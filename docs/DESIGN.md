@@ -316,3 +316,17 @@ flush without discarded output. Failed or discarded output retains the transitio
 including upload handoffs and retired resource ownership. A recovery frame re-establishes sources
 and placements omitted by partial repaint. Composition removes obsolete native placements before
 composed cells draw. Fresh backend lifetimes allocate and upload their own complete scene.
+
+#### Cached native presentation plans and host reports
+
+A successful native scene transition retains each terminal's content rectangle, clip, occlusions
+and measured cell geometry in the host backend. Graphics-only frames validate the layout epoch,
+complete live-terminal geometry, overlay geometry, effect and backdrop generations, host geometry
+and capability before reusing those plans. Native eligibility is rechecked against the new
+placements; unsupported overlap, scaling or excessive region counts widen to ordinary paint.
+
+The renderer stages presentation tokens only for visible terminal content. The runner delivers a
+batch after the frame's host writes and flush complete without output being discarded. Offscreen
+renders suspend token collection. Direct graphics presentations use the same post-success observer
+and committed plan visibility. Host output failure leaves the transition pending and emits no
+presentation report.

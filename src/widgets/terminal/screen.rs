@@ -553,7 +553,11 @@ pub struct TerminalScreen {
     /// Viewport rows changed since the last paint took them.
     damage: DamageAccumulator,
     mutation: TerminalMutation,
+    stable_terminal_id: u64,
+    presentation_token: Option<u64>,
     mutation_generation: u64,
+    cell_generation: u64,
+    graphics_generation: u64,
     grid_mutated: bool,
     mutation_waker: Option<std::rc::Weak<dyn Fn()>>,
     /// Independent from paint damage: a snapshot reader must not consume the renderer's damage.
@@ -736,8 +740,14 @@ pub struct TerminalRenderSnapshot {
     pub cursor_shape: CaretShape,
     /// Whether the child program requested a blinking cursor (via `DECSCUSR`).
     pub cursor_blinking: bool,
+    /// Application token and screen identity captured with this state.
+    pub presentation: Option<super::presentation::PresentedTerminal>,
     /// Stable sequence key for cache invalidation.
     pub sequence: u64,
+    /// Generation of cell or cursor changes, independent of graphics revisions.
+    pub cell_generation: u64,
+    /// Generation of retained graphics changes.
+    pub graphics_generation: u64,
     /// Current scrollback offset (0 = live view, >0 = scrolled into history).
     pub scrollback_offset: usize,
     /// Total number of scrollback rows available.
@@ -877,7 +887,10 @@ impl Default for TerminalRenderSnapshot {
             cursor_visible: true,
             cursor_shape: CaretShape::Block,
             cursor_blinking: true,
+            presentation: None,
             sequence: 0,
+            cell_generation: 0,
+            graphics_generation: 0,
             scrollback_offset: 0,
             total_scrollback_rows: 0,
             evicted_lines: 0,
@@ -982,6 +995,9 @@ impl TerminalRenderSnapshot {
             cursor_shape,
             cursor_blinking,
             sequence,
+            presentation: None,
+            cell_generation: sequence,
+            graphics_generation: 0,
             scrollback_offset,
             total_scrollback_rows,
             evicted_lines,
@@ -1222,7 +1238,15 @@ impl TerminalScreen {
         let screen = Self {
             damage: DamageAccumulator::default(),
             mutation: TerminalMutation::default(),
+            stable_terminal_id: {
+                static NEXT_TERMINAL: std::sync::atomic::AtomicU64 =
+                    std::sync::atomic::AtomicU64::new(1);
+                NEXT_TERMINAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            },
+            presentation_token: None,
             mutation_generation: 0,
+            cell_generation: 0,
+            graphics_generation: 0,
             grid_mutated: false,
             mutation_waker: None,
             snapshot_damage: DamageAccumulator::default(),
@@ -1345,12 +1369,21 @@ impl TerminalScreen {
         // grid operation or a cursor/mode change before treating it as visual damage.
         if self.grid_mutated || mutation.cursor_changed || before.modes != *self.term.mode() {
             mutation.cells = cells;
+            self.record_damage(&mutation.cells);
         }
         #[cfg(feature = "terminal-images")]
         {
             mutation.graphics = self.graphics.take_damage();
         }
+        if mutation.cells != TerminalDamage::None
+            || mutation.cursor_changed
+            || mutation.modes_changed
+        {
+            self.cell_generation = self.cell_generation.wrapping_add(1);
+        }
         if mutation.graphics != super::damage::GraphicsDamage::None {
+            self.graphics_generation = self.graphics_generation.wrapping_add(1);
+            // The composed path still needs full cell damage. The native path uses generations.
             self.damage.mark_full();
         }
         self.dirty |= mutation.is_visual() || mutation.modes_changed;
@@ -1373,8 +1406,29 @@ impl TerminalScreen {
     }
 
     fn invalidate_presentation(&mut self) {
+        self.cell_generation = self.cell_generation.wrapping_add(1);
         self.mutation.cells.merge(TerminalDamage::Full);
         self.notify_mutation();
+    }
+
+    /// Stable identity of this retained screen, independent of mounted widgets or host IDs.
+    pub fn stable_terminal_id(&self) -> u64 {
+        self.stable_terminal_id
+    }
+
+    /// Associate an application sequence with the current retained state.
+    /// This does not request a frame or acknowledge presentation.
+    pub fn set_presentation_token(&mut self, token: u64) {
+        self.presentation_token = Some(token);
+        self.cache.presentation = self.presentation();
+    }
+
+    fn presentation(&self) -> Option<super::presentation::PresentedTerminal> {
+        self.presentation_token
+            .map(|token| super::presentation::PresentedTerminal {
+                stable_terminal_id: self.stable_terminal_id,
+                token,
+            })
     }
 
     /// Take completed parser mutations accumulated since the previous call.
@@ -1397,21 +1451,41 @@ impl TerminalScreen {
         match self.term.damage() {
             alacritty_terminal::term::TermDamage::Full => {
                 completed.mark_full();
-                self.damage.mark_full();
-                self.snapshot_damage.mark_full();
             }
             alacritty_terminal::term::TermDamage::Partial(iter) => {
                 for line in iter {
                     completed.add_row(line.line, line.left, line.right, viewport_rows);
-                    self.damage
-                        .add_row(line.line, line.left, line.right, viewport_rows);
-                    self.snapshot_damage
-                        .add_row(line.line, line.left, line.right, viewport_rows);
                 }
             }
         }
         self.term.reset_damage();
         completed.take()
+    }
+
+    fn record_damage(&mut self, damage: &TerminalDamage) {
+        match damage {
+            TerminalDamage::Full => {
+                self.damage.mark_full();
+                self.snapshot_damage.mark_full();
+            }
+            TerminalDamage::Rows(rows) => {
+                for row in rows {
+                    self.damage.add_row(
+                        usize::from(row.row),
+                        usize::from(row.left),
+                        usize::from(row.right),
+                        usize::from(self.rows),
+                    );
+                    self.snapshot_damage.add_row(
+                        usize::from(row.row),
+                        usize::from(row.left),
+                        usize::from(row.right),
+                        usize::from(self.rows),
+                    );
+                }
+            }
+            TerminalDamage::None => {}
+        }
     }
 
     /// Take the rows that changed since the last call, leaving this screen clean.
@@ -2313,6 +2387,26 @@ impl TerminalScreen {
     pub fn render_snapshot(&mut self) -> TerminalRenderSnapshot {
         if self.dirty {
             self.sequence = self.sequence.saturating_add(1);
+            let damage = self.snapshot_damage.take();
+            if damage == TerminalDamage::None
+                && self.cache.sequence != 0
+                && self.cache.cell_generation == self.cell_generation
+            {
+                #[cfg(feature = "terminal-images")]
+                {
+                    self.cache.images = self
+                        .visible_images(
+                            self.term.grid().display_offset(),
+                            self.term.mode().contains(TermMode::ALT_SCREEN),
+                        )
+                        .into();
+                }
+                self.cache.presentation = self.presentation();
+                self.cache.sequence = self.sequence;
+                self.cache.graphics_generation = self.graphics_generation;
+                self.dirty = false;
+                return self.cache.clone();
+            }
             let content = self.term.renderable_content();
             let display_offset = content.display_offset;
             let mode = content.mode;
@@ -2330,13 +2424,18 @@ impl TerminalScreen {
             let cursor_shape = caret_shape_from_term(cursor_style.shape);
             let cursor_blinking = cursor_style.blinking;
 
-            let damage = self.snapshot_damage.take();
             let partial = match &damage {
+                TerminalDamage::None
+                    if self.cache.color_lines.len() == usize::from(self.rows)
+                        && self.cache.scrollback_offset == display_offset =>
+                {
+                    Some(&[][..])
+                }
                 TerminalDamage::Rows(rows)
                     if self.cache.color_lines.len() == usize::from(self.rows)
                         && self.cache.scrollback_offset == display_offset =>
                 {
-                    Some(rows)
+                    Some(rows.as_slice())
                 }
                 _ => None,
             };
@@ -2407,7 +2506,10 @@ impl TerminalScreen {
                 cursor_visible,
                 cursor_shape,
                 cursor_blinking,
+                presentation: self.presentation(),
                 sequence: self.sequence,
+                cell_generation: self.cell_generation,
+                graphics_generation: self.graphics_generation,
                 scrollback_offset: self.scrollback_offset,
                 total_scrollback_rows: self.term.history_size(),
                 evicted_lines: self.evicted_lines,

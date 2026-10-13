@@ -97,6 +97,8 @@ pub(crate) mod table;
 mod tabs;
 #[cfg(feature = "terminal")]
 mod terminal;
+#[cfg(feature = "terminal")]
+pub(crate) use terminal::presentation;
 mod text;
 mod text_area;
 pub(crate) mod theme_provider;
@@ -354,4 +356,7 @@ pub use zstack::ZStack;
 pub(crate) mod internal;
 
 #[cfg(feature = "terminal")]
-pub use terminal::{DamagedRow, GraphicsDamage, TerminalDamage, TerminalMutation};
+pub use terminal::{
+    DamagedRow, GraphicsDamage, PresentedTerminal, TerminalDamage, TerminalMutation,
+    TerminalPresentationSubscription,
+};

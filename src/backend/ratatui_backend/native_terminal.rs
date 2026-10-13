@@ -251,6 +251,8 @@ const CURSOR_REPLY_TIMEOUT: Duration = Duration::from_secs(2);
 /// [`host_input`]: super::host_input
 pub(crate) struct HostBackend<W: io::Write> {
     backend: CrosstermBackend<W>,
+    #[cfg(test)]
+    test_flush_action: u8,
     #[cfg(all(test, feature = "terminal-images"))]
     test_output: Option<std::sync::Arc<std::sync::Mutex<Vec<u8>>>>,
     dropped: std::sync::Arc<std::sync::atomic::AtomicUsize>,
@@ -272,6 +274,8 @@ impl<W: io::Write> HostBackend<W> {
     pub(crate) fn new(writer: W) -> Self {
         Self {
             backend: CrosstermBackend::new(writer),
+            #[cfg(test)]
+            test_flush_action: 0,
             #[cfg(all(test, feature = "terminal-images"))]
             test_output: None,
             dropped: Default::default(),
@@ -290,7 +294,76 @@ impl<W: io::Write> HostBackend<W> {
         }
     }
 
+    #[cfg(feature = "terminal-images")]
+    pub(crate) fn native_plan_scope(&self) -> super::renderers::image::NativePlanScope {
+        self.graphics_scene.native_plan_scope()
+    }
+
+    #[cfg(feature = "terminal-images")]
+    pub(crate) fn native_plan_owners(
+        &self,
+    ) -> std::collections::HashSet<crate::core::node::NodeId> {
+        self.graphics_scene.native_plan_owners()
+    }
+
+    #[cfg(feature = "terminal-images")]
+    pub(crate) fn terminal_graphics_visible(&self, owner: crate::core::node::NodeId) -> bool {
+        self.graphics_scene.terminal_visible(owner)
+    }
+
+    #[cfg(feature = "terminal-images")]
+    pub(crate) fn present_graphics<'a>(
+        &mut self,
+        updates: impl Iterator<
+            Item = (
+                crate::core::node::NodeId,
+                &'a [crate::widgets::TerminalImagePlacement],
+            ),
+        >,
+    ) -> io::Result<bool> {
+        let Some(desired) = self.graphics_scene.graphics_update(updates) else {
+            return Ok(false);
+        };
+        let reserved = self
+            .pending_scene
+            .as_ref()
+            .map(|(transition, _, _)| &transition.next);
+        let transition = self.graphics_scene.prepare(desired, reserved)?;
+        let epoch = self.dropped.load(Ordering::Relaxed);
+        self.pending_scene = Some((transition, epoch, false));
+        self.backend.write_all(b"\x1b[?2026h\x1b7")?;
+        if let Some((transition, _, _)) = &self.pending_scene {
+            for command in &transition.commands {
+                self.backend.write_all(command.as_bytes())?;
+            }
+        }
+        self.backend.write_all(b"\x1b8\x1b[?2026l")?;
+        if let Some((_, _, ready)) = self.pending_scene.as_mut() {
+            *ready = true;
+        }
+        self.flush_frame()?;
+        Ok(epoch == self.dropped.load(Ordering::Relaxed))
+    }
+
+    #[cfg(feature = "terminal")]
+    pub(crate) fn output_epoch(&self) -> usize {
+        self.dropped.load(Ordering::Relaxed)
+    }
+
+    #[cfg(all(test, feature = "terminal"))]
+    pub(crate) fn test_fail_next_flush(&mut self, discard: bool) {
+        self.test_flush_action = if discard { 2 } else { 1 };
+    }
+
     fn flush_frame(&mut self) -> io::Result<()> {
+        #[cfg(test)]
+        match std::mem::take(&mut self.test_flush_action) {
+            1 => return Err(io::Error::other("injected host flush failure")),
+            2 => {
+                self.dropped.fetch_add(1, Ordering::Relaxed);
+            }
+            _ => {}
+        }
         let result = io::Write::flush(&mut self.backend);
         #[cfg(feature = "terminal-images")]
         if result.is_ok()

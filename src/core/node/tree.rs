@@ -347,6 +347,8 @@ impl Default for NodeTree {
 pub(crate) struct LiveTerminalRefresh {
     /// Whether any live terminal took output since the last refresh.
     pub changed: bool,
+    /// Nodes whose snapshot changed without any cell, cursor or mode mutation.
+    pub graphics_only: Vec<NodeId>,
     /// The rows each terminal that moved reported.
     pub damage: Vec<(NodeId, crate::widgets::internal::TerminalDamage)>,
     /// Live labels changed since the last refresh.
@@ -539,13 +541,41 @@ impl NodeTree {
                 continue;
             }
             if let NodeKind::Terminal(terminal) = &mut self.node_mut(id).kind
-                && let Some(damage) = terminal.refresh_from_live_screen()
+                && let Some((damage, graphics_only)) = terminal.refresh_from_live_screen()
             {
                 refresh.changed = true;
                 refresh.damage.push((id, damage));
+                if graphics_only {
+                    refresh.graphics_only.push(id);
+                }
             }
         }
         refresh
+    }
+
+    #[cfg(feature = "terminal-images")]
+    pub(crate) fn live_terminal_geometry(
+        &self,
+    ) -> Vec<(NodeId, crate::style::Rect, usize, usize, usize)> {
+        self.live_terminal_ids
+            .iter()
+            .filter_map(|id| {
+                if !self.is_valid(*id) {
+                    return None;
+                }
+                let node = self.node(*id);
+                match &node.kind {
+                    NodeKind::Terminal(terminal) => Some((
+                        *id,
+                        node.rect,
+                        terminal.viewport_rows,
+                        terminal.viewport_cols,
+                        terminal.scrollback_offset,
+                    )),
+                    _ => None,
+                }
+            })
+            .collect()
     }
 
     /// Whether any terminal is reading a live screen a child program can write to at any moment.

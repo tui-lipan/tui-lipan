@@ -34,12 +34,33 @@ pub(crate) struct DesiredScene {
     full: bool,
     owners: HashSet<NodeId>,
     placements: Vec<DesiredPlacement>,
+    plans: HashMap<NodeId, native_patches::TerminalGraphicsPlan>,
 }
 
 thread_local! {
     // Only frame staging lives here. Committed resources belong to HostBackend.
     static DESIRED: RefCell<Option<DesiredScene>> = const { RefCell::new(None) };
+    static CACHED_PLANS: RefCell<Option<HashMap<NodeId, native_patches::TerminalGraphicsPlan>>> = const { RefCell::new(None) };
     static OWNER: Cell<NodeId> = const { Cell::new(NodeId::INVALID) };
+}
+
+pub(crate) struct NativePlanScope(Option<HashMap<NodeId, native_patches::TerminalGraphicsPlan>>);
+
+impl Drop for NativePlanScope {
+    fn drop(&mut self) {
+        CACHED_PLANS.with(|slot| {
+            slot.replace(self.0.take());
+        });
+    }
+}
+
+pub(super) fn cached_plan() -> Option<native_patches::TerminalGraphicsPlan> {
+    CACHED_PLANS.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .and_then(|plans| plans.get(&OWNER.get()))
+            .cloned()
+    })
 }
 
 pub(crate) fn begin(full: bool) {
@@ -72,6 +93,14 @@ impl Drop for OwnerScope {
     fn drop(&mut self) {
         OWNER.with(|slot| slot.set(self.0));
     }
+}
+
+pub(super) fn stage_plan(plan: native_patches::TerminalGraphicsPlan) {
+    DESIRED.with(|slot| {
+        if let Some(scene) = slot.borrow_mut().as_mut() {
+            scene.plans.insert(OWNER.get(), plan);
+        }
+    });
 }
 
 pub(super) fn stage(source: &TerminalImagePlacement, regions: &[native_patches::NativeRegion]) {
@@ -115,6 +144,7 @@ pub(crate) struct HostGraphicsScene {
     placements: HashMap<PlacementKey, PlacementState>,
     next_placement: u32,
     retired_sources: HashMap<u32, SourceState>,
+    plans: HashMap<NodeId, native_patches::TerminalGraphicsPlan>,
 }
 
 pub(crate) struct SceneTransition {
@@ -124,6 +154,45 @@ pub(crate) struct SceneTransition {
 }
 
 impl HostGraphicsScene {
+    pub(crate) fn graphics_update<'a>(
+        &self,
+        updates: impl Iterator<Item = (NodeId, &'a [TerminalImagePlacement])>,
+    ) -> Option<DesiredScene> {
+        let mut desired = DesiredScene::default();
+        for (owner, images) in updates {
+            let plan = self.plans.get(&owner)?;
+            let regions = plan.regions(images)?;
+            desired.owners.insert(owner);
+            desired.plans.insert(owner, plan.clone());
+            for (source, regions) in images.iter().zip(regions) {
+                for (region, geometry) in regions.into_iter().enumerate() {
+                    desired.placements.push(DesiredPlacement {
+                        key: PlacementKey {
+                            owner,
+                            logical: source.placement_key(),
+                            region,
+                        },
+                        source: source.clone(),
+                        geometry,
+                    });
+                }
+            }
+        }
+        Some(desired)
+    }
+
+    pub(crate) fn native_plan_scope(&self) -> NativePlanScope {
+        NativePlanScope(CACHED_PLANS.with(|slot| slot.replace(Some(self.plans.clone()))))
+    }
+
+    pub(crate) fn native_plan_owners(&self) -> HashSet<NodeId> {
+        self.plans.keys().copied().collect()
+    }
+
+    pub(crate) fn terminal_visible(&self, owner: NodeId) -> bool {
+        self.plans.get(&owner).is_some_and(|plan| plan.visible())
+    }
+
     pub(crate) fn commit_retirements(&mut self) {
         self.retired_sources.clear();
     }
@@ -134,6 +203,9 @@ impl HostGraphicsScene {
         reserved: Option<&Self>,
     ) -> std::io::Result<SceneTransition> {
         let mut next = reserved.unwrap_or(self).clone();
+        next.plans
+            .retain(|owner, _| !(desired.full || desired.owners.contains(owner)));
+        next.plans.extend(desired.plans.clone());
         let wanted: HashSet<_> = desired.placements.iter().map(|p| p.key).collect();
         let mut commands = Vec::new();
         next.placements.retain(|key, _| {

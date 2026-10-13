@@ -257,6 +257,8 @@ where
             devtools_metrics,
             pending_ui_snapshot,
             paint_observers,
+            #[cfg(feature = "terminal")]
+            terminal_presentation_observers: Rc::default(),
             copy_feedback_request,
             command_chord_pending_since,
             command_chord_reveal_delay,

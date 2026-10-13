@@ -105,10 +105,17 @@ where
         if *snapshot.area() != frame_area || frame_area.width == 0 || frame_area.height == 0 {
             return Err(DamageRejection::NoMatchingRetainedFrame);
         }
-        // HostBackend replaces ordinary Kitty placements on every draw. A partial row walk
-        // cannot recreate images in an unchanged pane, so any image requires a full tree paint.
+        // Static native images can keep their complete scene while cells are painted at a row
+        // clip. Composed images still require a whole paint to preserve their protocol placements.
         #[cfg(feature = "terminal-images")]
-        if self.core.tree.iter().any(|node| matches!(&node.kind, NodeKind::Terminal(terminal) if !terminal.images.is_empty())) {
+        let cached_plans_valid =
+            self.graphics_plan_epoch == Some(self.graphics_presentation_epochs(frame_area));
+        #[cfg(feature = "terminal-images")]
+        if self.core.tree.iter().any(|node| {
+            matches!(&node.kind, NodeKind::Terminal(terminal)
+            if !terminal.images.is_empty() && (!self.native_terminal_plans.contains(&node.id)
+                || !cached_plans_valid))
+        }) {
             return Err(DamageRejection::HasImages);
         }
         let frame_top = i32::from(frame_area.y);
@@ -234,6 +241,10 @@ where
             crate::animation::registry::PaintExtent::Partial,
         );
 
+        #[cfg(feature = "terminal-images")]
+        let _native_plans = terminal.backend().native_plan_scope();
+        let presentations = crate::widgets::presentation::PresentationScope::begin();
+        let output_epoch = terminal.backend().output_epoch();
         let frame_area = terminal.get_frame().area();
         let cursor_position = StdCell::new(None);
         let mut snapshot = self
@@ -274,6 +285,13 @@ where
             &self.widgets.text_area_vim_state,
         )?;
         terminal.backend_mut().flush()?;
+        if terminal.backend().output_epoch() == output_epoch {
+            self.core
+                .ctx
+                .env()
+                .terminal_presentation_observers
+                .deliver(presentations.take());
+        }
         // Deliberately no `swap_buffers`. Ratatui's current buffer was borrowed as scratch and put
         // back as it was found; its previous buffer still describes the last full draw, and
         // `host_patched_rows` is what reconciles that with the rows written here.

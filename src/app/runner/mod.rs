@@ -67,6 +67,9 @@ mod drag;
 pub(crate) mod events;
 mod exit_view;
 mod focus_events;
+mod frame_clock;
+#[cfg(feature = "terminal-images")]
+mod graphics_plan;
 mod headless_record;
 mod headless_snapshot;
 #[cfg(unix)]
@@ -283,6 +286,7 @@ fn mouse_dispatch_dirty_level(
 /// draws at once, and the rest draw together in the next frame-rate slot. The deadline is fixed by
 /// the last paint, so sustained input cannot push it back. Keys, clicks, releases, and anything
 /// needing layout or a rebuild always draw immediately.
+#[cfg(test)]
 fn paced_pointer_frame_due(
     level: DirtyLevel,
     pointer_motion_only: bool,
@@ -291,7 +295,10 @@ fn paced_pointer_frame_due(
     now: Instant,
 ) -> Option<Instant> {
     #[cfg(feature = "terminal")]
-    let paint_only = matches!(level, DirtyLevel::PaintOnly | DirtyLevel::TerminalPaintOnly);
+    let paint_only = matches!(
+        level,
+        DirtyLevel::PaintOnly | DirtyLevel::TerminalPaintOnly | DirtyLevel::TerminalGraphicsOnly
+    );
     #[cfg(not(feature = "terminal"))]
     let paint_only = matches!(level, DirtyLevel::PaintOnly);
     if !pointer_motion_only || !paint_only {
@@ -305,6 +312,8 @@ fn apply_dirty_level(dirty: &mut DirtyTracker, level: DirtyLevel) {
     match level {
         DirtyLevel::None => {}
         DirtyLevel::PaintOnly => dirty.mark_paint(),
+        #[cfg(feature = "terminal")]
+        DirtyLevel::TerminalGraphicsOnly => dirty.mark_terminal_graphics(),
         #[cfg(feature = "terminal")]
         DirtyLevel::TerminalPaintOnly => dirty.mark_terminal_paint(),
         DirtyLevel::LayoutOnly => dirty.mark_layout(),
@@ -604,6 +613,10 @@ pub struct AppRunner<C: Component> {
         std::cell::RefCell<Option<(u16, u16, Vec<ratatui::buffer::Cell>)>>,
     /// Copy of the last presented terminal buffer for scroll fast paths.
     pub(crate) last_frame_snapshot: Option<ratatui::buffer::Buffer>,
+    #[cfg(feature = "terminal-images")]
+    graphics_plan_epoch: Option<graphics_plan::GraphicsPresentationEpochs>,
+    #[cfg(feature = "terminal-images")]
+    native_terminal_plans: std::collections::HashSet<NodeId>,
     /// Scratch buffer used to build the pre-scroll diff baseline.
     pub(crate) scroll_diff_snapshot: Option<ratatui::buffer::Buffer>,
     /// Physical rows a terminal-damage repaint wrote straight to the host.
@@ -901,6 +914,10 @@ impl<C: Component> AppRunner<C> {
             last_bounds: crate::style::Rect::default(),
             dnd_snapshot_cells: std::cell::RefCell::new(None),
             last_frame_snapshot: None,
+            #[cfg(feature = "terminal-images")]
+            graphics_plan_epoch: None,
+            #[cfg(feature = "terminal-images")]
+            native_terminal_plans: Default::default(),
             scroll_diff_snapshot: None,
             #[cfg(feature = "terminal")]
             host_patched_rows: Vec::new(),
@@ -2253,7 +2270,8 @@ impl<C: Component> AppRunner<C> {
             // A paint-only frame of continuous pointer input held back to the frame cadence, and
             // when it falls due. See `paced_pointer_frame_due`.
             let mut paced_frame: Option<(DirtyLevel, Instant)> = None;
-            let mut last_paint_at: Option<Instant> = None;
+            let mut frame_clock = frame_clock::FrameClock::new(self.frame_interval);
+            let mut input_answer_until: Option<Instant> = None;
             // A snapshot callback ran after the last paint and may have queued a message.
             let mut snapshot_answered = false;
             // Last terminal size we observed. Used as a fallback for missed
@@ -2370,7 +2388,7 @@ impl<C: Component> AppRunner<C> {
                     #[cfg(feature = "terminal")]
                     Some(RunnerEvent::TerminalMutation) => {
                         terminal_wake_pending.set(false);
-                        dirty.mark_terminal_paint();
+                        dirty.mark_terminal_graphics();
                         None
                     }
                     Some(RunnerEvent::Control) => {
@@ -2392,7 +2410,20 @@ impl<C: Component> AppRunner<C> {
                     }
                     None => None,
                 };
+                let event_driven = maybe_event.is_some();
                 if let Some(event) = maybe_event {
+                    let answer_window = match &event {
+                        CEvent::Key(_) | CEvent::Paste(_) => true,
+                        CEvent::Mouse(mouse) => !matches!(
+                            mouse.kind,
+                            crossterm::event::MouseEventKind::Moved
+                                | crossterm::event::MouseEventKind::Drag(_)
+                        ),
+                        _ => false,
+                    };
+                    if answer_window {
+                        input_answer_until = Some(Instant::now() + Duration::from_millis(50));
+                    }
                     match event {
                         CEvent::FocusGained => {
                             self.set_window_focused(true, &mut dirty);
@@ -3071,13 +3102,15 @@ impl<C: Component> AppRunner<C> {
                     continue;
                 }
 
-                if let Some(due) = paced_pointer_frame_due(
-                    frame_level,
-                    pointer_motion_only && !force_host_redraw,
-                    last_paint_at,
-                    self.frame_interval,
-                    now,
-                ) {
+                let input_answering = input_answer_until.is_some_and(|until| now < until);
+                let continuous = match frame_level {
+                    #[cfg(feature = "terminal")]
+                    DirtyLevel::TerminalGraphicsOnly | DirtyLevel::TerminalPaintOnly => true,
+                    DirtyLevel::PaintOnly => pointer_motion_only || !event_driven,
+                    _ => false,
+                } && !force_host_redraw
+                    && !input_answering;
+                if let Some(due) = frame_clock.due(continuous, now) {
                     paced_frame = Some((frame_level, due));
                     continue;
                 }
@@ -3096,6 +3129,10 @@ impl<C: Component> AppRunner<C> {
                         self.render_paint_only(&mut terminal)?;
                     }
                     #[cfg(feature = "terminal")]
+                    DirtyLevel::TerminalGraphicsOnly => {
+                        self.render_terminal_graphics_only(&mut terminal)?;
+                    }
+                    #[cfg(feature = "terminal")]
                     DirtyLevel::TerminalPaintOnly => {
                         self.render_terminal_paint_only(&mut terminal)?;
                     }
@@ -3103,9 +3140,18 @@ impl<C: Component> AppRunner<C> {
                 }
 
                 if !matches!(frame_level, DirtyLevel::None) {
-                    last_paint_at = Some(Instant::now());
+                    frame_clock.presented(Instant::now());
                     snapshot_answered = self.apply_pending_ui_snapshot_request()?;
                     snapshot_answered |= self.deliver_painted_frame();
+                    #[cfg(feature = "terminal")]
+                    {
+                        snapshot_answered |= self
+                            .core
+                            .ctx
+                            .env()
+                            .terminal_presentation_observers
+                            .take_delivered();
+                    }
                 }
 
                 #[cfg(feature = "profiling-tracing")]

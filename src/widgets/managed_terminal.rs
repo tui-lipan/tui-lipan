@@ -23,6 +23,8 @@
 //! For advanced use cases (custom PTY handling, multiple terminals, etc.),
 //! use the low-level [`Terminal`] widget with [`TerminalPty`] directly.
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -34,7 +36,7 @@ use crate::core::event::KeyMods;
 use crate::style::{Length, Style, StyleSlot};
 use crate::widgets::terminal::{
     Terminal, TerminalClipboardTarget, TerminalInputEvent, TerminalLinkEvent, TerminalPty,
-    TerminalPtyConfig, TerminalPtyEvent, TerminalRenderSnapshot, TerminalScreen, TerminalViewport,
+    TerminalPtyConfig, TerminalPtyEvent, TerminalScreen, TerminalScreenHandle, TerminalViewport,
 };
 use crate::widgets::{Text, VStack};
 
@@ -349,8 +351,7 @@ pub enum ManagedTerminalMsg {
 
 /// Internal state for the managed terminal component.
 pub struct ManagedTerminalState {
-    screen: TerminalScreen,
-    snapshot: TerminalRenderSnapshot,
+    screen: Rc<RefCell<TerminalScreen>>,
     pty: Option<TerminalPty>,
     cols: u16,
     rows: u16,
@@ -376,8 +377,7 @@ impl Component for ManagedTerminal {
         screen.set_cell_size(crate::host_cell_size());
 
         ManagedTerminalState {
-            screen,
-            snapshot: TerminalRenderSnapshot::default(),
+            screen: Rc::new(RefCell::new(screen)),
             pty: None,
             cols: props.initial_cols,
             rows: props.initial_rows,
@@ -421,24 +421,7 @@ impl Component for ManagedTerminal {
             ManagedTerminalMsg::PtyEvent(event) => {
                 match event {
                     TerminalPtyEvent::Output(bytes) => {
-                        ctx.state.screen.process_bytes(&bytes);
-                        // Forward any terminal responses (device queries, etc.) back to the PTY.
-                        // This is critical for TUI apps like fzf that query terminal capabilities.
-                        if let Some(pty) = &ctx.state.pty {
-                            for response in ctx.state.screen.drain_responses() {
-                                if let Err(err) = pty.write(&response) {
-                                    let msg = format!("pty response write failed: {err}");
-                                    ctx.state.status = ManagedTerminalStatus::Error(Arc::from(msg));
-                                    break;
-                                }
-                            }
-                        }
-                        for event in ctx.state.screen.drain_clipboard_events() {
-                            if matches!(event.target, TerminalClipboardTarget::Clipboard) {
-                                let _ = ctx.clipboard().accept_osc52_store(&event.text);
-                            }
-                        }
-                        ctx.state.snapshot = ctx.state.screen.render_snapshot();
+                        return Self::process_output(ctx, &bytes);
                     }
                     TerminalPtyEvent::Exited(code) => {
                         ctx.state.status = ManagedTerminalStatus::Exited(code);
@@ -465,9 +448,8 @@ impl Component for ManagedTerminal {
                         ctx.state.status = ManagedTerminalStatus::Error(Arc::from(msg));
                     }
                     // Snap to live view when user types
-                    if ctx.state.screen.scrollback_offset() > 0 {
-                        ctx.state.screen.set_scrollback(0);
-                        ctx.state.snapshot = ctx.state.screen.render_snapshot();
+                    if ctx.state.screen.borrow().scrollback_offset() > 0 {
+                        ctx.state.screen.borrow_mut().set_scrollback(0);
                         return Update::full();
                     }
                 }
@@ -483,8 +465,7 @@ impl Component for ManagedTerminal {
                 Update::none()
             }
             ManagedTerminalMsg::TerminalScrollTo(offset) => {
-                ctx.state.screen.set_scrollback(offset);
-                ctx.state.snapshot = ctx.state.screen.render_snapshot();
+                ctx.state.screen.borrow_mut().set_scrollback(offset);
                 Update::full()
             }
             ManagedTerminalMsg::Resize { cols, rows } => {
@@ -555,7 +536,7 @@ impl Component for ManagedTerminal {
         }
 
         let mut terminal = Terminal::new()
-            .snapshot(ctx.state.snapshot.clone())
+            .screen(TerminalScreenHandle::from(Rc::clone(&ctx.state.screen)))
             .style(ctx.props.style)
             .focusable(ctx.props.focusable)
             .tab_stop(ctx.props.tab_stop)
@@ -596,6 +577,51 @@ impl Component for ManagedTerminal {
 }
 
 impl ManagedTerminal {
+    fn process_output(ctx: &mut Context<Self>, bytes: &[u8]) -> Update {
+        let status_before = ctx.state.status.clone();
+        let screen = Rc::clone(&ctx.state.screen);
+        let mut screen = screen.borrow_mut();
+        let mutation = screen.process_bytes(bytes);
+        Self::respond_to_queries(ctx, screen.drain_responses());
+        for event in screen.drain_clipboard_events() {
+            if matches!(event.target, TerminalClipboardTarget::Clipboard) {
+                let _ = ctx.clipboard().accept_osc52_store(&event.text);
+            }
+        }
+        drop(screen);
+        if ctx.state.status != status_before {
+            return Update::full();
+        }
+        Self::mutation_update(&mutation)
+    }
+
+    fn respond_to_queries(ctx: &mut Context<Self>, responses: Vec<Vec<u8>>) {
+        let Some(pty) = &ctx.state.pty else {
+            return;
+        };
+        for response in responses {
+            if let Err(err) = pty.write(&response) {
+                ctx.state.status = ManagedTerminalStatus::Error(Arc::from(format!(
+                    "pty response write failed: {err}"
+                )));
+                break;
+            }
+        }
+    }
+
+    fn mutation_update(mutation: &super::terminal::TerminalMutation) -> Update {
+        if mutation.cells != super::terminal::TerminalDamage::None
+            || mutation.cursor_changed
+            || mutation.modes_changed
+        {
+            Update::terminal_paint()
+        } else if mutation.graphics != super::terminal::GraphicsDamage::None {
+            Update::terminal_graphics()
+        } else {
+            Update::none()
+        }
+    }
+
     fn apply_resize(ctx: &mut Context<Self>, cols: u16, rows: u16) -> Update {
         if cols == ctx.state.cols && rows == ctx.state.rows {
             return Update::none();
@@ -617,8 +643,7 @@ impl ManagedTerminal {
             return Update::full();
         }
 
-        ctx.state.screen.resize(rows, cols);
-        ctx.state.snapshot = ctx.state.screen.render_snapshot();
+        ctx.state.screen.borrow_mut().resize(rows, cols);
         Update::full()
     }
 }
@@ -677,6 +702,45 @@ mod tests {
         assert!(props.focusable);
     }
 
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn managed_output_uses_live_screens_and_semantic_update_levels() {
+        use crate::UpdateLevel;
+        let mut backend = crate::TestBackend::new_with_props(
+            ManagedTerminal::new(),
+            ManagedTerminalProps {
+                auto_start: false,
+                placeholder: None,
+                ..Default::default()
+            },
+        );
+        let output = |bytes: &[u8]| {
+            ManagedTerminalMsg::PtyEvent(TerminalPtyEvent::Output(bytes.to_vec().into()))
+        };
+        assert_eq!(
+            backend.update_level(output(b"text")).unwrap(),
+            UpdateLevel::TerminalPaint
+        );
+        assert_eq!(
+            backend.update_level(output(b"\x1b[c")).unwrap(),
+            UpdateLevel::None
+        );
+        assert_eq!(
+            backend
+                .update_level(output(b"\x1b_Ga=T,i=7,f=24,s=1,v=1,C=1,q=2;YWJj\x1b\\"))
+                .unwrap(),
+            UpdateLevel::TerminalGraphics
+        );
+        assert_eq!(
+            backend
+                .update_level(output(b"\x1b_Ga=d,d=I,i=7,q=2;\x1b\\"))
+                .unwrap(),
+            UpdateLevel::TerminalGraphics
+        );
+        backend.render();
+        assert!(backend.core.tree.iter().any(|node| matches!(&node.kind, crate::core::node::NodeKind::Terminal(terminal) if terminal.screen.is_some())));
+    }
+
     #[test]
     fn managed_terminal_builder() {
         let terminal = ManagedTerminal::new()
@@ -708,8 +772,9 @@ mod tests {
         backend
             .state_mut()
             .screen
+            .borrow_mut()
             .process_bytes(b"\x1b]133;C\x1b\\output\r\n");
-        let marks = backend.state().screen.semantic_marks();
+        let marks = backend.state().screen.borrow().semantic_marks();
         assert!(!marks.is_empty());
 
         backend
@@ -735,7 +800,7 @@ mod tests {
         // Neither intermediate width was applied, so the semantic marks remain anchored.
         assert_eq!(backend.state().cols, 120);
         assert_eq!(backend.state().resize_apply_count, 0);
-        assert_eq!(backend.state().screen.semantic_marks(), marks);
+        assert_eq!(backend.state().screen.borrow().semantic_marks(), marks);
 
         backend.advance(Duration::from_millis(64));
         backend.pump().unwrap();
@@ -745,7 +810,7 @@ mod tests {
         assert_eq!(backend.state().resize_apply_count, 1);
         // A settled width reflow still invalidates absolute semantic indices;
         // debounce prevents every transient width from doing this repeatedly.
-        assert!(backend.state().screen.semantic_marks().is_empty());
+        assert!(backend.state().screen.borrow().semantic_marks().is_empty());
     }
 
     #[test]

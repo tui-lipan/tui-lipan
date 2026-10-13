@@ -68,6 +68,8 @@ fn new_registry() -> ComponentRegistry {
             devtools_metrics: Rc::new(crate::core::runtime_env::DevToolsMetrics::default()),
             pending_ui_snapshot: Rc::default(),
             paint_observers: Rc::default(),
+            #[cfg(feature = "terminal")]
+            terminal_presentation_observers: Rc::default(),
             copy_feedback_request: Rc::new(RefCell::new(Vec::new())),
             command_chord_pending_since: Rc::new(Cell::new(None)),
             command_chord_reveal_delay: Rc::new(Cell::new(std::time::Duration::ZERO)),

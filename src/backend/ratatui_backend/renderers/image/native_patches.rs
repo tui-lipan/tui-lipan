@@ -242,43 +242,75 @@ pub(crate) fn render_native_terminal_images(
     content: Rect,
     clip: ratatui::layout::Rect,
 ) -> bool {
-    if placements.is_empty() || !native_scene_supported(clip) {
+    if !native_scene_supported(clip) {
         return false;
     }
     let Some((width, height)) = image_support::measured_host_cell_size() else {
         return false;
     };
-    let Some(geometry) = scene_geometry(placements, content, (width, height)) else {
-        return false;
-    };
     let mut holes = IMAGE_OCCLUSIONS.with(|slot| slot.borrow().clone());
     holes.extend(super::super::image_effects::pending_image_occlusions());
-    // Resolve visible sources before staging so failure can fall back for the whole scene.
-    // Covered/offscreen sources must not be decoded, linked or uploaded.
-    let Some(regions) = placements
-        .iter()
-        .zip(geometry)
-        .map(|(p, geometry)| {
-            let regions = native_regions(geometry, clip, &holes);
-            if regions.len() > MAX_NATIVE_REGIONS {
-                return None;
-            }
-            if !regions.is_empty() && p.image.file_pixels().is_none() && p.image.pixels().is_none()
-            {
-                return None;
-            }
-            Some(regions)
-        })
-        .collect::<Option<Vec<_>>>()
-    else {
+    let plan = native_scene::cached_plan().unwrap_or(TerminalGraphicsPlan {
+        content,
+        clip,
+        holes,
+        cell: (width, height),
+    });
+    let Some(regions) = plan.regions(placements) else {
         return false;
     };
+    native_scene::stage_plan(plan);
     for (placement, regions) in placements.iter().zip(regions) {
         native_scene::stage(placement, &regions);
     }
     let _ = f;
 
     true
+}
+
+/// Geometry and occlusion captured by a successful ordinary render.
+#[derive(Clone)]
+pub(super) struct TerminalGraphicsPlan {
+    content: Rect,
+    clip: ratatui::layout::Rect,
+    holes: Vec<ratatui::layout::Rect>,
+    cell: (u16, u16),
+}
+
+impl TerminalGraphicsPlan {
+    pub(super) fn visible(&self) -> bool {
+        !self.clip.is_empty()
+            && (self.clip.y..self.clip.bottom()).any(|row| {
+                !uncovered_x_spans(self.clip.x, self.clip.right(), row, &self.holes).is_empty()
+            })
+    }
+
+    pub(super) fn regions(
+        &self,
+        placements: &[TerminalImagePlacement],
+    ) -> Option<Vec<Vec<NativeRegion>>> {
+        if image_support::measured_host_cell_size() != Some(self.cell)
+            || !native_scene_supported(self.clip)
+        {
+            return None;
+        }
+        let geometry = scene_geometry(placements, self.content, self.cell)?;
+        placements
+            .iter()
+            .zip(geometry)
+            .map(|(p, geometry)| {
+                let regions = native_regions(geometry, self.clip, &self.holes);
+                if regions.len() > MAX_NATIVE_REGIONS
+                    || (!regions.is_empty()
+                        && p.image.file_pixels().is_none()
+                        && p.image.pixels().is_none())
+                {
+                    return None;
+                }
+                Some(regions)
+            })
+            .collect()
+    }
 }
 
 fn native_scene_supported(clip: ratatui::layout::Rect) -> bool {

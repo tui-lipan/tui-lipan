@@ -1594,3 +1594,10 @@ Cursor identities survive movement and source retransmission until the placement
 Placeholder identities describe the virtual placement origin in absolute retained grid coordinates.
 `Unassigned` denotes an image placement without parser identity. These logical identities do not
 expose the host terminal's image or placement IDs.
+
+### Terminal presentation
+
+With `terminal`, `PresentedTerminal` contains `stable_terminal_id: u64` and `token: u64`.
+`TerminalPresentationSubscription` unregisters a successful-host-frame observer when dropped.
+`UpdateLevel::TerminalGraphics` requests native scene reconciliation and widens automatically when
+composition or plan invalidation requires terminal paint.

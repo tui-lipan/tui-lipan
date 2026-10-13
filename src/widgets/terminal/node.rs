@@ -57,6 +57,8 @@ pub(crate) struct TerminalNode {
     /// Sequence of the snapshot the fields above were last filled from, so a refresh that finds the
     /// screen unmoved does nothing.
     pub live_sequence: Option<u64>,
+    pub live_cell_generation: u64,
+    pub presentation: Option<super::presentation::PresentedTerminal>,
     /// Cursor visibility the app asked for, ANDed with what the live screen reports. A pane that is
     /// exited or wearing hint labels hides its caret no matter what the child program wants.
     pub show_cursor_requested: bool,
@@ -117,7 +119,7 @@ impl TerminalNode {
     /// here and only here, so a later consumer - the snapshot rebuild, an incremental repaint -
     /// takes it from the returned value rather than asking the screen again and starving whoever
     /// asks second.
-    pub(crate) fn refresh_from_live_screen(&mut self) -> Option<TerminalDamage> {
+    pub(crate) fn refresh_from_live_screen(&mut self) -> Option<(TerminalDamage, bool)> {
         let screen = self.screen.clone()?;
         let snapshot = screen.snapshot();
         let snapshot = if self.decorations.is_empty() {
@@ -125,20 +127,25 @@ impl TerminalNode {
         } else {
             snapshot.decorated(&self.decorations)
         };
+        self.presentation = snapshot.presentation;
         if self.live_sequence == Some(snapshot.sequence) {
             return None;
         }
+        let graphics_only =
+            self.live_cell_generation == snapshot.cell_generation && self.decorations.is_empty();
+        self.live_cell_generation = snapshot.cell_generation;
         self.live_sequence = Some(snapshot.sequence);
         self.apply_snapshot(&snapshot);
         // Decorations are painted over the snapshot after the fact, so the rows they touch are not
         // in the emulator's damage. Rather than reconcile the two, a decorated terminal reports
         // full damage and takes the ordinary path.
-        Some(if self.decorations.is_empty() {
+        let damage = if self.decorations.is_empty() {
             screen.take_damage()
         } else {
             let _ = screen.take_damage();
             TerminalDamage::Full
-        })
+        };
+        Some((damage, graphics_only))
     }
 
     /// Fill the snapshot-derived fields, keeping the scroll rules `reconcile_terminal` establishes:
@@ -156,6 +163,7 @@ impl TerminalNode {
         {
             self.link_hover = None;
         }
+        self.presentation = snapshot.presentation;
         self.text = snapshot.text.clone();
         self.lines = snapshot.color_lines.clone();
         self.wrapped_rows = snapshot.wrapped_rows.clone();

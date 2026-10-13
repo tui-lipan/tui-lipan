@@ -568,3 +568,16 @@ rsx! {
 ```
 
 > Without a key, reconciliation uses position, which breaks when items are added/removed.
+
+### Terminal presentation observers
+
+With `terminal`, `Context::observe_terminal_presentations(callback)` registers a passive observer
+for successful host frames. Keep its `TerminalPresentationSubscription` alive; dropping it removes
+the callback. The payload is `Vec<PresentedTerminal>`, with the highest application token per
+visible screen in that frame. Set tokens with `TerminalScreen::set_presentation_token()` after
+processing output. Unlike painted-frame captures, this observer performs no software render.
+
+`Update::terminal_graphics()` requests the narrowest visual update for retained terminal graphics.
+The runtime widens it when the native presentation plan cannot reproduce the scene correctly.
+Adding `UpdateLevel::TerminalGraphics` is a breaking enum change: exhaustive matches must handle
+it below `TerminalPaint` and above `None`.

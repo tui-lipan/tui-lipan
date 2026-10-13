@@ -659,7 +659,9 @@ impl<C: Component> AppRunner<C> {
                     }
                     DirtyLevel::PaintOnly | DirtyLevel::None => return Ok(false),
                     #[cfg(feature = "terminal")]
-                    DirtyLevel::TerminalPaintOnly => return Ok(false),
+                    DirtyLevel::TerminalPaintOnly | DirtyLevel::TerminalGraphicsOnly => {
+                        return Ok(false);
+                    }
                 }
 
                 if pass + 1 == RENDER_STABILITY_MAX_PASSES {
@@ -856,6 +858,81 @@ impl<C: Component> AppRunner<C> {
     /// how to draw. Anything it cannot handle falls through to the ordinary paint over the tree it
     /// already refreshed.
     #[cfg(feature = "terminal")]
+    pub(super) fn render_terminal_graphics_only(
+        &mut self,
+        terminal: &mut crate::backend::ratatui_backend::Terminal,
+    ) -> Result<()> {
+        self.render_terminal_paint_only(terminal)
+    }
+
+    #[cfg(feature = "terminal-images")]
+    fn try_present_terminal_graphics(
+        &mut self,
+        terminal: &mut crate::backend::ratatui_backend::Terminal,
+        refresh: &crate::core::node::LiveTerminalRefresh,
+    ) -> Result<bool> {
+        if !refresh.text_damage.is_empty()
+            || refresh.graphics_only.len() != refresh.damage.len()
+            || self.surface.is_inline()
+            || self.graphics_plan_epoch
+                != Some(self.graphics_presentation_epochs(terminal.get_frame().area()))
+        {
+            return Ok(false);
+        }
+        let updates =
+            refresh
+                .graphics_only
+                .iter()
+                .filter_map(|id| match &self.core.tree.node(*id).kind {
+                    crate::core::node::NodeKind::Terminal(node) => {
+                        Some((*id, node.images.as_ref()))
+                    }
+                    _ => None,
+                });
+        match terminal.backend_mut().present_graphics(updates) {
+            Ok(presented) => {
+                if presented {
+                    let reports = self.presented_graphics_tokens(terminal, &refresh.graphics_only);
+                    self.core
+                        .ctx
+                        .env()
+                        .terminal_presentation_observers
+                        .deliver(reports);
+                }
+                Ok(presented)
+            }
+            Err(error)
+                if crate::backend::ratatui_backend::renderers::image::native_source_unavailable(
+                    &error,
+                ) =>
+            {
+                Ok(false)
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    #[cfg(feature = "terminal-images")]
+    fn presented_graphics_tokens(
+        &self,
+        terminal: &crate::backend::ratatui_backend::Terminal,
+        owners: &[NodeId],
+    ) -> Vec<crate::widgets::PresentedTerminal> {
+        owners
+            .iter()
+            .filter_map(|id| {
+                if !terminal.backend().terminal_graphics_visible(*id) {
+                    return None;
+                }
+                match &self.core.tree.node(*id).kind {
+                    NodeKind::Terminal(node) => node.presentation,
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
+    #[cfg(feature = "terminal")]
     pub(super) fn render_terminal_paint_only(
         &mut self,
         terminal: &mut crate::backend::ratatui_backend::Terminal,
@@ -875,6 +952,10 @@ impl<C: Component> AppRunner<C> {
 
         let refresh = self.core.tree.refresh_live_terminals_detailed();
         if !refresh.changed {
+            return Ok(());
+        }
+        #[cfg(feature = "terminal-images")]
+        if self.try_present_terminal_graphics(terminal, &refresh)? {
             return Ok(());
         }
         self.emit_terminal_focus_change();
@@ -1043,7 +1124,11 @@ impl<C: Component> AppRunner<C> {
         if let Some(title) = &self.title {
             let _ = execute!(terminal.backend_mut(), Print(format!("\x1b]2;{title}\x07")));
         }
-        let _ = execute!(terminal.backend_mut(), Print("\x1b[?2026h"));
+        #[cfg(feature = "terminal")]
+        let presentations = crate::widgets::presentation::PresentationScope::begin();
+        #[cfg(feature = "terminal")]
+        let output_epoch = terminal.backend().output_epoch();
+        execute!(terminal.backend_mut(), Print("\x1b[?2026h"))?;
         #[cfg(any(feature = "devtools", feature = "profiling-tracing"))]
         let draw_start = Instant::now();
         let current_scroll_frames = capture_scroll_frames(&self.core.tree);
@@ -1129,8 +1214,12 @@ impl<C: Component> AppRunner<C> {
             target: "tui_lipan::perf",
             draw_ms = draw_duration.as_secs_f64() * 1000.0
         );
-        let _ = execute!(terminal.backend_mut(), Print("\x1b[?2026l"));
+        execute!(terminal.backend_mut(), Print("\x1b[?2026l"))?;
 
+        #[cfg(feature = "terminal-images")]
+        {
+            self.graphics_plan_epoch = Some(self.graphics_presentation_epochs(frame_area));
+        }
         self.last_scroll_frames = current_scroll_frames;
 
         self.set_viewport_metrics(frame_area);
@@ -1143,6 +1232,24 @@ impl<C: Component> AppRunner<C> {
             self.focus.focused,
             &self.widgets.text_area_vim_state,
         )?;
+        std::io::Write::flush(terminal.backend_mut())?;
+        #[cfg(feature = "terminal")]
+        if terminal.backend().output_epoch() == output_epoch {
+            self.core
+                .ctx
+                .env()
+                .terminal_presentation_observers
+                .deliver(presentations.take());
+            #[cfg(feature = "terminal-images")]
+            {
+                self.native_terminal_plans = terminal.backend().native_plan_owners();
+            }
+        } else {
+            #[cfg(feature = "terminal-images")]
+            {
+                self.graphics_plan_epoch = None;
+            }
+        }
 
         #[cfg(any(feature = "devtools", feature = "profiling-tracing"))]
         {

@@ -17,6 +17,8 @@ mod program_status;
 pub use program_status::{
     ProgramStatusEvent, ProgramStatusRecord, ProgramStatusSnapshot, ProgramStatusState,
 };
+pub(crate) mod presentation;
+pub use presentation::{PresentedTerminal, TerminalPresentationSubscription};
 mod pty;
 mod reconcile;
 mod screen;

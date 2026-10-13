@@ -504,4 +504,7 @@ pub use crate::widgets::{
 };
 
 #[cfg(feature = "terminal")]
-pub use widgets::{DamagedRow, GraphicsDamage, TerminalDamage, TerminalMutation};
+pub use widgets::{
+    DamagedRow, GraphicsDamage, PresentedTerminal, TerminalDamage, TerminalMutation,
+    TerminalPresentationSubscription,
+};

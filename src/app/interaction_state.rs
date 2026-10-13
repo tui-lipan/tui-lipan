@@ -28,6 +28,9 @@ pub(crate) enum DirtyLevel {
     /// Nothing to re-render.
     #[default]
     None,
+    /// Reconcile native terminal graphics without painting cells when the cached plan is valid.
+    #[cfg(feature = "terminal")]
+    TerminalGraphicsOnly,
     /// Draw-only update whose sole change is live terminal content, so terminal damage may be
     /// used to repaint just the rows that moved. Any other source in the same frame promotes this
     /// to [`PaintOnly`](Self::PaintOnly).
@@ -44,30 +47,27 @@ pub(crate) enum DirtyLevel {
 impl DirtyLevel {
     #[inline]
     pub fn merge(&mut self, other: DirtyLevel) {
-        match (*self, other) {
-            (_, DirtyLevel::None) => {}
-            (DirtyLevel::Full, _) => {}
-            (_, DirtyLevel::Full) => *self = DirtyLevel::Full,
-            (DirtyLevel::LayoutOnly, DirtyLevel::PaintOnly) => {}
-            (_, DirtyLevel::LayoutOnly) => *self = DirtyLevel::LayoutOnly,
-            (DirtyLevel::None, DirtyLevel::PaintOnly) => *self = DirtyLevel::PaintOnly,
-            (DirtyLevel::PaintOnly, DirtyLevel::PaintOnly) => {}
-            // A terminal-only frame survives only while every source in it says the same thing.
-            // Mixing in a generic paint widens it, which is what makes eligibility something the
-            // frame proves rather than something inferred from what was not observed.
-            #[cfg(feature = "terminal")]
-            (DirtyLevel::LayoutOnly, DirtyLevel::TerminalPaintOnly) => {}
-            #[cfg(feature = "terminal")]
-            (DirtyLevel::PaintOnly, DirtyLevel::TerminalPaintOnly) => {}
-            #[cfg(feature = "terminal")]
-            (DirtyLevel::TerminalPaintOnly, DirtyLevel::PaintOnly) => *self = DirtyLevel::PaintOnly,
-            #[cfg(feature = "terminal")]
-            (DirtyLevel::TerminalPaintOnly, DirtyLevel::TerminalPaintOnly) => {}
-            #[cfg(feature = "terminal")]
-            (DirtyLevel::None, DirtyLevel::TerminalPaintOnly) => {
-                *self = DirtyLevel::TerminalPaintOnly
-            }
+        if other.rank() > self.rank() {
+            *self = other;
         }
+    }
+
+    fn rank(self) -> u8 {
+        match self {
+            Self::None => 0,
+            #[cfg(feature = "terminal")]
+            Self::TerminalGraphicsOnly => 1,
+            #[cfg(feature = "terminal")]
+            Self::TerminalPaintOnly => 2,
+            Self::PaintOnly => 3,
+            Self::LayoutOnly => 4,
+            Self::Full => 5,
+        }
+    }
+
+    #[cfg(feature = "terminal")]
+    pub fn set_terminal_graphics(&mut self) {
+        self.merge(Self::TerminalGraphicsOnly);
     }
 
     /// Mark a frame whose only change is live terminal content.
@@ -117,6 +117,11 @@ impl DirtyTracker {
     #[inline]
     pub fn mark_paint(&mut self) {
         self.level.set_paint();
+    }
+
+    #[cfg(feature = "terminal")]
+    pub fn mark_terminal_graphics(&mut self) {
+        self.level.set_terminal_graphics();
     }
 
     /// See [`DirtyLevel::set_terminal_paint`].
@@ -543,8 +548,9 @@ mod tests {
     ];
 
     #[cfg(feature = "terminal")]
-    const ALL_LEVELS: [DirtyLevel; 5] = [
+    const ALL_LEVELS: [DirtyLevel; 6] = [
         DirtyLevel::None,
+        DirtyLevel::TerminalGraphicsOnly,
         DirtyLevel::TerminalPaintOnly,
         DirtyLevel::PaintOnly,
         DirtyLevel::LayoutOnly,
@@ -587,10 +593,12 @@ mod tests {
                 // Strictly narrower than a generic paint: it promises more, so it must lose to
                 // one whichever order they merge in.
                 #[cfg(feature = "terminal")]
-                DirtyLevel::TerminalPaintOnly => 1,
-                DirtyLevel::PaintOnly => 2,
-                DirtyLevel::LayoutOnly => 3,
-                DirtyLevel::Full => 4,
+                DirtyLevel::TerminalGraphicsOnly => 1,
+                #[cfg(feature = "terminal")]
+                DirtyLevel::TerminalPaintOnly => 2,
+                DirtyLevel::PaintOnly => 3,
+                DirtyLevel::LayoutOnly => 4,
+                DirtyLevel::Full => 5,
             }
         }
 

@@ -252,23 +252,26 @@ pub use crate::host_reads_shared_frames;
 pub use crate::widgets::TerminalPtyHandoff;
 #[cfg(feature = "terminal")]
 pub use crate::widgets::{
-    CopyModeAction, CopyModeGrid, KittyKeyboardFlags, ManagedTerminal, ManagedTerminalProps,
-    ManagedTerminalStatus, MouseEncoding, MouseMode, MouseModeState, ProgramStatusEvent,
-    ProgramStatusRecord, ProgramStatusSnapshot, ProgramStatusState, ScrollbackLineage,
-    SemanticMark, SemanticMarkKind, Terminal, TerminalBuffer, TerminalCellSize,
-    TerminalClipboardEvent, TerminalClipboardTarget, TerminalColorPalette, TerminalCommandPhase,
-    TerminalCopyMode, TerminalDecoration, TerminalHyperlink, TerminalInputEvent, TerminalInputKind,
-    TerminalKeyModes, TerminalLinkEvent, TerminalLogicalLine, TerminalPasteShortcutBehavior,
-    TerminalPos, TerminalPty, TerminalPtyConfig, TerminalPtyError, TerminalPtyEvent,
-    TerminalRenderSnapshot, TerminalScreen, TerminalScreenHandle, TerminalSelection,
-    TerminalSelectionEvent, TerminalSemanticEvent, TerminalSemanticState, TerminalTextPosition,
-    TerminalViewport, TerminalWorkingDirectory, TerminalWorkingDirectorySource, absolute_line,
-    encode_paste, focus_sequences, from_viewport, key_event_to_bytes, mouse_event_to_bytes,
-    paste_sequences, terminal_selection_text, to_viewport, viewport_row,
+    CopyModeAction, CopyModeGrid, DamagedRow, GraphicsDamage, KittyKeyboardFlags, ManagedTerminal,
+    ManagedTerminalProps, ManagedTerminalStatus, MouseEncoding, MouseMode, MouseModeState,
+    PresentedTerminal, ProgramStatusEvent, ProgramStatusRecord, ProgramStatusSnapshot,
+    ProgramStatusState, ScrollbackLineage, SemanticMark, SemanticMarkKind, Terminal,
+    TerminalBuffer, TerminalCellSize, TerminalClipboardEvent, TerminalClipboardTarget,
+    TerminalColorPalette, TerminalCommandPhase, TerminalCopyMode, TerminalDamage,
+    TerminalDecoration, TerminalHyperlink, TerminalInputEvent, TerminalInputKind, TerminalKeyModes,
+    TerminalLinkEvent, TerminalLogicalLine, TerminalMutation, TerminalPasteShortcutBehavior,
+    TerminalPos, TerminalPresentationSubscription, TerminalPty, TerminalPtyConfig,
+    TerminalPtyError, TerminalPtyEvent, TerminalRenderSnapshot, TerminalScreen,
+    TerminalScreenHandle, TerminalSelection, TerminalSelectionEvent, TerminalSemanticEvent,
+    TerminalSemanticState, TerminalTextPosition, TerminalViewport, TerminalWorkingDirectory,
+    TerminalWorkingDirectorySource, absolute_line, encode_paste, focus_sequences, from_viewport,
+    key_event_to_bytes, mouse_event_to_bytes, paste_sequences, terminal_selection_text,
+    to_viewport, viewport_row,
 };
 #[cfg(feature = "terminal-images")]
 pub use crate::widgets::{
-    GraphicsMediaPolicy, TerminalImage, TerminalImageCrop, TerminalImagePlacement,
+    GraphicsMediaPolicy, ImagePlacementIdentity, ImagePlacementKey, ImageSourceKey,
+    ImageSourceRevision, TerminalImage, TerminalImageCrop, TerminalImagePlacement,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use crate::{PixelPointerStatus, pixel_pointer_status};

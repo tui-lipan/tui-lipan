@@ -606,9 +606,21 @@ A query or incomplete upload does not request visual work. Live screen handles r
 runner wakeups instead of imposing a frame-rate poll while quiet. A handle outliving its runner
 returns to the compatibility polling path.
 
-The native scene foundation still uses the ordinary terminal repaint path for graphics changes.
-It does not yet provide graphics-only cell-tree bypass, presentation acknowledgements, transport
-coalescing, or producer pacing.
+`Update::terminal_graphics()` sends the scene diff directly when the last successful native
+presentation plan remains valid, without painting the cell tree. Layout, terminal and overlay
+geometry, effects, backdrop generations, measured host cells and capabilities invalidate the plan.
+Composition and unsupported scenes widen to terminal paint automatically. Unchanged native panes
+also retain their full presentation plans during partial text-row paints elsewhere in the tree,
+so image-bearing trees no longer categorically require a full paint.
+
+Continuous terminal output, graphics, pointer motion, drags and animations share phase-preserving
+frame deadlines. Late frames skip slots without moving the phase. Input opens a 50 ms answer
+window; layout and full updates can present immediately.
+
+`TerminalScreen::set_presentation_token()` associates application sequences with retained state.
+`Context::observe_terminal_presentations()` batches reports after successful, undiscarded host
+writes. Parsing, captures and recording renders do not report presentation. Transport coalescing
+and producer pacing belong to the session application.
 
 Foundation validation on 2026-10-13 used `terminal_patch_layers` with native and composed modes in isolated
 Ghostty windows at 980×720, scale 1, JetBrainsMono NF. Image-only, text-overlay, and block-overlay

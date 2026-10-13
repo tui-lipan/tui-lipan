@@ -8,6 +8,11 @@ tui-lipan = { version = "*", features = ["terminal"] }
 
 ## ManagedTerminal
 
+PTY output reaches a retained live screen. Completed parser mutations select graphics-only,
+terminal-cell or invisible updates instead of rebuilding the component for every output event.
+The PTY reader pushes messages to the runner; quiet managed terminals do not impose frame-rate
+polling. Lifecycle, status and resize changes retain their normal component updates.
+
 The recommended starting point: a complete PTY terminal with automatic lifecycle management. No manual wiring needed.
 
 | Prop | Type | Description |
@@ -1056,3 +1061,24 @@ cursor placements. Deleting and reusing the ID creates a new incarnation. An id-
 receives a fresh assigned ID. `TerminalImagePlacement::placement_key()` survives source replacement
 and viewport scrolling; placeholder identities use their absolute retained grid origins. Host
 resource IDs are presentation details and are not part of replay or capture semantics.
+
+### Graphics-only updates and successful presentation
+
+Return `Update::terminal_graphics()` when retained graphics are the only visual change. The runtime
+uses the previous native plan without painting cells. Composition, changed geometry, overlays,
+effects or host capabilities automatically widen to terminal paint. Queries and metadata without
+visual changes can return `Update::none()`.
+
+`TerminalRenderSnapshot::cell_generation` and `graphics_generation` let observers detect visual
+changes even after another consumer reads `take_mutation()`. Graphics-only snapshots reuse the
+retained cell content. **Migration:** exhaustive snapshot literals must supply the new generation
+fields and `presentation`, or use `..TerminalRenderSnapshot::default()`.
+
+Call `screen.set_presentation_token(sequence)` after processing application output. Subscribe using
+`ctx.observe_terminal_presentations(ctx.link().callback(Msg::Presented))` and retain the returned
+`TerminalPresentationSubscription` in component state. Each callback receives a batch of
+`PresentedTerminal { stable_terminal_id, token }` for terminal state included in a successfully
+written host frame. `screen.stable_terminal_id()` identifies the screen across mounted widgets.
+Tokens do not trigger a frame. Failed writes and discarded frames do not report tokens, and
+software captures and recording renders do not count as host presentation. A handler that only
+forwards acknowledgements should return `Update::none()`.
