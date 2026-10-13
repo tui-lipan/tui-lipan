@@ -58,6 +58,8 @@ mod progress_empty_track_surface;
 mod retained_scroll_popover;
 #[path = "suites/widget_behavior/roving_focus.rs"]
 mod roving_focus;
+#[path = "suites/widget_behavior/search_palette_row_fit.rs"]
+mod search_palette_row_fit;
 #[path = "suites/widget_behavior/select_button_padding_render.rs"]
 mod select_button_padding_render;
 #[path = "suites/widget_behavior/select_keeps_focus.rs"]

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::style::{RowStylePolicy, Span, Style};
+use crate::style::{Length, RowStylePolicy, Span, Style};
 use crate::utils::gradient::{ColorGradient, GradientRange};
 use crate::widgets::list::ListItemSpinnerSlot;
 use crate::widgets::{
@@ -33,6 +33,8 @@ pub(super) struct RenderStyles {
     pub description_selection: bool,
     pub description_overflow: DescriptionOverflow,
     pub primary_truncate_description_first: bool,
+    pub primary_description_gap: u16,
+    pub primary_min_label_width: Option<Length>,
     pub line_width: Option<u16>,
     pub highlight: Style,
 }
@@ -399,6 +401,7 @@ fn default_render<T>(
                         let label_width = spans_width(&label_spans) as u16;
                         let mut desc_budget = width
                             .saturating_sub(label_width)
+                            .saturating_sub(styles.primary_description_gap)
                             .saturating_sub(description_spinner_width);
                         if score_width > 0 {
                             desc_budget = desc_budget.saturating_sub(score_width.saturating_add(2));
@@ -414,7 +417,8 @@ fn default_render<T>(
                 if !desc_right.is_empty() {
                     let separated_by_spinner = description_spinner.is_some()
                         && matches!(description_spinner_position, ListSymbolPosition::Left);
-                    if !separated_by_spinner {
+                    // A gap holds the description off the label itself.
+                    if !separated_by_spinner && styles.primary_description_gap == 0 {
                         primary_right_spans.push(
                             Span::new(" ")
                                 .style(description_style)
@@ -467,7 +471,7 @@ fn default_render<T>(
                     .style(description_style)
                     .row_style_policy(description_row_policy),
             );
-        } else {
+        } else if styles.primary_description_gap == 0 {
             primary_right_spans.push(
                 Span::new(" ")
                     .style(description_style)
@@ -506,8 +510,14 @@ fn default_render<T>(
     {
         if styles.primary_truncate_description_first {
             let label_width = spans_width(&label_spans) as u16;
-            let right_budget = width.saturating_sub(label_width);
+            let right_budget = width
+                .saturating_sub(label_width)
+                .saturating_sub(styles.primary_description_gap);
             primary_right_spans = truncate_spans_with_ellipsis(&primary_right_spans, right_budget);
+            // With a gap, a description cut to nothing but `…` is hidden, as List hides one.
+            if styles.primary_description_gap > 0 && is_bare_ellipsis(&primary_right_spans) {
+                primary_right_spans.clear();
+            }
         } else {
             // Keep the metadata available to List's label-first allocator. Only cap the metadata
             // itself when it cannot fit on a row even without a label.
@@ -538,16 +548,19 @@ fn default_render<T>(
             list_item = list_item.line(line);
         }
 
-        list_item = list_item.line(
-            ListItemLine::from_spans(label_spans)
-                .style(styles.item)
-                .description_spans(primary_right_spans)
-                .selection_label(true)
-                .selection_description(primary_right_highlight)
-                .hover_label(true)
-                .hover_description(primary_right_hover)
-                .truncate_description_first(primary_truncate_description_first),
-        );
+        let mut primary_line = ListItemLine::from_spans(label_spans)
+            .style(styles.item)
+            .description_spans(primary_right_spans)
+            .selection_label(true)
+            .selection_description(primary_right_highlight)
+            .hover_label(true)
+            .hover_description(primary_right_hover)
+            .truncate_description_first(primary_truncate_description_first)
+            .description_gap(styles.primary_description_gap);
+        if let Some(width) = styles.primary_min_label_width {
+            primary_line = primary_line.min_label_width(width);
+        }
+        list_item = list_item.line(primary_line);
 
         for line in bottom_lines {
             list_item = list_item.line(line);
@@ -560,7 +573,11 @@ fn default_render<T>(
         .active(item.active)
         .primary_selection_description(primary_right_highlight)
         .primary_hover_description(primary_right_hover)
-        .primary_truncate_description_first(primary_truncate_description_first);
+        .primary_truncate_description_first(primary_truncate_description_first)
+        .primary_description_gap(styles.primary_description_gap);
+    if let Some(width) = styles.primary_min_label_width {
+        list_item = list_item.primary_min_label_width(width);
+    }
     if !primary_right_spans.is_empty() {
         list_item = list_item.description_spans(primary_right_spans);
     }
@@ -632,6 +649,15 @@ fn inline_truncate(
     let desc_budget = line_budget.saturating_sub(label_width.saturating_add(separator_width));
     out.extend(truncate_spans_with_ellipsis(&desc_spans, desc_budget));
     out
+}
+
+/// Whether `spans` hold nothing but a single `…`.
+fn is_bare_ellipsis(spans: &[Span]) -> bool {
+    spans
+        .iter()
+        .map(|span| span.content.trim())
+        .filter(|content| !content.is_empty())
+        .eq(["…"])
 }
 
 fn truncate_spans_with_ellipsis(spans: &[Span], max_width: u16) -> Vec<Span> {
@@ -813,6 +839,8 @@ mod tests {
             description_selection: true,
             description_overflow: DescriptionOverflow::Truncate,
             primary_truncate_description_first: true,
+            primary_description_gap: 0,
+            primary_min_label_width: None,
             line_width: None,
             highlight: Style::default(),
         }
@@ -896,6 +924,8 @@ mod tests {
                 description_selection: false,
                 description_overflow: DescriptionOverflow::Truncate,
                 primary_truncate_description_first: true,
+                primary_description_gap: 0,
+                primary_min_label_width: None,
                 line_width: Some(20),
                 highlight: Style::default(),
             },
@@ -931,6 +961,8 @@ mod tests {
                 description_selection: false,
                 description_overflow: DescriptionOverflow::Truncate,
                 primary_truncate_description_first: true,
+                primary_description_gap: 0,
+                primary_min_label_width: None,
                 line_width: Some(20),
                 highlight: Style::default(),
             },
@@ -980,6 +1012,8 @@ mod tests {
                 description_selection: true,
                 description_overflow: DescriptionOverflow::Truncate,
                 primary_truncate_description_first: true,
+                primary_description_gap: 0,
+                primary_min_label_width: None,
                 line_width: Some(20),
                 highlight: Style::default(),
             },
@@ -1014,6 +1048,8 @@ mod tests {
                 description_selection: true,
                 description_overflow: DescriptionOverflow::Truncate,
                 primary_truncate_description_first: true,
+                primary_description_gap: 0,
+                primary_min_label_width: None,
                 line_width: Some(11),
                 highlight: Style::default(),
             },
@@ -1054,6 +1090,8 @@ mod tests {
                 description_selection: true,
                 description_overflow: DescriptionOverflow::Truncate,
                 primary_truncate_description_first: true,
+                primary_description_gap: 0,
+                primary_min_label_width: None,
                 line_width: Some(10),
                 highlight: Style::default(),
             },
@@ -1089,6 +1127,8 @@ mod tests {
                 description_selection: true,
                 description_overflow: DescriptionOverflow::Truncate,
                 primary_truncate_description_first: false,
+                primary_description_gap: 0,
+                primary_min_label_width: None,
                 line_width: Some(30),
                 highlight: Style::default(),
             },
@@ -1132,6 +1172,8 @@ mod tests {
                 description_selection: true,
                 description_overflow: DescriptionOverflow::Truncate,
                 primary_truncate_description_first: true,
+                primary_description_gap: 0,
+                primary_min_label_width: None,
                 line_width: Some(10),
                 highlight: Style::default(),
             },
@@ -1167,6 +1209,8 @@ mod tests {
                 description_selection: true,
                 description_overflow: DescriptionOverflow::Wrap,
                 primary_truncate_description_first: true,
+                primary_description_gap: 0,
+                primary_min_label_width: None,
                 line_width: Some(11),
                 highlight: Style::default(),
             },
@@ -1207,6 +1251,8 @@ mod tests {
                 description_selection: false,
                 description_overflow: DescriptionOverflow::Truncate,
                 primary_truncate_description_first: true,
+                primary_description_gap: 0,
+                primary_min_label_width: None,
                 line_width: Some(20),
                 highlight: Style::default(),
             },
@@ -1241,6 +1287,8 @@ mod tests {
                 description_selection: true,
                 description_overflow: DescriptionOverflow::Wrap,
                 primary_truncate_description_first: true,
+                primary_description_gap: 0,
+                primary_min_label_width: None,
                 line_width: Some(10),
                 highlight: Style::default(),
             },
@@ -1283,6 +1331,8 @@ mod tests {
                 description_selection: true,
                 description_overflow: DescriptionOverflow::Truncate,
                 primary_truncate_description_first: true,
+                primary_description_gap: 0,
+                primary_min_label_width: None,
                 line_width: Some(5),
                 highlight: Style::default(),
             },
@@ -1316,6 +1366,8 @@ mod tests {
                 description_selection: false,
                 description_overflow: DescriptionOverflow::Truncate,
                 primary_truncate_description_first: true,
+                primary_description_gap: 0,
+                primary_min_label_width: None,
                 line_width: Some(20),
                 highlight: Style::default(),
             },
@@ -1351,6 +1403,8 @@ mod tests {
                 description_selection: true,
                 description_overflow: DescriptionOverflow::Wrap,
                 primary_truncate_description_first: true,
+                primary_description_gap: 0,
+                primary_min_label_width: None,
                 line_width: Some(4),
                 highlight: Style::default(),
             },
@@ -1387,6 +1441,8 @@ mod tests {
                 description_selection: true,
                 description_overflow: DescriptionOverflow::Truncate,
                 primary_truncate_description_first: true,
+                primary_description_gap: 0,
+                primary_min_label_width: None,
                 line_width: Some(20),
                 highlight: Style::default(),
             },
@@ -1425,6 +1481,8 @@ mod tests {
                 description_selection: true,
                 description_overflow: DescriptionOverflow::Truncate,
                 primary_truncate_description_first: true,
+                primary_description_gap: 0,
+                primary_min_label_width: None,
                 line_width: Some(20),
                 highlight: Style::default(),
             },

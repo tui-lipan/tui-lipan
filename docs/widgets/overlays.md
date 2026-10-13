@@ -619,6 +619,8 @@ to extend or inherit the scoped theme roles.
 | `description_selection` | `bool` | Whether selection highlight applies to description text |
 | `description_overflow` | `DescriptionOverflow` | Description overflow policy: `Truncate` or `Wrap` (`Wrap` applies to `Above`/`Below`) |
 | `primary_truncate_description_first` | `bool` | Truncate right-aligned primary description before the label (default: `true`); set `false` to keep metadata visible and truncate the label first |
+| `primary_description_gap` | `u16` | Blank columns between a row's label and its right-aligned description (default: `0`, a single space). With a gap, a description cut to a bare `…` is hidden |
+| `primary_min_label_width` | `Length` | With `primary_truncate_description_first(false)`, the share of the row the label keeps before the description is cut further, e.g. `Length::Percent(40)`; see `ListItem::primary_min_label_width` |
 | `match_style` | `Style` | Matched character style |
 | `show_scores` | `bool` | Show numeric match scores |
 | `score_gradient` | `ColorGradient` | Gradient for score coloring |
