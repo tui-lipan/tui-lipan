@@ -88,6 +88,7 @@ rustc-hash = "2"
 smallvec = "1"
 
 base64 = "0.23.1"
+memchr = { version = "2.8.3", optional = true }
 
 thiserror = "2.0.19"
 tracing = { version = "0.1", optional = true }
@@ -176,7 +177,7 @@ image-full-formats = ["image?/default-formats", "ratatui-image?/image-defaults"]
 syntax-syntect = ["dep:syntect"]
 syntax-extra = ["syntax-syntect", "dep:two-face"]
 markdown       = ["dep:pulldown-cmark"]
-terminal      = ["dep:portable-pty", "dep:alacritty_terminal"]
+terminal      = ["dep:portable-pty", "dep:alacritty_terminal", "dep:memchr"]
 terminal-images = ["terminal", "image", "dep:flate2", "dep:tempfile"]
 terminal-serde = ["terminal", "dep:serde"]
 profiling-tracing = ["dep:tracing"]

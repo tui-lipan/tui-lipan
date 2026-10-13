@@ -533,6 +533,8 @@ pub struct TerminalScreen {
     /// CSI sequences but cannot affect rendering, and its state is deliberately not part of
     /// `TerminalRenderSnapshot`.
     semantic_parser: SemanticVteParser,
+    program_status: super::program_status::ProgramStatusStore,
+    program_status_scanner: super::program_status::ProgramStatusScanner,
     semantic: SemanticObserver,
     /// Logical viewport rows (matches the PTY size).
     rows: u16,
@@ -1169,6 +1171,8 @@ impl TerminalScreen {
             terminal_identity: Arc::from(DEFAULT_TERMINAL_IDENTITY),
             xtversion_enabled: true,
             semantic_parser: SemanticVteParser::new(),
+            program_status: Default::default(),
+            program_status_scanner: Default::default(),
             semantic: SemanticObserver::default(),
             rows,
             cols,
@@ -1198,12 +1202,32 @@ impl TerminalScreen {
         screen
     }
 
+    /// Enable OSC 7501 records and feature replies. Disabled by default for passive parsers.
+    pub fn set_program_status_enabled(&mut self, enabled: bool) {
+        self.program_status.enabled = enabled;
+    }
+
+    /// Current terminal-owned records; independent of primary/alternate screen and resize.
+    pub fn program_status_snapshot(&self) -> super::ProgramStatusSnapshot {
+        self.program_status.snapshot()
+    }
+
+    /// Drain effective changes in PTY stream order, including repeated prompts and full resets.
+    pub fn drain_program_status_events(&mut self) -> Vec<super::ProgramStatusEvent> {
+        self.program_status.drain_events()
+    }
+
+    /// Drop active records when the attached process exits, before a replacement PTY starts.
+    pub fn program_status_process_exited(&mut self) {
+        self.program_status.clear_active();
+    }
+
     /// Feed terminal bytes.
     ///
     pub fn process_bytes(&mut self, bytes: &[u8]) {
-        let xtversion_boundaries = self.xtversion_boundaries(bytes);
-        let evicted = if self.xtversion_enabled && !xtversion_boundaries.is_empty() {
-            self.feed_grid_with_xtversion_boundaries(bytes, &xtversion_boundaries)
+        let response_boundaries = self.response_boundaries(bytes);
+        let evicted = if !response_boundaries.is_empty() {
+            self.feed_grid_with_response_boundaries(bytes, &response_boundaries)
         } else {
             self.feed_grid_with_prompt_boundaries(bytes)
         };
@@ -1259,8 +1283,13 @@ impl TerminalScreen {
         self.damage.take()
     }
 
-    fn xtversion_boundaries(&mut self, bytes: &[u8]) -> Vec<usize> {
-        let mut boundaries = Vec::new();
+    fn response_boundaries(&mut self, bytes: &[u8]) -> Vec<(usize, Vec<u8>)> {
+        let mut boundaries: Vec<_> = self
+            .program_status_scanner
+            .scan(bytes, &mut self.program_status)
+            .into_iter()
+            .map(|end| (end, super::program_status::RESPONSE.to_vec()))
+            .collect();
         let mut processed = 0;
         while processed < bytes.len() {
             let consumed = self
@@ -1270,22 +1299,25 @@ impl TerminalScreen {
                 break;
             }
             processed += consumed;
-            if self.semantic.take_xtversion_query() {
-                boundaries.push(processed);
+            if self.semantic.take_xtversion_query() && self.xtversion_enabled {
+                boundaries.push((processed, self.xtversion_response()));
             }
         }
+        boundaries.sort_by_key(|(end, _)| *end);
         boundaries
     }
 
-    fn feed_grid_with_xtversion_boundaries(&mut self, bytes: &[u8], boundaries: &[usize]) -> usize {
+    fn feed_grid_with_response_boundaries(
+        &mut self,
+        bytes: &[u8],
+        boundaries: &[(usize, Vec<u8>)],
+    ) -> usize {
         let mut evicted_total = 0;
         let mut start = 0;
-        for &end in boundaries {
+        for (end, response) in boundaries {
+            let end = *end;
             evicted_total += self.feed_grid_with_prompt_boundaries(&bytes[start..end]);
-            self.listener
-                .responses
-                .borrow_mut()
-                .push(self.xtversion_response());
+            self.listener.responses.borrow_mut().push(response.clone());
             start = end;
         }
         evicted_total + self.feed_grid_with_prompt_boundaries(&bytes[start..])
@@ -2828,6 +2860,8 @@ impl TerminalScreen {
         // (cwd/command phase/executable) - a child hard-reset (RIS) does not imply the shell's
         // last-known working directory or command lifecycle became invalid.
         self.semantic_parser = SemanticVteParser::new();
+        self.program_status.clear("");
+        self.program_status_scanner = Default::default();
         self.mouse_mode = MouseModeState::default();
         self.pixel_mouse = false;
         self.scrollback_offset = 0;

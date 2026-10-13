@@ -13,6 +13,10 @@ mod layout;
 mod mod_private;
 mod node;
 mod osc;
+mod program_status;
+pub use program_status::{
+    ProgramStatusEvent, ProgramStatusRecord, ProgramStatusSnapshot, ProgramStatusState,
+};
 mod pty;
 mod reconcile;
 mod screen;
