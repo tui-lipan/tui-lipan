@@ -230,8 +230,8 @@ fn text(value: &str, encoded: usize, decoded: usize) -> Option<Arc<str>> {
     Some(text.into())
 }
 
-/// Check every pair before resolving repeated keys. Invalid free text invalidates the report even
-/// if a later occurrence would replace it. Malformed pairs are skipped, unknown keys ignored.
+/// Check hard limits on every pair, then validate the last value of each text field.
+/// Malformed pairs are skipped, unknown keys ignored.
 fn pairs(body: &[u8]) -> Option<BTreeMap<&str, &str>> {
     let mut fields = BTreeMap::new();
     for pair in body.split(|b| *b == b':') {
@@ -255,8 +255,10 @@ fn pairs(body: &[u8]) -> Option<BTreeMap<&str, &str>> {
         if !pair_syntax(key, value) {
             continue;
         }
-        validate_text_pair(key, value)?;
         fields.insert(key, value);
+    }
+    for (key, value) in &fields {
+        validate_text_pair(key, value)?;
     }
     Some(fields)
 }
@@ -376,9 +378,6 @@ enum WireMode {
 impl ProgramStatusScanner {
     pub fn scan(&mut self, bytes: &[u8], store: &mut ProgramStatusStore) -> Vec<usize> {
         let mut replies = Vec::new();
-        if !store.enabled {
-            return replies;
-        }
         let mut i = 0;
         while i < bytes.len() {
             if matches!(self.mode, WireMode::Ground) {
@@ -480,10 +479,13 @@ impl ProgramStatusScanner {
     }
 
     fn finish(&self, store: &mut ProgramStatusStore) -> bool {
-        if !store.enabled || self.bytes > 4096 {
+        if self.bytes > 4096 {
             return false;
         }
         if let Some(body) = self.body.strip_prefix(b"7501;") {
+            if !store.enabled {
+                return false;
+            }
             if body == b"?" {
                 return true;
             }
@@ -542,7 +544,6 @@ mod tests {
             "state=done:msg=AA==",
             "state=done:title=woc=",
             "state=done:msg=/w==",
-            "state=done:msg=AA==:msg=SGk=",
             "state=done:id=bad$id",
             "state=done:id=a/b/c/d/e/f/g/h/i",
         ] {
@@ -571,6 +572,103 @@ mod tests {
             report(&mut s, &format!("state=working:progress={progress}"));
             assert!(s.program_status_snapshot().records[0].progress.is_none());
         }
+    }
+
+    #[test]
+    fn program_status_repeated_text_validates_last_value() {
+        for key in ["title", "msg"] {
+            for invalid in ["AA==", "woc=", "/w==", "A"] {
+                let mut s = screen();
+                report(&mut s, &format!("state=done:{key}={invalid}:{key}=SGk="));
+                let record = s.program_status_snapshot().records.remove(0);
+                let value = if key == "title" {
+                    record.title
+                } else {
+                    record.msg
+                };
+                assert_eq!(value.as_deref(), Some("Hi"), "{key}={invalid}");
+                let before = s.program_status_snapshot();
+                report(&mut s, &format!("state=done:{key}=SGk=:{key}={invalid}"));
+                assert_eq!(s.program_status_snapshot(), before);
+                report(&mut s, &format!("state=clear:{key}=SGk=:{key}={invalid}"));
+                assert_eq!(s.program_status_snapshot(), before);
+            }
+        }
+    }
+
+    #[test]
+    fn program_status_repeated_text_checks_every_encoded_limit() {
+        for (key, limit) in [("title", 256), ("msg", 2732)] {
+            let mut s = screen();
+            report(&mut s, "state=working");
+            let before = s.program_status_snapshot();
+            let oversized = "a".repeat(limit + 1);
+            report(&mut s, &format!("state=done:{key}={oversized}:{key}=SGk="));
+            assert_eq!(s.program_status_snapshot(), before);
+        }
+    }
+
+    #[test]
+    fn program_status_enablement_discards_partial_sequences() {
+        for (partial, suffix) in [
+            (b"\x1b]7501;state=work".as_slice(), b"ing\x07".as_slice()),
+            (b"\x1b]7501;?", b"\x07"),
+            (b"\x1b", b"]7501;state=working\x07"),
+        ] {
+            let mut s = screen();
+            s.process_bytes(partial);
+            s.set_program_status_enabled(false);
+            s.process_bytes(b"junk");
+            s.set_program_status_enabled(true);
+            s.process_bytes(suffix);
+            assert!(s.program_status_snapshot().records.is_empty());
+            assert!(s.drain_program_status_events().is_empty());
+            assert!(s.drain_responses().is_empty());
+            report(&mut s, "state=done");
+            assert_eq!(s.program_status_snapshot().records.len(), 1);
+        }
+        let mut s = screen();
+        s.set_program_status_enabled(false);
+        s.process_bytes(b"\x1b]7501;state=work");
+        s.set_program_status_enabled(true);
+        s.process_bytes(b"ing\x07");
+        assert!(s.program_status_snapshot().records.is_empty());
+    }
+
+    #[test]
+    fn program_status_redundant_enablement_preserves_partial_sequences() {
+        let mut s = screen();
+        s.process_bytes(b"\x1b]7501;state=work");
+        s.set_program_status_enabled(true);
+        s.process_bytes(b"ing\x07");
+        assert_eq!(
+            s.program_status_snapshot().records[0].state,
+            ProgramStatusState::Working
+        );
+    }
+
+    #[test]
+    fn program_status_disabled_still_observes_lifecycle() {
+        let mut s = screen();
+        report(&mut s, "state=working");
+        report(&mut s, "state=done:id=child");
+        s.drain_program_status_events();
+        let before = s.program_status_snapshot();
+        s.set_program_status_enabled(false);
+        report(&mut s, "state=error:id=child");
+        s.process_bytes(b"\x1b]7501;?\x07");
+        assert_eq!(s.program_status_snapshot(), before);
+        assert!(s.drain_responses().is_empty());
+        s.process_bytes(b"\x1b]133;A\x07");
+        let snapshot = s.program_status_snapshot();
+        assert_eq!(snapshot.records.len(), 1);
+        assert_eq!(snapshot.records[0].state, ProgramStatusState::Done);
+        assert_eq!(s.drain_program_status_events().len(), 1);
+        s.process_bytes(b"\x1bc");
+        assert!(s.program_status_snapshot().records.is_empty());
+        assert_eq!(s.drain_program_status_events().len(), 1);
+        s.set_program_status_enabled(true);
+        assert!(s.program_status_snapshot().records.is_empty());
     }
 
     #[test]

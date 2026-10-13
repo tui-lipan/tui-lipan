@@ -1006,6 +1006,8 @@ terminal with `screen.set_program_status_enabled(true)`. It is disabled by defau
 so a passive parser does not store competing records or answer feature queries.
 Drain terminal responses and write them to the child after each `process_bytes` call.
 OSC queries and device attribute replies preserve their input order.
+Changing enablement discards partial wire sequences. Disabling preserves existing
+records, but prompts, process exit and resets still apply their usual lifecycle rules.
 
 `program_status_snapshot()` returns at most 256 independent records in stable ID
 order, with a revision and report order. `drain_program_status_events()` returns
@@ -1020,7 +1022,9 @@ exit hook before replacing a child process that shares the same logical terminal
 Done, error and idle survive those events. RIS and `reset()` clear every record;
 soft reset, screen switching and resizing preserve them. No heartbeat is required.
 
-Titles and messages are decoded UTF-8 plain text, with protocol limits and control
-character checks. They remain untrusted text. Disarm bidirectional overrides and
-invisible formatting before displaying them outside the terminal grid, and never
-interpret them as markup. Feature replies contain no report-supplied data.
+For repeated fields, the last value wins. Encoded size limits apply to every
+occurrence; base64, UTF-8 and control character checks apply to the final title and
+message values. Titles and messages are decoded UTF-8 plain text. They remain
+untrusted text. Disarm bidirectional overrides and invisible formatting before
+displaying them outside the terminal grid, and never interpret them as markup.
+Feature replies contain no report-supplied data.

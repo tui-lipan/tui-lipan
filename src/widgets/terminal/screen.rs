@@ -1203,8 +1203,14 @@ impl TerminalScreen {
     }
 
     /// Enable OSC 7501 records and feature replies. Disabled by default for passive parsers.
+    ///
+    /// Changing enablement discards partial wire sequences. Existing records remain, with
+    /// prompt, process-exit and reset lifecycle handling still active while disabled.
     pub fn set_program_status_enabled(&mut self, enabled: bool) {
-        self.program_status.enabled = enabled;
+        if self.program_status.enabled != enabled {
+            self.program_status_scanner = Default::default();
+            self.program_status.enabled = enabled;
+        }
     }
 
     /// Current terminal-owned records; independent of primary/alternate screen and resize.
