@@ -82,12 +82,9 @@ impl<C: Component> AppRunner<C> {
             }
         }
 
-        // A child program writes whenever it likes and tells nobody, so every live terminal - not
-        // only the focused one - has to be looked at on a cadence. This is the whole frame rate a
-        // program drawing at video rates can reach through a pane, and the only cost a pane with
-        // nothing to say imposes.
+        // Legacy sources without a registered wakeup retain the compatibility cadence.
         #[cfg(feature = "terminal")]
-        if self.core.tree.has_live_terminals() {
+        if self.core.tree.has_polling_terminals() {
             poll_timeout = poll_timeout.min(self.frame_interval);
         }
 

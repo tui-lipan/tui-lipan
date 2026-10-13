@@ -37,6 +37,17 @@ pub(crate) struct NativeImageLease {
 }
 
 impl NativeImageLease {
+    /// New immutable revision sharing an existing logical source allocation.
+    pub(crate) fn next_revision(&self) -> Self {
+        let allocation = OnceLock::new();
+        if let Some(existing) = self.allocation.get().cloned().flatten() {
+            let _ = allocation.set(Some(existing));
+        }
+        Self {
+            allocation,
+            protocol: Mutex::default(),
+        }
+    }
     fn id(&self) -> Option<u32> {
         self.allocation().map(|allocation| allocation.id)
     }

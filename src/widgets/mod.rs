@@ -313,7 +313,10 @@ pub use terminal::{
     to_viewport, viewport_row,
 };
 #[cfg(feature = "terminal-images")]
-pub use terminal::{GraphicsMediaPolicy, TerminalImage, TerminalImageCrop, TerminalImagePlacement};
+pub use terminal::{
+    GraphicsMediaPolicy, ImagePlacementIdentity, ImagePlacementKey, ImageSourceKey,
+    ImageSourceRevision, TerminalImage, TerminalImageCrop, TerminalImagePlacement,
+};
 pub use text::{Overflow, Text, TextSource};
 pub use text_area::{
     IMAGE_SENTINEL_BASE, SENTINEL_BASE, SentinelEvent, SentinelId, TextArea,
@@ -349,3 +352,6 @@ pub use tree::{IndentStyle, Tree, TreeEvent, TreeKeymap, TreeNode, TreePath, Tre
 pub use zstack::ZStack;
 
 pub(crate) mod internal;
+
+#[cfg(feature = "terminal")]
+pub use terminal::{DamagedRow, GraphicsDamage, TerminalDamage, TerminalMutation};

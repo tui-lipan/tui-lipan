@@ -314,7 +314,8 @@ pub use crate::widgets::{
 };
 #[cfg(feature = "terminal-images")]
 pub use crate::widgets::{
-    GraphicsMediaPolicy, TerminalImage, TerminalImageCrop, TerminalImagePlacement,
+    GraphicsMediaPolicy, ImagePlacementIdentity, ImagePlacementKey, ImageSourceKey,
+    ImageSourceRevision, TerminalImage, TerminalImageCrop, TerminalImagePlacement,
 };
 
 #[cfg(feature = "diff-view")]
@@ -501,3 +502,6 @@ fn inline_surface_internal_wrap_policy_is_opaque() {
 pub use crate::widgets::{
     ProgramStatusEvent, ProgramStatusRecord, ProgramStatusSnapshot, ProgramStatusState,
 };
+
+#[cfg(feature = "terminal")]
+pub use widgets::{DamagedRow, GraphicsDamage, TerminalDamage, TerminalMutation};

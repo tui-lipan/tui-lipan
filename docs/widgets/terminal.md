@@ -1033,3 +1033,26 @@ message values. Titles and messages are decoded UTF-8 plain text. They remain
 untrusted text. Disarm bidirectional overrides and invisible formatting before
 displaying them outside the terminal grid, and never interpret them as markup.
 Feature replies contain no report-supplied data.
+
+### Completed parser mutations
+
+`TerminalScreen::process_bytes` returns `TerminalMutation`. `cells` reports the emulator's
+changed rows or full-grid damage. `graphics` reports successful source and placement changes.
+Cursor, title, modes, semantic metadata, clipboard requests, and responses have separate flags.
+Queries and incomplete graphics commands do not cause visual mutations. Several calls accumulate
+independently of snapshot and row-damage consumption; `take_mutation()` drains that accumulator.
+`mutation_generation()` advances when a completed parser operation changes state or emits events.
+
+Ignoring the return value remains valid. Code that used `process_bytes` as a unit-returning tail
+expression should add a semicolon. This is the migration for its new return type.
+
+Live `TerminalScreenHandle` nodes register a runner wakeup. Quiet screens with a registered wakeup
+do not require frame-rate polling. Sources without a wakeup retain the compatibility cadence.
+Managed terminal PTY output already enters through component messages and wakes the runtime.
+
+With `terminal-images`, `TerminalImage::source_key()` identifies the screen lifetime, producer ID,
+and incarnation. Replacing a retained producer ID increments `source_revision()` and preserves
+cursor placements. Deleting and reusing the ID creates a new incarnation. An id-less transmission
+receives a fresh assigned ID. `TerminalImagePlacement::placement_key()` survives source replacement
+and viewport scrolling; placeholder identities use their absolute retained grid origins. Host
+resource IDs are presentation details and are not part of replay or capture semantics.

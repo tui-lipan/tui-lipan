@@ -117,6 +117,49 @@ fn next_stream_namespace() -> u64 {
 
 // ─── Public types ────────────────────────────────────────────────────────────
 
+/// Logical source identity, independent of decoded pixels and host resources.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct ImageSourceKey {
+    /// Lifetime of the retained screen's graphics namespace.
+    pub screen_lifetime: u64,
+    /// Producer id, including the assigned id for an id-less transmission.
+    pub producer_image_id: u32,
+    /// Distinguishes deletion followed by reuse of a producer id.
+    pub incarnation: u64,
+}
+
+/// Identity of a retained placement within its source incarnation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ImagePlacementIdentity {
+    /// A caller-created placement without parser identity.
+    #[default]
+    Unassigned,
+    /// Cursor placement, retained until deleted.
+    Cursor(u64),
+    /// Placeholder grid origin in absolute retained coordinates.
+    Placeholder {
+        /// Absolute retained line of the virtual placement origin.
+        line: i64,
+        /// Retained column of the virtual placement origin.
+        column: i32,
+        /// Whether the cells belong to the alternate grid.
+        alternate: bool,
+    },
+}
+
+/// Logical placement identity, independent of current viewport geometry.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct ImagePlacementKey {
+    /// Logical source incarnation.
+    pub source: ImageSourceKey,
+    /// Placement within that incarnation.
+    pub placement: ImagePlacementIdentity,
+}
+
+/// Monotonic revision of one logical source incarnation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct ImageSourceRevision(pub u64);
+
 /// Decoded pixels the child transmitted.
 ///
 /// Opaque on purpose: the pixels live behind this crate's `image` dependency, and pinning that
@@ -124,6 +167,9 @@ fn next_stream_namespace() -> u64 {
 #[derive(Clone)]
 pub struct TerminalImage {
     source: ImageSource,
+    source_key: ImageSourceKey,
+    placement_identity: ImagePlacementIdentity,
+    source_revision: ImageSourceRevision,
     native: Arc<crate::backend::ratatui_backend::renderers::image::NativeImageLease>,
     width: u32,
     height: u32,
@@ -176,6 +222,16 @@ enum ImageSource {
 }
 
 impl TerminalImage {
+    /// Logical source identity, stable across retransmission and scrolling.
+    pub fn source_key(&self) -> ImageSourceKey {
+        self.source_key
+    }
+
+    /// Revision of this immutable retained source.
+    pub fn source_revision(&self) -> ImageSourceRevision {
+        self.source_revision
+    }
+
     /// Width in pixels.
     pub fn width(&self) -> u32 {
         self.width
@@ -305,6 +361,16 @@ pub struct TerminalImagePlacement {
     pub z: i32,
     /// Source sub-rectangle to draw, when the child asked for one (`x`/`y`/`w`/`h`).
     pub source_crop: Option<TerminalImageCrop>,
+}
+
+impl TerminalImagePlacement {
+    /// Stable identity assigned by the retained parser.
+    pub fn placement_key(&self) -> ImagePlacementKey {
+        ImagePlacementKey {
+            source: self.image.source_key,
+            placement: self.image.placement_identity,
+        }
+    }
 }
 
 /// A source-pixel sub-rectangle of a transmitted image.
@@ -673,16 +739,6 @@ impl Default for GraphicsCommand {
 }
 
 impl GraphicsCommand {
-    pub(super) fn affects_images(&self) -> bool {
-        matches!(
-            self.action,
-            GraphicsAction::Transmit
-                | GraphicsAction::TransmitAndDisplay
-                | GraphicsAction::Display
-                | GraphicsAction::Delete
-        )
-    }
-
     fn parse(body: &[u8], decode_payload: bool) -> Option<Self> {
         let (control, payload) = match body.iter().position(|byte| *byte == b';') {
             Some(at) => (&body[..at], &body[at + 1..]),
@@ -1379,8 +1435,9 @@ impl StoredImage {
 }
 
 /// A live placement of a stored image.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct Placement {
+    serial: u64,
     image_id: u32,
     placement_id: u32,
     /// Absolute line of the placement's top row.
@@ -1431,6 +1488,7 @@ impl PendingTransmit {
 /// Decoded images and their placements for one [`TerminalScreen`](super::TerminalScreen).
 pub(super) struct TerminalGraphics {
     stream_namespace: u64,
+    damage: super::damage::GraphicsDamage,
     images: HashMap<u32, StoredImage>,
     image_dimensions: HashMap<u32, (u32, u32)>,
     /// `I=` image numbers mapped to the ids they were transmitted under.
@@ -1452,6 +1510,8 @@ pub(super) struct TerminalGraphics {
     /// Counts transmissions that named their pixels rather than carrying them. See
     /// [`TerminalGraphics::named_source_identity`].
     source_serial: u64,
+    next_incarnation: u64,
+    next_placement: u64,
     composition: Arc<std::sync::Mutex<composite::CompositionCache>>,
 }
 
@@ -1459,6 +1519,7 @@ impl Default for TerminalGraphics {
     fn default() -> Self {
         Self {
             stream_namespace: next_stream_namespace(),
+            damage: super::damage::GraphicsDamage::None,
             images: HashMap::new(),
             image_dimensions: HashMap::new(),
             numbers: HashMap::new(),
@@ -1478,12 +1539,18 @@ impl Default for TerminalGraphics {
             ),
             media: GraphicsMediaPolicy::default(),
             source_serial: 0,
+            next_incarnation: 0,
+            next_placement: 0,
             composition: Arc::default(),
         }
     }
 }
 
 impl TerminalGraphics {
+    pub(super) fn take_damage(&mut self) -> super::damage::GraphicsDamage {
+        std::mem::take(&mut self.damage)
+    }
+
     /// Whether any image has been transmitted, so a session with none can skip the grid walk
     /// that looks for placeholder cells.
     pub(super) fn has_images(&self) -> bool {
@@ -1523,6 +1590,7 @@ impl TerminalGraphics {
 
     /// Drop everything, for `RIS` or a screen reset.
     pub(super) fn reset(&mut self) {
+        self.damage = super::damage::GraphicsDamage::Reset;
         self.stream_namespace = next_stream_namespace();
         self.images.clear();
         self.replace_file_pool();
@@ -1551,6 +1619,7 @@ impl TerminalGraphics {
         if self.placements.is_empty() {
             return;
         }
+        self.damage.merge(super::damage::GraphicsDamage::Placements);
         let mut index = 0;
         self.placements.retain_mut(|placement| {
             let anchor = anchors.get(index).copied().flatten();
@@ -1570,7 +1639,11 @@ impl TerminalGraphics {
         let before = self.placements.len();
         self.placements.retain(|placement| !placement.alt_screen);
         self.clear_composed_tiles();
-        before != self.placements.len()
+        let changed = before != self.placements.len();
+        if changed {
+            self.damage.merge(super::damage::GraphicsDamage::Placements);
+        }
+        changed
     }
 
     /// Shift placements up by the lines that just fell out of scrollback.
@@ -1581,6 +1654,7 @@ impl TerminalGraphics {
         if evicted == 0 || self.placements.is_empty() {
             return false;
         }
+        self.damage.merge(super::damage::GraphicsDamage::Placements);
         // An image scrolling off the top keeps its remaining rows, so it fades out row by row
         // instead of vanishing whole.
         self.placements
@@ -1619,6 +1693,7 @@ impl TerminalGraphics {
                     image: {
                         let mut image = self.images.get(&placement.image_id)?.image.clone();
                         image.geometry = Some(placement.geometry);
+                        image.placement_identity = ImagePlacementIdentity::Cursor(placement.serial);
                         image
                     },
                     row: row.clamp(i32::MIN as i64, i32::MAX as i64) as i32,
@@ -1643,6 +1718,8 @@ impl TerminalGraphics {
         &self,
         cells: &[PlaceholderCell],
         cell: TerminalCellSize,
+        viewport_top: i64,
+        alternate: bool,
     ) -> Vec<TerminalImagePlacement> {
         merge_placeholder_runs(&placeholder_runs(cells))
             .into_iter()
@@ -1681,6 +1758,11 @@ impl TerminalGraphics {
                     image_id: rect.image_id,
                     image: {
                         let mut image = stored.image.clone();
+                        image.placement_identity = ImagePlacementIdentity::Placeholder {
+                            line: viewport_top + i64::from(rect.row) - i64::from(rect.image_row),
+                            column: i32::from(rect.col) - i32::from(rect.image_col),
+                            alternate,
+                        };
                         image.geometry = Some(ImageGeometry {
                             offset: (0, 0),
                             size: (
@@ -1863,6 +1945,9 @@ impl TerminalGraphics {
         let (image, bytes) = if let Some((input, bytes)) = file {
             (
                 TerminalImage {
+                    source_key: ImageSourceKey::default(),
+                    placement_identity: ImagePlacementIdentity::default(),
+                    source_revision: ImageSourceRevision::default(),
                     native: Arc::default(),
                     source: ImageSource::File {
                         input: Arc::new(input),
@@ -1889,6 +1974,9 @@ impl TerminalGraphics {
                         .saturating_mul(height as usize)
                         .saturating_mul(channels);
                     let image = TerminalImage {
+                        source_key: ImageSourceKey::default(),
+                        placement_identity: ImagePlacementIdentity::default(),
+                        source_revision: ImageSourceRevision::default(),
                         native: Arc::default(),
                         source: ImageSource::Deferred {
                             input: Arc::new(DeferredDecode {
@@ -1913,6 +2001,9 @@ impl TerminalGraphics {
                     let decoded = decode_payload(command, payload)?;
                     let bytes = decoded_bytes(&decoded);
                     let image = TerminalImage {
+                        source_key: ImageSourceKey::default(),
+                        placement_identity: ImagePlacementIdentity::default(),
+                        source_revision: ImageSourceRevision::default(),
                         native: Arc::default(),
                         width: decoded.width(),
                         height: decoded.height(),
@@ -1984,6 +2075,7 @@ impl TerminalGraphics {
                     };
                 }
             };
+            self.damage.merge(super::damage::GraphicsDamage::Sources);
             self.image_dimensions.insert(id, dimensions);
             if command.number != 0 {
                 self.numbers.insert(command.number, id);
@@ -2107,11 +2199,26 @@ impl TerminalGraphics {
             .clamp(1, u32::from(u16::MAX)) as u16;
 
         if self.storage_enabled {
+            let previous = self
+                .placements
+                .iter()
+                .find(|placement| {
+                    placement.image_id == id && placement.placement_id == command.placement
+                })
+                .cloned();
+            let serial = previous
+                .as_ref()
+                .map(|placement| placement.serial)
+                .unwrap_or_else(|| {
+                    self.next_placement = self.next_placement.saturating_add(1);
+                    self.next_placement
+                });
             // A second placement with the same ids replaces the first, as the protocol specifies.
             self.placements.retain(|placement| {
                 placement.image_id != id || placement.placement_id != command.placement
             });
-            self.placements.push(Placement {
+            let placement = Placement {
+                serial,
                 image_id: id,
                 placement_id: command.placement,
                 line: ctx.cursor_line,
@@ -2122,7 +2229,11 @@ impl TerminalGraphics {
                 crop,
                 geometry,
                 alt_screen: ctx.alt_screen,
-            });
+            };
+            if previous.as_ref() != Some(&placement) {
+                self.damage.merge(super::damage::GraphicsDamage::Placements);
+            }
+            self.placements.push(placement);
             while self.placements.len() > MAX_PLACEMENTS {
                 self.placements.remove(0);
             }
@@ -2136,7 +2247,11 @@ impl TerminalGraphics {
             && command.rows != 0
             && let Some(stored) = self.images.get_mut(&id)
         {
-            stored.virtual_cells = Some((command.cols, command.rows));
+            let cells = Some((command.cols, command.rows));
+            if stored.virtual_cells != cells {
+                stored.virtual_cells = cells;
+                self.damage.merge(super::damage::GraphicsDamage::Placements);
+            }
         }
     }
 
@@ -2176,6 +2291,7 @@ impl TerminalGraphics {
             _ => return,
         };
 
+        let before = self.placements.len();
         let mut freed: Vec<u32> = Vec::new();
         self.placements.retain(|item| {
             if !hit(item) {
@@ -2187,6 +2303,9 @@ impl TerminalGraphics {
             false
         });
 
+        if before != self.placements.len() {
+            self.damage.merge(super::damage::GraphicsDamage::Placements);
+        }
         self.clear_composed_tiles();
         if free_data {
             match selector {
@@ -2212,11 +2331,26 @@ impl TerminalGraphics {
         }
     }
 
-    fn insert_image(&mut self, id: u32, image: TerminalImage, bytes: usize) {
+    fn insert_image(&mut self, id: u32, mut image: TerminalImage, bytes: usize) {
+        self.damage.merge(super::damage::GraphicsDamage::Sources);
         // The cell box belongs to the id's virtual placement, not to one frame's pixels: the
         // protocol has a sender declare it once and then send frame after frame under the same id.
         let virtual_cells = self.images.get(&id).and_then(|stored| stored.virtual_cells);
-        self.remove_image(id);
+        if let Some(previous) = self.images.remove(&id) {
+            self.used_bytes = self.used_bytes.saturating_sub(previous.bytes);
+            image.source_key = previous.image.source_key;
+            image.source_revision =
+                ImageSourceRevision(previous.image.source_revision.0.saturating_add(1));
+            image.native = Arc::new(previous.image.native.next_revision());
+        } else {
+            self.next_incarnation = self.next_incarnation.saturating_add(1);
+            image.source_key = ImageSourceKey {
+                screen_lifetime: self.stream_namespace,
+                producer_image_id: id,
+                incarnation: self.next_incarnation,
+            };
+            image.source_revision = ImageSourceRevision(1);
+        }
         self.image_dimensions
             .insert(id, (image.width(), image.height()));
         let clock = self.clock;
@@ -2234,6 +2368,16 @@ impl TerminalGraphics {
     }
 
     fn remove_image(&mut self, id: u32) {
+        if self.image_dimensions.contains_key(&id) {
+            self.damage.merge(super::damage::GraphicsDamage::Sources);
+        }
+        if self
+            .placements
+            .iter()
+            .any(|placement| placement.image_id == id)
+        {
+            self.damage.merge(super::damage::GraphicsDamage::Placements);
+        }
         if let Some(stored) = self.images.remove(&id) {
             self.used_bytes = self.used_bytes.saturating_sub(stored.bytes);
         }
@@ -3552,7 +3696,8 @@ mod tests {
                 })
             })
             .collect();
-        let mut placements = graphics.placeholder_placements(&cells, TerminalCellSize::new(10, 20));
+        let mut placements =
+            graphics.placeholder_placements(&cells, TerminalCellSize::new(10, 20), 0, false);
         assert_eq!(placements.len(), 1, "one image, one rectangle of cells");
         placements.remove(0)
     }

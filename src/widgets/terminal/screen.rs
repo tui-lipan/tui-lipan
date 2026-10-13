@@ -6,7 +6,7 @@ use std::ops::ControlFlow;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use super::damage::{DamageAccumulator, TerminalDamage};
+use super::damage::{DamageAccumulator, TerminalDamage, TerminalMutation};
 use alacritty_terminal::event::{Event as TermEvent, EventListener, WindowSize};
 use alacritty_terminal::grid::{Dimensions, GridCell, Scroll};
 use alacritty_terminal::index::{Column, Line, Point};
@@ -552,6 +552,10 @@ pub struct TerminalScreen {
     dirty: bool,
     /// Viewport rows changed since the last paint took them.
     damage: DamageAccumulator,
+    mutation: TerminalMutation,
+    mutation_generation: u64,
+    grid_mutated: bool,
+    mutation_waker: Option<std::rc::Weak<dyn Fn()>>,
     /// Independent from paint damage: a snapshot reader must not consume the renderer's damage.
     snapshot_damage: DamageAccumulator,
     sequence: u64,
@@ -579,6 +583,41 @@ pub struct TerminalScreen {
     cell_size: TerminalCellSize,
 }
 
+struct MutationBaseline {
+    cursor: Point,
+    cursor_style: TermCursorStyle,
+    pixel_mouse: bool,
+    modes: TermMode,
+    title: Option<String>,
+    semantic: TerminalSemanticState,
+    status: super::ProgramStatusSnapshot,
+    clipboard_count: usize,
+    response_count: usize,
+}
+
+impl MutationBaseline {
+    fn cursor_changed(&self, screen: &TerminalScreen) -> bool {
+        self.cursor != screen.term.grid().cursor.point
+            || self.cursor_style != screen.term.cursor_style()
+            || self.modes.contains(TermMode::SHOW_CURSOR)
+                != screen.term.mode().contains(TermMode::SHOW_CURSOR)
+    }
+
+    fn metadata(&self, screen: &TerminalScreen) -> TerminalMutation {
+        TerminalMutation {
+            title_changed: self.title != screen.title(),
+            modes_changed: self.modes != *screen.term.mode()
+                || self.pixel_mouse != screen.pixel_mouse,
+            semantic_changed: self.semantic != screen.semantic_state()
+                || self.status != screen.program_status_snapshot(),
+            clipboard_events: self.clipboard_count
+                != screen.listener.clipboard_events.borrow().len(),
+            responses: self.response_count != screen.listener.responses.borrow().len(),
+            ..TerminalMutation::default()
+        }
+    }
+}
+
 /// A [`TerminalScreen`] an app owns and lets the widget read for itself.
 ///
 /// Handing the widget a handle instead of a [`TerminalRenderSnapshot`] takes the screen's contents
@@ -593,6 +632,24 @@ pub struct TerminalScreen {
 pub struct TerminalScreenHandle(Rc<RefCell<TerminalScreen>>);
 
 impl TerminalScreenHandle {
+    pub(crate) fn set_mutation_waker(&self, wake: Rc<dyn Fn()>) {
+        self.0.borrow_mut().mutation_waker = Some(Rc::downgrade(&wake));
+    }
+
+    pub(crate) fn needs_polling(&self) -> bool {
+        self.0
+            .borrow()
+            .mutation_waker
+            .as_ref()
+            .and_then(std::rc::Weak::upgrade)
+            .is_none()
+    }
+
+    /// Completed parser mutation generation of the shared screen.
+    pub fn mutation_generation(&self) -> u64 {
+        self.0.borrow().mutation_generation()
+    }
+
     /// Share `screen` with the widget.
     pub fn new(screen: Rc<RefCell<TerminalScreen>>) -> Self {
         Self(screen)
@@ -1164,6 +1221,10 @@ impl TerminalScreen {
         let term = Term::new(config, &dimensions, listener.clone());
         let screen = Self {
             damage: DamageAccumulator::default(),
+            mutation: TerminalMutation::default(),
+            mutation_generation: 0,
+            grid_mutated: false,
+            mutation_waker: None,
             snapshot_damage: DamageAccumulator::default(),
             processor: VteProcessor::new(),
             term,
@@ -1230,7 +1291,9 @@ impl TerminalScreen {
 
     /// Feed terminal bytes.
     ///
-    pub fn process_bytes(&mut self, bytes: &[u8]) {
+    pub fn process_bytes(&mut self, bytes: &[u8]) -> TerminalMutation {
+        self.grid_mutated = false;
+        let before = self.mutation_baseline();
         let response_boundaries = self.response_boundaries(bytes);
         let evicted = if !response_boundaries.is_empty() {
             self.feed_grid_with_response_boundaries(bytes, &response_boundaries)
@@ -1257,23 +1320,89 @@ impl TerminalScreen {
         }
         self.scrollback_offset = self.term.grid().display_offset();
         self.mouse_mode = mouse_mode_from_term(*self.term.mode(), self.pixel_mouse);
-        self.collect_damage();
-        self.dirty = true;
+        self.finish_mutation(before)
+    }
+
+    fn mutation_baseline(&self) -> MutationBaseline {
+        MutationBaseline {
+            cursor: self.term.grid().cursor.point,
+            cursor_style: self.term.cursor_style(),
+            pixel_mouse: self.pixel_mouse,
+            modes: *self.term.mode(),
+            title: self.title(),
+            semantic: self.semantic_state(),
+            status: self.program_status_snapshot(),
+            clipboard_count: self.listener.clipboard_events.borrow().len(),
+            response_count: self.listener.responses.borrow().len(),
+        }
+    }
+
+    fn finish_mutation(&mut self, before: MutationBaseline) -> TerminalMutation {
+        let mut mutation = before.metadata(self);
+        mutation.cursor_changed = before.cursor_changed(self);
+        let cells = self.collect_damage();
+        // Alacritty unconditionally damages the cursor on damage(). Require a completed
+        // grid operation or a cursor/mode change before treating it as visual damage.
+        if self.grid_mutated || mutation.cursor_changed || before.modes != *self.term.mode() {
+            mutation.cells = cells;
+        }
+        #[cfg(feature = "terminal-images")]
+        {
+            mutation.graphics = self.graphics.take_damage();
+        }
+        if mutation.graphics != super::damage::GraphicsDamage::None {
+            self.damage.mark_full();
+        }
+        self.dirty |= mutation.is_visual() || mutation.modes_changed;
+        if !mutation.is_empty() {
+            self.mutation.merge(mutation.clone());
+            self.notify_mutation();
+        }
+        mutation
+    }
+
+    fn notify_mutation(&mut self) {
+        self.mutation_generation = self.mutation_generation.wrapping_add(1);
+        if let Some(wake) = self
+            .mutation_waker
+            .as_ref()
+            .and_then(std::rc::Weak::upgrade)
+        {
+            wake();
+        }
+    }
+
+    fn invalidate_presentation(&mut self) {
+        self.mutation.cells.merge(TerminalDamage::Full);
+        self.notify_mutation();
+    }
+
+    /// Take completed parser mutations accumulated since the previous call.
+    pub fn take_mutation(&mut self) -> TerminalMutation {
+        std::mem::take(&mut self.mutation)
+    }
+
+    /// Generation of completed parser changes, independent of render snapshots.
+    pub fn mutation_generation(&self) -> u64 {
+        self.mutation_generation
     }
 
     /// Fold the emulator's damage for this write into what has accumulated since the last paint.
     ///
     /// Taken every write rather than once per frame because `Term::damage` is cleared by reading
     /// it, and several writes can land between two paints.
-    fn collect_damage(&mut self) {
+    fn collect_damage(&mut self) -> TerminalDamage {
+        let mut completed = DamageAccumulator::default();
         let viewport_rows = usize::from(self.rows);
         match self.term.damage() {
             alacritty_terminal::term::TermDamage::Full => {
+                completed.mark_full();
                 self.damage.mark_full();
                 self.snapshot_damage.mark_full();
             }
             alacritty_terminal::term::TermDamage::Partial(iter) => {
                 for line in iter {
+                    completed.add_row(line.line, line.left, line.right, viewport_rows);
                     self.damage
                         .add_row(line.line, line.left, line.right, viewport_rows);
                     self.snapshot_damage
@@ -1282,6 +1411,7 @@ impl TerminalScreen {
             }
         }
         self.term.reset_damage();
+        completed.take()
     }
 
     /// Take the rows that changed since the last call, leaving this screen clean.
@@ -1424,6 +1554,7 @@ impl TerminalScreen {
             },
         );
         self.processor.advance(&mut ledger, bytes);
+        self.grid_mutated |= ledger.grid_mutated();
         let (evicted, reset, left_alt_screen) =
             (ledger.evicted(), ledger.reset(), ledger.left_alt_screen());
         self.apply_ledger_events(reset, left_alt_screen);
@@ -1495,6 +1626,7 @@ impl TerminalScreen {
             },
         );
         self.processor.stop_sync(&mut ledger);
+        self.grid_mutated |= ledger.grid_mutated();
         let (evicted, reset, left_alt_screen) =
             (ledger.evicted(), ledger.reset(), ledger.left_alt_screen());
         self.apply_ledger_events(reset, left_alt_screen);
@@ -1511,11 +1643,6 @@ impl TerminalScreen {
             cell: self.cell_size,
             cols: self.cols,
         };
-        if command.affects_images() {
-            // Image-only updates and deleting the last placement still need a paint even when
-            // the VT grid and cursor stay unchanged. Text snapshot damage remains independent.
-            self.damage.mark_full();
-        }
         let outcome = self.graphics.apply(command, ctx);
         if let Some(response) = outcome.response {
             self.listener.responses.borrow_mut().push(response);
@@ -1551,10 +1678,12 @@ impl TerminalScreen {
             self.rows,
             alt_screen,
         );
-        images.extend(
-            self.graphics
-                .placeholder_placements(&self.placeholder_cells(display_offset), self.cell_size),
-        );
+        images.extend(self.graphics.placeholder_placements(
+            &self.placeholder_cells(display_offset),
+            self.cell_size,
+            self.term.history_size() as i64 - display_offset as i64,
+            alt_screen,
+        ));
         images
     }
 
@@ -1621,6 +1750,7 @@ impl TerminalScreen {
             self.cell_size = cell;
             self.sync_viewport();
             self.dirty = true;
+            self.invalidate_presentation();
             self.snapshot_damage.mark_full();
         }
     }
@@ -1787,6 +1917,7 @@ impl TerminalScreen {
     pub fn set_image_budget(&mut self, bytes: usize) {
         self.graphics.set_budget(bytes);
         self.dirty = true;
+        self.invalidate_presentation();
         self.snapshot_damage.mark_full();
     }
 
@@ -1800,6 +1931,7 @@ impl TerminalScreen {
         self.graphics_scanner.set_decode_payload(enabled);
         self.graphics.set_storage_enabled(enabled);
         self.dirty = true;
+        self.invalidate_presentation();
         self.snapshot_damage.mark_full();
     }
 
@@ -2078,6 +2210,7 @@ impl TerminalScreen {
         self.scrollback_offset = self.term.grid().display_offset();
         self.mouse_mode = mouse_mode_from_term(*self.term.mode(), self.pixel_mouse);
         self.dirty = true;
+        self.invalidate_presentation();
         self.snapshot_damage.mark_full();
     }
 
@@ -2506,6 +2639,7 @@ impl TerminalScreen {
             // queries are answered against the current palette.
             *self.listener.palette.borrow_mut() = palette;
             self.dirty = true;
+            self.invalidate_presentation();
             self.snapshot_damage.mark_full();
         }
     }
@@ -2529,6 +2663,7 @@ impl TerminalScreen {
         }
         self.scrollback_offset = self.term.grid().display_offset();
         self.dirty = true;
+        self.invalidate_presentation();
         self.snapshot_damage.mark_full();
     }
 
@@ -2887,6 +3022,7 @@ impl TerminalScreen {
             self.graphics.reset();
         }
         self.dirty = true;
+        self.invalidate_presentation();
         self.snapshot_damage.mark_full();
     }
 

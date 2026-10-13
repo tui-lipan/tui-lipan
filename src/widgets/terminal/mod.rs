@@ -25,6 +25,8 @@ mod scrollback_ledger;
 mod selection;
 
 pub use buffer::TerminalBuffer;
+pub use damage::{DamagedRow, GraphicsDamage, TerminalDamage, TerminalMutation};
+
 #[cfg(feature = "terminal")]
 pub use copy_mode::{CopyModeAction, CopyModeGrid, TerminalCopyMode};
 pub use events::{
@@ -34,12 +36,15 @@ pub use events::{
     mouse_event_to_bytes, paste_sequences, terminal_selection_text,
 };
 #[cfg(feature = "terminal-images")]
+pub use graphics::{
+    ImagePlacementIdentity, ImagePlacementKey, ImageSourceKey, ImageSourceRevision, TerminalImage,
+    TerminalImageCrop, TerminalImagePlacement,
+};
+#[cfg(feature = "terminal-images")]
 pub(crate) use graphics::{
     PLACEHOLDER as KITTY_PLACEHOLDER, composite_terminal_images, crop_for_visible_cells,
     diacritic as kitty_diacritic, image_cell_has_pixels, image_cell_is_opaque, image_covers_cell,
 };
-#[cfg(feature = "terminal-images")]
-pub use graphics::{TerminalImage, TerminalImageCrop, TerminalImagePlacement};
 #[cfg(feature = "terminal-images")]
 pub use graphics_media::GraphicsMediaPolicy;
 pub use mod_private::Terminal;

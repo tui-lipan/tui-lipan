@@ -550,8 +550,22 @@ impl NodeTree {
 
     /// Whether any terminal is reading a live screen a child program can write to at any moment.
     #[cfg(feature = "terminal")]
-    pub(crate) fn has_live_terminals(&self) -> bool {
-        !self.live_terminal_ids.is_empty()
+    pub(crate) fn has_polling_terminals(&self) -> bool {
+        self.live_terminal_ids.iter().any(|id| {
+            matches!(&self.node(*id).kind, NodeKind::Terminal(terminal)
+                if terminal.screen.as_ref().is_some_and(|screen| screen.needs_polling()))
+        })
+    }
+
+    #[cfg(feature = "terminal")]
+    pub(crate) fn set_terminal_mutation_waker(&self, wake: Rc<dyn Fn()>) {
+        for id in &self.live_terminal_ids {
+            if let NodeKind::Terminal(terminal) = &self.node(*id).kind
+                && let Some(screen) = &terminal.screen
+            {
+                screen.set_mutation_waker(wake.clone());
+            }
+        }
     }
 
     /// Returns true if any animated wrapper nodes are currently transitioning.

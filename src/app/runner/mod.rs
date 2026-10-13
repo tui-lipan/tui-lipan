@@ -101,6 +101,8 @@ enum RunnerEvent {
     },
     /// Wakeup for a queued live-control request.
     Control,
+    #[cfg(feature = "terminal")]
+    TerminalMutation,
     /// The input reader observed a terminal theme report or resumed after an external handoff.
     HostTerminalColorRefreshRequested,
     /// A live color query completed inside the persistent input worker.
@@ -2229,6 +2231,18 @@ impl<C: Component> AppRunner<C> {
                 }
             }
 
+            #[cfg(feature = "terminal")]
+            let terminal_wake_pending = Rc::new(std::cell::Cell::new(false));
+            #[cfg(feature = "terminal")]
+            let terminal_waker: Option<Rc<dyn Fn()>> = platform_input.sender().map(|sender| {
+                let pending = terminal_wake_pending.clone();
+                Rc::new(move || {
+                    if !pending.replace(true) && sender.send(RunnerEvent::TerminalMutation).is_err()
+                    {
+                        pending.set(false);
+                    }
+                }) as Rc<dyn Fn()>
+            });
             let event_rx = &platform_input;
             #[cfg(unix)]
             let mut host_hung_up_at: Option<Instant> = None;
@@ -2263,6 +2277,10 @@ impl<C: Component> AppRunner<C> {
                 if deferred_full {
                     dirty.mark_full();
                     deferred_full = false;
+                }
+                #[cfg(feature = "terminal")]
+                if let Some(wake) = &terminal_waker {
+                    self.core.tree.set_terminal_mutation_waker(wake.clone());
                 }
                 let mut poll_timeout = self.update_animation_cycle(&mut dirty);
                 if let Some((_, due)) = paced_frame {
@@ -2347,6 +2365,12 @@ impl<C: Component> AppRunner<C> {
                     #[cfg(unix)]
                     Some(RunnerEvent::HostHungUp) => {
                         host_hung_up_at.get_or_insert_with(Instant::now);
+                        None
+                    }
+                    #[cfg(feature = "terminal")]
+                    Some(RunnerEvent::TerminalMutation) => {
+                        terminal_wake_pending.set(false);
+                        dirty.mark_terminal_paint();
                         None
                     }
                     Some(RunnerEvent::Control) => {
