@@ -283,7 +283,7 @@ pub fn resume_after_external_process(
     // would put every click hundreds of columns from the pointer.
     #[cfg(unix)]
     if termina_paused
-        && crate::app::input::pixel_mouse::is_active()
+        && crate::app::input::pixel_mouse::should_request()
         && execute_plan(&mut executor, &pixel_mouse_plan(true)).is_ok()
     {
         crate::app::input::pixel_mouse::note_mode_enabled(true);

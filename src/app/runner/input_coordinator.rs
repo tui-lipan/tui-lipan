@@ -111,6 +111,18 @@ impl TerminaInputCoordinator {
         self.control.wake();
         Ok(())
     }
+
+    /// Have the worker bring the host's pixel-reporting mode in line with whether anything wants
+    /// it. The worker writes the escape because it is the one reading the reports it changes.
+    #[cfg(feature = "terminal")]
+    pub(super) fn sync_pixel_mouse(&self) -> io::Result<()> {
+        self.control
+            .commands
+            .send(WorkerCommand::SyncPixelMouse)
+            .map_err(|_| worker_stopped())?;
+        self.control.wake();
+        Ok(())
+    }
 }
 
 impl Drop for TerminaInputCoordinator {
@@ -130,6 +142,8 @@ enum WorkerCommand {
     Pause(mpsc::SyncSender<()>),
     Resume(mpsc::SyncSender<io::Result<()>>),
     RefreshHostColors(Option<HostTerminalColors>),
+    #[cfg_attr(not(feature = "terminal"), allow(dead_code))]
+    SyncPixelMouse,
     Shutdown,
 }
 
@@ -225,7 +239,7 @@ fn worker_wake_pipe() -> io::Result<(UnixStream, UnixStream)> {
 
 fn open_terminal_input() -> io::Result<File> {
     let terminal = OpenOptions::new().read(true).write(true).open("/dev/tty")?;
-    if let Ok(size) = crossterm::terminal::window_size() {
+    if let Ok(size) = window_size(&terminal) {
         pixel_mouse::note_window_size(size.columns, size.rows, Some(size.width), Some(size.height));
     }
     // Asked for here rather than in the enter plan: the host's own answer arrived before this, but
@@ -258,7 +272,7 @@ fn run_worker(
     let mut input = WorkerInput::default();
     let mut query = None;
     let mut settle_at = None;
-    let mut last_window_size = crossterm::terminal::window_size().ok();
+    let mut last_window_size = window_size(&terminal).ok();
     loop {
         match process_worker_commands(
             &mut terminal,
@@ -296,7 +310,7 @@ fn run_worker(
                         break;
                     }
                 }
-                if !refresh_window_size(&events, &mut last_window_size) {
+                if !refresh_window_size(&terminal, &events, &mut last_window_size) {
                     break;
                 }
                 continue;
@@ -357,7 +371,7 @@ fn run_worker(
                 break;
             }
         }
-        if !refresh_window_size(&events, &mut last_window_size) {
+        if !refresh_window_size(&terminal, &events, &mut last_window_size) {
             break;
         }
     }
@@ -395,7 +409,8 @@ fn process_worker_commands(
                                 return Err(io::Error::new(kind, message));
                             }
                         },
-                        WorkerCommand::RefreshHostColors(_) => {}
+                        // Resuming reopens the terminal, which syncs the mode itself.
+                        WorkerCommand::RefreshHostColors(_) | WorkerCommand::SyncPixelMouse => {}
                         WorkerCommand::Shutdown => return Ok(false),
                         WorkerCommand::Pause(ack) => {
                             let _ = ack.send(());
@@ -409,6 +424,7 @@ fn process_worker_commands(
             WorkerCommand::RefreshHostColors(previous) => {
                 queue_color_refresh(query, previous);
             }
+            WorkerCommand::SyncPixelMouse => sync_pixel_mouse_mode(),
             WorkerCommand::Shutdown => return Ok(false),
         }
     }
@@ -422,6 +438,20 @@ struct WorkerInput {
     parser: Parser,
     text: crate::app::input::kitty_text::KittyText,
     colors: HostColorResponseParser,
+    /// The newest plain motion report of the read being dispatched. See [`WorkerInput::send`].
+    pending_motion: Option<RunnerEvent>,
+}
+
+fn is_plain_motion(event: &RunnerEvent) -> bool {
+    let (RunnerEvent::Terminal(CrosstermEvent::Mouse(mouse))
+    | RunnerEvent::Pointer {
+        event: CrosstermEvent::Mouse(mouse),
+        ..
+    }) = event
+    else {
+        return false;
+    };
+    mouse.kind == CrosstermMouseEventKind::Moved
 }
 
 impl WorkerInput {
@@ -439,11 +469,38 @@ impl WorkerInput {
 
     fn dispatch(&mut self, events: &mpsc::Sender<RunnerEvent>) -> bool {
         while let Some(event) = self.parser.pop() {
-            if !dispatch_termina_event(event, events) {
+            if let Some(event) = termina_runner_event(event)
+                && !self.send(event, events)
+            {
                 return false;
             }
         }
-        true
+        self.flush_motion(events)
+    }
+
+    /// Send one event to the runner, keeping only the newest plain motion of a read.
+    ///
+    /// A host can hand over a whole frame's worth of pointer motion in one read - every pixel the
+    /// pointer crossed. Each report sent wakes the UI thread for a pass of its loop, and the runner
+    /// only ever wants where the pointer is now, so the reports behind the newest one are dropped
+    /// here instead. Nothing is held across reads: the newest position goes out with the read that
+    /// brought it, so coalescing never makes a hover arrive later.
+    ///
+    /// Only motion with no button held is merged. A press, a release, a drag, a wheel notch or a
+    /// key each mean something on their own, so they go in order - behind the motion that came
+    /// before them, so the runner still learns where the pointer was first.
+    fn send(&mut self, event: RunnerEvent, events: &mpsc::Sender<RunnerEvent>) -> bool {
+        if is_plain_motion(&event) {
+            self.pending_motion = Some(event);
+            return true;
+        }
+        self.flush_motion(events) && events.send(event).is_ok()
+    }
+
+    fn flush_motion(&mut self, events: &mpsc::Sender<RunnerEvent>) -> bool {
+        self.pending_motion
+            .take()
+            .is_none_or(|motion| events.send(motion).is_ok())
     }
 }
 
@@ -571,11 +628,34 @@ fn next_poll_timeout(settle_at: Option<Instant>, query: Option<&ActiveColorQuery
         .fold(INPUT_POLL_INTERVAL, Duration::min)
 }
 
+/// The host's size, asked of the terminal this worker already holds.
+///
+/// `crossterm::terminal::window_size` answers the same question by opening `/dev/tty`, asking, and
+/// closing it again. The worker asks after every read, and pointer motion can make that hundreds
+/// of reads a second, so the open and close came to cost more than everything else the read did.
+fn window_size(terminal: &impl AsRawFd) -> io::Result<crossterm::terminal::WindowSize> {
+    // SAFETY: `winsize` is plain integers, for which all-zero is a valid value.
+    let mut size: libc::winsize = unsafe { std::mem::zeroed() };
+    // The request's integer type differs between libcs, hence `.into()`.
+    #[allow(clippy::useless_conversion)]
+    // SAFETY: `TIOCGWINSZ` writes one `winsize` through the pointer, which outlives the call.
+    if unsafe { libc::ioctl(terminal.as_raw_fd(), libc::TIOCGWINSZ.into(), &mut size) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(crossterm::terminal::WindowSize {
+        rows: size.ws_row,
+        columns: size.ws_col,
+        width: size.ws_xpixel,
+        height: size.ws_ypixel,
+    })
+}
+
 fn refresh_window_size(
+    terminal: &impl AsRawFd,
     events: &mpsc::Sender<RunnerEvent>,
     previous: &mut Option<crossterm::terminal::WindowSize>,
 ) -> bool {
-    let Ok(size) = crossterm::terminal::window_size() else {
+    let Ok(size) = window_size(terminal) else {
         return true;
     };
     let changed = previous.as_ref().is_none_or(|old| {
@@ -636,7 +716,9 @@ fn poll_terminal_input(
             revents: 0,
         },
     ];
-    let timeout = timeout.as_millis().min(i32::MAX as u128) as i32;
+    // Rounded up: `poll` counts whole milliseconds, and truncating a wait for a deadline less than
+    // one away turns it into a busy loop until the deadline passes.
+    let timeout = timeout.as_nanos().div_ceil(1_000_000).min(i32::MAX as u128) as i32;
     let result = unsafe { libc::poll(descriptors.as_mut_ptr(), descriptors.len() as _, timeout) };
     if result < 0 {
         return Err(io::Error::last_os_error());
@@ -704,7 +786,8 @@ pub(crate) enum TerminaEventAction {
     Ignore,
 }
 
-fn dispatch_termina_event(event: TerminaEvent, events: &mpsc::Sender<RunnerEvent>) -> bool {
+/// What the runner should hear about a parsed host event, if anything.
+fn termina_runner_event(event: TerminaEvent) -> Option<RunnerEvent> {
     let action = map_termina_event(event);
     // A resize is where a padded window can first divide evenly, and so where the mode can first be
     // worth asking for. The ask lives here rather than in the mapping because it writes to the host,
@@ -716,14 +799,12 @@ fn dispatch_termina_event(event: TerminaEvent, events: &mpsc::Sender<RunnerEvent
         sync_pixel_mouse_mode();
     }
     match action {
-        TerminaEventAction::Input(event) => events.send(RunnerEvent::Terminal(event)).is_ok(),
-        TerminaEventAction::Pointer(event, sub_cell) => events
-            .send(RunnerEvent::Pointer { event, sub_cell })
-            .is_ok(),
-        TerminaEventAction::ThemeRefresh => events
-            .send(RunnerEvent::HostTerminalColorRefreshRequested)
-            .is_ok(),
-        TerminaEventAction::Ignore => true,
+        TerminaEventAction::Input(event) => Some(RunnerEvent::Terminal(event)),
+        TerminaEventAction::Pointer(event, sub_cell) => {
+            Some(RunnerEvent::Pointer { event, sub_cell })
+        }
+        TerminaEventAction::ThemeRefresh => Some(RunnerEvent::HostTerminalColorRefreshRequested),
+        TerminaEventAction::Ignore => None,
     }
 }
 
@@ -754,11 +835,11 @@ pub(crate) fn map_termina_event(event: TerminaEvent) -> TerminaEventAction {
     }
 }
 
-/// Bring the host's SGR-pixels mode in line with what this run can make sense of.
+/// Bring the host's SGR-pixels mode in line with what this run can make sense of and has a use for.
 ///
 /// Both halves of `pixel_mouse::is_active` can turn true after startup, because the cell size is
-/// re-derived from every resize. The mode has to be asked for at that moment rather than only at
-/// startup: `map_pointer_event` reads reports as pixels only once the host has actually been asked,
+/// re-derived from every resize, and a program can ask for pixels at any time. The mode has to be
+/// asked for at that moment rather than only at startup: `map_pointer_event` reads reports as pixels only once the host has actually been asked,
 /// so a cell size learned late would otherwise leave the precision on the table forever.
 ///
 /// Only ever called from the Termina worker, which is the one decoder that can read a pixel report -
@@ -766,7 +847,7 @@ pub(crate) fn map_termina_event(event: TerminaEvent) -> TerminaEventAction {
 /// noted only if it lands, so a host that never heard the escape keeps sending cells and keeps being
 /// read that way.
 fn sync_pixel_mouse_mode() {
-    let wanted = pixel_mouse::is_active();
+    let wanted = pixel_mouse::should_request();
     if wanted == pixel_mouse::reports_pixels() {
         return;
     }
@@ -1007,10 +1088,8 @@ mod tests {
     fn theme_report_wakes_runner_for_full_palette_refresh() {
         let (events, receiver) = mpsc::channel();
 
-        assert!(dispatch_termina_event(
-            parsed_event(b"\x1b[?997;1n"),
-            &events
-        ));
+        let mut input = WorkerInput::default();
+        assert!(input.push(b"\x1b[?997;1n", &events));
         assert_eq!(
             receiver.recv().unwrap(),
             RunnerEvent::HostTerminalColorRefreshRequested
@@ -1041,6 +1120,87 @@ mod tests {
             colors.ansi[1], previous.ansi[1],
             "an OSC 4-looking string inside paste content is not a palette response"
         );
+    }
+
+    fn mouse_kind(event: RunnerEvent) -> (CrosstermMouseEventKind, u16) {
+        match event {
+            RunnerEvent::Terminal(CrosstermEvent::Mouse(mouse))
+            | RunnerEvent::Pointer {
+                event: CrosstermEvent::Mouse(mouse),
+                ..
+            } => (mouse.kind, mouse.column),
+            other => panic!("expected a mouse event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_read_of_motion_sends_only_its_newest_position() {
+        let (events, receiver) = mpsc::channel();
+        let mut input = WorkerInput::default();
+
+        assert!(input.push(b"\x1b[<35;10;5M\x1b[<35;11;5M\x1b[<35;12;5M", &events));
+
+        assert_eq!(
+            mouse_kind(receiver.try_recv().unwrap()),
+            (CrosstermMouseEventKind::Moved, 11),
+            "the newest position, not the first one of the read"
+        );
+        assert!(receiver.try_recv().is_err());
+        assert!(
+            input.pending_motion.is_none(),
+            "nothing is held past its read"
+        );
+    }
+
+    #[test]
+    fn every_read_sends_its_motion_at_once() {
+        let (events, receiver) = mpsc::channel();
+        let mut input = WorkerInput::default();
+
+        for column in [10, 11, 12] {
+            assert!(input.push(format!("\x1b[<35;{column};5M").as_bytes(), &events));
+            assert_eq!(
+                mouse_kind(receiver.try_recv().unwrap()),
+                (CrosstermMouseEventKind::Moved, column - 1),
+                "coalescing never makes a position wait for a later read"
+            );
+        }
+    }
+
+    #[test]
+    fn a_press_sends_the_motion_before_it_first() {
+        let (events, receiver) = mpsc::channel();
+        let mut input = WorkerInput::default();
+
+        assert!(input.push(
+            b"\x1b[<35;10;5M\x1b[<35;20;5M\x1b[<0;20;5M\x1b[<35;30;5M",
+            &events
+        ));
+
+        assert_eq!(
+            mouse_kind(receiver.try_recv().unwrap()),
+            (CrosstermMouseEventKind::Moved, 19),
+            "the runner learns where the pointer went before it learns of the press"
+        );
+        assert_eq!(
+            mouse_kind(receiver.try_recv().unwrap()).0,
+            CrosstermMouseEventKind::Down(CrosstermMouseButton::Left)
+        );
+        assert_eq!(
+            mouse_kind(receiver.try_recv().unwrap()),
+            (CrosstermMouseEventKind::Moved, 29)
+        );
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn drags_are_never_merged() {
+        let (events, receiver) = mpsc::channel();
+        let mut input = WorkerInput::default();
+
+        assert!(input.push(b"\x1b[<32;10;5M\x1b[<32;11;5M\x1b[<32;12;5M", &events));
+
+        assert_eq!(receiver.try_iter().count(), 3);
     }
 
     #[test]

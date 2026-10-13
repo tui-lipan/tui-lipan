@@ -8247,6 +8247,70 @@ fn live_screen_output_reaches_the_node_without_a_view_pass() {
 }
 
 #[cfg(feature = "terminal")]
+struct LivePixelMouse {
+    screen: Rc<RefCell<crate::widgets::TerminalScreen>>,
+    views: Rc<Cell<usize>>,
+}
+
+#[cfg(feature = "terminal")]
+impl Component for LivePixelMouse {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        self.views.set(self.views.get() + 1);
+        Terminal::new()
+            .screen(crate::widgets::TerminalScreenHandle::new(
+                self.screen.clone(),
+            ))
+            .on_mouse_forward(Callback::new(|_| {}))
+            .key("terminal")
+    }
+}
+
+/// A child asks for pixel reports whenever it likes, and a live screen carries that to the node
+/// without a view pass. The host has to be asked anyway, or the child gets cell corners only.
+#[cfg(feature = "terminal")]
+#[test]
+fn a_live_screen_asking_for_pixel_reports_is_heard_without_a_view_pass() {
+    let screen = Rc::new(RefCell::new(crate::widgets::TerminalScreen::new(
+        4, 20, 100,
+    )));
+    let views = Rc::new(Cell::new(0));
+    let mut backend = crate::TestBackend::new(LivePixelMouse {
+        screen: screen.clone(),
+        views: views.clone(),
+    });
+    backend.render();
+    let views_after_first_frame = views.get();
+    assert!(!backend.core.tree.has_terminal_pixel_mouse());
+
+    screen
+        .borrow_mut()
+        .process_bytes(b"\x1b[?1003h\x1b[?1006h\x1b[?1016h");
+    assert!(backend.refresh_live_terminals());
+    assert!(
+        backend.core.tree.has_terminal_pixel_mouse(),
+        "the child's request reaches the runner"
+    );
+
+    screen.borrow_mut().process_bytes(b"\x1b[?1016l");
+    assert!(backend.refresh_live_terminals());
+    assert!(
+        !backend.core.tree.has_terminal_pixel_mouse(),
+        "and so does its withdrawal"
+    );
+    assert_eq!(views.get(), views_after_first_frame, "with no view pass");
+}
+
+#[cfg(feature = "terminal")]
 struct WheelTerminalSmoke {
     screen: Rc<RefCell<crate::widgets::TerminalScreen>>,
     multiplier: Option<u16>,

@@ -5,12 +5,12 @@ use super::overlay::{OverlayRoot, ScrollbarAxis, ScrollbarTarget, ScrollbarZone}
 use crate::core::element::Key;
 use crate::style::{Edge, Rect, Theme};
 use crate::utils::arena::Arena;
-#[cfg(feature = "terminal")]
-use crate::widgets::MouseMode;
 use crate::widgets::internal::{FrameJoinOverlap, RememberedScrollAnchor, compute_frame_geometry};
 use crate::widgets::{DecorationPlacement, SingleDocSelection};
 #[cfg(feature = "diff-view")]
 use crate::widgets::{DiffLineClickConfig, DiffPane};
+#[cfg(feature = "terminal")]
+use crate::widgets::{MouseEncoding, MouseMode};
 
 use rustc_hash::FxHashMap;
 use std::cell::RefCell;
@@ -24,6 +24,16 @@ thread_local! {
 
 fn default_active_theme() -> Rc<Theme> {
     DEFAULT_ACTIVE_THEME.with(Rc::clone)
+}
+
+/// A terminal forwarding mouse reports in SGR-pixels encoding: the one reader of the sub-cell
+/// position, and so the one reason to ask the host for pixel reports.
+#[cfg(feature = "terminal")]
+fn kind_forwards_pixel_mouse(kind: &NodeKind) -> bool {
+    matches!(kind, NodeKind::Terminal(terminal)
+        if terminal.mouse_mode.mode != MouseMode::None
+            && terminal.mouse_mode.encoding == MouseEncoding::SgrPixels
+            && terminal.on_mouse_forward.is_some())
 }
 
 fn node_kind_has_spinners(kind: &NodeKind) -> bool {
@@ -289,6 +299,8 @@ pub(crate) struct NodeTree {
     has_hoverables: bool,
     has_mouse_move_handlers: bool,
     has_terminal_any_event: bool,
+    /// Terminals without a live screen that forward pixel reports; live ones are read on demand.
+    has_terminal_pixel_mouse: bool,
     has_terminal_link_hover: bool,
     /// Terminals reading a live screen, so the pre-draw refresh visits only those.
     #[cfg(feature = "terminal")]
@@ -366,6 +378,7 @@ impl NodeTree {
             has_hoverables: false,
             has_mouse_move_handlers: false,
             has_terminal_any_event: false,
+            has_terminal_pixel_mouse: false,
             has_terminal_link_hover: false,
             #[cfg(feature = "terminal")]
             live_terminal_ids: Vec::new(),
@@ -480,6 +493,19 @@ impl NodeTree {
     /// Returns true if any terminal node requests any-event mouse forwarding.
     pub fn has_terminal_any_event(&self) -> bool {
         self.has_terminal_any_event
+    }
+
+    /// Returns true if any terminal node forwards mouse reports in SGR-pixels encoding, which only
+    /// pixel-precise reports from the host can fill in.
+    #[cfg(feature = "terminal")]
+    pub(crate) fn has_terminal_pixel_mouse(&self) -> bool {
+        // A live screen's child can ask for pixel reports between rebuilds, and the refresh that
+        // carries the new mode does not reconcile, so live terminals are read as they are now.
+        self.has_terminal_pixel_mouse
+            || self
+                .live_terminal_ids
+                .iter()
+                .any(|&id| self.is_valid(id) && kind_forwards_pixel_mouse(&self.node(id).kind))
     }
 
     /// Returns true if any terminal node can paint modifier-hovered links.
@@ -1278,6 +1304,13 @@ impl NodeTree {
             self.has_terminal_any_event = true;
         }
         #[cfg(feature = "terminal")]
+        if !self.has_terminal_pixel_mouse
+            && matches!(&node.kind, NodeKind::Terminal(terminal) if terminal.screen.is_none())
+            && kind_forwards_pixel_mouse(&node.kind)
+        {
+            self.has_terminal_pixel_mouse = true;
+        }
+        #[cfg(feature = "terminal")]
         if !self.has_terminal_link_hover
             && matches!(&node.kind, NodeKind::Terminal(terminal)
                 if terminal.on_link_activate.is_some())
@@ -1343,6 +1376,7 @@ impl NodeTree {
         self.has_hoverables = false;
         self.has_mouse_move_handlers = false;
         self.has_terminal_any_event = false;
+        self.has_terminal_pixel_mouse = false;
         self.has_terminal_link_hover = false;
         #[cfg(feature = "terminal")]
         self.live_terminal_ids.clear();
@@ -1653,6 +1687,8 @@ impl NodeTree {
         #[cfg(feature = "terminal")]
         let mut full_terminal_any_event = false;
         #[cfg(feature = "terminal")]
+        let mut full_terminal_pixel_mouse = false;
+        #[cfg(feature = "terminal")]
         let mut full_terminal_link_hover = false;
         #[cfg(feature = "terminal")]
         let mut full_live_terminal_ids = Vec::new();
@@ -1680,6 +1716,8 @@ impl NodeTree {
             {
                 full_terminal_any_event |= matches!(&node.kind, NodeKind::Terminal(terminal)
                     if terminal.mouse_mode.mode == MouseMode::AnyEvent && terminal.on_mouse_forward.is_some());
+                full_terminal_pixel_mouse |= matches!(&node.kind, NodeKind::Terminal(terminal) if terminal.screen.is_none())
+                    && kind_forwards_pixel_mouse(&node.kind);
                 full_terminal_link_hover |= matches!(&node.kind, NodeKind::Terminal(terminal)
                     if terminal.on_link_activate.is_some());
                 if matches!(&node.kind, NodeKind::Terminal(terminal) if terminal.screen.is_some()) {
@@ -1730,6 +1768,11 @@ impl NodeTree {
         assert_eq!(
             self.has_terminal_any_event, full_terminal_any_event,
             "incremental has_terminal_any_event must match full scan"
+        );
+        #[cfg(feature = "terminal")]
+        assert_eq!(
+            self.has_terminal_pixel_mouse, full_terminal_pixel_mouse,
+            "incremental has_terminal_pixel_mouse must match full scan"
         );
         #[cfg(feature = "terminal")]
         assert_eq!(
