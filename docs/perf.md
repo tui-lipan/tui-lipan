@@ -610,7 +610,7 @@ The native scene foundation still uses the ordinary terminal repaint path for gr
 It does not yet provide graphics-only cell-tree bypass, presentation acknowledgements, transport
 coalescing, or producer pacing.
 
-Foundation validation used `terminal_patch_layers` with native and composed modes in isolated
+Foundation validation on 2026-10-13 used `terminal_patch_layers` with native and composed modes in isolated
 Ghostty windows at 980×720, scale 1, JetBrainsMono NF. Image-only, text-overlay, and block-overlay
 captures each matched exactly in a 330×215 region at offset 0,20, with zero differing pixels out of
 70,950. A separate instrumented debug run confirmed native commands reached the host. Three
@@ -618,3 +618,8 @@ unchanged `n` actions emitted zero additional image uploads or placements; the 1
 ordinary frame/chrome output. This is correctness and traffic evidence for this fixture, not a
 high-rate FPS, CPU, memory, or browser benchmark. The command counter was injected only into the
 owned fixture executable and excluded Ghostty.
+
+The measured debug executable had SHA-256
+`80770ed728c6a55949ec55aeab0985aa3b9b8e1df148edfc9d995160eb05768a`.
+It was built from base `35de344` with the foundation worktree changes before the checkpoint
+commits. These measurements do not describe a published release or the later full pipeline.
