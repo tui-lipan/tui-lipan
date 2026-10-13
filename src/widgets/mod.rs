@@ -299,7 +299,8 @@ pub use terminal::TerminalPtyHandoff;
 #[cfg(feature = "terminal")]
 pub use terminal::{
     CopyModeAction, CopyModeGrid, KittyKeyboardFlags, MouseEncoding, MouseMode, MouseModeState,
-    MouseReportGeometry, ScrollbackLineage, SemanticMark, SemanticMarkKind, Terminal,
+    MouseReportGeometry, ProgramStatusEvent, ProgramStatusRecord, ProgramStatusSnapshot,
+    ProgramStatusState, ScrollbackLineage, SemanticMark, SemanticMarkKind, Terminal,
     TerminalBuffer, TerminalCellSize, TerminalClipboardEvent, TerminalClipboardTarget,
     TerminalColorPalette, TerminalCommandPhase, TerminalCopyMode, TerminalDecoration,
     TerminalHyperlink, TerminalInputEvent, TerminalInputKind, TerminalKeyModes, TerminalLinkEvent,

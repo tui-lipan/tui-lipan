@@ -253,7 +253,8 @@ pub use crate::widgets::TerminalPtyHandoff;
 #[cfg(feature = "terminal")]
 pub use crate::widgets::{
     CopyModeAction, CopyModeGrid, KittyKeyboardFlags, ManagedTerminal, ManagedTerminalProps,
-    ManagedTerminalStatus, MouseEncoding, MouseMode, MouseModeState, ScrollbackLineage,
+    ManagedTerminalStatus, MouseEncoding, MouseMode, MouseModeState, ProgramStatusEvent,
+    ProgramStatusRecord, ProgramStatusSnapshot, ProgramStatusState, ScrollbackLineage,
     SemanticMark, SemanticMarkKind, Terminal, TerminalBuffer, TerminalCellSize,
     TerminalClipboardEvent, TerminalClipboardTarget, TerminalColorPalette, TerminalCommandPhase,
     TerminalCopyMode, TerminalDecoration, TerminalHyperlink, TerminalInputEvent, TerminalInputKind,

@@ -549,6 +549,7 @@ cargo bench --bench scroll_view_rich_children --features markdown
 cargo bench --bench scroll_reorder_reconcile
 cargo bench --bench image_backdrop --features terminal-images
 cargo bench --bench terminal_snapshot --features terminal -- terminal_resize
+cargo bench --bench terminal_ingest --features terminal -- program_status_ingest
 ```
 
 The `terminal_resize` group measures resize plus snapshot on persistent 253×64 screens with
@@ -556,6 +557,15 @@ The `terminal_resize` group measures resize plus snapshot on persistent 253×64 
 alternating width and height changes. Repeating `TerminalScreen::resize` with the same clamped
 dimensions preserves the cached snapshot and pending paint damage; genuine geometry changes
 still resize and reflow normally. Cell-pixel changes use `set_cell_size` independently.
+
+The `program_status_ingest` group compares OSC 7501 enabled, disabled with an empty store,
+and disabled with a retained working record. It ingests 256 KiB of ordinary log output or
+1,000 progress reports into a fresh 200×60 screen with 5,000 history lines. Screen creation
+and initial retained-record setup are outside the timed loop; ingestion, event draining and
+screen destruction are timed. This matches Rozi's original ingestion benchmark inputs and
+measurement loop. An empty disabled store skips the status scanner, while a disabled store
+with records still observes prompt and reset lifecycle events. Report enabled overhead against
+the empty disabled case from the same revision and run.
 
 Save and compare a baseline with Criterion's standard flags:
 

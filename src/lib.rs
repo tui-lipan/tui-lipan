@@ -496,3 +496,8 @@ fn inline_surface_commit_render_path_is_unified() {
 fn inline_surface_internal_wrap_policy_is_opaque() {
     crate::backend::ratatui_backend::assert_inline_surface_internal_wrap_policy_is_opaque();
 }
+
+#[cfg(feature = "terminal")]
+pub use crate::widgets::{
+    ProgramStatusEvent, ProgramStatusRecord, ProgramStatusSnapshot, ProgramStatusState,
+};

@@ -998,3 +998,38 @@ Programs in a pane can draw pictures with the Kitty graphics protocol; enable th
 child's escapes and re-encodes for whatever the host supports, down to half-blocks. See
 [terminal-images.md](terminal-images.md). `TerminalScreen::has_images()` is whether any of those
 pixels are still retained; `snapshot.images` is the visible set this frame.
+
+## Program status through OSC 7501
+
+`TerminalScreen` supports OSC 7501 revision 0.4. Enable it on the authoritative
+terminal with `screen.set_program_status_enabled(true)`. It is disabled by default,
+so a passive parser does not store competing records or answer feature queries.
+Drain terminal responses and write them to the child after each `process_bytes` call.
+OSC queries and device attribute replies preserve their input order.
+Changing enablement discards partial wire sequences. Disabling preserves existing
+records, but prompts, process exit and resets still apply their usual lifecycle rules.
+A disabled screen with no retained records skips status scanning. OSC 133 prompts
+drop ignorable C0 bytes as the terminal parser does, independently of the OSC 7501
+4096-byte sequence limit. Prompt expiry also follows the terminal parser when
+CAN, SUB or ESC interrupts OSC 133. OSC 7501 reports and queries still require
+BEL or a complete ST terminator.
+
+`program_status_snapshot()` returns at most 256 independent records in stable ID
+order, with a revision and report order. `drain_program_status_events()` returns
+ordered effective-store changes. Drain it after each output batch; embedders may
+coalesce presentation updates using the final snapshot. Use `snapshot.app_for(record)`
+to resolve the nearest ancestor's application identifier.
+
+Reports replace the addressed record completely. Hierarchical clear removes that
+record and its descendants. Prompts emitted through OSC 133 A and the explicit
+`program_status_process_exited()` hook remove working and blocked records. Call the
+exit hook before replacing a child process that shares the same logical terminal.
+Done, error and idle survive those events. RIS and `reset()` clear every record;
+soft reset, screen switching and resizing preserve them. No heartbeat is required.
+
+For repeated fields, the last value wins. Encoded size limits apply to every
+occurrence; base64, UTF-8 and control character checks apply to the final title and
+message values. Titles and messages are decoded UTF-8 plain text. They remain
+untrusted text. Disarm bidirectional overrides and invisible formatting before
+displaying them outside the terminal grid, and never interpret them as markup.
+Feature replies contain no report-supplied data.
