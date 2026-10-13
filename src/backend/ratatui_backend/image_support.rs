@@ -91,6 +91,11 @@ pub(crate) fn init_image_picker() {
     }
 }
 
+/// Forget the previous run's answer until this run's query replaces it.
+pub(crate) fn forget_queried_cell_size() {
+    CELL_SIZE_QUERIED.store(false, std::sync::atomic::Ordering::Release);
+}
+
 /// The cell size in pixels the host itself reported, or `None` when it was never asked or did not
 /// answer.
 ///

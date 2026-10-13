@@ -18,7 +18,7 @@ use super::terminal_transition::{
     CrosstermTransitionExecutor, execute_plan_with_rollback, resume_plan, suspend_plan,
 };
 #[cfg(unix)]
-use super::terminal_transition::{execute_plan, pixel_mouse_plan, theme_notification_plan};
+use super::terminal_transition::{disable_pixel_mouse_plan, execute_plan, theme_notification_plan};
 
 static STDIN_READER_PAUSED: AtomicBool = AtomicBool::new(false);
 
@@ -197,10 +197,14 @@ pub fn suspend_for_external_process(surface_mode: SurfaceMode) -> io::Result<()>
     if result.is_ok() && pop_keyboard {
         super::MAIN_SCREEN_KEYBOARD_PUSHED.store(false, Ordering::SeqCst);
     }
-    // The plan turns pixel reporting off before handing the terminal over. A rollback puts it back,
-    // so only a plan that stuck changes what reports are read as.
+    // The plan turns pixel reporting off before handing the terminal over, and a rollback leaves it
+    // off. A plan that failed before reaching it may not have, so it is turned off here as well: the
+    // host is then known to report cells, and the resumed worker asks again if anything wants pixels.
     #[cfg(unix)]
-    if result.is_ok() {
+    {
+        if result.is_err() {
+            let _ = execute_plan(&mut executor, &disable_pixel_mouse_plan());
+        }
         crate::app::input::pixel_mouse::note_mode_enabled(false);
     }
 
@@ -277,16 +281,8 @@ pub fn resume_after_external_process(
     }
     STDIN_READER_PAUSED.store(false, Ordering::SeqCst);
     FULL_REPAINT_AFTER_HANDOFF.store(true, Ordering::SeqCst);
-    // The suspend turned pixel reporting off; the host is the same one that answered at startup, so
-    // it goes straight back on rather than being asked again. Only for a paused Termina worker,
-    // though: it is the one decoder that can read a pixel report, and handing pixels to any other
-    // would put every click hundreds of columns from the pointer.
-    #[cfg(unix)]
-    if termina_paused
-        && crate::app::input::pixel_mouse::is_active()
-        && execute_plan(&mut executor, &pixel_mouse_plan(true)).is_ok()
-    {
-        crate::app::input::pixel_mouse::note_mode_enabled(true);
-    }
+    // Pixel reporting, which the suspend turned off, is asked for again by the resumed Termina
+    // worker: the one decoder that can read a pixel report, and the one that can tell where in its
+    // input the reports switch over.
     Ok(())
 }
