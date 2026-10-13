@@ -80,6 +80,7 @@ pub fn query_host_colors() -> Option<HostTerminalColors> {
             break;
         }
     }
+    super::startup_input::keep(&super::startup_input::split(&ordered_response).input);
 
     parser.finish_query(None)
 }
@@ -332,6 +333,7 @@ pub(crate) fn query_host_capabilities_with(
         }
     }
 
+    super::startup_input::keep(&super::startup_input::split(&buffer).input);
     let cursor_reports_asked = if ask_utf8 { 3 } else { 2 };
     if ask_utf8 {
         record_utf8(utf8_from_reports(&buffer));
@@ -510,6 +512,9 @@ pub(crate) fn query_host_capabilities_with(
 /// Draining them here, right after the probes and before the event loop starts,
 /// prevents that. The window is short and bounded; a fast, already-drained TTY
 /// returns at the first empty poll.
+///
+/// Only replies are discarded. Whatever the user typed or clicked meanwhile is kept for the input
+/// reader; see [`super::startup_input`].
 #[cfg(unix)]
 pub(crate) fn drain_pending_terminal_responses() {
     let Some(fd) = tty_open() else {
@@ -525,6 +530,7 @@ pub(crate) fn drain_pending_terminal_responses() {
     // empty poll so nothing is discarded once the queue is clear.
     let deadline = Instant::now() + Duration::from_millis(50);
     let mut chunk = [0u8; 256];
+    let mut read = Vec::new();
     while Instant::now() < deadline {
         let remaining = deadline
             .saturating_duration_since(Instant::now())
@@ -534,10 +540,58 @@ pub(crate) fn drain_pending_terminal_responses() {
             _ => break,
         }
         match tty_read(fd, &mut chunk) {
-            Some(n) if n > 0 => {}
+            Some(n) if n > 0 => read.extend_from_slice(&chunk[..n]),
             _ => break,
         }
     }
+    super::startup_input::keep(&super::startup_input::split(&read).input);
+}
+
+/// Put a question to the host during startup and return its replies, once `answered` says they are
+/// complete or `budget` runs out.
+///
+/// Read from the terminal directly, with a deadline that holds whatever the host does: nothing is
+/// left reading after this returns, to take input meant for the app. Input that arrives meanwhile
+/// is kept for the input reader rather than mistaken for an answer.
+#[cfg(all(unix, feature = "image"))]
+pub(crate) fn ask_host_during_startup(
+    question: &[u8],
+    budget: Duration,
+    mut answered: impl FnMut(&[u8]) -> bool,
+) -> Vec<u8> {
+    let Some(fd) = tty_open() else {
+        return Vec::new();
+    };
+    let _fd_guard = FdGuard(fd);
+    let Some(_raw_guard) = RawModeGuard::new(fd) else {
+        return Vec::new();
+    };
+    if tty_write_all(fd, question).is_none() {
+        return Vec::new();
+    }
+    let deadline = Instant::now() + budget;
+    let mut read = Vec::new();
+    let mut chunk = [0u8; 256];
+    while Instant::now() < deadline {
+        let remaining = deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis() as i32;
+        match poll_readable(fd, remaining.clamp(1, 10)) {
+            Some(true) => {}
+            Some(false) => continue,
+            None => break,
+        }
+        match tty_read(fd, &mut chunk) {
+            Some(n) if n > 0 => read.extend_from_slice(&chunk[..n]),
+            _ => break,
+        }
+        if answered(&super::startup_input::split(&read).replies) {
+            break;
+        }
+    }
+    let split = super::startup_input::split(&read);
+    super::startup_input::keep(&split.input);
+    split.replies
 }
 
 /// Drain stub for non-Unix hosts. Windows terminals do not exhibit the leaked

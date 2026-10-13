@@ -37,6 +37,7 @@ pub(crate) use imp::{InlineHostReader, is_hang_up};
 
 #[cfg(unix)]
 mod imp {
+    use std::collections::VecDeque;
     use std::io::{self, Write};
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -59,6 +60,9 @@ mod imp {
 
     static INLINE_HUNG_UP: AtomicBool = AtomicBool::new(false);
 
+    /// Input that arrived while startup was reading the host's replies, read before the terminal.
+    static EARLY: Mutex<VecDeque<TerminaEvent>> = Mutex::new(VecDeque::new());
+
     /// Whether `err` means the terminal is gone rather than that one read failed.
     ///
     /// termina reports end-of-file as `UnexpectedEof`. A pty slave read after its master closed,
@@ -79,6 +83,13 @@ mod imp {
         pub(crate) fn start() -> io::Result<Self> {
             let reader = open_reader()?;
             INLINE_HUNG_UP.store(false, Ordering::SeqCst);
+            let mut parser = termina::Parser::default();
+            // Nothing more of it is coming, so a lone escape is the Escape key.
+            parser.parse(&crate::style::startup_input::take(), false);
+            if let Ok(mut early) = EARLY.lock() {
+                early.clear();
+                early.extend(std::iter::from_fn(|| parser.pop()));
+            }
             if let Ok(mut registered) = REGISTERED.lock() {
                 *registered = Some(Registered {
                     reader,
@@ -89,6 +100,9 @@ mod imp {
         }
 
         pub(crate) fn read(&self, wait: Duration) -> io::Result<HostEvent> {
+            if let Some(event) = EARLY.lock().ok().and_then(|mut early| early.pop_front()) {
+                return Ok(host_event(event));
+            }
             if INLINE_HUNG_UP.load(Ordering::SeqCst) {
                 // Asking again would fail at once; the runner is only waiting out its grace period.
                 std::thread::sleep(wait);
@@ -137,18 +151,22 @@ mod imp {
             Err(err) => Err(err),
         };
         match event {
-            Ok(event) => Ok(match map_termina_event(event) {
-                TerminaEventAction::Input(event) => HostEvent::Input(event),
-                TerminaEventAction::Pointer(event, sub_cell) => HostEvent::Pointer(event, sub_cell),
-                TerminaEventAction::ThemeRefresh => HostEvent::ThemeRefresh,
-                TerminaEventAction::Ignore => HostEvent::Quiet,
-            }),
+            Ok(event) => Ok(host_event(event)),
             Err(err) if err.kind() == io::ErrorKind::Interrupted => Ok(HostEvent::Quiet),
             Err(err) if is_hang_up(&err) => {
                 hung_up.store(true, Ordering::SeqCst);
                 Ok(HostEvent::HungUp)
             }
             Err(err) => Err(err),
+        }
+    }
+
+    fn host_event(event: TerminaEvent) -> HostEvent {
+        match map_termina_event(event) {
+            TerminaEventAction::Input(event) => HostEvent::Input(event),
+            TerminaEventAction::Pointer(event, sub_cell) => HostEvent::Pointer(event, sub_cell),
+            TerminaEventAction::ThemeRefresh => HostEvent::ThemeRefresh,
+            TerminaEventAction::Ignore => HostEvent::Quiet,
         }
     }
 

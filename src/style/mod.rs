@@ -25,6 +25,9 @@ pub mod presets;
 pub mod reload;
 /// Runtime themed style-slot resolution.
 pub mod resolve;
+/// Input the user typed while startup was reading the host's replies.
+#[cfg(unix)]
+pub(crate) mod startup_input;
 /// Host terminal color palette probing.
 pub mod terminal_colors;
 /// Rich text primitives (Span, RichText).
