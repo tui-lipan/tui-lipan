@@ -8192,6 +8192,66 @@ impl Component for LiveScreenSmoke {
     }
 }
 
+/// Host state belongs to the runtime, and applies to screens bound before or after startup.
+#[cfg(feature = "terminal")]
+#[test]
+fn live_screens_inherit_host_cursor_defaults_and_keep_explicit_preferences() {
+    use crate::{CaretShape, TerminalCursorStyle};
+    let host = TerminalCursorStyle {
+        shape: CaretShape::Bar,
+        blinking: false,
+    };
+    for before_binding in [true, false] {
+        let screen = Rc::new(RefCell::new(crate::widgets::TerminalScreen::new(
+            4, 20, 100,
+        )));
+        let mut backend = crate::TestBackend::new(LiveScreenSmoke {
+            screen: screen.clone(),
+            views: Rc::new(Cell::new(0)),
+        });
+        backend.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 4,
+        });
+        if before_binding {
+            backend.core.tree.host_cursor_style = Some(host);
+        }
+        backend.render();
+        if !before_binding {
+            backend.core.tree.host_cursor_style = Some(host);
+            assert!(backend.refresh_live_terminals());
+        }
+        let snapshot = screen.borrow_mut().render_snapshot();
+        assert_eq!(snapshot.cursor_shape, CaretShape::Bar);
+        assert!(!snapshot.cursor_blinking);
+        assert!(
+            !backend.refresh_live_terminals(),
+            "an unchanged default causes no damage"
+        );
+        screen.borrow_mut().process_bytes(b"\x1b[3 q");
+        backend.refresh_live_terminals();
+        assert!(screen.borrow_mut().render_snapshot().cursor_blinking);
+        screen.borrow_mut().process_bytes(b"\x1b[0 q");
+        backend.refresh_live_terminals();
+        assert!(!screen.borrow_mut().render_snapshot().cursor_blinking);
+        screen
+            .borrow_mut()
+            .set_default_cursor_style(TerminalCursorStyle {
+                shape: CaretShape::Underline,
+                blinking: true,
+            });
+        backend.render();
+        let configured = screen.borrow_mut().render_snapshot();
+        assert_eq!(configured.cursor_shape, CaretShape::Underline);
+        assert!(
+            configured.cursor_blinking,
+            "application defaults take precedence"
+        );
+    }
+}
+
 /// Output written to a screen the widget holds a handle to must reach the node without `view()`
 /// running again. That is what lets a streaming pane cost a repaint instead of a rebuild of every
 /// pane, workbar segment and sidebar row in the window.

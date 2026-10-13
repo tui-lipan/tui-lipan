@@ -40,7 +40,7 @@ use super::osc::{
     SemanticObserver, TerminalCommandPhase, TerminalSemanticEvent, TerminalSemanticState,
 };
 use super::scrollback_ledger::{
-    HostModes, LedgerTerm, SGR_PIXELS_MOUSE, ledger_capacity, settle_history,
+    CursorStyleOverrides, HostModes, LedgerTerm, SGR_PIXELS_MOUSE, ledger_capacity, settle_history,
 };
 use super::selection::{ScrollbackLineage, TerminalSelection};
 use crate::capture::{
@@ -522,6 +522,9 @@ impl EventListener for ResponseCapture {
 pub struct TerminalScreen {
     processor: VteProcessor,
     term: Term<ResponseCapture>,
+    default_cursor_style: TermCursorStyle,
+    cursor_style_configured: bool,
+    cursor_overrides: CursorStyleOverrides,
     listener: ResponseCapture,
     /// Stable child-facing identity returned for XTVERSION queries.
     terminal_identity: Arc<str>,
@@ -602,6 +605,13 @@ impl TerminalScreenHandle {
     /// call (see [`TerminalScreen::render_snapshot`]).
     pub fn snapshot(&self) -> TerminalRenderSnapshot {
         self.0.borrow_mut().render_snapshot()
+    }
+
+    pub(crate) fn set_host_cursor_style(&self, style: crate::style::TerminalCursorStyle) {
+        let mut screen = self.0.borrow_mut();
+        if !screen.cursor_style_configured {
+            screen.apply_default_cursor_style(style);
+        }
     }
 
     /// Take the viewport rows this screen changed since the last call (see
@@ -1167,6 +1177,9 @@ impl TerminalScreen {
             snapshot_damage: DamageAccumulator::default(),
             processor: VteProcessor::new(),
             term,
+            default_cursor_style: DEFAULT_CURSOR_STYLE,
+            cursor_style_configured: false,
+            cursor_overrides: CursorStyleOverrides::default(),
             listener,
             terminal_identity: Arc::from(DEFAULT_TERMINAL_IDENTITY),
             xtversion_enabled: true,
@@ -1422,6 +1435,7 @@ impl TerminalScreen {
                 pixel_mouse: &mut self.pixel_mouse,
                 responses: &self.listener.responses,
             },
+            &mut self.cursor_overrides,
         );
         self.processor.advance(&mut ledger, bytes);
         let (evicted, reset, left_alt_screen) =
@@ -1493,6 +1507,7 @@ impl TerminalScreen {
                 pixel_mouse: &mut self.pixel_mouse,
                 responses: &self.listener.responses,
             },
+            &mut self.cursor_overrides,
         );
         self.processor.stop_sync(&mut ledger);
         let (evicted, reset, left_alt_screen) =
@@ -2303,7 +2318,7 @@ impl TerminalScreen {
     /// A wide glyph occupies its own cell, and the column it covers holds an empty symbol, so
     /// joining a row's symbols yields text at its true display width. Hidden text captures as
     /// spaces. The cursor is reported while it lies inside the viewport, with the shape and blink
-    /// the program asked for through `DECSCUSR` (the screen's default is a blinking block) and
+    /// the program asked for through `DECSCUSR` (the screen's configured default otherwise) and
     /// the color it set through `OSC 12`, if any.
     ///
     /// With `terminal-images`, the images the program displayed land in
@@ -2846,6 +2861,44 @@ impl TerminalScreen {
         }
     }
 
+    /// Set the default cursor shape and blink, without replacing explicit child requests.
+    ///
+    /// Live `Terminal::screen` widgets receive the host's startup style automatically. Apps using
+    /// snapshots can call this before parsing output. Headless screens keep a blinking block until
+    /// configured. An explicit default takes precedence over host inheritance. `TerminalDefault`
+    /// uses a block when no concrete host shape is available.
+    pub fn set_default_cursor_style(&mut self, style: crate::style::TerminalCursorStyle) {
+        self.cursor_style_configured = true;
+        self.apply_default_cursor_style(style);
+    }
+
+    fn apply_default_cursor_style(&mut self, style: crate::style::TerminalCursorStyle) {
+        let default_cursor_style = TermCursorStyle {
+            shape: match style.shape {
+                CaretShape::Bar => TermCursorShape::Beam,
+                CaretShape::Underline => TermCursorShape::Underline,
+                CaretShape::Block | CaretShape::TerminalDefault => TermCursorShape::Block,
+            },
+            blinking: style.blinking,
+        };
+        if self.default_cursor_style == default_cursor_style {
+            return;
+        }
+        let child_style = self
+            .cursor_overrides
+            .resolve(self.term.cursor_style(), default_cursor_style);
+        self.default_cursor_style = default_cursor_style;
+        self.term.set_options(TermConfig {
+            scrolling_history: self.ledger_capacity,
+            default_cursor_style,
+            kitty_keyboard: true,
+            ..TermConfig::default()
+        });
+        alacritty_terminal::vte::ansi::Handler::set_cursor_style(&mut self.term, child_style);
+        self.collect_damage();
+        self.dirty = true;
+    }
+
     /// Clear parser state and screen.
     pub fn reset(&mut self) {
         let dimensions = TermDimensions {
@@ -2853,12 +2906,13 @@ impl TerminalScreen {
             cols: self.cols as usize,
         };
         let config = TermConfig {
-            scrolling_history: self.scrollback_len,
-            default_cursor_style: DEFAULT_CURSOR_STYLE,
+            scrolling_history: self.ledger_capacity,
+            default_cursor_style: self.default_cursor_style,
             kitty_keyboard: true,
             ..TermConfig::default()
         };
         self.listener = ResponseCapture::default();
+        self.cursor_overrides = CursorStyleOverrides::default();
         self.term = Term::new(config, &dimensions, self.listener.clone());
         self.sync_viewport();
         self.processor = VteProcessor::new();
@@ -5698,6 +5752,63 @@ mod tests {
                 .nth(1)
                 .is_some_and(|line| line.starts_with("  Z"))
         );
+    }
+
+    #[test]
+    fn late_host_defaults_preserve_only_cursor_properties_the_child_set() {
+        use crate::style::TerminalCursorStyle;
+        for (request, shape, blinking) in [
+            (b"\x1b[?12h".as_slice(), CaretShape::Bar, true),
+            (b"\x1b[?12l", CaretShape::Bar, false),
+            (b"\x1b[?12$p", CaretShape::Bar, false),
+            (b"\x1b]50;CursorShape=2\x07", CaretShape::Underline, false),
+            (b"\x1b[3 q", CaretShape::Underline, true),
+            (b"\x1b[0 q", CaretShape::Bar, false),
+        ] {
+            let mut screen = TerminalScreen::new(4, 10, 20);
+            screen.process_bytes(request);
+            screen.apply_default_cursor_style(TerminalCursorStyle {
+                shape: CaretShape::Bar,
+                blinking: false,
+            });
+            let snapshot = screen.render_snapshot();
+            assert_eq!(snapshot.cursor_shape, shape);
+            assert_eq!(snapshot.cursor_blinking, blinking);
+        }
+    }
+
+    #[test]
+    fn configured_cursor_defaults_survive_resets_and_preserve_child_requests() {
+        use crate::style::TerminalCursorStyle;
+        let mut screen = TerminalScreen::new(4, 10, 20);
+        let steady_bar = TerminalCursorStyle {
+            shape: CaretShape::Bar,
+            blinking: false,
+        };
+        screen.set_default_cursor_style(steady_bar);
+        let initial = screen.render_snapshot();
+        assert_eq!(initial.cursor_shape, CaretShape::Bar);
+        assert!(!initial.cursor_blinking);
+        assert!(!screen.capture_frame().cursor.unwrap().blinking);
+        screen.process_bytes(b"\x1b[3 q");
+        screen.set_default_cursor_style(TerminalCursorStyle {
+            shape: CaretShape::Block,
+            blinking: false,
+        });
+        let explicit = screen.render_snapshot();
+        assert_eq!(explicit.cursor_shape, CaretShape::Underline);
+        assert!(explicit.cursor_blinking);
+        screen.set_default_cursor_style(steady_bar);
+        screen.process_bytes(b"\x1b[0 q");
+        assert_eq!(screen.render_snapshot().cursor_shape, CaretShape::Bar);
+        assert!(!screen.render_snapshot().cursor_blinking);
+        screen.process_bytes(b"\x1b[?12h");
+        assert!(screen.render_snapshot().cursor_blinking);
+        screen.process_bytes(b"\x1bc");
+        assert!(!screen.render_snapshot().cursor_blinking);
+        screen.reset();
+        assert_eq!(screen.render_snapshot().cursor_shape, CaretShape::Bar);
+        assert!(!screen.render_snapshot().cursor_blinking);
     }
 
     #[test]

@@ -678,6 +678,8 @@ impl<B: Backend> Drop for OwnedTerminal<B> {
 }
 
 pub(crate) struct TerminalGuard {
+    #[cfg_attr(not(feature = "terminal"), allow(dead_code))]
+    pub(crate) host_cursor_style: Option<crate::style::TerminalCursorStyle>,
     stdout: Stdout,
     policy: SurfaceTerminalPolicy,
     keyboard_enhancement: bool,
@@ -711,7 +713,7 @@ impl TerminalGuard {
             .unwrap_or_default();
         #[cfg(not(feature = "terminal-images"))]
         let probe_bytes: &[u8] = &[];
-        let capabilities =
+        let (capabilities, host_cursor_style) =
             query_host_capabilities_with(probe_bytes, require_utf8).unwrap_or_default();
         // Refused here, before raw mode or the alternate screen, so the error lands on a terminal
         // that is exactly as the user left it. A probe reply still in flight is dropped first, or
@@ -793,6 +795,7 @@ impl TerminalGuard {
         };
 
         let guard = Self {
+            host_cursor_style,
             stdout: io::stdout(),
             policy,
             keyboard_enhancement,
@@ -949,6 +952,7 @@ mod tests {
         if let Some(report) = child_report() {
             crossterm::terminal::enable_raw_mode().expect("raw PTY");
             let mut guard = TerminalGuard {
+                host_cursor_style: None,
                 stdout: io::stdout(),
                 policy: surface_terminal_policy(SurfaceMode::InlineEphemeral { height: 3.into() }),
                 keyboard_enhancement: true,

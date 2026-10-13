@@ -248,8 +248,8 @@ pub use crate::style::{
     Justify, LayoutConstraints, Length, Padding, Paint, PreparedCellEffect, Rect, RetroPreset,
     RichText, RippleRadius, ScrollbarConfig, ScrollbarPalette, ScrollbarVariant, ShrinkPriority,
     Size, Span, StatusPalette, Style, SurfacePalette, SyntaxPalette, TerminalColor,
-    TerminalPalette, TextAreaPalette, ThemeExtension, ThemePalette, VisualEffect,
-    query_host_colors,
+    TerminalCursorStyle, TerminalPalette, TextAreaPalette, ThemeExtension, ThemePalette,
+    VisualEffect, query_host_colors,
 };
 #[cfg(feature = "theme-reload")]
 pub use crate::style::{ThemeWatcher, load_theme_from_toml};

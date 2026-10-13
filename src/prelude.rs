@@ -100,7 +100,7 @@ pub use crate::style::{
     EffectPrepareContext, EffectPulse, FloatRect, HostTerminalColors, Justify, LayoutConstraints,
     Length, Padding, Paint, PreparedCellEffect, Rect, RetroPreset, RichText, RippleRadius,
     ScrollbarConfig, ScrollbarVariant, ShrinkPriority, Size, Span, Style, TerminalColor,
-    VisualEffect,
+    TerminalCursorStyle, VisualEffect,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

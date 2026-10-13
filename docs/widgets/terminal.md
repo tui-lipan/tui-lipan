@@ -568,7 +568,8 @@ symbols join to text at its true display width. A row that wrapped a wide glyph 
 blank column it left. Hidden text captures as spaces. `cursor` is set while the cursor lies in
 the viewport, and is visible only when the program shows it and the view is not scrolled back.
 Its `shape` and `blinking` follow the program's `DECSCUSR` request (`CSI Ps SP q`), and until it
-makes one they are the screen's default blinking block. Its `color` is the one the program set
+makes one they are the screen's configured default. Live screens inherit the host cursor style;
+standalone headless screens default to a blinking block. Its `color` is the one the program set
 with `OSC 12`, or `None` after `OSC 112` or when it never set one.
 
 With `terminal-images`, the images the program displayed are in `frame.images`, cropped to the
@@ -631,8 +632,23 @@ The focused `Terminal` renders the real hardware cursor. It follows the cursor s
 program requests through `DECSCUSR` (`CSI Ps SP q`): a block (`1`/`2`), underline (`3`/`4`), or bar
 (`5`/`6`), mapped to `CaretShape`. Odd codes request blinking and even codes request a steady
 cursor; the widget honors that preference (blinking is driven by the framework blink timer, so a
-steady cursor stays lit). A child that never issues `DECSCUSR` falls back to a blinking block. These
-fields flow through `TerminalRenderSnapshot` and can be overridden directly with
+steady cursor stays lit).
+
+On Unix, startup queries the host's current shape and blink through `DECRQSS`, before changing the
+cursor or entering the alternate screen. Live `Terminal::screen(handle)` widgets use that style as
+their screen default, including screens attached later. Explicit child requests through `DECSCUSR`
+or DEC mode 12 take precedence; `CSI 0 SP q` and hard resets return to the inherited default. This is a
+startup snapshot, so terminal configuration changes during a run are not re-queried. Unsupported
+hosts and Windows keep the blinking-block fallback. Text inputs continue to use their theme's caret
+preferences.
+
+Applications can override a screen's default with
+`screen.set_default_cursor_style(TerminalCursorStyle { shape: CaretShape::Bar, blinking: false })`.
+That explicit default takes precedence over automatic inheritance and survives resets. Snapshot-only
+widgets and standalone headless screens do not query a terminal; configure their screen explicitly
+or keep the deterministic blinking-block default.
+
+These fields flow through `TerminalRenderSnapshot` and can be overridden directly with
 `Terminal::cursor_shape()` / `Terminal::cursor_blinking()`.
 
 ### Cursor color
