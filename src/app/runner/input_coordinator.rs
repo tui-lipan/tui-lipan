@@ -1744,6 +1744,79 @@ mod tests {
         assert_eq!(scanner.find(b"\x1b[?1016;\x1b[?1016;4$y"), Some((19, 4)));
     }
 
+    /// Input kept during a start that then fails belongs to nobody. Here the first start is refused
+    /// for a terminal that draws UTF-8 as one cell per byte, with a key already kept, and the next
+    /// start must not hand that key to its reader.
+    #[test]
+    #[cfg(all(target_os = "linux", feature = "terminal"))]
+    fn input_kept_by_a_failed_start_is_not_the_next_runs() {
+        use std::sync::atomic::AtomicBool;
+
+        use crate::app::context::SurfaceMode;
+        use crate::backend::ratatui_backend::TerminalGuard;
+        use crate::backend::ratatui_backend::host_input::pty_test::{child_report, run_on_pty};
+        use crate::backend::ratatui_backend::terminal_handoff::input_handoff_slot;
+
+        let name = "input_kept_by_a_failed_start_is_not_the_next_runs";
+        if let Some(report) = child_report() {
+            report.line("ready", 1);
+            // As if typed while an earlier query read the terminal.
+            crate::style::startup_input::keep(b"s");
+            let refused =
+                TerminalGuard::enter(SurfaceMode::Fullscreen, true, true, &AtomicBool::new(false));
+            report.line("refused", refused.is_err());
+            drop(refused);
+            let (_terminal, guard) = TerminalGuard::enter(
+                SurfaceMode::Fullscreen,
+                true,
+                false,
+                &AtomicBool::new(false),
+            )
+            .expect("enter");
+            let coordinator = TerminaInputCoordinator::start(input_handoff_slot()).expect("start");
+            let started = Instant::now();
+            while started.elapsed() < Duration::from_secs(5) {
+                if let Ok(RunnerEvent::Terminal(CrosstermEvent::Key(key))) = coordinator
+                    .receiver()
+                    .recv_timeout(Duration::from_millis(100))
+                {
+                    report.line("first_key", format!("{:?}", key.code));
+                    break;
+                }
+            }
+            drop(coordinator);
+            drop(guard);
+            report.line("done", 1);
+            return;
+        }
+
+        let module = module_path!();
+        let module = module.split_once("::").map_or(module, |(_, rest)| rest);
+        let report = run_on_pty(&format!("{module}::{name}"), |master| {
+            let mut terminal = File::from(master);
+            let mut output = Vec::new();
+            // The first start's probe: the sample took two cells, so the host is not UTF-8.
+            read_child_until(&mut terminal, &mut output, b"\x1b[c");
+            terminal
+                .write_all(b"\x1b[1;1R\x1b[1;3R\x1b[1;3R\x1b[?62;22c")
+                .unwrap();
+            // The second start enters; only then is the new key typed.
+            read_child_until(&mut terminal, &mut output, b"\x1b[?1016l");
+            terminal.write_all(b"n").unwrap();
+            terminal
+        });
+        assert_eq!(
+            report.get("refused").map(String::as_str),
+            Some("true"),
+            "{report:?}"
+        );
+        assert_eq!(
+            report.get("first_key").map(String::as_str),
+            Some("Char('n')"),
+            "{report:?}"
+        );
+    }
+
     /// Read what a pty child writes until `wanted` appears in it.
     #[cfg(all(target_os = "linux", feature = "terminal"))]
     fn read_child_until(terminal: &mut File, output: &mut Vec<u8>, wanted: &[u8]) {

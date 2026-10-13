@@ -28,6 +28,35 @@ pub(crate) fn keep(input: &[u8]) {
     }
 }
 
+/// The kept input's tie to a run that is starting: if the start fails, the input goes with it.
+///
+/// Held for the whole of terminal entry and handed over only once entry succeeds, after which the
+/// input reader takes the input and a run's end drops whatever it did not. A start that fails at any
+/// point in between - a terminal refused for its charset, a mode change it rejected - drops it here,
+/// so it can never become the first input of another run later in the same process.
+pub(crate) struct Claim {
+    handed_over: bool,
+}
+
+impl Claim {
+    pub(crate) fn new() -> Self {
+        Self { handed_over: false }
+    }
+
+    /// The start succeeded; the input is the run's now.
+    pub(crate) fn hand_over(mut self) {
+        self.handed_over = true;
+    }
+}
+
+impl Drop for Claim {
+    fn drop(&mut self) {
+        if !self.handed_over {
+            forget();
+        }
+    }
+}
+
 /// Everything kept so far, for the input reader to decode before anything it reads itself.
 pub(crate) fn take() -> Vec<u8> {
     KEPT.lock()
@@ -48,9 +77,9 @@ pub(crate) struct Split {
 ///
 /// A reply is recognised by a shape no key or pointer report has:
 /// - `CSI ?` and `CSI >` sequences: device attributes, mode and keyboard-flag reports;
-/// - CSI sequences ending in `t` (window and cell sizes), `n` (status) or `R` (cursor position) -
-///   startup asks for the cursor position, and the one key that shares the shape, F3 with a
-///   modifier, is reported differently once the keyboard protocol is on;
+/// - CSI sequences ending in `t` (window and cell sizes), `n` (status) or `R` (cursor position).
+///   The legacy encoding of F3 with a modifier shares the `R` shape, but no reader could deliver
+///   it: termina reads every `CSI … R` as a cursor report, during startup or after;
 /// - OSC, DCS, APC, PM and SOS strings: colors, capabilities and graphics answers.
 ///
 /// A sequence cut off at the end is kept as input. Its remainder is still on its way, and the input
@@ -162,6 +191,23 @@ mod tests {
         assert_eq!(split.replies, b"\x1b[?1c");
     }
 
+    /// Why `CSI … R` can be counted a reply without losing a key: termina, which decodes all input,
+    /// reads it as a cursor report too, so legacy Shift+F3 never reaches an app by any route. If
+    /// that changes, so should [`split`].
+    #[test]
+    fn termina_reads_a_legacy_modified_f3_as_a_cursor_report() {
+        use termina::escape::csi::{Csi, Cursor};
+        use termina::event::Event;
+
+        let mut parser = termina::Parser::default();
+        parser.parse(b"\x1b[1;2R", false);
+        assert!(matches!(
+            parser.pop(),
+            Some(Event::Csi(Csi::Cursor(Cursor::ActivePositionReport { .. })))
+        ));
+        assert_eq!(split(b"\x1b[1;2R").replies, b"\x1b[1;2R");
+    }
+
     #[test]
     fn kept_input_is_handed_on_once() {
         forget();
@@ -173,5 +219,20 @@ mod tests {
         keep(b"stale");
         forget();
         assert!(take().is_empty());
+
+        // In one test with the above: the kept input is process-wide.
+        keep(b"typed before a start that failed");
+        drop(Claim::new());
+        assert!(
+            take().is_empty(),
+            "a failed start leaves nothing for a later run"
+        );
+        keep(b"ls");
+        Claim::new().hand_over();
+        assert_eq!(
+            take(),
+            b"ls",
+            "a start that succeeded keeps it for its reader"
+        );
     }
 }

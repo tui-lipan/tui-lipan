@@ -694,6 +694,10 @@ impl TerminalGuard {
     ) -> io::Result<(OwnedTerminal, Self)> {
         let policy = surface_terminal_policy(surface_mode);
         let stdout = io::stdout();
+        // Input kept while starting, here or by a color query before `run()`, belongs to this run
+        // only if it starts. Every early return below drops it.
+        #[cfg(unix)]
+        let startup_input = crate::style::startup_input::Claim::new();
         // The object outlives the query so a terminal that declines it still finds it there, and is
         // unlinked when this scope ends whether or not the terminal read it.
         //
@@ -801,6 +805,8 @@ impl TerminalGuard {
             modifier_key_reporting: false,
             theme_notifications: false,
         };
+        #[cfg(unix)]
+        startup_input.hand_over();
         Ok((OwnedTerminal::new(terminal), guard))
     }
 
