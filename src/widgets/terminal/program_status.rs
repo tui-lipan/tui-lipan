@@ -360,6 +360,9 @@ pub(super) struct ProgramStatusScanner {
     mode: WireMode,
     body: Vec<u8>,
     bytes: usize,
+    // VTE ignores C0 bytes in OSC 133; keep its prefix separate from the raw OSC 7501 body.
+    prompt_prefix: [u8; 6],
+    prompt_prefix_len: usize,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -378,6 +381,10 @@ enum WireMode {
 impl ProgramStatusScanner {
     pub fn scan(&mut self, bytes: &[u8], store: &mut ProgramStatusStore) -> Vec<usize> {
         let mut replies = Vec::new();
+        // Enablement changes reset wire state, and an empty disabled store has no lifecycle work.
+        if !store.enabled && store.records.is_empty() {
+            return replies;
+        }
         let mut i = 0;
         while i < bytes.len() {
             if matches!(self.mode, WireMode::Ground) {
@@ -452,10 +459,19 @@ impl ProgramStatusScanner {
             }
             0x1b => self.mode = WireMode::OscEscape,
             0x18 | 0x1a => self.mode = WireMode::Ground,
-            _ if self.bytes <= 4096 => self.body.push(byte),
-            _ => {}
+            _ => self.collect_osc_byte(byte),
         }
         false
+    }
+
+    fn collect_osc_byte(&mut self, byte: u8) {
+        if self.bytes <= 4096 {
+            self.body.push(byte);
+        }
+        if byte >= 0x20 && self.prompt_prefix_len < self.prompt_prefix.len() {
+            self.prompt_prefix[self.prompt_prefix_len] = byte;
+            self.prompt_prefix_len += 1;
+        }
     }
 
     fn escape(&mut self, byte: u8, store: &mut ProgramStatusStore) {
@@ -464,6 +480,7 @@ impl ProgramStatusScanner {
             b']' => {
                 self.body.clear();
                 self.bytes = 2;
+                self.prompt_prefix_len = 0;
                 Osc
             }
             b'[' => Csi,
@@ -479,22 +496,18 @@ impl ProgramStatusScanner {
     }
 
     fn finish(&self, store: &mut ProgramStatusStore) -> bool {
-        if self.bytes > 4096 {
-            return false;
-        }
         if let Some(body) = self.body.strip_prefix(b"7501;") {
-            if !store.enabled {
+            if !store.enabled || self.bytes > 4096 {
                 return false;
             }
             if body == b"?" {
                 return true;
             }
             store.report(body);
-        } else if self
-            .body
-            .strip_prefix(b"133;")
-            .is_some_and(|body| body == b"A" || body.starts_with(b"A;"))
-        {
+        } else if matches!(
+            &self.prompt_prefix[..self.prompt_prefix_len],
+            b"133;A" | b"133;A;"
+        ) {
             store.clear_active();
         }
         false
@@ -669,6 +682,83 @@ mod tests {
         assert_eq!(s.drain_program_status_events().len(), 1);
         s.set_program_status_enabled(true);
         assert!(s.program_status_snapshot().records.is_empty());
+    }
+
+    #[test]
+    fn program_status_long_prompts_clear_active_records() {
+        for enabled in [true, false] {
+            for terminator in ["\x07", "\x1b\\"] {
+                let mut s = screen();
+                report(&mut s, "state=working");
+                report(&mut s, "state=blocked:id=child");
+                report(&mut s, "state=done:id=finished");
+                s.drain_program_status_events();
+                s.set_program_status_enabled(enabled);
+                let prompt = format!("\x1b]133;A;{}{}", "x".repeat(5000), terminator);
+                for chunk in prompt.as_bytes().chunks(127) {
+                    s.process_bytes(chunk);
+                }
+                let snapshot = s.program_status_snapshot();
+                assert_eq!(snapshot.records.len(), 1);
+                assert_eq!(snapshot.records[0].state, ProgramStatusState::Done);
+                assert_eq!(s.drain_program_status_events().len(), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn program_status_prompts_ignore_c0_bytes_without_changing_report_validation() {
+        for enabled in [true, false] {
+            for ignored in [0x00..=0x06, 0x08..=0x17, 0x19..=0x19, 0x1c..=0x1f]
+                .into_iter()
+                .flatten()
+            {
+                let mut s = screen();
+                report(&mut s, "state=working");
+                s.set_program_status_enabled(enabled);
+                let mut prompt = b"\x1b]".to_vec();
+                // Force the meaningful prefix beyond the raw report buffer's limit.
+                prompt.extend(std::iter::repeat_n(ignored, 5000));
+                for byte in b"133;A" {
+                    prompt.extend_from_slice(&[ignored, *byte, ignored]);
+                }
+                prompt.push(7);
+                for chunk in prompt.chunks(127) {
+                    s.process_bytes(chunk);
+                }
+                assert!(
+                    s.program_status_snapshot().records.is_empty(),
+                    "C0 {ignored:#x}"
+                );
+            }
+        }
+        let mut s = screen();
+        s.process_bytes(b"\x1b]7501;state=done:msg=SG\x00k=\x07");
+        assert!(s.program_status_snapshot().records[0].msg.is_none());
+        s.process_bytes(b"\x1b]75\x0001;state=working\x07");
+        assert_eq!(
+            s.program_status_snapshot().records[0].state,
+            ProgramStatusState::Done
+        );
+    }
+
+    #[test]
+    fn program_status_disabled_empty_store_skips_scanning() {
+        let mut scanner = ProgramStatusScanner::default();
+        let mut store = ProgramStatusStore::default();
+        assert!(scanner.scan(b"\x1b]7501;state=work", &mut store).is_empty());
+        assert!(matches!(scanner.mode, WireMode::Ground));
+        assert!(scanner.body.is_empty());
+        assert_eq!(scanner.bytes, 0);
+        store.enabled = true;
+        scanner.scan(b"\x1b]7501;state=working\x07", &mut store);
+        store.enabled = false;
+        scanner.scan(b"\x1b]133;A\x07", &mut store);
+        assert!(store.records.is_empty());
+        let bytes = scanner.bytes;
+        scanner.scan(b"\x1b]7501;state=work", &mut store);
+        assert!(matches!(scanner.mode, WireMode::Ground));
+        assert_eq!(scanner.bytes, bytes);
     }
 
     #[test]

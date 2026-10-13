@@ -1008,6 +1008,9 @@ Drain terminal responses and write them to the child after each `process_bytes` 
 OSC queries and device attribute replies preserve their input order.
 Changing enablement discards partial wire sequences. Disabling preserves existing
 records, but prompts, process exit and resets still apply their usual lifecycle rules.
+A disabled screen with no retained records skips status scanning. OSC 133 prompts
+drop ignorable C0 bytes as the terminal parser does, independently of the OSC 7501
+4096-byte sequence limit.
 
 `program_status_snapshot()` returns at most 256 independent records in stable ID
 order, with a revision and report order. `drain_program_status_events()` returns

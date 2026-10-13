@@ -334,6 +334,11 @@ name = "scroll_reorder_reconcile"
 harness = false
 
 [[bench]]
+name = "terminal_ingest"
+harness = false
+required-features = ["terminal"]
+
+[[bench]]
 name = "terminal_snapshot"
 harness = false
 required-features = ["terminal"]
