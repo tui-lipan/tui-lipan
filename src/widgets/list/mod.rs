@@ -552,6 +552,7 @@ pub struct ListItem {
     pub(crate) primary_wrap_description: bool,
     pub(crate) primary_max_label_width: Option<u16>,
     pub(crate) primary_max_description_width: Option<u16>,
+    pub(crate) primary_min_label_width: Option<Length>,
     pub(crate) primary_description_truncation: ListTruncation,
     pub(crate) primary_description_gap: u16,
     pub(crate) symbol_line: usize,
@@ -579,6 +580,7 @@ pub struct ListItemLine {
     pub(crate) wrap_description: bool,
     pub(crate) max_label_width: Option<u16>,
     pub(crate) max_description_width: Option<u16>,
+    pub(crate) min_label_width: Option<Length>,
     pub(crate) description_truncation: ListTruncation,
     pub(crate) description_gap: u16,
 }
@@ -603,6 +605,7 @@ impl ListItemLine {
             wrap_description: false,
             max_label_width: None,
             max_description_width: None,
+            min_label_width: None,
             description_truncation: ListTruncation::End,
             description_gap: 0,
         }
@@ -627,6 +630,7 @@ impl ListItemLine {
             wrap_description: false,
             max_label_width: None,
             max_description_width: None,
+            min_label_width: None,
             description_truncation: ListTruncation::End,
             description_gap: 0,
         }
@@ -746,6 +750,29 @@ impl ListItemLine {
         self
     }
 
+    /// Keep at least this much of the label when it and the description do not both fit.
+    ///
+    /// The description is cut first, but only until the label has this many columns; past that
+    /// the label is cut as usual. `Percent` is a share of the width the label, gap, and
+    /// description share on the line, so it follows the row as the list resizes. `Px` is a column
+    /// count. `Auto` and `Flex` keep the whole label, like
+    /// [`truncate_description_first`](Self::truncate_description_first). A label narrower than the minimum is never padded,
+    /// and a description that fits is never cut.
+    ///
+    /// ```
+    /// use tui_lipan::prelude::*;
+    ///
+    /// // A long name gives way to a long description, but never below a third of the row.
+    /// let item = ListItemLine::new("Codex: reviewing the focus restore path")
+    ///     .description("Working · 2m · rozi (fix/agent-picker-cursor)")
+    ///     .min_label_width(Length::Percent(33));
+    /// # let _ = item;
+    /// ```
+    pub fn min_label_width(mut self, width: Length) -> Self {
+        self.min_label_width = Some(width);
+        self
+    }
+
     /// Choose which end of the description is cut when it does not fit.
     pub fn description_truncation(mut self, truncation: ListTruncation) -> Self {
         self.description_truncation = truncation;
@@ -792,6 +819,7 @@ impl ListItem {
             primary_wrap_description: false,
             primary_max_label_width: None,
             primary_max_description_width: None,
+            primary_min_label_width: None,
             primary_description_truncation: ListTruncation::End,
             primary_description_gap: 0,
             symbol_line: 0,
@@ -852,6 +880,7 @@ impl ListItem {
             primary_wrap_description: false,
             primary_max_label_width: None,
             primary_max_description_width: None,
+            primary_min_label_width: None,
             primary_description_truncation: ListTruncation::End,
             primary_description_gap: 0,
             symbol_line: 0,
@@ -888,6 +917,7 @@ impl ListItem {
             primary_wrap_description: false,
             primary_max_label_width: None,
             primary_max_description_width: None,
+            primary_min_label_width: None,
             primary_description_truncation: ListTruncation::End,
             primary_description_gap: 0,
             symbol_line: 0,
@@ -1103,6 +1133,29 @@ impl ListItem {
     /// Limit the primary description to at most this many columns.
     pub fn primary_max_description_width(mut self, width: u16) -> Self {
         self.primary_max_description_width = Some(width);
+        self
+    }
+
+    /// Keep at least this much of the primary label when it and the description do not both fit.
+    ///
+    /// The description is cut first, but only until the label has this many columns; past that
+    /// the label is cut as usual. `Percent` is a share of the width the label, gap, and
+    /// description share on the line, so it follows the row as the list resizes. `Px` is a column
+    /// count. `Auto` and `Flex` keep the whole label, like
+    /// [`primary_truncate_description_first`](Self::primary_truncate_description_first). A label narrower than the minimum is never padded,
+    /// and a description that fits is never cut.
+    ///
+    /// ```
+    /// use tui_lipan::prelude::*;
+    ///
+    /// // A long name gives way to a long description, but never below a third of the row.
+    /// let item = ListItem::new("Codex: reviewing the focus restore path")
+    ///     .description("Working · 2m · rozi (fix/agent-picker-cursor)")
+    ///     .primary_min_label_width(Length::Percent(33));
+    /// # let _ = item;
+    /// ```
+    pub fn primary_min_label_width(mut self, width: Length) -> Self {
+        self.primary_min_label_width = Some(width);
         self
     }
 
@@ -2316,6 +2369,7 @@ fn hash_list_item_layout(item: &ListItem, hasher: &mut impl std::hash::Hasher) {
     item.primary_wrap_description.hash(hasher);
     item.primary_max_label_width.hash(hasher);
     item.primary_max_description_width.hash(hasher);
+    item.primary_min_label_width.hash(hasher);
     item.primary_description_truncation.hash(hasher);
     item.primary_description_gap.hash(hasher);
     item.symbol_line.hash(hasher);
@@ -2354,6 +2408,7 @@ fn hash_list_item_line_layout(line: &ListItemLine, hasher: &mut impl std::hash::
     line.wrap_description.hash(hasher);
     line.max_label_width.hash(hasher);
     line.max_description_width.hash(hasher);
+    line.min_label_width.hash(hasher);
     line.description_truncation.hash(hasher);
     line.description_gap.hash(hasher);
     hash_spinner_slot(
