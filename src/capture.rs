@@ -136,7 +136,7 @@ pub enum CursorShape {
 /// fields are not breaking changes.
 ///
 /// A terminal capture takes the shape and blink from the program's `DECSCUSR` request, falling
-/// back to the screen's default blinking block, and the color from `OSC 12`. A UI capture takes
+/// back to the screen's configured default, and the color from `OSC 12`. A UI capture takes
 /// them from the focused widget's caret settings and its theme. What neither source knows stays
 /// at the default: a steady [`CursorShape::Block`] with no color of its own.
 #[derive(Clone, Debug, PartialEq, Eq)]

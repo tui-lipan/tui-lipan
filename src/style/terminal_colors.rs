@@ -7,7 +7,16 @@ use std::time::Duration;
 #[cfg(unix)]
 use web_time::Instant;
 
-use crate::style::Color;
+use crate::style::{CaretShape, Color};
+
+/// Default cursor shape and blinking state for an emulated terminal screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TerminalCursorStyle {
+    /// The cursor shape.
+    pub shape: CaretShape,
+    /// Whether the cursor blinks.
+    pub blinking: bool,
+}
 
 /// Colors reported by the host terminal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -259,10 +268,10 @@ const UTF8_SAMPLE: &str = "\u{f1}";
 /// that as "nothing supported".
 #[cfg(unix)]
 pub fn query_host_capabilities(graphics_probe: &[u8]) -> Option<HostCapabilities> {
-    query_host_capabilities_with(graphics_probe, false)
+    query_host_capabilities_with(graphics_probe, false).map(|(capabilities, _)| capabilities)
 }
 
-/// [`query_host_capabilities`], and with `ask_utf8` also whether the host draws UTF-8 as UTF-8.
+/// Startup capabilities and current cursor style, with an optional UTF-8 rendering check.
 ///
 /// The UTF-8 question rides the same batch: [`UTF8_SAMPLE`] goes between the leading cursor report
 /// and one more, and how far the cursor moved over it is the answer, recorded for
@@ -272,7 +281,7 @@ pub fn query_host_capabilities(graphics_probe: &[u8]) -> Option<HostCapabilities
 pub(crate) fn query_host_capabilities_with(
     graphics_probe: &[u8],
     ask_utf8: bool,
-) -> Option<HostCapabilities> {
+) -> Option<(HostCapabilities, Option<TerminalCursorStyle>)> {
     record_utf8(None);
     // Cleared before the first thing that can fail. Opening the TTY and raw mode can both return
     // early, and a guard may be entering a different terminal than the one an earlier probe
@@ -295,6 +304,8 @@ pub(crate) fn query_host_capabilities_with(
         probe.extend_from_slice(b"\x1b[6n");
     }
     probe.extend_from_slice(b"\x1b[?u\x1b[?1016$p");
+    // DECRQSS for DECSCUSR, before anything changes the user's cursor.
+    probe.extend_from_slice(b"\x1bP$q q\x1b\\");
     probe.extend_from_slice(graphics_probe);
     probe.extend_from_slice(b"\x1b[6n");
     probe.extend_from_slice(b"\x1b[c");
@@ -328,7 +339,7 @@ pub(crate) fn query_host_capabilities_with(
             record_round_trip(Some(asked.elapsed()));
             // The sentinel came back and was consumed here, so nothing is owed downstream.
             set_startup_reply_outstanding(false);
-            answered = Some(capabilities);
+            answered = Some((capabilities, scan_host_cursor_style(&buffer)));
             break;
         }
     }
@@ -494,7 +505,7 @@ pub fn query_host_capabilities(_graphics_probe: &[u8]) -> Option<HostCapabilitie
 pub(crate) fn query_host_capabilities_with(
     _graphics_probe: &[u8],
     _ask_utf8: bool,
-) -> Option<HostCapabilities> {
+) -> Option<(HostCapabilities, Option<TerminalCursorStyle>)> {
     None
 }
 
@@ -763,10 +774,13 @@ fn scan_host_capabilities(buf: &[u8]) -> Option<HostCapabilities> {
     let mut capabilities = HostCapabilities::default();
     let mut i = 0usize;
     while i + 2 < buf.len() {
-        // APC: the graphics protocol's own reply, `ESC _ G i=… ; OK ESC \`.
-        if buf[i] == 0x1b && buf[i + 1] == b'_' {
+        // Skip complete APC and DCS strings; their contents are not CSI replies.
+        // Only APC can carry the graphics reply `ESC _ G i=… ; OK ESC \`.
+        if buf[i] == 0x1b && matches!(buf[i + 1], b'_' | b'P') {
             let end = find_string_terminator(&buf[i..])?;
-            capabilities.graphics_query_ok |= buf[i..i + end].ends_with(b";OK");
+            if buf[i + 1] == b'_' {
+                capabilities.graphics_query_ok |= buf[i..i + end].ends_with(b";OK");
+            }
             i += end;
             continue;
         }
@@ -798,6 +812,36 @@ fn scan_host_capabilities(buf: &[u8]) -> Option<HostCapabilities> {
             }
         }
         i += 1;
+    }
+    None
+}
+
+/// Read successful DECRQSS cursor-style replies, ignoring unsupported or malformed replies.
+#[cfg(unix)]
+fn scan_host_cursor_style(buf: &[u8]) -> Option<TerminalCursorStyle> {
+    let mut remaining = buf;
+    while let Some(start) = remaining.windows(2).position(|pair| pair == b"\x1bP") {
+        remaining = &remaining[start + 2..];
+        let end = find_string_terminator(remaining)?;
+        let reply = &remaining[..end];
+        remaining = &remaining[end + 2..];
+        let Some(value) = reply
+            .strip_prefix(b"1$r")
+            .and_then(|s| s.strip_suffix(b" q"))
+        else {
+            continue;
+        };
+        let [code @ b'1'..=b'6'] = value else {
+            continue;
+        };
+        return Some(TerminalCursorStyle {
+            shape: match code {
+                b'1' | b'2' => CaretShape::Block,
+                b'3' | b'4' => CaretShape::Underline,
+                _ => CaretShape::Bar,
+            },
+            blinking: code % 2 == 1,
+        });
     }
     None
 }
@@ -1338,6 +1382,38 @@ mod tests {
     };
     use crate::style::{Color, HostTerminalColors};
 
+    #[test]
+    fn host_cursor_style_reports_are_bounded_by_the_startup_sentinel() {
+        use crate::style::{CaretShape, TerminalCursorStyle};
+        for (code, shape, blinking) in [
+            (1, CaretShape::Block, true),
+            (2, CaretShape::Block, false),
+            (3, CaretShape::Underline, true),
+            (4, CaretShape::Underline, false),
+            (5, CaretShape::Bar, true),
+            (6, CaretShape::Bar, false),
+        ] {
+            let reply = format!("\x1bP1$r{code} q\x1b\\\x1b[?62;1;6c");
+            assert_eq!(
+                super::scan_host_cursor_style(reply.as_bytes()),
+                Some(TerminalCursorStyle { shape, blinking })
+            );
+            for end in 0..reply.len() {
+                assert_eq!(scan_host_capabilities(&reply.as_bytes()[..end]), None);
+            }
+            assert_eq!(scan_host_capabilities(reply.as_bytes()), keyboard(false));
+        }
+        for reply in [
+            b"\x1bP0$r q\x1b\\".as_slice(),
+            b"\x1bP1$r0 q\x1b\\",
+            b"\x1bP1$r7 q\x1b\\",
+            b"\x1bP1$r2 q",
+            b"\x1bP1$r2m\x1b\\",
+        ] {
+            assert_eq!(super::scan_host_cursor_style(reply), None);
+        }
+    }
+
     fn keyboard(enhancement: bool) -> Option<HostCapabilities> {
         Some(HostCapabilities {
             keyboard_enhancement: enhancement,
@@ -1746,7 +1822,7 @@ mod tests {
     /// position the mess has already moved past and the erase starts in the wrong place.
     #[test]
     fn the_probe_asks_for_the_cursor_on_both_sides_of_itself() {
-        let probe = b"\x1b[6n\x1b[?u\x1b[?1016$p\x1b[6n\x1b[c";
+        let probe = b"\x1b[6n\x1b[?u\x1b[?1016$p\x1bP$q q\x1b\\\x1b[6n\x1b[c";
         assert!(probe.starts_with(b"\x1b[6n"), "before anything is written");
         assert!(
             probe.ends_with(b"\x1b[6n\x1b[c"),

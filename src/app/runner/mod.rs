@@ -2165,6 +2165,15 @@ impl<C: Component> AppRunner<C> {
                 self.require_utf8,
                 panic_keyboard_enhancement.as_ref(),
             )?;
+            self.core
+                .ctx
+                .env()
+                .host_cursor_style
+                .set(guard.host_cursor_style);
+            #[cfg(feature = "terminal")]
+            {
+                self.core.tree.host_cursor_style = guard.host_cursor_style;
+            }
             let mut guard = guard;
             // Route the stop signals through the loop for as long as we own the
             // terminal, so a stop — ours, an external `kill -TSTP`, or a tty

@@ -305,6 +305,8 @@ pub(crate) struct NodeTree {
     /// Terminals reading a live screen, so the pre-draw refresh visits only those.
     #[cfg(feature = "terminal")]
     live_terminal_ids: Vec<NodeId>,
+    #[cfg(feature = "terminal")]
+    pub(crate) host_cursor_style: Option<crate::style::TerminalCursorStyle>,
     live_text_ids: Vec<NodeId>,
     has_spinners: bool,
     spinner_ids: Vec<NodeId>,
@@ -382,6 +384,8 @@ impl NodeTree {
             has_terminal_link_hover: false,
             #[cfg(feature = "terminal")]
             live_terminal_ids: Vec::new(),
+            #[cfg(feature = "terminal")]
+            host_cursor_style: None,
             live_text_ids: Vec::new(),
             has_spinners: false,
             spinner_ids: Vec::new(),
@@ -564,8 +568,9 @@ impl NodeTree {
             if !self.is_valid(id) {
                 continue;
             }
+            let host_cursor_style = self.host_cursor_style;
             if let NodeKind::Terminal(terminal) = &mut self.node_mut(id).kind
-                && let Some(damage) = terminal.refresh_from_live_screen()
+                && let Some(damage) = terminal.refresh_from_live_screen(host_cursor_style)
             {
                 refresh.changed = true;
                 refresh.damage.push((id, damage));
