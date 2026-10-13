@@ -735,6 +735,7 @@ impl TerminalGuard {
         // for one would put every click in the wrong cell.
         #[cfg(unix)]
         {
+            crate::app::input::pixel_mouse::start_run();
             crate::app::input::pixel_mouse::note_host_support(capabilities.pixel_mouse);
             if let Ok(size) = crossterm::terminal::window_size() {
                 crate::app::input::pixel_mouse::note_window_size(
@@ -846,6 +847,13 @@ fn rollback_entered_terminal(policy: SurfaceTerminalPolicy, keyboard_enhancement
     let plan = exit_plan(policy, pop_keyboard_on_exit(policy, keyboard_enhancement));
     let mut executor = CrosstermTransitionExecutor::new(&mut stdout);
     let _ = execute_plan(&mut executor, &plan);
+    note_pixel_mouse_restored();
+}
+
+/// Every exit plan turns pixel reporting off, so the host is back to reporting cells.
+fn note_pixel_mouse_restored() {
+    #[cfg(unix)]
+    crate::app::input::pixel_mouse::note_mode_enabled(false);
 }
 
 impl Drop for TerminalGuard {
@@ -868,6 +876,7 @@ impl Drop for TerminalGuard {
             pop_keyboard_on_exit(self.policy, self.keyboard_enhancement),
         );
         let _ = execute_plan(&mut executor, &plan);
+        note_pixel_mouse_restored();
     }
 }
 
@@ -890,6 +899,7 @@ pub(crate) fn restore_terminal_on_panic(
     flush_pending_terminal_responses_on_exit();
     let plan = exit_plan(policy, pop_keyboard_on_exit(policy, keyboard_enhancement));
     let _ = execute_plan(&mut executor, &plan);
+    note_pixel_mouse_restored();
     reset_handoff_state_for_terminal_restore();
 }
 

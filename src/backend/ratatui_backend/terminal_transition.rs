@@ -38,7 +38,6 @@ pub(crate) enum TerminalOp {
     PopKeyboardEnhancement,
     EnableThemeNotifications,
     DisableThemeNotifications,
-    EnablePixelMouse,
     DisablePixelMouse,
     Flush,
 }
@@ -65,9 +64,9 @@ impl TerminalOp {
             Self::PopKeyboardEnhancement => Some(Self::PushKeyboardEnhancement),
             Self::EnableThemeNotifications => Some(Self::DisableThemeNotifications),
             Self::DisableThemeNotifications => Some(Self::EnableThemeNotifications),
-            Self::EnablePixelMouse => Some(Self::DisablePixelMouse),
-            Self::DisablePixelMouse => Some(Self::EnablePixelMouse),
-            Self::ClearScreen | Self::Flush => None,
+            // Not undone: pixel reports were not necessarily on before, and only the input worker
+            // can switch them on at a point its decoder sees. It asks again when it resumes.
+            Self::ClearScreen | Self::Flush | Self::DisablePixelMouse => None,
         }
     }
 }
@@ -193,17 +192,10 @@ pub(crate) fn resume_plan(
     TerminalTransitionPlan::new(ops)
 }
 
-/// Turn SGR-pixels reporting on or off once the host has said whether it implements it.
+/// Turn SGR-pixels reporting off. Only the input worker turns it on, at a point its decoder sees.
 #[cfg(unix)]
-pub(crate) fn pixel_mouse_plan(enabled: bool) -> TerminalTransitionPlan {
-    TerminalTransitionPlan::new(vec![
-        if enabled {
-            TerminalOp::EnablePixelMouse
-        } else {
-            TerminalOp::DisablePixelMouse
-        },
-        TerminalOp::Flush,
-    ])
+pub(crate) fn disable_pixel_mouse_plan() -> TerminalTransitionPlan {
+    TerminalTransitionPlan::new(vec![TerminalOp::DisablePixelMouse, TerminalOp::Flush])
 }
 
 #[cfg(unix)]
@@ -333,7 +325,6 @@ impl<W: Write> TerminalTransitionExecutor for CrosstermTransitionExecutor<W> {
             TerminalOp::DisableThemeNotifications => {
                 execute!(self.writer, Print("\x1b[?2031l"))
             }
-            TerminalOp::EnablePixelMouse => execute!(self.writer, Print("\x1b[?1016h")),
             TerminalOp::DisablePixelMouse => execute!(self.writer, Print("\x1b[?1016l")),
             TerminalOp::Flush => self.writer.flush(),
         }

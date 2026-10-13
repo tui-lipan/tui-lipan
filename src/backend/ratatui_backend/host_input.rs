@@ -358,7 +358,7 @@ pub(crate) mod pty_test {
         })
     }
 
-    fn run_on_pty<T>(
+    pub(crate) fn run_on_pty<T>(
         test_name: &str,
         interact: impl FnOnce(OwnedFd) -> T,
     ) -> HashMap<String, String> {

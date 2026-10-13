@@ -474,6 +474,15 @@ impl PlatformInputCoordinator {
         Ok(false)
     }
 
+    /// Whether the reader checks the host size itself, sending a resize when it changes. The Termina
+    /// worker does, so a second check on the UI thread would only repeat its system call.
+    fn watches_window_size(&self) -> bool {
+        #[cfg(unix)]
+        return self.termina.is_some();
+        #[cfg(not(unix))]
+        false
+    }
+
     /// Ask the host for pixel-precise pointer reports exactly while some terminal on screen will
     /// read them. Only the Termina worker can decode them, so every other reader leaves the host
     /// reporting cells.
@@ -2311,9 +2320,10 @@ impl<C: Component> AppRunner<C> {
                 // The poll keeps its own cadence rather than the loop's. Asking the host for its
                 // size is not free - crossterm opens and closes `/dev/tty` for every answer - and
                 // this loop turns once per input event, which pointer motion alone can make
-                // hundreds of times a second.
-                let size_poll_due =
-                    event_rx.receiver().is_some() && last_size_poll.elapsed() >= SIZE_POLL_INTERVAL;
+                // hundreds of times a second. A reader that watches the size itself needs no poll.
+                let size_poll_due = event_rx.receiver().is_some()
+                    && !platform_input.watches_window_size()
+                    && last_size_poll.elapsed() >= SIZE_POLL_INTERVAL;
                 if size_poll_due {
                     last_size_poll = Instant::now();
                 }

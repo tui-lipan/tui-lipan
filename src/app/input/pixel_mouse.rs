@@ -164,6 +164,15 @@ pub(crate) fn should_request() -> bool {
     is_active() && WANTED.load(Ordering::Acquire)
 }
 
+/// Start a run from a known state: the host reporting cells, and nothing on screen wanting pixels.
+///
+/// Both are process-wide while a run is not, and a second run in the same process would otherwise
+/// begin from whatever the first left behind.
+pub(crate) fn start_run() {
+    REPORTS_PIXELS.store(false, Ordering::Release);
+    WANTED.store(false, Ordering::Release);
+}
+
 /// Record that the host has been asked for the mode, or told to drop it.
 ///
 /// Called by whoever writes the escape, and only after the write succeeded: this is a note of what
@@ -318,6 +327,16 @@ mod tests {
                 "the last reader leaving withdraws the request"
             );
         }
+
+        // A run that ended with pixels on and wanted leaves nothing for the next one to inherit.
+        // Its exit turned the mode off at the host, and whatever wanted it is gone.
+        #[cfg(feature = "terminal")]
+        note_wanted(true);
+        note_mode_enabled(true);
+        start_run();
+        assert!(!reports_pixels(), "the next run starts reading cells");
+        assert!(!should_request(), "and with nothing asking for pixels");
+        assert_eq!(read_report(20, 30), PointerReport::Cells);
 
         reset();
     }
