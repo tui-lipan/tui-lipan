@@ -1,6 +1,5 @@
 #![allow(unsafe_code)]
 
-use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
@@ -485,7 +484,9 @@ impl WorkerInput {
             if !self.decode(&rest[..end], events) {
                 return false;
             }
-            self.pixel.confirm(setting);
+            if let Some(pixels) = self.pixel.confirm(setting) {
+                pixel_mouse::note_mode_enabled(pixels);
+            }
             rest = &rest[end..];
         }
         self.decode(rest, events)
@@ -591,13 +592,19 @@ impl WorkerInput {
 /// the escape is written. A query of the mode follows every switch, and the host answers only after
 /// acting on it: reports before the answer are read the old way, reports after it the new way.
 ///
-/// Time never stands in for that answer. One that went missing leaves no point in the input where
-/// the coordinates change, so pointer reports are dropped until the host answers a fresh query.
+/// Every answer says what the host reports from that point on, so each one is applied, whichever
+/// query it answers. The count of answers still owed only decides how long to wait. Time never
+/// stands in for an answer: one that went missing leaves no point in the input where the
+/// coordinates change, so pointer reports are dropped until the host answers a fresh query.
 #[derive(Default)]
 struct PixelSwitch {
-    /// Answers awaited, oldest first, each with the encoding asked for by then. `true` is pixels.
-    pending: VecDeque<bool>,
-    /// When to stop waiting for the oldest answer and ask again.
+    /// This worker has queried the mode, so answers are its own rather than a startup probe's.
+    asked: bool,
+    /// Answers still owed. A retry resets this to one: a fresh answer settles everything before it.
+    owed: usize,
+    /// The encoding last asked for, while an answer is owed. `true` is pixels.
+    last_asked: Option<bool>,
+    /// When to stop waiting for an owed answer and ask again.
     deadline: Option<Instant>,
     /// An answer is overdue, so the reports arriving could be in either encoding.
     unsure: bool,
@@ -607,30 +614,36 @@ struct PixelSwitch {
 impl PixelSwitch {
     /// What the host will be sending once every switch written so far has taken effect.
     fn requested(&self) -> bool {
-        self.pending
-            .back()
-            .copied()
-            .unwrap_or_else(pixel_mouse::reports_pixels)
+        self.last_asked.unwrap_or_else(pixel_mouse::reports_pixels)
     }
 
     fn request(&mut self, pixels: bool) {
-        self.pending.push_back(pixels);
+        self.asked = true;
+        self.owed += 1;
+        self.last_asked = Some(pixels);
         self.deadline
             .get_or_insert_with(|| Instant::now() + PIXEL_SWITCH_TIMEOUT);
     }
 
-    /// The host answered the oldest query: from here on, reports carry what it says.
-    fn confirm(&mut self, setting: u16) {
-        // An answer nobody here asked for, such as a late reply to a startup probe, changes nothing.
-        if self.pending.pop_front().is_none() {
-            return;
+    /// The host answered: whether reports from here on carry pixels, or `None` for an answer
+    /// nothing here asked for, such as a late reply to a startup probe.
+    fn confirm(&mut self, setting: u16) -> Option<bool> {
+        if !self.asked {
+            return None;
+        }
+        // An answer also says what every report after it carries, which ends any doubt an overdue
+        // one raised.
+        self.unsure = false;
+        self.owed = self.owed.saturating_sub(1);
+        if self.owed == 0 {
+            self.last_asked = None;
+            self.deadline = None;
+        } else {
+            self.deadline = Some(Instant::now() + PIXEL_SWITCH_TIMEOUT);
         }
         // The host's word decides rather than the request, so one that refused the mode stays read
-        // as cells. 1 and 3 are set and permanently set. It also says what every report after it
-        // carries, which ends any doubt an overdue answer raised.
-        pixel_mouse::note_mode_enabled(matches!(setting, 1 | 3));
-        self.unsure = false;
-        self.deadline = (!self.pending.is_empty()).then(|| Instant::now() + PIXEL_SWITCH_TIMEOUT);
+        // as cells. 1 and 3 are set and permanently set.
+        Some(matches!(setting, 1 | 3))
     }
 
     /// An overdue answer may have been lost, so ask again; until some answer arrives, pointer
@@ -646,7 +659,8 @@ impl PixelSwitch {
             .and_then(|()| out.flush())
             .is_ok()
         {
-            self.pending.push_back(self.requested());
+            // The answers owed before are presumed lost. Any that do still arrive are applied too.
+            self.owed = 1;
         }
     }
 }
@@ -1830,6 +1844,11 @@ mod tests {
     #[test]
     fn an_overdue_answer_is_asked_again_and_reports_wait_for_it() {
         let mut switch = PixelSwitch::default();
+        assert_eq!(
+            switch.confirm(1),
+            None,
+            "a startup probe's late reply is not ours"
+        );
         switch.request(true);
         let deadline = switch.deadline.expect("a switch waits for its answer");
 
@@ -1840,7 +1859,6 @@ mod tests {
         switch.recheck(deadline, &mut written);
         assert_eq!(written, PIXEL_MODE_QUERY, "asked again");
         assert!(switch.unsure);
-        assert_eq!(Vec::from(switch.pending.clone()), [true, true]);
         assert!(switch.deadline.is_some_and(|next| next > deadline));
 
         let (events, receiver) = mpsc::channel();
@@ -1859,6 +1877,42 @@ mod tests {
             [RunnerEvent::Terminal(CrosstermEvent::Key(_))],
             "keys still are"
         );
+
+        // The first answer was lost; the retry's answer settles everything, and nothing is owed.
+        let mut switch = input.pixel;
+        assert_eq!(switch.confirm(1), Some(true));
+        assert!(!switch.unsure);
+        assert_eq!(switch.owed, 0);
+        assert_eq!(switch.deadline, None);
+        written.clear();
+        switch.recheck(deadline + PIXEL_SWITCH_TIMEOUT * 10, &mut written);
+        assert!(written.is_empty(), "a settled switch never asks again");
+    }
+
+    /// Answers that were only late still arrive, after a retry was sent. Each says what the reports
+    /// after it carry, so each is applied, and the bookkeeping settles all the same.
+    #[test]
+    fn late_answers_and_several_switches_still_settle() {
+        let mut switch = PixelSwitch::default();
+        switch.request(true);
+        let deadline = switch.deadline.unwrap();
+        switch.recheck(deadline, &mut Vec::new());
+        assert_eq!(switch.confirm(1), Some(true), "the late original");
+        assert_eq!(switch.deadline, None);
+        assert_eq!(switch.confirm(1), Some(true), "the retry's, applied too");
+        assert_eq!(switch.owed, 0);
+
+        // Switches made back to back are each answered in turn, and the last says where it ends.
+        switch.request(false);
+        switch.request(true);
+        assert!(
+            switch.requested(),
+            "the newest request is where the host is headed"
+        );
+        assert_eq!(switch.confirm(2), Some(false));
+        assert!(switch.deadline.is_some(), "one answer is still owed");
+        assert_eq!(switch.confirm(1), Some(true));
+        assert_eq!((switch.owed, switch.deadline), (0, None));
     }
 
     /// The host keeps sending its old coordinates until it reads a switch of mode 1016, and a
