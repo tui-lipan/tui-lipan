@@ -3728,3 +3728,69 @@ fn clicking_hover_only_mouse_region_preserves_hover_state() {
     assert!(update_hover_test_backend(&mut backend, outside_x, 0, false));
     assert_eq!(&*hover_changes.borrow(), &[true, false]);
 }
+
+#[cfg(feature = "terminal")]
+#[test]
+fn only_a_forwarding_sgr_pixels_terminal_wants_pixel_reports() {
+    struct PixelTerminal {
+        encoding: MouseEncoding,
+        mode: MouseMode,
+        forwards: bool,
+    }
+
+    impl Component for PixelTerminal {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            let terminal = Terminal::new().snapshot(TerminalRenderSnapshot {
+                mouse_mode: MouseModeState {
+                    mode: self.mode,
+                    encoding: self.encoding,
+                    focus_events_enabled: false,
+                },
+                ..TerminalRenderSnapshot::default()
+            });
+            if self.forwards {
+                terminal.on_mouse_forward(Callback::new(|_| {})).into()
+            } else {
+                terminal.into()
+            }
+        }
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+    }
+
+    let wants_pixels = |encoding, mode, forwards| {
+        let mut backend = TestBackend::new(PixelTerminal {
+            encoding,
+            mode,
+            forwards,
+        });
+        backend.render();
+        backend.core.tree.has_terminal_pixel_mouse()
+    };
+
+    assert!(wants_pixels(
+        MouseEncoding::SgrPixels,
+        MouseMode::AnyEvent,
+        true
+    ));
+    assert!(
+        !wants_pixels(MouseEncoding::Sgr, MouseMode::AnyEvent, true),
+        "cell-encoded reports have no use for pixels"
+    );
+    assert!(
+        !wants_pixels(MouseEncoding::SgrPixels, MouseMode::None, true),
+        "a program that stopped tracking the mouse reads nothing"
+    );
+    assert!(
+        !wants_pixels(MouseEncoding::SgrPixels, MouseMode::AnyEvent, false),
+        "reports that are never forwarded reach no program"
+    );
+}

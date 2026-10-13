@@ -914,11 +914,16 @@ becomes `MouseEncoding::SgrPixels`; the encoding is the only thing that changes,
 `on_mouse_forward` payloads to the PTY needs no special handling.
 
 How much precision those reports actually carry depends on the host the app itself runs under. The
-runner asks it for the same mode as soon as the host both answers the probe and reports a cell size
-that a pixel position can be divided by, and then passes the sub-cell offset through to the report.
-Those two facts can settle at different times - a host that pads its window only reveals its cell
-size on a resize that happens to divide evenly - so the request may come mid-run rather than at
-startup, and reports are read as pixels only once it has. A host that only says which cell was
+runner asks it for the same mode while a forwarding terminal on screen uses that encoding, the host
+answers the probe, and the host reports a cell size that a pixel position can be divided by. It then
+passes the sub-cell offset through to the report. The mode is withdrawn again once no terminal uses
+the encoding: a pixel-reporting host sends a report for every pixel the pointer crosses rather than
+every cell, which the whole input path would otherwise pay for with nothing reading it. These facts
+can settle at different times - a host that pads its window only reveals its cell size on a resize
+that happens to divide evenly - so the request may come mid-run rather than at startup. Each switch
+is followed by a query of the mode, and reports change meaning exactly where the host's answer
+arrives: one the host sent before acting on the switch is still read the old way, so a click in the
+transition lands on the cell it was made on. A host that only says which cell was
 clicked leaves reports on that cell's first pixel - correct, one cell granular, and exactly what the
 child would have got from cell coordinates.
 
