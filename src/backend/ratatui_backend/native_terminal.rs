@@ -848,13 +848,21 @@ fn rollback_entered_terminal(policy: SurfaceTerminalPolicy, keyboard_enhancement
     let plan = exit_plan(policy, pop_keyboard_on_exit(policy, keyboard_enhancement));
     let mut executor = CrosstermTransitionExecutor::new(&mut stdout);
     let _ = execute_plan(&mut executor, &plan);
-    note_pixel_mouse_restored();
+    note_terminal_restored();
 }
 
-/// Every exit plan turns pixel reporting off, so the host is back to reporting cells.
-fn note_pixel_mouse_restored() {
+/// What every exit leaves behind for the next run in this process.
+///
+/// The exit plan turned pixel reporting off, so the host is back to reporting cells. Input kept
+/// during startup belonged to this run; whatever no reader took is dropped here, at the end, and
+/// not when the next run starts - by then the app may already have asked the host something
+/// before `run()`, such as its colors, and kept what the user typed meanwhile.
+fn note_terminal_restored() {
     #[cfg(unix)]
-    crate::app::input::pixel_mouse::note_mode_enabled(false);
+    {
+        crate::app::input::pixel_mouse::note_mode_enabled(false);
+        crate::style::startup_input::forget();
+    }
 }
 
 impl Drop for TerminalGuard {
@@ -877,7 +885,7 @@ impl Drop for TerminalGuard {
             pop_keyboard_on_exit(self.policy, self.keyboard_enhancement),
         );
         let _ = execute_plan(&mut executor, &plan);
-        note_pixel_mouse_restored();
+        note_terminal_restored();
     }
 }
 
@@ -900,7 +908,7 @@ pub(crate) fn restore_terminal_on_panic(
     flush_pending_terminal_responses_on_exit();
     let plan = exit_plan(policy, pop_keyboard_on_exit(policy, keyboard_enhancement));
     let _ = execute_plan(&mut executor, &plan);
-    note_pixel_mouse_restored();
+    note_terminal_restored();
     reset_handoff_state_for_terminal_restore();
 }
 

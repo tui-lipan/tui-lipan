@@ -277,6 +277,14 @@ fn run_worker(
     input.sync_pixel_mouse(&mut io::stdout());
     let mut query = None;
     let mut settle_at = None;
+    // Input that arrived while startup was reading the host's replies comes first, as it did.
+    let early = crate::style::startup_input::take();
+    if !early.is_empty() {
+        if !input.push(&early, &events) {
+            return;
+        }
+        settle_at = Some(Instant::now() + ESCAPE_DISAMBIGUATION);
+    }
     let mut size = WindowSizeWatch::new(&terminal);
     loop {
         input.pixel.recheck(Instant::now(), &mut io::stdout());
@@ -1819,12 +1827,7 @@ mod tests {
             let mut output = Vec::new();
             // Nothing wants pixels yet, so the only `1016l` before a click is the enter plan's.
             read_child_until(&mut terminal, &mut output, b"\x1b[?1016l");
-            // Startup can still swallow the first input to arrive, so the click is repeated until
-            // the child has read one. Every repeat is the same cell click.
-            for _ in 0..20 {
-                terminal.write_all(b"\x1b[<0;11;6M").unwrap();
-                std::thread::sleep(Duration::from_millis(100));
-            }
+            terminal.write_all(b"\x1b[<0;11;6M").unwrap();
             terminal
         });
         assert_eq!(
@@ -1835,6 +1838,83 @@ mod tests {
         assert_eq!(
             report.get("report").map(String::as_str),
             Some("cells 10,5"),
+            "{report:?}"
+        );
+    }
+
+    /// Startup reads the terminal for the host's replies before the input reader owns it. A key
+    /// and a click made meanwhile land in those reads, and must still reach the app, in order,
+    /// rather than be thrown away with the replies. Here the host answers none of the questions, so
+    /// every startup read runs to its deadline with the input already queued.
+    ///
+    /// The input is typed as it would be ahead of a real launch: at a shell, while the terminal is
+    /// still reading lines. And the app asks for the host's colors before entering, as the docs
+    /// suggest, so that query is the read that finds the input.
+    #[test]
+    #[cfg(all(target_os = "linux", feature = "terminal"))]
+    fn input_made_during_startup_reaches_the_app() {
+        use std::sync::atomic::AtomicBool;
+
+        use crate::app::context::SurfaceMode;
+        use crate::backend::ratatui_backend::TerminalGuard;
+        use crate::backend::ratatui_backend::host_input::pty_test::{child_report, run_on_pty};
+        use crate::backend::ratatui_backend::terminal_handoff::input_handoff_slot;
+
+        let name = "input_made_during_startup_reaches_the_app";
+        if let Some(report) = child_report() {
+            report.line("ready", 1);
+            std::thread::sleep(Duration::from_millis(300));
+            let _ = crate::style::query_host_colors();
+            let (_terminal, guard) = TerminalGuard::enter(
+                SurfaceMode::Fullscreen,
+                true,
+                false,
+                &AtomicBool::new(false),
+            )
+            .expect("enter");
+            let coordinator = TerminaInputCoordinator::start(input_handoff_slot()).expect("start");
+            let started = Instant::now();
+            let mut seen = Vec::new();
+            while seen.len() < 2 && started.elapsed() < Duration::from_secs(5) {
+                match coordinator
+                    .receiver()
+                    .recv_timeout(Duration::from_millis(100))
+                {
+                    Ok(RunnerEvent::Terminal(CrosstermEvent::Key(key))) => {
+                        seen.push(format!("key {:?}", key.code));
+                    }
+                    Ok(RunnerEvent::Terminal(CrosstermEvent::Mouse(mouse))) => {
+                        seen.push(format!("click {},{}", mouse.column, mouse.row));
+                    }
+                    _ => {}
+                }
+            }
+            report.line("seen", seen.join(" / "));
+            drop(coordinator);
+            drop(guard);
+            report.line("done", 1);
+            return;
+        }
+
+        let module = module_path!();
+        let module = module.split_once("::").map_or(module, |(_, rest)| rest);
+        let report = run_on_pty(&format!("{module}::{name}"), |master| {
+            let mut terminal = File::from(master);
+            // Typed while the child has yet to start: it is queued for startup's first read.
+            terminal.write_all(b"x\x1b[<0;11;6M").unwrap();
+            let mut output = Vec::new();
+            // Kept open until the child is reading; its probe is the first thing it writes.
+            read_child_until(&mut terminal, &mut output, b"\x1b[6n");
+            terminal
+        });
+        assert_eq!(
+            report.get("done").map(String::as_str),
+            Some("1"),
+            "{report:?}"
+        );
+        assert_eq!(
+            report.get("seen").map(String::as_str),
+            Some("key Char('x') / click 10,5"),
             "{report:?}"
         );
     }
