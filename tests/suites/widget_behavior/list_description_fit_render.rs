@@ -201,3 +201,76 @@ impl Component for Narrow {
             .into()
     }
 }
+
+fn long_label() -> ListItem {
+    ListItem::new("codex-reviewing-focus").primary_description_gap(2)
+}
+
+#[test]
+fn a_minimum_label_share_is_kept_before_the_description_is() {
+    // Without it, a label-first cut leaves nothing of the label.
+    assert_eq!(
+        row(long_label().description("working-on-the-picker")),
+        "…  working-on-the-picker"
+    );
+    // Half of the 24 columns stays with the label; the description takes the rest.
+    assert_eq!(
+        row(long_label()
+            .description("working-on-the-picker")
+            .primary_min_label_width(Length::Percent(50))),
+        "codex-revie…  working-o…"
+    );
+}
+
+#[test]
+fn a_minimum_label_width_never_cuts_a_description_that_fits() {
+    assert_eq!(
+        row(long_label()
+            .description("idle")
+            .primary_min_label_width(Length::Percent(33))),
+        "codex-reviewing-f…  idle"
+    );
+}
+
+#[test]
+fn a_short_label_leaves_the_rest_of_its_share_to_the_description() {
+    assert_eq!(
+        row(ListItem::new("codex")
+            .primary_description_gap(2)
+            .description("working-on-the-picker-row")
+            .primary_min_label_width(Length::Percent(33))),
+        "codex  working-on-the-p…"
+    );
+}
+
+#[test]
+fn a_minimum_label_width_takes_columns_or_the_whole_label() {
+    assert_eq!(
+        row(long_label()
+            .description("working-on-the-picker")
+            .primary_min_label_width(Length::Px(8))),
+        "codex-r…  working-on-th…"
+    );
+    // `Auto` keeps the label whole, as cutting the description first would.
+    assert_eq!(
+        row(long_label()
+            .description("working-on-the-picker")
+            .primary_min_label_width(Length::Auto)),
+        row(long_label()
+            .description("working-on-the-picker")
+            .primary_truncate_description_first(true)),
+    );
+}
+
+#[test]
+fn extra_lines_take_their_own_minimum_label_width() {
+    let rows = rows(vec![
+        ListItem::new("x").line(
+            ListItemLine::new("codex-reviewing-focus")
+                .description("working-on-the-picker")
+                .description_gap(2)
+                .min_label_width(Length::Percent(50)),
+        ),
+    ]);
+    assert_eq!(rows[1], "codex-revie…  working-o…");
+}

@@ -110,6 +110,10 @@ ListItem::new("my-project")
 ListItem::new("feat/a-long-branch-name")
     .description("new session")                          // default: description wins, label truncates
     .primary_description_gap(3)
+ListItem::new("Codex: reviewing the focus restore path")
+    .description("Working · 2m · rozi (fix/agent-picker)") // description wins, but…
+    .primary_min_label_width(Length::Percent(33))        // …never below a third of the row
+    .primary_description_gap(2)
 
 // Symbol/gutter can be rendered on a non-primary line (useful for "description above")
 ListItem::new("description")
@@ -133,8 +137,15 @@ A description is cut from the end unless `description_truncation(ListTruncation:
 keep its tail, which suits paths and branch names. `description_gap(n)` keeps at least `n` blank
 columns between a label and its description whenever both have content, whichever side
 `truncate_description_first` lets win. With a gap set, a description that would be cut down to a
-bare `…` is hidden instead, together with its gap. `ListItemLine` takes the same two options
-without the `primary_` prefix.
+bare `…` is hidden instead, together with its gap.
+
+When the description wins, `min_label_width(Length)` stops it from taking the whole line: the
+description is cut first until the label has that much, and only then the label. `Length::Percent`
+is a share of the width the label, gap, and description share on the line, so it tracks the row as
+the list resizes; `Length::Px` is a column count; `Auto` and `Flex` keep the whole label, like
+`truncate_description_first(true)`. A short label is never padded out to the minimum, and a
+description that fits is never cut, so a long description still starts right after a short label.
+`ListItemLine` takes these options without the `primary_` prefix.
 
 `ListItem::prefix(...)` renders a prefix before the primary label and automatically
 indents extra lines to match the label start. Use `.extra_line_indent(...)` to override

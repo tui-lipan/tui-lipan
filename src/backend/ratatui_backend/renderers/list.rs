@@ -982,6 +982,7 @@ pub(crate) fn render_list(params: ListRenderParams<'_, '_, '_>) {
                 truncate_description_first,
                 max_label_width,
                 max_description_width,
+                min_label_width,
                 description_truncation,
                 description_gap,
                 description_spinner,
@@ -998,6 +999,7 @@ pub(crate) fn render_list(params: ListRenderParams<'_, '_, '_>) {
                     item.primary_truncate_description_first,
                     item.primary_max_label_width,
                     item.primary_max_description_width,
+                    item.primary_min_label_width,
                     item.primary_description_truncation,
                     item.primary_description_gap,
                     item.description_spinner
@@ -1020,6 +1022,7 @@ pub(crate) fn render_list(params: ListRenderParams<'_, '_, '_>) {
                     line.truncate_description_first,
                     line.max_label_width,
                     line.max_description_width,
+                    line.min_label_width,
                     line.description_truncation,
                     line.description_gap,
                     line.description_spinner
@@ -1288,16 +1291,27 @@ pub(crate) fn render_list(params: ListRenderParams<'_, '_, '_>) {
                 drop_bare_ellipsis: description_gap > 0,
             };
 
-            if truncate_description_first {
-                let left_budget = max_text_w
-                    .saturating_sub(item_symbol_width as u16)
-                    .saturating_sub(item_gutter_width as u16)
-                    .saturating_sub(prefix_or_indent_w)
-                    .saturating_sub(trailing_symbol_width as u16)
-                    .saturating_sub(label_spinner_reserved as u16)
-                    .saturating_sub(row_padding.horizontal());
+            // The width the label, gap, and description share on this line.
+            let left_budget = max_text_w
+                .saturating_sub(item_symbol_width as u16)
+                .saturating_sub(item_gutter_width as u16)
+                .saturating_sub(prefix_or_indent_w)
+                .saturating_sub(trailing_symbol_width as u16)
+                .saturating_sub(label_spinner_reserved as u16)
+                .saturating_sub(row_padding.horizontal());
+            // Columns of the label the description must leave alone: all of it when the
+            // description is cut first, otherwise up to the minimum label width.
+            let kept_label_width = if truncate_description_first {
+                Some(left_content_width)
+            } else {
+                min_label_width.map(|min| {
+                    let natural = u16::try_from(left_content_width).unwrap_or(u16::MAX);
+                    usize::from(min.resolve(left_budget, natural)).min(left_content_width)
+                })
+            };
+            if let Some(kept_label_width) = kept_label_width {
                 let max_right_width = usize::from(left_budget)
-                    .saturating_sub(left_content_width)
+                    .saturating_sub(kept_label_width)
                     .saturating_sub(description_gap)
                     .saturating_sub(spinner_reserved);
                 right_spans = fit.apply(right_spans, max_right_width);
