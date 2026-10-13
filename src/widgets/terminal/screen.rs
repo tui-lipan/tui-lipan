@@ -5778,6 +5778,29 @@ mod tests {
     }
 
     #[test]
+    fn cursor_blink_reports_follow_the_default_in_force_when_the_child_asks() {
+        use crate::style::TerminalCursorStyle;
+        let steady_bar = TerminalCursorStyle {
+            shape: CaretShape::Bar,
+            blinking: false,
+        };
+        // Before late binding, a query answers from the standalone blinking-block default.
+        let mut screen = TerminalScreen::new(4, 10, 20);
+        screen.process_bytes(b"\x1b[?12$p");
+        assert_eq!(screen.drain_responses(), vec![b"\x1b[?12;1$y".to_vec()]);
+        screen.apply_default_cursor_style(steady_bar);
+        screen.process_bytes(b"\x1b[?12$p");
+        assert_eq!(screen.drain_responses(), vec![b"\x1b[?12;2$y".to_vec()]);
+        assert!(!screen.render_snapshot().cursor_blinking);
+
+        // Seeding before the first byte answers the very first query with the host preference.
+        let mut seeded = TerminalScreen::new(4, 10, 20);
+        seeded.set_default_cursor_style(steady_bar);
+        seeded.process_bytes(b"\x1b[?12$p");
+        assert_eq!(seeded.drain_responses(), vec![b"\x1b[?12;2$y".to_vec()]);
+    }
+
+    #[test]
     fn configured_cursor_defaults_survive_resets_and_preserve_child_requests() {
         use crate::style::TerminalCursorStyle;
         let mut screen = TerminalScreen::new(4, 10, 20);

@@ -648,6 +648,17 @@ That explicit default takes precedence over automatic inheritance and survives r
 widgets and standalone headless screens do not query a terminal; configure their screen explicitly
 or keep the deterministic blinking-block default.
 
+Inheritance happens when the widget is attached. Until then a screen answers cursor-mode queries
+such as `CSI ? 12 $ p` from its own default, the blinking block unless configured. A screen that
+parses child output before it is attached should seed itself from the startup probe first, so the
+child sees the host preference from its first query:
+
+```rust
+if let Some(style) = ctx.host_cursor_style() {
+    screen.set_default_cursor_style(style);
+}
+```
+
 These fields flow through `TerminalRenderSnapshot` and can be overridden directly with
 `Terminal::cursor_shape()` / `Terminal::cursor_blinking()`.
 

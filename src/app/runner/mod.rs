@@ -2134,6 +2134,11 @@ impl<C: Component> AppRunner<C> {
                 self.require_utf8,
                 panic_keyboard_enhancement.as_ref(),
             )?;
+            self.core
+                .ctx
+                .env()
+                .host_cursor_style
+                .set(guard.host_cursor_style);
             #[cfg(feature = "terminal")]
             {
                 self.core.tree.host_cursor_style = guard.host_cursor_style;

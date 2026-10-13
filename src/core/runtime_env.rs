@@ -23,7 +23,7 @@ use crate::core::element::Element;
 use crate::core::element::Key;
 use crate::core::node::NodeId;
 use crate::runtime::FocusRequest;
-use crate::style::{HostTerminalColors, Rect, RichText, Theme};
+use crate::style::{HostTerminalColors, Rect, RichText, TerminalCursorStyle, Theme};
 use crate::utils::GridSelection;
 
 /// A queued copy-flash request: the target node and, optionally, an explicit range
@@ -362,6 +362,8 @@ pub(crate) struct RuntimeEnv {
     pub host_terminal_color_generation: Rc<Cell<u64>>,
     pub host_terminal_color_refresh_requested: Rc<Cell<bool>>,
     pub host_terminal_color_refresh_enabled: bool,
+    /// Host cursor style read by the startup probe, before any component initializes.
+    pub host_cursor_style: Rc<Cell<Option<TerminalCursorStyle>>>,
     pub mouse_capture_generation: Rc<Cell<u64>>,
     pub memo_dependency_recorder: Rc<RefCell<Option<MemoDependencies>>>,
     /// When set, the next frame performs a full reconcile and draw (e.g. after an external
@@ -510,6 +512,10 @@ impl RuntimeEnv {
     pub(crate) fn host_terminal_colors(&self) -> Option<HostTerminalColors> {
         self.note_memo_dependency(MemoDependency::HostTerminalColors);
         self.host_terminal_colors.get()
+    }
+
+    pub(crate) fn host_cursor_style(&self) -> Option<TerminalCursorStyle> {
+        self.host_cursor_style.get()
     }
 
     pub(crate) fn host_terminal_color_generation(&self) -> u64 {
