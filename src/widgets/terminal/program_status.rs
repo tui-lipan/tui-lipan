@@ -452,6 +452,10 @@ impl ProgramStatusScanner {
 
     fn osc_byte(&mut self, byte: u8, store: &mut ProgramStatusStore) -> bool {
         self.bytes = self.bytes.saturating_add(1);
+        // VTE dispatches OSC 133 at any OSC ending, even before ESC is confirmed as ST.
+        if matches!(byte, 7 | 0x1b | 0x18 | 0x1a) {
+            self.finish_prompt(store);
+        }
         match byte {
             7 => {
                 self.mode = WireMode::Ground;
@@ -504,20 +508,24 @@ impl ProgramStatusScanner {
                 return true;
             }
             store.report(body);
-        } else if matches!(
+        }
+        false
+    }
+
+    fn finish_prompt(&self, store: &mut ProgramStatusStore) {
+        if matches!(
             &self.prompt_prefix[..self.prompt_prefix_len],
             b"133;A" | b"133;A;"
         ) {
             store.clear_active();
         }
-        false
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::widgets::terminal::TerminalScreen;
+    use crate::widgets::terminal::{TerminalCommandPhase, TerminalScreen};
 
     fn screen() -> TerminalScreen {
         let mut screen = TerminalScreen::new(24, 80, 100);
@@ -682,6 +690,60 @@ mod tests {
         assert_eq!(s.drain_program_status_events().len(), 1);
         s.set_program_status_enabled(true);
         assert!(s.program_status_snapshot().records.is_empty());
+    }
+
+    #[test]
+    fn program_status_interrupted_prompts_match_terminal_lifecycle() {
+        for enabled in [true, false] {
+            for ending in [b"\x18".as_slice(), b"\x1a", b"\x1b", b"\x1b[0m", b"\x1b\\"] {
+                let mut s = screen();
+                report(&mut s, "state=working");
+                report(&mut s, "state=blocked:id=child");
+                report(&mut s, "state=done:id=finished");
+                s.drain_program_status_events();
+                s.set_program_status_enabled(enabled);
+                s.process_bytes(b"\x1b]133;A");
+                // ESC alone must expire records before the next byte confirms or interrupts ST.
+                for byte in ending {
+                    s.process_bytes(&[*byte]);
+                    assert_eq!(
+                        s.semantic_state().command_phase,
+                        TerminalCommandPhase::Prompt
+                    );
+                    let snapshot = s.program_status_snapshot();
+                    assert_eq!(snapshot.records.len(), 1);
+                    assert_eq!(snapshot.records[0].state, ProgramStatusState::Done);
+                }
+                assert_eq!(s.drain_program_status_events().len(), 1);
+                s.set_program_status_enabled(true);
+                report(&mut s, "state=idle");
+                assert_eq!(s.program_status_snapshot().records.len(), 2);
+            }
+        }
+    }
+
+    #[test]
+    fn program_status_interrupted_reports_and_queries_are_ignored() {
+        for body in ["state=done", "state=clear", "?"] {
+            for ending in [b"\x18".as_slice(), b"\x1a", b"\x1b[0m"] {
+                let mut s = screen();
+                report(&mut s, "state=working");
+                s.drain_program_status_events();
+                let before = s.program_status_snapshot();
+                s.process_bytes(format!("\x1b]7501;{body}").as_bytes());
+                for byte in ending {
+                    s.process_bytes(&[*byte]);
+                }
+                assert_eq!(s.program_status_snapshot(), before);
+                assert!(s.drain_program_status_events().is_empty());
+                assert!(s.drain_responses().is_empty());
+                report(&mut s, "state=done");
+                assert_eq!(
+                    s.program_status_snapshot().records[0].state,
+                    ProgramStatusState::Done
+                );
+            }
+        }
     }
 
     #[test]

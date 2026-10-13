@@ -1010,7 +1010,9 @@ Changing enablement discards partial wire sequences. Disabling preserves existin
 records, but prompts, process exit and resets still apply their usual lifecycle rules.
 A disabled screen with no retained records skips status scanning. OSC 133 prompts
 drop ignorable C0 bytes as the terminal parser does, independently of the OSC 7501
-4096-byte sequence limit.
+4096-byte sequence limit. Prompt expiry also follows the terminal parser when
+CAN, SUB or ESC interrupts OSC 133. OSC 7501 reports and queries still require
+BEL or a complete ST terminator.
 
 `program_status_snapshot()` returns at most 256 independent records in stable ID
 order, with a revision and report order. `drain_program_status_events()` returns
