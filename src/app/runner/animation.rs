@@ -149,6 +149,18 @@ impl<C: Component> AppRunner<C> {
     }
 
     #[cfg(feature = "image")]
+    pub(super) fn pause_images_after_resize(&mut self) {
+        let pause = Duration::from_millis(u64::from(super::image_resize_pause_ms()));
+        if pause.is_zero() {
+            return;
+        }
+        // Opt-in throttling for hosts where resize uploads are expensive. A fixed pause must
+        // not delay live terminal pictures on every resize by default.
+        self.suspend_image_animations_for(pause);
+        image_support::suspend_image_rendering_for(pause);
+    }
+
+    #[cfg(feature = "image")]
     pub(crate) fn suspend_image_animations_for(&mut self, duration: Duration) {
         let now = self.core.ctx.env().now();
         let requested_deadline = now + duration;

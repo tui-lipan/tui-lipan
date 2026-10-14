@@ -1102,6 +1102,41 @@ mod tests {
     }
 
     #[test]
+    fn screen_clear_reuploads_unchanged_native_sources_with_reserved_ids() {
+        for region in [
+            None,
+            Some(ratatui::backend::ClearType::All),
+            Some(ratatui::backend::ClearType::AfterCursor),
+        ] {
+            let mut screen = screen();
+            let output = Output::default();
+            let mut host = HostBackend::new(output.clone());
+            stage_frame(&mut screen);
+            draw(&mut host).unwrap();
+            let initial = output.take();
+
+            if let Some(region) = region {
+                host.clear_region(region).unwrap();
+            } else {
+                host.clear().unwrap();
+            }
+            stage_frame(&mut screen);
+            draw(&mut host).unwrap();
+            let restored = output.take();
+            assert!(
+                restored.contains("a=t"),
+                "a clear can erase the host image data"
+            );
+            assert_eq!(id(&initial, "i="), id(&restored, "i="));
+            assert_eq!(id(&initial, "p="), id(&restored, "p="));
+
+            stage_frame(&mut screen);
+            draw(&mut host).unwrap();
+            assert!(!output.take().contains("\x1b_G"));
+        }
+    }
+
+    #[test]
     fn host_recovery_restores_sources_with_reserved_ids_and_backend_drop_cleans_them() {
         let mut screen = screen();
         let output = Output::default();

@@ -345,11 +345,14 @@ impl<W: io::Write> HostBackend<W> {
         self.title = None;
         self.pending_title = None;
         #[cfg(feature = "terminal-images")]
-        {
-            self.graphics_scene.invalidate();
-            if let Some((_, _, ready)) = &mut self.pending_scene {
-                *ready = false;
-            }
+        self.invalidate_graphics_state();
+    }
+
+    #[cfg(feature = "terminal-images")]
+    fn invalidate_graphics_state(&mut self) {
+        self.graphics_scene.invalidate();
+        if let Some((_, _, ready)) = &mut self.pending_scene {
+            *ready = false;
         }
     }
 
@@ -680,10 +683,16 @@ impl<W: io::Write> Backend for HostBackend<W> {
     }
 
     fn clear(&mut self) -> io::Result<()> {
+        // Host erase commands can remove image data as well as text. Ratatui also uses them
+        // during resize, so an unchanged native source must be uploaded again on the next draw.
+        #[cfg(feature = "terminal-images")]
+        self.invalidate_graphics_state();
         self.backend.clear()
     }
 
     fn clear_region(&mut self, clear_type: ratatui::backend::ClearType) -> io::Result<()> {
+        #[cfg(feature = "terminal-images")]
+        self.invalidate_graphics_state();
         self.backend.clear_region(clear_type)
     }
 

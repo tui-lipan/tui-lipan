@@ -144,6 +144,20 @@ fn host_colors(bg: Color) -> HostTerminalColors {
     }
 }
 
+#[cfg(feature = "image")]
+#[test]
+fn resize_does_not_suspend_image_updates_by_default() {
+    let mut runner = AppRunner::new(App::new(), RunnerKeymapSmoke, ());
+    let last_tick = runner.animation.last_image_tick;
+
+    runner.pause_images_after_resize();
+    runner.pause_images_after_resize();
+
+    assert!(runner.animation.image_animation_suspend_until.is_none());
+    assert!(!runner.image_animations_suspended());
+    assert_eq!(runner.animation.last_image_tick, last_tick);
+}
+
 #[test]
 fn host_terminal_color_cache_generation_changes_only_when_colors_differ() {
     let runner = AppRunner::new(
