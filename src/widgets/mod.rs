@@ -350,7 +350,10 @@ pub use text_area::{
 };
 pub use toast::{Toast, ToastCopyAffordance};
 pub use tooltip::Tooltip;
-pub use tree::{IndentStyle, Tree, TreeEvent, TreeKeymap, TreeNode, TreePath, TreeToggleEvent};
+pub use tree::{
+    IndentStyle, Tree, TreeBranch, TreeEvent, TreeGuides, TreeKeymap, TreeNode, TreePath,
+    TreeToggleEvent,
+};
 pub use zstack::ZStack;
 
 pub(crate) mod internal;

@@ -211,8 +211,8 @@ pub use crate::widgets::{
     TextAreaStateChangeEvent, TextAreaStateChangeReason, TextAreaVimConfig,
     TextAreaVimCurrentLineHighlight, TextAreaVimKeyBinding, TextAreaVimKeymap, TextAreaVimMode,
     TextAreaVirtualText, TextSource, ThemeProvider, Toast, ToastCopyAffordance, Tooltip, Tree,
-    TreeEvent, TreeKeymap, TreeNode, TreePath, TreeToggleEvent, VStack, VirtualTextPlacement,
-    ZStack,
+    TreeBranch, TreeEvent, TreeGuides, TreeKeymap, TreeNode, TreePath, TreeToggleEvent, VStack,
+    VirtualTextPlacement, ZStack,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -443,6 +443,36 @@ TreeNode::new(ListItem::from_spans(vec![
 Use `TreeNode::expandable(true)` when a node must retain expand/collapse behavior while its current
 child list is empty, such as an asynchronously loaded directory.
 
+A node's `ListItem` renders with the tree's indentation and disclosure icon in front of its label.
+Everything else about the item is kept: `gutter`, `status`, and `prefix` stay columns in front of
+the indentation, and extra lines, `extra_line_indent`, and `primary_max_label_width` move right
+with the label so they keep lining up under it.
+
+### Guides for composed rows
+
+`TreeGuides` draws the same indentation `Tree` does, for rows that are composed elements rather
+than `ListItem`s. Describe where each visible row sits with a `TreeBranch`, built top-down, and
+put the guide spans in front of the row's own content:
+
+```rust
+let guides = TreeGuides::new(IndentStyle::Short)
+    .indent(2)
+    .guide_style(Style::new().fg(theme.border));
+let project = TreeBranch::root();
+let checkouts = [project.child(false), project.child(true)];
+// `spans(branch, max_depth)`: `max_depth` spreads a `gradient` across the visible rows.
+let first: Vec<Span> = guides.spans(&checkouts[0], 1); // "├ "
+let width = guides.width(&checkouts[1]); // 2 cells: "└ "
+```
+
+| `TreeGuides` method | Default | Effect |
+|---|---|---|
+| `new(IndentStyle)` | - | Connector glyphs, as for `Tree::indent_style` |
+| `indent(u16)` | `2` | Cells per level |
+| `guide_style(Style)` | default | Style of the guide characters |
+| `gradient(ColorGradient)` | none | Colors guides by depth |
+| `start_depth(usize)` | `1` | Shallowest depth that draws guides; shallower rows indent with blanks |
+
 ### Events
 
 ```rust

@@ -1,9 +1,11 @@
 //! Tree widget.
 
 mod component;
+mod guides;
 mod types;
 
 pub(crate) use component::*;
+pub use guides::{TreeBranch, TreeGuides};
 pub use types::*;
 
 use crate::callback::Callback;
