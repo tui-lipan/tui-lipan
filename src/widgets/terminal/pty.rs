@@ -516,7 +516,7 @@ impl TerminalPty {
                     if !thread_inner.active.load(Ordering::Acquire) {
                         break;
                     }
-                    match reader.read(&mut buffer[..budget]) {
+                    match reader.read(&mut buffer[..budget.bytes.min(PTY_READ_BUFFER_SIZE)]) {
                         Ok(0) => {
                             stream_ended = true;
                             break;
@@ -525,9 +525,11 @@ impl TerminalPty {
                             if !thread_inner.active.load(Ordering::Acquire) {
                                 break;
                             }
-                            on_event(TerminalPtyEvent::Output(Arc::<[u8]>::from(
-                                buffer[..read].to_vec(),
-                            )));
+                            let mut output = buffer[..read].to_vec();
+                            if budget.drain {
+                                drain_pending(&mut reader, &mut buffer, &mut output, budget.bytes);
+                            }
+                            on_event(TerminalPtyEvent::Output(Arc::<[u8]>::from(output)));
                         }
                         Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
                         Err(err) => {
@@ -774,6 +776,39 @@ enum PtyReadiness {
     /// The PTY was deactivated, or the master can no longer be polled.
     Stop,
 }
+
+/// Append bytes the master already holds, until `limit` or the first read that would wait.
+///
+/// End of stream and errors end the drain; the read loop observes them on its next pass.
+#[cfg(unix)]
+fn drain_pending(
+    reader: &mut (impl Read + AsRawFd),
+    buffer: &mut [u8],
+    output: &mut Vec<u8>,
+    limit: usize,
+) {
+    while output.len() < limit {
+        let mut pollfd = libc::pollfd {
+            fd: reader.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        if unsafe { libc::poll(&mut pollfd, 1, 0) } <= 0 || pollfd.revents & libc::POLLIN == 0 {
+            return;
+        }
+        let len = (limit - output.len()).min(buffer.len());
+        match reader.read(&mut buffer[..len]) {
+            Ok(0) => return,
+            Ok(read) => output.extend_from_slice(&buffer[..read]),
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => return,
+        }
+    }
+}
+
+/// Windows pipes offer no readiness check that cannot block, so a credit admits one read there.
+#[cfg(not(unix))]
+fn drain_pending(_: &mut impl Read, _: &mut [u8], _: &mut Vec<u8>, _: usize) {}
 
 #[cfg(unix)]
 fn unix_wait_readable(fd: RawFd, active: &AtomicBool) -> PtyReadiness {
@@ -1102,5 +1137,67 @@ mod read_gate_tests {
         assert!(bytes.windows(8).any(|window| window == b"BUFFERED"));
         assert!(bytes.windows(4).any(|window| window == b"TAIL"));
         assert!(!gate.stats().held);
+    }
+
+    #[test]
+    fn one_credit_drains_the_whole_held_backlog_as_one_event() {
+        let directory = tempfile::tempdir().unwrap();
+        let marker = directory.path().join("written");
+        let script = format!(
+            "printf READY; read go; i=0; while [ $i -lt 1000 ]; do printf 'frame;'; \
+             i=$((i+1)); done; printf DONE; touch '{}'; read wait",
+            marker.display()
+        );
+        let (sender, receiver) = mpsc::channel();
+        let pty = TerminalPty::spawn(
+            TerminalPtyConfig::new("/bin/sh").args(["-c", script.as_str()].map(Arc::from)),
+            move |event| {
+                let _ = sender.send(event);
+            },
+        )
+        .unwrap();
+        let mut bytes = Vec::new();
+        while !bytes.windows(5).any(|window| window == b"READY") {
+            let TerminalPtyEvent::Output(output) =
+                receiver.recv_timeout(Duration::from_secs(1)).unwrap()
+            else {
+                panic!("child exited before READY");
+            };
+            bytes.extend_from_slice(&output);
+        }
+        let gate = pty.read_gate();
+        gate.set_credit(1, false, Duration::from_millis(250));
+        gate.test_hold_limit(Duration::from_secs(30));
+        // The echo of this line is the first held output.
+        pty.write(b"go\n").unwrap();
+        assert!(gate.wait_for_hold(), "reader must hold the pending output");
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !marker.exists() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "child never finished writing"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        gate.set_credit(
+            super::super::read_gate::MAXIMUM_CREDIT,
+            true,
+            Duration::from_millis(250),
+        );
+        let TerminalPtyEvent::Output(output) =
+            receiver.recv_timeout(Duration::from_secs(1)).unwrap()
+        else {
+            panic!("expected the backlog");
+        };
+        assert!(
+            output.len() > 4096,
+            "the backlog spans several kernel reads"
+        );
+        assert!(
+            output.ends_with(b"DONE"),
+            "one credit delivers the newest output, not the oldest part of the backlog"
+        );
+        pty.kill().unwrap();
     }
 }

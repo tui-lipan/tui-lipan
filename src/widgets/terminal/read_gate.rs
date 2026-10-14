@@ -3,7 +3,28 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 pub(crate) const PTY_READ_BUFFER_SIZE: usize = 8192;
+/// Most bytes one credit may drain.
+pub(crate) const MAXIMUM_CREDIT: usize = 64 * 1024;
 const MAXIMUM_HOLD: Duration = Duration::from_millis(250);
+
+/// What the reader may consume before it next consults the gate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ReadBudget {
+    pub(crate) bytes: usize,
+    /// Keep reading while the PTY has bytes immediately pending, up to `bytes` in total.
+    pub(crate) drain: bool,
+}
+
+impl ReadBudget {
+    const OPEN: Self = Self {
+        bytes: PTY_READ_BUFFER_SIZE,
+        drain: false,
+    };
+
+    fn credit(bytes: usize) -> Self {
+        Self { bytes, drain: true }
+    }
+}
 
 /// Aggregate reader backpressure, without per-read logging.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -20,9 +41,11 @@ pub struct TerminalReadGateStats {
 
 /// A per-PTY read gate. Normal terminal output starts unrestricted.
 ///
-/// Credited mode admits at most one read per granted credit. Each read is bounded by the chosen
-/// byte budget, with at most one previously admitted read in flight. Exhausted credit holds this
-/// reader only. A safety timeout always admits another bounded read; closing a child or explicitly
+/// Credited mode admits one drain per granted credit: the reader keeps reading while the PTY has
+/// bytes immediately pending, up to the chosen byte budget, and delivers them as one output event.
+/// Holding a producer leaves its output queued in the kernel, oldest first, so a release has to
+/// take that whole backlog for a consumer to see current state instead of the oldest queued frame.
+/// At most one previously admitted drain is in flight. Exhausted credit holds this reader only. A safety timeout always admits another bounded read; closing a child or explicitly
 /// resuming the gate releases the reader so its final bytes can drain before the exit event.
 #[derive(Clone, Default)]
 pub struct TerminalReadGate(Arc<Gate>);
@@ -59,7 +82,7 @@ impl State {
         }
     }
 
-    fn poll(&mut self, now: Instant) -> Option<usize> {
+    fn poll(&mut self, now: Instant) -> Option<ReadBudget> {
         let Policy::Credit {
             available,
             bytes,
@@ -67,13 +90,13 @@ impl State {
         } = &mut self.policy
         else {
             self.finish_hold(now);
-            return Some(PTY_READ_BUFFER_SIZE);
+            return Some(ReadBudget::OPEN);
         };
         if *available {
             *available = false;
             let bytes = *bytes;
             self.finish_hold(now);
-            return Some(bytes);
+            return Some(ReadBudget::credit(bytes));
         }
         let start = *self.held_since.get_or_insert_with(|| {
             self.stats.holds += 1;
@@ -83,7 +106,7 @@ impl State {
             let bytes = *bytes;
             self.stats.forced_releases += 1;
             self.finish_hold(now);
-            return Some(bytes);
+            return Some(ReadBudget::credit(bytes));
         }
         None
     }
@@ -99,9 +122,10 @@ impl State {
 }
 
 impl TerminalReadGate {
-    /// Set a bounded read budget and grant or withhold one credit. Repeated withheld-credit
-    /// updates do not extend a hold already in progress. Budgets clamp to 1–8192 bytes and safety
-    /// holds clamp to 1–250 ms. Choose budgets from semantic transaction sizes, not frame pixels.
+    /// Set a bounded drain budget and grant or withhold one credit. Repeated withheld-credit
+    /// updates do not extend a hold already in progress. Budgets clamp to 1 byte–64 KiB and safety
+    /// holds clamp to 1–250 ms. A budget bounds how much queued output one release may parse;
+    /// one smaller than the backlog delivers its oldest part and leaves the rest queued.
     pub fn set_credit(&self, bytes: usize, available: bool, maximum_hold: Duration) {
         let mut state = self
             .0
@@ -113,7 +137,7 @@ impl TerminalReadGate {
         }
         state.policy = Policy::Credit {
             available,
-            bytes: bytes.clamp(1, PTY_READ_BUFFER_SIZE),
+            bytes: bytes.clamp(1, MAXIMUM_CREDIT),
             maximum_hold: maximum_hold.clamp(Duration::from_millis(1), MAXIMUM_HOLD),
         };
         self.0.changed.notify_all();
@@ -175,7 +199,7 @@ impl TerminalReadGate {
         stats
     }
 
-    pub(crate) fn read_budget(&self) -> usize {
+    pub(crate) fn read_budget(&self) -> ReadBudget {
         let mut state = self
             .0
             .state
@@ -213,10 +237,13 @@ mod tests {
             },
             ..Default::default()
         };
-        assert_eq!(state.poll(now), Some(128));
+        assert_eq!(state.poll(now), Some(ReadBudget::credit(128)));
         assert_eq!(state.poll(now), None);
         assert_eq!(state.poll(now + Duration::from_millis(99)), None);
-        assert_eq!(state.poll(now + Duration::from_millis(100)), Some(128));
+        assert_eq!(
+            state.poll(now + Duration::from_millis(100)),
+            Some(ReadBudget::credit(128))
+        );
         assert_eq!(state.stats.holds, 1);
         assert_eq!(state.stats.forced_releases, 1);
         assert_eq!(state.stats.total_hold_time, Duration::from_millis(100));
@@ -239,7 +266,10 @@ mod tests {
             bytes: 256,
             maximum_hold: Duration::from_millis(100),
         };
-        assert_eq!(state.poll(now + Duration::from_millis(100)), Some(256));
+        assert_eq!(
+            state.poll(now + Duration::from_millis(100)),
+            Some(ReadBudget::credit(256))
+        );
         assert_eq!(state.stats.forced_releases, 1);
     }
 
@@ -262,9 +292,9 @@ mod tests {
             .unwrap();
         assert!(!timeout.timed_out());
         drop(state);
-        assert_eq!(other.read_budget(), 64);
+        assert_eq!(other.read_budget(), ReadBudget::credit(64));
         gate.resume();
-        assert_eq!(reader.join().unwrap(), PTY_READ_BUFFER_SIZE);
+        assert_eq!(reader.join().unwrap(), ReadBudget::OPEN);
         assert_eq!(gate.stats().holds, 1);
         assert!(!gate.stats().held);
         assert_eq!(gate.stats().forced_releases, 0);
@@ -280,7 +310,7 @@ mod exit_tests {
         gate.set_credit(64, false, MAXIMUM_HOLD);
         gate.finish();
         gate.set_credit(64, false, MAXIMUM_HOLD);
-        assert_eq!(gate.read_budget(), PTY_READ_BUFFER_SIZE);
+        assert_eq!(gate.read_budget(), ReadBudget::OPEN);
         assert_eq!(gate.stats().holds, 0);
     }
 }

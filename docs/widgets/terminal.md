@@ -1110,10 +1110,17 @@ rebuild. An unchanged native scene writes no synchronized-output wrapper and rep
 ### Per-PTY read credits
 
 `TerminalPty::read_gate()` returns a cloneable `TerminalReadGate`. Reads start unrestricted. A session
-transport can call `set_credit(bytes, available, maximum_hold)` to admit one bounded read or hold
-only that PTY's reader. Budgets clamp to 1 through 8192 bytes, and safety holds to 1 through 250 ms.
-Choose the byte budget from completed output transaction sizes. A small file-backed graphics command
-needs a small read budget to prevent one credit from draining many obsolete frames.
+transport can call `set_credit(bytes, available, maximum_hold)` to admit one drain or hold only that
+PTY's reader. A drain keeps reading while the PTY has bytes immediately pending, up to the budget,
+and delivers them as one `Output` event. Budgets clamp to 1 byte through 64 KiB, and safety holds to
+1 through 250 ms.
+
+While the reader is held, the producer's output queues in the kernel, oldest first. A release must
+take that whole backlog for the consumer to coalesce it to current state. A one-frame budget
+delivers the oldest queued frame instead: with small file-backed graphics commands the kernel holds
+dozens of frames, and a 240 fps producer paced to a 60 Hz presenter then trailed it by about a
+second. Use the largest budget whose parsing cost is acceptable, and coalesce replaceable
+transactions within each delivered event.
 
 Call `resume()` for ordinary output, input answer windows or policy resets. Child exit permanently
 releases the gate, so late policy changes cannot hold its final output ahead of the exit event.
