@@ -411,6 +411,45 @@ fn host_terminal_color_refresh_waits_for_quiet_window() {
 }
 
 #[test]
+fn background_command_wakes_the_event_loop_once_until_drained() {
+    let (command_tx, command_rx, wake) = crate::callback::CommandTx::channel();
+    let (events_tx, events) = std::sync::mpsc::channel();
+    let pending = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let hook = super::CommandWakeHook::install(&wake, &pending, events_tx);
+
+    let sender = command_tx.clone();
+    std::thread::spawn(move || {
+        for value in 0..3_u8 {
+            sender
+                .send((crate::callback::ScopeId(1), Box::new(value)))
+                .unwrap();
+        }
+    })
+    .join()
+    .unwrap();
+
+    std::assert_matches!(
+        events.recv_timeout(Duration::from_secs(1)),
+        Ok(super::RunnerEvent::Command)
+    );
+    assert!(events.try_recv().is_err(), "undrained sends coalesce");
+    assert_eq!(command_rx.try_iter().count(), 3);
+
+    pending.store(false, std::sync::atomic::Ordering::Release);
+    command_tx
+        .send((crate::callback::ScopeId(1), Box::new(())))
+        .unwrap();
+    std::assert_matches!(events.try_recv(), Ok(super::RunnerEvent::Command));
+
+    drop(hook);
+    pending.store(false, std::sync::atomic::Ordering::Release);
+    command_tx
+        .send((crate::callback::ScopeId(1), Box::new(())))
+        .unwrap();
+    assert!(events.try_recv().is_err(), "an exited loop is not woken");
+}
+
+#[test]
 fn resize_burst_followed_by_key_preserves_key_as_pending_event() {
     let (tx, rx) = std::sync::mpsc::channel();
     tx.send(super::RunnerEvent::Terminal(CEvent::Resize(81, 24)))

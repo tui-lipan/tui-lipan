@@ -115,7 +115,7 @@ pub(crate) struct RuntimeCore<C: Component> {
     pub(crate) transcript_history: TranscriptHistory,
     pub(crate) command_tx: CommandTx,
     pub(crate) command_rx: CommandRx,
-    activity_rx: std::sync::mpsc::Receiver<()>,
+    pub(crate) command_wake: crate::callback::CommandWake,
     accepting_messages: Rc<Cell<bool>>,
     initialized: bool,
     unmounted: bool,
@@ -182,7 +182,7 @@ where
             })
         };
 
-        let (command_tx, command_rx, activity_rx, activity_tx) = CommandTx::channel();
+        let (command_tx, command_rx, command_wake) = CommandTx::channel();
         let quit = Rc::new(Cell::new(false));
 
         let focus = Rc::new(FocusContext::default());
@@ -264,7 +264,7 @@ where
             command_chord_reveal_delay,
             clock,
             activity: std::sync::Arc::new(crate::core::runtime_env::RuntimeActivity::new(
-                activity_tx,
+                command_wake.clone(),
             )),
             last_mouse,
         };
@@ -290,7 +290,7 @@ where
             transcript_history,
             command_tx,
             command_rx,
-            activity_rx,
+            command_wake,
             accepting_messages,
             initialized: false,
             unmounted: false,
@@ -464,7 +464,7 @@ where
     }
 
     pub(crate) fn wait_for_command(&mut self, timeout: std::time::Duration) -> bool {
-        let woke = self.activity_rx.recv_timeout(timeout).is_ok();
+        let woke = self.command_wake.wait(timeout);
         if woke {
             self.drain_commands();
         }

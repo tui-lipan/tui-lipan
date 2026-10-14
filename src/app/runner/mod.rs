@@ -104,6 +104,8 @@ enum RunnerEvent {
     },
     /// Wakeup for a queued live-control request.
     Control,
+    /// A background command queued a message or finished.
+    Command,
     #[cfg(feature = "terminal")]
     TerminalMutation,
     /// The input reader observed a terminal theme report or resumed after an external handoff.
@@ -2265,6 +2267,12 @@ impl<C: Component> AppRunner<C> {
                 }) as Rc<dyn Fn()>
             });
             let event_rx = &platform_input;
+            // Background commands wake the loop through its event channel; without this, their
+            // messages would wait for the next unrelated event or idle timeout.
+            let command_wake_pending = Arc::new(AtomicBool::new(false));
+            let _command_wake_hook = platform_input.sender().map(|sender| {
+                CommandWakeHook::install(&self.core.command_wake, &command_wake_pending, sender)
+            });
             #[cfg(unix)]
             let mut host_hung_up_at: Option<Instant> = None;
 
@@ -2395,6 +2403,11 @@ impl<C: Component> AppRunner<C> {
                     Some(RunnerEvent::TerminalMutation) => {
                         terminal_wake_pending.set(false);
                         dirty.mark_terminal_graphics();
+                        None
+                    }
+                    Some(RunnerEvent::Command) => {
+                        // Cleared before this pass drains commands, so a later send wakes again.
+                        command_wake_pending.store(false, Ordering::Release);
                         None
                     }
                     Some(RunnerEvent::Control) => {
@@ -3367,6 +3380,32 @@ impl<C: Component> AppRunner<C> {
             return Self::recv_inline_event(input, Duration::ZERO);
         }
         try_recv_channel(input.receiver())
+    }
+}
+
+/// Keeps a command wake hook installed for the event loop's lifetime.
+struct CommandWakeHook(crate::callback::CommandWake);
+
+impl CommandWakeHook {
+    /// Send one [`RunnerEvent::Command`] per wake until the loop clears `pending`.
+    fn install(
+        wake: &crate::callback::CommandWake,
+        pending: &Arc<AtomicBool>,
+        sender: mpsc::Sender<RunnerEvent>,
+    ) -> Self {
+        let pending = pending.clone();
+        wake.set_hook(Some(Arc::new(move || {
+            if !pending.swap(true, Ordering::AcqRel) && sender.send(RunnerEvent::Command).is_err() {
+                pending.store(false, Ordering::Release);
+            }
+        })));
+        Self(wake.clone())
+    }
+}
+
+impl Drop for CommandWakeHook {
+    fn drop(&mut self) {
+        self.0.set_hook(None);
     }
 }
 

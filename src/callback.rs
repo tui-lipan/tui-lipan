@@ -2,7 +2,7 @@ use std::any::Any;
 use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Condvar, Mutex, mpsc};
 
 use crate::core::event::KeyEvent;
 
@@ -75,20 +75,19 @@ impl Dispatcher {
 #[derive(Clone)]
 pub(crate) struct CommandTx {
     inner: mpsc::Sender<CommandMessage>,
-    wake: mpsc::Sender<()>,
+    wake: CommandWake,
 }
 
 impl CommandTx {
-    pub(crate) fn channel() -> (Self, CommandRx, mpsc::Receiver<()>, mpsc::Sender<()>) {
+    pub(crate) fn channel() -> (Self, CommandRx, CommandWake) {
         let (inner, rx) = mpsc::channel();
-        let (wake, wake_rx) = mpsc::channel();
+        let wake = CommandWake::default();
         (
             Self {
                 inner,
                 wake: wake.clone(),
             },
             rx,
-            wake_rx,
             wake,
         )
     }
@@ -99,9 +98,61 @@ impl CommandTx {
     ) -> Result<(), mpsc::SendError<CommandMessage>> {
         let result = self.inner.send(message);
         if result.is_ok() {
-            let _ = self.wake.send(());
+            self.wake.notify();
         }
         result
+    }
+}
+
+type WakeHook = Arc<dyn Fn() + Send + Sync>;
+
+/// Coalesced signal that background work queued a message or finished.
+///
+/// Repeated notifications before a wait collapse into one, so a runtime that never waits on it
+/// accumulates nothing. The event loop installs a hook to be woken from other threads; headless
+/// drivers block in [`Self::wait`].
+#[derive(Clone, Default)]
+pub(crate) struct CommandWake(Arc<CommandWakeInner>);
+
+#[derive(Default)]
+struct CommandWakeInner {
+    signaled: Mutex<bool>,
+    ready: Condvar,
+    hook: Mutex<Option<WakeHook>>,
+}
+
+impl CommandWake {
+    pub(crate) fn notify(&self) {
+        if let Ok(mut signaled) = self.0.signaled.lock() {
+            *signaled = true;
+        }
+        self.0.ready.notify_all();
+        let hook = self.0.hook.lock().ok().and_then(|hook| hook.clone());
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+
+    /// Wait up to `timeout` for a notification, consuming it. Returns whether one arrived.
+    pub(crate) fn wait(&self, timeout: std::time::Duration) -> bool {
+        let Ok(signaled) = self.0.signaled.lock() else {
+            return false;
+        };
+        let Ok((mut signaled, _)) =
+            self.0
+                .ready
+                .wait_timeout_while(signaled, timeout, |signaled| !*signaled)
+        else {
+            return false;
+        };
+        std::mem::take(&mut *signaled)
+    }
+
+    /// Run `hook` on every notification, from whichever thread notifies, until replaced.
+    pub(crate) fn set_hook(&self, hook: Option<WakeHook>) {
+        if let Ok(mut slot) = self.0.hook.lock() {
+            *slot = hook;
+        }
     }
 }
 
@@ -418,5 +469,20 @@ mod tests {
         assert_eq!(queue.borrow().len(), 1);
         assert!(!handler.handle(key(KeyCode::Tab)));
         assert_eq!(queue.borrow().len(), 1);
+    }
+
+    #[test]
+    fn command_wake_coalesces_and_is_consumed_by_wait() {
+        let wake = super::CommandWake::default();
+        assert!(!wake.wait(std::time::Duration::ZERO));
+        wake.notify();
+        wake.notify();
+        assert!(wake.wait(std::time::Duration::ZERO));
+        assert!(!wake.wait(std::time::Duration::ZERO));
+
+        let notifier = wake.clone();
+        let thread = std::thread::spawn(move || notifier.notify());
+        assert!(wake.wait(std::time::Duration::from_secs(1)));
+        thread.join().unwrap();
     }
 }

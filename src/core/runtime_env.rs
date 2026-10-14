@@ -242,11 +242,11 @@ struct SessionClockInner {
 
 pub(crate) struct RuntimeActivity {
     tracked_commands: AtomicUsize,
-    wake: Option<std::sync::mpsc::Sender<()>>,
+    wake: Option<crate::callback::CommandWake>,
 }
 
 impl RuntimeActivity {
-    pub(crate) fn new(wake: std::sync::mpsc::Sender<()>) -> Self {
+    pub(crate) fn new(wake: crate::callback::CommandWake) -> Self {
         Self {
             tracked_commands: AtomicUsize::new(0),
             wake: Some(wake),
@@ -275,7 +275,7 @@ impl Drop for RuntimeActivityGuard {
             .tracked_commands
             .fetch_sub(1, Ordering::AcqRel);
         if let Some(wake) = &self.activity.wake {
-            let _ = wake.send(());
+            wake.notify();
         }
     }
 }

@@ -368,6 +368,8 @@ to *look* rather than be told:
 `App::frame_rate(fps)` sets that cadence, between 15 and 480; the default is
 `DEFAULT_FRAME_RATE` (120). An idle app is unaffected: with nothing animating
 and no live terminal the loop waits on events and wakes on a 50 ms idle timeout.
+A message a background command sends through `CommandLink` wakes the loop at
+once, so it never waits for that timeout.
 
 The same cadence caps continuous pointer input. Motion, drags, and the wheel can
 report hundreds of times a second, far more often than any display shows a frame.
@@ -604,7 +606,9 @@ than 512 regions selects the existing composed renderer.
 Terminal input classification comes from completed parser operations through `TerminalMutation`.
 A query or incomplete upload does not request visual work. Live screen handles register weak
 runner wakeups instead of imposing a frame-rate poll while quiet. A handle outliving its runner
-returns to the compatibility polling path.
+returns to the compatibility polling path. Output an application forwards from another thread,
+such as a multiplexer client receiving pane frames, arrives through `CommandLink` and wakes the
+loop the same way, so it presents in the next frame slot rather than after the idle timeout.
 
 `Update::terminal_graphics()` sends the scene diff directly when the last successful native
 presentation plan remains valid, without painting the cell tree. Layout, terminal and overlay
