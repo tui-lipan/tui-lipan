@@ -273,17 +273,26 @@ impl Component for Pane {
                 ))
                 .into();
         }
-        if self.cfg.image_overlay == 8 {
+        if matches!(self.cfg.image_overlay, 8 | 12 | 13 | 14) {
             let border = crate::widgets::Frame::new()
                 .padding(0)
                 .style(Style::default().fg(Color::White))
                 .child(Text::new(""));
+            let border = match self.cfg.image_overlay {
+                12 | 14 => crate::widgets::Animated::new(border).opacity(0.5),
+                13 => crate::widgets::Animated::new(border)
+                    .opacity(0.5)
+                    .opacity_target(Color::Black),
+                _ => crate::widgets::Animated::new(border),
+            };
+            let body = if self.cfg.image_overlay == 14 {
+                body
+            } else {
+                crate::widgets::Frame::new().padding(0).child(body).into()
+            };
             return crate::widgets::Canvas::new()
-                .child_at(
-                    viewport(),
-                    crate::widgets::Frame::new().padding(0).child(body),
-                )
-                .child_at(viewport(), crate::widgets::Animated::new(border))
+                .child_at(viewport(), body)
+                .child_at(viewport(), border)
                 .into();
         }
         if self.cfg.image_overlay == 10 {
@@ -1232,7 +1241,7 @@ fn an_unchanged_image_pane_survives_an_unrelated_terminal_update() {
 fn ordinary_overlays_cover_image_pixels_without_covering_the_anchor() {
     use base64::Engine as _;
     let _host = crate::backend::ratatui_backend::image_support::test_kitty_host((10, 20), true);
-    for (image_overlay, stacked) in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    for (image_overlay, stacked) in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
         .into_iter()
         .flat_map(|overlay| [false, true].map(|stacked| (overlay, stacked)))
     {
@@ -1274,8 +1283,14 @@ fn ordinary_overlays_cover_image_pixels_without_covering_the_anchor() {
         if image_overlay != 0 || !stacked {
             assert_eq!(
                 native,
-                matches!(image_overlay, 0 | 4 | 5 | 8 | 10 | 11),
+                matches!(image_overlay, 0 | 4 | 5 | 7 | 8 | 10 | 11 | 12 | 14),
                 "native placements may not cover a later widget"
+            );
+        }
+        if image_overlay == 14 {
+            assert!(
+                output.contains("x=10,y=20,w=110,h=80"),
+                "a fading border must cut the picture's top and left edge: {output:?}"
             );
         }
         if image_overlay == 9 {
@@ -1618,4 +1633,160 @@ fn metadata_modes_and_unchanged_graphics_do_not_write_or_present_frames() {
     );
     assert!(!harness.runner.host_frame_presented);
     assert_eq!(terminal.backend().test_output().len(), start);
+}
+
+#[cfg(feature = "terminal-images")]
+#[derive(Clone, Debug)]
+struct ImageMaskProbe {
+    columns: std::sync::Arc<std::sync::atomic::AtomicU16>,
+}
+
+#[cfg(feature = "terminal-images")]
+impl crate::style::CellEffect for ImageMaskProbe {
+    fn apply(&self, cell: &mut crate::style::EffectCell, ctx: &crate::style::EffectContext) {
+        if ctx.x - ctx.bounds.x >= self.columns.load(std::sync::atomic::Ordering::Relaxed) as i16 {
+            cell.set_symbol("*");
+        }
+    }
+
+    fn image_mask(&self, ctx: &crate::style::EffectPrepareContext) -> Option<crate::CellMask> {
+        let columns = self.columns.load(std::sync::atomic::Ordering::Relaxed);
+        let count = usize::from(ctx.bounds.w) * usize::from(ctx.bounds.h);
+        let mut bits = vec![0u64; count.div_ceil(64)];
+        for y in 0..ctx.bounds.h {
+            for x in 0..columns.min(ctx.bounds.w) {
+                let bit = usize::from(y) * usize::from(ctx.bounds.w) + usize::from(x);
+                bits[bit / 64] |= 1 << (bit % 64);
+            }
+        }
+        Some(crate::CellMask {
+            origin: (0, 0),
+            w: ctx.bounds.w,
+            h: ctx.bounds.h,
+            bits: bits.into(),
+        })
+    }
+}
+
+#[cfg(feature = "terminal-images")]
+#[derive(Clone)]
+struct MaskedImagePane {
+    screen: Rc<RefCell<TerminalScreen>>,
+    effect: ImageMaskProbe,
+}
+
+#[cfg(feature = "terminal-images")]
+impl Component for MaskedImagePane {
+    type Properties = ();
+    type State = ();
+    type Message = ();
+    fn create_state(&self, _: &()) {}
+    fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+    fn view(&self, _: &Context<Self>) -> Element {
+        crate::widgets::EffectScope::new()
+            .custom_effect(self.effect.clone())
+            .child(
+                crate::widgets::Terminal::new()
+                    .screen(self.screen.clone())
+                    .scrollbar(false),
+            )
+            .into()
+    }
+}
+
+#[cfg(feature = "terminal-images")]
+#[test]
+fn a_cell_effect_removes_native_picture_fragments_on_paint_only_frames() {
+    use base64::Engine as _;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU16, Ordering},
+    };
+    let _host = crate::backend::ratatui_backend::image_support::test_kitty_host((10, 20), true);
+    let bounds = Rect {
+        x: 0,
+        y: 0,
+        w: 12,
+        h: 5,
+    };
+    let screen = Rc::new(RefCell::new(TerminalScreen::new(5, 12, 0)));
+    screen
+        .borrow_mut()
+        .set_cell_size(crate::widgets::TerminalCellSize::new(10, 20));
+    let pixels =
+        base64::engine::general_purpose::STANDARD.encode([0, 255, 0, 255].repeat(120 * 100));
+    screen.borrow_mut().process_bytes(
+        format!("\x1b[?25l\x1b[H\x1b_Ga=T,f=32,s=120,v=100,i=7,p=9,C=1,q=2,z=1;{pixels}\x1b\\")
+            .as_bytes(),
+    );
+    let columns = Arc::new(AtomicU16::new(12));
+    let component = MaskedImagePane {
+        screen,
+        effect: ImageMaskProbe {
+            columns: columns.clone(),
+        },
+    };
+    let capture_component = component.clone();
+    let mut runner = AppRunner::new(App::new(), component.clone(), ());
+    runner.core = RuntimeCore::new_test(
+        component,
+        (),
+        bounds,
+        Theme::default(),
+        SurfaceMode::Fullscreen,
+        Rc::new(StdCell::new(false)),
+    )
+    .into();
+    runner.core.init();
+    runner.core.render_element(bounds, None, None, None);
+    let mut terminal = crate::backend::ratatui_backend::create_test_terminal(12, 5).unwrap();
+    let cursor = StdCell::new(None);
+    let mut offset = 0;
+    for visible in [12, 6, 0] {
+        columns.store(visible, Ordering::Relaxed);
+        let _plans = terminal.backend().native_plan_scope();
+        let buffer = runner.with_render_context(&cursor, |ctx| {
+            terminal.draw(|f| render(f, ctx)).unwrap().buffer.clone()
+        });
+        let output = terminal.backend().test_output();
+        let commands = String::from_utf8_lossy(&output[offset..]);
+        if visible > 0 {
+            assert!(
+                commands.contains(&format!("w={},h=100", visible * 10)),
+                "mask must clip the host picture: {commands:?}"
+            );
+        } else {
+            assert!(
+                commands.contains("a=d"),
+                "the image must disappear before the effect is unmounted: {commands:?}"
+            );
+        }
+        if visible != 12 {
+            assert!(
+                !commands.contains("a=t"),
+                "moving the mask must not reupload the bitmap"
+            );
+        }
+        for x in visible..12 {
+            assert_eq!(buffer[(x, 0)].symbol(), "*");
+        }
+        offset = output.len();
+    }
+    columns.store(6, Ordering::Relaxed);
+    let mut capture = crate::TestBackend::new(capture_component);
+    capture.set_viewport(bounds);
+    capture.render();
+    let frame = capture.capture_frame();
+    let visible_cells = frame
+        .images
+        .iter()
+        .flat_map(|image| image.visible.iter())
+        .filter(|&&visible| visible)
+        .count();
+    assert_eq!(
+        visible_cells, 30,
+        "captures must retain only the same picture fragments"
+    );
 }

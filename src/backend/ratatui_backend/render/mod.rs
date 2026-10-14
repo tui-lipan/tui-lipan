@@ -687,6 +687,7 @@ fn render_subtree(
             RenderOffset,
             EffectPhase,
             Option<BufferSnapshot>,
+            EffectImageScope,
         ),
         AnimatedPost(
             NodeId,
@@ -772,6 +773,7 @@ fn render_subtree(
                         node_offset,
                         state.ctx.effect_phase,
                         backdrop,
+                        effect_scope_image_mask(state, node, node_clip, node_offset),
                     ));
                 }
                 let animated_restore_snapshot = if let NodeKind::Animated(animated) = &node.kind {
@@ -830,6 +832,7 @@ fn render_subtree(
                 node_offset,
                 effect_phase,
                 backdrop,
+                _image_mask,
             ) => {
                 #[cfg(feature = "image")]
                 crate::backend::ratatui_backend::renderers::image_effects::image_effects_applied(
@@ -983,6 +986,55 @@ fn render_subtree(
             }
         }
     }
+}
+
+#[cfg(feature = "terminal-images")]
+type EffectImageScope =
+    Option<crate::backend::ratatui_backend::renderers::image::ImageOcclusionScope>;
+#[cfg(not(feature = "terminal-images"))]
+type EffectImageScope = ();
+
+#[cfg(not(feature = "terminal-images"))]
+fn effect_scope_image_mask(
+    _state: &RenderState<'_, '_, '_>,
+    _node: &crate::core::node::Node,
+    _clip: Option<Rect>,
+    _offset: RenderOffset,
+) -> EffectImageScope {
+}
+
+#[cfg(feature = "terminal-images")]
+fn effect_scope_image_mask(
+    state: &RenderState<'_, '_, '_>,
+    node: &crate::core::node::Node,
+    clip: Option<Rect>,
+    offset: RenderOffset,
+) -> Option<crate::backend::ratatui_backend::renderers::image::ImageOcclusionScope> {
+    let NodeKind::EffectScope(scope) = &node.kind else {
+        return None;
+    };
+    if scope.cells_only {
+        return None;
+    }
+    let mut rect = offset.apply_to_rect(node.rect);
+    rect.x = rect.x.saturating_add(state.content.x as i16);
+    rect.y = rect.y.saturating_add(state.content.y as i16);
+    let rect = clip.map_or(rect, |clip| rect.intersection(&clip));
+    let area = to_ratatui_rect(rect);
+    let ctx = crate::style::EffectPrepareContext::new(Rect {
+        x: area.x as i16,
+        y: area.y as i16,
+        w: area.width,
+        h: area.height,
+    })
+    .with_phase(state.ctx.effect_phase)
+    .with_elapsed(crate::animation::registry::render_elapsed())
+    .with_terminal_bg(state.ctx.terminal_bg);
+    let holes = crate::backend::ratatui_backend::renderers::image_effects::image_mask_holes(
+        &scope.effects,
+        ctx,
+    );
+    Some(crate::backend::ratatui_backend::renderers::image::push_image_occlusions(holes))
 }
 
 #[cfg(feature = "diff-view")]
@@ -1832,7 +1884,8 @@ fn animated_paints_cells(animated: &crate::widgets::internal::AnimatedNode) -> b
 }
 
 /// Ordinary widgets can erase composed image placeholders, but cannot cover a positive host
-/// placement. Until those widgets expose pixel occlusions, compose any overlapping later branch.
+/// placement. Plain frame borders expose exact occlusions; other overlapping painted branches
+/// still require retained composition.
 #[cfg(feature = "terminal-images")]
 pub(crate) fn terminal_native_layers_supported(
     tree: &NodeTree,
@@ -1853,7 +1906,7 @@ pub(crate) fn terminal_native_layers_supported(
         let in_owner =
             std::iter::successors(node.parent, |id| tree.node(*id).parent).any(|id| id == owner);
         in_owner
-            || nonpainting_native_layer(tree, node, content)
+            || native_layer_supported(tree, node, content)
             || clipped_layer_rect(tree, node.id)
                 .intersection(&content)
                 .is_empty()
@@ -1893,13 +1946,12 @@ fn terminal_layer_paint_order(tree: &NodeTree) -> impl Iterator<Item = &crate::c
 }
 
 #[cfg(feature = "terminal-images")]
-fn nonpainting_native_layer(
-    tree: &NodeTree,
-    node: &crate::core::node::Node,
-    content: Rect,
-) -> bool {
+fn native_layer_supported(tree: &NodeTree, node: &crate::core::node::Node, content: Rect) -> bool {
     match &node.kind {
-        NodeKind::Animated(animated) => !animated_paints_cells(animated),
+        NodeKind::Animated(animated) => {
+            !animated_paints_cells(animated)
+                || animated_crossfade_misses_content(tree, node, animated, content)
+        }
         NodeKind::Canvas(canvas) => {
             native_layer_style_is_transparent(resolve_base_style(node.active_theme(), canvas.style))
         }
@@ -1910,9 +1962,65 @@ fn nonpainting_native_layer(
                     text.style,
                 ))
         }
-        NodeKind::Frame(frame) => native_frame_border_misses_content(tree, node, frame, content),
+        NodeKind::Frame(frame) => native_frame_occlusions(tree, node, frame, content).is_some(),
         _ => false,
     }
+}
+
+/// A crossfade over an unchanged underlay is an identity operation. A border-only sibling can
+/// fade without making the terminal inside its ring fall back to per-cell image placements.
+#[cfg(feature = "terminal-images")]
+fn animated_crossfade_misses_content(
+    tree: &NodeTree,
+    node: &crate::core::node::Node,
+    animated: &crate::widgets::internal::AnimatedNode,
+    content: Rect,
+) -> bool {
+    if !animated_crossfade_preserves_underlay(animated) {
+        return false;
+    }
+    let mut stack = node.children.clone();
+    while let Some(id) = stack.pop() {
+        if !tree.is_valid(id) {
+            continue;
+        }
+        let child = tree.node(id);
+        if clipped_layer_rect(tree, id)
+            .intersection(&content)
+            .is_empty()
+        {
+            continue;
+        }
+        if !native_layer_supported(tree, child, content) {
+            return false;
+        }
+        stack.extend(child.children.iter().copied());
+    }
+    true
+}
+
+#[cfg(feature = "terminal-images")]
+fn animated_crossfade_preserves_underlay(
+    animated: &crate::widgets::internal::AnimatedNode,
+) -> bool {
+    let overrides_color = [
+        animated.current_fg,
+        animated.target_fg,
+        animated.current_bg,
+        animated.target_bg,
+    ]
+    .iter()
+    .any(Option::is_some);
+    let overrides_exit_color =
+        animated.inherited_fg_exit.is_some() || animated.inherited_bg_exit.is_some();
+    let paints_visibility_effect = animated
+        .visibility
+        .as_ref()
+        .is_some_and(|state| state.recipe.paints_effect());
+    animated.opacity_target.is_none()
+        && !overrides_color
+        && !overrides_exit_color
+        && !paints_visibility_effect
 }
 
 #[cfg(feature = "terminal-images")]
@@ -1926,19 +2034,19 @@ fn native_layer_style_is_transparent(style: Style) -> bool {
 }
 
 #[cfg(feature = "terminal-images")]
-fn native_frame_border_misses_content(
+fn native_frame_occlusions(
     tree: &NodeTree,
     node: &crate::core::node::Node,
     frame: &crate::widgets::internal::FrameNode,
     content: Rect,
-) -> bool {
-    // Complete border rings stay outside their interior. Plain frames are transparent only
+) -> Option<Vec<ratatui::layout::Rect>> {
+    // Complete border rings have known coverage. Borderless frames are transparent only
     // without header/footer labels; joined and decorated borders can extend beyond their ring.
     if !native_frame_geometry_is_plain(frame, node.rect.h)
         || !frame.decorations.is_empty()
         || frame.inner_style().is_some()
     {
-        return false;
+        return None;
     }
     let theme = node.active_theme();
     let fills = [
@@ -1951,9 +2059,32 @@ fn native_frame_border_misses_content(
     .into_iter()
     .flatten()
     .any(|style| style.bg.is_some());
-    let overlap = clipped_layer_rect(tree, node.id).intersection(&content);
-    let inner = visually_offset_node_rect(tree, node.id).inset(frame.border_padding());
-    !fills && overlap.intersection(&inner) == overlap
+    if fills {
+        return None;
+    }
+    if !frame.border {
+        return Some(Vec::new());
+    }
+    let outer = to_ratatui_rect(visually_offset_node_rect(tree, node.id));
+    let visible = to_ratatui_rect(clipped_layer_rect(tree, node.id).intersection(&content));
+    let middle_height = outer.height.saturating_sub(2);
+    let ring = [
+        ratatui::layout::Rect::new(outer.x, outer.y, outer.width, 1),
+        ratatui::layout::Rect::new(outer.x, outer.bottom().saturating_sub(1), outer.width, 1),
+        ratatui::layout::Rect::new(outer.x, outer.y.saturating_add(1), 1, middle_height),
+        ratatui::layout::Rect::new(
+            outer.right().saturating_sub(1),
+            outer.y.saturating_add(1),
+            1,
+            middle_height,
+        ),
+    ];
+    Some(
+        ring.into_iter()
+            .map(|edge| edge.intersection(visible))
+            .filter(|edge| !edge.is_empty())
+            .collect(),
+    )
 }
 
 #[cfg(feature = "terminal-images")]
@@ -2000,11 +2131,20 @@ pub(crate) fn terminal_image_layer_occlusions(
 
     tree.iter()
         .enumerate()
-        .filter_map(|(rank, node)| {
-            if rank <= owner_rank {
-                return None;
-            }
-            later_image_layer_rect(tree, node.id, &owner_ancestors, &content_rect)
+        .filter(|(rank, _)| *rank > owner_rank)
+        .flat_map(|(_, node)| {
+            let mut occlusions = if let NodeKind::Frame(frame) = &node.kind {
+                native_frame_occlusions(tree, node, frame, content_rect).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            occlusions.extend(later_image_layer_rect(
+                tree,
+                node.id,
+                &owner_ancestors,
+                &content_rect,
+            ));
+            occlusions
         })
         .collect()
 }
@@ -2588,12 +2728,13 @@ mod terminal_image_layer_tests {
     use crate::core::element::Element;
     use crate::runtime::RuntimeCore;
     use crate::style::{CellEffect, Color, EffectCell, EffectContext, Rect, Theme};
-    use crate::widgets::{Animated, Canvas, EffectScope, Terminal};
+    use crate::widgets::{Animated, Canvas, EffectScope, Frame, Terminal};
 
     struct LayeredTerminals {
         top_opacity: f32,
         top_opacity_target: Option<Color>,
         top_effect: Option<Reveal>,
+        top_frame: bool,
     }
 
     /// A reveal in progress: every cell shows what lay beneath the scope, or only its own content.
@@ -2644,6 +2785,16 @@ mod terminal_image_layer_tests {
                     .into(),
                 None => top_layer.into(),
             };
+            let top_layer = if self.top_frame {
+                Frame::new()
+                    .border(false)
+                    .padding(0)
+                    .style(crate::style::Style::default().bg(Color::Blue))
+                    .child(top_layer)
+                    .into()
+            } else {
+                top_layer
+            };
             Canvas::new()
                 .child_at(
                     Rect {
@@ -2679,6 +2830,15 @@ mod terminal_image_layer_tests {
         top_opacity_target: Option<Color>,
         top_effect: Option<Reveal>,
     ) -> RuntimeCore<LayeredTerminals> {
+        runtime_with_frame(top_opacity, top_opacity_target, top_effect, false)
+    }
+
+    fn runtime_with_frame(
+        top_opacity: f32,
+        top_opacity_target: Option<Color>,
+        top_effect: Option<Reveal>,
+        top_frame: bool,
+    ) -> RuntimeCore<LayeredTerminals> {
         let viewport = Rect {
             x: 0,
             y: 0,
@@ -2690,6 +2850,7 @@ mod terminal_image_layer_tests {
                 top_opacity,
                 top_opacity_target,
                 top_effect,
+                top_frame,
             },
             (),
             viewport,
@@ -2716,6 +2877,21 @@ mod terminal_image_layer_tests {
             })
             .map(|node| node.id)
             .expect("keyed terminal node")
+    }
+
+    #[test]
+    fn a_filled_terminal_frame_keeps_its_full_layer_occlusion() {
+        let runtime = runtime_with_frame(1.0, None, None, true);
+        let bottom = node_with_key(&runtime, "bottom-terminal");
+        assert_eq!(
+            terminal_image_layer_occlusions(
+                &runtime.tree,
+                bottom,
+                ratatui::layout::Rect::new(0, 0, 10, 5),
+            ),
+            vec![ratatui::layout::Rect::new(2, 1, 4, 3)],
+            "border holes must not replace the full coverage of a framed terminal"
+        );
     }
 
     #[test]

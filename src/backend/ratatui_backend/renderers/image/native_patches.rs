@@ -259,12 +259,19 @@ pub(crate) fn render_native_terminal_images(
     };
     let mut holes = IMAGE_OCCLUSIONS.with(|slot| slot.borrow().clone());
     holes.extend(super::super::image_effects::pending_image_occlusions());
-    let plan = native_scene::cached_plan().unwrap_or(TerminalGraphicsPlan {
-        content,
-        clip,
-        holes,
-        cell: (width, height),
-    });
+    let plan = native_scene::cached_plan()
+        .filter(|plan| {
+            plan.content == content
+                && plan.clip == clip
+                && plan.holes == holes
+                && plan.cell == (width, height)
+        })
+        .unwrap_or(TerminalGraphicsPlan {
+            content,
+            clip,
+            holes,
+            cell: (width, height),
+        });
     let Some(regions) = plan.regions(placements) else {
         return false;
     };
