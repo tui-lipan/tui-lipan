@@ -1123,9 +1123,13 @@ producer reads; it does not block the UI thread or share credits with other PTYs
 Native host IDs are reserved for each logical source incarnation while the retained source or a
 snapshot still owns it. Hiding an image or switching to composition frees host pixel data while
 keeping that lightweight reservation; returning to native rendering reuploads with the same ID.
-Cursor placement IDs survive the same transition. Backend retry pixels and encoder caches do not
+Cursor and placeholder placement IDs survive the same transition. Backend retry pixels and encoder caches do not
 keep producer identities alive. Unchanged clipped rectangles retain their placement IDs when a
-neighboring region is added or removed.
+neighboring region is added or removed. Placeholder identities include the producer placement ID
+from underline colour and absolute retained-grid origin. Their lightweight lifetime records are
+pruned with overwritten visible rows, evicted scrollback and retired alternate grids.
+When matching `ImagePlacementIdentity::Placeholder`, include the new `grid_lifetime` and
+`producer_placement_id` fields or use `..`; the framework supplies their values.
 
 Native scene and upload acknowledgement commit after the complete successful host frame, including
 the synchronized-output closure and cursor writes. A failure after the cell flush still retries

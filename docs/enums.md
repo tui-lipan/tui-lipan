@@ -1587,7 +1587,7 @@ The following types also require `terminal-images`:
 |------|------------------|
 | `ImageSourceKey` | `screen_lifetime`, `producer_image_id`, `incarnation` |
 | `ImageSourceRevision` | Tuple wrapper around a monotonic `u64` revision |
-| `ImagePlacementIdentity` | `Unassigned` (default), `Cursor(u64)`, `Placeholder { line, column, alternate }` |
+| `ImagePlacementIdentity` | `Unassigned` (default), `Cursor(u64)`, `Placeholder { grid_lifetime, producer_placement_id, line, column, alternate }` |
 | `ImagePlacementKey` | `source: ImageSourceKey`, `placement: ImagePlacementIdentity` |
 
 Cursor identities survive movement and source retransmission until the placement is deleted.

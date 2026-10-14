@@ -1891,8 +1891,21 @@ impl TerminalScreen {
         images.extend(self.graphics.placeholder_placements(
             &self.placeholder_cells(display_offset),
             self.cell_size,
-            self.term.history_size() as i64 - display_offset as i64,
-            alt_screen,
+            super::graphics::PlaceholderViewport {
+                top: self.term.history_size() as i64 - display_offset as i64
+                    + if alt_screen {
+                        0
+                    } else {
+                        self.evicted_lines.min(i64::MAX as u64) as i64
+                    },
+                oldest: if alt_screen {
+                    0
+                } else {
+                    self.evicted_lines.min(i64::MAX as u64) as i64
+                },
+                rows: self.rows,
+                alternate: alt_screen,
+            },
         ));
         images
     }
@@ -1925,12 +1938,16 @@ impl TerminalScreen {
                 let Some(id_low) = placeholder_id(cell) else {
                     continue;
                 };
-                cells.push(PlaceholderCell::new(
-                    row,
-                    col,
-                    id_low,
-                    cell.zerowidth().unwrap_or(&[]),
-                ));
+                let mut placeholder =
+                    PlaceholderCell::new(row, col, id_low, cell.zerowidth().unwrap_or(&[]));
+                placeholder.placement_id = match cell.underline_color() {
+                    Some(TermColor::Spec(TermRgb { r, g, b })) => {
+                        (u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b)
+                    }
+                    Some(TermColor::Indexed(index)) => u32::from(index),
+                    _ => 0,
+                };
+                cells.push(placeholder);
             }
         }
         cells

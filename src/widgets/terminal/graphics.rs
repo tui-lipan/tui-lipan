@@ -138,6 +138,10 @@ pub enum ImagePlacementIdentity {
     Cursor(u64),
     /// Placeholder grid origin in absolute retained coordinates.
     Placeholder {
+        /// Lifetime of the retained grid containing the placeholder.
+        grid_lifetime: u64,
+        /// Producer placement ID carried by the underline colour, or zero.
+        producer_placement_id: u32,
         /// Absolute retained line of the virtual placement origin.
         line: i64,
         /// Retained column of the virtual placement origin.
@@ -1368,6 +1372,7 @@ fn diacritic_value(mark: char) -> Option<u16> {
 /// One placeholder cell, as read off the grid.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct PlaceholderCell {
+    pub(super) placement_id: u32,
     /// Viewport row.
     pub(super) row: u16,
     /// Viewport column.
@@ -1391,6 +1396,7 @@ impl PlaceholderCell {
     pub(super) fn new(row: u16, col: u16, id_low: u32, marks: &[char]) -> Self {
         let mut values = marks.iter().filter_map(|mark| diacritic_value(*mark));
         Self {
+            placement_id: 0,
             row,
             col,
             id_low,
@@ -1404,6 +1410,7 @@ impl PlaceholderCell {
 /// A resolved run of placeholder cells: one screen row of one image.
 #[derive(Clone, Copy, Debug)]
 struct PlaceholderRun {
+    placement_id: u32,
     image_id: u32,
     /// High byte of the image id, kept so the cells continuing this run can inherit it.
     id_high: u16,
@@ -1440,6 +1447,7 @@ fn placeholder_runs(cells: &[PlaceholderCell]) -> Vec<PlaceholderRun> {
         let continues = adjacent
             && open.is_some_and(|run| {
                 run.image_id == image_id
+                    && run.placement_id == cell.placement_id
                     && cell.image_row.is_none_or(|value| value == run.image_row)
                     && cell
                         .image_col
@@ -1457,6 +1465,7 @@ fn placeholder_runs(cells: &[PlaceholderCell]) -> Vec<PlaceholderRun> {
             runs.push(run);
         }
         open = Some(PlaceholderRun {
+            placement_id: cell.placement_id,
             image_id,
             id_high,
             row: cell.row,
@@ -1474,6 +1483,7 @@ fn placeholder_runs(cells: &[PlaceholderCell]) -> Vec<PlaceholderRun> {
 /// A rectangle of one image, assembled from the rows of placeholders covering it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PlaceholderRect {
+    placement_id: u32,
     image_id: u32,
     row: u16,
     col: u16,
@@ -1494,6 +1504,7 @@ fn merge_placeholder_runs(runs: &[PlaceholderRun]) -> Vec<PlaceholderRect> {
     for run in runs {
         let stackable = rects.iter_mut().find(|rect| {
             rect.image_id == run.image_id
+                && rect.placement_id == run.placement_id
                 && rect.col == run.col
                 && rect.width == run.width
                 && rect.image_col == run.image_col
@@ -1505,6 +1516,7 @@ fn merge_placeholder_runs(runs: &[PlaceholderRun]) -> Vec<PlaceholderRect> {
             continue;
         }
         rects.push(PlaceholderRect {
+            placement_id: run.placement_id,
             image_id: run.image_id,
             row: run.row,
             col: run.col,
@@ -1655,7 +1667,22 @@ impl ReplacementObservation {
     }
 }
 
+pub(super) struct PlaceholderViewport {
+    pub(super) top: i64,
+    pub(super) oldest: i64,
+    pub(super) rows: u16,
+    pub(super) alternate: bool,
+}
+
+#[derive(Default)]
+struct PlaceholderLifetimes {
+    rows: std::collections::BTreeMap<(bool, i64), HashMap<ImagePlacementKey, Arc<()>>>,
+    owners: HashMap<ImagePlacementKey, std::sync::Weak<()>>,
+}
+
 pub(super) struct TerminalGraphics {
+    placeholder_lifetimes: std::cell::RefCell<PlaceholderLifetimes>,
+    alternate_grid_lifetime: u64,
     stream_namespace: u64,
     damage: super::damage::GraphicsDamage,
     images: HashMap<u32, StoredImage>,
@@ -1687,6 +1714,8 @@ pub(super) struct TerminalGraphics {
 impl Default for TerminalGraphics {
     fn default() -> Self {
         Self {
+            placeholder_lifetimes: Default::default(),
+            alternate_grid_lifetime: 0,
             stream_namespace: next_stream_namespace(),
             damage: super::damage::GraphicsDamage::None,
             images: HashMap::new(),
@@ -1780,6 +1809,7 @@ impl TerminalGraphics {
     pub(super) fn reset(&mut self) {
         self.damage = super::damage::GraphicsDamage::Reset;
         self.stream_namespace = next_stream_namespace();
+        self.placeholder_lifetimes = Default::default();
         self.images.clear();
         self.replace_file_pool();
         self.image_dimensions.clear();
@@ -1824,6 +1854,11 @@ impl TerminalGraphics {
 
     /// Drop placements made on the alternate screen, on the way back to the primary one.
     pub(super) fn clear_alt_screen(&mut self) -> bool {
+        self.alternate_grid_lifetime = self.alternate_grid_lifetime.saturating_add(1);
+        self.placeholder_lifetimes
+            .borrow_mut()
+            .rows
+            .retain(|(alternate, _), _| !alternate);
         let before = self.placements.len();
         self.placements.retain(|placement| !placement.alt_screen);
         self.clear_composed_tiles();
@@ -1903,13 +1938,61 @@ impl TerminalGraphics {
     /// Unlike a direct placement, a virtual one is not anchored to a scrollback line: it *is* the
     /// text, so it scrolls, clears, and reflows for free, and it disappears the moment the cells
     /// holding it do. That is why these are derived per snapshot rather than stored.
+    fn prune_placeholder_lifetimes(&self, viewport: &PlaceholderViewport) -> Vec<Arc<()>> {
+        let mut previous = Vec::new();
+        let mut lifetimes = self.placeholder_lifetimes.borrow_mut();
+        lifetimes.rows.retain(|(alternate, line), placements| {
+            if *alternate == viewport.alternate
+                && (*line < viewport.oldest
+                    || (*line >= viewport.top && *line < viewport.top + i64::from(viewport.rows)))
+            {
+                previous.extend(placements.values().cloned());
+                return false;
+            }
+            placements.retain(|key, _| {
+                self.images
+                    .get(&key.source.producer_image_id)
+                    .is_some_and(|image| image.image.source_key == key.source)
+            });
+            !placements.is_empty()
+        });
+        lifetimes
+            .owners
+            .retain(|_, owner| owner.strong_count() != 0);
+        previous
+    }
+
+    fn placeholder_lifetime(
+        &self,
+        key: ImagePlacementKey,
+        viewport: &PlaceholderViewport,
+        row: u16,
+        height: u16,
+    ) -> Arc<()> {
+        let mut lifetimes = self.placeholder_lifetimes.borrow_mut();
+        let owner = lifetimes
+            .owners
+            .get(&key)
+            .and_then(std::sync::Weak::upgrade)
+            .unwrap_or_default();
+        lifetimes.owners.insert(key, Arc::downgrade(&owner));
+        for row in row..row.saturating_add(height) {
+            lifetimes
+                .rows
+                .entry((viewport.alternate, viewport.top + i64::from(row)))
+                .or_default()
+                .insert(key, Arc::clone(&owner));
+        }
+        owner
+    }
+
     pub(super) fn placeholder_placements(
         &self,
         cells: &[PlaceholderCell],
         cell: TerminalCellSize,
-        viewport_top: i64,
-        alternate: bool,
+        viewport: PlaceholderViewport,
     ) -> Vec<TerminalImagePlacement> {
+        let _previous_rows = self.prune_placeholder_lifetimes(&viewport);
         merge_placeholder_runs(&placeholder_runs(cells))
             .into_iter()
             .filter_map(|rect| {
@@ -1948,10 +2031,25 @@ impl TerminalGraphics {
                     image: {
                         let mut image = stored.image.clone();
                         image.placement_identity = ImagePlacementIdentity::Placeholder {
-                            line: viewport_top + i64::from(rect.row) - i64::from(rect.image_row),
+                            grid_lifetime: if viewport.alternate {
+                                self.alternate_grid_lifetime
+                            } else {
+                                0
+                            },
+                            producer_placement_id: rect.placement_id,
+                            line: viewport.top + i64::from(rect.row) - i64::from(rect.image_row),
                             column: i32::from(rect.col) - i32::from(rect.image_col),
-                            alternate,
+                            alternate: viewport.alternate,
                         };
+                        image.placement_lifetime = Some(self.placeholder_lifetime(
+                            ImagePlacementKey {
+                                source: image.source_key,
+                                placement: image.placement_identity,
+                            },
+                            &viewport,
+                            rect.row,
+                            rect.height,
+                        ));
                         image.geometry = Some(ImageGeometry {
                             offset: (0, 0),
                             size: (
@@ -3896,10 +3994,67 @@ mod tests {
                 })
             })
             .collect();
-        let mut placements =
-            graphics.placeholder_placements(&cells, TerminalCellSize::new(10, 20), 0, false);
+        let mut placements = graphics.placeholder_placements(
+            &cells,
+            TerminalCellSize::new(10, 20),
+            PlaceholderViewport {
+                top: 0,
+                oldest: 0,
+                rows,
+                alternate: false,
+            },
+        );
         assert_eq!(placements.len(), 1, "one image, one rectangle of cells");
         placements.remove(0)
+    }
+
+    #[test]
+    fn placeholder_owners_follow_retained_grid_origins_and_producer_placement_ids() {
+        let mut graphics = TerminalGraphics::default();
+        let mut scanner = GraphicsScanner::default();
+        let (_, commands) = scan_all(
+            &mut scanner,
+            b"\x1b_Ga=T,U=1,i=7,p=9,c=2,r=2,f=24,s=2,v=2,q=2;YWJjYWJjYWJjYWJj\x1b\\",
+        );
+        graphics.apply(commands[0].clone(), context());
+        let viewport = |top, oldest| PlaceholderViewport {
+            top,
+            oldest,
+            rows: 1,
+            alternate: false,
+        };
+        let mut first_cell = PlaceholderCell::new(0, 0, 7, &[diacritic(0), diacritic(0)]);
+        first_cell.placement_id = 9;
+        let first = graphics.placeholder_placements(
+            &[first_cell],
+            TerminalCellSize::new(1, 1),
+            viewport(0, 0),
+        );
+        let mut scrolled_cell = PlaceholderCell::new(0, 0, 7, &[diacritic(1), diacritic(0)]);
+        scrolled_cell.placement_id = 9;
+        let scrolled = graphics.placeholder_placements(
+            &[scrolled_cell],
+            TerminalCellSize::new(1, 1),
+            viewport(1, 0),
+        );
+        assert_eq!(first[0].placement_key(), scrolled[0].placement_key());
+        assert!(Arc::ptr_eq(
+            first[0].image.placement_lifetime.as_ref().unwrap(),
+            scrolled[0].image.placement_lifetime.as_ref().unwrap()
+        ));
+        scrolled_cell.placement_id = 10;
+        let different = graphics.placeholder_placements(
+            &[scrolled_cell],
+            TerminalCellSize::new(1, 1),
+            viewport(1, 0),
+        );
+        assert_ne!(scrolled[0].placement_key(), different[0].placement_key());
+        drop((first, scrolled, different));
+        graphics.placeholder_placements(&[], TerminalCellSize::new(1, 1), viewport(100, 100));
+        graphics.placeholder_placements(&[], TerminalCellSize::new(1, 1), viewport(100, 100));
+        let lifetimes = graphics.placeholder_lifetimes.borrow();
+        assert!(lifetimes.rows.is_empty());
+        assert!(lifetimes.owners.is_empty());
     }
 
     #[test]
