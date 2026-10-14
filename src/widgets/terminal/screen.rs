@@ -1546,9 +1546,7 @@ impl TerminalScreen {
         let replacement = frame
             .footprint(self.graphics.evictions())
             .and_then(|footprint| {
-                let observation = frame
-                    .image_ids()
-                    .find_map(|id| self.graphics.replacement_observation(id))?;
+                let observation = self.graphics.replacement_observation(footprint.image())?;
                 Some((observation, footprint))
             });
         let Some((observation, footprint)) = replacement else {
@@ -1901,6 +1899,7 @@ impl TerminalScreen {
         let op = command.frame_op();
         let source_id = command.transmitted_id();
         let previous = source_id.and_then(|id| self.graphics.replacement_observation(id));
+        let evictions = self.graphics.evictions();
         let candidate = command.independent_candidate()
             && !self.graphics.has_pending_transmission()
             && !self.processor.sync_timeout().pending_timeout()
@@ -1913,7 +1912,9 @@ impl TerminalScreen {
                     .as_ref()
                     .is_none_or(|old| old.revision != current.revision) =>
             {
+                // Dropping a replacement that evicted would bring the evicted image back.
                 let independent = candidate
+                    && self.graphics.evictions() == evictions
                     && previous
                         .as_ref()
                         .is_some_and(|old| current.independently_replaces(old));
@@ -2312,6 +2313,11 @@ impl TerminalScreen {
             cols: self.cols,
             cell: self.cell_size,
         });
+    }
+
+    #[cfg(all(test, feature = "terminal-images"))]
+    pub(super) fn has_stored_image(&self, id: u32) -> bool {
+        self.graphics.replacement_observation(id).is_some()
     }
 
     /// Cap the decoded pixels this screen retains, in bytes.

@@ -1129,32 +1129,30 @@ by default. Each `TerminalOutputTransaction` contains the exact original bytes a
 `Ordered` segments must retain their order and bytes. `Graphics` segments include the stable source
 key, its revision, and `GraphicsDependency`. Only `Independent` transactions can supersede earlier
 pending ones. The contract covers a *run*: consecutive `Independent` transactions with nothing else
-between them. Within a run, a later transaction with the same source makes every earlier one with
-that source redundant, and transactions with different sources commute. A consumer may therefore
-keep only the newest transaction per source, at the position of the first. Any other transaction
-ends the run.
+between them. A run holds a single source, and a later transaction makes every earlier one in the
+run redundant, so a consumer may keep only the newest. A replacement of a different source, or any
+other transaction, ends the run. Replacements of different images are never reordered, because the
+image budget evicts by recency and size, and moving one could evict an image that the original
+order kept. For the same reason, a replacement whose execution evicted an image is reported as
+`DependsOnPrevious`.
 
 Two shapes qualify:
 
 - A single command: a complete, accepted replacement of a nonzero image ID with unchanged displayed
   placement state, quiet responses, reusable media (`t=d` or `t=f`), and no cursor or grid effects.
-- A whole synchronized update (`CSI ? 2026 h` to `CSI ? 2026 l`) whose text is only absolute cursor
-  positioning (`CSI row ; col H`) and whose graphics leave every image they touch in a state that
-  does not depend on earlier output. That means complete, quiet transmissions under explicit IDs
-  (retransmission retires the image's placements) and `a=d,d=I` deletes by ID. Placements must use
-  `C=1` and come after the update has set the cursor. A by-ID placement delete (`a=d,d=i`) is
-  allowed only for an image the same update also transmits or deletes. This is how
-  terminal-browser's whole-frame presenter writes each frame. The transaction carries the whole
-  update's bytes, keyed by its lowest image ID.
+- A whole synchronized update (`CSI ? 2026 h` to `CSI ? 2026 l`) that replaces one image, whose
+  text is only absolute cursor positioning (`CSI row ; col H`). Its graphics must be complete,
+  quiet transmissions of that image's explicit ID (retransmission retires the image's
+  placements), an `a=d,d=I` delete of it, or `a=d,d=i` placement deletes of it alongside one of
+  those. Placements must use `C=1` and come after the update has set the cursor. This is how
+  terminal-browser's whole-frame presenter writes each frame.
 
-The screen holds a candidate update until its end marker. It releases the held bytes, unchanged,
-as soon as anything falls outside that subset: text, other controls, other graphics actions,
-chunked or failed transmissions, more than 1 MiB, or an eviction from the image budget. If a
-replacement would share an image or the cursor with a different source in the current run, it is
-reported as `DependsOnPrevious` instead. Partial patches, chunked uploads, queries, unknown
-controls, consuming media and id-less creations remain dependent or ordered. Patch streams such as
-terminal-browser's default presenter are dependency chains: each frame layers new images over
-earlier ones, so they stay ordered.
+The screen holds a candidate update until its end marker. Text, other controls, other graphics
+actions, chunked or failed transmissions, or more than 1 MiB release the held bytes unchanged at
+once. An update that touched a second image or caused an eviction is released unchanged at its
+end. Partial patches, chunked uploads, queries, unknown controls, consuming media and id-less
+creations remain dependent or ordered. Patch streams such as terminal-browser's default presenter
+are dependency chains: each frame layers new images over earlier ones, so they stay ordered.
 
 A graphics escape spanning several parser calls is emitted only when complete. Additional recording
 buffers and ordered transactions are bounded to 1 MiB; larger commands stream as ordered fragments. Before an

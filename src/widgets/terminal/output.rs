@@ -1,5 +1,5 @@
 //! Lossless output transactions classified by the retained parser.
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::BTreeMap;
 
 use super::graphics::FrameOp;
 use super::{ImageSourceKey, ImageSourceRevision};
@@ -7,15 +7,14 @@ use super::{ImageSourceKey, ImageSourceRevision};
 /// Whether a completed graphics transaction can supersede earlier ones.
 ///
 /// The guarantee covers a run of consecutive [`Independent`](Self::Independent) transactions from
-/// one screen. Within a run, a later transaction with the same source makes every earlier one
-/// with that source redundant, and transactions with different sources commute, so a consumer may
-/// keep only the newest per source at the position of the first. Any other transaction ends the
-/// run.
+/// one screen. A run holds a single source: a later transaction makes every earlier one in the
+/// run redundant, so a consumer may keep only the newest. Any other transaction, including a
+/// replacement of a different source, ends the run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GraphicsDependency {
     /// This transaction completely determines everything it changes: either one command
     /// replacing its source without changing its placements, or a whole synchronized update
-    /// keyed by its lowest image id.
+    /// replacing one image.
     Independent,
     /// Its effects require preceding output; preserve byte order and every transaction.
     DependsOnPrevious,
@@ -66,18 +65,19 @@ pub(super) enum CursorUse {
 }
 
 /// Everything a replaceable transaction's effect depends on or changes.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Footprint {
-    /// Image ids, ascending, each with whether it was transmitted. A transmission also advances
-    /// the screen's next automatic id past the one it names, so it is part of the effect.
-    images: Vec<(u32, bool)>,
+    image: u32,
+    /// A transmission also advances the screen's next automatic id past the one it names.
+    transmitted: bool,
     cursor: CursorUse,
 }
 
 impl Footprint {
     pub(super) fn transmission(id: u32, places: bool) -> Self {
         Self {
-            images: vec![(id, true)],
+            image: id,
+            transmitted: true,
             cursor: if places {
                 CursorUse::Reads
             } else {
@@ -85,57 +85,40 @@ impl Footprint {
             },
         }
     }
+
+    pub(super) fn image(&self) -> u32 {
+        self.image
+    }
 }
 
 /// Replaceable transactions since the last ordered one, which is what a consumer may coalesce.
 ///
-/// Consumers keep the newest transaction per source in place of the first. That is lossless
-/// only while equal sources mean an identical footprint, which the later transaction wholly
-/// determines, and distinct sources share nothing that one of them writes.
+/// A run holds one source, and every transaction in it has the same footprint: one image and,
+/// possibly, the cursor. Replaying only the newest therefore differs from replaying all of them
+/// in that image alone, which the newest wholly determines. The image budget sees the same
+/// sizes, and no transaction in a run evicted, so no eviction can appear or disappear.
+/// Transactions for different sources are never reordered: they could change which images
+/// the budget evicts.
 #[derive(Default)]
 pub(super) struct ReplacementRun {
-    footprints: HashMap<ImageSourceKey, Footprint>,
-    images: HashMap<u32, ImageSourceKey>,
-    cursor_writer: Option<ImageSourceKey>,
-    cursor_readers: HashSet<ImageSourceKey>,
+    current: Option<(ImageSourceKey, Footprint)>,
 }
 
 impl ReplacementRun {
     /// Whether a transaction keyed by `source` keeps the run coalescible. If not, the caller
     /// must emit it as a dependency and clear the run.
     pub(super) fn admit(&mut self, source: ImageSourceKey, footprint: Footprint) -> bool {
-        if let Some(existing) = self.footprints.get(&source) {
-            return *existing == footprint;
-        }
-        let images_free = footprint
-            .images
-            .iter()
-            .all(|(id, _)| !self.images.contains_key(id));
-        let cursor_free = match footprint.cursor {
-            CursorUse::Untouched => true,
-            CursorUse::Reads => self.cursor_writer.is_none(),
-            CursorUse::Writes => self.cursor_writer.is_none() && self.cursor_readers.is_empty(),
-        };
-        if !images_free || !cursor_free {
-            return false;
-        }
-        self.images
-            .extend(footprint.images.iter().map(|(id, _)| (*id, source)));
-        match footprint.cursor {
-            CursorUse::Untouched => {}
-            CursorUse::Reads => {
-                self.cursor_readers.insert(source);
+        match self.current {
+            Some(current) => current == (source, footprint),
+            None => {
+                self.current = Some((source, footprint));
+                true
             }
-            CursorUse::Writes => self.cursor_writer = Some(source),
         }
-        self.footprints.insert(source, footprint);
-        true
     }
 
     pub(super) fn clear(&mut self) {
-        if !self.footprints.is_empty() {
-            *self = Self::default();
-        }
+        self.current = None;
     }
 }
 
@@ -248,26 +231,23 @@ impl OpenFrame {
         }
     }
 
-    /// The frame's footprint, if the whole update is one provable replacement.
+    /// The frame's footprint, if the whole update is one provable replacement of one image.
+    /// Several images would let a dropped frame change the sizes a later one meets on its way,
+    /// and so what the image budget evicts.
     pub(super) fn footprint(&self, evictions: u64) -> Option<Footprint> {
-        let determined = self.images.values().all(|(determined, _)| *determined);
-        (self.proven() && determined && evictions == self.evictions && !self.images.is_empty())
-            .then(|| Footprint {
-                images: self
-                    .images
-                    .iter()
-                    .map(|(id, (_, sent))| (*id, *sent))
-                    .collect(),
-                cursor: if self.cursor {
-                    CursorUse::Writes
-                } else {
-                    CursorUse::Untouched
-                },
-            })
-    }
-
-    pub(super) fn image_ids(&self) -> impl Iterator<Item = u32> + '_ {
-        self.images.keys().copied()
+        let mut images = self.images.iter();
+        let (Some((image, (true, transmitted))), None) = (images.next(), images.next()) else {
+            return None;
+        };
+        (self.proven() && evictions == self.evictions).then_some(Footprint {
+            image: *image,
+            transmitted: *transmitted,
+            cursor: if self.cursor {
+                CursorUse::Writes
+            } else {
+                CursorUse::Untouched
+            },
+        })
     }
 
     /// The held bytes, in order, for emitting the frame as one transaction.
@@ -782,19 +762,23 @@ mod tests {
     }
 
     #[test]
-    fn transmissions_outside_a_frame_keep_their_classification() {
+    fn a_run_holds_one_source() {
+        // Reordering replacements of different images could change what the budget evicts, so
+        // switching sources ends the run and the switching transaction becomes a dependency.
         let mut screen = screen();
         screen.process_bytes(b"\x1b_Ga=T,i=8,p=1,f=24,s=1,v=1,C=1,q=2;YWJj\x1b\\");
         screen.take_output_transactions();
-        for _ in 0..3 {
-            screen.process_bytes(FRAME);
-            screen.process_bytes(b"\x1b_Ga=T,i=8,p=1,f=24,s=1,v=1,C=1,q=2;ZGVm\x1b\\");
+        let other = b"\x1b_Ga=T,i=8,p=1,f=24,s=1,v=1,C=1,q=2;ZGVm\x1b\\";
+        for wire in [FRAME, FRAME, other, other, FRAME] {
+            screen.process_bytes(wire);
         }
-        assert!(
+        assert_eq!(
             screen
                 .take_output_transactions()
                 .iter()
-                .all(|tx| independent(tx.class))
+                .map(|tx| independent(tx.class))
+                .collect::<Vec<_>>(),
+            [true, true, false, true, false]
         );
     }
 
@@ -802,7 +786,7 @@ mod tests {
     /// transactions, keep the newest per source at the position of the first.
     fn coalesce(transactions: Vec<TerminalOutputTransaction>) -> Vec<u8> {
         let mut out: Vec<TerminalOutputTransaction> = Vec::new();
-        let mut run: HashMap<ImageSourceKey, usize> = HashMap::new();
+        let mut run: std::collections::HashMap<ImageSourceKey, usize> = Default::default();
         for tx in transactions {
             match tx.class {
                 TerminalOutputClass::Graphics {
@@ -878,6 +862,105 @@ mod tests {
                 (images, snapshot.cursor_row, snapshot.cursor_col)
             };
             assert_eq!(observe(&kept), observe(&wire), "{wire:?}");
+        }
+        assert!(
+            coalesced > 50,
+            "only {coalesced} streams coalesced anything"
+        );
+    }
+
+    /// A stored, unplaced image of `units` × 12 bytes (three RGBA pixels per unit).
+    fn stored(id: u32, units: usize) -> Vec<u8> {
+        format!(
+            "\x1b_Ga=t,i={id},f=32,s={},v=1,q=2;{}\x1b\\",
+            units * 3,
+            "AAAA".repeat(units * 4)
+        )
+        .into_bytes()
+    }
+
+    /// Images left after `seed` then `stream`, with a budget of 100 units.
+    fn surviving(seed: &[u8], stream: &[u8]) -> Vec<u32> {
+        let mut screen = TerminalScreen::new(4, 8, 0);
+        screen.set_image_budget(1200);
+        screen.process_bytes(seed);
+        screen.process_bytes(stream);
+        (1..=9).filter(|id| screen.has_stored_image(*id)).collect()
+    }
+
+    fn assert_coalescing_keeps_budget_effects(seed: &[u8], stream: &[u8]) {
+        let mut recorder = TerminalScreen::new(4, 8, 0);
+        recorder.set_image_budget(1200);
+        recorder.process_bytes(seed);
+        recorder.set_output_transaction_recording(true);
+        recorder.process_bytes(stream);
+        let kept = coalesce(recorder.take_output_transactions());
+        assert_eq!(surviving(seed, &kept), surviving(seed, stream));
+    }
+
+    #[test]
+    fn coalescing_across_sources_cannot_cause_an_eviction() {
+        // C=20, B=60, A=10, then A→10, B→10, A→60 never exceeds 100. Moving the last A to the
+        // first one's position would reach 140 and evict C, which nothing recreates.
+        let seed = [stored(3, 20), stored(2, 60), stored(1, 10)].concat();
+        let stream = [stored(1, 10), stored(2, 10), stored(1, 60)].concat();
+        assert_eq!(surviving(&seed, &stream), [1, 2, 3]);
+        assert_coalescing_keeps_budget_effects(&seed, &stream);
+    }
+
+    #[test]
+    fn a_replacement_that_evicted_is_not_dropped() {
+        // X→90 evicts C; dropping it in favour of X→10 would leave C stored.
+        let seed = [stored(3, 20), stored(1, 10)].concat();
+        let stream = [stored(1, 90), stored(1, 10)].concat();
+        assert_eq!(surviving(&seed, &stream), [1]);
+        assert_coalescing_keeps_budget_effects(&seed, &stream);
+    }
+
+    #[test]
+    fn a_frame_owning_several_images_is_not_a_replacement() {
+        // An earlier frame can shrink image 2 so that a later one fits only in its original
+        // position; dropping the earlier frame would let the later one evict.
+        let mut screen = screen();
+        screen.process_bytes(
+            b"\x1b[?2026h\x1b_Ga=t,i=1,f=24,s=1,v=1,q=2;YWJj\x1b\\\
+              \x1b_Ga=t,i=2,f=24,s=1,v=1,q=2;ZGVm\x1b\\\x1b[?2026l",
+        );
+        assert!(
+            screen
+                .take_output_transactions()
+                .iter()
+                .all(|tx| !independent(tx.class))
+        );
+    }
+
+    #[test]
+    fn coalescing_under_budget_pressure_keeps_the_same_images() {
+        let seed = [stored(3, 20), stored(2, 30), stored(1, 10)].concat();
+        let mut state = 0x9e37_79b9_7f4a_7c15u64;
+        let mut coalesced = 0;
+        for _ in 0..300 {
+            let mut stream = Vec::new();
+            for _ in 0..8 {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                let id = 1 + (state % 3) as u32;
+                let units = [5, 10, 30, 60, 90][((state >> 8) % 5) as usize];
+                stream.extend_from_slice(&stored(id, units));
+            }
+            let mut recorder = TerminalScreen::new(4, 8, 0);
+            recorder.set_image_budget(1200);
+            recorder.process_bytes(&seed);
+            recorder.set_output_transaction_recording(true);
+            recorder.process_bytes(&stream);
+            let kept = coalesce(recorder.take_output_transactions());
+            coalesced += usize::from(kept.len() < stream.len());
+            assert_eq!(
+                surviving(&seed, &kept),
+                surviving(&seed, &stream),
+                "{stream:?}"
+            );
         }
         assert!(
             coalesced > 50,
