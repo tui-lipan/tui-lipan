@@ -195,6 +195,44 @@ impl TreeGuides {
         spans
     }
 
+    /// The indentation for a row's second and later lines.
+    ///
+    /// Guides keep running through every ancestor that still has siblings below, and through the
+    /// row's own column when it has a later sibling, so a multi-line row does not break the lines
+    /// connecting what is above it to what is below. Same width as [`spans`](Self::spans).
+    pub fn continuation_spans(&self, branch: &TreeBranch, max_depth: usize) -> Vec<Span> {
+        let depth = branch.depth;
+        if self.style == IndentStyle::None || depth < self.start_depth.max(1) {
+            let indent = self
+                .indent
+                .saturating_mul(depth.min(u16::MAX as usize) as u16);
+            return if indent > 0 {
+                vec![Span::new(" ".repeat(indent as usize))]
+            } else {
+                Vec::new()
+            };
+        }
+        let gap = self.indent.saturating_sub(1);
+        let mut spans = Vec::new();
+        for level in 0..depth {
+            let open = if level + 1 == depth {
+                !branch.last_child
+            } else {
+                level + 1 >= self.start_depth
+                    && branch.continued.get(level).copied().unwrap_or(false)
+            };
+            if open {
+                spans.push(Span::new("│").style(self.style_at(level + 1, max_depth)));
+            } else {
+                spans.push(Span::new(" "));
+            }
+            if gap > 0 {
+                spans.push(Span::new(" ".repeat(gap as usize)));
+            }
+        }
+        spans
+    }
+
     /// Cells the indentation in front of a row at `branch` occupies.
     pub fn width(&self, branch: &TreeBranch) -> u16 {
         self.spans(branch, branch.depth)
@@ -262,6 +300,27 @@ mod tests {
         let guides = TreeGuides::new(IndentStyle::None).indent(2);
         let leaf = TreeBranch::root().child(false).child(true);
         assert_eq!(text(&guides, &leaf), "    ");
+    }
+
+    /// A two-line row keeps the guides below it connected: its own column continues only while a
+    /// later sibling follows, and the width matches the first line's.
+    #[test]
+    fn continuation_lines_keep_open_guides_running() {
+        let guides = TreeGuides::new(IndentStyle::Short).indent(2);
+        let root = TreeBranch::root();
+        let middle = root.child(false);
+        let last = root.child(true);
+        let cont = |branch: &TreeBranch| {
+            guides
+                .continuation_spans(branch, 4)
+                .iter()
+                .map(|span| span.content.to_string())
+                .collect::<String>()
+        };
+        assert_eq!(cont(&middle), "│ ");
+        assert_eq!(cont(&last), "  ");
+        assert_eq!(cont(&middle.child(true)), "│   ");
+        assert_eq!(cont(&root), "");
     }
 
     /// A start depth of zero must not underflow on a top-level row.

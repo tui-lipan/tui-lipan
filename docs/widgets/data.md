@@ -473,6 +473,10 @@ let width = guides.width(&checkouts[1]); // 2 cells: "└ "
 | `gradient(ColorGradient)` | none | Colors guides by depth |
 | `start_depth(usize)` | `1` | Shallowest depth that draws guides; shallower rows indent with blanks |
 
+For a row with more than one line, put `continuation_spans(branch, max_depth)` in front of the
+later lines. It keeps guides running through ancestors that still have rows below, and through the
+row's own column while a later sibling follows, at the same width as `spans`.
+
 ### Events
 
 ```rust
