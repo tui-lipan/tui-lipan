@@ -101,16 +101,19 @@ impl DirtyLevel {
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct DirtyTracker {
     level: DirtyLevel,
+    immediate_layout: bool,
 }
 
 impl DirtyTracker {
     #[inline]
     pub fn mark_full(&mut self) {
+        self.immediate_layout = true;
         self.level.set_full();
     }
 
     #[inline]
     pub fn mark_layout(&mut self) {
+        self.immediate_layout = true;
         self.level.set_layout();
     }
 
@@ -129,6 +132,16 @@ impl DirtyTracker {
     #[inline]
     pub fn mark_terminal_paint(&mut self) {
         self.level.set_terminal_paint();
+    }
+
+    /// Animation and deferred continuous work keep the same frame deadline even when they
+    /// require layout or rebuilding a view. Explicit layout/full updates still bypass that gate.
+    pub fn merge_continuous_level(&mut self, level: DirtyLevel) {
+        self.level.merge(level);
+    }
+
+    pub fn continuous_frame(&self) -> bool {
+        self.is_dirty() && !self.immediate_layout
     }
 
     #[inline]
@@ -765,5 +778,44 @@ mod terminal_paint_tests {
         let mut dirty = DirtyTracker::default();
         dirty.mark_terminal_paint();
         assert!(dirty.is_dirty());
+    }
+}
+
+#[cfg(test)]
+mod continuous_frame_tests {
+    use super::*;
+
+    #[test]
+    fn animation_layout_and_full_updates_share_the_continuous_clock() {
+        for level in [
+            DirtyLevel::PaintOnly,
+            DirtyLevel::LayoutOnly,
+            DirtyLevel::Full,
+        ] {
+            let mut dirty = DirtyTracker::default();
+            dirty.merge_continuous_level(level);
+            assert!(dirty.continuous_frame());
+            dirty.mark_paint();
+            assert!(dirty.continuous_frame());
+            dirty.mark_layout();
+            assert!(!dirty.continuous_frame());
+            dirty.merge_continuous_level(DirtyLevel::Full);
+            assert!(
+                !dirty.continuous_frame(),
+                "a deferred animation cannot delay explicit layout"
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_full_updates_remain_immediate_in_either_merge_order() {
+        let mut dirty = DirtyTracker::default();
+        dirty.mark_full();
+        dirty.merge_continuous_level(DirtyLevel::Full);
+        assert!(!dirty.continuous_frame());
+        let mut dirty = DirtyTracker::default();
+        dirty.merge_continuous_level(DirtyLevel::Full);
+        dirty.mark_full();
+        assert!(!dirty.continuous_frame());
     }
 }

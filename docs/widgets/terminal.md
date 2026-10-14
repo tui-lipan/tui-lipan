@@ -1098,7 +1098,7 @@ responses, reusable media, and no cursor or grid effects. Partial patches, chunk
 unknown controls, consuming media and id-less creations remain dependent or ordered.
 
 A graphics escape spanning several parser calls is emitted only when complete. Additional recording
-buffers are bounded to 1 MiB per command; larger commands stream as ordered fragments. Before an
+buffers and ordered transactions are bounded to 1 MiB; larger commands stream as ordered fragments. Before an
 external resize, reset or exit boundary, call `flush_output_transaction_boundary()` and drain the
 transactions. This forwards unfinished bytes as ordered without resetting the parser; continuation
 bytes remain ordered. Concatenating transactions reproduces the original byte stream exactly.
@@ -1106,3 +1106,16 @@ bytes remain ordered. Concatenating transactions reproduces the original byte st
 Mode changes without visual effects update live input handling without painting cells. Live screens
 supply current keyboard, paste, mouse and focus modes directly rather than waiting for an app view
 rebuild. An unchanged native scene writes no synchronized-output wrapper and reports no presentation.
+
+### Per-PTY read credits
+
+`TerminalPty::read_gate()` returns a cloneable `TerminalReadGate`. Reads start unrestricted. A session
+transport can call `set_credit(bytes, available, maximum_hold)` to admit one bounded read or hold
+only that PTY's reader. Budgets clamp to 1 through 8192 bytes, and safety holds to 1 through 250 ms.
+Choose the byte budget from completed output transaction sizes. A small file-backed graphics command
+needs a small read budget to prevent one credit from draining many obsolete frames.
+
+Call `resume()` for ordinary output, input answer windows or policy resets. Child exit permanently
+releases the gate, so late policy changes cannot hold its final output ahead of the exit event.
+`stats()` reports actual holds, total hold duration and forced safety releases. This API controls
+producer reads; it does not block the UI thread or share credits with other PTYs.

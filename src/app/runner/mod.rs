@@ -2270,9 +2270,8 @@ impl<C: Component> AppRunner<C> {
 
             let mut pending_event: Option<RunnerEvent> = None;
             let mut host_color_refresh_quiet_until: Option<Instant> = None;
-            let mut deferred_full = false;
-            // A paint-only frame of continuous pointer input held back to the frame cadence, and
-            // when it falls due. See `paced_pointer_frame_due`.
+            let mut deferred_full: Option<bool> = None;
+            // Continuous work shares one phase-preserving presentation deadline.
             let mut paced_frame: Option<(DirtyLevel, Instant)> = None;
             let mut frame_clock = frame_clock::FrameClock::new(self.frame_interval);
             let mut input_answer_until: Option<Instant> = None;
@@ -2296,9 +2295,12 @@ impl<C: Component> AppRunner<C> {
                 }
                 #[cfg(feature = "devtools")]
                 self.ingest_pending_devtools_logs();
-                if deferred_full {
-                    dirty.mark_full();
-                    deferred_full = false;
+                if let Some(continuous) = deferred_full.take() {
+                    if continuous {
+                        dirty.merge_continuous_level(DirtyLevel::Full);
+                    } else {
+                        dirty.mark_full();
+                    }
                 }
                 #[cfg(feature = "terminal")]
                 if let Some(wake) = &terminal_waker {
@@ -2414,7 +2416,6 @@ impl<C: Component> AppRunner<C> {
                     }
                     None => None,
                 };
-                let event_driven = maybe_event.is_some();
                 if let Some(event) = maybe_event {
                     let answer_window = match &event {
                         CEvent::Key(_) | CEvent::Paste(_) => true,
@@ -3079,7 +3080,7 @@ impl<C: Component> AppRunner<C> {
                 if let Some((level, _)) =
                     paced_frame.take_if(|(_, due)| dirty.is_dirty() || now >= *due)
                 {
-                    apply_dirty_level(&mut dirty, level);
+                    dirty.merge_continuous_level(level);
                 }
                 let frame_level = dirty.level();
 
@@ -3097,7 +3098,7 @@ impl<C: Component> AppRunner<C> {
                     && let Some(next) = self.try_recv_event(event_rx)?
                 {
                     preserve_pending_event(&mut pending_event, next);
-                    deferred_full = true;
+                    deferred_full = Some(dirty.continuous_frame() || pointer_motion_only);
                     #[cfg(feature = "profiling-tracing")]
                     tracing::trace!(
                         target: "tui_lipan::perf",
@@ -3107,12 +3108,8 @@ impl<C: Component> AppRunner<C> {
                 }
 
                 let input_answering = input_answer_until.is_some_and(|until| now < until);
-                let continuous = match frame_level {
-                    #[cfg(feature = "terminal")]
-                    DirtyLevel::TerminalGraphicsOnly | DirtyLevel::TerminalPaintOnly => true,
-                    DirtyLevel::PaintOnly => pointer_motion_only || !event_driven,
-                    _ => false,
-                } && !force_host_redraw
+                let continuous = (dirty.continuous_frame() || pointer_motion_only)
+                    && !force_host_redraw
                     && !input_answering;
                 if let Some(due) = frame_clock.due(continuous, now) {
                     paced_frame = Some((frame_level, due));

@@ -635,3 +635,7 @@ The measured debug executable had SHA-256
 `80770ed728c6a55949ec55aeab0985aa3b9b8e1df148edfc9d995160eb05768a`.
 It was built from base `35de344` with the foundation worktree changes before the checkpoint
 commits. These measurements do not describe a published release or the later full pipeline.
+
+Continuous terminal output, graphics, pointer motion and drags, paint updates, and framework
+animation ticks share one presentation deadline. Animation ticks that need layout or a new view
+also use that deadline. Explicit layout/full updates and input answer windows remain immediate.

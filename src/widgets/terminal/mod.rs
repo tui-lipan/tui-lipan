@@ -24,6 +24,7 @@ pub use program_status::{
 pub(crate) mod presentation;
 pub use presentation::{PresentedTerminal, TerminalPresentationSubscription};
 mod pty;
+mod read_gate;
 mod reconcile;
 mod screen;
 mod scrollback_ledger;
@@ -61,6 +62,7 @@ pub use osc::{
 #[cfg(unix)]
 pub use pty::TerminalPtyHandoff;
 pub use pty::{TerminalPty, TerminalPtyConfig, TerminalPtyError, TerminalPtyEvent};
+pub use read_gate::{TerminalReadGate, TerminalReadGateStats};
 pub use screen::{
     SemanticMark, SemanticMarkKind, TerminalCellSize, TerminalClipboardEvent,
     TerminalClipboardTarget, TerminalColorPalette, TerminalDecoration, TerminalHyperlink,

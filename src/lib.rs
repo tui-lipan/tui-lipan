@@ -511,3 +511,6 @@ pub use widgets::{
 
 #[cfg(feature = "terminal-images")]
 pub use crate::widgets::{GraphicsDependency, TerminalOutputClass, TerminalOutputTransaction};
+
+#[cfg(feature = "terminal")]
+pub use widgets::{TerminalReadGate, TerminalReadGateStats};

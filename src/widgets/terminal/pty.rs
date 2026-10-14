@@ -16,6 +16,7 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
 use super::events::{TerminalKeyModes, key_event_to_bytes};
+use super::read_gate::{PTY_READ_BUFFER_SIZE, TerminalReadGate};
 use super::screen::TerminalCellSize;
 use crate::core::event::KeyEvent;
 
@@ -351,6 +352,7 @@ struct TerminalPtyInner {
     reader_thread: Mutex<Option<JoinHandle<()>>>,
     /// Orders `Exited` behind the child's final output; see [`ExitSync`].
     exit: ExitSync,
+    read_gate: TerminalReadGate,
     active: AtomicBool,
     kill_on_drop: AtomicBool,
     /// Number of live `TerminalPty` handles sharing this child (see [`Clone`] above).
@@ -472,6 +474,7 @@ impl TerminalPty {
             killer: Mutex::new(Some(child.clone_killer())),
             reader_thread: Mutex::new(None),
             exit: ExitSync::default(),
+            read_gate: TerminalReadGate::default(),
             active: AtomicBool::new(true),
             kill_on_drop: AtomicBool::new(true),
             handle_count: AtomicUsize::new(1),
@@ -487,7 +490,7 @@ impl TerminalPty {
             let thread_inner = inner.clone();
             let reader_thread = std::thread::spawn(move || {
                 let mut reader = reader;
-                let mut buffer = [0u8; 8192];
+                let mut buffer = [0u8; PTY_READ_BUFFER_SIZE];
                 // Whether the loop ended because the stream itself ended, as opposed to the PTY
                 // being deactivated under it. Only the former proves there is nothing left to read.
                 let mut stream_ended = false;
@@ -509,7 +512,11 @@ impl TerminalPty {
                         }
                         PtyReadiness::Stop => break,
                     }
-                    match reader.read(&mut buffer) {
+                    let budget = thread_inner.read_gate.read_budget();
+                    if !thread_inner.active.load(Ordering::Acquire) {
+                        break;
+                    }
+                    match reader.read(&mut buffer[..budget]) {
                         Ok(0) => {
                             stream_ended = true;
                             break;
@@ -566,6 +573,7 @@ impl TerminalPty {
                 // usually before the reader has picked up the bytes it left behind. The reader
                 // emits the exit once it has drained them; this thread only steps in when the
                 // reader cannot get there (see `EXIT_DRAIN_GRACE`) or when the PTY was killed.
+                thread_inner.read_gate.finish();
                 thread_inner.exit.publish(exit_code);
                 if let Some(code) = thread_inner.exit.claim_after_drain(EXIT_DRAIN_GRACE) {
                     on_event(TerminalPtyEvent::Exited(code));
@@ -580,6 +588,7 @@ impl TerminalPty {
     /// Prepare this PTY for transfer to another process.
     pub fn handoff(&self) -> std::io::Result<TerminalPtyHandoff> {
         self.inner.active.store(false, Ordering::Release);
+        self.inner.read_gate.finish();
         // The reader is about to stop without reaching end of stream, so nothing will ever report
         // a drain; release the exit waits so joining it below cannot stall on the drain grace.
         self.inner.exit.stop();
@@ -659,6 +668,11 @@ impl TerminalPty {
         writer.flush()
     }
 
+    /// Per-instance reader credits. Other PTYs and the UI event pump remain independent.
+    pub fn read_gate(&self) -> TerminalReadGate {
+        self.inner.read_gate.clone()
+    }
+
     /// Encode key and send it to child stdin.
     ///
     /// Pass the modes the child has enabled, from `TerminalScreen::key_modes()`. Returns `false`
@@ -715,6 +729,7 @@ impl TerminalPty {
             return Ok(());
         }
         self.inner.active.store(false, Ordering::Release);
+        self.inner.read_gate.finish();
         // An explicit kill stops the reader mid-stream, so the exit must not wait for a drain that
         // will never be reported - it is delivered as soon as the child is reaped.
         self.inner.exit.stop();
@@ -1032,5 +1047,60 @@ mod tests {
         assert!(pty.foreground_process_group_id().is_some());
 
         drop(pty);
+    }
+}
+
+#[cfg(all(test, unix))]
+mod read_gate_tests {
+    use super::*;
+    use std::sync::mpsc;
+
+    #[test]
+    fn exiting_a_credit_held_child_drains_its_last_bytes_before_exit() {
+        let (sender, receiver) = mpsc::channel();
+        let pty = TerminalPty::spawn(
+            TerminalPtyConfig::new("/bin/sh").args(
+                [
+                    "-c",
+                    "printf READY; read first; printf BUFFERED; read last; printf TAIL",
+                ]
+                .map(Arc::from),
+            ),
+            move |event| {
+                let _ = sender.send(event);
+            },
+        )
+        .unwrap();
+        let mut bytes = Vec::new();
+        loop {
+            let TerminalPtyEvent::Output(output) =
+                receiver.recv_timeout(Duration::from_secs(1)).unwrap()
+            else {
+                panic!("child exited before READY");
+            };
+            bytes.extend_from_slice(&output);
+            if bytes.windows(5).any(|window| window == b"READY") {
+                break;
+            }
+        }
+        let gate = pty.read_gate();
+        gate.set_credit(128, false, Duration::from_millis(250));
+        gate.test_hold_limit(Duration::from_secs(30));
+        pty.write(b"first\n").unwrap();
+        assert!(gate.wait_for_hold(), "reader must hold the pending output");
+        pty.write(b"last\n").unwrap();
+        loop {
+            match receiver.recv_timeout(Duration::from_secs(1)).unwrap() {
+                TerminalPtyEvent::Output(output) => bytes.extend_from_slice(&output),
+                TerminalPtyEvent::Exited(code) => {
+                    assert_eq!(code, 0);
+                    break;
+                }
+                TerminalPtyEvent::Error(error) => panic!("{error}"),
+            }
+        }
+        assert!(bytes.windows(8).any(|window| window == b"BUFFERED"));
+        assert!(bytes.windows(4).any(|window| window == b"TAIL"));
+        assert!(!gate.stats().held);
     }
 }

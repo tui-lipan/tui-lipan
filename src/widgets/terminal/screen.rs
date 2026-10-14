@@ -1460,13 +1460,19 @@ impl TerminalScreen {
     #[cfg(feature = "terminal-images")]
     fn record_output(&mut self, bytes: &[u8], class: super::output::TerminalOutputClass) {
         if self.output_transactions.is_some() && !bytes.is_empty() {
-            self.record_owned_output(bytes.to_vec(), class);
+            for chunk in bytes.chunks(1024 * 1024) {
+                self.record_owned_output(chunk.to_vec(), class);
+            }
         }
     }
 
     #[cfg(feature = "terminal-images")]
     fn record_owned_output(&mut self, bytes: Vec<u8>, class: super::output::TerminalOutputClass) {
         use super::output::{TerminalOutputClass, TerminalOutputTransaction};
+        if bytes.len() > 1024 * 1024 {
+            self.record_output(&bytes, TerminalOutputClass::Ordered);
+            return;
+        }
         let Some(transactions) = self.output_transactions.as_mut() else {
             return;
         };

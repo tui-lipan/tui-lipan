@@ -61,6 +61,28 @@ mod tests {
     }
 
     #[test]
+    fn large_ordered_reads_remain_bounded_and_lossless() {
+        let mut screen = screen();
+        let bytes = vec![0; 1024 * 1024 + 17];
+        screen.process_bytes(&bytes);
+        let transactions = screen.take_output_transactions();
+        assert_eq!(transactions.len(), 2);
+        assert!(
+            transactions
+                .iter()
+                .all(|transaction| transaction.bytes.len() <= 1024 * 1024
+                    && transaction.class == TerminalOutputClass::Ordered)
+        );
+        assert_eq!(
+            transactions
+                .into_iter()
+                .flat_map(|transaction| transaction.bytes)
+                .collect::<Vec<_>>(),
+            bytes
+        );
+    }
+
+    #[test]
     fn mixed_output_is_lossless_at_every_split_boundary() {
         let wire = [
             b"text".as_slice(),
