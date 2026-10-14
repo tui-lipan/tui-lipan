@@ -216,7 +216,7 @@ impl NativeGeometry {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) struct NativeRegion {
     pub(super) anchor: (u16, u16),
     pub(super) offset: (u32, u32),

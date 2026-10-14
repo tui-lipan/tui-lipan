@@ -168,6 +168,8 @@ pub struct ImageSourceRevision(pub u64);
 pub struct TerminalImage {
     source: ImageSource,
     source_key: ImageSourceKey,
+    source_lifetime: Arc<()>,
+    placement_lifetime: Option<Arc<()>>,
     placement_identity: ImagePlacementIdentity,
     source_revision: ImageSourceRevision,
     native: Arc<crate::backend::ratatui_backend::renderers::image::NativeImageLease>,
@@ -223,6 +225,21 @@ enum ImageSource {
 
 impl TerminalImage {
     /// Logical source identity, stable across retransmission and scrolling.
+    pub(crate) fn source_lifetime(&self) -> std::sync::Weak<()> {
+        Arc::downgrade(&self.source_lifetime)
+    }
+
+    pub(crate) fn placement_lifetime(&self) -> Option<std::sync::Weak<()>> {
+        self.placement_lifetime.as_ref().map(Arc::downgrade)
+    }
+
+    // Host retry storage owns pixels, but must not keep logical producer resources alive.
+    pub(crate) fn detach_logical_lifetimes(&mut self) {
+        self.source_lifetime = Arc::default();
+        self.placement_lifetime = None;
+    }
+
+    /// Stable producer source identity, independent of decoded pixel allocations.
     pub fn source_key(&self) -> ImageSourceKey {
         self.source_key
     }
@@ -375,7 +392,7 @@ impl TerminalImagePlacement {
 }
 
 /// A source-pixel sub-rectangle of a transmitted image.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TerminalImageCrop {
     /// Left edge in source pixels.
     pub x: u32,
@@ -1572,6 +1589,7 @@ impl StoredImage {
 /// A live placement of a stored image.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Placement {
+    lifetime: Arc<()>,
     serial: u64,
     image_id: u32,
     placement_id: u32,
@@ -1864,6 +1882,7 @@ impl TerminalGraphics {
                         let mut image = self.images.get(&placement.image_id)?.image.clone();
                         image.geometry = Some(placement.geometry);
                         image.placement_identity = ImagePlacementIdentity::Cursor(placement.serial);
+                        image.placement_lifetime = Some(Arc::clone(&placement.lifetime));
                         image
                     },
                     row: row.clamp(i32::MIN as i64, i32::MAX as i64) as i32,
@@ -2116,6 +2135,8 @@ impl TerminalGraphics {
             (
                 TerminalImage {
                     source_key: ImageSourceKey::default(),
+                    source_lifetime: Arc::default(),
+                    placement_lifetime: None,
                     placement_identity: ImagePlacementIdentity::default(),
                     source_revision: ImageSourceRevision::default(),
                     native: Arc::default(),
@@ -2145,6 +2166,8 @@ impl TerminalGraphics {
                         .saturating_mul(channels);
                     let image = TerminalImage {
                         source_key: ImageSourceKey::default(),
+                        source_lifetime: Arc::default(),
+                        placement_lifetime: None,
                         placement_identity: ImagePlacementIdentity::default(),
                         source_revision: ImageSourceRevision::default(),
                         native: Arc::default(),
@@ -2172,6 +2195,8 @@ impl TerminalGraphics {
                     let bytes = decoded_bytes(&decoded);
                     let image = TerminalImage {
                         source_key: ImageSourceKey::default(),
+                        source_lifetime: Arc::default(),
+                        placement_lifetime: None,
                         placement_identity: ImagePlacementIdentity::default(),
                         source_revision: ImageSourceRevision::default(),
                         native: Arc::default(),
@@ -2388,6 +2413,9 @@ impl TerminalGraphics {
                 placement.image_id != id || placement.placement_id != command.placement
             });
             let placement = Placement {
+                lifetime: previous
+                    .as_ref()
+                    .map_or_else(Arc::default, |placement| Arc::clone(&placement.lifetime)),
                 serial,
                 image_id: id,
                 placement_id: command.placement,
@@ -2509,6 +2537,7 @@ impl TerminalGraphics {
         if let Some(previous) = self.images.remove(&id) {
             self.used_bytes = self.used_bytes.saturating_sub(previous.bytes);
             image.source_key = previous.image.source_key;
+            image.source_lifetime = Arc::clone(&previous.image.source_lifetime);
             image.source_revision =
                 ImageSourceRevision(previous.image.source_revision.0.saturating_add(1));
             image.native = Arc::new(previous.image.native.next_revision());

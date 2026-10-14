@@ -1,4 +1,6 @@
 //! Backend-owned, transactional native Kitty presentation state.
+use std::rc::Rc;
+
 use super::*;
 use crate::core::node::NodeId;
 use crate::widgets::{
@@ -145,6 +147,13 @@ pub(crate) struct HostGraphicsScene {
     next_placement: u32,
     retired_sources: HashMap<u32, SourceState>,
     plans: HashMap<NodeId, native_patches::TerminalGraphicsPlan>,
+    identities: Rc<RefCell<SceneIdentities>>,
+}
+
+#[derive(Default)]
+struct SceneIdentities {
+    sources: HashMap<ImageSourceKey, (std::sync::Weak<()>, Arc<NativeImageLease>)>,
+    placements: HashMap<PlacementKey, (std::sync::Weak<()>, u32)>,
 }
 
 pub(crate) struct SceneTransition {
@@ -199,9 +208,19 @@ impl HostGraphicsScene {
 
     pub(crate) fn prepare(
         &self,
-        desired: DesiredScene,
+        mut desired: DesiredScene,
         reserved: Option<&Self>,
     ) -> std::io::Result<SceneTransition> {
+        {
+            let mut identities = self.identities.borrow_mut();
+            identities
+                .sources
+                .retain(|_, (owner, _)| owner.strong_count() != 0);
+            identities
+                .placements
+                .retain(|_, (owner, _)| owner.strong_count() != 0);
+        }
+        self.match_regions(&mut desired, reserved);
         let mut next = reserved.unwrap_or(self).clone();
         next.plans
             .retain(|owner, _| !(desired.full || desired.owners.contains(owner)));
@@ -244,6 +263,49 @@ impl HostGraphicsScene {
             commands,
             uploads,
         })
+    }
+
+    fn match_regions(&self, desired: &mut DesiredScene, reserved: Option<&Self>) {
+        let mut geometry = HashMap::new();
+        let mut free: HashMap<(NodeId, ImagePlacementKey), std::collections::BTreeSet<usize>> =
+            HashMap::new();
+        for previous in std::iter::once(reserved)
+            .flatten()
+            .chain(std::iter::once(self))
+        {
+            for (key, state) in &previous.placements {
+                geometry.insert((key.owner, key.logical, state.geometry), key.region);
+                free.entry((key.owner, key.logical))
+                    .or_default()
+                    .insert(key.region);
+            }
+        }
+        let mut matched = HashSet::new();
+        let mut used: HashMap<(NodeId, ImagePlacementKey), HashSet<usize>> = HashMap::new();
+        for (index, placement) in desired.placements.iter_mut().enumerate() {
+            let group = (placement.key.owner, placement.key.logical);
+            if let Some(&region) = geometry.get(&(group.0, group.1, placement.geometry))
+                && used.entry(group).or_default().insert(region)
+            {
+                placement.key.region = region;
+                free.entry(group).or_default().remove(&region);
+                matched.insert(index);
+            }
+        }
+        for (index, placement) in desired.placements.iter_mut().enumerate() {
+            if matched.contains(&index) {
+                continue;
+            }
+            let group = (placement.key.owner, placement.key.logical);
+            let regions = used.entry(group).or_default();
+            let region = free
+                .entry(group)
+                .or_default()
+                .pop_first()
+                .unwrap_or_else(|| (0..).find(|region| !regions.contains(region)).unwrap_or(0));
+            regions.insert(region);
+            placement.key.region = region;
+        }
     }
 
     fn retain_sources(&mut self, wanted: &HashSet<ImageSourceKey>) {
@@ -412,7 +474,16 @@ impl HostGraphicsScene {
             return Ok(previous.clone());
         }
         let lease = previous.map_or_else(
-            || Arc::new(NativeImageLease::backend_owned()),
+            || {
+                let mut identities = self.identities.borrow_mut();
+                let (_, lease) = identities.sources.entry(key).or_insert_with(|| {
+                    (
+                        placement.image.source_lifetime(),
+                        Arc::new(NativeImageLease::backend_owned()),
+                    )
+                });
+                Arc::new(lease.next_revision())
+            },
             |previous| Arc::new(previous.lease.next_revision()),
         );
         let id = lease
@@ -420,8 +491,10 @@ impl HostGraphicsScene {
             .ok_or_else(|| std::io::Error::other("native image id exhaustion"))?;
         let (protocol, _) = native_patches::encode_native_source(placement, id, Arc::clone(&lease))
             .ok_or_else(|| std::io::Error::other(NativeSourceUnavailable))?;
+        let mut source = placement.clone();
+        source.image.detach_logical_lifetimes();
         Ok(SourceState {
-            source: placement.clone(),
+            source,
             revision: placement.image.source_revision(),
             id,
             lease,
@@ -444,6 +517,8 @@ impl HostGraphicsScene {
         }
         let id = if let Some(previous) = previous {
             previous.id
+        } else if let Some((_, id)) = self.identities.borrow().placements.get(&desired.key) {
+            *id
         } else {
             self.next_placement = self
                 .next_placement
@@ -451,6 +526,12 @@ impl HostGraphicsScene {
                 .ok_or_else(|| std::io::Error::other("native placement id exhaustion"))?;
             self.next_placement
         };
+        if let Some(owner) = desired.source.image.placement_lifetime() {
+            self.identities
+                .borrow_mut()
+                .placements
+                .insert(desired.key, (owner, id));
+        }
         let state = PlacementState {
             id,
             source,
@@ -651,16 +732,104 @@ mod tests {
         let mut host = HostBackend::new(output.clone());
         stage_frame(&mut screen);
         draw(&mut host).unwrap();
-        output.take();
+        let initial = output.take();
         begin(true);
         draw(&mut host).unwrap();
         let removal = output.take();
         assert_eq!(removal.matches("a=d").count(), 2);
         stage_frame(&mut screen);
         draw(&mut host).unwrap();
-        assert_eq!(output.take().matches("a=p").count(), 1);
+        let restored = output.take();
+        assert_eq!(restored.matches("a=p").count(), 1);
+        assert_eq!(id(&initial, "i="), id(&restored, "i="));
+        assert_eq!(id(&initial, "p="), id(&restored, "p="));
         begin(false);
         draw(&mut host).unwrap();
         assert!(!output.take().contains("\x1b_G"));
+    }
+    #[test]
+    fn late_frame_failure_and_abandonment_do_not_commit_graphics() {
+        for failure in [false, true] {
+            let mut screen = screen();
+            let output = Output::default();
+            let mut host = HostBackend::new(output.clone());
+            let frame = host.begin_output_frame().unwrap();
+            stage_frame(&mut screen);
+            draw(&mut host).unwrap();
+            let first = output.take();
+            if failure {
+                output.fail_flush.set(true);
+                assert!(host.finish_output_frame(frame).is_err());
+            } else {
+                drop(frame);
+            }
+            stage_frame(&mut screen);
+            draw(&mut host).unwrap();
+            let retry = output.take();
+            assert!(retry.contains("a=t"));
+            assert_eq!(id(&first, "i="), id(&retry, "i="));
+            assert_eq!(id(&first, "p="), id(&retry, "p="));
+            stage_frame(&mut screen);
+            draw(&mut host).unwrap();
+            assert!(!output.take().contains("\x1b_G"));
+        }
+    }
+
+    #[test]
+    fn backend_retry_pixels_do_not_keep_logical_source_reservations_alive() {
+        let mut screen = screen();
+        stage_frame(&mut screen);
+        let scene = HostGraphicsScene::default();
+        let mut committed = scene.prepare(take_desired().unwrap(), None).unwrap().next;
+        committed.commit_retirements();
+        assert_eq!(committed.identities.borrow().sources.len(), 1);
+        assert_eq!(committed.identities.borrow().placements.len(), 1);
+        drop(screen);
+        let next = committed
+            .prepare(
+                DesiredScene {
+                    full: true,
+                    ..Default::default()
+                },
+                None,
+            )
+            .unwrap()
+            .next;
+        assert!(next.identities.borrow().sources.is_empty());
+        assert!(next.identities.borrow().placements.is_empty());
+    }
+
+    #[test]
+    fn inserting_a_region_does_not_renumber_unchanged_regions() {
+        let mut screen = screen();
+        let output = Output::default();
+        let mut host = HostBackend::new(output.clone());
+        let placement = screen.render_snapshot().images[0].clone();
+        let region = |row| native_patches::NativeRegion {
+            anchor: (0, row),
+            offset: (0, 0),
+            z: 0,
+            source: crate::widgets::TerminalImageCrop {
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+            },
+        };
+        for rows in [vec![0, 2], vec![0, 1, 2]] {
+            begin(true);
+            let _owner = owner_scope(NodeId::new(1, 1));
+            stage(
+                &placement,
+                &rows.iter().map(|row| region(*row)).collect::<Vec<_>>(),
+            );
+            draw(&mut host).unwrap();
+            let commands = output.take();
+            assert_eq!(
+                commands.matches("a=p").count(),
+                if rows.len() == 2 { 2 } else { 1 }
+            );
+            assert!(!commands.contains("a=d"));
+        }
     }
 }

@@ -1119,3 +1119,14 @@ Call `resume()` for ordinary output, input answer windows or policy resets. Chil
 releases the gate, so late policy changes cannot hold its final output ahead of the exit event.
 `stats()` reports actual holds, total hold duration and forced safety releases. This API controls
 producer reads; it does not block the UI thread or share credits with other PTYs.
+
+Native host IDs are reserved for each logical source incarnation while the retained source or a
+snapshot still owns it. Hiding an image or switching to composition frees host pixel data while
+keeping that lightweight reservation; returning to native rendering reuploads with the same ID.
+Cursor placement IDs survive the same transition. Backend retry pixels and encoder caches do not
+keep producer identities alive. Unchanged clipped rectangles retain their placement IDs when a
+neighboring region is added or removed.
+
+Native scene and upload acknowledgement commit after the complete successful host frame, including
+the synchronized-output closure and cursor writes. A failure after the cell flush still retries
+from the previous committed graphics scene.

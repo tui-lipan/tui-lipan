@@ -301,6 +301,8 @@ fn compose_tile(
     (cache.namespace, tile.0).hash(&mut stream);
     TerminalImage {
         source_key: super::ImageSourceKey::default(),
+        source_lifetime: Arc::default(),
+        placement_lifetime: None,
         placement_identity: super::ImagePlacementIdentity::default(),
         source_revision: super::ImageSourceRevision::default(),
         native: Arc::default(),

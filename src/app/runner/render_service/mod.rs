@@ -1138,6 +1138,7 @@ impl<C: Component> AppRunner<C> {
         }
         #[cfg(feature = "terminal")]
         let presentations = crate::widgets::presentation::PresentationScope::begin();
+        let output_frame = terminal.backend().begin_output_frame()?;
         let output_epoch = terminal.backend().output_epoch();
         execute!(terminal.backend_mut(), Print("\x1b[?2026h"))?;
         #[cfg(any(feature = "devtools", feature = "profiling-tracing"))]
@@ -1228,10 +1229,6 @@ impl<C: Component> AppRunner<C> {
         );
         execute!(terminal.backend_mut(), Print("\x1b[?2026l"))?;
 
-        #[cfg(feature = "terminal-images")]
-        {
-            self.graphics_plan_epoch = Some(self.graphics_presentation_epochs(frame_area));
-        }
         self.last_scroll_frames = current_scroll_frames;
 
         self.set_viewport_metrics(frame_area);
@@ -1244,7 +1241,7 @@ impl<C: Component> AppRunner<C> {
             self.focus.focused,
             &self.widgets.text_area_vim_state,
         )?;
-        std::io::Write::flush(terminal.backend_mut())?;
+        terminal.backend_mut().finish_output_frame(output_frame)?;
         self.host_frame_presented = terminal.backend().output_epoch() == output_epoch;
         #[cfg(feature = "terminal")]
         if terminal.backend().output_epoch() == output_epoch {
@@ -1255,6 +1252,7 @@ impl<C: Component> AppRunner<C> {
                 .deliver(presentations.take());
             #[cfg(feature = "terminal-images")]
             {
+                self.graphics_plan_epoch = Some(self.graphics_presentation_epochs(frame_area));
                 self.native_terminal_plans = terminal.backend().native_plan_owners();
             }
         } else {

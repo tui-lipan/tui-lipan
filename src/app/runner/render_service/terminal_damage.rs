@@ -244,6 +244,7 @@ where
         #[cfg(feature = "terminal-images")]
         let _native_plans = terminal.backend().native_plan_scope();
         let presentations = crate::widgets::presentation::PresentationScope::begin();
+        let output_frame = terminal.backend().begin_output_frame()?;
         let output_epoch = terminal.backend().output_epoch();
         let frame_area = terminal.get_frame().area();
         let cursor_position = StdCell::new(None);
@@ -285,7 +286,7 @@ where
             self.focus.focused,
             &self.widgets.text_area_vim_state,
         )?;
-        terminal.backend_mut().flush()?;
+        terminal.backend_mut().finish_output_frame(output_frame)?;
         self.host_frame_presented = terminal.backend().output_epoch() == output_epoch;
         if self.host_frame_presented {
             self.core

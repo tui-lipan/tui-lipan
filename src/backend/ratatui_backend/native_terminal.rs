@@ -257,8 +257,27 @@ pub(crate) enum GraphicsPresentation {
     Discarded,
 }
 
+/// Extends the graphics transaction through synchronized-output closure and cursor writes.
+pub(crate) struct HostFrame {
+    active: std::rc::Rc<std::cell::Cell<bool>>,
+    dropped: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    epoch: usize,
+    committed: bool,
+}
+
+impl Drop for HostFrame {
+    fn drop(&mut self) {
+        self.active.set(false);
+        if !self.committed {
+            // Invalidate every upload/scene staged by this abandoned output transaction.
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
 pub(crate) struct HostBackend<W: io::Write> {
     backend: CrosstermBackend<W>,
+    frame_active: std::rc::Rc<std::cell::Cell<bool>>,
     #[cfg(test)]
     test_flush_action: u8,
     #[cfg(all(test, feature = "terminal-images"))]
@@ -282,6 +301,7 @@ impl<W: io::Write> HostBackend<W> {
     pub(crate) fn new(writer: W) -> Self {
         Self {
             backend: CrosstermBackend::new(writer),
+            frame_active: Default::default(),
             #[cfg(test)]
             test_flush_action: 0,
             #[cfg(all(test, feature = "terminal-images"))]
@@ -300,6 +320,25 @@ impl<W: io::Write> HostBackend<W> {
             #[cfg(feature = "terminal-images")]
             placement_retirement: None,
         }
+    }
+
+    pub(crate) fn begin_output_frame(&self) -> io::Result<HostFrame> {
+        if self.frame_active.replace(true) {
+            return Err(io::Error::other("nested host output transaction"));
+        }
+        Ok(HostFrame {
+            active: std::rc::Rc::clone(&self.frame_active),
+            dropped: std::sync::Arc::clone(&self.dropped),
+            epoch: self.output_epoch(),
+            committed: false,
+        })
+    }
+
+    pub(crate) fn finish_output_frame(&mut self, mut frame: HostFrame) -> io::Result<()> {
+        frame.active.set(false);
+        self.flush_frame()?;
+        frame.committed = frame.epoch == self.output_epoch();
+        Ok(())
     }
 
     #[cfg(feature = "terminal-images")]
@@ -379,6 +418,9 @@ impl<W: io::Write> HostBackend<W> {
             _ => {}
         }
         let result = io::Write::flush(&mut self.backend);
+        if self.frame_active.get() {
+            return result;
+        }
         #[cfg(feature = "terminal-images")]
         if result.is_ok()
             && let Some((retired, epoch)) = self.placement_retirement.take()
