@@ -411,6 +411,45 @@ fn host_terminal_color_refresh_waits_for_quiet_window() {
 }
 
 #[test]
+fn background_command_wakes_the_event_loop_once_until_drained() {
+    let (command_tx, command_rx, wake) = crate::callback::CommandTx::channel();
+    let (events_tx, events) = std::sync::mpsc::channel();
+    let pending = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let hook = super::CommandWakeHook::install(&wake, &pending, events_tx);
+
+    let sender = command_tx.clone();
+    std::thread::spawn(move || {
+        for value in 0..3_u8 {
+            sender
+                .send((crate::callback::ScopeId(1), Box::new(value)))
+                .unwrap();
+        }
+    })
+    .join()
+    .unwrap();
+
+    std::assert_matches!(
+        events.recv_timeout(Duration::from_secs(1)),
+        Ok(super::RunnerEvent::Command)
+    );
+    assert!(events.try_recv().is_err(), "undrained sends coalesce");
+    assert_eq!(command_rx.try_iter().count(), 3);
+
+    pending.store(false, std::sync::atomic::Ordering::Release);
+    command_tx
+        .send((crate::callback::ScopeId(1), Box::new(())))
+        .unwrap();
+    std::assert_matches!(events.try_recv(), Ok(super::RunnerEvent::Command));
+
+    drop(hook);
+    pending.store(false, std::sync::atomic::Ordering::Release);
+    command_tx
+        .send((crate::callback::ScopeId(1), Box::new(())))
+        .unwrap();
+    assert!(events.try_recv().is_err(), "an exited loop is not woken");
+}
+
+#[test]
 fn resize_burst_followed_by_key_preserves_key_as_pending_event() {
     let (tx, rx) = std::sync::mpsc::channel();
     tx.send(super::RunnerEvent::Terminal(CEvent::Resize(81, 24)))
@@ -10736,4 +10775,53 @@ fn scripted_focus_during_an_exit_animation_outlasts_it() {
 
     finish_closing_modal(&mut runner);
     assert_eq!(closing_modal_focused_key(&runner).as_deref(), Some("after"));
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn notifying_live_terminals_do_not_poll_at_frame_cadence() {
+    let screen = Rc::new(RefCell::new(crate::widgets::TerminalScreen::new(8, 20, 0)));
+    let views = Rc::new(Cell::new(0));
+    let component = || LiveScreenSmoke {
+        screen: screen.clone(),
+        views: views.clone(),
+    };
+    let mut runner = AppRunner::new(App::new().mouse(false).frame_rate(120), component(), ());
+    init_runner(
+        &mut runner,
+        component(),
+        Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 8,
+        },
+    );
+    runner.focus.focused = None;
+    let wakes = Rc::new(Cell::new(0));
+    let count = wakes.clone();
+    let wake: Rc<dyn Fn()> = Rc::new(move || count.set(count.get() + 1));
+    runner.core.tree.set_terminal_mutation_waker(wake.clone());
+    let mut dirty = DirtyTracker::default();
+    assert!(!runner.core.tree.has_polling_terminals());
+    #[cfg(not(feature = "image"))]
+    assert_eq!(
+        runner.update_animation_cycle(&mut dirty),
+        Duration::from_millis(50)
+    );
+    #[cfg(feature = "image")]
+    let _ = runner.update_animation_cycle(&mut dirty);
+    screen.borrow_mut().process_bytes(b"x");
+    assert_eq!(wakes.get(), 1);
+    screen.borrow_mut().process_bytes(b"\x1b_G");
+    assert_eq!(
+        wakes.get(),
+        1,
+        "incomplete commands must not wake the runner"
+    );
+    drop(wake);
+    assert!(
+        runner.core.tree.has_polling_terminals(),
+        "expired runners must restore polling"
+    );
 }

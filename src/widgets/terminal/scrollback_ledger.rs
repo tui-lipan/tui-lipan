@@ -104,6 +104,7 @@ pub(super) struct LedgerTerm<'a, T: EventListener> {
     /// Grid capacity, always `limit + rows`.
     capacity: usize,
     evicted: usize,
+    grid_mutated: bool,
     /// The child sent `RIS` while this wrapper was driving the term.
     reset: bool,
     /// The term left the alternate screen while this wrapper was driving it.
@@ -125,9 +126,14 @@ impl<'a, T: EventListener> LedgerTerm<'a, T> {
             limit,
             capacity,
             evicted: 0,
+            grid_mutated: false,
             reset: false,
             left_alt_screen: false,
         }
+    }
+
+    pub(super) fn grid_mutated(&self) -> bool {
+        self.grid_mutated
     }
 
     /// Whether the term left the alternate screen while this wrapper was driving it.
@@ -210,6 +216,7 @@ impl<T: EventListener> Handler for LedgerTerm<'_, T> {
         self.settle();
     }
     fn input(&mut self, c: char) {
+        self.grid_mutated = true;
         self.inner.input(c);
         self.settle();
     }
@@ -226,6 +233,7 @@ impl<T: EventListener> Handler for LedgerTerm<'_, T> {
         self.settle();
     }
     fn insert_blank(&mut self, arg0: usize) {
+        self.grid_mutated = true;
         self.inner.insert_blank(arg0);
         self.settle();
     }
@@ -284,6 +292,7 @@ impl<T: EventListener> Handler for LedgerTerm<'_, T> {
         self.settle();
     }
     fn linefeed(&mut self) {
+        self.grid_mutated = true;
         self.inner.linefeed();
         self.settle();
     }
@@ -292,10 +301,12 @@ impl<T: EventListener> Handler for LedgerTerm<'_, T> {
         self.settle();
     }
     fn substitute(&mut self) {
+        self.grid_mutated = true;
         self.inner.substitute();
         self.settle();
     }
     fn newline(&mut self) {
+        self.grid_mutated = true;
         self.inner.newline();
         self.settle();
     }
@@ -304,26 +315,32 @@ impl<T: EventListener> Handler for LedgerTerm<'_, T> {
         self.settle();
     }
     fn scroll_up(&mut self, arg0: usize) {
+        self.grid_mutated = true;
         self.inner.scroll_up(arg0);
         self.settle();
     }
     fn scroll_down(&mut self, arg0: usize) {
+        self.grid_mutated = true;
         self.inner.scroll_down(arg0);
         self.settle();
     }
     fn insert_blank_lines(&mut self, arg0: usize) {
+        self.grid_mutated = true;
         self.inner.insert_blank_lines(arg0);
         self.settle();
     }
     fn delete_lines(&mut self, arg0: usize) {
+        self.grid_mutated = true;
         self.inner.delete_lines(arg0);
         self.settle();
     }
     fn erase_chars(&mut self, arg0: usize) {
+        self.grid_mutated = true;
         self.inner.erase_chars(arg0);
         self.settle();
     }
     fn delete_chars(&mut self, arg0: usize) {
+        self.grid_mutated = true;
         self.inner.delete_chars(arg0);
         self.settle();
     }
@@ -344,10 +361,12 @@ impl<T: EventListener> Handler for LedgerTerm<'_, T> {
         self.settle();
     }
     fn clear_line(&mut self, mode: LineClearMode) {
+        self.grid_mutated = true;
         self.inner.clear_line(mode);
         self.settle();
     }
     fn clear_screen(&mut self, mode: ClearMode) {
+        self.grid_mutated = true;
         self.counting_discarded(|term| term.clear_screen(mode));
     }
     fn clear_tabs(&mut self, mode: TabulationClearMode) {
@@ -355,12 +374,14 @@ impl<T: EventListener> Handler for LedgerTerm<'_, T> {
         self.settle();
     }
     fn reset_state(&mut self) {
+        self.grid_mutated = true;
         *self.cursor_overrides = CursorStyleOverrides::default();
         self.inner.reset_state();
         self.reset = true;
         self.settle();
     }
     fn reverse_index(&mut self) {
+        self.grid_mutated = true;
         self.inner.reverse_index();
         self.settle();
     }
@@ -385,10 +406,12 @@ impl<T: EventListener> Handler for LedgerTerm<'_, T> {
             *self.modes.pixel_mouse = true;
             return;
         }
+        let alternate = self.inner.mode().contains(TermMode::ALT_SCREEN);
         if mode.raw() == 12 {
             self.cursor_overrides.blinking = true;
         }
         self.inner.set_private_mode(mode);
+        self.grid_mutated |= alternate != self.inner.mode().contains(TermMode::ALT_SCREEN);
         self.settle();
     }
     fn unset_private_mode(&mut self, mode: PrivateMode) {
@@ -402,6 +425,7 @@ impl<T: EventListener> Handler for LedgerTerm<'_, T> {
         }
         self.inner.unset_private_mode(mode);
         self.left_alt_screen |= alt_screen && !self.inner.mode().contains(TermMode::ALT_SCREEN);
+        self.grid_mutated |= self.left_alt_screen;
         self.settle();
     }
     fn report_private_mode(&mut self, mode: PrivateMode) {
@@ -440,6 +464,7 @@ impl<T: EventListener> Handler for LedgerTerm<'_, T> {
         self.settle();
     }
     fn set_color(&mut self, arg0: usize, arg1: Rgb) {
+        self.grid_mutated = true;
         self.inner.set_color(arg0, arg1);
         self.settle();
     }
@@ -448,6 +473,7 @@ impl<T: EventListener> Handler for LedgerTerm<'_, T> {
         self.settle();
     }
     fn reset_color(&mut self, arg0: usize) {
+        self.grid_mutated = true;
         self.inner.reset_color(arg0);
         self.settle();
     }
@@ -460,6 +486,7 @@ impl<T: EventListener> Handler for LedgerTerm<'_, T> {
         self.settle();
     }
     fn decaln(&mut self) {
+        self.grid_mutated = true;
         self.inner.decaln();
         self.settle();
     }

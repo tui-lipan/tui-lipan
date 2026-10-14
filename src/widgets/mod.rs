@@ -97,6 +97,8 @@ pub(crate) mod table;
 mod tabs;
 #[cfg(feature = "terminal")]
 mod terminal;
+#[cfg(feature = "terminal")]
+pub(crate) use terminal::presentation;
 mod text;
 mod text_area;
 pub(crate) mod theme_provider;
@@ -305,15 +307,18 @@ pub use terminal::{
     TerminalColorPalette, TerminalCommandPhase, TerminalCopyMode, TerminalDecoration,
     TerminalHyperlink, TerminalInputEvent, TerminalInputKind, TerminalKeyModes, TerminalLinkEvent,
     TerminalLogicalLine, TerminalPasteShortcutBehavior, TerminalPos, TerminalPty,
-    TerminalPtyConfig, TerminalPtyError, TerminalPtyEvent, TerminalRenderSnapshot, TerminalScreen,
-    TerminalScreenHandle, TerminalSelection, TerminalSelectionEvent, TerminalSemanticEvent,
-    TerminalSemanticState, TerminalTextPosition, TerminalViewport, TerminalWorkingDirectory,
-    TerminalWorkingDirectorySource, absolute_line, encode_paste, focus_sequences, from_viewport,
-    key_event_to_bytes, mouse_event_to_bytes, paste_sequences, terminal_selection_text,
-    to_viewport, viewport_row,
+    TerminalPtyConfig, TerminalPtyError, TerminalPtyEvent, TerminalReadGate, TerminalReadGateStats,
+    TerminalRenderSnapshot, TerminalScreen, TerminalScreenHandle, TerminalSelection,
+    TerminalSelectionEvent, TerminalSemanticEvent, TerminalSemanticState, TerminalTextPosition,
+    TerminalViewport, TerminalWorkingDirectory, TerminalWorkingDirectorySource, absolute_line,
+    encode_paste, focus_sequences, from_viewport, key_event_to_bytes, mouse_event_to_bytes,
+    paste_sequences, terminal_selection_text, to_viewport, viewport_row,
 };
 #[cfg(feature = "terminal-images")]
-pub use terminal::{GraphicsMediaPolicy, TerminalImage, TerminalImageCrop, TerminalImagePlacement};
+pub use terminal::{
+    GraphicsMediaPolicy, ImagePlacementIdentity, ImagePlacementKey, ImageSourceKey,
+    ImageSourceRevision, TerminalImage, TerminalImageCrop, TerminalImagePlacement,
+};
 pub use text::{Overflow, Text, TextSource};
 pub use text_area::{
     IMAGE_SENTINEL_BASE, SENTINEL_BASE, SentinelEvent, SentinelId, TextArea,
@@ -349,3 +354,14 @@ pub use tree::{IndentStyle, Tree, TreeEvent, TreeKeymap, TreeNode, TreePath, Tre
 pub use zstack::ZStack;
 
 pub(crate) mod internal;
+
+#[cfg(feature = "terminal")]
+pub use terminal::{
+    DamagedRow, GraphicsDamage, PresentedTerminal, TerminalDamage, TerminalMutation,
+    TerminalPresentationSubscription,
+};
+
+#[cfg(feature = "terminal-images")]
+pub use terminal::{GraphicsDependency, TerminalOutputClass, TerminalOutputTransaction};
+
+pub use crate::core::terminal_metrics::{TerminalGraphicsMetrics, terminal_graphics_metrics};

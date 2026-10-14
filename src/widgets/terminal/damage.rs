@@ -19,7 +19,7 @@ pub struct DamagedRow {
 }
 
 /// What changed in a terminal's viewport since the last time damage was taken.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum TerminalDamage {
     /// Nothing changed.
     #[default]
@@ -170,5 +170,235 @@ mod cursor_damage_tests {
             !matches!(damage, super::TerminalDamage::None),
             "a cursor move reported no damage: {damage:?}"
         );
+    }
+}
+
+/// Completed changes to the retained graphics scene.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GraphicsDamage {
+    /// No retained graphics changed.
+    #[default]
+    None,
+    /// Image pixels or source definitions changed.
+    Sources,
+    /// Placement geometry or visibility changed.
+    Placements,
+    /// Both sources and placements changed.
+    SourcesAndPlacements,
+    /// The graphics namespace was reset.
+    Reset,
+}
+
+impl GraphicsDamage {
+    /// Accumulate changes without losing a reset or either kind of damage.
+    pub fn merge(&mut self, other: Self) {
+        *self = match (*self, other) {
+            (Self::Reset, _) | (_, Self::Reset) => Self::Reset,
+            (Self::None, damage) | (damage, Self::None) => damage,
+            (a, b) if a == b => a,
+            _ => Self::SourcesAndPlacements,
+        };
+    }
+}
+
+/// Mutations completed by the terminal parser, independent of snapshot consumption.
+///
+/// Incomplete escape sequences and graphics queries do not report visual damage.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TerminalMutation {
+    /// Changed viewport cells, including the emulator's cursor damage.
+    pub cells: TerminalDamage,
+    /// Changes to retained image sources and placements.
+    pub graphics: GraphicsDamage,
+    /// Cursor position, visibility, or style changed.
+    pub cursor_changed: bool,
+    /// Window title changed.
+    pub title_changed: bool,
+    /// Terminal modes changed.
+    pub modes_changed: bool,
+    /// Semantic metadata or program status changed.
+    pub semantic_changed: bool,
+    /// Clipboard requests were produced.
+    pub clipboard_events: bool,
+    /// Protocol responses were produced.
+    pub responses: bool,
+}
+
+impl TerminalMutation {
+    /// Whether a completed operation changed anything or produced an event.
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Whether a completed operation requires visual presentation.
+    pub fn is_visual(&self) -> bool {
+        self.cells != TerminalDamage::None
+            || self.graphics != GraphicsDamage::None
+            || self.cursor_changed
+    }
+
+    /// Merge parser calls made before a consumer takes pending mutations.
+    pub fn merge(&mut self, other: Self) {
+        self.cells.merge(other.cells);
+        self.graphics.merge(other.graphics);
+        self.cursor_changed |= other.cursor_changed;
+        self.title_changed |= other.title_changed;
+        self.modes_changed |= other.modes_changed;
+        self.semantic_changed |= other.semantic_changed;
+        self.clipboard_events |= other.clipboard_events;
+        self.responses |= other.responses;
+    }
+}
+
+#[cfg(all(test, feature = "terminal-images"))]
+mod mutation_tests {
+    use super::{GraphicsDamage, TerminalDamage};
+    use crate::widgets::TerminalScreen;
+
+    fn clean_screen() -> TerminalScreen {
+        let mut screen = TerminalScreen::new(4, 8, 0);
+        screen.process_bytes(b"");
+        screen.take_damage();
+        screen.take_mutation();
+        screen
+    }
+
+    #[test]
+    fn split_upload_mutates_only_when_completed() {
+        let mut screen = clean_screen();
+        let generation = screen.mutation_generation();
+        assert!(
+            screen
+                .process_bytes(b"\x1b_Ga=t,i=7,f=24,s=1,v=1,q=2;YWJj")
+                .is_empty()
+        );
+        assert_eq!(screen.mutation_generation(), generation);
+        let mutation = screen.process_bytes(b"\x1b\\");
+        assert_eq!(mutation.graphics, GraphicsDamage::Sources);
+        assert_eq!(mutation.cells, TerminalDamage::None);
+        assert!(!mutation.cursor_changed);
+        assert_eq!(screen.take_mutation(), mutation);
+        assert!(screen.take_mutation().is_empty());
+    }
+
+    #[test]
+    fn query_and_malformed_upload_only_produce_responses() {
+        let mut screen = clean_screen();
+        for command in [
+            b"\x1b_Ga=q,i=7,f=24,s=1,v=1;YWJj\x1b\\".as_slice(),
+            b"\x1b_Ga=t,i=7,f=24,s=1,v=1;!\x1b\\".as_slice(),
+        ] {
+            let mutation = screen.process_bytes(command);
+            assert!(!mutation.is_visual(), "{mutation:?}");
+            assert!(mutation.responses);
+        }
+    }
+
+    #[test]
+    fn metadata_and_cells_accumulate_independently() {
+        let mut screen = clean_screen();
+        let title = screen.process_bytes(b"\x1b]2;new title\x07");
+        assert!(title.title_changed);
+        assert!(!title.is_visual(), "{title:?}");
+        let upload = screen.process_bytes(b"\x1b_Ga=t,i=7,f=24,s=1,v=1,q=2;YWJj\x1b\\");
+        assert_eq!(upload.graphics, GraphicsDamage::Sources);
+        screen.process_bytes(b"x");
+        let pending = screen.take_mutation();
+        assert!(pending.title_changed);
+        assert_eq!(pending.graphics, GraphicsDamage::Sources);
+        assert_ne!(pending.cells, TerminalDamage::None);
+    }
+
+    #[test]
+    fn retransmission_removes_all_old_placements_and_displays_only_the_requested_one() {
+        for action in ['t', 'T'] {
+            let mut screen = clean_screen();
+            screen.process_bytes(b"\x1b_Ga=T,i=7,p=9,f=24,s=1,v=1,q=2,C=1;YWJj\x1b\\");
+            screen.process_bytes(b"\x1b[2;3H\x1b_Ga=p,i=7,p=10,C=1,q=2;\x1b\\");
+            screen.process_bytes(b"\x1b_Ga=T,i=8,p=11,f=24,s=1,v=1,q=2,C=1;YWJj\x1b\\");
+            assert_eq!(screen.render_snapshot().images.len(), 3);
+            let mutation = screen.process_bytes(
+                format!("\x1b[3;4H\x1b_Ga={action},i=7,p=12,f=24,s=1,v=1,q=2,C=1;ZGVm\x1b\\")
+                    .as_bytes(),
+            );
+            assert_eq!(mutation.graphics, GraphicsDamage::SourcesAndPlacements);
+            let snapshot = screen.render_snapshot();
+            assert_eq!(
+                snapshot
+                    .images
+                    .iter()
+                    .filter(|image| image.image_id == 8)
+                    .count(),
+                1
+            );
+            let placements: Vec<_> = snapshot
+                .images
+                .iter()
+                .filter(|image| image.image_id == 7)
+                .collect();
+            if action == 't' {
+                assert!(placements.is_empty());
+            } else {
+                assert_eq!(placements.len(), 1);
+                assert_eq!((placements[0].row, placements[0].col), (2, 3));
+            }
+        }
+    }
+
+    #[test]
+    fn retransmission_retires_virtual_placement_until_it_is_declared_again() {
+        let mut screen = clean_screen();
+        screen.process_bytes(b"\x1b_Ga=T,U=1,i=7,p=9,c=1,r=1,f=24,s=1,v=1,q=2;YWJj\x1b\\");
+        screen.process_bytes("\x1b[38;2;0;0;7m\u{10eeee}\u{305}\u{305}".as_bytes());
+        assert_eq!(screen.render_snapshot().images.len(), 1);
+        screen.process_bytes(b"\x1b_Ga=t,i=7,f=24,s=1,v=1,q=2;ZGVm\x1b\\");
+        assert!(screen.render_snapshot().images.is_empty());
+        screen.process_bytes(b"\x1b_Ga=p,U=1,i=7,p=9,c=1,r=1,q=2;\x1b\\");
+        assert_eq!(screen.render_snapshot().images.len(), 1);
+    }
+
+    #[test]
+    fn virtual_placement_without_an_explicit_box_updates_visibility_and_replays() {
+        let mut screen = clean_screen();
+        screen.process_bytes(b"\x1b_Ga=t,i=7,f=24,s=1,v=1,q=2;YWJj\x1b\\");
+        screen.process_bytes("\x1b[38;2;0;0;7m\u{10eeee}\u{305}\u{305}".as_bytes());
+        assert!(screen.render_snapshot().images.is_empty());
+        let mutation = screen.process_bytes(b"\x1b_Ga=p,U=1,i=7,p=9,q=2;\x1b\\");
+        assert_eq!(mutation.graphics, GraphicsDamage::Placements);
+        assert_eq!(screen.render_snapshot().images.len(), 1);
+        let mut restored = clean_screen();
+        restored.process_bytes(&screen.export_replay_bytes());
+        assert_eq!(restored.render_snapshot().images.len(), 1);
+    }
+
+    #[test]
+    fn rejected_retransmission_keeps_the_previous_placements() {
+        let mut screen = clean_screen();
+        screen.process_bytes(b"\x1b_Ga=T,i=7,p=9,f=24,s=1,v=1,q=2,C=1;YWJj\x1b\\");
+        let before = screen.render_snapshot().images[0].placement_key();
+        screen.process_bytes(b"\x1b_Ga=t,i=7,f=24,s=1,v=1,q=2;@@bad@@\x1b\\");
+        assert_eq!(screen.render_snapshot().images[0].placement_key(), before);
+    }
+
+    #[test]
+    fn source_replacement_retires_placements_but_reuses_source_reservation() {
+        let mut screen = clean_screen();
+        screen.process_bytes(b"\x1b_Ga=T,i=7,f=24,s=1,v=1,q=2,C=1;YWJj\x1b\\");
+        let before_key = screen.render_snapshot().images[0].placement_key();
+        let before = screen.render_snapshot().images[0].image.clone();
+        screen.process_bytes(b"\x1b_Ga=t,i=7,f=24,s=1,v=1,q=2;ZGVm\x1b\\");
+        assert!(screen.render_snapshot().images.is_empty());
+        screen.process_bytes(b"\x1b_Ga=p,i=7,C=1,q=2;\x1b\\");
+        let after = screen.render_snapshot().images[0].image.clone();
+        assert_ne!(
+            before_key,
+            screen.render_snapshot().images[0].placement_key()
+        );
+        assert_eq!(before.source_key(), after.source_key());
+        assert_eq!(after.source_revision().0, before.source_revision().0 + 1);
+        screen.process_bytes(b"\x1b_Ga=d,d=I,i=7,q=2;\x1b\\");
+        screen.process_bytes(b"\x1b_Ga=T,i=7,f=24,s=1,v=1,q=2,C=1;YWJj\x1b\\");
+        let recreated = screen.render_snapshot().images[0].image.clone();
+        assert_ne!(before.source_key(), recreated.source_key());
     }
 }

@@ -53,6 +53,8 @@ impl<C: Component> AppRunner<C> {
                 dirty.mark_paint();
             }
             #[cfg(feature = "terminal")]
+            UpdateLevel::TerminalGraphics => dirty.mark_terminal_graphics(),
+            #[cfg(feature = "terminal")]
             UpdateLevel::TerminalPaint => {
                 #[cfg(debug_assertions)]
                 if scope == ScopeId(1) {
@@ -81,6 +83,8 @@ impl<C: Component> AppRunner<C> {
         {
             let level = match update_level {
                 UpdateLevel::Paint => super::DirtyLevel::PaintOnly,
+                #[cfg(feature = "terminal")]
+                UpdateLevel::TerminalGraphics => super::DirtyLevel::TerminalGraphicsOnly,
                 #[cfg(feature = "terminal")]
                 UpdateLevel::TerminalPaint => super::DirtyLevel::TerminalPaintOnly,
                 UpdateLevel::Layout => super::DirtyLevel::LayoutOnly,

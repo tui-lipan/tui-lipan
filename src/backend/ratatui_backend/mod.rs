@@ -28,6 +28,9 @@ pub(crate) use native_terminal::{
     set_mouse_capture_enabled,
 };
 
+#[cfg(all(feature = "terminal-images", not(target_arch = "wasm32")))]
+pub(crate) use native_terminal::GraphicsPresentation;
+
 pub(crate) use render::{RenderContext, render, render_regions};
 
 #[cfg(all(test, not(target_arch = "wasm32")))]

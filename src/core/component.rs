@@ -390,6 +390,9 @@ pub enum UpdateLevel {
     /// Nothing changed; no frame.
     #[default]
     None,
+    /// Present retained terminal graphics without repainting cells when native rendering permits it.
+    #[cfg(feature = "terminal")]
+    TerminalGraphics,
     /// Redraw from the node tree as it stands, where the only thing that changed is content in
     /// one or more live terminal screens or fixed-allocation text sources. Strictly narrower than
     /// [`Paint`](Self::Paint): the runtime may repaint only the rows that moved.
@@ -414,6 +417,19 @@ pub struct Update {
 }
 
 impl Update {
+    /// Request a frame whose only visual changes are retained terminal graphics.
+    ///
+    /// The runtime reuses the last successful native presentation plan. A changed layout,
+    /// unavailable plan or scene requiring composition automatically widens to terminal paint.
+    #[cfg(feature = "terminal")]
+    pub fn terminal_graphics() -> Self {
+        Self {
+            dirty: true,
+            level: UpdateLevel::TerminalGraphics,
+            command: None,
+        }
+    }
+
     /// Request a repaint whose only visual change is live terminal or fixed-allocation text content.
     ///
     /// This is a promise, not a hint. Returning it asserts that nothing else in the tree looks
@@ -2145,6 +2161,17 @@ impl<C: Component> Context<C> {
         callback: Callback<crate::capture::PaintedFrame>,
     ) -> crate::capture::PaintSubscription {
         self.env.paint_observers.subscribe(callback)
+    }
+
+    /// Observe application terminal tokens only after a successful, undiscarded host frame.
+    /// Reports are batched per frame. Parsing, software captures and recordings do not acknowledge
+    /// tokens. Dropping the subscription unsubscribes; subscribing does not request a frame.
+    #[cfg(feature = "terminal")]
+    pub fn observe_terminal_presentations(
+        &self,
+        callback: Callback<Vec<crate::widgets::PresentedTerminal>>,
+    ) -> crate::widgets::TerminalPresentationSubscription {
+        self.env.terminal_presentation_observers.subscribe(callback)
     }
 
     pub(crate) fn take_pending_ui_snapshot(&self) -> crate::ui_snapshot::PendingUiSnapshot {

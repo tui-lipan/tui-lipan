@@ -242,11 +242,11 @@ struct SessionClockInner {
 
 pub(crate) struct RuntimeActivity {
     tracked_commands: AtomicUsize,
-    wake: Option<std::sync::mpsc::Sender<()>>,
+    wake: Option<crate::callback::CommandWake>,
 }
 
 impl RuntimeActivity {
-    pub(crate) fn new(wake: std::sync::mpsc::Sender<()>) -> Self {
+    pub(crate) fn new(wake: crate::callback::CommandWake) -> Self {
         Self {
             tracked_commands: AtomicUsize::new(0),
             wake: Some(wake),
@@ -275,7 +275,7 @@ impl Drop for RuntimeActivityGuard {
             .tracked_commands
             .fetch_sub(1, Ordering::AcqRel);
         if let Some(wake) = &self.activity.wake {
-            let _ = wake.send(());
+            wake.notify();
         }
     }
 }
@@ -378,6 +378,8 @@ pub(crate) struct RuntimeEnv {
     pub pending_ui_snapshot: Rc<RefCell<crate::ui_snapshot::PendingUiSnapshot>>,
     /// Subscribers to every normally painted frame.
     pub paint_observers: Rc<crate::capture::PaintObservers>,
+    #[cfg(feature = "terminal")]
+    pub terminal_presentation_observers: Rc<crate::widgets::presentation::PresentationObservers>,
     /// Pending requests to flash copy feedback on specific nodes.
     pub copy_feedback_request: Rc<RefCell<Vec<CopyFeedbackRequest>>>,
     /// When the currently pending multi-step command chord started, or `None` when no chord is

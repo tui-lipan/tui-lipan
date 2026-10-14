@@ -249,13 +249,53 @@ const CURSOR_REPLY_TIMEOUT: Duration = Duration::from_secs(2);
 /// without discarded frame output; ordinary placements are deleted on the following frame.
 ///
 /// [`host_input`]: super::host_input
+#[cfg(feature = "terminal-images")]
+pub(crate) enum GraphicsPresentation {
+    Unavailable,
+    Unchanged,
+    Written,
+    Discarded,
+}
+
+/// Extends the graphics transaction through synchronized-output closure and cursor writes.
+pub(crate) struct HostFrame {
+    active: std::rc::Rc<std::cell::Cell<bool>>,
+    dropped: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    epoch: usize,
+    committed: bool,
+    started: std::time::Instant,
+    paints_cells: bool,
+    flush_time: std::rc::Rc<std::cell::Cell<Duration>>,
+}
+
+impl Drop for HostFrame {
+    fn drop(&mut self) {
+        self.active.set(false);
+        if !self.committed {
+            // Invalidate every upload/scene staged by this abandoned output transaction.
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+            crate::core::terminal_metrics::update(|metrics| metrics.frames_failed += 1);
+        }
+    }
+}
+
 pub(crate) struct HostBackend<W: io::Write> {
     backend: CrosstermBackend<W>,
+    frame_active: std::rc::Rc<std::cell::Cell<bool>>,
+    frame_flush_time: std::rc::Rc<std::cell::Cell<Duration>>,
+    title: Option<std::sync::Arc<str>>,
+    pending_title: Option<(std::sync::Arc<str>, usize)>,
+    #[cfg(test)]
+    test_flush_action: u8,
     #[cfg(all(test, feature = "terminal-images"))]
     test_output: Option<std::sync::Arc<std::sync::Mutex<Vec<u8>>>>,
     dropped: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     #[cfg(feature = "terminal-images")]
     placement_deletes: Vec<String>,
+    #[cfg(feature = "terminal-images")]
+    graphics_scene: super::renderers::image::HostGraphicsScene,
+    #[cfg(feature = "terminal-images")]
+    pending_scene: Option<(super::renderers::image::SceneTransition, usize, bool)>,
     #[cfg(feature = "terminal-images")]
     retired_native_ids: Vec<u32>,
     #[cfg(feature = "terminal-images")]
@@ -268,6 +308,12 @@ impl<W: io::Write> HostBackend<W> {
     pub(crate) fn new(writer: W) -> Self {
         Self {
             backend: CrosstermBackend::new(writer),
+            frame_active: Default::default(),
+            frame_flush_time: Default::default(),
+            title: None,
+            pending_title: None,
+            #[cfg(test)]
+            test_flush_action: 0,
             #[cfg(all(test, feature = "terminal-images"))]
             test_output: None,
             dropped: Default::default(),
@@ -276,14 +322,187 @@ impl<W: io::Write> HostBackend<W> {
             #[cfg(feature = "terminal-images")]
             placement_deletes: Vec::new(),
             #[cfg(feature = "terminal-images")]
+            graphics_scene: Default::default(),
+            #[cfg(feature = "terminal-images")]
+            pending_scene: None,
+            #[cfg(feature = "terminal-images")]
             retired_native_ids: Vec::new(),
             #[cfg(feature = "terminal-images")]
             placement_retirement: None,
         }
     }
 
+    pub(crate) fn set_title(&mut self, title: &str) -> io::Result<()> {
+        if self.title.as_deref() == Some(title) {
+            return Ok(());
+        }
+        self.pending_title = Some((std::sync::Arc::from(title), self.output_epoch()));
+        self.backend
+            .write_all(format!("\x1b]2;{title}\x07").as_bytes())
+    }
+
+    pub(crate) fn invalidate_host_state(&mut self) {
+        self.title = None;
+        self.pending_title = None;
+        #[cfg(feature = "terminal-images")]
+        {
+            self.graphics_scene.invalidate();
+            if let Some((_, _, ready)) = &mut self.pending_scene {
+                *ready = false;
+            }
+        }
+    }
+
+    pub(crate) fn begin_output_frame(&self) -> io::Result<HostFrame> {
+        self.begin_frame(true)
+    }
+
+    fn begin_frame(&self, paints_cells: bool) -> io::Result<HostFrame> {
+        if self.frame_active.replace(true) {
+            return Err(io::Error::other("nested host output transaction"));
+        }
+        self.frame_flush_time.set(Duration::ZERO);
+        crate::core::terminal_metrics::update(|metrics| {
+            metrics.frames_requested += 1;
+            metrics.frames_composed += u64::from(paints_cells);
+        });
+        Ok(HostFrame {
+            active: std::rc::Rc::clone(&self.frame_active),
+            dropped: std::sync::Arc::clone(&self.dropped),
+            epoch: self.output_epoch(),
+            committed: false,
+            started: std::time::Instant::now(),
+            paints_cells,
+            flush_time: std::rc::Rc::clone(&self.frame_flush_time),
+        })
+    }
+
+    pub(crate) fn finish_output_frame(&mut self, mut frame: HostFrame) -> io::Result<()> {
+        frame.active.set(false);
+        self.flush_frame()?;
+        frame.committed = frame.epoch == self.output_epoch();
+        if frame.committed {
+            crate::core::terminal_metrics::presented(std::time::Instant::now());
+            if frame.paints_cells {
+                crate::core::terminal_metrics::update(|metrics| {
+                    metrics.compose_us += frame
+                        .started
+                        .elapsed()
+                        .saturating_sub(frame.flush_time.get())
+                        .as_micros()
+                        .min(u128::from(u64::MAX)) as u64
+                });
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "terminal-images")]
+    fn prepare_scene(
+        &self,
+        desired: super::renderers::image::DesiredScene,
+    ) -> io::Result<super::renderers::image::SceneTransition> {
+        if let Some((transition, epoch, ready)) = &self.pending_scene {
+            if self.frame_active.get() && *ready && *epoch == self.output_epoch() {
+                return transition.continue_with(desired);
+            }
+            return self.graphics_scene.prepare(desired, Some(&transition.next));
+        }
+        self.graphics_scene.prepare(desired, None)
+    }
+
+    #[cfg(feature = "terminal-images")]
+    pub(crate) fn native_plan_scope(&self) -> super::renderers::image::NativePlanScope {
+        self.graphics_scene.native_plan_scope()
+    }
+
+    #[cfg(feature = "terminal-images")]
+    pub(crate) fn native_plan_owners(
+        &self,
+    ) -> std::collections::HashSet<crate::core::node::NodeId> {
+        self.graphics_scene.native_plan_owners()
+    }
+
+    #[cfg(feature = "terminal-images")]
+    pub(crate) fn terminal_graphics_visible(&self, owner: crate::core::node::NodeId) -> bool {
+        self.graphics_scene.terminal_visible(owner)
+    }
+
+    #[cfg(feature = "terminal-images")]
+    pub(crate) fn present_graphics<'a>(
+        &mut self,
+        updates: impl Iterator<
+            Item = (
+                crate::core::node::NodeId,
+                &'a [crate::widgets::TerminalImagePlacement],
+            ),
+        >,
+    ) -> io::Result<GraphicsPresentation> {
+        let Some(desired) = self.graphics_scene.graphics_update(updates) else {
+            return Ok(GraphicsPresentation::Unavailable);
+        };
+        let transition = self.prepare_scene(desired)?;
+        if transition.commands.is_empty() {
+            transition.record_metrics();
+            return Ok(GraphicsPresentation::Unchanged);
+        }
+        let output_frame = self.begin_frame(false)?;
+        let epoch = self.dropped.load(Ordering::Relaxed);
+        self.pending_scene = Some((transition, epoch, false));
+        self.backend.write_all(b"\x1b[?2026h\x1b7")?;
+        if let Some((transition, _, _)) = &self.pending_scene {
+            for command in &transition.commands {
+                self.backend.write_all(command.as_bytes())?;
+            }
+        }
+        self.backend.write_all(b"\x1b8\x1b[?2026l")?;
+        if let Some((_, _, ready)) = self.pending_scene.as_mut() {
+            *ready = true;
+        }
+        self.finish_output_frame(output_frame)?;
+        Ok(if epoch == self.dropped.load(Ordering::Relaxed) {
+            crate::core::terminal_metrics::update(|metrics| metrics.graphics_direct += 1);
+            GraphicsPresentation::Written
+        } else {
+            GraphicsPresentation::Discarded
+        })
+    }
+
+    pub(crate) fn output_epoch(&self) -> usize {
+        self.dropped.load(Ordering::Relaxed)
+    }
+
+    #[cfg(all(test, feature = "terminal"))]
+    pub(crate) fn test_fail_next_flush(&mut self, discard: bool) {
+        self.test_flush_action = if discard { 2 } else { 1 };
+    }
+
     fn flush_frame(&mut self) -> io::Result<()> {
+        #[cfg(test)]
+        match std::mem::take(&mut self.test_flush_action) {
+            1 => return Err(io::Error::other("injected host flush failure")),
+            2 => {
+                self.dropped.fetch_add(1, Ordering::Relaxed);
+            }
+            _ => {}
+        }
+        let write_started = std::time::Instant::now();
         let result = io::Write::flush(&mut self.backend);
+        let duration = write_started.elapsed();
+        self.frame_flush_time
+            .set(self.frame_flush_time.get().saturating_add(duration));
+        crate::core::terminal_metrics::update(|metrics| {
+            metrics.host_write_us += duration.as_micros().min(u128::from(u64::MAX)) as u64
+        });
+        if self.frame_active.get() {
+            return result;
+        }
+        if let Some((title, epoch)) = self.pending_title.take()
+            && result.is_ok()
+            && epoch == self.output_epoch()
+        {
+            self.title = Some(title);
+        }
         #[cfg(feature = "terminal-images")]
         if result.is_ok()
             && let Some((retired, epoch)) = self.placement_retirement.take()
@@ -298,7 +517,44 @@ impl<W: io::Write> HostBackend<W> {
                 upload.handed_over();
             }
         }
+        #[cfg(feature = "terminal-images")]
+        if let Some((transition, epoch, ready)) = self.pending_scene.as_mut() {
+            if result.is_ok() && *ready && *epoch == self.dropped.load(Ordering::Relaxed) {
+                for upload in &transition.uploads {
+                    upload.handed_over();
+                }
+                transition.record_metrics();
+                self.graphics_scene = transition.next.clone();
+                self.graphics_scene.commit_retirements();
+                self.pending_scene = None;
+            } else {
+                *ready = false;
+            }
+        }
         result
+    }
+}
+
+impl<W: io::Write> Drop for HostBackend<W> {
+    fn drop(&mut self) {
+        #[cfg(feature = "terminal-images")]
+        {
+            let pending = self
+                .pending_scene
+                .as_ref()
+                .map(|(transition, _, _)| &transition.next);
+            let commands = self.graphics_scene.cleanup_commands(pending);
+            if !commands.is_empty() {
+                let epoch = self.output_epoch();
+                let result = self
+                    .backend
+                    .write_all(commands.as_bytes())
+                    .and_then(|()| io::Write::flush(&mut self.backend));
+                if result.is_err() || epoch != self.output_epoch() {
+                    self.graphics_scene.defer_cleanup(pending);
+                }
+            }
+        }
     }
 }
 
@@ -349,6 +605,15 @@ impl<W: io::Write> Backend for HostBackend<W> {
             use super::renderers::image::{kitty_draw_pending, prepare_kitty_cells};
             let epoch = self.dropped.load(Ordering::Relaxed);
             self.placement_retirement = None;
+            if let Some(desired) = super::renderers::image::take_desired() {
+                let transition = self.prepare_scene(desired)?;
+                self.pending_scene = Some((transition, epoch, false));
+                if let Some((transition, _, _)) = &self.pending_scene {
+                    for command in &transition.commands {
+                        self.backend.write_all(command.as_bytes())?;
+                    }
+                }
+            }
             self.retired_native_ids
                 .extend(super::renderers::image::take_retired_native_ids());
             for id in &self.retired_native_ids {
@@ -359,7 +624,11 @@ impl<W: io::Write> Backend for HostBackend<W> {
             }
             self.placement_retirement = Some((self.placement_deletes.len(), epoch));
             if !kitty_draw_pending() {
-                return self.backend.draw(content);
+                self.backend.draw(content)?;
+                if let Some((_, _, ready)) = self.pending_scene.as_mut() {
+                    *ready = true;
+                }
+                return Ok(());
             }
             let prepared = prepare_kitty_cells(content)?;
             self.placement_deletes.extend(prepared.placement_deletes);
@@ -373,6 +642,9 @@ impl<W: io::Write> Backend for HostBackend<W> {
             // has not discarded any part of this frame during terminal release.
             self.uploads
                 .extend(prepared.uploads.into_iter().map(|upload| (upload, epoch)));
+            if let Some((_, _, ready)) = self.pending_scene.as_mut() {
+                *ready = true;
+            }
             Ok(())
         }
         #[cfg(not(feature = "terminal-images"))]

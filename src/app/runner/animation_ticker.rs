@@ -82,12 +82,9 @@ impl<C: Component> AppRunner<C> {
             }
         }
 
-        // A child program writes whenever it likes and tells nobody, so every live terminal - not
-        // only the focused one - has to be looked at on a cadence. This is the whole frame rate a
-        // program drawing at video rates can reach through a pane, and the only cost a pane with
-        // nothing to say imposes.
+        // Legacy sources without a registered wakeup retain the compatibility cadence.
         #[cfg(feature = "terminal")]
-        if self.core.tree.has_live_terminals() {
+        if self.core.tree.has_polling_terminals() {
             poll_timeout = poll_timeout.min(self.frame_interval);
         }
 
@@ -310,9 +307,9 @@ impl<C: Component> AppRunner<C> {
             // rendered styles. A late-bound paint or effect amount does not: the renderer resolves
             // it while drawing, so the whole transition costs repaints.
             if transitions.view_changed {
-                dirty.mark_full();
+                dirty.merge_continuous_level(super::DirtyLevel::Full);
             } else if needs_layout {
-                dirty.mark_layout();
+                dirty.merge_continuous_level(super::DirtyLevel::LayoutOnly);
             } else if needs_paint || transitions.render_changed {
                 dirty.mark_paint();
             }
@@ -339,7 +336,7 @@ impl<C: Component> AppRunner<C> {
             if due && self.tick_stationary_drag_autoscroll() {
                 crate::debug::internal_log!("[tui-lipan] dirty: stationary drag autoscroll");
                 if self.drag.autoscroll_layout_dirty {
-                    dirty.mark_layout();
+                    dirty.merge_continuous_level(super::DirtyLevel::LayoutOnly);
                 } else {
                     dirty.mark_paint();
                 }
@@ -381,7 +378,7 @@ impl<C: Component> AppRunner<C> {
                 .tick_at(self.clock_now());
             if tick_result.dirty {
                 crate::debug::internal_log!("[tui-lipan] dirty: overlay tick");
-                dirty.mark_full();
+                dirty.merge_continuous_level(super::DirtyLevel::Full);
             }
             self.animation.last_overlay_tick = self.clock_now();
         }

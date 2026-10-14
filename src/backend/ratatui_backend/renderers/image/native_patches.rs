@@ -14,7 +14,7 @@ pub(super) fn terminal_image_rows_can_batch() -> bool {
 pub(crate) struct NativeLayerScope(bool);
 
 pub(crate) fn native_layer_scope(supported: bool) -> NativeLayerScope {
-    NativeLayerScope(NATIVE_LAYERS_SUPPORTED.with(|slot| slot.replace(supported)))
+    NativeLayerScope(NATIVE_LAYERS_SUPPORTED.with(|slot| slot.replace(supported && slot.get())))
 }
 
 impl Drop for NativeLayerScope {
@@ -33,13 +33,28 @@ fn retired_ids() -> &'static Mutex<RetiredNativeIds> {
 #[derive(Default)]
 pub(crate) struct NativeImageLease {
     allocation: OnceLock<Option<Arc<NativeImageAllocation>>>,
+    #[cfg(test)]
     protocol: Mutex<Option<Arc<EncodedProtocol>>>,
 }
 
 impl NativeImageLease {
-    fn id(&self) -> Option<u32> {
+    /// New immutable source revision sharing the logical source's host allocation.
+    pub(crate) fn next_revision(&self) -> Self {
+        let allocation = OnceLock::new();
+        if let Some(existing) = self.allocation.get().cloned().flatten() {
+            let _ = allocation.set(Some(existing));
+        }
+        Self {
+            allocation,
+            #[cfg(test)]
+            protocol: Mutex::default(),
+        }
+    }
+
+    pub(super) fn id(&self) -> Option<u32> {
         self.allocation().map(|allocation| allocation.id)
     }
+    #[cfg(test)]
     pub(super) fn discard_unattempted(&self) {
         // Cache cleanup already holds the encoder lock. Never wait on a source whose
         // resolver may be holding its protocol lock while waiting for that encoder.
@@ -53,6 +68,22 @@ impl NativeImageLease {
             }
         }
     }
+    pub(super) fn backend_owned() -> Self {
+        let allocation = OnceLock::new();
+        let _ = allocation.set(allocate_native_id().map(|id| {
+            Arc::new(NativeImageAllocation {
+                id,
+                owner: std::thread::current().id(),
+                retire_on_drop: false,
+            })
+        }));
+        Self {
+            allocation,
+            #[cfg(test)]
+            protocol: Mutex::default(),
+        }
+    }
+
     fn allocation(&self) -> Option<Arc<NativeImageAllocation>> {
         self.allocation
             .get_or_init(|| {
@@ -60,6 +91,7 @@ impl NativeImageLease {
                     Arc::new(NativeImageAllocation {
                         id,
                         owner: std::thread::current().id(),
+                        retire_on_drop: true,
                     })
                 })
             })
@@ -80,6 +112,7 @@ fn allocate_native_id() -> Option<u32> {
 }
 
 struct NativeImageAllocation {
+    retire_on_drop: bool,
     id: u32,
     owner: std::thread::ThreadId,
 }
@@ -91,6 +124,9 @@ pub(super) struct NativeImageOwnership {
 
 impl Drop for NativeImageAllocation {
     fn drop(&mut self) {
+        if !self.retire_on_drop {
+            return;
+        }
         retired_ids()
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -98,6 +134,15 @@ impl Drop for NativeImageAllocation {
             .or_default()
             .push(self.id);
     }
+}
+
+pub(super) fn defer_backend_cleanup(ids: impl IntoIterator<Item = u32>) {
+    retired_ids()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .entry(std::thread::current().id())
+        .or_default()
+        .extend(ids);
 }
 
 pub(crate) fn take_retired_native_ids() -> Vec<u32> {
@@ -180,16 +225,16 @@ impl NativeGeometry {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-struct NativeRegion {
-    anchor: (u16, u16),
-    offset: (u32, u32),
-    source: TerminalImageCrop,
-    z: i32,
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(super) struct NativeRegion {
+    pub(super) anchor: (u16, u16),
+    pub(super) offset: (u32, u32),
+    pub(super) source: TerminalImageCrop,
+    pub(super) z: i32,
 }
 
 impl NativeRegion {
-    fn command(self, image: &CompressedKitty, p: u32) -> String {
+    pub(super) fn command(self, image: &CompressedKitty, p: u32) -> String {
         let s = self.source;
         // No c/r: scaling a partially occupied cell would stretch the patch. X/Y place its first
         // pixel inside the cell; w/h are source pixels at the host's own cell resolution.
@@ -206,45 +251,77 @@ pub(crate) fn render_native_terminal_images(
     content: Rect,
     clip: ratatui::layout::Rect,
 ) -> bool {
-    if placements.is_empty() || !native_scene_supported(clip) {
+    if !native_scene_supported(clip) {
         return false;
     }
     let Some((width, height)) = image_support::measured_host_cell_size() else {
         return false;
     };
-    let Some(geometry) = scene_geometry(placements, content, (width, height)) else {
-        return false;
-    };
     let mut holes = IMAGE_OCCLUSIONS.with(|slot| slot.borrow().clone());
     holes.extend(super::super::image_effects::pending_image_occlusions());
-    // Resolve visible sources before staging so failure can fall back for the whole scene.
-    // Covered/offscreen sources must not be decoded, linked or uploaded.
-    let Some(encoded) = placements
-        .iter()
-        .zip(geometry)
-        .filter_map(|(p, geometry)| {
-            let regions = native_regions(geometry, clip, &holes);
-            (!regions.is_empty()).then(|| native_protocol(p).map(|protocol| (protocol, regions)))
-        })
-        .collect::<Option<Vec<_>>>()
-    else {
-        // A partially prepared batch must not reserve the file/shared-memory pool while the
-        // composed path needs it. Staged uploads from another pane keep their own references.
-        if let Ok(mut inner) = async_encoder().inner.lock() {
-            inner.cache.remove_unattempted_native_images();
-        }
-        for placement in placements {
-            placement.image.native_lease().discard_unattempted();
-        }
+    let plan = native_scene::cached_plan().unwrap_or(TerminalGraphicsPlan {
+        content,
+        clip,
+        holes,
+        cell: (width, height),
+    });
+    let Some(regions) = plan.regions(placements) else {
         return false;
     };
-    for (protocol, regions) in encoded {
-        let EncodedProtocol::CompressedKitty(image) = &*protocol else {
-            unreachable!()
-        };
-        render_native_regions(image, f, &regions);
+    native_scene::stage_plan(plan);
+    for (placement, regions) in placements.iter().zip(regions) {
+        native_scene::stage(placement, &regions);
     }
+    let _ = f;
+
     true
+}
+
+/// Geometry and occlusion captured by a successful ordinary render.
+#[derive(Clone)]
+pub(super) struct TerminalGraphicsPlan {
+    content: Rect,
+    clip: ratatui::layout::Rect,
+    holes: Vec<ratatui::layout::Rect>,
+    cell: (u16, u16),
+}
+
+impl TerminalGraphicsPlan {
+    pub(super) fn visible(&self) -> bool {
+        !self.clip.is_empty()
+            && (self.clip.y..self.clip.bottom()).any(|row| {
+                !uncovered_x_spans(self.clip.x, self.clip.right(), row, &self.holes).is_empty()
+            })
+    }
+
+    pub(super) fn regions(
+        &self,
+        placements: &[TerminalImagePlacement],
+    ) -> Option<Vec<Vec<NativeRegion>>> {
+        if image_support::measured_host_cell_size() != Some(self.cell)
+            || !native_scene_supported(self.clip)
+        {
+            return None;
+        }
+        let geometry = scene_geometry(placements, self.content, self.cell)?;
+        let mut total_regions = 0;
+        placements
+            .iter()
+            .zip(geometry)
+            .map(|(p, geometry)| {
+                let regions = native_regions(geometry, self.clip, &self.holes);
+                total_regions += regions.len();
+                if total_regions > MAX_NATIVE_REGIONS
+                    || (!regions.is_empty()
+                        && p.image.file_pixels().is_none()
+                        && p.image.pixels().is_none())
+                {
+                    return None;
+                }
+                Some(regions)
+            })
+            .collect()
+    }
 }
 
 fn native_scene_supported(clip: ratatui::layout::Rect) -> bool {
@@ -290,6 +367,7 @@ fn scene_geometry(
     Some(geometry)
 }
 
+#[cfg(test)]
 fn native_protocol(p: &TerminalImagePlacement) -> Option<Arc<EncodedProtocol>> {
     let mut hash = std::collections::hash_map::DefaultHasher::new();
     use std::hash::{Hash, Hasher};
@@ -344,7 +422,7 @@ fn native_protocol(p: &TerminalImagePlacement) -> Option<Arc<EncodedProtocol>> {
     Some(protocol)
 }
 
-fn encode_native_source(
+pub(super) fn encode_native_source(
     p: &TerminalImagePlacement,
     id: u32,
     lease: Arc<NativeImageLease>,
@@ -376,22 +454,66 @@ fn encode_native_source(
     Some((Arc::new(EncodedProtocol::CompressedKitty(encoded)), bytes))
 }
 
+/// Bound host commands under pathological widget occlusion. Exceeding the limit
+/// selects retained composition for the entire terminal scene.
+const MAX_NATIVE_REGIONS: usize = 512;
+
 fn native_regions(
     geometry: NativeGeometry,
     clip: ratatui::layout::Rect,
     holes: &[ratatui::layout::Rect],
 ) -> Vec<NativeRegion> {
-    let mut regions = Vec::new();
+    let mut regions: Vec<NativeRegion> = Vec::new();
+    let mut before_merge = 0;
+    let mut previous: HashMap<(u16, u32, u32, u32), usize> = HashMap::new();
     for y in clip.y..clip.bottom() {
+        let mut current = HashMap::new();
         for (left, right) in uncovered_x_spans(clip.x, clip.right(), y, holes) {
-            if let Some(region) = geometry.visible_row(left, right, y) {
-                regions.push(region);
+            let Some(region) = geometry.visible_row(left, right, y) else {
+                continue;
+            };
+            before_merge += 1;
+            let key = (
+                region.anchor.0,
+                region.offset.0,
+                region.source.x,
+                region.source.width,
+            );
+            let index = match previous.get(&key).copied() {
+                Some(index) if vertically_contiguous(regions[index], region, geometry.cell.1) => {
+                    regions[index].source.height += region.source.height;
+                    index
+                }
+                _ => {
+                    regions.push(region);
+                    regions.len() - 1
+                }
+            };
+            current.insert(key, index);
+            if regions.len() > MAX_NATIVE_REGIONS {
+                return record_region_metrics(before_merge, regions);
             }
         }
+        previous = current;
     }
+    record_region_metrics(before_merge, regions)
+}
+
+fn record_region_metrics(before: u64, regions: Vec<NativeRegion>) -> Vec<NativeRegion> {
+    crate::core::terminal_metrics::update(|metrics| {
+        metrics.regions_before_merge += before;
+        metrics.regions_after_merge += regions.len() as u64;
+    });
     regions
 }
 
+fn vertically_contiguous(top: NativeRegion, bottom: NativeRegion, cell_height: u16) -> bool {
+    top.source.y + top.source.height == bottom.source.y
+        && u32::from(top.anchor.1) * u32::from(cell_height) + top.offset.1 + top.source.height
+            == u32::from(bottom.anchor.1) * u32::from(cell_height) + bottom.offset.1
+}
+
+#[cfg(test)]
 fn render_native_regions(
     image: &CompressedKitty,
     f: &mut ratatui::Frame<'_>,
@@ -416,7 +538,14 @@ fn render_native_image(
     clip: ratatui::layout::Rect,
 ) {
     let holes = IMAGE_OCCLUSIONS.with(|slot| slot.borrow().clone());
-    render_native_regions(image, f, &native_regions(geometry, clip, &holes));
+    let regions: Vec<_> = (clip.y..clip.bottom())
+        .flat_map(|y| {
+            uncovered_x_spans(clip.x, clip.right(), y, &holes)
+                .into_iter()
+                .filter_map(move |(left, right)| geometry.visible_row(left, right, y))
+        })
+        .collect();
+    render_native_regions(image, f, &regions);
 }
 
 #[cfg(test)]
@@ -1035,5 +1164,113 @@ mod tests {
         cache.remove_unattempted_native_images();
         assert!(upload.upgrade().is_none());
         assert!(cache.entries.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod rectangle_tests {
+    use super::*;
+
+    fn geometry() -> NativeGeometry {
+        NativeGeometry {
+            origin: (0, 0),
+            source: TerminalImageCrop {
+                x: 0,
+                y: 0,
+                width: 800,
+                height: 1000,
+            },
+            cell: (10, 20),
+            z: 1,
+        }
+    }
+
+    #[test]
+    fn region_bound_applies_to_the_complete_terminal_scene() {
+        let _host = image_support::test_kitty_host((10, 20), true);
+        let mut source = crate::widgets::TerminalScreen::new(1, 1024, 0);
+        source.set_cell_size(crate::widgets::TerminalCellSize::new(10, 20));
+        source.process_bytes(b"\x1b_Ga=T,i=1,C=1,f=24,s=1,v=1,q=2;YWJj\x1b\\");
+        let base = source.render_snapshot().images[0].clone();
+        let placements: Vec<_> = (0..=MAX_NATIVE_REGIONS)
+            .map(|col| {
+                let mut placement = base.clone();
+                placement.col = col as i32;
+                placement
+            })
+            .collect();
+        let plan = TerminalGraphicsPlan {
+            content: Rect {
+                x: 0,
+                y: 0,
+                w: 1024,
+                h: 1,
+            },
+            clip: ratatui::layout::Rect::new(0, 0, 1024, 1),
+            holes: Vec::new(),
+            cell: (10, 20),
+        };
+        assert!(plan.regions(&placements[..MAX_NATIVE_REGIONS]).is_some());
+        assert!(plan.regions(&placements).is_none());
+    }
+
+    #[test]
+    fn unobstructed_pane_compacts_to_one_rectangle() {
+        let regions = native_regions(geometry(), ratatui::layout::Rect::new(0, 0, 80, 50), &[]);
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].source, geometry().source);
+    }
+
+    #[test]
+    fn rectangular_modal_produces_four_rectangles() {
+        let regions = native_regions(
+            geometry(),
+            ratatui::layout::Rect::new(0, 0, 80, 50),
+            &[ratatui::layout::Rect::new(20, 10, 40, 20)],
+        );
+        assert_eq!(regions.len(), 4);
+        let area: u32 = regions
+            .iter()
+            .map(|r| r.source.width * r.source.height)
+            .sum();
+        assert_eq!(area, 800 * 1000 - 400 * 400);
+    }
+
+    #[test]
+    fn merging_preserves_partial_cells_and_source_crop() {
+        let geometry = NativeGeometry {
+            origin: (3, 7),
+            source: TerminalImageCrop {
+                x: 11,
+                y: 13,
+                width: 45,
+                height: 62,
+            },
+            ..geometry()
+        };
+        let regions = native_regions(geometry, ratatui::layout::Rect::new(0, 0, 80, 50), &[]);
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].offset, (3, 7));
+        assert_eq!(regions[0].source, geometry.source);
+        let clipped = native_regions(geometry, ratatui::layout::Rect::new(1, 1, 2, 2), &[]);
+        assert_eq!(clipped.len(), 1);
+        assert_eq!(
+            clipped[0].source,
+            TerminalImageCrop {
+                x: 18,
+                y: 26,
+                width: 20,
+                height: 40
+            }
+        );
+    }
+
+    #[test]
+    fn pathological_occlusion_stops_at_region_limit() {
+        let holes: Vec<_> = (0..50)
+            .flat_map(|y| (0..40).map(move |x| ratatui::layout::Rect::new(2 * x + y % 2, y, 1, 1)))
+            .collect();
+        let regions = native_regions(geometry(), ratatui::layout::Rect::new(0, 0, 80, 50), &holes);
+        assert_eq!(regions.len(), MAX_NATIVE_REGIONS + 1);
     }
 }

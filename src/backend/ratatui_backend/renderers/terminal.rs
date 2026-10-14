@@ -535,6 +535,16 @@ pub(crate) fn render_terminal(
 
     let mut rendered_content = false;
     if content_rect.w > 0 && content_rect.h > 0 && effective.width > 0 && effective.height > 0 {
+        #[cfg(feature = "terminal-images")]
+        let presentation_visible =
+            !crate::backend::ratatui_backend::renderers::image::image_area_fully_occluded(
+                effective,
+            );
+        #[cfg(not(feature = "terminal-images"))]
+        let presentation_visible = true;
+        if presentation_visible {
+            crate::widgets::presentation::stage(node.presentation);
+        }
         let dx = (effective.x as i32)
             .saturating_sub(content_rect.x as i32)
             .max(0) as u16;
@@ -866,6 +876,9 @@ pub(crate) fn render_terminal_node(
     rrect: ratatui::layout::Rect,
     clip_bounds: Option<Rect>,
 ) {
+    #[cfg(feature = "terminal-images")]
+    let _native_scene_scope =
+        crate::backend::ratatui_backend::renderers::image::native_scene_owner_scope(node_id);
     let is_focused = Some(node_id) == state.ctx.focused;
     let is_hovered = Some(node_id) == state.ctx.hovered;
 
@@ -890,7 +903,7 @@ pub(crate) fn render_terminal_node(
         .copy_feedback
         .and_then(|feedback| feedback.active_range(node_id));
     #[cfg(feature = "terminal-images")]
-    let _native_layer_scope = (!term.images.is_empty()).then(|| {
+    let _native_layer_scope = {
         crate::backend::ratatui_backend::renderers::image::native_layer_scope(
             crate::backend::ratatui_backend::render::terminal_native_layers_supported(
                 state.ctx.tree,
@@ -898,9 +911,9 @@ pub(crate) fn render_terminal_node(
                 rrect.intersection(state.content),
             ),
         )
-    });
+    };
     #[cfg(feature = "terminal-images")]
-    let _image_occlusion_scope = (!term.images.is_empty()).then(|| {
+    let _image_occlusion_scope = {
         crate::backend::ratatui_backend::renderers::image::push_image_occlusions(
             crate::backend::ratatui_backend::render::terminal_image_layer_occlusions(
                 state.ctx.tree,
@@ -908,7 +921,7 @@ pub(crate) fn render_terminal_node(
                 state.content,
             ),
         )
-    });
+    };
     let f = &mut *state.f;
     render_terminal(
         f,

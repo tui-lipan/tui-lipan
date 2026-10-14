@@ -252,14 +252,16 @@ pub use crate::host_reads_shared_frames;
 pub use crate::widgets::TerminalPtyHandoff;
 #[cfg(feature = "terminal")]
 pub use crate::widgets::{
-    CopyModeAction, CopyModeGrid, KittyKeyboardFlags, ManagedTerminal, ManagedTerminalProps,
-    ManagedTerminalStatus, MouseEncoding, MouseMode, MouseModeState, ProgramStatusEvent,
-    ProgramStatusRecord, ProgramStatusSnapshot, ProgramStatusState, ScrollbackLineage,
-    SemanticMark, SemanticMarkKind, Terminal, TerminalBuffer, TerminalCellSize,
-    TerminalClipboardEvent, TerminalClipboardTarget, TerminalColorPalette, TerminalCommandPhase,
-    TerminalCopyMode, TerminalDecoration, TerminalHyperlink, TerminalInputEvent, TerminalInputKind,
-    TerminalKeyModes, TerminalLinkEvent, TerminalLogicalLine, TerminalPasteShortcutBehavior,
-    TerminalPos, TerminalPty, TerminalPtyConfig, TerminalPtyError, TerminalPtyEvent,
+    CopyModeAction, CopyModeGrid, DamagedRow, GraphicsDamage, KittyKeyboardFlags, ManagedTerminal,
+    ManagedTerminalProps, ManagedTerminalStatus, MouseEncoding, MouseMode, MouseModeState,
+    PresentedTerminal, ProgramStatusEvent, ProgramStatusRecord, ProgramStatusSnapshot,
+    ProgramStatusState, ScrollbackLineage, SemanticMark, SemanticMarkKind, Terminal,
+    TerminalBuffer, TerminalCellSize, TerminalClipboardEvent, TerminalClipboardTarget,
+    TerminalColorPalette, TerminalCommandPhase, TerminalCopyMode, TerminalDamage,
+    TerminalDecoration, TerminalHyperlink, TerminalInputEvent, TerminalInputKind, TerminalKeyModes,
+    TerminalLinkEvent, TerminalLogicalLine, TerminalMutation, TerminalPasteShortcutBehavior,
+    TerminalPos, TerminalPresentationSubscription, TerminalPty, TerminalPtyConfig,
+    TerminalPtyError, TerminalPtyEvent, TerminalReadGate, TerminalReadGateStats,
     TerminalRenderSnapshot, TerminalScreen, TerminalScreenHandle, TerminalSelection,
     TerminalSelectionEvent, TerminalSemanticEvent, TerminalSemanticState, TerminalTextPosition,
     TerminalViewport, TerminalWorkingDirectory, TerminalWorkingDirectorySource, absolute_line,
@@ -268,7 +270,8 @@ pub use crate::widgets::{
 };
 #[cfg(feature = "terminal-images")]
 pub use crate::widgets::{
-    GraphicsMediaPolicy, TerminalImage, TerminalImageCrop, TerminalImagePlacement,
+    GraphicsMediaPolicy, ImagePlacementIdentity, ImagePlacementKey, ImageSourceKey,
+    ImageSourceRevision, TerminalImage, TerminalImageCrop, TerminalImagePlacement,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use crate::{PixelPointerStatus, pixel_pointer_status};
@@ -279,3 +282,8 @@ pub use crate::{PixelPointerStatus, pixel_pointer_status};
 
 #[cfg(feature = "theme-reload")]
 pub use crate::{ThemeWatcher, load_theme_from_toml};
+
+#[cfg(feature = "terminal-images")]
+pub use crate::widgets::{GraphicsDependency, TerminalOutputClass, TerminalOutputTransaction};
+
+pub use crate::{TerminalGraphicsMetrics, terminal_graphics_metrics};

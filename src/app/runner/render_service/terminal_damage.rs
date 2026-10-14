@@ -105,10 +105,17 @@ where
         if *snapshot.area() != frame_area || frame_area.width == 0 || frame_area.height == 0 {
             return Err(DamageRejection::NoMatchingRetainedFrame);
         }
-        // HostBackend replaces ordinary Kitty placements on every draw. A partial row walk
-        // cannot recreate images in an unchanged pane, so any image requires a full tree paint.
+        // Static native images can keep their complete scene while cells are painted at a row
+        // clip. Composed images still require a whole paint to preserve their protocol placements.
         #[cfg(feature = "terminal-images")]
-        if self.core.tree.iter().any(|node| matches!(&node.kind, NodeKind::Terminal(terminal) if !terminal.images.is_empty())) {
+        let cached_plans_valid =
+            self.graphics_plan_epoch == Some(self.graphics_presentation_epochs(frame_area));
+        #[cfg(feature = "terminal-images")]
+        if self.core.tree.iter().any(|node| {
+            matches!(&node.kind, NodeKind::Terminal(terminal)
+            if !terminal.images.is_empty() && (!self.native_terminal_plans.contains(&node.id)
+                || !cached_plans_valid))
+        }) {
             return Err(DamageRejection::HasImages);
         }
         let frame_top = i32::from(frame_area.y);
@@ -234,6 +241,11 @@ where
             crate::animation::registry::PaintExtent::Partial,
         );
 
+        #[cfg(feature = "terminal-images")]
+        let _native_plans = terminal.backend().native_plan_scope();
+        let presentations = crate::widgets::presentation::PresentationScope::begin();
+        let output_frame = terminal.backend().begin_output_frame()?;
+        let output_epoch = terminal.backend().output_epoch();
         let frame_area = terminal.get_frame().area();
         let cursor_position = StdCell::new(None);
         let mut snapshot = self
@@ -241,10 +253,10 @@ where
             .take()
             .expect("the plan proved a retained frame of this geometry");
 
-        let _ = crossterm::execute!(
+        crossterm::execute!(
             terminal.backend_mut(),
             crossterm::style::Print("\x1b[?2026h")
-        );
+        )?;
         let mut painted: Vec<u16> = Vec::with_capacity(plan.rows.len());
         let result: crate::Result<()> = self.with_render_context(&cursor_position, |ctx| {
             for &row in &plan.rows {
@@ -258,14 +270,15 @@ where
             place_caret(terminal, cursor_position.get())?;
             Ok(())
         });
-        let _ = crossterm::execute!(
+        crossterm::execute!(
             terminal.backend_mut(),
             crossterm::style::Print("\x1b[?2026l")
-        );
+        )?;
 
         self.last_frame_snapshot = Some(snapshot);
         self.host_patched_rows.extend(painted);
         result?;
+        self.frame_rendered = true;
 
         self.terminal.update_cursor(
             terminal.backend_mut(),
@@ -273,7 +286,15 @@ where
             self.focus.focused,
             &self.widgets.text_area_vim_state,
         )?;
-        terminal.backend_mut().flush()?;
+        terminal.backend_mut().finish_output_frame(output_frame)?;
+        self.host_frame_presented = terminal.backend().output_epoch() == output_epoch;
+        if self.host_frame_presented {
+            self.core
+                .ctx
+                .env()
+                .terminal_presentation_observers
+                .deliver(presentations.take());
+        }
         // Deliberately no `swap_buffers`. Ratatui's current buffer was borrowed as scratch and put
         // back as it was found; its previous buffer still describes the last full draw, and
         // `host_patched_rows` is what reconciles that with the rows written here.

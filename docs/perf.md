@@ -368,6 +368,8 @@ to *look* rather than be told:
 `App::frame_rate(fps)` sets that cadence, between 15 and 480; the default is
 `DEFAULT_FRAME_RATE` (120). An idle app is unaffected: with nothing animating
 and no live terminal the loop waits on events and wakes on a 50 ms idle timeout.
+A message a background command sends through `CommandLink` wakes the loop at
+once, so it never waits for that timeout.
 
 The same cadence caps continuous pointer input. Motion, drags, and the wheel can
 report hundreds of times a second, far more often than any display shows a frame.
@@ -592,3 +594,70 @@ warm unchanged renders last. The warm path is already expected to be cheap.
 - Are histories, outputs, caches, and pending work bounded?
 - Is blocking work command-driven, cancellable, and coalesced?
 - Was the change measured in a release build with representative data?
+
+## Native terminal graphics
+
+Natural-size Kitty sources use a backend-owned retained host scene. Source revisions reuse the
+same host image ID. Unchanged placements emit no commands on an unrelated full-tree paint;
+geometry or source changes refresh only the affected persistent placement IDs. Producer
+retransmission deletes its old direct and virtual placements; an explicit new placement can reuse
+the source upload ID but starts a new placement lifetime. Visible scanline intervals merge into rectangles. An unobstructed pane-sized image needs one native region. More
+than 512 regions selects the existing composed renderer.
+
+Terminal input classification comes from completed parser operations through `TerminalMutation`.
+A query or incomplete upload does not request visual work. Live screen handles register weak
+runner wakeups instead of imposing a frame-rate poll while quiet. A handle outliving its runner
+returns to the compatibility polling path. Output an application forwards from another thread,
+such as a multiplexer client receiving pane frames, arrives through `CommandLink` and wakes the
+loop the same way, so it presents in the next frame slot rather than after the idle timeout.
+
+`Update::terminal_graphics()` sends the scene diff directly when the last successful native
+presentation plan remains valid, without painting the cell tree. Layout, terminal and overlay
+geometry, effects, backdrop generations, measured host cells and capabilities invalidate the plan.
+Composition and unsupported scenes widen to terminal paint automatically. Unchanged native panes
+also retain their full presentation plans during partial text-row paints elsewhere in the tree,
+so image-bearing trees no longer categorically require a full paint.
+
+Continuous terminal output, graphics, pointer motion, drags and animations share phase-preserving
+frame deadlines. Late frames skip slots without moving the phase. Input opens a 50 ms answer
+window; layout and full updates can present immediately.
+
+`TerminalScreen::set_presentation_token()` associates application sequences with retained state.
+`Context::observe_terminal_presentations()` batches reports after successful, undiscarded host
+writes. Parsing, captures and recording renders do not report presentation. Transport coalescing
+and producer pacing belong to the session application.
+
+Foundation validation on 2026-10-13 used `terminal_patch_layers` with native and composed modes in isolated
+Ghostty windows at 980×720, scale 1, JetBrainsMono NF. Image-only, text-overlay, and block-overlay
+captures each matched exactly in a 330×215 region at offset 0,20, with zero differing pixels out of
+70,950. A separate instrumented debug run confirmed native commands reached the host. Three
+unchanged `n` actions emitted zero additional image uploads or placements; the 192 TTY bytes were
+ordinary frame/chrome output. This is correctness and traffic evidence for this fixture, not a
+high-rate FPS, CPU, memory, or browser benchmark. The command counter was injected only into the
+owned fixture executable and excluded Ghostty.
+
+The measured debug executable had SHA-256
+`80770ed728c6a55949ec55aeab0985aa3b9b8e1df148edfc9d995160eb05768a`.
+It was built from base `35de344` with the foundation worktree changes before the checkpoint
+commits. These measurements do not describe a published release or the later full pipeline.
+
+Continuous terminal output, graphics, pointer motion and drags, paint updates, and framework
+animation ticks share one presentation deadline. Animation ticks that need layout or a new view
+also use that deadline. Explicit layout/full updates and input answer windows remain immediate.
+
+### Terminal graphics aggregates
+
+`terminal_graphics_metrics()` reports counters for parsers and host backends on the calling UI
+thread: mutation classes, native source and placement changes, rectangle counts before/after
+merging, direct graphics presentations and widened paints, committed graphics command bytes,
+frame attempts, cell paints, successful host writes and abandoned frames. `TerminalGraphicsMetrics`
+serializes with `terminal-serde`. Read it on demand or publish selected values through DevTools;
+no per-frame logging is enabled.
+
+Native operations and command bytes count only successful scene commits. An intermediate cell
+flush does not increment presented FPS. Successful frame intervals retain a bounded window of
+1024 samples and report p50/p95/p99/max in microseconds. `compose_us` measures normal frame time
+excluding backend flushes; `host_write_us` measures backend flush duration, including failures.
+Use an outgoing-wire trace for actual partial-write traffic and whole-process sampling for CPU,
+RSS/PSS and producer/page-cache memory. These counters do not measure producer work before PTY
+output or GPU scanout completion.

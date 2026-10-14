@@ -140,6 +140,8 @@ fn draw_offscreen(
     regions: Option<&[Rect]>,
     seed: Option<&dyn Fn(&mut ratatui::buffer::Buffer)>,
 ) -> RenderedBuffer {
+    #[cfg(feature = "terminal")]
+    let _presentation = crate::widgets::presentation::PresentationScope::suspend();
     let backend = TestBackend::new(viewport.w.max(1), viewport.h.max(1));
     let mut terminal = Terminal::new(backend).expect("capture terminal should init");
 

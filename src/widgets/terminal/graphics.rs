@@ -117,6 +117,53 @@ fn next_stream_namespace() -> u64 {
 
 // ─── Public types ────────────────────────────────────────────────────────────
 
+/// Logical source identity, independent of decoded pixels and host resources.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct ImageSourceKey {
+    /// Lifetime of the retained screen's graphics namespace.
+    pub screen_lifetime: u64,
+    /// Producer id, including the assigned id for an id-less transmission.
+    pub producer_image_id: u32,
+    /// Distinguishes deletion followed by reuse of a producer id.
+    pub incarnation: u64,
+}
+
+/// Identity of a retained placement within its source incarnation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ImagePlacementIdentity {
+    /// A caller-created placement without parser identity.
+    #[default]
+    Unassigned,
+    /// Cursor placement, retained until deleted.
+    Cursor(u64),
+    /// Placeholder grid origin in absolute retained coordinates.
+    Placeholder {
+        /// Lifetime of the retained grid containing the placeholder.
+        grid_lifetime: u64,
+        /// Producer placement ID carried by the underline colour, or zero.
+        producer_placement_id: u32,
+        /// Absolute retained line of the virtual placement origin.
+        line: i64,
+        /// Retained column of the virtual placement origin.
+        column: i32,
+        /// Whether the cells belong to the alternate grid.
+        alternate: bool,
+    },
+}
+
+/// Logical placement identity, independent of current viewport geometry.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct ImagePlacementKey {
+    /// Logical source incarnation.
+    pub source: ImageSourceKey,
+    /// Placement within that incarnation.
+    pub placement: ImagePlacementIdentity,
+}
+
+/// Monotonic revision of one logical source incarnation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct ImageSourceRevision(pub u64);
+
 /// Decoded pixels the child transmitted.
 ///
 /// Opaque on purpose: the pixels live behind this crate's `image` dependency, and pinning that
@@ -124,6 +171,11 @@ fn next_stream_namespace() -> u64 {
 #[derive(Clone)]
 pub struct TerminalImage {
     source: ImageSource,
+    source_key: ImageSourceKey,
+    source_lifetime: Arc<()>,
+    placement_lifetime: Option<Arc<()>>,
+    placement_identity: ImagePlacementIdentity,
+    source_revision: ImageSourceRevision,
     native: Arc<crate::backend::ratatui_backend::renderers::image::NativeImageLease>,
     width: u32,
     height: u32,
@@ -176,6 +228,31 @@ enum ImageSource {
 }
 
 impl TerminalImage {
+    /// Logical source identity, stable across retransmission and scrolling.
+    pub(crate) fn source_lifetime(&self) -> std::sync::Weak<()> {
+        Arc::downgrade(&self.source_lifetime)
+    }
+
+    pub(crate) fn placement_lifetime(&self) -> Option<std::sync::Weak<()>> {
+        self.placement_lifetime.as_ref().map(Arc::downgrade)
+    }
+
+    // Host retry storage owns pixels, but must not keep logical producer resources alive.
+    pub(crate) fn detach_logical_lifetimes(&mut self) {
+        self.source_lifetime = Arc::default();
+        self.placement_lifetime = None;
+    }
+
+    /// Stable producer source identity, independent of decoded pixel allocations.
+    pub fn source_key(&self) -> ImageSourceKey {
+        self.source_key
+    }
+
+    /// Revision of this immutable retained source.
+    pub fn source_revision(&self) -> ImageSourceRevision {
+        self.source_revision
+    }
+
     /// Width in pixels.
     pub fn width(&self) -> u32 {
         self.width
@@ -244,6 +321,7 @@ impl TerminalImage {
         ))
     }
 
+    #[cfg(test)]
     pub(crate) fn native_lease(
         &self,
     ) -> Arc<crate::backend::ratatui_backend::renderers::image::NativeImageLease> {
@@ -307,8 +385,18 @@ pub struct TerminalImagePlacement {
     pub source_crop: Option<TerminalImageCrop>,
 }
 
+impl TerminalImagePlacement {
+    /// Stable identity assigned by the retained parser.
+    pub fn placement_key(&self) -> ImagePlacementKey {
+        ImagePlacementKey {
+            source: self.image.source_key,
+            placement: self.image.placement_identity,
+        }
+    }
+}
+
 /// A source-pixel sub-rectangle of a transmitted image.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TerminalImageCrop {
     /// Left edge in source pixels.
     pub x: u32,
@@ -363,6 +451,8 @@ pub(super) enum GraphicsSegment {
     HeldEscape,
     /// A complete, well-formed graphics command. Boxed to keep the enum small.
     Command(Box<GraphicsCommand>),
+    /// Lossless ordered APC bytes, emitted only when output transaction recording is enabled.
+    Wire(Vec<u8>),
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -392,6 +482,10 @@ pub(super) struct GraphicsScanner {
     overflowed: bool,
     decode_payload: bool,
     decode_continuation_payload: bool,
+    record_output: bool,
+    wire: Vec<u8>,
+    wire_ordered: bool,
+    held_escape_forwarded: bool,
 }
 
 impl Default for GraphicsScanner {
@@ -402,11 +496,56 @@ impl Default for GraphicsScanner {
             overflowed: false,
             decode_payload: true,
             decode_continuation_payload: false,
+            record_output: false,
+            wire: Vec::new(),
+            wire_ordered: false,
+            held_escape_forwarded: false,
         }
     }
 }
 
 impl GraphicsScanner {
+    pub(super) fn set_record_output(&mut self, enabled: bool) {
+        self.record_output = enabled;
+        self.wire.clear();
+        self.wire_ordered = self.state != ScanState::Ground;
+    }
+
+    pub(super) fn output_pending(&self) -> bool {
+        self.state != ScanState::Ground
+    }
+
+    /// Force pending bytes ordered before an external resize/reset/exit barrier. Parsing remains
+    /// in flight, so later continuation bytes cannot become an independent replacement.
+    pub(super) fn flush_pending_wire(&mut self) -> Vec<u8> {
+        self.wire_ordered = true;
+        if self.record_output && self.state == ScanState::Escape && !self.held_escape_forwarded {
+            self.held_escape_forwarded = true;
+            vec![0x1b]
+        } else {
+            std::mem::take(&mut self.wire)
+        }
+    }
+
+    // Bound additional transaction buffering. Large APCs remain exact ordered fragments while
+    // the existing command parser continues with its own established payload limit.
+    fn record_wire(&mut self, byte: u8, out: &mut Vec<GraphicsSegment>) {
+        if !self.record_output {
+            return;
+        }
+        self.wire.push(byte);
+        if self.wire.len() >= 1024 * 1024 {
+            self.wire_ordered = true;
+            out.push(GraphicsSegment::Wire(std::mem::take(&mut self.wire)));
+        }
+    }
+
+    fn finish_ordered_wire(&mut self, out: &mut Vec<GraphicsSegment>) {
+        if !self.wire.is_empty() {
+            out.push(GraphicsSegment::Wire(std::mem::take(&mut self.wire)));
+        }
+    }
+
     pub(super) fn set_decode_payload(&mut self, enabled: bool) {
         self.decode_payload = enabled;
         self.reset();
@@ -455,44 +594,41 @@ impl GraphicsScanner {
                         self.state = ScanState::Apc;
                         self.apc.clear();
                         self.overflowed = false;
+                        self.wire_ordered = self.held_escape_forwarded;
+                        if self.record_output {
+                            self.wire = if self.held_escape_forwarded {
+                                b"_".to_vec()
+                            } else {
+                                b"\x1b_".to_vec()
+                            };
+                        }
+                        self.held_escape_forwarded = false;
                         idx += 1;
                         text_start = idx;
                     } else {
                         self.state = ScanState::Ground;
-                        if text_start == idx {
+                        if text_start == idx && !self.held_escape_forwarded {
                             // The ESC was the last byte of an earlier chunk.
                             out.push(GraphicsSegment::HeldEscape);
                         }
+                        self.held_escape_forwarded = false;
                         // Re-read this byte in `Ground`, so `ESC ESC` starts a fresh sequence.
                     }
                 }
                 ScanState::Apc => {
-                    match byte {
-                        0x1b => self.state = ScanState::ApcEscape,
-                        // Some emitters end a string with BEL. Protocol payloads are base64 and
-                        // never contain one, so accepting it costs nothing.
-                        0x07 => {
-                            self.finish_apc(&mut out);
-                            self.state = ScanState::Ground;
-                        }
-                        // CAN / SUB abort a string in flight.
-                        0x18 | 0x1a => {
-                            self.apc.clear();
-                            self.overflowed = false;
-                            self.state = ScanState::Ground;
-                        }
-                        _ => self.push_apc(byte),
-                    }
+                    self.scan_apc_byte(byte, &mut out);
                     idx += 1;
                     text_start = idx;
                 }
                 ScanState::ApcEscape => {
                     if byte == b'\\' {
+                        self.record_wire(byte, &mut out);
                         self.finish_apc(&mut out);
                         self.state = ScanState::Ground;
                         idx += 1;
                         text_start = idx;
                     } else {
+                        self.finish_ordered_wire(&mut out);
                         // Unterminated: the VT parser would discard this body too, so drop it and
                         // re-read the byte as the start of whatever follows.
                         self.apc.clear();
@@ -511,6 +647,27 @@ impl GraphicsScanner {
         out
     }
 
+    fn scan_apc_byte(&mut self, byte: u8, out: &mut Vec<GraphicsSegment>) {
+        self.record_wire(byte, out);
+        match byte {
+            0x1b => self.state = ScanState::ApcEscape,
+            // Some emitters end a string with BEL. Protocol payloads are base64 and
+            // never contain one, so accepting it costs nothing.
+            0x07 => {
+                self.finish_apc(out);
+                self.state = ScanState::Ground;
+            }
+            // CAN / SUB abort a string in flight.
+            0x18 | 0x1a => {
+                self.finish_ordered_wire(out);
+                self.apc.clear();
+                self.overflowed = false;
+                self.state = ScanState::Ground;
+            }
+            _ => self.push_apc(byte),
+        }
+    }
+
     fn push_apc(&mut self, byte: u8) {
         if self.overflowed {
             return;
@@ -527,13 +684,15 @@ impl GraphicsScanner {
         let body = std::mem::take(&mut self.apc);
         let overflowed = std::mem::take(&mut self.overflowed);
         if overflowed {
+            self.finish_ordered_wire(out);
             return;
         }
         // Any other `APC` application command; the VT parser ignores those as well.
         let Some(rest) = body.strip_prefix(b"G") else {
+            self.finish_ordered_wire(out);
             return;
         };
-        if let Some(command) = GraphicsCommand::parse(
+        if let Some(mut command) = GraphicsCommand::parse(
             rest,
             self.decode_payload || self.decode_continuation_payload,
         ) {
@@ -542,7 +701,14 @@ impl GraphicsScanner {
                     || self.decode_continuation_payload
                     || command.format == 100
                     || matches!(command.action, GraphicsAction::Query));
+            if self.record_output && !self.wire_ordered {
+                command.wire = Some(std::mem::take(&mut self.wire));
+            } else {
+                self.finish_ordered_wire(out);
+            }
             out.push(GraphicsSegment::Command(Box::new(command)));
+        } else {
+            self.finish_ordered_wire(out);
         }
     }
 
@@ -552,6 +718,9 @@ impl GraphicsScanner {
         self.apc.clear();
         self.overflowed = false;
         self.decode_continuation_payload = false;
+        self.wire.clear();
+        self.wire_ordered = false;
+        self.held_escape_forwarded = false;
     }
 }
 
@@ -635,6 +804,8 @@ pub(super) struct GraphicsCommand {
     /// The payload is not base64. The keys still parsed, so the command can be answered with an
     /// error instead of vanishing, but it must not be acted on.
     malformed: bool,
+    wire: Option<Vec<u8>>,
+    coalescing_safe: bool,
 }
 
 impl Default for GraphicsCommand {
@@ -668,21 +839,13 @@ impl Default for GraphicsCommand {
             payload: Vec::new(),
             payload_len: 0,
             malformed: false,
+            wire: None,
+            coalescing_safe: true,
         }
     }
 }
 
 impl GraphicsCommand {
-    pub(super) fn affects_images(&self) -> bool {
-        matches!(
-            self.action,
-            GraphicsAction::Transmit
-                | GraphicsAction::TransmitAndDisplay
-                | GraphicsAction::Display
-                | GraphicsAction::Delete
-        )
-    }
-
     fn parse(body: &[u8], decode_payload: bool) -> Option<Self> {
         let (control, payload) = match body.iter().position(|byte| *byte == b';') {
             Some(at) => (&body[..at], &body[at + 1..]),
@@ -690,11 +853,21 @@ impl GraphicsCommand {
         };
 
         let mut command = Self::default();
+        let mut seen = 0u128;
         for pair in control.split(|byte| *byte == b',') {
             let mut halves = pair.splitn(2, |byte| *byte == b'=');
             let ([key], Some(value)) = (halves.next()?, halves.next()) else {
+                command.coalescing_safe = false;
                 continue;
             };
+            let valid = Self::safe_pair(*key, value);
+            if valid {
+                let bit = 1u128 << *key;
+                command.coalescing_safe &= seen & bit == 0;
+                seen |= bit;
+            } else {
+                command.coalescing_safe = false;
+            }
             command.apply_key(*key, value);
         }
 
@@ -722,6 +895,45 @@ impl GraphicsCommand {
             }
         }
         Some(command)
+    }
+
+    fn safe_pair(key: u8, value: &[u8]) -> bool {
+        match key {
+            b'a' => matches!(value, b"t" | b"T"),
+            b't' => matches!(value, b"d" | b"f"),
+            b'o' => value == b"z",
+            b'z' => std::str::from_utf8(value).is_ok_and(|value| value.parse::<i32>().is_ok()),
+            b'f' => matches!(value, b"24" | b"32" | b"100"),
+            b'm' | b'C' => matches!(value, b"0" | b"1"),
+            b'q' => matches!(value, b"0" | b"1" | b"2"),
+            b'O' => std::str::from_utf8(value).is_ok_and(|value| value.parse::<u64>().is_ok()),
+            b'S' => std::str::from_utf8(value).is_ok_and(|value| value.parse::<usize>().is_ok()),
+            b's' | b'v' | b'i' | b'p' | b'X' | b'Y' | b'c' | b'r' => {
+                std::str::from_utf8(value).is_ok_and(|value| value.parse::<u32>().is_ok())
+            }
+            _ => false,
+        }
+    }
+
+    pub(super) fn transmitted_id(&self) -> Option<u32> {
+        (self.action.transmits() && self.id != 0).then_some(self.id)
+    }
+
+    pub(super) fn independent_candidate(&self) -> bool {
+        self.coalescing_safe
+            && !self.malformed
+            && !self.more
+            && self.id != 0
+            && self.number == 0
+            && self.quiet == 2
+            && !self.virtual_placement
+            && self.action.transmits()
+            && (self.action == GraphicsAction::Transmit || self.no_cursor_move)
+            && matches!(self.medium, GraphicsMedium::Direct | GraphicsMedium::File)
+    }
+
+    pub(super) fn take_wire(&mut self) -> Option<Vec<u8>> {
+        self.wire.take()
     }
 
     fn apply_key(&mut self, key: u8, value: &[u8]) {
@@ -1160,6 +1372,7 @@ fn diacritic_value(mark: char) -> Option<u16> {
 /// One placeholder cell, as read off the grid.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct PlaceholderCell {
+    pub(super) placement_id: u32,
     /// Viewport row.
     pub(super) row: u16,
     /// Viewport column.
@@ -1183,6 +1396,7 @@ impl PlaceholderCell {
     pub(super) fn new(row: u16, col: u16, id_low: u32, marks: &[char]) -> Self {
         let mut values = marks.iter().filter_map(|mark| diacritic_value(*mark));
         Self {
+            placement_id: 0,
             row,
             col,
             id_low,
@@ -1196,6 +1410,7 @@ impl PlaceholderCell {
 /// A resolved run of placeholder cells: one screen row of one image.
 #[derive(Clone, Copy, Debug)]
 struct PlaceholderRun {
+    placement_id: u32,
     image_id: u32,
     /// High byte of the image id, kept so the cells continuing this run can inherit it.
     id_high: u16,
@@ -1232,6 +1447,7 @@ fn placeholder_runs(cells: &[PlaceholderCell]) -> Vec<PlaceholderRun> {
         let continues = adjacent
             && open.is_some_and(|run| {
                 run.image_id == image_id
+                    && run.placement_id == cell.placement_id
                     && cell.image_row.is_none_or(|value| value == run.image_row)
                     && cell
                         .image_col
@@ -1249,6 +1465,7 @@ fn placeholder_runs(cells: &[PlaceholderCell]) -> Vec<PlaceholderRun> {
             runs.push(run);
         }
         open = Some(PlaceholderRun {
+            placement_id: cell.placement_id,
             image_id,
             id_high,
             row: cell.row,
@@ -1266,6 +1483,7 @@ fn placeholder_runs(cells: &[PlaceholderCell]) -> Vec<PlaceholderRun> {
 /// A rectangle of one image, assembled from the rows of placeholders covering it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PlaceholderRect {
+    placement_id: u32,
     image_id: u32,
     row: u16,
     col: u16,
@@ -1286,6 +1504,7 @@ fn merge_placeholder_runs(runs: &[PlaceholderRun]) -> Vec<PlaceholderRect> {
     for run in runs {
         let stackable = rects.iter_mut().find(|rect| {
             rect.image_id == run.image_id
+                && rect.placement_id == run.placement_id
                 && rect.col == run.col
                 && rect.width == run.width
                 && rect.image_col == run.image_col
@@ -1297,6 +1516,7 @@ fn merge_placeholder_runs(runs: &[PlaceholderRun]) -> Vec<PlaceholderRect> {
             continue;
         }
         rects.push(PlaceholderRect {
+            placement_id: run.placement_id,
             image_id: run.image_id,
             row: run.row,
             col: run.col,
@@ -1349,9 +1569,10 @@ struct StoredImage {
     ///
     /// The protocol has a sender declare this once and then write placeholder cells naming
     /// positions *within it*, so without it a cell's position says nothing about which pixels it
-    /// covers. `None` for an image that never got a virtual placement, whose placeholders are read
-    /// against the cell grid its own pixels imply.
+    /// covers. `None` means no explicit virtual cell box; a declared virtual placement then uses
+    /// the cell grid its pixels imply. Without a virtual placement, placeholders display nothing.
     virtual_cells: Option<(u32, u32)>,
+    virtual_placement: bool,
 }
 
 impl StoredImage {
@@ -1379,8 +1600,10 @@ impl StoredImage {
 }
 
 /// A live placement of a stored image.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct Placement {
+    lifetime: Arc<()>,
+    serial: u64,
     image_id: u32,
     placement_id: u32,
     /// Absolute line of the placement's top row.
@@ -1396,6 +1619,33 @@ struct Placement {
 }
 
 impl Placement {
+    /// Ownership changes on retransmission; only the displayed state governs safe replacement.
+    fn same_display(&self, previous: &Self) -> bool {
+        (
+            self.image_id,
+            self.placement_id,
+            self.line,
+            self.col,
+            self.rows,
+            self.cols,
+            self.z,
+            self.crop,
+            self.geometry,
+            self.alt_screen,
+        ) == (
+            previous.image_id,
+            previous.placement_id,
+            previous.line,
+            previous.col,
+            previous.rows,
+            previous.cols,
+            previous.z,
+            previous.crop,
+            previous.geometry,
+            previous.alt_screen,
+        )
+    }
+
     fn covers_cell(&self, line: usize, col: u16) -> bool {
         self.covers_line(line) && self.covers_column(col)
     }
@@ -1429,8 +1679,47 @@ impl PendingTransmit {
 }
 
 /// Decoded images and their placements for one [`TerminalScreen`](super::TerminalScreen).
+pub(super) struct ReplacementObservation {
+    pub(super) source: ImageSourceKey,
+    pub(super) revision: ImageSourceRevision,
+    placements: Vec<Placement>,
+    virtual_cells: Option<(u32, u32)>,
+    virtual_placement: bool,
+}
+
+impl ReplacementObservation {
+    pub(super) fn independently_replaces(&self, previous: &Self) -> bool {
+        self.source == previous.source
+            && self.revision != previous.revision
+            && self.placements.len() == previous.placements.len()
+            && self
+                .placements
+                .iter()
+                .zip(&previous.placements)
+                .all(|(current, previous)| current.same_display(previous))
+            && self.virtual_cells == previous.virtual_cells
+            && self.virtual_placement == previous.virtual_placement
+    }
+}
+
+pub(super) struct PlaceholderViewport {
+    pub(super) top: i64,
+    pub(super) oldest: i64,
+    pub(super) rows: u16,
+    pub(super) alternate: bool,
+}
+
+#[derive(Default)]
+struct PlaceholderLifetimes {
+    rows: std::collections::BTreeMap<(bool, i64), HashMap<ImagePlacementKey, Arc<()>>>,
+    owners: HashMap<ImagePlacementKey, std::sync::Weak<()>>,
+}
+
 pub(super) struct TerminalGraphics {
+    placeholder_lifetimes: std::cell::RefCell<PlaceholderLifetimes>,
+    alternate_grid_lifetime: u64,
     stream_namespace: u64,
+    damage: super::damage::GraphicsDamage,
     images: HashMap<u32, StoredImage>,
     image_dimensions: HashMap<u32, (u32, u32)>,
     /// `I=` image numbers mapped to the ids they were transmitted under.
@@ -1452,13 +1741,18 @@ pub(super) struct TerminalGraphics {
     /// Counts transmissions that named their pixels rather than carrying them. See
     /// [`TerminalGraphics::named_source_identity`].
     source_serial: u64,
+    next_incarnation: u64,
+    next_placement: u64,
     composition: Arc<std::sync::Mutex<composite::CompositionCache>>,
 }
 
 impl Default for TerminalGraphics {
     fn default() -> Self {
         Self {
+            placeholder_lifetimes: Default::default(),
+            alternate_grid_lifetime: 0,
             stream_namespace: next_stream_namespace(),
+            damage: super::damage::GraphicsDamage::None,
             images: HashMap::new(),
             image_dimensions: HashMap::new(),
             numbers: HashMap::new(),
@@ -1478,12 +1772,38 @@ impl Default for TerminalGraphics {
             ),
             media: GraphicsMediaPolicy::default(),
             source_serial: 0,
+            next_incarnation: 0,
+            next_placement: 0,
             composition: Arc::default(),
         }
     }
 }
 
 impl TerminalGraphics {
+    pub(super) fn replacement_observation(&self, id: u32) -> Option<ReplacementObservation> {
+        let image = self.images.get(&id)?;
+        Some(ReplacementObservation {
+            source: image.image.source_key(),
+            revision: image.image.source_revision(),
+            placements: self
+                .placements
+                .iter()
+                .filter(|placement| placement.image_id == id)
+                .cloned()
+                .collect(),
+            virtual_cells: image.virtual_cells,
+            virtual_placement: image.virtual_placement,
+        })
+    }
+
+    pub(super) fn has_pending_transmission(&self) -> bool {
+        self.pending.is_some() || self.discarding_run
+    }
+
+    pub(super) fn take_damage(&mut self) -> super::damage::GraphicsDamage {
+        std::mem::take(&mut self.damage)
+    }
+
     /// Whether any image has been transmitted, so a session with none can skip the grid walk
     /// that looks for placeholder cells.
     pub(super) fn has_images(&self) -> bool {
@@ -1523,7 +1843,9 @@ impl TerminalGraphics {
 
     /// Drop everything, for `RIS` or a screen reset.
     pub(super) fn reset(&mut self) {
+        self.damage = super::damage::GraphicsDamage::Reset;
         self.stream_namespace = next_stream_namespace();
+        self.placeholder_lifetimes = Default::default();
         self.images.clear();
         self.replace_file_pool();
         self.image_dimensions.clear();
@@ -1551,6 +1873,7 @@ impl TerminalGraphics {
         if self.placements.is_empty() {
             return;
         }
+        self.damage.merge(super::damage::GraphicsDamage::Placements);
         let mut index = 0;
         self.placements.retain_mut(|placement| {
             let anchor = anchors.get(index).copied().flatten();
@@ -1567,10 +1890,19 @@ impl TerminalGraphics {
 
     /// Drop placements made on the alternate screen, on the way back to the primary one.
     pub(super) fn clear_alt_screen(&mut self) -> bool {
+        self.alternate_grid_lifetime = self.alternate_grid_lifetime.saturating_add(1);
+        self.placeholder_lifetimes
+            .borrow_mut()
+            .rows
+            .retain(|(alternate, _), _| !alternate);
         let before = self.placements.len();
         self.placements.retain(|placement| !placement.alt_screen);
         self.clear_composed_tiles();
-        before != self.placements.len()
+        let changed = before != self.placements.len();
+        if changed {
+            self.damage.merge(super::damage::GraphicsDamage::Placements);
+        }
+        changed
     }
 
     /// Shift placements up by the lines that just fell out of scrollback.
@@ -1581,6 +1913,7 @@ impl TerminalGraphics {
         if evicted == 0 || self.placements.is_empty() {
             return false;
         }
+        self.damage.merge(super::damage::GraphicsDamage::Placements);
         // An image scrolling off the top keeps its remaining rows, so it fades out row by row
         // instead of vanishing whole.
         self.placements
@@ -1619,6 +1952,8 @@ impl TerminalGraphics {
                     image: {
                         let mut image = self.images.get(&placement.image_id)?.image.clone();
                         image.geometry = Some(placement.geometry);
+                        image.placement_identity = ImagePlacementIdentity::Cursor(placement.serial);
+                        image.placement_lifetime = Some(Arc::clone(&placement.lifetime));
                         image
                     },
                     row: row.clamp(i32::MIN as i64, i32::MAX as i64) as i32,
@@ -1639,15 +1974,68 @@ impl TerminalGraphics {
     /// Unlike a direct placement, a virtual one is not anchored to a scrollback line: it *is* the
     /// text, so it scrolls, clears, and reflows for free, and it disappears the moment the cells
     /// holding it do. That is why these are derived per snapshot rather than stored.
+    fn prune_placeholder_lifetimes(&self, viewport: &PlaceholderViewport) -> Vec<Arc<()>> {
+        let mut previous = Vec::new();
+        let mut lifetimes = self.placeholder_lifetimes.borrow_mut();
+        lifetimes.rows.retain(|(alternate, line), placements| {
+            if *alternate == viewport.alternate
+                && (*line < viewport.oldest
+                    || (*line >= viewport.top && *line < viewport.top + i64::from(viewport.rows)))
+            {
+                previous.extend(placements.values().cloned());
+                return false;
+            }
+            placements.retain(|key, _| {
+                self.images
+                    .get(&key.source.producer_image_id)
+                    .is_some_and(|image| image.image.source_key == key.source)
+            });
+            !placements.is_empty()
+        });
+        lifetimes
+            .owners
+            .retain(|_, owner| owner.strong_count() != 0);
+        previous
+    }
+
+    fn placeholder_lifetime(
+        &self,
+        key: ImagePlacementKey,
+        viewport: &PlaceholderViewport,
+        row: u16,
+        height: u16,
+    ) -> Arc<()> {
+        let mut lifetimes = self.placeholder_lifetimes.borrow_mut();
+        let owner = lifetimes
+            .owners
+            .get(&key)
+            .and_then(std::sync::Weak::upgrade)
+            .unwrap_or_default();
+        lifetimes.owners.insert(key, Arc::downgrade(&owner));
+        for row in row..row.saturating_add(height) {
+            lifetimes
+                .rows
+                .entry((viewport.alternate, viewport.top + i64::from(row)))
+                .or_default()
+                .insert(key, Arc::clone(&owner));
+        }
+        owner
+    }
+
     pub(super) fn placeholder_placements(
         &self,
         cells: &[PlaceholderCell],
         cell: TerminalCellSize,
+        viewport: PlaceholderViewport,
     ) -> Vec<TerminalImagePlacement> {
+        let _previous_rows = self.prune_placeholder_lifetimes(&viewport);
         merge_placeholder_runs(&placeholder_runs(cells))
             .into_iter()
             .filter_map(|rect| {
                 let stored = self.images.get(&rect.image_id)?;
+                if !stored.virtual_placement {
+                    return None;
+                }
                 let (width, height) = (stored.image.width(), stored.image.height());
                 // The source region a rect covers. A virtual placement said how many cells the
                 // whole image spans, so a cell's share of the pixels follows from that; without one
@@ -1681,6 +2069,26 @@ impl TerminalGraphics {
                     image_id: rect.image_id,
                     image: {
                         let mut image = stored.image.clone();
+                        image.placement_identity = ImagePlacementIdentity::Placeholder {
+                            grid_lifetime: if viewport.alternate {
+                                self.alternate_grid_lifetime
+                            } else {
+                                0
+                            },
+                            producer_placement_id: rect.placement_id,
+                            line: viewport.top + i64::from(rect.row) - i64::from(rect.image_row),
+                            column: i32::from(rect.col) - i32::from(rect.image_col),
+                            alternate: viewport.alternate,
+                        };
+                        image.placement_lifetime = Some(self.placeholder_lifetime(
+                            ImagePlacementKey {
+                                source: image.source_key,
+                                placement: image.placement_identity,
+                            },
+                            &viewport,
+                            rect.row,
+                            rect.height,
+                        ));
                         image.geometry = Some(ImageGeometry {
                             offset: (0, 0),
                             size: (
@@ -1863,6 +2271,11 @@ impl TerminalGraphics {
         let (image, bytes) = if let Some((input, bytes)) = file {
             (
                 TerminalImage {
+                    source_key: ImageSourceKey::default(),
+                    source_lifetime: Arc::default(),
+                    placement_lifetime: None,
+                    placement_identity: ImagePlacementIdentity::default(),
+                    source_revision: ImageSourceRevision::default(),
                     native: Arc::default(),
                     source: ImageSource::File {
                         input: Arc::new(input),
@@ -1889,6 +2302,11 @@ impl TerminalGraphics {
                         .saturating_mul(height as usize)
                         .saturating_mul(channels);
                     let image = TerminalImage {
+                        source_key: ImageSourceKey::default(),
+                        source_lifetime: Arc::default(),
+                        placement_lifetime: None,
+                        placement_identity: ImagePlacementIdentity::default(),
+                        source_revision: ImageSourceRevision::default(),
                         native: Arc::default(),
                         source: ImageSource::Deferred {
                             input: Arc::new(DeferredDecode {
@@ -1913,6 +2331,11 @@ impl TerminalGraphics {
                     let decoded = decode_payload(command, payload)?;
                     let bytes = decoded_bytes(&decoded);
                     let image = TerminalImage {
+                        source_key: ImageSourceKey::default(),
+                        source_lifetime: Arc::default(),
+                        placement_lifetime: None,
+                        placement_identity: ImagePlacementIdentity::default(),
+                        source_revision: ImageSourceRevision::default(),
                         native: Arc::default(),
                         width: decoded.width(),
                         height: decoded.height(),
@@ -1984,6 +2407,8 @@ impl TerminalGraphics {
                     };
                 }
             };
+            self.damage.merge(super::damage::GraphicsDamage::Sources);
+            self.retire_placements(id);
             self.image_dimensions.insert(id, dimensions);
             if command.number != 0 {
                 self.numbers.insert(command.number, id);
@@ -2107,11 +2532,29 @@ impl TerminalGraphics {
             .clamp(1, u32::from(u16::MAX)) as u16;
 
         if self.storage_enabled {
+            let previous = self
+                .placements
+                .iter()
+                .find(|placement| {
+                    placement.image_id == id && placement.placement_id == command.placement
+                })
+                .cloned();
+            let serial = previous
+                .as_ref()
+                .map(|placement| placement.serial)
+                .unwrap_or_else(|| {
+                    self.next_placement = self.next_placement.saturating_add(1);
+                    self.next_placement
+                });
             // A second placement with the same ids replaces the first, as the protocol specifies.
             self.placements.retain(|placement| {
                 placement.image_id != id || placement.placement_id != command.placement
             });
-            self.placements.push(Placement {
+            let placement = Placement {
+                lifetime: previous
+                    .as_ref()
+                    .map_or_else(Arc::default, |placement| Arc::clone(&placement.lifetime)),
+                serial,
                 image_id: id,
                 placement_id: command.placement,
                 line: ctx.cursor_line,
@@ -2122,7 +2565,11 @@ impl TerminalGraphics {
                 crop,
                 geometry,
                 alt_screen: ctx.alt_screen,
-            });
+            };
+            if previous.as_ref() != Some(&placement) {
+                self.damage.merge(super::damage::GraphicsDamage::Placements);
+            }
+            self.placements.push(placement);
             while self.placements.len() > MAX_PLACEMENTS {
                 self.placements.remove(0);
             }
@@ -2132,12 +2579,19 @@ impl TerminalGraphics {
     }
 
     fn set_virtual_cells(&mut self, id: u32, command: &GraphicsCommand) {
-        if command.cols != 0
-            && command.rows != 0
-            && let Some(stored) = self.images.get_mut(&id)
-        {
-            stored.virtual_cells = Some((command.cols, command.rows));
+        let Some(stored) = self.images.get_mut(&id) else {
+            return;
+        };
+        let cells = if command.cols != 0 && command.rows != 0 {
+            Some((command.cols, command.rows))
+        } else {
+            stored.virtual_cells
+        };
+        if !stored.virtual_placement || stored.virtual_cells != cells {
+            self.damage.merge(super::damage::GraphicsDamage::Placements);
         }
+        stored.virtual_placement = true;
+        stored.virtual_cells = cells;
     }
 
     fn delete(&mut self, command: &GraphicsCommand, ctx: GraphicsContext) {
@@ -2176,6 +2630,7 @@ impl TerminalGraphics {
             _ => return,
         };
 
+        let before = self.placements.len();
         let mut freed: Vec<u32> = Vec::new();
         self.placements.retain(|item| {
             if !hit(item) {
@@ -2187,6 +2642,9 @@ impl TerminalGraphics {
             false
         });
 
+        if before != self.placements.len() {
+            self.damage.merge(super::damage::GraphicsDamage::Placements);
+        }
         self.clear_composed_tiles();
         if free_data {
             match selector {
@@ -2212,11 +2670,49 @@ impl TerminalGraphics {
         }
     }
 
-    fn insert_image(&mut self, id: u32, image: TerminalImage, bytes: usize) {
-        // The cell box belongs to the id's virtual placement, not to one frame's pixels: the
-        // protocol has a sender declare it once and then send frame after frame under the same id.
-        let virtual_cells = self.images.get(&id).and_then(|stored| stored.virtual_cells);
-        self.remove_image(id);
+    fn retire_placements(&mut self, id: u32) {
+        let before = self.placements.len();
+        self.placements.retain(|placement| placement.image_id != id);
+        let had_virtual = self
+            .images
+            .get(&id)
+            .is_some_and(|stored| stored.virtual_placement);
+        if before != self.placements.len() || had_virtual {
+            self.damage.merge(super::damage::GraphicsDamage::Placements);
+        }
+        let mut lifetimes = self.placeholder_lifetimes.borrow_mut();
+        lifetimes.rows.retain(|_, placements| {
+            placements.retain(|key, _| key.source.producer_image_id != id);
+            !placements.is_empty()
+        });
+        lifetimes
+            .owners
+            .retain(|key, _| key.source.producer_image_id != id);
+        drop(lifetimes);
+        self.clear_composed_tiles();
+    }
+
+    fn insert_image(&mut self, id: u32, mut image: TerminalImage, bytes: usize) {
+        self.damage.merge(super::damage::GraphicsDamage::Sources);
+        // Kitty retransmission retires every producer placement. Retain only the source's
+        // internal reservation so the backend can reuse its upload ID for the next revision.
+        self.retire_placements(id);
+        if let Some(previous) = self.images.remove(&id) {
+            self.used_bytes = self.used_bytes.saturating_sub(previous.bytes);
+            image.source_key = previous.image.source_key;
+            image.source_lifetime = Arc::clone(&previous.image.source_lifetime);
+            image.source_revision =
+                ImageSourceRevision(previous.image.source_revision.0.saturating_add(1));
+            image.native = Arc::new(previous.image.native.next_revision());
+        } else {
+            self.next_incarnation = self.next_incarnation.saturating_add(1);
+            image.source_key = ImageSourceKey {
+                screen_lifetime: self.stream_namespace,
+                producer_image_id: id,
+                incarnation: self.next_incarnation,
+            };
+            image.source_revision = ImageSourceRevision(1);
+        }
         self.image_dimensions
             .insert(id, (image.width(), image.height()));
         let clock = self.clock;
@@ -2226,7 +2722,8 @@ impl TerminalGraphics {
                 image,
                 bytes,
                 used: clock,
-                virtual_cells,
+                virtual_cells: None,
+                virtual_placement: false,
             },
         );
         self.used_bytes = self.used_bytes.saturating_add(bytes);
@@ -2234,6 +2731,16 @@ impl TerminalGraphics {
     }
 
     fn remove_image(&mut self, id: u32) {
+        if self.image_dimensions.contains_key(&id) {
+            self.damage.merge(super::damage::GraphicsDamage::Sources);
+        }
+        if self
+            .placements
+            .iter()
+            .any(|placement| placement.image_id == id)
+        {
+            self.damage.merge(super::damage::GraphicsDamage::Placements);
+        }
         if let Some(stored) = self.images.remove(&id) {
             self.used_bytes = self.used_bytes.saturating_sub(stored.bytes);
         }
@@ -2311,7 +2818,9 @@ impl TerminalGraphics {
                 writer,
                 id,
                 (number != 0).then_some(number),
-                stored.virtual_cells,
+                stored
+                    .virtual_placement
+                    .then_some(stored.virtual_cells.unwrap_or((0, 0))),
                 stored.image.width,
                 stored.image.height,
                 format,
@@ -3229,6 +3738,7 @@ mod tests {
                 GraphicsSegment::Text(range) => text.extend_from_slice(&bytes[range]),
                 GraphicsSegment::HeldEscape => text.push(0x1b),
                 GraphicsSegment::Command(command) => commands.push(*command),
+                GraphicsSegment::Wire(_) => unreachable!("wire recording disabled"),
             }
         }
         (text, commands)
@@ -3552,9 +4062,67 @@ mod tests {
                 })
             })
             .collect();
-        let mut placements = graphics.placeholder_placements(&cells, TerminalCellSize::new(10, 20));
+        let mut placements = graphics.placeholder_placements(
+            &cells,
+            TerminalCellSize::new(10, 20),
+            PlaceholderViewport {
+                top: 0,
+                oldest: 0,
+                rows,
+                alternate: false,
+            },
+        );
         assert_eq!(placements.len(), 1, "one image, one rectangle of cells");
         placements.remove(0)
+    }
+
+    #[test]
+    fn placeholder_owners_follow_retained_grid_origins_and_producer_placement_ids() {
+        let mut graphics = TerminalGraphics::default();
+        let mut scanner = GraphicsScanner::default();
+        let (_, commands) = scan_all(
+            &mut scanner,
+            b"\x1b_Ga=T,U=1,i=7,p=9,c=2,r=2,f=24,s=2,v=2,q=2;YWJjYWJjYWJjYWJj\x1b\\",
+        );
+        graphics.apply(commands[0].clone(), context());
+        let viewport = |top, oldest| PlaceholderViewport {
+            top,
+            oldest,
+            rows: 1,
+            alternate: false,
+        };
+        let mut first_cell = PlaceholderCell::new(0, 0, 7, &[diacritic(0), diacritic(0)]);
+        first_cell.placement_id = 9;
+        let first = graphics.placeholder_placements(
+            &[first_cell],
+            TerminalCellSize::new(1, 1),
+            viewport(0, 0),
+        );
+        let mut scrolled_cell = PlaceholderCell::new(0, 0, 7, &[diacritic(1), diacritic(0)]);
+        scrolled_cell.placement_id = 9;
+        let scrolled = graphics.placeholder_placements(
+            &[scrolled_cell],
+            TerminalCellSize::new(1, 1),
+            viewport(1, 0),
+        );
+        assert_eq!(first[0].placement_key(), scrolled[0].placement_key());
+        assert!(Arc::ptr_eq(
+            first[0].image.placement_lifetime.as_ref().unwrap(),
+            scrolled[0].image.placement_lifetime.as_ref().unwrap()
+        ));
+        scrolled_cell.placement_id = 10;
+        let different = graphics.placeholder_placements(
+            &[scrolled_cell],
+            TerminalCellSize::new(1, 1),
+            viewport(1, 0),
+        );
+        assert_ne!(scrolled[0].placement_key(), different[0].placement_key());
+        drop((first, scrolled, different));
+        graphics.placeholder_placements(&[], TerminalCellSize::new(1, 1), viewport(100, 100));
+        graphics.placeholder_placements(&[], TerminalCellSize::new(1, 1), viewport(100, 100));
+        let lifetimes = graphics.placeholder_lifetimes.borrow();
+        assert!(lifetimes.rows.is_empty());
+        assert!(lifetimes.owners.is_empty());
     }
 
     #[test]

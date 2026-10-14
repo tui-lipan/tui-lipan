@@ -1193,10 +1193,7 @@ fn an_unchanged_image_pane_survives_an_unrelated_terminal_update() {
     harness.screen.borrow_mut().take_damage();
     let mut terminal = crate::backend::ratatui_backend::create_test_terminal(COLS, ROWS).unwrap();
     let cursor = StdCell::new(None);
-    let buffer = harness.runner.with_render_context(&cursor, |ctx| {
-        terminal.draw(|f| render(f, ctx)).unwrap().buffer.clone()
-    });
-    harness.runner.last_frame_snapshot = Some(buffer);
+    harness.runner.render_paint_only(&mut terminal).unwrap();
     let initial = terminal.backend().test_output().len();
     harness
         .second
@@ -1221,10 +1218,13 @@ fn an_unchanged_image_pane_survives_an_unrelated_terminal_update() {
     let update = String::from_utf8_lossy(&output[initial..]);
     assert!(update.contains('X'));
     assert!(
-        update.contains("a=p,") || update.contains('\u{10EEEE}'),
-        "the unchanged image must be placed again: {update:?}"
+        !update.contains("\x1b_G"),
+        "unchanged native graphics must emit no commands: {update:?}"
     );
-    assert_eq!(plan, Err(DamageRejection::HasImages));
+    assert!(
+        plan.is_ok(),
+        "unchanged native images must permit partial cell paints: {plan:?}"
+    );
 }
 
 #[cfg(feature = "terminal-images")]
@@ -1426,4 +1426,196 @@ fn terminal_inside_declarative_portal_emits_native_placements() {
             .any(|command| { !command.split("\x1b\\").next().unwrap().contains("c=") }),
         "eligible portal terminal must emit native placements: {output:?}"
     );
+}
+
+#[cfg(feature = "terminal-images")]
+#[test]
+fn parser_queries_do_not_write_a_terminal_paint_frame() {
+    let mut harness = build(PaneCfg::new(), b"stable");
+    let mut terminal = crate::backend::ratatui_backend::create_test_terminal(COLS, ROWS).unwrap();
+    let cursor = StdCell::new(None);
+    harness.runner.with_render_context(&cursor, |ctx| {
+        terminal.draw(|f| render(f, ctx)).unwrap();
+    });
+    let initial = terminal.backend().test_output().len();
+    let mutation = harness.screen.borrow_mut().process_bytes(b"\x1b[c");
+    assert!(mutation.responses);
+    assert!(!mutation.is_visual());
+    harness
+        .runner
+        .render_terminal_paint_only(&mut terminal)
+        .unwrap();
+    assert_eq!(terminal.backend().test_output().len(), initial);
+}
+
+#[cfg(feature = "terminal-images")]
+#[test]
+fn graphics_only_updates_use_committed_plan_without_repainting_cells() {
+    let _host = crate::backend::ratatui_backend::image_support::test_kitty_host((10, 20), true);
+    let mut harness = build(PaneCfg::new(), b"stable\x1b[?25l");
+    harness
+        .screen
+        .borrow_mut()
+        .set_cell_size(crate::widgets::TerminalCellSize::new(10, 20));
+    let mut terminal = crate::backend::ratatui_backend::create_test_terminal(COLS, ROWS).unwrap();
+    harness.runner.render_paint_only(&mut terminal).unwrap();
+    let retained = harness.runner.last_frame_snapshot.clone();
+    for command in [
+        b"\x1b_Ga=T,f=32,s=1,v=1,i=919,C=1,q=2;/////w==\x1b\\".as_slice(),
+        b"\x1b_Ga=T,f=32,s=1,v=1,i=919,C=1,q=2;AAAA/w==\x1b\\".as_slice(),
+        b"\x1b_Ga=d,d=I,i=919,q=2;\x1b\\".as_slice(),
+    ] {
+        let start = terminal.backend().test_output().len();
+        let mutation = harness.screen.borrow_mut().process_bytes(command);
+        assert_eq!(mutation.cells, crate::widgets::TerminalDamage::None);
+        let refresh = harness.runner.core.tree.refresh_live_terminals_detailed();
+        assert_eq!(refresh.graphics_only.len(), 1);
+        assert!(
+            harness
+                .runner
+                .try_present_terminal_graphics(&mut terminal, &refresh)
+                .unwrap()
+        );
+        assert_eq!(harness.runner.last_frame_snapshot, retained);
+        let output = terminal.backend().test_output();
+        let update = String::from_utf8_lossy(&output[start..]);
+        assert!(update.contains("\x1b_G"), "{update:?}");
+        assert!(!update.contains("stable"));
+    }
+}
+
+#[cfg(feature = "terminal-images")]
+#[test]
+fn graphics_plan_rejects_changed_host_geometry_and_layout() {
+    let _host = crate::backend::ratatui_backend::image_support::test_kitty_host((10, 20), true);
+    let mut harness = build(PaneCfg::new(), b"stable\x1b[?25l");
+    harness
+        .screen
+        .borrow_mut()
+        .set_cell_size(crate::widgets::TerminalCellSize::new(10, 20));
+    let mut terminal = crate::backend::ratatui_backend::create_test_terminal(COLS, ROWS).unwrap();
+    harness.runner.render_paint_only(&mut terminal).unwrap();
+    harness
+        .screen
+        .borrow_mut()
+        .process_bytes(b"\x1b_Ga=T,f=32,s=1,v=1,i=919,C=1,q=2;/////w==\x1b\\");
+    let refresh = harness.runner.core.tree.refresh_live_terminals_detailed();
+    {
+        let _changed_host =
+            crate::backend::ratatui_backend::image_support::test_kitty_host((11, 20), true);
+        assert!(
+            !harness
+                .runner
+                .try_present_terminal_graphics(&mut terminal, &refresh)
+                .unwrap()
+        );
+    }
+    harness.runner.graphics_plan_epoch = None;
+    assert!(
+        !harness
+            .runner
+            .try_present_terminal_graphics(&mut terminal, &refresh)
+            .unwrap()
+    );
+}
+
+#[cfg(feature = "terminal-images")]
+#[test]
+fn presentation_tokens_follow_successful_host_frames_and_ignore_failed_updates() {
+    let _host = crate::backend::ratatui_backend::image_support::test_kitty_host((10, 20), true);
+    for discard in [false, true] {
+        let mut harness = build(PaneCfg::new(), b"stable\x1b[?25l");
+        harness
+            .screen
+            .borrow_mut()
+            .set_cell_size(crate::widgets::TerminalCellSize::new(10, 20));
+        harness.screen.borrow_mut().set_presentation_token(1);
+        let reports = Rc::new(RefCell::new(Vec::new()));
+        let received = reports.clone();
+        let _subscription =
+            harness
+                .runner
+                .core
+                .ctx
+                .observe_terminal_presentations(crate::Callback::new(move |batch| {
+                    received.borrow_mut().push(batch)
+                }));
+        let mut terminal =
+            crate::backend::ratatui_backend::create_test_terminal(COLS, ROWS).unwrap();
+        harness.runner.render_paint_only(&mut terminal).unwrap();
+        assert_eq!(reports.borrow().len(), 1);
+        assert_eq!(reports.borrow()[0][0].token, 1);
+        let id = harness.screen.borrow().stable_terminal_id();
+        assert_eq!(reports.borrow()[0][0].stable_terminal_id, id);
+        let _capture = harness.runner.capture_painted_frame();
+        assert_eq!(reports.borrow().len(), 1);
+        harness
+            .screen
+            .borrow_mut()
+            .process_bytes(b"\x1b_Ga=T,f=32,s=1,v=1,i=919,C=1,q=2;/////w==\x1b\\");
+        harness.screen.borrow_mut().set_presentation_token(2);
+        let refresh = harness.runner.core.tree.refresh_live_terminals_detailed();
+        harness.runner.host_frame_presented = false;
+        terminal.backend_mut().test_fail_next_flush(discard);
+        let result = harness
+            .runner
+            .try_present_terminal_graphics(&mut terminal, &refresh);
+        if discard {
+            assert!(result.unwrap());
+            assert!(!harness.runner.host_frame_presented);
+        } else {
+            assert!(result.is_err());
+        }
+        assert_eq!(
+            reports.borrow().len(),
+            1,
+            "failed or discarded output must never acknowledge tokens"
+        );
+        assert!(
+            harness
+                .runner
+                .try_present_terminal_graphics(&mut terminal, &refresh)
+                .unwrap()
+        );
+        assert_eq!(reports.borrow().len(), 2);
+        assert_eq!(reports.borrow()[1][0].token, 2);
+        assert_eq!(reports.borrow()[1][0].stable_terminal_id, id);
+    }
+}
+
+#[cfg(feature = "terminal-images")]
+#[test]
+fn metadata_modes_and_unchanged_graphics_do_not_write_or_present_frames() {
+    let _host = crate::backend::ratatui_backend::image_support::test_kitty_host((10, 20), true);
+    let mut harness = build(PaneCfg::new(), b"stable\x1b[?25l");
+    harness
+        .screen
+        .borrow_mut()
+        .set_cell_size(crate::widgets::TerminalCellSize::new(10, 20));
+    let mut terminal = crate::backend::ratatui_backend::create_test_terminal(COLS, ROWS).unwrap();
+    harness.runner.render_paint_only(&mut terminal).unwrap();
+    let start = terminal.backend().test_output().len();
+    for bytes in [b"\x1b[?2004h".as_slice(), b"\x1b[?1003h", b"\x1b[?1h"] {
+        let mutation = harness.screen.borrow_mut().process_bytes(bytes);
+        assert!(mutation.modes_changed);
+        assert!(!mutation.is_visual(), "{mutation:?}");
+        harness.runner.frame_rendered = false;
+        harness.runner.host_frame_presented = false;
+        harness
+            .runner
+            .render_terminal_paint_only(&mut terminal)
+            .unwrap();
+        assert!(!harness.runner.frame_rendered);
+        assert!(!harness.runner.host_frame_presented);
+        assert_eq!(terminal.backend().test_output().len(), start);
+    }
+    let refresh = harness.runner.core.tree.refresh_live_terminals_detailed();
+    assert!(
+        harness
+            .runner
+            .try_present_terminal_graphics(&mut terminal, &refresh)
+            .unwrap()
+    );
+    assert!(!harness.runner.host_frame_presented);
+    assert_eq!(terminal.backend().test_output().len(), start);
 }

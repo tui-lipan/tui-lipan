@@ -26,7 +26,7 @@ use crate::test_backend::TestBackend;
 
 fn new_registry() -> ComponentRegistry {
     let dispatcher = Dispatcher::new(|_, _| {});
-    let (command_tx, _command_rx, _wake_rx, _wake_tx) = super::CommandTx::channel();
+    let (command_tx, _command_rx, _wake) = super::CommandTx::channel();
     let quit = Rc::new(Cell::new(false));
     let overlay_manager = Rc::new(RefCell::new(OverlayManager::new()));
 
@@ -69,6 +69,8 @@ fn new_registry() -> ComponentRegistry {
             devtools_metrics: Rc::new(crate::core::runtime_env::DevToolsMetrics::default()),
             pending_ui_snapshot: Rc::default(),
             paint_observers: Rc::default(),
+            #[cfg(feature = "terminal")]
+            terminal_presentation_observers: Rc::default(),
             copy_feedback_request: Rc::new(RefCell::new(Vec::new())),
             command_chord_pending_since: Rc::new(Cell::new(None)),
             command_chord_reveal_delay: Rc::new(Cell::new(std::time::Duration::ZERO)),
@@ -880,7 +882,7 @@ fn keyed_command_latest_only_coalesces_pending_tasks() {
         .expect("first update should succeed");
     let cmd1 = update1.command.expect("first update should have command");
 
-    let (dummy_cmd_tx, _dummy_cmd_rx, _wake_rx, _wake_tx) = super::CommandTx::channel();
+    let (dummy_cmd_tx, _dummy_cmd_rx, _wake) = super::CommandTx::channel();
     cmd1.run(CommandRuntime {
         scope,
         tx: dummy_cmd_tx.clone(),
@@ -950,7 +952,7 @@ fn keyed_command_latest_only_coalesces_pending_tasks() {
 
 #[test]
 fn command_link_send_if_not_cancelled_suppresses_messages() {
-    let (tx, rx, _wake_rx, _wake_tx) = super::CommandTx::channel();
+    let (tx, rx, _wake) = super::CommandTx::channel();
     let token = CancellationToken::default();
     let link = CommandLink::new(
         ScopeId(7),
@@ -976,7 +978,7 @@ fn command_link_send_if_not_cancelled_suppresses_messages() {
 /// requiring prompt work to run proves the waiting happens elsewhere.
 #[test]
 fn after_does_not_occupy_executor_workers_while_waiting() {
-    let (cmd_tx, _cmd_rx, _wake_rx, _wake_tx) = super::CommandTx::channel();
+    let (cmd_tx, _cmd_rx, _wake) = super::CommandTx::channel();
     let runtime = || CommandRuntime {
         scope: ScopeId(1),
         tx: cmd_tx.clone(),
@@ -1006,7 +1008,7 @@ fn after_does_not_occupy_executor_workers_while_waiting() {
 
 #[test]
 fn after_runs_the_task_once_the_delay_elapses() {
-    let (cmd_tx, _cmd_rx, _wake_rx, _wake_tx) = super::CommandTx::channel();
+    let (cmd_tx, _cmd_rx, _wake) = super::CommandTx::channel();
     let (ran_tx, ran_rx) = mpsc::channel();
 
     let start = std::time::Instant::now();
@@ -1036,7 +1038,7 @@ fn after_runs_the_task_once_the_delay_elapses() {
 /// after a long tick would be held behind it.
 #[test]
 fn after_fires_in_due_order_regardless_of_submission_order() {
-    let (cmd_tx, _cmd_rx, _wake_rx, _wake_tx) = super::CommandTx::channel();
+    let (cmd_tx, _cmd_rx, _wake) = super::CommandTx::channel();
     let runtime = || CommandRuntime {
         scope: ScopeId(1),
         tx: cmd_tx.clone(),

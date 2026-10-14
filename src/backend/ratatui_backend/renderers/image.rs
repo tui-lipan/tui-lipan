@@ -1,8 +1,15 @@
 #[cfg(feature = "terminal-images")]
 mod native_patches;
 #[cfg(feature = "terminal-images")]
+mod native_scene;
+#[cfg(feature = "terminal-images")]
 pub(crate) use native_patches::{
     NativeImageLease, native_layer_scope, render_native_terminal_images, take_retired_native_ids,
+};
+#[cfg(feature = "terminal-images")]
+pub(crate) use native_scene::{
+    DesiredScene, HostGraphicsScene, NativePlanScope, SceneTransition, native_owners_scope,
+    native_source_unavailable, owner_scope as native_scene_owner_scope, take_desired,
 };
 
 #[cfg(feature = "terminal-images")]
@@ -1262,6 +1269,14 @@ thread_local! {
 
 #[cfg(feature = "terminal-images")]
 impl KittyUpload {
+    fn attempt_native_sequence(&self) -> std::io::Result<Option<String>> {
+        // Native scenes own ordinary placements. Upload only source data; the scene
+        // reconciler refreshes its persistent placements after a source replacement.
+        Ok(self
+            .attempt_sequence()?
+            .map(|sequence| sequence.replacen(",a=T,U=1,", ",a=t,", 1)))
+    }
+
     fn attempt_sequence(&self) -> std::io::Result<Option<String>> {
         let sequence = self
             .transmit
@@ -1358,11 +1373,19 @@ impl Drop for KittyUpload {
     }
 }
 
+#[cfg(feature = "terminal-images")]
+pub(crate) fn begin_partial_native_scene() {
+    if !capturing_images() {
+        native_scene::begin(false);
+    }
+}
+
 /// Keep this frame's uploads alive through cache eviction, but release discarded paints on the
 /// next frame. Captures must not clear uploads staged by an outer live paint.
 #[cfg(feature = "terminal-images")]
 pub(crate) fn begin_kitty_frame() {
     if !capturing_images() {
+        native_scene::begin(true);
         PENDING_KITTY_UPLOADS.with(|pending| pending.borrow_mut().clear());
         PENDING_KITTY_PLACEMENTS.with(|pending| pending.borrow_mut().clear());
         if let Some(encoder) = ENCODER.get()
@@ -1711,6 +1734,11 @@ struct CacheEntry {
     estimated_bytes: usize,
     last_used: Instant,
     terminal_alive: Option<Arc<AtomicBool>>,
+    /// Insertion order, unaffected by use, so a stream's newer frame can be told from an older one.
+    inserted: u64,
+    /// The host holds this frame under the stream's one image ID, which every newer frame of the
+    /// stream and backdrop overwrites. See [`kitty_image_id`].
+    shares_host_image: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1846,10 +1874,11 @@ struct StandIn {
 struct ImageRenderCache {
     entries: Vec<CacheEntry>,
     total_estimated_bytes: usize,
+    insertions: u64,
 }
 
 impl ImageRenderCache {
-    #[cfg(feature = "terminal-images")]
+    #[cfg(all(test, feature = "terminal-images"))]
     fn remove_unattempted_native_images(&mut self) {
         for index in (0..self.entries.len()).rev() {
             let EncodedProtocol::CompressedKitty(image) = &*self.entries[index].protocol else {
@@ -1890,6 +1919,12 @@ impl ImageRenderCache {
 
     fn get(&mut self, key: &RenderCacheKey) -> Option<Arc<EncodedProtocol>> {
         let idx = self.entries.iter().position(|entry| &entry.key == key)?;
+        if self.overwritten_on_host(&self.entries[idx]) {
+            // A producer returning to earlier pixels must send them again: the host image now
+            // holds a newer frame, and this encode's payload was released once it was sent.
+            self.remove_at(idx);
+            return None;
+        }
         let mut entry = self.entries.remove(idx);
         let retained_bytes = entry
             .protocol
@@ -1935,6 +1970,18 @@ impl ImageRenderCache {
             protocol,
             same_backdrop,
         })
+    }
+
+    fn overwritten_on_host(&self, entry: &CacheEntry) -> bool {
+        entry.shares_host_image
+            && !entry.protocol.transmission_pending()
+            && self.entries.iter().any(|newer| {
+                newer.shares_host_image
+                    && newer.stream_key == entry.stream_key
+                    && newer.key.backdrop == entry.key.backdrop
+                    && newer.inserted > entry.inserted
+                    && !newer.protocol.transmission_pending()
+            })
     }
 
     fn remove_at(&mut self, idx: usize) {
@@ -1998,6 +2045,12 @@ impl ImageRenderCache {
             }
         }
 
+        self.insertions += 1;
+        #[cfg(feature = "terminal-images")]
+        let shares_host_image = matches!(retention, CacheRetention::LatestOnly)
+            && matches!(*protocol, EncodedProtocol::CompressedKitty(_));
+        #[cfg(not(feature = "terminal-images"))]
+        let shares_host_image = false;
         self.entries.push(CacheEntry {
             stream_key,
             key,
@@ -2005,6 +2058,8 @@ impl ImageRenderCache {
             estimated_bytes,
             last_used: Instant::now(),
             terminal_alive: None,
+            inserted: self.insertions,
+            shares_host_image,
         });
         self.total_estimated_bytes = self.total_estimated_bytes.saturating_add(estimated_bytes);
 
@@ -4193,6 +4248,98 @@ mod tests {
             7,
             &moved_behind_text
         ));
+    }
+
+    #[cfg(feature = "terminal-images")]
+    fn kitty_protocol(sent: bool) -> Arc<EncodedProtocol> {
+        let encoded = CompressedKitty::new(
+            &image::DynamicImage::new_rgba8(1, 1),
+            ratatui::layout::Size::new(1, 1),
+            7,
+            0,
+        )
+        .unwrap();
+        if sent {
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(1, 1)).unwrap();
+            terminal
+                .draw(|frame| encoded.render(frame, frame.area()))
+                .unwrap();
+            let mut host =
+                crate::backend::ratatui_backend::native_terminal::HostBackend::new(Vec::new());
+            ratatui::backend::Backend::draw(
+                &mut host,
+                std::iter::once((0, 0, &terminal.backend().buffer()[(0, 0)])),
+            )
+            .unwrap();
+            ratatui::backend::Backend::flush(&mut host).unwrap();
+            assert!(!encoded.transmission_pending());
+        }
+        Arc::new(EncodedProtocol::CompressedKitty(encoded))
+    }
+
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn returning_to_earlier_terminal_pixels_sends_them_again() {
+        let (green, blue) = (key(10), key(11));
+        let mut cache = ImageRenderCache::default();
+        cache.insert(
+            7,
+            green,
+            kitty_protocol(true),
+            10,
+            CacheRetention::LatestOnly,
+        );
+        cache.insert(
+            7,
+            blue,
+            kitty_protocol(true),
+            10,
+            CacheRetention::LatestOnly,
+        );
+        assert!(cache.get(&blue).is_some());
+        assert!(
+            cache.get(&green).is_none(),
+            "the stream's host image now holds blue, so green must be encoded and sent again"
+        );
+
+        // Until the newer frame reaches the host, the image still holds the older one.
+        let mut cache = ImageRenderCache::default();
+        cache.insert(
+            7,
+            green,
+            kitty_protocol(true),
+            10,
+            CacheRetention::LatestOnly,
+        );
+        cache.insert(
+            7,
+            blue,
+            kitty_protocol(false),
+            10,
+            CacheRetention::LatestOnly,
+        );
+        assert!(cache.get(&green).is_some());
+
+        // Under another backdrop the frame is a different host image, which blue does not touch.
+        let mut cache = ImageRenderCache::default();
+        let mut dimmed = green;
+        dimmed.backdrop = 1;
+        cache.insert(
+            7,
+            dimmed,
+            kitty_protocol(true),
+            10,
+            CacheRetention::LatestOnly,
+        );
+        cache.insert(
+            7,
+            blue,
+            kitty_protocol(true),
+            10,
+            CacheRetention::LatestOnly,
+        );
+        assert!(cache.get(&dimmed).is_some());
     }
 
     #[cfg(feature = "terminal-images")]

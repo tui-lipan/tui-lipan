@@ -659,7 +659,9 @@ impl<C: Component> AppRunner<C> {
                     }
                     DirtyLevel::PaintOnly | DirtyLevel::None => return Ok(false),
                     #[cfg(feature = "terminal")]
-                    DirtyLevel::TerminalPaintOnly => return Ok(false),
+                    DirtyLevel::TerminalPaintOnly | DirtyLevel::TerminalGraphicsOnly => {
+                        return Ok(false);
+                    }
                 }
 
                 if pass + 1 == RENDER_STABILITY_MAX_PASSES {
@@ -856,6 +858,93 @@ impl<C: Component> AppRunner<C> {
     /// how to draw. Anything it cannot handle falls through to the ordinary paint over the tree it
     /// already refreshed.
     #[cfg(feature = "terminal")]
+    pub(super) fn render_terminal_graphics_only(
+        &mut self,
+        terminal: &mut crate::backend::ratatui_backend::Terminal,
+    ) -> Result<()> {
+        self.render_terminal_paint_only(terminal)
+    }
+
+    #[cfg(feature = "terminal-images")]
+    fn try_present_terminal_graphics(
+        &mut self,
+        terminal: &mut crate::backend::ratatui_backend::Terminal,
+        refresh: &crate::core::node::LiveTerminalRefresh,
+    ) -> Result<bool> {
+        if !refresh.text_damage.is_empty()
+            || refresh.graphics_only.len() != refresh.damage.len()
+            || self.surface.is_inline()
+            || self.graphics_plan_epoch
+                != Some(self.graphics_presentation_epochs(terminal.get_frame().area()))
+        {
+            return Ok(false);
+        }
+        let updates =
+            refresh
+                .graphics_only
+                .iter()
+                .filter_map(|id| match &self.core.tree.node(*id).kind {
+                    crate::core::node::NodeKind::Terminal(node) => {
+                        Some((*id, node.images.as_ref()))
+                    }
+                    _ => None,
+                });
+        match terminal.backend_mut().present_graphics(updates) {
+            Ok(presentation) => {
+                use crate::backend::ratatui_backend::GraphicsPresentation;
+                match presentation {
+                    GraphicsPresentation::Unavailable => Ok(false),
+                    GraphicsPresentation::Unchanged => Ok(true),
+                    GraphicsPresentation::Discarded => {
+                        self.frame_rendered = true;
+                        Ok(true)
+                    }
+                    GraphicsPresentation::Written => {
+                        self.frame_rendered = true;
+                        self.host_frame_presented = true;
+                        let reports =
+                            self.presented_graphics_tokens(terminal, &refresh.graphics_only);
+                        self.core
+                            .ctx
+                            .env()
+                            .terminal_presentation_observers
+                            .deliver(reports);
+                        Ok(true)
+                    }
+                }
+            }
+            Err(error)
+                if crate::backend::ratatui_backend::renderers::image::native_source_unavailable(
+                    &error,
+                ) =>
+            {
+                Ok(false)
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    #[cfg(feature = "terminal-images")]
+    fn presented_graphics_tokens(
+        &self,
+        terminal: &crate::backend::ratatui_backend::Terminal,
+        owners: &[NodeId],
+    ) -> Vec<crate::widgets::PresentedTerminal> {
+        owners
+            .iter()
+            .filter_map(|id| {
+                if !terminal.backend().terminal_graphics_visible(*id) {
+                    return None;
+                }
+                match &self.core.tree.node(*id).kind {
+                    NodeKind::Terminal(node) => node.presentation,
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
+    #[cfg(feature = "terminal")]
     pub(super) fn render_terminal_paint_only(
         &mut self,
         terminal: &mut crate::backend::ratatui_backend::Terminal,
@@ -875,8 +964,21 @@ impl<C: Component> AppRunner<C> {
 
         let refresh = self.core.tree.refresh_live_terminals_detailed();
         self.emit_terminal_focus_change();
+        if !refresh.visual_changed {
+            return Ok(());
+        }
+        #[cfg(feature = "terminal-images")]
+        if self.try_present_terminal_graphics(terminal, &refresh)? {
+            return Ok(());
+        }
+        let graphics_only = !refresh.graphics_only.is_empty() && refresh.text_damage.is_empty();
         let frame_area = terminal.get_frame().area();
         if let Some(plan) = self.prepare_terminal_damage_plan(&refresh, frame_area) {
+            if graphics_only {
+                crate::core::terminal_metrics::update(|metrics| {
+                    metrics.graphics_widened_terminal += 1
+                });
+            }
             self.draw_terminal_damage(terminal, &plan)?;
             #[cfg(feature = "devtools")]
             self.record_devtools_frame_metrics(
@@ -888,6 +990,9 @@ impl<C: Component> AppRunner<C> {
             return Ok(());
         }
 
+        if graphics_only {
+            crate::core::terminal_metrics::update(|metrics| metrics.graphics_widened_normal += 1);
+        }
         let draw_duration =
             self.draw_current_tree_after_live_refresh(terminal, DrawMode::PaintOnly)?;
         #[cfg(feature = "devtools")]
@@ -1037,10 +1142,14 @@ impl<C: Component> AppRunner<C> {
             let frame = terminal.get_frame();
             frame.area()
         };
+        #[cfg(feature = "terminal")]
+        let presentations = crate::widgets::presentation::PresentationScope::begin();
+        let output_frame = terminal.backend().begin_output_frame()?;
+        let output_epoch = terminal.backend().output_epoch();
         if let Some(title) = &self.title {
-            let _ = execute!(terminal.backend_mut(), Print(format!("\x1b]2;{title}\x07")));
+            terminal.backend_mut().set_title(title)?;
         }
-        let _ = execute!(terminal.backend_mut(), Print("\x1b[?2026h"));
+        execute!(terminal.backend_mut(), Print("\x1b[?2026h"))?;
         #[cfg(any(feature = "devtools", feature = "profiling-tracing"))]
         let draw_start = Instant::now();
         let current_scroll_frames = capture_scroll_frames(&self.core.tree);
@@ -1087,10 +1196,18 @@ impl<C: Component> AppRunner<C> {
                 {
                     // The whole tree paints: every slot with a reader on screen is read now.
                     self.core.ctx.env().animations.begin_paint();
-                    let completed = terminal.draw(|f| {
-                        render(f, ctx);
-                    })?;
-                    replace_buffer_snapshot(&mut last_snapshot, completed.buffer);
+                    match terminal.draw(|f| render(f, ctx)) {
+                        Ok(completed) => replace_buffer_snapshot(&mut last_snapshot, completed.buffer),
+                        #[cfg(feature = "terminal-images")]
+                        Err(error) if crate::backend::ratatui_backend::renderers::image::native_source_unavailable(&error) => {
+                            // Preparation failed before any native commands were written. Retry
+                            // the retained scene through composition for this whole frame.
+                            let _native_scope = crate::backend::ratatui_backend::renderers::image::native_layer_scope(false);
+                            let completed = terminal.draw(|f| render(f, ctx))?;
+                            replace_buffer_snapshot(&mut last_snapshot, completed.buffer);
+                        }
+                        Err(error) => return Err(error.into()),
+                    }
                 }
                 #[cfg(feature = "terminal")]
                 if let Some(frame) = last_snapshot.as_ref() {
@@ -1110,6 +1227,7 @@ impl<C: Component> AppRunner<C> {
         self.last_frame_snapshot = last_snapshot;
         self.scroll_diff_snapshot = diff_snapshot;
         draw_result?;
+        self.frame_rendered = true;
 
         #[cfg(any(feature = "devtools", feature = "profiling-tracing"))]
         let draw_duration = draw_start.elapsed();
@@ -1118,7 +1236,7 @@ impl<C: Component> AppRunner<C> {
             target: "tui_lipan::perf",
             draw_ms = draw_duration.as_secs_f64() * 1000.0
         );
-        let _ = execute!(terminal.backend_mut(), Print("\x1b[?2026l"));
+        execute!(terminal.backend_mut(), Print("\x1b[?2026l"))?;
 
         self.last_scroll_frames = current_scroll_frames;
 
@@ -1132,6 +1250,26 @@ impl<C: Component> AppRunner<C> {
             self.focus.focused,
             &self.widgets.text_area_vim_state,
         )?;
+        terminal.backend_mut().finish_output_frame(output_frame)?;
+        self.host_frame_presented = terminal.backend().output_epoch() == output_epoch;
+        #[cfg(feature = "terminal")]
+        if terminal.backend().output_epoch() == output_epoch {
+            self.core
+                .ctx
+                .env()
+                .terminal_presentation_observers
+                .deliver(presentations.take());
+            #[cfg(feature = "terminal-images")]
+            {
+                self.graphics_plan_epoch = Some(self.graphics_presentation_epochs(frame_area));
+                self.native_terminal_plans = terminal.backend().native_plan_owners();
+            }
+        } else {
+            #[cfg(feature = "terminal-images")]
+            {
+                self.graphics_plan_epoch = None;
+            }
+        }
 
         #[cfg(any(feature = "devtools", feature = "profiling-tracing"))]
         {
@@ -1179,6 +1317,16 @@ impl<C: Component> AppRunner<C> {
         cursor_position: &StdCell<Option<Position>>,
         f: impl FnOnce(&RenderContext<'_>) -> R,
     ) -> R {
+        #[cfg(feature = "terminal-images")]
+        let _native_owners = crate::backend::ratatui_backend::renderers::image::native_owners_scope(
+            self.core
+                .tree
+                .iter()
+                .filter_map(|node| {
+                    matches!(node.kind, crate::core::node::NodeKind::Terminal(_)).then_some(node.id)
+                })
+                .collect(),
+        );
         let tab_drag_preview_label: Option<std::sync::Arc<str>> = match &self.drag.active {
             // Suppress text label when a snapshot preview is available.
             ActiveDrag::DraggableTabBar(d) if d.started && d.preview_snapshot_anchor.is_none() => {

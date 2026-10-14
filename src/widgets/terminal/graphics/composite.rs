@@ -300,6 +300,11 @@ fn compose_tile(
     let mut stream = std::collections::hash_map::DefaultHasher::new();
     (cache.namespace, tile.0).hash(&mut stream);
     TerminalImage {
+        source_key: super::ImageSourceKey::default(),
+        source_lifetime: Arc::default(),
+        placement_lifetime: None,
+        placement_identity: super::ImagePlacementIdentity::default(),
+        source_revision: super::ImageSourceRevision::default(),
         native: Arc::default(),
         source: ImageSource::Decoded(Arc::new(DynamicImage::ImageRgba8(pixels))),
         width,

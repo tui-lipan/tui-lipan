@@ -1572,3 +1572,42 @@ pub struct GridSelectionEvent {
   final visual row without affecting wrapping.
 - `TextAreaStateChangeReason`: `Edit`, `SelectionChange`, `CursorMove`,
   `Scroll`, `VimModeChange`.
+
+## Terminal mutations and retained graphics identities
+
+`TerminalMutation` reports completed parser operations. See
+[the terminal guide](widgets/terminal.md#completed-parser-mutations) for accumulation and migration
+from the old unit-returning `process_bytes` signature.
+
+| Type | Values or fields |
+|------|------------------|
+| `TerminalDamage` | `None` (default), `Rows(Vec<DamagedRow>)`, `Full` |
+| `DamagedRow` | `row`, `left`, `right`; column endpoints are inclusive |
+| `GraphicsDamage` | `None` (default), `Sources`, `Placements`, `SourcesAndPlacements`, `Reset` |
+| `TerminalMutation` | `cells`, `graphics`, `cursor_changed`, `title_changed`, `modes_changed`, `semantic_changed`, `clipboard_events`, `responses` |
+
+These types are exported from the crate root, widgets module, and prelude with `terminal` enabled.
+
+The following types also require `terminal-images`:
+
+| Type | Values or fields |
+|------|------------------|
+| `ImageSourceKey` | `screen_lifetime`, `producer_image_id`, `incarnation` |
+| `ImageSourceRevision` | Tuple wrapper around a monotonic `u64` revision |
+| `ImagePlacementIdentity` | `Unassigned` (default), `Cursor(u64)`, `Placeholder { grid_lifetime, producer_placement_id, line, column, alternate }` |
+| `ImagePlacementKey` | `source: ImageSourceKey`, `placement: ImagePlacementIdentity` |
+
+Cursor identities survive movement and source retransmission until the placement is deleted.
+Placeholder identities describe the virtual placement origin in absolute retained grid coordinates.
+`Unassigned` denotes an image placement without parser identity. These logical identities do not
+expose the host terminal's image or placement IDs.
+
+### Terminal presentation
+
+With `terminal`, `PresentedTerminal` contains `stable_terminal_id: u64` and `token: u64`.
+`TerminalPresentationSubscription` unregisters a successful-host-frame observer when dropped.
+`UpdateLevel::TerminalGraphics` requests native scene reconciliation and widens automatically when
+composition or plan invalidation requires terminal paint.
+
+`TerminalGraphicsMetrics` contains cumulative parser, native-scene and host-frame counters plus
+bounded successful frame interval percentiles. See [performance guidance](perf.md#terminal-graphics-aggregates).

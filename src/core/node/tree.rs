@@ -361,6 +361,10 @@ impl Default for NodeTree {
 pub(crate) struct LiveTerminalRefresh {
     /// Whether any live terminal took output since the last refresh.
     pub changed: bool,
+    /// Whether cells, cursor, graphics or live labels need host presentation.
+    pub visual_changed: bool,
+    /// Nodes whose snapshot changed without any cell, cursor or mode mutation.
+    pub graphics_only: Vec<NodeId>,
     /// The rows each terminal that moved reported.
     pub damage: Vec<(NodeId, crate::widgets::internal::TerminalDamage)>,
     /// Live labels changed since the last refresh.
@@ -496,6 +500,14 @@ impl NodeTree {
 
     /// Returns true if any terminal node requests any-event mouse forwarding.
     pub fn has_terminal_any_event(&self) -> bool {
+        #[cfg(feature = "terminal")]
+        if self.live_terminal_ids.iter().any(|id| {
+            matches!(&self.arena.get(*id).kind, NodeKind::Terminal(terminal)
+                if terminal.input_mouse_mode().mode == MouseMode::AnyEvent
+                    && terminal.on_mouse_forward.is_some())
+        }) {
+            return true;
+        }
         self.has_terminal_any_event
     }
 
@@ -560,6 +572,7 @@ impl NodeTree {
         let text_damage = self.refresh_live_texts();
         let mut refresh = LiveTerminalRefresh {
             changed: !text_damage.is_empty(),
+            visual_changed: !text_damage.is_empty(),
             text_damage,
             ..Default::default()
         };
@@ -570,19 +583,65 @@ impl NodeTree {
             }
             let host_cursor_style = self.host_cursor_style;
             if let NodeKind::Terminal(terminal) = &mut self.node_mut(id).kind
-                && let Some(damage) = terminal.refresh_from_live_screen(host_cursor_style)
+                && let Some((damage, graphics_only, visual_changed)) =
+                    terminal.refresh_from_live_screen(host_cursor_style)
             {
                 refresh.changed = true;
-                refresh.damage.push((id, damage));
+                if visual_changed {
+                    refresh.visual_changed = true;
+                    refresh.damage.push((id, damage));
+                }
+                if graphics_only {
+                    refresh.graphics_only.push(id);
+                }
             }
         }
         refresh
     }
 
+    #[cfg(feature = "terminal-images")]
+    pub(crate) fn live_terminal_geometry(
+        &self,
+    ) -> Vec<(NodeId, crate::style::Rect, usize, usize, usize)> {
+        self.live_terminal_ids
+            .iter()
+            .filter_map(|id| {
+                if !self.is_valid(*id) {
+                    return None;
+                }
+                let node = self.node(*id);
+                match &node.kind {
+                    NodeKind::Terminal(terminal) => Some((
+                        *id,
+                        node.rect,
+                        terminal.viewport_rows,
+                        terminal.viewport_cols,
+                        terminal.scrollback_offset,
+                    )),
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
     /// Whether any terminal is reading a live screen a child program can write to at any moment.
     #[cfg(feature = "terminal")]
-    pub(crate) fn has_live_terminals(&self) -> bool {
-        !self.live_terminal_ids.is_empty()
+    pub(crate) fn has_polling_terminals(&self) -> bool {
+        self.live_terminal_ids.iter().any(|id| {
+            matches!(&self.node(*id).kind, NodeKind::Terminal(terminal)
+                if terminal.screen.as_ref().is_some_and(|screen| screen.needs_polling()))
+        })
+    }
+
+    #[cfg(feature = "terminal")]
+    pub(crate) fn set_terminal_mutation_waker(&self, wake: Rc<dyn Fn()>) {
+        for id in &self.live_terminal_ids {
+            if let NodeKind::Terminal(terminal) = &self.node(*id).kind
+                && let Some(screen) = &terminal.screen
+            {
+                screen.set_mutation_waker(wake.clone());
+            }
+        }
     }
 
     /// Returns true if any animated wrapper nodes are currently transitioning.

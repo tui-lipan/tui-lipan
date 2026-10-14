@@ -2171,7 +2171,7 @@ mod tests {
 
     fn new_registry() -> ComponentRegistry {
         let dispatcher = Dispatcher::new(|_, _| {});
-        let (command_tx, _command_rx, _wake_rx, _wake_tx) = crate::callback::CommandTx::channel();
+        let (command_tx, _command_rx, _wake) = crate::callback::CommandTx::channel();
         let quit = Rc::new(Cell::new(false));
         let overlay_manager = Rc::new(RefCell::new(crate::overlay::OverlayManager::new()));
 
@@ -2216,6 +2216,8 @@ mod tests {
                 devtools_metrics: Rc::new(crate::core::runtime_env::DevToolsMetrics::default()),
                 pending_ui_snapshot: Rc::default(),
                 paint_observers: Rc::default(),
+                #[cfg(feature = "terminal")]
+                terminal_presentation_observers: Rc::default(),
                 copy_feedback_request: Rc::new(RefCell::new(Vec::new())),
                 command_chord_pending_since: Rc::new(Cell::new(None)),
                 command_chord_reveal_delay: Rc::new(Cell::new(std::time::Duration::ZERO)),
@@ -2446,7 +2448,7 @@ mod tests {
     #[test]
     fn keyed_children_keep_state_when_reordered() {
         let dispatcher = Dispatcher::new(|_, _| {});
-        let (command_tx, _command_rx, _wake_rx, _wake_tx) = crate::callback::CommandTx::channel();
+        let (command_tx, _command_rx, _wake) = crate::callback::CommandTx::channel();
         let quit = Rc::new(Cell::new(false));
         let overlay_manager = Rc::new(RefCell::new(crate::overlay::OverlayManager::new()));
 
@@ -2491,6 +2493,8 @@ mod tests {
                 devtools_metrics: Rc::new(crate::core::runtime_env::DevToolsMetrics::default()),
                 pending_ui_snapshot: Rc::default(),
                 paint_observers: Rc::default(),
+                #[cfg(feature = "terminal")]
+                terminal_presentation_observers: Rc::default(),
                 copy_feedback_request: Rc::new(RefCell::new(Vec::new())),
                 command_chord_pending_since: Rc::new(Cell::new(None)),
                 command_chord_reveal_delay: Rc::new(Cell::new(std::time::Duration::ZERO)),
@@ -2662,7 +2666,7 @@ mod tests {
     #[test]
     fn nested_components_are_scoped_per_parent() {
         let dispatcher = Dispatcher::new(|_, _| {});
-        let (command_tx, _command_rx, _wake_rx, _wake_tx) = crate::callback::CommandTx::channel();
+        let (command_tx, _command_rx, _wake) = crate::callback::CommandTx::channel();
         let quit = Rc::new(Cell::new(false));
         let overlay_manager = Rc::new(RefCell::new(crate::overlay::OverlayManager::new()));
 
@@ -2707,6 +2711,8 @@ mod tests {
                 devtools_metrics: Rc::new(crate::core::runtime_env::DevToolsMetrics::default()),
                 pending_ui_snapshot: Rc::default(),
                 paint_observers: Rc::default(),
+                #[cfg(feature = "terminal")]
+                terminal_presentation_observers: Rc::default(),
                 copy_feedback_request: Rc::new(RefCell::new(Vec::new())),
                 command_chord_pending_since: Rc::new(Cell::new(None)),
                 command_chord_reveal_delay: Rc::new(Cell::new(std::time::Duration::ZERO)),

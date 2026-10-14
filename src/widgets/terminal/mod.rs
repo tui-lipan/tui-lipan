@@ -13,11 +13,18 @@ mod layout;
 mod mod_private;
 mod node;
 mod osc;
+#[cfg(feature = "terminal-images")]
+mod output;
+#[cfg(feature = "terminal-images")]
+pub use output::{GraphicsDependency, TerminalOutputClass, TerminalOutputTransaction};
 mod program_status;
 pub use program_status::{
     ProgramStatusEvent, ProgramStatusRecord, ProgramStatusSnapshot, ProgramStatusState,
 };
+pub(crate) mod presentation;
+pub use presentation::{PresentedTerminal, TerminalPresentationSubscription};
 mod pty;
+mod read_gate;
 mod reconcile;
 mod screen;
 mod scrollback_ledger;
@@ -25,6 +32,8 @@ mod scrollback_ledger;
 mod selection;
 
 pub use buffer::TerminalBuffer;
+pub use damage::{DamagedRow, GraphicsDamage, TerminalDamage, TerminalMutation};
+
 #[cfg(feature = "terminal")]
 pub use copy_mode::{CopyModeAction, CopyModeGrid, TerminalCopyMode};
 pub use events::{
@@ -34,12 +43,15 @@ pub use events::{
     mouse_event_to_bytes, paste_sequences, terminal_selection_text,
 };
 #[cfg(feature = "terminal-images")]
+pub use graphics::{
+    ImagePlacementIdentity, ImagePlacementKey, ImageSourceKey, ImageSourceRevision, TerminalImage,
+    TerminalImageCrop, TerminalImagePlacement,
+};
+#[cfg(feature = "terminal-images")]
 pub(crate) use graphics::{
     PLACEHOLDER as KITTY_PLACEHOLDER, composite_terminal_images, crop_for_visible_cells,
     diacritic as kitty_diacritic, image_cell_has_pixels, image_cell_is_opaque, image_covers_cell,
 };
-#[cfg(feature = "terminal-images")]
-pub use graphics::{TerminalImage, TerminalImageCrop, TerminalImagePlacement};
 #[cfg(feature = "terminal-images")]
 pub use graphics_media::GraphicsMediaPolicy;
 pub use mod_private::Terminal;
@@ -50,6 +62,7 @@ pub use osc::{
 #[cfg(unix)]
 pub use pty::TerminalPtyHandoff;
 pub use pty::{TerminalPty, TerminalPtyConfig, TerminalPtyError, TerminalPtyEvent};
+pub use read_gate::{TerminalReadGate, TerminalReadGateStats};
 pub use screen::{
     SemanticMark, SemanticMarkKind, TerminalCellSize, TerminalClipboardEvent,
     TerminalClipboardTarget, TerminalColorPalette, TerminalDecoration, TerminalHyperlink,
@@ -572,9 +585,13 @@ impl From<Terminal> for Element {
         let on_input = terminal.on_input.clone();
         let fallback_on_key = terminal.on_key.clone();
         let key_modes = terminal.key_modes;
+        let live_screen = terminal.screen.clone();
         terminal.on_key = if on_input.is_some() || fallback_on_key.is_some() {
             Some(KeyHandler::new(move |key| {
                 let mut handled = false;
+                let key_modes = live_screen
+                    .as_ref()
+                    .map_or(key_modes, TerminalScreenHandle::key_modes);
 
                 if let Some(on_input) = on_input.as_ref()
                     && let Some(bytes) = key_event_to_bytes(key, key_modes)

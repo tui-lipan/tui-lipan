@@ -8,6 +8,11 @@ tui-lipan = { version = "*", features = ["terminal"] }
 
 ## ManagedTerminal
 
+PTY output reaches a retained live screen. Completed parser mutations select graphics-only,
+terminal-cell or invisible updates instead of rebuilding the component for every output event.
+The PTY reader pushes messages to the runner; quiet managed terminals do not impose frame-rate
+polling. Lifecycle, status and resize changes retain their normal component updates.
+
 The recommended starting point: a complete PTY terminal with automatic lifecycle management. No manual wiring needed.
 
 | Prop | Type | Description |
@@ -1065,3 +1070,120 @@ message values. Titles and messages are decoded UTF-8 plain text. They remain
 untrusted text. Disarm bidirectional overrides and invisible formatting before
 displaying them outside the terminal grid, and never interpret them as markup.
 Feature replies contain no report-supplied data.
+
+### Completed parser mutations
+
+`TerminalScreen::process_bytes` returns `TerminalMutation`. `cells` reports the emulator's
+changed rows or full-grid damage. `graphics` reports successful source and placement changes.
+Cursor, title, modes, semantic metadata, clipboard requests, and responses have separate flags.
+Queries and incomplete graphics commands do not cause visual mutations. Several calls accumulate
+independently of snapshot and row-damage consumption; `take_mutation()` drains that accumulator.
+`mutation_generation()` advances when a completed parser operation changes state or emits events.
+
+Ignoring the return value remains valid. Code that used `process_bytes` as a unit-returning tail
+expression should add a semicolon. This is the migration for its new return type.
+
+Live `TerminalScreenHandle` nodes register a runner wakeup. Quiet screens with a registered wakeup
+do not require frame-rate polling. Sources without a wakeup retain the compatibility cadence.
+Managed terminal PTY output already enters through component messages and wakes the runtime.
+
+With `terminal-images`, `TerminalImage::source_key()` identifies the screen lifetime, producer ID,
+and incarnation. Retransmitting a retained producer ID increments `source_revision()` but deletes
+all its previous direct and virtual placements, as Kitty requires. `a=t` stores the replacement
+without displaying it; `a=T` creates only the placement requested by that command. Existing
+placeholder cells remain text and display no image until a new virtual placement is declared.
+The source key remains available for backend upload-ID reuse; it does not keep placements alive.
+Deleting and reusing the ID creates a new source incarnation. An id-less transmission receives a
+fresh assigned ID. `TerminalImagePlacement::placement_key()` survives viewport scrolling but a
+recreated cursor placement receives a new key. Placeholder identities use their absolute retained
+grid origins. Host resource IDs are presentation details, outside replay or capture semantics.
+
+### Graphics-only updates and successful presentation
+
+Return `Update::terminal_graphics()` when retained graphics are the only visual change. The runtime
+uses the previous native plan without painting cells. Composition, changed geometry, overlays,
+effects or host capabilities automatically widen to terminal paint. Queries and metadata without
+visual changes can return `Update::none()`.
+
+`TerminalRenderSnapshot::cell_generation` and `graphics_generation` let observers detect visual
+changes even after another consumer reads `take_mutation()`. Graphics-only snapshots reuse the
+retained cell content. **Migration:** exhaustive snapshot literals must supply the new generation
+fields and `presentation`, or use `..TerminalRenderSnapshot::default()`.
+
+Call `screen.set_presentation_token(sequence)` after processing application output. Subscribe using
+`ctx.observe_terminal_presentations(ctx.link().callback(Msg::Presented))` and retain the returned
+`TerminalPresentationSubscription` in component state. Each callback receives a batch of
+`PresentedTerminal { stable_terminal_id, token }` for terminal state included in a successfully
+written host frame. `screen.stable_terminal_id()` identifies the screen across mounted widgets.
+Tokens do not trigger a frame. Failed writes and discarded frames do not report tokens, and
+software captures and recording renders do not count as host presentation. A handler that only
+forwards acknowledgements should return `Update::none()`.
+
+### Lossless semantic output transactions
+
+Session transports can call `screen.set_output_transaction_recording(true)` before feeding output,
+then drain `screen.take_output_transactions()` after parsing. Recording is optional and disabled
+by default. Each `TerminalOutputTransaction` contains the exact original bytes and a
+`TerminalOutputClass` established by the same parser that changes the retained scene.
+
+`Ordered` segments must retain their order and bytes. `Graphics` segments include the stable source
+key, its revision, and `GraphicsDependency`. Only `Independent` transactions can supersede earlier
+pending transactions for the same source without an intervening ordered barrier. Current eligibility
+requires a complete, accepted replacement of a nonzero image ID with unchanged displayed placement
+state, quiet responses, reusable media, and no cursor or grid effects. Partial patches, chunked
+uploads, queries, unknown controls, consuming media and id-less creations remain dependent or ordered.
+
+A graphics escape spanning several parser calls is emitted only when complete. Additional recording
+buffers and ordered transactions are bounded to 1 MiB; larger commands stream as ordered fragments. Before an
+external resize, reset or exit boundary, call `flush_output_transaction_boundary()` and drain the
+transactions. This forwards unfinished bytes as ordered without resetting the parser; continuation
+bytes remain ordered. Concatenating transactions reproduces the original byte stream exactly.
+
+Mode changes without visual effects update live input handling without painting cells. Live screens
+supply current keyboard, paste, mouse and focus modes directly rather than waiting for an app view
+rebuild. An unchanged native scene writes no synchronized-output wrapper and reports no presentation.
+
+### Per-PTY read credits
+
+`TerminalPty::read_gate()` returns a cloneable `TerminalReadGate`. Reads start unrestricted. A session
+transport can call `set_credit(bytes, available, maximum_hold)` to admit one drain or hold only that
+PTY's reader. A drain keeps reading while the PTY has bytes immediately pending, up to the budget,
+and delivers them as one `Output` event. Budgets clamp to 1 byte through 64 KiB, and safety holds to
+1 through 250 ms.
+
+Unix readers poll and drain the kernel PTY directly. Windows ConPTY uses a byte-mode pipe: the
+first read has a buffer large enough for the full credit and returns when it has read the queued
+bytes or filled the budget. It does not wait for future writes to fill a short read. Unrestricted
+reads remain capped at 8 KiB on both platforms.
+
+While the reader is held, the producer's output queues in the kernel, oldest first. A release must
+take that whole backlog for the consumer to coalesce it to current state. A one-frame budget
+delivers the oldest queued frame instead: with small file-backed graphics commands the kernel holds
+dozens of frames, and a 240 fps producer paced to a 60 Hz presenter then trailed it by about a
+second. Use the largest budget whose parsing cost is acceptable, and coalesce replaceable
+transactions within each delivered event.
+
+Call `resume()` for ordinary output, input answer windows or policy resets. Child exit permanently
+releases the gate, so late policy changes cannot hold its final output ahead of the exit event.
+`stats()` reports actual holds, total hold duration and forced safety releases. This API controls
+producer reads; it does not block the UI thread or share credits with other PTYs.
+
+Native host IDs are reserved for each logical source incarnation while the retained source or a
+snapshot still owns it. Hiding an image or switching to composition frees host pixel data while
+keeping that lightweight reservation; returning to native rendering reuploads with the same ID.
+Cursor and placeholder placement IDs survive the same transition. Backend retry pixels and encoder caches do not
+keep producer identities alive. Unchanged clipped rectangles retain their placement IDs when a
+neighboring region is added or removed. Placeholder identities include the producer placement ID
+from underline colour and absolute retained-grid origin. Their lightweight lifetime records are
+pruned with overwritten visible rows, evicted scrollback and retired alternate grids.
+When matching `ImagePlacementIdentity::Placeholder`, include the new `grid_lifetime` and
+`producer_placement_id` fields or use `..`; the framework supplies their values.
+
+Native scene and upload acknowledgement commit after the complete successful host frame, including
+the synchronized-output closure and cursor writes. A failure after the cell flush still retries
+from the previous committed graphics scene.
+
+An explicit `Context::request_full_repaint()` or return from terminal handoff also invalidates host
+resource acknowledgements. The next frame restores retained sources and placements using their
+reserved IDs. Ordinary UI rebuilds keep unchanged native scenes intact. Dropping a backend deletes
+its owned native resources, including resources staged by an interrupted frame.

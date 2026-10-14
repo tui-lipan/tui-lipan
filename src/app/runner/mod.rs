@@ -67,6 +67,9 @@ mod drag;
 pub(crate) mod events;
 mod exit_view;
 mod focus_events;
+mod frame_clock;
+#[cfg(feature = "terminal-images")]
+mod graphics_plan;
 mod headless_record;
 mod headless_snapshot;
 #[cfg(unix)]
@@ -101,6 +104,10 @@ enum RunnerEvent {
     },
     /// Wakeup for a queued live-control request.
     Control,
+    /// A background command queued a message or finished.
+    Command,
+    #[cfg(feature = "terminal")]
+    TerminalMutation,
     /// The input reader observed a terminal theme report or resumed after an external handoff.
     HostTerminalColorRefreshRequested,
     /// A live color query completed inside the persistent input worker.
@@ -284,6 +291,7 @@ fn mouse_dispatch_dirty_level(
 /// draws at once, and the rest draw together in the next frame-rate slot. The deadline is fixed by
 /// the last paint, so sustained input cannot push it back. Keys, clicks, releases, and anything
 /// needing layout or a rebuild always draw immediately.
+#[cfg(test)]
 fn paced_pointer_frame_due(
     level: DirtyLevel,
     pointer_motion_only: bool,
@@ -292,7 +300,10 @@ fn paced_pointer_frame_due(
     now: Instant,
 ) -> Option<Instant> {
     #[cfg(feature = "terminal")]
-    let paint_only = matches!(level, DirtyLevel::PaintOnly | DirtyLevel::TerminalPaintOnly);
+    let paint_only = matches!(
+        level,
+        DirtyLevel::PaintOnly | DirtyLevel::TerminalPaintOnly | DirtyLevel::TerminalGraphicsOnly
+    );
     #[cfg(not(feature = "terminal"))]
     let paint_only = matches!(level, DirtyLevel::PaintOnly);
     if !pointer_motion_only || !paint_only {
@@ -306,6 +317,8 @@ fn apply_dirty_level(dirty: &mut DirtyTracker, level: DirtyLevel) {
     match level {
         DirtyLevel::None => {}
         DirtyLevel::PaintOnly => dirty.mark_paint(),
+        #[cfg(feature = "terminal")]
+        DirtyLevel::TerminalGraphicsOnly => dirty.mark_terminal_graphics(),
         #[cfg(feature = "terminal")]
         DirtyLevel::TerminalPaintOnly => dirty.mark_terminal_paint(),
         DirtyLevel::LayoutOnly => dirty.mark_layout(),
@@ -632,7 +645,13 @@ pub struct AppRunner<C: Component> {
     pub(crate) dnd_snapshot_cells:
         std::cell::RefCell<Option<(u16, u16, Vec<ratatui::buffer::Cell>)>>,
     /// Copy of the last presented terminal buffer for scroll fast paths.
+    frame_rendered: bool,
+    host_frame_presented: bool,
     pub(crate) last_frame_snapshot: Option<ratatui::buffer::Buffer>,
+    #[cfg(feature = "terminal-images")]
+    graphics_plan_epoch: Option<graphics_plan::GraphicsPresentationEpochs>,
+    #[cfg(feature = "terminal-images")]
+    native_terminal_plans: std::collections::HashSet<NodeId>,
     /// Scratch buffer used to build the pre-scroll diff baseline.
     pub(crate) scroll_diff_snapshot: Option<ratatui::buffer::Buffer>,
     /// Physical rows a terminal-damage repaint wrote straight to the host.
@@ -929,7 +948,13 @@ impl<C: Component> AppRunner<C> {
             highlight: None,
             last_bounds: crate::style::Rect::default(),
             dnd_snapshot_cells: std::cell::RefCell::new(None),
+            frame_rendered: false,
+            host_frame_presented: false,
             last_frame_snapshot: None,
+            #[cfg(feature = "terminal-images")]
+            graphics_plan_epoch: None,
+            #[cfg(feature = "terminal-images")]
+            native_terminal_plans: Default::default(),
             scroll_diff_snapshot: None,
             #[cfg(feature = "terminal")]
             host_patched_rows: Vec::new(),
@@ -2269,17 +2294,35 @@ impl<C: Component> AppRunner<C> {
                 }
             }
 
+            #[cfg(feature = "terminal")]
+            let terminal_wake_pending = Rc::new(std::cell::Cell::new(false));
+            #[cfg(feature = "terminal")]
+            let terminal_waker: Option<Rc<dyn Fn()>> = platform_input.sender().map(|sender| {
+                let pending = terminal_wake_pending.clone();
+                Rc::new(move || {
+                    if !pending.replace(true) && sender.send(RunnerEvent::TerminalMutation).is_err()
+                    {
+                        pending.set(false);
+                    }
+                }) as Rc<dyn Fn()>
+            });
             let event_rx = &platform_input;
+            // Background commands wake the loop through its event channel; without this, their
+            // messages would wait for the next unrelated event or idle timeout.
+            let command_wake_pending = Arc::new(AtomicBool::new(false));
+            let _command_wake_hook = platform_input.sender().map(|sender| {
+                CommandWakeHook::install(&self.core.command_wake, &command_wake_pending, sender)
+            });
             #[cfg(unix)]
             let mut host_hung_up_at: Option<Instant> = None;
 
             let mut pending_event: Option<RunnerEvent> = None;
             let mut host_color_refresh_quiet_until: Option<Instant> = None;
-            let mut deferred_full = false;
-            // A paint-only frame of continuous pointer input held back to the frame cadence, and
-            // when it falls due. See `paced_pointer_frame_due`.
+            let mut deferred_full: Option<bool> = None;
+            // Continuous work shares one phase-preserving presentation deadline.
             let mut paced_frame: Option<(DirtyLevel, Instant)> = None;
-            let mut last_paint_at: Option<Instant> = None;
+            let mut frame_clock = frame_clock::FrameClock::new(self.frame_interval);
+            let mut input_answer_until: Option<Instant> = None;
             // A snapshot callback ran after the last paint and may have queued a message.
             let mut snapshot_answered = false;
             // Last terminal size we observed. Used as a fallback for missed
@@ -2301,9 +2344,16 @@ impl<C: Component> AppRunner<C> {
                 }
                 #[cfg(feature = "devtools")]
                 self.ingest_pending_devtools_logs();
-                if deferred_full {
-                    dirty.mark_full();
-                    deferred_full = false;
+                if let Some(continuous) = deferred_full.take() {
+                    if continuous {
+                        dirty.merge_continuous_level(DirtyLevel::Full);
+                    } else {
+                        dirty.mark_full();
+                    }
+                }
+                #[cfg(feature = "terminal")]
+                if let Some(wake) = &terminal_waker {
+                    self.core.tree.set_terminal_mutation_waker(wake.clone());
                 }
                 let mut poll_timeout = self.update_animation_cycle(&mut dirty);
                 if let Some((_, due)) = paced_frame {
@@ -2403,6 +2453,17 @@ impl<C: Component> AppRunner<C> {
                         host_hung_up_at.get_or_insert_with(Instant::now);
                         None
                     }
+                    #[cfg(feature = "terminal")]
+                    Some(RunnerEvent::TerminalMutation) => {
+                        terminal_wake_pending.set(false);
+                        dirty.mark_terminal_graphics();
+                        None
+                    }
+                    Some(RunnerEvent::Command) => {
+                        // Cleared before this pass drains commands, so a later send wakes again.
+                        command_wake_pending.store(false, Ordering::Release);
+                        None
+                    }
                     Some(RunnerEvent::Control) => {
                         if self.drain_control_requests() {
                             dirty.mark_full();
@@ -2423,6 +2484,18 @@ impl<C: Component> AppRunner<C> {
                     None => None,
                 };
                 if let Some(event) = maybe_event {
+                    let answer_window = match &event {
+                        CEvent::Key(_) | CEvent::Paste(_) => true,
+                        CEvent::Mouse(mouse) => !matches!(
+                            mouse.kind,
+                            crossterm::event::MouseEventKind::Moved
+                                | crossterm::event::MouseEventKind::Drag(_)
+                        ),
+                        _ => false,
+                    };
+                    if answer_window {
+                        input_answer_until = Some(Instant::now() + Duration::from_millis(50));
+                    }
                     match event {
                         CEvent::FocusGained => {
                             self.set_window_focused(true, &mut dirty);
@@ -3074,7 +3147,7 @@ impl<C: Component> AppRunner<C> {
                 if let Some((level, _)) =
                     paced_frame.take_if(|(_, due)| dirty.is_dirty() || now >= *due)
                 {
-                    apply_dirty_level(&mut dirty, level);
+                    dirty.merge_continuous_level(level);
                 }
                 let frame_level = dirty.level();
 
@@ -3092,7 +3165,7 @@ impl<C: Component> AppRunner<C> {
                     && let Some(next) = self.try_recv_event(event_rx)?
                 {
                     preserve_pending_event(&mut pending_event, next);
-                    deferred_full = true;
+                    deferred_full = Some(dirty.continuous_frame() || pointer_motion_only);
                     #[cfg(feature = "profiling-tracing")]
                     tracing::trace!(
                         target: "tui_lipan::perf",
@@ -3101,20 +3174,23 @@ impl<C: Component> AppRunner<C> {
                     continue;
                 }
 
-                if let Some(due) = paced_pointer_frame_due(
-                    frame_level,
-                    pointer_motion_only && !force_host_redraw,
-                    last_paint_at,
-                    self.frame_interval,
-                    now,
-                ) {
+                let input_answering = input_answer_until.is_some_and(|until| now < until);
+                let continuous = (dirty.continuous_frame() || pointer_motion_only)
+                    && !force_host_redraw
+                    && !input_answering;
+                if let Some(due) = frame_clock.due(continuous, now) {
                     paced_frame = Some((frame_level, due));
                     continue;
                 }
 
+                self.frame_rendered = false;
+                self.host_frame_presented = false;
                 match frame_level {
                     DirtyLevel::Full => {
                         if force_host_redraw {
+                            if ctx_repaint || handoff_repaint {
+                                terminal.backend_mut().invalidate_host_state();
+                            }
                             invalidate_previous_frame(&mut terminal);
                             self.last_frame_snapshot = None;
                             self.scroll_diff_snapshot = None;
@@ -3126,16 +3202,31 @@ impl<C: Component> AppRunner<C> {
                         self.render_paint_only(&mut terminal)?;
                     }
                     #[cfg(feature = "terminal")]
+                    DirtyLevel::TerminalGraphicsOnly => {
+                        self.render_terminal_graphics_only(&mut terminal)?;
+                    }
+                    #[cfg(feature = "terminal")]
                     DirtyLevel::TerminalPaintOnly => {
                         self.render_terminal_paint_only(&mut terminal)?;
                     }
                     DirtyLevel::None => {}
                 }
 
-                if !matches!(frame_level, DirtyLevel::None) {
-                    last_paint_at = Some(Instant::now());
+                if self.host_frame_presented {
+                    frame_clock.presented(Instant::now());
+                }
+                if self.frame_rendered {
                     snapshot_answered = self.apply_pending_ui_snapshot_request()?;
                     snapshot_answered |= self.deliver_painted_frame();
+                    #[cfg(feature = "terminal")]
+                    {
+                        snapshot_answered |= self
+                            .core
+                            .ctx
+                            .env()
+                            .terminal_presentation_observers
+                            .take_delivered();
+                    }
                 }
 
                 #[cfg(feature = "profiling-tracing")]
@@ -3343,6 +3434,32 @@ impl<C: Component> AppRunner<C> {
             return Self::recv_inline_event(input, Duration::ZERO);
         }
         try_recv_channel(input.receiver())
+    }
+}
+
+/// Keeps a command wake hook installed for the event loop's lifetime.
+struct CommandWakeHook(crate::callback::CommandWake);
+
+impl CommandWakeHook {
+    /// Send one [`RunnerEvent::Command`] per wake until the loop clears `pending`.
+    fn install(
+        wake: &crate::callback::CommandWake,
+        pending: &Arc<AtomicBool>,
+        sender: mpsc::Sender<RunnerEvent>,
+    ) -> Self {
+        let pending = pending.clone();
+        wake.set_hook(Some(Arc::new(move || {
+            if !pending.swap(true, Ordering::AcqRel) && sender.send(RunnerEvent::Command).is_err() {
+                pending.store(false, Ordering::Release);
+            }
+        })));
+        Self(wake.clone())
+    }
+}
+
+impl Drop for CommandWakeHook {
+    fn drop(&mut self) {
+        self.0.set_hook(None);
     }
 }
 
