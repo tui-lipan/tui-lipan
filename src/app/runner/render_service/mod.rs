@@ -971,8 +971,14 @@ impl<C: Component> AppRunner<C> {
         if self.try_present_terminal_graphics(terminal, &refresh)? {
             return Ok(());
         }
+        let graphics_only = !refresh.graphics_only.is_empty() && refresh.text_damage.is_empty();
         let frame_area = terminal.get_frame().area();
         if let Some(plan) = self.prepare_terminal_damage_plan(&refresh, frame_area) {
+            if graphics_only {
+                crate::core::terminal_metrics::update(|metrics| {
+                    metrics.graphics_widened_terminal += 1
+                });
+            }
             self.draw_terminal_damage(terminal, &plan)?;
             #[cfg(feature = "devtools")]
             self.record_devtools_frame_metrics(
@@ -984,6 +990,9 @@ impl<C: Component> AppRunner<C> {
             return Ok(());
         }
 
+        if graphics_only {
+            crate::core::terminal_metrics::update(|metrics| metrics.graphics_widened_normal += 1);
+        }
         let draw_duration =
             self.draw_current_tree_after_live_refresh(terminal, DrawMode::PaintOnly)?;
         #[cfg(feature = "devtools")]

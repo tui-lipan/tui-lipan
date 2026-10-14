@@ -160,6 +160,27 @@ pub(crate) struct SceneTransition {
     pub(crate) next: HostGraphicsScene,
     pub(crate) commands: Vec<String>,
     pub(crate) uploads: Vec<Arc<KittyUpload>>,
+    pub(crate) metrics: crate::widgets::TerminalGraphicsMetrics,
+}
+
+impl SceneTransition {
+    pub(crate) fn record_metrics(&self) {
+        crate::core::terminal_metrics::update(|metrics| {
+            metrics.sources_created += self.metrics.sources_created;
+            metrics.sources_uploaded += self.metrics.sources_uploaded;
+            metrics.sources_unchanged += self.metrics.sources_unchanged;
+            metrics.sources_updated += self.metrics.sources_updated;
+            metrics.sources_retired += self.metrics.sources_retired;
+            metrics.placements_desired += self.metrics.placements_desired;
+            metrics.placements_created += self.metrics.placements_created;
+            metrics.placements_unchanged += self.metrics.placements_unchanged;
+            metrics.placements_updated += self.metrics.placements_updated;
+            metrics.placements_deleted += self.metrics.placements_deleted;
+            metrics.upload_bytes += self.metrics.upload_bytes;
+            metrics.placement_bytes += self.metrics.placement_bytes;
+            metrics.delete_bytes += self.metrics.delete_bytes;
+        });
+    }
 }
 
 impl HostGraphicsScene {
@@ -258,11 +279,70 @@ impl HostGraphicsScene {
         next.refresh_preserved_placements(&wanted, &updated, &mut commands)?;
         next.delete_obsolete_placements(self, reserved, &mut commands);
         next.retire_obsolete_sources(self, reserved, &mut commands);
+        let metrics =
+            self.transition_metrics(&next, &wanted, &wanted_sources, &commands, uploads.len());
         Ok(SceneTransition {
+            metrics,
             next,
             commands,
             uploads,
         })
+    }
+
+    fn transition_metrics(
+        &self,
+        next: &Self,
+        wanted: &HashSet<PlacementKey>,
+        sources: &HashSet<ImageSourceKey>,
+        commands: &[String],
+        uploads: usize,
+    ) -> crate::widgets::TerminalGraphicsMetrics {
+        let mut metrics = crate::widgets::TerminalGraphicsMetrics {
+            placements_desired: wanted.len() as u64,
+            sources_uploaded: uploads as u64,
+            ..Default::default()
+        };
+        for key in sources {
+            let Some(source) = next.sources.get(key) else {
+                continue;
+            };
+            match self.sources.get(key) {
+                None => metrics.sources_created += 1,
+                Some(previous) if previous.revision != source.revision => {
+                    metrics.sources_updated += 1
+                }
+                Some(_) => metrics.sources_unchanged += 1,
+            }
+        }
+        metrics.sources_retired = self
+            .sources
+            .keys()
+            .filter(|key| !next.sources.contains_key(key))
+            .count() as u64;
+        metrics.placements_created = wanted
+            .iter()
+            .filter(|key| !self.placements.contains_key(key))
+            .count() as u64;
+        for command in commands {
+            if command.contains("\x1b_Ga=p,") {
+                metrics.placement_bytes += command.len() as u64;
+                metrics.placements_updated += 1;
+            } else if command.starts_with("\x1b_Ga=d,") {
+                metrics.delete_bytes += command.len() as u64;
+                if command.contains(",p=") {
+                    metrics.placements_deleted += 1;
+                }
+            } else {
+                metrics.upload_bytes += command.len() as u64;
+            }
+        }
+        metrics.placements_updated = metrics
+            .placements_updated
+            .saturating_sub(metrics.placements_created);
+        metrics.placements_unchanged = metrics
+            .placements_desired
+            .saturating_sub(metrics.placements_created + metrics.placements_updated);
+        metrics
     }
 
     fn match_regions(&self, desired: &mut DesiredScene, reserved: Option<&Self>) {
@@ -831,5 +911,33 @@ mod tests {
             );
             assert!(!commands.contains("a=d"));
         }
+    }
+    #[test]
+    fn operation_counters_commit_with_the_scene_and_not_intermediate_flushes() {
+        let mut screen = screen();
+        let output = Output::default();
+        let mut host = HostBackend::new(output.clone());
+        let before = crate::widgets::terminal_graphics_metrics();
+        let frame = host.begin_output_frame().unwrap();
+        stage_frame(&mut screen);
+        draw(&mut host).unwrap();
+        let intermediate = crate::widgets::terminal_graphics_metrics();
+        assert_eq!(intermediate.sources_uploaded, before.sources_uploaded);
+        assert_eq!(intermediate.frames_written, before.frames_written);
+        host.finish_output_frame(frame).unwrap();
+        let committed = crate::widgets::terminal_graphics_metrics();
+        assert_eq!(committed.sources_uploaded, before.sources_uploaded + 1);
+        assert_eq!(committed.placements_created, before.placements_created + 1);
+        assert_eq!(committed.frames_written, before.frames_written + 1);
+        assert!(committed.upload_bytes > before.upload_bytes);
+        let frame = host.begin_output_frame().unwrap();
+        screen.process_bytes(b"\x1b_Ga=t,i=7,f=24,s=1,v=1,q=2;ZGVm\x1b\\");
+        stage_frame(&mut screen);
+        draw(&mut host).unwrap();
+        drop(frame);
+        let abandoned = crate::widgets::terminal_graphics_metrics();
+        assert_eq!(abandoned.sources_uploaded, committed.sources_uploaded);
+        assert_eq!(abandoned.frames_written, committed.frames_written);
+        assert_eq!(abandoned.frames_failed, committed.frames_failed + 1);
     }
 }

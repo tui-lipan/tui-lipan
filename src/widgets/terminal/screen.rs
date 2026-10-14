@@ -1404,6 +1404,7 @@ impl TerminalScreen {
             self.mutation.merge(mutation.clone());
             self.notify_mutation();
         }
+        crate::core::terminal_metrics::mutation(&mutation);
         mutation
     }
 

@@ -263,6 +263,9 @@ pub(crate) struct HostFrame {
     dropped: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     epoch: usize,
     committed: bool,
+    started: std::time::Instant,
+    paints_cells: bool,
+    flush_time: std::rc::Rc<std::cell::Cell<Duration>>,
 }
 
 impl Drop for HostFrame {
@@ -271,6 +274,7 @@ impl Drop for HostFrame {
         if !self.committed {
             // Invalidate every upload/scene staged by this abandoned output transaction.
             self.dropped.fetch_add(1, Ordering::Relaxed);
+            crate::core::terminal_metrics::update(|metrics| metrics.frames_failed += 1);
         }
     }
 }
@@ -278,6 +282,7 @@ impl Drop for HostFrame {
 pub(crate) struct HostBackend<W: io::Write> {
     backend: CrosstermBackend<W>,
     frame_active: std::rc::Rc<std::cell::Cell<bool>>,
+    frame_flush_time: std::rc::Rc<std::cell::Cell<Duration>>,
     #[cfg(test)]
     test_flush_action: u8,
     #[cfg(all(test, feature = "terminal-images"))]
@@ -302,6 +307,7 @@ impl<W: io::Write> HostBackend<W> {
         Self {
             backend: CrosstermBackend::new(writer),
             frame_active: Default::default(),
+            frame_flush_time: Default::default(),
             #[cfg(test)]
             test_flush_action: 0,
             #[cfg(all(test, feature = "terminal-images"))]
@@ -323,14 +329,26 @@ impl<W: io::Write> HostBackend<W> {
     }
 
     pub(crate) fn begin_output_frame(&self) -> io::Result<HostFrame> {
+        self.begin_frame(true)
+    }
+
+    fn begin_frame(&self, paints_cells: bool) -> io::Result<HostFrame> {
         if self.frame_active.replace(true) {
             return Err(io::Error::other("nested host output transaction"));
         }
+        self.frame_flush_time.set(Duration::ZERO);
+        crate::core::terminal_metrics::update(|metrics| {
+            metrics.frames_requested += 1;
+            metrics.frames_composed += u64::from(paints_cells);
+        });
         Ok(HostFrame {
             active: std::rc::Rc::clone(&self.frame_active),
             dropped: std::sync::Arc::clone(&self.dropped),
             epoch: self.output_epoch(),
             committed: false,
+            started: std::time::Instant::now(),
+            paints_cells,
+            flush_time: std::rc::Rc::clone(&self.frame_flush_time),
         })
     }
 
@@ -338,6 +356,19 @@ impl<W: io::Write> HostBackend<W> {
         frame.active.set(false);
         self.flush_frame()?;
         frame.committed = frame.epoch == self.output_epoch();
+        if frame.committed {
+            crate::core::terminal_metrics::presented(std::time::Instant::now());
+            if frame.paints_cells {
+                crate::core::terminal_metrics::update(|metrics| {
+                    metrics.compose_us += frame
+                        .started
+                        .elapsed()
+                        .saturating_sub(frame.flush_time.get())
+                        .as_micros()
+                        .min(u128::from(u64::MAX)) as u64
+                });
+            }
+        }
         Ok(())
     }
 
@@ -377,8 +408,10 @@ impl<W: io::Write> HostBackend<W> {
             .map(|(transition, _, _)| &transition.next);
         let transition = self.graphics_scene.prepare(desired, reserved)?;
         if transition.commands.is_empty() {
+            transition.record_metrics();
             return Ok(GraphicsPresentation::Unchanged);
         }
+        let output_frame = self.begin_frame(false)?;
         let epoch = self.dropped.load(Ordering::Relaxed);
         self.pending_scene = Some((transition, epoch, false));
         self.backend.write_all(b"\x1b[?2026h\x1b7")?;
@@ -391,8 +424,9 @@ impl<W: io::Write> HostBackend<W> {
         if let Some((_, _, ready)) = self.pending_scene.as_mut() {
             *ready = true;
         }
-        self.flush_frame()?;
+        self.finish_output_frame(output_frame)?;
         Ok(if epoch == self.dropped.load(Ordering::Relaxed) {
+            crate::core::terminal_metrics::update(|metrics| metrics.graphics_direct += 1);
             GraphicsPresentation::Written
         } else {
             GraphicsPresentation::Discarded
@@ -417,7 +451,14 @@ impl<W: io::Write> HostBackend<W> {
             }
             _ => {}
         }
+        let write_started = std::time::Instant::now();
         let result = io::Write::flush(&mut self.backend);
+        let duration = write_started.elapsed();
+        self.frame_flush_time
+            .set(self.frame_flush_time.get().saturating_add(duration));
+        crate::core::terminal_metrics::update(|metrics| {
+            metrics.host_write_us += duration.as_micros().min(u128::from(u64::MAX)) as u64
+        });
         if self.frame_active.get() {
             return result;
         }
@@ -441,6 +482,7 @@ impl<W: io::Write> HostBackend<W> {
                 for upload in &transition.uploads {
                     upload.handed_over();
                 }
+                transition.record_metrics();
                 self.graphics_scene = transition.next.clone();
                 self.graphics_scene.commit_retirements();
                 self.pending_scene = None;

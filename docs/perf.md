@@ -639,3 +639,20 @@ commits. These measurements do not describe a published release or the later ful
 Continuous terminal output, graphics, pointer motion and drags, paint updates, and framework
 animation ticks share one presentation deadline. Animation ticks that need layout or a new view
 also use that deadline. Explicit layout/full updates and input answer windows remain immediate.
+
+### Terminal graphics aggregates
+
+`terminal_graphics_metrics()` reports counters for parsers and host backends on the calling UI
+thread: mutation classes, native source and placement changes, rectangle counts before/after
+merging, direct graphics presentations and widened paints, committed graphics command bytes,
+frame attempts, cell paints, successful host writes and abandoned frames. `TerminalGraphicsMetrics`
+serializes with `terminal-serde`. Read it on demand or publish selected values through DevTools;
+no per-frame logging is enabled.
+
+Native operations and command bytes count only successful scene commits. An intermediate cell
+flush does not increment presented FPS. Successful frame intervals retain a bounded window of
+1024 samples and report p50/p95/p99/max in microseconds. `compose_us` measures normal frame time
+excluding backend flushes; `host_write_us` measures backend flush duration, including failures.
+Use an outgoing-wire trace for actual partial-write traffic and whole-process sampling for CPU,
+RSS/PSS and producer/page-cache memory. These counters do not measure producer work before PTY
+output or GPU scanout completion.

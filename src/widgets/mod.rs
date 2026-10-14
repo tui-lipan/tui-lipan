@@ -363,3 +363,5 @@ pub use terminal::{
 
 #[cfg(feature = "terminal-images")]
 pub use terminal::{GraphicsDependency, TerminalOutputClass, TerminalOutputTransaction};
+
+pub use crate::core::terminal_metrics::{TerminalGraphicsMetrics, terminal_graphics_metrics};

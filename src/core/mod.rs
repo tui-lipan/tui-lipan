@@ -20,3 +20,5 @@ pub(crate) mod nested;
 pub mod node;
 /// Shared runtime environment passed to every component.
 pub(crate) mod runtime_env;
+
+pub(crate) mod terminal_metrics;

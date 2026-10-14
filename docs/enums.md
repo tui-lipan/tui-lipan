@@ -1601,3 +1601,6 @@ With `terminal`, `PresentedTerminal` contains `stable_terminal_id: u64` and `tok
 `TerminalPresentationSubscription` unregisters a successful-host-frame observer when dropped.
 `UpdateLevel::TerminalGraphics` requests native scene reconciliation and widens automatically when
 composition or plan invalidation requires terminal paint.
+
+`TerminalGraphicsMetrics` contains cumulative parser, native-scene and host-frame counters plus
+bounded successful frame interval percentiles. See [performance guidance](perf.md#terminal-graphics-aggregates).

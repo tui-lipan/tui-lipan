@@ -455,6 +455,7 @@ fn native_regions(
     holes: &[ratatui::layout::Rect],
 ) -> Vec<NativeRegion> {
     let mut regions: Vec<NativeRegion> = Vec::new();
+    let mut before_merge = 0;
     let mut previous: HashMap<(u16, u32, u32, u32), usize> = HashMap::new();
     for y in clip.y..clip.bottom() {
         let mut current = HashMap::new();
@@ -462,6 +463,7 @@ fn native_regions(
             let Some(region) = geometry.visible_row(left, right, y) else {
                 continue;
             };
+            before_merge += 1;
             let key = (
                 region.anchor.0,
                 region.offset.0,
@@ -480,11 +482,19 @@ fn native_regions(
             };
             current.insert(key, index);
             if regions.len() > MAX_NATIVE_REGIONS {
-                return regions;
+                return record_region_metrics(before_merge, regions);
             }
         }
         previous = current;
     }
+    record_region_metrics(before_merge, regions)
+}
+
+fn record_region_metrics(before: u64, regions: Vec<NativeRegion>) -> Vec<NativeRegion> {
+    crate::core::terminal_metrics::update(|metrics| {
+        metrics.regions_before_merge += before;
+        metrics.regions_after_merge += regions.len() as u64;
+    });
     regions
 }
 
