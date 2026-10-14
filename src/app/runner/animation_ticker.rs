@@ -187,7 +187,7 @@ impl<C: Component> AppRunner<C> {
                     || {
                         #[cfg(feature = "terminal")]
                         {
-                            matches!(&node.kind, NodeKind::Terminal(n) if n.cursor_visible)
+                            matches!(&node.kind, NodeKind::Terminal(n) if n.cursor_visible && n.cursor_blinking)
                         }
                         #[cfg(not(feature = "terminal"))]
                         {

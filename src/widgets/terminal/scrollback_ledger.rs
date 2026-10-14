@@ -63,10 +63,42 @@ pub(super) struct HostModes<'a> {
     pub(super) responses: &'a std::cell::RefCell<Vec<Vec<u8>>>,
 }
 
+/// Which cursor properties the child explicitly set, independent of emulator defaults.
+///
+/// Alacritty materializes a full style even for a blink-only request or a mode query. Keeping
+/// intent lets a later host default still supply the properties the child never set.
+#[derive(Default)]
+pub(super) struct CursorStyleOverrides {
+    shape: bool,
+    blinking: bool,
+}
+
+impl CursorStyleOverrides {
+    pub(super) fn resolve(
+        &self,
+        current: CursorStyle,
+        default: CursorStyle,
+    ) -> Option<CursorStyle> {
+        (self.shape || self.blinking).then_some(CursorStyle {
+            shape: if self.shape {
+                current.shape
+            } else {
+                default.shape
+            },
+            blinking: if self.blinking {
+                current.blinking
+            } else {
+                default.blinking
+            },
+        })
+    }
+}
+
 /// A [`Term`] that counts the scrollback lines evicted while it is driven.
 pub(super) struct LedgerTerm<'a, T: EventListener> {
     inner: &'a mut Term<T>,
     modes: HostModes<'a>,
+    cursor_overrides: &'a mut CursorStyleOverrides,
     /// Scrollback depth actually exposed to callers.
     limit: usize,
     /// Grid capacity, always `limit + rows`.
@@ -85,10 +117,12 @@ impl<'a, T: EventListener> LedgerTerm<'a, T> {
         limit: usize,
         capacity: usize,
         modes: HostModes<'a>,
+        cursor_overrides: &'a mut CursorStyleOverrides,
     ) -> Self {
         Self {
             inner,
             modes,
+            cursor_overrides,
             limit,
             capacity,
             evicted: 0,
@@ -171,10 +205,13 @@ impl<T: EventListener> Handler for LedgerTerm<'_, T> {
         self.settle();
     }
     fn set_cursor_style(&mut self, arg0: Option<CursorStyle>) {
+        self.cursor_overrides.shape = arg0.is_some();
+        self.cursor_overrides.blinking = arg0.is_some();
         self.inner.set_cursor_style(arg0);
         self.settle();
     }
     fn set_cursor_shape(&mut self, shape: CursorShape) {
+        self.cursor_overrides.shape = true;
         self.inner.set_cursor_shape(shape);
         self.settle();
     }
@@ -338,6 +375,7 @@ impl<T: EventListener> Handler for LedgerTerm<'_, T> {
     }
     fn reset_state(&mut self) {
         self.grid_mutated = true;
+        *self.cursor_overrides = CursorStyleOverrides::default();
         self.inner.reset_state();
         self.reset = true;
         self.settle();
@@ -369,6 +407,9 @@ impl<T: EventListener> Handler for LedgerTerm<'_, T> {
             return;
         }
         let alternate = self.inner.mode().contains(TermMode::ALT_SCREEN);
+        if mode.raw() == 12 {
+            self.cursor_overrides.blinking = true;
+        }
         self.inner.set_private_mode(mode);
         self.grid_mutated |= alternate != self.inner.mode().contains(TermMode::ALT_SCREEN);
         self.settle();
@@ -379,6 +420,9 @@ impl<T: EventListener> Handler for LedgerTerm<'_, T> {
             return;
         }
         let alt_screen = self.inner.mode().contains(TermMode::ALT_SCREEN);
+        if mode.raw() == 12 {
+            self.cursor_overrides.blinking = true;
+        }
         self.inner.unset_private_mode(mode);
         self.left_alt_screen |= alt_screen && !self.inner.mode().contains(TermMode::ALT_SCREEN);
         self.grid_mutated |= self.left_alt_screen;
@@ -567,11 +611,13 @@ mod tests {
             // delegation, not the ledger's own eviction.
             let mut pixel_mouse = false;
             let responses = std::cell::RefCell::new(Vec::new());
+            let mut cursor_overrides = CursorStyleOverrides::default();
             let mut ledger = LedgerTerm::new(
                 &mut wrapped,
                 10_000,
                 10_000,
                 HostModes::detached(&mut pixel_mouse, &responses),
+                &mut cursor_overrides,
             );
             wrapped_parser.advance(&mut ledger, chunk);
             assert_eq!(ledger.evicted(), 0);
@@ -608,11 +654,13 @@ mod tests {
         for i in 0..20 {
             let mut pixel_mouse = false;
             let responses = std::cell::RefCell::new(Vec::new());
+            let mut cursor_overrides = CursorStyleOverrides::default();
             let mut ledger = LedgerTerm::new(
                 &mut term,
                 3,
                 ledger_capacity(3, 2),
                 HostModes::detached(&mut pixel_mouse, &responses),
+                &mut cursor_overrides,
             );
             parser.advance(&mut ledger, format!("l{i}\r\n").as_bytes());
             total += ledger.evicted();
@@ -640,11 +688,13 @@ mod tests {
         let mut parser = Processor::<StdSyncHandler>::new();
         let mut pixel_mouse = false;
         let responses = std::cell::RefCell::new(Vec::new());
+        let mut cursor_overrides = CursorStyleOverrides::default();
         let mut ledger = LedgerTerm::new(
             &mut term,
             2,
             capacity,
             HostModes::detached(&mut pixel_mouse, &responses),
+            &mut cursor_overrides,
         );
         parser.advance(&mut ledger, b"a\r\nb\r\nc\r\nd");
         parser.advance(&mut ledger, b"\x1b[999S");

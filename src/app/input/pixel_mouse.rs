@@ -17,6 +17,9 @@
 //! Dividing those by the cell size collapses the whole screen into its top-left corner, so
 //! [`read_report`] answers from [`reports_pixels`]: what the host was told, not what it could be
 //! told.
+//!
+//! The mode is asked for only while a program on screen wants it ([`should_request`]). It is not
+//! free: the host then reports every pixel of pointer motion rather than every cell.
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
@@ -26,6 +29,8 @@ static SUPPORTED: AtomicBool = AtomicBool::new(false);
 static CELL: AtomicU32 = AtomicU32::new(0);
 /// The host has been asked for the mode and has not been told to stop, so reports carry pixels.
 static REPORTS_PIXELS: AtomicBool = AtomicBool::new(false);
+/// Something on screen reads the precision: a terminal whose program asked for pixel reports.
+static WANTED: AtomicBool = AtomicBool::new(false);
 
 /// Cell sizes outside this range are a misreport, not a font.
 const CELL_WIDTH: std::ops::RangeInclusive<u16> = 2..=64;
@@ -134,12 +139,44 @@ pub(crate) fn host_supports() -> bool {
     SUPPORTED.load(Ordering::Acquire)
 }
 
-/// Whether to ask the host for pixel reports, and so whether incoming reports carry pixels.
+/// Whether pixel reports are available on this host: it implements the mode, and the cell size
+/// they are divided by is known.
 ///
 /// Both halves are required. A host that reports pixels we cannot divide into cells is worse than
 /// one reporting cells, so an unknown cell size leaves the mode alone.
 pub(crate) fn is_active() -> bool {
     SUPPORTED.load(Ordering::Acquire) && cell_size().is_some()
+}
+
+/// Record whether anything on screen would read pixel precision. Returns whether that changed.
+#[cfg(feature = "terminal")]
+pub(crate) fn note_wanted(wanted: bool) -> bool {
+    WANTED.swap(wanted, Ordering::AcqRel) != wanted
+}
+
+/// Whether to ask the host for pixel reports: they are available, and something would read them.
+///
+/// Available is not enough. A pixel-reporting host sends a report for every pixel the pointer
+/// crosses rather than every cell, which multiplies the motion reports the whole input path handles
+/// many times over. Nothing but a terminal whose program asked for pixels can tell the difference,
+/// so without one the host keeps sending cells.
+pub(crate) fn should_request() -> bool {
+    is_active() && WANTED.load(Ordering::Acquire)
+}
+
+/// Forget everything a previous run learned, before this run probes its host.
+///
+/// All of it is process-wide while a run is not. A second run in the same process may face another
+/// host, one that does not support the mode or whose cell size cannot be read, and must not divide
+/// its reports by the first host's cells. The host is put back to reporting cells by the enter
+/// plan, which is what [`reports_pixels`] then says.
+pub(crate) fn start_run() {
+    SUPPORTED.store(false, Ordering::Release);
+    CELL.store(0, Ordering::Release);
+    REPORTS_PIXELS.store(false, Ordering::Release);
+    WANTED.store(false, Ordering::Release);
+    #[cfg(feature = "image")]
+    crate::backend::ratatui_backend::image_support::forget_queried_cell_size();
 }
 
 /// Record that the host has been asked for the mode, or told to drop it.
@@ -152,8 +189,8 @@ pub(crate) fn note_mode_enabled(enabled: bool) {
 
 /// Whether the reports arriving right now carry pixels.
 ///
-/// [`is_active`] answers whether the mode *can* be on, which is what decides whether to ask for it.
-/// This answers whether it *is*, which is the only safe question to read a report against.
+/// [`should_request`] answers whether the mode *should* be on, which is what decides whether to ask
+/// for it. This answers whether it *is*, which is the only safe question to read a report against.
 pub(crate) fn reports_pixels() -> bool {
     REPORTS_PIXELS.load(Ordering::Acquire)
 }
@@ -184,6 +221,7 @@ fn reset() {
     SUPPORTED.store(false, Ordering::Release);
     CELL.store(0, Ordering::Release);
     REPORTS_PIXELS.store(false, Ordering::Release);
+    WANTED.store(false, Ordering::Release);
 }
 
 #[cfg(test)]
@@ -272,6 +310,38 @@ mod tests {
 
         // And a suspend that drops the mode puts them back, without waiting for a resize to say so.
         note_mode_enabled(false);
+        assert_eq!(read_report(20, 30), PointerReport::Cells);
+
+        // Available is not the same as asked for. A pixel-reporting host reports every pixel of
+        // motion, so the mode waits for something on screen to read the precision.
+        assert!(is_active());
+        assert!(!should_request(), "nothing on screen reads pixels");
+        #[cfg(feature = "terminal")]
+        {
+            assert!(note_wanted(true), "a program asking for pixels is a change");
+            assert!(!note_wanted(true), "asking again is not");
+            assert!(should_request());
+            note_host_support(false);
+            assert!(
+                !should_request(),
+                "wanting pixels does not make a host send them"
+            );
+            note_host_support(true);
+            assert!(note_wanted(false));
+            assert!(
+                !should_request(),
+                "the last reader leaving withdraws the request"
+            );
+        }
+
+        // A run that ended with pixels on and wanted leaves nothing for the next one to inherit.
+        // Its exit turned the mode off at the host, and whatever wanted it is gone.
+        #[cfg(feature = "terminal")]
+        note_wanted(true);
+        note_mode_enabled(true);
+        start_run();
+        assert!(!reports_pixels(), "the next run starts reading cells");
+        assert!(!should_request(), "and with nothing asking for pixels");
         assert_eq!(read_report(20, 30), PointerReport::Cells);
 
         reset();

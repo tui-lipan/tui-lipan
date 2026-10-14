@@ -59,6 +59,7 @@ fn new_registry() -> ComponentRegistry {
             host_terminal_colors: Rc::new(Cell::new(None)),
             host_terminal_color_generation: Rc::new(Cell::new(0)),
             host_terminal_color_refresh_requested: Rc::new(Cell::new(false)),
+            host_cursor_style: Rc::new(Cell::new(None)),
             host_terminal_color_refresh_enabled: false,
             mouse_capture_generation: Rc::new(Cell::new(1)),
             memo_dependency_recorder: Rc::new(RefCell::new(None)),

@@ -249,6 +249,7 @@ where
             host_terminal_color_generation,
             host_terminal_color_refresh_requested,
             host_terminal_color_refresh_enabled,
+            host_cursor_style: Rc::new(Cell::new(None)),
             mouse_capture_generation,
             memo_dependency_recorder,
             full_repaint,

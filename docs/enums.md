@@ -494,6 +494,13 @@ and `Arrow`; `font_safe()` degrades either to `Padded`. An explicitly selected
 | `CaretShape::Bar` | Vertical bar cursor (│) |
 | `CaretShape::Underline` | Underline cursor (_) |
 
+### `TerminalCursorStyle`
+
+`TerminalCursorStyle { shape: CaretShape, blinking: bool }` specifies an emulated terminal screen's
+default cursor. Pass it to `TerminalScreen::set_default_cursor_style` to override host inheritance
+without replacing explicit cursor requests from the child program. It is exported from the crate
+root, `style`, and the prelude.
+
 ### `CaretPalette`
 
 Global caret defaults for editable text-entry widgets. `ThemePalette` derives

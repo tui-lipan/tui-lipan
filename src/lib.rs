@@ -122,9 +122,10 @@ pub fn pixel_pointer_status() -> PixelPointerStatus {
     }
 }
 
-/// What [`pixel_pointer_status`] found. `active` is the conjunction, and is what decides whether the
-/// mode is asked for; reports carry pixels from the moment that request reaches the host, which for
-/// a host that only reveals its cell size on a resize is later than startup.
+/// What [`pixel_pointer_status`] found. `active` is the conjunction: whether pixel reports are
+/// available at all. The mode is then asked for only while a terminal on screen forwards mouse
+/// reports in SGR-pixels encoding, because a pixel-reporting host sends a report for every pixel of
+/// pointer motion. Reports carry pixels from the moment that request reaches the host.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg(not(target_arch = "wasm32"))]
 pub struct PixelPointerStatus {
@@ -137,7 +138,7 @@ pub struct PixelPointerStatus {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl PixelPointerStatus {
-    /// Whether pointer reports on this host carry pixels.
+    /// Whether pointer reports on this host can carry pixels.
     pub fn active(&self) -> bool {
         self.host_supports && self.cell.is_some()
     }
@@ -248,8 +249,8 @@ pub use crate::style::{
     Justify, LayoutConstraints, Length, Padding, Paint, PreparedCellEffect, Rect, RetroPreset,
     RichText, RippleRadius, ScrollbarConfig, ScrollbarPalette, ScrollbarVariant, ShrinkPriority,
     Size, Span, StatusPalette, Style, SurfacePalette, SyntaxPalette, TerminalColor,
-    TerminalPalette, TextAreaPalette, ThemeExtension, ThemePalette, VisualEffect,
-    query_host_colors,
+    TerminalCursorStyle, TerminalPalette, TextAreaPalette, ThemeExtension, ThemePalette,
+    VisualEffect, query_host_colors,
 };
 #[cfg(feature = "theme-reload")]
 pub use crate::style::{ThemeWatcher, load_theme_from_toml};

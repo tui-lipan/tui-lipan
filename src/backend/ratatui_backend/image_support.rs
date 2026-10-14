@@ -2,8 +2,10 @@ use std::sync::{OnceLock, RwLock};
 use std::time::Duration;
 use web_time::Instant;
 
+#[cfg(not(unix))]
+use ratatui_image::picker::Capability;
+use ratatui_image::picker::Picker;
 use ratatui_image::picker::cap_parser::QueryStdioOptions;
-use ratatui_image::picker::{Capability, Picker};
 
 #[cfg(test)]
 thread_local! {
@@ -43,6 +45,7 @@ static CELL_SIZE_QUERIED: std::sync::atomic::AtomicBool = std::sync::atomic::Ato
 /// arbitrary built-in size or the truncated result of dividing a padded window, both of which are
 /// plausible numbers rather than true ones. Only the query's own answer says the size is real,
 /// which is what a pixel coordinate has to be divided by.
+#[cfg(not(unix))]
 fn cell_size_was_queried(picker: &Picker) -> bool {
     picker
         .capabilities()
@@ -72,23 +75,113 @@ fn forced_protocol() -> Option<ratatui_image::picker::ProtocolType> {
 }
 
 pub(crate) fn init_image_picker() {
-    let options = QueryStdioOptions {
-        timeout: Duration::from_millis(200),
-        ..QueryStdioOptions::default()
-    };
-
-    let queried = Picker::from_query_stdio_with_options(options);
-    CELL_SIZE_QUERIED.store(
-        queried.as_ref().is_ok_and(cell_size_was_queried),
-        std::sync::atomic::Ordering::Release,
-    );
-    let mut picker = queried.unwrap_or_else(|_| Picker::halfblocks());
+    let (mut picker, cell_size_queried) = query_picker();
+    CELL_SIZE_QUERIED.store(cell_size_queried, std::sync::atomic::Ordering::Release);
     if let Some(protocol) = forced_protocol() {
         picker.set_protocol_type(protocol);
     }
     if let Ok(mut slot) = picker_state().write() {
         *slot = picker;
     }
+}
+
+/// How long the host has to answer the image query.
+const QUERY_BUDGET: Duration = Duration::from_millis(200);
+
+/// Ask the host what it can draw, and how big its cells are.
+///
+/// `Picker::from_query_stdio` asks the same question on a thread that reads stdin until the host
+/// answers, and its timeout only stops waiting for that thread, not the thread itself. On a host
+/// slower than the timeout the thread goes on reading after startup: it takes the first input meant
+/// for the app, and switches raw mode off under it once an answer finally arrives. So the question
+/// is put through the startup exchange instead, which stops reading at its deadline and keeps any
+/// input it read, and the picker is built from the answers the way ratatui-image builds it.
+#[cfg(unix)]
+fn query_picker() -> (Picker, bool) {
+    use ratatui_image::picker::ProtocolType;
+    use ratatui_image::picker::cap_parser::{Parser, Response};
+
+    // Built first for its tmux detection, which also turns on tmux's passthrough the query needs.
+    let fallback = Picker::halfblocks();
+    let mut options = QueryStdioOptions {
+        timeout: QUERY_BUDGET,
+        ..QueryStdioOptions::default()
+    };
+    // As ratatui-image: WezTerm's and Konsole's answers claim protocols they draw badly.
+    if ["WEZTERM_EXECUTABLE", "KONSOLE_VERSION"]
+        .iter()
+        .any(|name| std::env::var(name).is_ok_and(|value| !value.is_empty()))
+    {
+        options.blacklist_protocols = vec![ProtocolType::Kitty, ProtocolType::Sixel];
+    }
+    let question = Parser::query(fallback.tmux_detected(), options);
+    let parse = |replies: &[u8]| {
+        let mut parser = Parser::new();
+        replies
+            .iter()
+            .flat_map(|&byte| parser.push(char::from(byte)))
+            .collect::<Vec<_>>()
+    };
+    let replies = crate::style::terminal_colors::ask_host_during_startup(
+        question.as_bytes(),
+        QUERY_BUDGET,
+        // The query ends with a status request every terminal answers, after everything else.
+        |replies| parse(replies).contains(&Response::Status),
+    );
+    let responses = parse(&replies);
+
+    let mut protocol = None;
+    let mut queried_cell = None;
+    for response in &responses {
+        match response {
+            Response::Kitty => protocol = Some(ProtocolType::Kitty),
+            Response::Sixel => {
+                protocol.get_or_insert(ProtocolType::Sixel);
+            }
+            Response::CellSize(Some(cell)) => queried_cell = Some(*cell),
+            _ => {}
+        }
+    }
+    // An unanswered query still leaves the window's own size to divide, as ratatui-image does.
+    let font_size = queried_cell.or_else(window_cell_size);
+    let Some(font_size) = font_size else {
+        return (fallback, false);
+    };
+    #[allow(deprecated)]
+    let mut picker = Picker::from_fontsize(font_size.into());
+    if let Some(protocol) = protocol {
+        picker.set_protocol_type(protocol);
+    }
+    (picker, queried_cell.is_some())
+}
+
+/// The cell size implied by dividing the window, truncated as ratatui-image does.
+#[cfg(unix)]
+fn window_cell_size() -> Option<(u16, u16)> {
+    let size = crossterm::terminal::window_size().ok()?;
+    if size.width == 0 || size.height == 0 || size.columns == 0 || size.rows == 0 {
+        return None;
+    }
+    Some((size.width / size.columns, size.height / size.rows))
+}
+
+#[cfg(not(unix))]
+fn query_picker() -> (Picker, bool) {
+    let options = QueryStdioOptions {
+        timeout: QUERY_BUDGET,
+        ..QueryStdioOptions::default()
+    };
+    let queried = Picker::from_query_stdio_with_options(options);
+    let cell_size_queried = queried.as_ref().is_ok_and(cell_size_was_queried);
+    (
+        queried.unwrap_or_else(|_| Picker::halfblocks()),
+        cell_size_queried,
+    )
+}
+
+/// Forget the previous run's answer until this run's query replaces it.
+pub(crate) fn forget_queried_cell_size() {
+    CELL_SIZE_QUERIED.store(false, std::sync::atomic::Ordering::Release);
 }
 
 /// The cell size in pixels the host itself reported, or `None` when it was never asked or did not

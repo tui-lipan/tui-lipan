@@ -1318,6 +1318,17 @@ impl<C: Component> Context<C> {
         self.env.host_terminal_colors()
     }
 
+    /// Return the host terminal's cursor shape and blink, read once at startup.
+    ///
+    /// `None` when the host did not answer, on Windows, and in headless runs. Live
+    /// `Terminal::screen` widgets inherit this on their own once attached; a screen that parses
+    /// child output before it is attached should pass it to
+    /// `TerminalScreen::set_default_cursor_style` first, so cursor-mode queries see the host's
+    /// preference from the first byte.
+    pub fn host_cursor_style(&self) -> Option<crate::style::TerminalCursorStyle> {
+        self.env.host_cursor_style()
+    }
+
     /// Return the generation for the cached host terminal colors.
     ///
     /// Starts at `0` and increments whenever the runner observes a different

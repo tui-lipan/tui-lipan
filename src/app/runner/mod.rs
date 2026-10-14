@@ -121,6 +121,9 @@ enum RunnerEvent {
 type ExitViewFn<C> = dyn Fn(&C, &Context<C>) -> Element;
 
 const HOST_COLOR_REFRESH_QUIET_WINDOW: Duration = Duration::from_millis(50);
+/// How often the run loop checks the host size for a resize whose event never arrived. A fallback,
+/// so it may lag a little; the host's own resize notification remains the prompt path.
+const SIZE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const HEADLESS_AUTOMATION_ENV: &str = "TUI_LIPAN_AUTOMATION_HEADLESS";
 const HEADLESS_AUTOMATION_VIEWPORT_ENV: &str = "TUI_LIPAN_AUTOMATION_VIEWPORT";
 
@@ -482,6 +485,34 @@ impl PlatformInputCoordinator {
         }
         let _ = previous;
         Ok(false)
+    }
+
+    /// Whether the reader checks the host size itself, sending a resize when it changes. The Termina
+    /// worker does, so a second check on the UI thread would only repeat its system call.
+    fn watches_window_size(&self) -> bool {
+        #[cfg(unix)]
+        return self.termina.is_some();
+        #[cfg(not(unix))]
+        false
+    }
+
+    /// Ask the host for pixel-precise pointer reports exactly while some terminal on screen will
+    /// read them. Only the Termina worker can decode them, so every other reader leaves the host
+    /// reporting cells.
+    #[cfg(feature = "terminal")]
+    fn sync_pixel_mouse(&self, wanted: bool) {
+        #[cfg(unix)]
+        if crate::app::input::pixel_mouse::note_wanted(wanted)
+            && let Some(coordinator) = &self.termina
+            && let Err(err) = coordinator.sync_pixel_mouse()
+        {
+            crate::debug::internal_log!(
+                "[tui-lipan] pixel pointer sync failed (non-fatal): {}",
+                err
+            );
+        }
+        #[cfg(not(unix))]
+        let _ = wanted;
     }
 }
 
@@ -2159,6 +2190,15 @@ impl<C: Component> AppRunner<C> {
                 self.require_utf8,
                 panic_keyboard_enhancement.as_ref(),
             )?;
+            self.core
+                .ctx
+                .env()
+                .host_cursor_style
+                .set(guard.host_cursor_style);
+            #[cfg(feature = "terminal")]
+            {
+                self.core.tree.host_cursor_style = guard.host_cursor_style;
+            }
             let mut guard = guard;
             // Route the stop signals through the loop for as long as we own the
             // terminal, so a stop — ours, an external `kill -TSTP`, or a tty
@@ -2288,6 +2328,7 @@ impl<C: Component> AppRunner<C> {
             // Last terminal size we observed. Used as a fallback for missed
             // SIGWINCH/Resize events (see the size-poll check below).
             let mut last_known_size = terminal.size().unwrap_or_default();
+            let mut last_size_poll = Instant::now();
 
             while !self.core.ctx.should_quit() {
                 #[cfg(feature = "profiling-tracing")]
@@ -2330,11 +2371,22 @@ impl<C: Component> AppRunner<C> {
                 // SIGWINCH) to redraw. Some compositors — e.g. a tiling WM
                 // reflowing our window after a neighbor closes — resize the PTY
                 // without that event reaching us, so the UI stays at the old
-                // size until the next unrelated input. Poll the real size each
-                // tick and force a full redraw when it drifts. Only relevant on
-                // the background-reader (fullscreen) path; inline mode reads
-                // events on the main thread and relies on ratatui autoresize.
-                if event_rx.receiver().is_some()
+                // size until the next unrelated input. Poll the real size and
+                // force a full redraw when it drifts. Only relevant on the
+                // background-reader (fullscreen) path; inline mode reads events
+                // on the main thread and relies on ratatui autoresize.
+                //
+                // The poll keeps its own cadence rather than the loop's. Asking the host for its
+                // size is not free - crossterm opens and closes `/dev/tty` for every answer - and
+                // this loop turns once per input event, which pointer motion alone can make
+                // hundreds of times a second. A reader that watches the size itself needs no poll.
+                let size_poll_due = event_rx.receiver().is_some()
+                    && !platform_input.watches_window_size()
+                    && last_size_poll.elapsed() >= SIZE_POLL_INTERVAL;
+                if size_poll_due {
+                    last_size_poll = Instant::now();
+                }
+                if size_poll_due
                     && let Ok(size) = terminal.size()
                     && size != last_known_size
                 {
@@ -2348,6 +2400,8 @@ impl<C: Component> AppRunner<C> {
                 if self.sync_mouse_capture_preference(&mut terminal)? {
                     dirty.mark_full();
                 }
+                #[cfg(feature = "terminal")]
+                platform_input.sync_pixel_mouse(self.core.tree.has_terminal_pixel_mouse());
 
                 #[cfg_attr(not(unix), allow(unused_mut))]
                 // The message a snapshot callback sent is its caller's answer; it must not wait for

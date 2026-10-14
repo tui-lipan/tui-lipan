@@ -17,6 +17,9 @@ pub(crate) fn reconcile_terminal(
     // the scrollbar and the scroll rules below all keep working off one code path. The pre-draw
     // refresh then only has to catch output that arrived since this pass.
     let live = terminal.screen.as_ref().map(|screen| {
+        if let Some(style) = tree.host_cursor_style {
+            screen.set_host_cursor_style(style);
+        }
         let snapshot = screen.snapshot();
         if terminal.decorations.is_empty() {
             snapshot

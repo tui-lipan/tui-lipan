@@ -132,8 +132,14 @@ impl TerminalNode {
     /// here and only here, so a later consumer - the snapshot rebuild, an incremental repaint -
     /// takes it from the returned value rather than asking the screen again and starving whoever
     /// asks second.
-    pub(crate) fn refresh_from_live_screen(&mut self) -> Option<(TerminalDamage, bool, bool)> {
+    pub(crate) fn refresh_from_live_screen(
+        &mut self,
+        host_cursor_style: Option<crate::style::TerminalCursorStyle>,
+    ) -> Option<(TerminalDamage, bool, bool)> {
         let screen = self.screen.clone()?;
+        if let Some(style) = host_cursor_style {
+            screen.set_host_cursor_style(style);
+        }
         let snapshot = screen.snapshot();
         let snapshot = if self.decorations.is_empty() {
             snapshot

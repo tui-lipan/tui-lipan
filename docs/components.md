@@ -141,6 +141,7 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
 | `ctx.theme()` | Clone the active theme for this subtree |
 | `ctx.theme_extension::<T>()` | Clone a typed app-specific theme extension |
 | `ctx.host_terminal_colors()` | Read the runner-managed `HostTerminalColors` cache when live host colors are enabled |
+| `ctx.host_cursor_style()` | Read the host cursor shape and blink from the startup probe, or `None` when the host did not answer |
 | `ctx.host_terminal_color_generation()` | Read the cache generation; increments when refreshed colors differ |
 | `ctx.request_host_terminal_color_refresh()` | Queue a safe runner-owned host-color refresh on the UI thread |
 | `ctx.use_context::<T>()` | Read nearest `ContextProvider<T>` value for this subtree |
