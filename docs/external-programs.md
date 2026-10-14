@@ -31,7 +31,7 @@ use tui_lipan::terminal_handoff::{
 | `suspend_for_external_process(surface_mode)` | Pause the fullscreen stdin reader (when applicable), leave interactive terminal state so the child can use the TTY. |
 | `resume_after_external_process(surface_mode, mouse_enabled)` | Restore raw mode, alternate screen (if not inline), mouse capture if it was enabled, resume the reader, and **request a host redraw** on the next frame. |
 
-The framework consumes that request on the next tick: it promotes the frame to a **full** render, invalidates Ratatui's previous frame in memory, and drops incremental scroll snapshots so the UI matches the TTY again. The next complete frame is emitted through the normal draw path without first flushing a cleared terminal. You can still call [`Context::request_full_repaint()`](components.md#context-methods) for other cases where the host display may be stale.
+The framework consumes that request on the next tick: it promotes the frame to a **full** render, invalidates Ratatui's previous frame in memory, and drops incremental scroll snapshots so the UI matches the TTY again. Retained native graphics and the application title are restored as part of that frame. The next complete frame is emitted through the normal draw path without first flushing a cleared terminal. You can still call [`Context::request_full_repaint()`](components.md#context-methods) for other cases where the host display may be stale.
 
 **Stale stdin:** Before the event reader is unpaused, `resume_after_external_process` discards pending terminal input and, on Unix, runs `tcflush(TCIFLUSH)` on stdin so CSI/OSC/DA tails and other mode-switch bytes are not delivered as fake key input to the focused widget.
 

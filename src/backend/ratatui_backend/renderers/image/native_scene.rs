@@ -34,6 +34,7 @@ pub(super) struct DesiredPlacement {
 #[derive(Default)]
 pub(crate) struct DesiredScene {
     full: bool,
+    alive_owners: Option<HashSet<NodeId>>,
     owners: HashSet<NodeId>,
     placements: Vec<DesiredPlacement>,
     plans: HashMap<NodeId, native_patches::TerminalGraphicsPlan>,
@@ -43,6 +44,7 @@ thread_local! {
     // Only frame staging lives here. Committed resources belong to HostBackend.
     static DESIRED: RefCell<Option<DesiredScene>> = const { RefCell::new(None) };
     static CACHED_PLANS: RefCell<Option<HashMap<NodeId, native_patches::TerminalGraphicsPlan>>> = const { RefCell::new(None) };
+    static ALIVE_OWNERS: RefCell<Option<HashSet<NodeId>>> = const { RefCell::new(None) };
     static OWNER: Cell<NodeId> = const { Cell::new(NodeId::INVALID) };
 }
 
@@ -65,10 +67,25 @@ pub(super) fn cached_plan() -> Option<native_patches::TerminalGraphicsPlan> {
     })
 }
 
+pub(crate) struct NativeOwnersScope(Option<HashSet<NodeId>>);
+
+pub(crate) fn native_owners_scope(owners: HashSet<NodeId>) -> NativeOwnersScope {
+    NativeOwnersScope(ALIVE_OWNERS.with(|slot| slot.replace(Some(owners))))
+}
+
+impl Drop for NativeOwnersScope {
+    fn drop(&mut self) {
+        ALIVE_OWNERS.with(|slot| slot.replace(self.0.take()));
+    }
+}
+
 pub(crate) fn begin(full: bool) {
     DESIRED.with(|slot| {
         *slot.borrow_mut() = Some(DesiredScene {
             full,
+            alive_owners: full
+                .then(|| ALIVE_OWNERS.with(|slot| slot.borrow().clone()))
+                .flatten(),
             ..Default::default()
         })
     });
@@ -136,6 +153,7 @@ struct SourceState {
 struct PlacementState {
     id: u32,
     source: ImageSourceKey,
+    revision: ImageSourceRevision,
     geometry: native_patches::NativeRegion,
 }
 
@@ -164,6 +182,32 @@ pub(crate) struct SceneTransition {
 }
 
 impl SceneTransition {
+    pub(crate) fn continue_with(&self, desired: DesiredScene) -> std::io::Result<Self> {
+        let mut base = self.next.clone();
+        // These deletions were already written in this output batch. Keep their leases in the
+        // resulting transition, but do not emit them again for each repainted terminal row.
+        base.commit_retirements();
+        let mut next = base.prepare(desired, None)?;
+        next.next
+            .retired_sources
+            .extend(self.next.retired_sources.clone());
+        next.uploads.extend(self.uploads.iter().cloned());
+        next.metrics.sources_created += self.metrics.sources_created;
+        next.metrics.sources_uploaded += self.metrics.sources_uploaded;
+        next.metrics.sources_unchanged += self.metrics.sources_unchanged;
+        next.metrics.sources_updated += self.metrics.sources_updated;
+        next.metrics.sources_retired += self.metrics.sources_retired;
+        next.metrics.placements_desired += self.metrics.placements_desired;
+        next.metrics.placements_created += self.metrics.placements_created;
+        next.metrics.placements_unchanged += self.metrics.placements_unchanged;
+        next.metrics.placements_updated += self.metrics.placements_updated;
+        next.metrics.placements_deleted += self.metrics.placements_deleted;
+        next.metrics.upload_bytes += self.metrics.upload_bytes;
+        next.metrics.placement_bytes += self.metrics.placement_bytes;
+        next.metrics.delete_bytes += self.metrics.delete_bytes;
+        Ok(next)
+    }
+
     pub(crate) fn record_metrics(&self) {
         crate::core::terminal_metrics::update(|metrics| {
             metrics.sources_created += self.metrics.sources_created;
@@ -223,6 +267,33 @@ impl HostGraphicsScene {
         self.plans.get(&owner).is_some_and(|plan| plan.visible())
     }
 
+    pub(crate) fn invalidate(&mut self) {
+        self.plans.clear();
+        for source in self.sources.values_mut() {
+            source.revision = ImageSourceRevision::default();
+        }
+    }
+
+    fn cleanup_ids(&self, pending: Option<&Self>) -> std::collections::BTreeSet<u32> {
+        let mut ids = std::collections::BTreeSet::new();
+        for scene in std::iter::once(self).chain(pending) {
+            ids.extend(scene.sources.values().map(|source| source.id));
+            ids.extend(scene.retired_sources.keys().copied());
+        }
+        ids
+    }
+
+    pub(crate) fn cleanup_commands(&self, pending: Option<&Self>) -> String {
+        self.cleanup_ids(pending)
+            .into_iter()
+            .map(|id| format!("\x1b_Ga=d,q=2,d=I,i={id};\x1b\\"))
+            .collect()
+    }
+
+    pub(crate) fn defer_cleanup(&self, pending: Option<&Self>) {
+        native_patches::defer_backend_cleanup(self.cleanup_ids(pending));
+    }
+
     pub(crate) fn commit_retirements(&mut self) {
         self.retired_sources.clear();
     }
@@ -237,9 +308,13 @@ impl HostGraphicsScene {
             identities
                 .sources
                 .retain(|_, (owner, _)| owner.strong_count() != 0);
-            identities
-                .placements
-                .retain(|_, (owner, _)| owner.strong_count() != 0);
+            identities.placements.retain(|key, (owner, _)| {
+                owner.strong_count() != 0
+                    && desired
+                        .alive_owners
+                        .as_ref()
+                        .is_none_or(|owners| owners.contains(&key.owner))
+            });
         }
         self.match_regions(&mut desired, reserved);
         let mut next = reserved.unwrap_or(self).clone();
@@ -257,6 +332,7 @@ impl HostGraphicsScene {
             .map(|p| p.source.image.source_key())
             .chain(next.placements.values().map(|p| p.source))
             .collect();
+        next.validate_revisions(&desired, &wanted)?;
         next.retain_sources(&wanted_sources);
         let mut uploads = Vec::new();
         let mut updated = HashSet::new();
@@ -287,6 +363,36 @@ impl HostGraphicsScene {
             commands,
             uploads,
         })
+    }
+
+    fn validate_revisions(
+        &self,
+        desired: &DesiredScene,
+        wanted: &HashSet<PlacementKey>,
+    ) -> std::io::Result<()> {
+        let mut revisions = HashMap::new();
+        let desired_versions = desired.placements.iter().map(|placement| {
+            (
+                placement.source.image.source_key(),
+                placement.source.image.source_revision(),
+            )
+        });
+        let preserved_versions = self
+            .placements
+            .iter()
+            .filter(|(key, _)| !wanted.contains(key))
+            .map(|(_, placement)| (placement.source, placement.revision));
+        for (key, revision) in desired_versions.chain(preserved_versions) {
+            if revisions
+                .insert(key, revision)
+                .is_some_and(|previous| previous != revision)
+            {
+                // Frozen snapshots may coexist with a live screen at a newer source revision.
+                // A single Kitty image ID cannot display both; retained composition can.
+                return Err(std::io::Error::other(NativeSourceUnavailable));
+            }
+        }
+        Ok(())
     }
 
     fn transition_metrics(
@@ -615,6 +721,7 @@ impl HostGraphicsScene {
         let state = PlacementState {
             id,
             source,
+            revision: desired.source.image.source_revision(),
             geometry: desired.geometry,
         };
         commands.push(self.placement_command(&state)?);
@@ -939,5 +1046,192 @@ mod tests {
         assert_eq!(abandoned.sources_uploaded, committed.sources_uploaded);
         assert_eq!(abandoned.frames_written, committed.frames_written);
         assert_eq!(abandoned.frames_failed, committed.frames_failed + 1);
+    }
+    #[test]
+    fn title_updates_commit_after_the_complete_frame_and_retry_after_failure() {
+        let output = Output::default();
+        let mut host = HostBackend::new(output.clone());
+        let frame = host.begin_output_frame().unwrap();
+        host.set_title("scene").unwrap();
+        draw(&mut host).unwrap();
+        host.finish_output_frame(frame).unwrap();
+        assert_eq!(output.take().matches("\x1b]2;scene").count(), 1);
+        let frame = host.begin_output_frame().unwrap();
+        host.set_title("scene").unwrap();
+        host.finish_output_frame(frame).unwrap();
+        assert!(!output.take().contains("\x1b]2;"));
+        let frame = host.begin_output_frame().unwrap();
+        host.set_title("replacement").unwrap();
+        draw(&mut host).unwrap();
+        output.fail_flush.set(true);
+        assert!(host.finish_output_frame(frame).is_err());
+        output.take();
+        let frame = host.begin_output_frame().unwrap();
+        host.set_title("replacement").unwrap();
+        host.finish_output_frame(frame).unwrap();
+        assert!(output.take().contains("\x1b]2;replacement"));
+    }
+
+    #[test]
+    fn host_recovery_restores_sources_with_reserved_ids_and_backend_drop_cleans_them() {
+        let mut screen = screen();
+        let output = Output::default();
+        let mut host = HostBackend::new(output.clone());
+        stage_frame(&mut screen);
+        draw(&mut host).unwrap();
+        let initial = output.take();
+        host.invalidate_host_state();
+        stage_frame(&mut screen);
+        draw(&mut host).unwrap();
+        let restored = output.take();
+        assert!(restored.contains("a=t"));
+        assert_eq!(id(&initial, "i="), id(&restored, "i="));
+        assert_eq!(id(&initial, "p="), id(&restored, "p="));
+        stage_frame(&mut screen);
+        draw(&mut host).unwrap();
+        assert!(!output.take().contains("\x1b_G"));
+        drop(host);
+        let cleanup = output.take();
+        assert!(cleanup.contains("a=d,q=2,d=I"));
+        assert_eq!(id(&initial, "i="), id(&cleanup, "i="));
+    }
+    #[test]
+    fn multiple_row_draws_do_not_reupload_an_unrelated_native_source() {
+        let mut screen = screen();
+        let output = Output::default();
+        let mut host = HostBackend::new(output.clone());
+        stage_frame(&mut screen);
+        draw(&mut host).unwrap();
+        output.take();
+        let frame = host.begin_output_frame().unwrap();
+        for _ in 0..3 {
+            begin(false);
+            let _owner = owner_scope(NodeId::new(2, 1));
+            draw(&mut host).unwrap();
+        }
+        host.finish_output_frame(frame).unwrap();
+        assert!(!output.take().contains("\x1b_G"));
+    }
+
+    #[test]
+    fn repeated_draws_in_one_frame_commit_one_upload_and_keep_its_handoff() {
+        let mut screen = screen();
+        let output = Output::default();
+        let mut host = HostBackend::new(output.clone());
+        stage_frame(&mut screen);
+        draw(&mut host).unwrap();
+        output.take();
+        screen.process_bytes(b"\x1b_Ga=t,i=7,f=24,s=1,v=1,q=2;ZGVm\x1b\\");
+        let before = crate::terminal_graphics_metrics();
+        let frame = host.begin_output_frame().unwrap();
+        for _ in 0..3 {
+            stage_frame(&mut screen);
+            draw(&mut host).unwrap();
+        }
+        host.finish_output_frame(frame).unwrap();
+        let commands = output.take();
+        assert_eq!(commands.matches("a=t").count(), 1);
+        assert_eq!(commands.matches("a=p").count(), 1);
+        assert_eq!(
+            crate::terminal_graphics_metrics().sources_uploaded,
+            before.sources_uploaded + 1
+        );
+        stage_frame(&mut screen);
+        draw(&mut host).unwrap();
+        assert!(!output.take().contains("\x1b_G"));
+    }
+
+    #[test]
+    fn simultaneous_frozen_and_live_source_revisions_require_composition() {
+        let mut screen = screen();
+        stage_frame(&mut screen);
+        let mut desired = take_desired().unwrap();
+        let mut frozen = desired.placements[0].clone();
+        frozen.key.owner = NodeId::new(2, 1);
+        desired.owners.insert(frozen.key.owner);
+        desired.placements.push(frozen.clone());
+        let committed = HostGraphicsScene::default()
+            .prepare(desired, None)
+            .unwrap()
+            .next;
+        screen.process_bytes(b"\x1b_Ga=t,i=7,f=24,s=1,v=1,q=2;ZGVm\x1b\\");
+        stage_frame(&mut screen);
+        let mut changed = take_desired().unwrap();
+        changed.full = false;
+        match committed.prepare(changed, None) {
+            Ok(_) => panic!("different retained source revisions cannot share a Kitty source"),
+            Err(error) => assert!(native_source_unavailable(&error)),
+        }
+    }
+
+    #[test]
+    fn placement_reservations_survive_clipping_but_not_owner_removal() {
+        let mut screen = screen();
+        stage_frame(&mut screen);
+        let committed = HostGraphicsScene::default()
+            .prepare(take_desired().unwrap(), None)
+            .unwrap()
+            .next;
+        let owner = NodeId::new(1, 1);
+        let clipped = DesiredScene {
+            full: true,
+            alive_owners: Some(HashSet::from([owner])),
+            ..Default::default()
+        };
+        let hidden = committed.prepare(clipped, None).unwrap().next;
+        assert_eq!(hidden.identities.borrow().placements.len(), 1);
+        let removed = DesiredScene {
+            full: true,
+            alive_owners: Some(HashSet::new()),
+            ..Default::default()
+        };
+        let detached = hidden.prepare(removed, None).unwrap().next;
+        assert!(detached.identities.borrow().placements.is_empty());
+        assert_eq!(detached.identities.borrow().sources.len(), 1);
+    }
+
+    #[test]
+    fn failed_backend_cleanup_is_available_to_the_next_backend() {
+        super::native_patches::take_retired_native_ids();
+        let mut screen = screen();
+        let output = Output::default();
+        let mut host = HostBackend::new(output.clone());
+        stage_frame(&mut screen);
+        draw(&mut host).unwrap();
+        let initial = output.take();
+        output.fail_flush.set(true);
+        drop(host);
+        let deferred = super::native_patches::take_retired_native_ids();
+        assert!(deferred.contains(&id(&initial, "i=")));
+    }
+
+    #[test]
+    fn failed_multi_draw_frame_retries_one_upload_with_the_same_ids() {
+        let mut screen = screen();
+        let output = Output::default();
+        let mut host = HostBackend::new(output.clone());
+        stage_frame(&mut screen);
+        draw(&mut host).unwrap();
+        let initial = output.take();
+        screen.process_bytes(b"\x1b_Ga=t,i=7,f=24,s=1,v=1,q=2;ZGVm\x1b\\");
+        let frame = host.begin_output_frame().unwrap();
+        for _ in 0..3 {
+            stage_frame(&mut screen);
+            draw(&mut host).unwrap();
+        }
+        output.fail_flush.set(true);
+        assert!(host.finish_output_frame(frame).is_err());
+        output.take();
+        let frame = host.begin_output_frame().unwrap();
+        for _ in 0..3 {
+            stage_frame(&mut screen);
+            draw(&mut host).unwrap();
+        }
+        host.finish_output_frame(frame).unwrap();
+        let retried = output.take();
+        assert_eq!(retried.matches("a=t").count(), 1);
+        assert_eq!(retried.matches("a=p").count(), 1);
+        assert_eq!(id(&initial, "i="), id(&retried, "i="));
+        assert_eq!(id(&initial, "p="), id(&retried, "p="));
     }
 }

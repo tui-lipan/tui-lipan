@@ -283,6 +283,8 @@ pub(crate) struct HostBackend<W: io::Write> {
     backend: CrosstermBackend<W>,
     frame_active: std::rc::Rc<std::cell::Cell<bool>>,
     frame_flush_time: std::rc::Rc<std::cell::Cell<Duration>>,
+    title: Option<std::sync::Arc<str>>,
+    pending_title: Option<(std::sync::Arc<str>, usize)>,
     #[cfg(test)]
     test_flush_action: u8,
     #[cfg(all(test, feature = "terminal-images"))]
@@ -308,6 +310,8 @@ impl<W: io::Write> HostBackend<W> {
             backend: CrosstermBackend::new(writer),
             frame_active: Default::default(),
             frame_flush_time: Default::default(),
+            title: None,
+            pending_title: None,
             #[cfg(test)]
             test_flush_action: 0,
             #[cfg(all(test, feature = "terminal-images"))]
@@ -325,6 +329,27 @@ impl<W: io::Write> HostBackend<W> {
             retired_native_ids: Vec::new(),
             #[cfg(feature = "terminal-images")]
             placement_retirement: None,
+        }
+    }
+
+    pub(crate) fn set_title(&mut self, title: &str) -> io::Result<()> {
+        if self.title.as_deref() == Some(title) {
+            return Ok(());
+        }
+        self.pending_title = Some((std::sync::Arc::from(title), self.output_epoch()));
+        self.backend
+            .write_all(format!("\x1b]2;{title}\x07").as_bytes())
+    }
+
+    pub(crate) fn invalidate_host_state(&mut self) {
+        self.title = None;
+        self.pending_title = None;
+        #[cfg(feature = "terminal-images")]
+        {
+            self.graphics_scene.invalidate();
+            if let Some((_, _, ready)) = &mut self.pending_scene {
+                *ready = false;
+            }
         }
     }
 
@@ -373,6 +398,20 @@ impl<W: io::Write> HostBackend<W> {
     }
 
     #[cfg(feature = "terminal-images")]
+    fn prepare_scene(
+        &self,
+        desired: super::renderers::image::DesiredScene,
+    ) -> io::Result<super::renderers::image::SceneTransition> {
+        if let Some((transition, epoch, ready)) = &self.pending_scene {
+            if self.frame_active.get() && *ready && *epoch == self.output_epoch() {
+                return transition.continue_with(desired);
+            }
+            return self.graphics_scene.prepare(desired, Some(&transition.next));
+        }
+        self.graphics_scene.prepare(desired, None)
+    }
+
+    #[cfg(feature = "terminal-images")]
     pub(crate) fn native_plan_scope(&self) -> super::renderers::image::NativePlanScope {
         self.graphics_scene.native_plan_scope()
     }
@@ -402,11 +441,7 @@ impl<W: io::Write> HostBackend<W> {
         let Some(desired) = self.graphics_scene.graphics_update(updates) else {
             return Ok(GraphicsPresentation::Unavailable);
         };
-        let reserved = self
-            .pending_scene
-            .as_ref()
-            .map(|(transition, _, _)| &transition.next);
-        let transition = self.graphics_scene.prepare(desired, reserved)?;
+        let transition = self.prepare_scene(desired)?;
         if transition.commands.is_empty() {
             transition.record_metrics();
             return Ok(GraphicsPresentation::Unchanged);
@@ -462,6 +497,12 @@ impl<W: io::Write> HostBackend<W> {
         if self.frame_active.get() {
             return result;
         }
+        if let Some((title, epoch)) = self.pending_title.take()
+            && result.is_ok()
+            && epoch == self.output_epoch()
+        {
+            self.title = Some(title);
+        }
         #[cfg(feature = "terminal-images")]
         if result.is_ok()
             && let Some((retired, epoch)) = self.placement_retirement.take()
@@ -491,6 +532,29 @@ impl<W: io::Write> HostBackend<W> {
             }
         }
         result
+    }
+}
+
+impl<W: io::Write> Drop for HostBackend<W> {
+    fn drop(&mut self) {
+        #[cfg(feature = "terminal-images")]
+        {
+            let pending = self
+                .pending_scene
+                .as_ref()
+                .map(|(transition, _, _)| &transition.next);
+            let commands = self.graphics_scene.cleanup_commands(pending);
+            if !commands.is_empty() {
+                let epoch = self.output_epoch();
+                let result = self
+                    .backend
+                    .write_all(commands.as_bytes())
+                    .and_then(|()| io::Write::flush(&mut self.backend));
+                if result.is_err() || epoch != self.output_epoch() {
+                    self.graphics_scene.defer_cleanup(pending);
+                }
+            }
+        }
     }
 }
 
@@ -541,15 +605,8 @@ impl<W: io::Write> Backend for HostBackend<W> {
             use super::renderers::image::{kitty_draw_pending, prepare_kitty_cells};
             let epoch = self.dropped.load(Ordering::Relaxed);
             self.placement_retirement = None;
-            if let Some((_, _, ready)) = self.pending_scene.as_mut() {
-                *ready = false;
-            }
             if let Some(desired) = super::renderers::image::take_desired() {
-                let reserved = self
-                    .pending_scene
-                    .as_ref()
-                    .map(|(transition, _, _)| &transition.next);
-                let transition = self.graphics_scene.prepare(desired, reserved)?;
+                let transition = self.prepare_scene(desired)?;
                 self.pending_scene = Some((transition, epoch, false));
                 if let Some((transition, _, _)) = &self.pending_scene {
                     for command in &transition.commands {

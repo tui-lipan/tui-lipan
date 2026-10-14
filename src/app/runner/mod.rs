@@ -3121,6 +3121,9 @@ impl<C: Component> AppRunner<C> {
                 match frame_level {
                     DirtyLevel::Full => {
                         if force_host_redraw {
+                            if ctx_repaint || handoff_repaint {
+                                terminal.backend_mut().invalidate_host_state();
+                            }
                             invalidate_previous_frame(&mut terminal);
                             self.last_frame_snapshot = None;
                             self.scroll_diff_snapshot = None;

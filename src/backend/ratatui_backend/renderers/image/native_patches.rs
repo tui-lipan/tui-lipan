@@ -136,6 +136,15 @@ impl Drop for NativeImageAllocation {
     }
 }
 
+pub(super) fn defer_backend_cleanup(ids: impl IntoIterator<Item = u32>) {
+    retired_ids()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .entry(std::thread::current().id())
+        .or_default()
+        .extend(ids);
+}
+
 pub(crate) fn take_retired_native_ids() -> Vec<u32> {
     retired_ids()
         .lock()

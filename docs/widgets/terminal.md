@@ -1134,3 +1134,8 @@ When matching `ImagePlacementIdentity::Placeholder`, include the new `grid_lifet
 Native scene and upload acknowledgement commit after the complete successful host frame, including
 the synchronized-output closure and cursor writes. A failure after the cell flush still retries
 from the previous committed graphics scene.
+
+An explicit `Context::request_full_repaint()` or return from terminal handoff also invalidates host
+resource acknowledgements. The next frame restores retained sources and placements using their
+reserved IDs. Ordinary UI rebuilds keep unchanged native scenes intact. Dropping a backend deletes
+its owned native resources, including resources staged by an interrupted frame.

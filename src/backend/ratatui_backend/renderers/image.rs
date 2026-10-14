@@ -8,8 +8,8 @@ pub(crate) use native_patches::{
 };
 #[cfg(feature = "terminal-images")]
 pub(crate) use native_scene::{
-    HostGraphicsScene, NativePlanScope, SceneTransition, native_source_unavailable,
-    owner_scope as native_scene_owner_scope, take_desired,
+    DesiredScene, HostGraphicsScene, NativePlanScope, SceneTransition, native_owners_scope,
+    native_source_unavailable, owner_scope as native_scene_owner_scope, take_desired,
 };
 
 #[cfg(feature = "terminal-images")]

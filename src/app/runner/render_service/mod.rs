@@ -1142,13 +1142,13 @@ impl<C: Component> AppRunner<C> {
             let frame = terminal.get_frame();
             frame.area()
         };
-        if let Some(title) = &self.title {
-            let _ = execute!(terminal.backend_mut(), Print(format!("\x1b]2;{title}\x07")));
-        }
         #[cfg(feature = "terminal")]
         let presentations = crate::widgets::presentation::PresentationScope::begin();
         let output_frame = terminal.backend().begin_output_frame()?;
         let output_epoch = terminal.backend().output_epoch();
+        if let Some(title) = &self.title {
+            terminal.backend_mut().set_title(title)?;
+        }
         execute!(terminal.backend_mut(), Print("\x1b[?2026h"))?;
         #[cfg(any(feature = "devtools", feature = "profiling-tracing"))]
         let draw_start = Instant::now();
@@ -1317,6 +1317,16 @@ impl<C: Component> AppRunner<C> {
         cursor_position: &StdCell<Option<Position>>,
         f: impl FnOnce(&RenderContext<'_>) -> R,
     ) -> R {
+        #[cfg(feature = "terminal-images")]
+        let _native_owners = crate::backend::ratatui_backend::renderers::image::native_owners_scope(
+            self.core
+                .tree
+                .iter()
+                .filter_map(|node| {
+                    matches!(node.kind, crate::core::node::NodeKind::Terminal(_)).then_some(node.id)
+                })
+                .collect(),
+        );
         let tab_drag_preview_label: Option<std::sync::Arc<str>> = match &self.drag.active {
             // Suppress text label when a snapshot preview is available.
             ActiveDrag::DraggableTabBar(d) if d.started && d.preview_snapshot_anchor.is_none() => {
