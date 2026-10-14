@@ -1128,16 +1128,38 @@ by default. Each `TerminalOutputTransaction` contains the exact original bytes a
 
 `Ordered` segments must retain their order and bytes. `Graphics` segments include the stable source
 key, its revision, and `GraphicsDependency`. Only `Independent` transactions can supersede earlier
-pending transactions for the same source without an intervening ordered barrier. Current eligibility
-requires a complete, accepted replacement of a nonzero image ID with unchanged displayed placement
-state, quiet responses, reusable media, and no cursor or grid effects. Partial patches, chunked
-uploads, queries, unknown controls, consuming media and id-less creations remain dependent or ordered.
+pending ones. The contract covers a *run*: consecutive `Independent` transactions with nothing else
+between them. A run holds a single source, and a later transaction makes every earlier one in the
+run redundant, so a consumer may keep only the newest. A replacement of a different source, or any
+other transaction, ends the run. Replacements of different images are never reordered, because the
+image budget evicts by recency and size, and moving one could evict an image that the original
+order kept. For the same reason, a replacement whose execution evicted an image is reported as
+`DependsOnPrevious`.
+
+Two shapes qualify:
+
+- A single command: a complete, accepted replacement of a nonzero image ID with unchanged displayed
+  placement state, quiet responses, reusable media (`t=d` or `t=f`), and no cursor or grid effects.
+- A whole synchronized update (`CSI ? 2026 h` to `CSI ? 2026 l`) that replaces one image, whose
+  text is only absolute cursor positioning (`CSI row ; col H`). Its graphics must be complete,
+  quiet transmissions of that image's explicit ID (retransmission retires the image's
+  placements), an `a=d,d=I` delete of it, or `a=d,d=i` placement deletes of it alongside one of
+  those. Placements must use `C=1` and come after the update has set the cursor. This is how
+  terminal-browser's whole-frame presenter writes each frame.
+
+The screen holds a candidate update until its end marker. Text, other controls, other graphics
+actions, chunked or failed transmissions, or more than 1 MiB release the held bytes unchanged at
+once. An update that touched a second image or caused an eviction is released unchanged at its
+end. Partial patches, chunked uploads, queries, unknown controls, consuming media and id-less
+creations remain dependent or ordered. Patch streams such as terminal-browser's default presenter
+are dependency chains: each frame layers new images over earlier ones, so they stay ordered.
 
 A graphics escape spanning several parser calls is emitted only when complete. Additional recording
 buffers and ordered transactions are bounded to 1 MiB; larger commands stream as ordered fragments. Before an
 external resize, reset or exit boundary, call `flush_output_transaction_boundary()` and drain the
-transactions. This forwards unfinished bytes as ordered without resetting the parser; continuation
-bytes remain ordered. Concatenating transactions reproduces the original byte stream exactly.
+transactions. This forwards unfinished bytes, including a held synchronized update, as ordered
+without resetting the parser; continuation bytes remain ordered. `output_transaction_pending()`
+reports a held update as pending. Concatenating transactions reproduces the original byte stream exactly.
 
 Mode changes without visual effects update live input handling without painting cells. Live screens
 supply current keyboard, paste, mouse and focus modes directly rather than waiting for an app view

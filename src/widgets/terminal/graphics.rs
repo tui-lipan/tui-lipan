@@ -751,6 +751,19 @@ impl GraphicsAction {
     }
 }
 
+/// The effect of one graphics command on the images a synchronized frame owns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum FrameOp {
+    /// A complete transmission under an explicit id. Retransmission retires every placement the
+    /// image had, so the image's whole state afterwards comes from this command; `places` adds
+    /// one placement at the cursor without moving it.
+    Replace { id: u32, places: bool },
+    /// `a=d,d=I` by id: the image and its data are gone whatever existed before.
+    Remove { id: u32 },
+    /// `a=d,d=i` by id: drops placements and keeps the data, so the result depends on the past.
+    Unplace { id: u32 },
+}
+
 /// A parsed `APC _G` command.
 #[derive(Clone, Debug)]
 pub(super) struct GraphicsCommand {
@@ -806,6 +819,8 @@ pub(super) struct GraphicsCommand {
     malformed: bool,
     wire: Option<Vec<u8>>,
     coalescing_safe: bool,
+    /// Every key is one a by-id delete inside a synchronized frame may carry, each at most once.
+    delete_safe: bool,
 }
 
 impl Default for GraphicsCommand {
@@ -841,6 +856,7 @@ impl Default for GraphicsCommand {
             malformed: false,
             wire: None,
             coalescing_safe: true,
+            delete_safe: true,
         }
     }
 }
@@ -858,16 +874,14 @@ impl GraphicsCommand {
             let mut halves = pair.splitn(2, |byte| *byte == b'=');
             let ([key], Some(value)) = (halves.next()?, halves.next()) else {
                 command.coalescing_safe = false;
+                command.delete_safe = false;
                 continue;
             };
-            let valid = Self::safe_pair(*key, value);
-            if valid {
-                let bit = 1u128 << *key;
-                command.coalescing_safe &= seen & bit == 0;
-                seen |= bit;
-            } else {
-                command.coalescing_safe = false;
-            }
+            let bit = 1u128.checked_shl(u32::from(*key)).unwrap_or(0);
+            let repeated = bit == 0 || seen & bit != 0;
+            seen |= bit;
+            command.coalescing_safe &= !repeated && Self::safe_pair(*key, value);
+            command.delete_safe &= !repeated && Self::delete_pair(*key, value);
             command.apply_key(*key, value);
         }
 
@@ -912,6 +926,43 @@ impl GraphicsCommand {
                 std::str::from_utf8(value).is_ok_and(|value| value.parse::<u32>().is_ok())
             }
             _ => false,
+        }
+    }
+
+    fn delete_pair(key: u8, value: &[u8]) -> bool {
+        match key {
+            b'a' => value == b"d",
+            b'd' => matches!(value, b"i" | b"I"),
+            b'q' => matches!(value, b"0" | b"1" | b"2"),
+            b'i' | b'p' => {
+                std::str::from_utf8(value).is_ok_and(|value| value.parse::<u32>().is_ok())
+            }
+            _ => false,
+        }
+    }
+
+    /// What this command does to the state a synchronized frame owns, when that is provable from
+    /// its keys alone. `None` means it reads or changes state the frame cannot account for.
+    pub(super) fn frame_op(&self) -> Option<FrameOp> {
+        if self.independent_candidate() {
+            return Some(FrameOp::Replace {
+                id: self.id,
+                places: self.action == GraphicsAction::TransmitAndDisplay,
+            });
+        }
+        if self.action != GraphicsAction::Delete
+            || !self.delete_safe
+            || self.malformed
+            || self.id == 0
+            || self.quiet != 2
+        {
+            return None;
+        }
+        match (self.delete, self.placement) {
+            (b'I', 0) => Some(FrameOp::Remove { id: self.id }),
+            (b'i', _) => Some(FrameOp::Unplace { id: self.id }),
+            // Freeing data with a placement selector depends on which placements remain.
+            _ => None,
         }
     }
 
@@ -1744,6 +1795,9 @@ pub(super) struct TerminalGraphics {
     next_incarnation: u64,
     next_placement: u64,
     composition: Arc<std::sync::Mutex<composite::CompositionCache>>,
+    /// Images dropped to stay within budget. Which ones go depends on everything stored, so a
+    /// frame that evicted anything cannot claim its effect is independent of earlier output.
+    evictions: u64,
 }
 
 impl Default for TerminalGraphics {
@@ -1775,6 +1829,7 @@ impl Default for TerminalGraphics {
             next_incarnation: 0,
             next_placement: 0,
             composition: Arc::default(),
+            evictions: 0,
         }
     }
 }
@@ -1794,6 +1849,10 @@ impl TerminalGraphics {
             virtual_cells: image.virtual_cells,
             virtual_placement: image.virtual_placement,
         })
+    }
+
+    pub(super) fn evictions(&self) -> u64 {
+        self.evictions
     }
 
     pub(super) fn has_pending_transmission(&self) -> bool {
@@ -2897,6 +2956,7 @@ impl TerminalGraphics {
                 .min_by_key(|(_, stored)| (stored.used, stored.bytes))
                 .map(|(id, _)| *id);
             let Some(victim) = victim else { break };
+            self.evictions = self.evictions.wrapping_add(1);
             self.remove_image(victim);
         }
     }
