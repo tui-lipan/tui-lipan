@@ -928,7 +928,7 @@ fn retro_crt_vignette_dim(x: i16, y: i16, bounds: RRect, strength: f32) -> f32 {
     radial.powf(2.2) * strength
 }
 
-fn strip_effect_wrappers(mut effect: &VisualEffect) -> &VisualEffect {
+pub(crate) fn strip_effect_wrappers(mut effect: &VisualEffect) -> &VisualEffect {
     loop {
         effect = match effect {
             VisualEffect::Clipped { inner, .. } | VisualEffect::Channels { inner, .. } => inner,
@@ -937,7 +937,12 @@ fn strip_effect_wrappers(mut effect: &VisualEffect) -> &VisualEffect {
     }
 }
 
-fn cell_passes_visual_clip(effect: &VisualEffect, scope_rect: Rect, x: i16, y: i16) -> bool {
+pub(crate) fn cell_passes_visual_clip(
+    effect: &VisualEffect,
+    scope_rect: Rect,
+    x: i16,
+    y: i16,
+) -> bool {
     let mut e = effect;
     loop {
         match e {

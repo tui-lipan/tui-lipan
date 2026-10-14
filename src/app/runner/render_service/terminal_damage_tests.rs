@@ -249,6 +249,46 @@ impl Component for Pane {
                 .into(),
             None => self.terminal(&self.screen).into(),
         };
+        if matches!(self.cfg.image_overlay, 19 | 20) {
+            use crate::core::element::ElementKind;
+            use crate::overlay::{
+                DismissPolicy, OverlayLayer, OverlayPlacement, PointerCapture, Portal,
+            };
+            let border: Element = crate::widgets::Frame::new()
+                .padding(0)
+                .style(Style::default().fg(Color::White))
+                .child(Text::new(""))
+                .into();
+            let (portal_content, main_content) = if self.cfg.image_overlay == 19 {
+                (border, body)
+            } else {
+                (body, border)
+            };
+            let portal = Element::new(ElementKind::Portal(Portal {
+                layer: OverlayLayer::Modal,
+                content: Box::new(
+                    portal_content
+                        .min_width(crate::style::Length::Px(COLS))
+                        .max_width(crate::style::Length::Px(COLS))
+                        .min_height(crate::style::Length::Px(ROWS))
+                        .max_height(crate::style::Length::Px(ROWS)),
+                ),
+                placement: OverlayPlacement::Center {
+                    reserve_height: None,
+                },
+                dismiss_policy: DismissPolicy::None,
+                on_close: None,
+                backdrop: None,
+                captures_focus: false,
+                auto_focus: false,
+                captures_pointer: PointerCapture::None,
+                animation: None,
+            }));
+            return crate::widgets::ZStack::new()
+                .child(portal)
+                .child(main_content)
+                .into();
+        }
         if self.cfg.terminal_portal {
             return crate::widgets::Modal::new()
                 .width(crate::style::Length::Px(COLS))
@@ -273,17 +313,35 @@ impl Component for Pane {
                 ))
                 .into();
         }
-        if self.cfg.image_overlay == 8 {
+        if matches!(
+            self.cfg.image_overlay,
+            8 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 21
+        ) {
             let border = crate::widgets::Frame::new()
                 .padding(0)
                 .style(Style::default().fg(Color::White))
                 .child(Text::new(""));
+            let border = match self.cfg.image_overlay {
+                12 | 14 => crate::widgets::Animated::new(border).opacity(0.5),
+                15 => crate::widgets::Animated::new(border).opacity(0.0),
+                16 | 21 => crate::widgets::Animated::new(border).opacity(0.25),
+                17 => crate::widgets::Animated::new(border).opacity(0.75),
+                18 => crate::widgets::Animated::new(border)
+                    .opacity(0.0)
+                    .opacity_fg_only(true),
+                13 => crate::widgets::Animated::new(border)
+                    .opacity(0.5)
+                    .opacity_target(Color::Black),
+                _ => crate::widgets::Animated::new(border),
+            };
+            let body = if matches!(self.cfg.image_overlay, 14..=18) {
+                body
+            } else {
+                crate::widgets::Frame::new().padding(0).child(body).into()
+            };
             return crate::widgets::Canvas::new()
-                .child_at(
-                    viewport(),
-                    crate::widgets::Frame::new().padding(0).child(body),
-                )
-                .child_at(viewport(), crate::widgets::Animated::new(border))
+                .child_at(viewport(), body)
+                .child_at(viewport(), border)
                 .into();
         }
         if self.cfg.image_overlay == 10 {
@@ -1230,70 +1288,158 @@ fn an_unchanged_image_pane_survives_an_unrelated_terminal_update() {
 #[cfg(feature = "terminal-images")]
 #[test]
 fn ordinary_overlays_cover_image_pixels_without_covering_the_anchor() {
+    for mode in 0..=14 {
+        for stacked in [false, true] {
+            assert_ordinary_overlay_image_coverage(mode, stacked);
+        }
+    }
+}
+
+#[cfg(feature = "terminal-images")]
+#[test]
+fn crossfading_borders_match_visible_cells_at_zero_low_and_high_opacity() {
+    for mode in [15, 16, 17, 18, 21] {
+        for stacked in [false, true] {
+            assert_ordinary_overlay_image_coverage(mode, stacked);
+        }
+    }
+}
+
+#[cfg(feature = "terminal-images")]
+#[test]
+fn portal_border_declared_before_main_terminal_still_clips_its_native_picture() {
+    for stacked in [false, true] {
+        assert_ordinary_overlay_image_coverage(19, stacked);
+    }
+}
+
+#[cfg(feature = "terminal-images")]
+#[test]
+fn main_frame_declared_after_portal_terminal_does_not_clip_its_native_picture() {
+    for stacked in [false, true] {
+        assert_ordinary_overlay_image_coverage(20, stacked);
+    }
+}
+
+#[cfg(feature = "terminal-images")]
+fn assert_ordinary_overlay_image_coverage(image_overlay: u8, stacked: bool) {
     use base64::Engine as _;
     let _host = crate::backend::ratatui_backend::image_support::test_kitty_host((10, 20), true);
-    for (image_overlay, stacked) in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
-        .into_iter()
-        .flat_map(|overlay| [false, true].map(|stacked| (overlay, stacked)))
-    {
-        let mut harness = build(
-            PaneCfg {
-                image_overlay,
-                ..PaneCfg::new()
-            },
-            b"\x1b[?25l\x1b[H",
-        );
+    let mut harness = build(
+        PaneCfg {
+            image_overlay,
+            ..PaneCfg::new()
+        },
+        b"\x1b[?25l\x1b[H",
+    );
+    harness
+        .screen
+        .borrow_mut()
+        .set_cell_size(crate::widgets::TerminalCellSize::new(10, 20));
+    let payload =
+        base64::engine::general_purpose::STANDARD.encode([0, 255, 0, 255].repeat(120 * 100));
+    harness
+        .screen
+        .borrow_mut()
+        .process_bytes(format!("\x1b_Ga=T,f=32,s=120,v=100,i=920,z=1;{payload}\x1b\\").as_bytes());
+    if stacked {
         harness
             .screen
             .borrow_mut()
-            .set_cell_size(crate::widgets::TerminalCellSize::new(10, 20));
-        let payload =
-            base64::engine::general_purpose::STANDARD.encode([0, 255, 0, 255].repeat(120 * 100));
-        harness.screen.borrow_mut().process_bytes(
-            format!("\x1b_Ga=T,f=32,s=120,v=100,i=920,z=1;{payload}\x1b\\").as_bytes(),
+            .process_bytes(b"\x1b[H\x1b_Ga=p,i=920,p=2,z=2;\x1b\\");
+    }
+    harness.runner.core.tree.refresh_live_terminals_detailed();
+    if matches!(image_overlay, 19 | 20) {
+        let tree = &harness.runner.core.tree;
+        let owner = tree
+            .iter()
+            .find(|node| matches!(node.kind, NodeKind::Terminal(_)))
+            .unwrap();
+        let frame = tree
+            .iter()
+            .find(|node| matches!(node.kind, NodeKind::Frame(_)))
+            .unwrap();
+        let owner_rank = tree.iter().position(|node| node.id == owner.id).unwrap();
+        let frame_rank = tree.iter().position(|node| node.id == frame.id).unwrap();
+        assert_eq!(
+            frame_rank < owner_rank,
+            image_overlay == 19,
+            "the declarative order must oppose the real portal paint order"
         );
-        if stacked {
-            harness
-                .screen
-                .borrow_mut()
-                .process_bytes(b"\x1b[H\x1b_Ga=p,i=920,p=2,z=2;\x1b\\");
-        }
-        harness.runner.core.tree.refresh_live_terminals_detailed();
-        let mut terminal =
-            crate::backend::ratatui_backend::create_test_terminal(COLS, ROWS).unwrap();
-        let cursor = StdCell::new(None);
-        let rendered = harness.runner.with_render_context(&cursor, |ctx| {
-            terminal.draw(|f| render(f, ctx)).unwrap().buffer.clone()
-        });
-        let output = terminal.backend().test_output();
-        let output = String::from_utf8_lossy(&output);
-        let native = output
-            .split("\x1b_Ga=p,")
-            .skip(1)
-            .any(|command| !command.split("\x1b\\").next().unwrap().contains("c="));
-        if image_overlay != 0 || !stacked {
-            assert_eq!(
-                native,
-                matches!(image_overlay, 0 | 4 | 5 | 8 | 10 | 11),
-                "native placements may not cover a later widget"
-            );
-        }
-        if image_overlay == 9 {
-            assert!(
-                output.contains("COVER"),
-                "the plain frame footer must reach the host: {output:?}"
-            );
-        }
-        if matches!(image_overlay, 1..=3 | 6) {
-            assert!(
-                output.contains("COVER"),
-                "the overlay must reach the host: {output:?}"
-            );
-            let symbols: String = (5..10)
-                .map(|x| rendered[(x, 2)].symbol().to_owned())
-                .collect();
-            assert_eq!(symbols, "COVER", "widget {image_overlay}: {output:?}");
-        }
+        let area = ratatui::layout::Rect::new(0, 0, COLS, ROWS);
+        assert!(
+            crate::backend::ratatui_backend::render::terminal_native_layers_supported(
+                tree, owner.id, area
+            )
+        );
+        let holes = crate::backend::ratatui_backend::render::terminal_image_layer_occlusions(
+            tree, owner.id, area,
+        );
+        let expected = if image_overlay == 19 {
+            vec![
+                ratatui::layout::Rect::new(0, 0, COLS, 1),
+                ratatui::layout::Rect::new(0, ROWS - 1, COLS, 1),
+                ratatui::layout::Rect::new(0, 1, 1, ROWS - 2),
+                ratatui::layout::Rect::new(COLS - 1, 1, 1, ROWS - 2),
+            ]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(
+            holes, expected,
+            "native eligibility and border occlusion must agree on portal paint order"
+        );
+        return;
+    }
+    let mut terminal = crate::backend::ratatui_backend::create_test_terminal(COLS, ROWS).unwrap();
+    let cursor = StdCell::new(None);
+    let rendered = harness.runner.with_render_context(&cursor, |ctx| {
+        terminal.draw(|f| render(f, ctx)).unwrap().buffer.clone()
+    });
+    let output = terminal.backend().test_output();
+    let output = String::from_utf8_lossy(&output);
+    let native = output
+        .split("\x1b_Ga=p,")
+        .skip(1)
+        .any(|command| !command.split("\x1b\\").next().unwrap().contains("c="));
+    if image_overlay != 0 || !stacked {
+        assert_eq!(
+            native,
+            matches!(
+                image_overlay,
+                0 | 4 | 5 | 7 | 8 | 10 | 11 | 12 | 14 | 15 | 17 | 18 | 21
+            ),
+            "native placements may not cover a later widget"
+        );
+    }
+    if matches!(image_overlay, 14 | 17 | 18) {
+        assert!(
+            output.contains("x=10,y=20,w=110,h=80"),
+            "a fading border must cut the picture's top and left edge: {output:?}"
+        );
+    }
+    if matches!(image_overlay, 15 | 20 | 21) {
+        assert!(
+            output.contains("x=0,y=0,w=120,h=100"),
+            "an invisible or non-overlapping frame must not crop the picture (mode {image_overlay}): {output:?}"
+        );
+        assert!(!output.contains("x=10,y=20,w=110,h=80"));
+    }
+    if image_overlay == 9 {
+        assert!(
+            output.contains("COVER"),
+            "the plain frame footer must reach the host: {output:?}"
+        );
+    }
+    if matches!(image_overlay, 1..=3 | 6) {
+        assert!(
+            output.contains("COVER"),
+            "the overlay must reach the host: {output:?}"
+        );
+        let symbols: String = (5..10)
+            .map(|x| rendered[(x, 2)].symbol().to_owned())
+            .collect();
+        assert_eq!(symbols, "COVER", "widget {image_overlay}: {output:?}");
     }
 }
 
@@ -1618,4 +1764,160 @@ fn metadata_modes_and_unchanged_graphics_do_not_write_or_present_frames() {
     );
     assert!(!harness.runner.host_frame_presented);
     assert_eq!(terminal.backend().test_output().len(), start);
+}
+
+#[cfg(feature = "terminal-images")]
+#[derive(Clone, Debug)]
+struct ImageMaskProbe {
+    columns: std::sync::Arc<std::sync::atomic::AtomicU16>,
+}
+
+#[cfg(feature = "terminal-images")]
+impl crate::style::CellEffect for ImageMaskProbe {
+    fn apply(&self, cell: &mut crate::style::EffectCell, ctx: &crate::style::EffectContext) {
+        if ctx.x - ctx.bounds.x >= self.columns.load(std::sync::atomic::Ordering::Relaxed) as i16 {
+            cell.set_symbol("*");
+        }
+    }
+
+    fn image_mask(&self, ctx: &crate::style::EffectPrepareContext) -> Option<crate::CellMask> {
+        let columns = self.columns.load(std::sync::atomic::Ordering::Relaxed);
+        let count = usize::from(ctx.bounds.w) * usize::from(ctx.bounds.h);
+        let mut bits = vec![0u64; count.div_ceil(64)];
+        for y in 0..ctx.bounds.h {
+            for x in 0..columns.min(ctx.bounds.w) {
+                let bit = usize::from(y) * usize::from(ctx.bounds.w) + usize::from(x);
+                bits[bit / 64] |= 1 << (bit % 64);
+            }
+        }
+        Some(crate::CellMask {
+            origin: (0, 0),
+            w: ctx.bounds.w,
+            h: ctx.bounds.h,
+            bits: bits.into(),
+        })
+    }
+}
+
+#[cfg(feature = "terminal-images")]
+#[derive(Clone)]
+struct MaskedImagePane {
+    screen: Rc<RefCell<TerminalScreen>>,
+    effect: ImageMaskProbe,
+}
+
+#[cfg(feature = "terminal-images")]
+impl Component for MaskedImagePane {
+    type Properties = ();
+    type State = ();
+    type Message = ();
+    fn create_state(&self, _: &()) {}
+    fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+    fn view(&self, _: &Context<Self>) -> Element {
+        crate::widgets::EffectScope::new()
+            .custom_effect(self.effect.clone())
+            .child(
+                crate::widgets::Terminal::new()
+                    .screen(self.screen.clone())
+                    .scrollbar(false),
+            )
+            .into()
+    }
+}
+
+#[cfg(feature = "terminal-images")]
+#[test]
+fn a_cell_effect_removes_native_picture_fragments_on_paint_only_frames() {
+    use base64::Engine as _;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU16, Ordering},
+    };
+    let _host = crate::backend::ratatui_backend::image_support::test_kitty_host((10, 20), true);
+    let bounds = Rect {
+        x: 0,
+        y: 0,
+        w: 12,
+        h: 5,
+    };
+    let screen = Rc::new(RefCell::new(TerminalScreen::new(5, 12, 0)));
+    screen
+        .borrow_mut()
+        .set_cell_size(crate::widgets::TerminalCellSize::new(10, 20));
+    let pixels =
+        base64::engine::general_purpose::STANDARD.encode([0, 255, 0, 255].repeat(120 * 100));
+    screen.borrow_mut().process_bytes(
+        format!("\x1b[?25l\x1b[H\x1b_Ga=T,f=32,s=120,v=100,i=7,p=9,C=1,q=2,z=1;{pixels}\x1b\\")
+            .as_bytes(),
+    );
+    let columns = Arc::new(AtomicU16::new(12));
+    let component = MaskedImagePane {
+        screen,
+        effect: ImageMaskProbe {
+            columns: columns.clone(),
+        },
+    };
+    let capture_component = component.clone();
+    let mut runner = AppRunner::new(App::new(), component.clone(), ());
+    runner.core = RuntimeCore::new_test(
+        component,
+        (),
+        bounds,
+        Theme::default(),
+        SurfaceMode::Fullscreen,
+        Rc::new(StdCell::new(false)),
+    )
+    .into();
+    runner.core.init();
+    runner.core.render_element(bounds, None, None, None);
+    let mut terminal = crate::backend::ratatui_backend::create_test_terminal(12, 5).unwrap();
+    let cursor = StdCell::new(None);
+    let mut offset = 0;
+    for visible in [12, 6, 0] {
+        columns.store(visible, Ordering::Relaxed);
+        let _plans = terminal.backend().native_plan_scope();
+        let buffer = runner.with_render_context(&cursor, |ctx| {
+            terminal.draw(|f| render(f, ctx)).unwrap().buffer.clone()
+        });
+        let output = terminal.backend().test_output();
+        let commands = String::from_utf8_lossy(&output[offset..]);
+        if visible > 0 {
+            assert!(
+                commands.contains(&format!("w={},h=100", visible * 10)),
+                "mask must clip the host picture: {commands:?}"
+            );
+        } else {
+            assert!(
+                commands.contains("a=d"),
+                "the image must disappear before the effect is unmounted: {commands:?}"
+            );
+        }
+        if visible != 12 {
+            assert!(
+                !commands.contains("a=t"),
+                "moving the mask must not reupload the bitmap"
+            );
+        }
+        for x in visible..12 {
+            assert_eq!(buffer[(x, 0)].symbol(), "*");
+        }
+        offset = output.len();
+    }
+    columns.store(6, Ordering::Relaxed);
+    let mut capture = crate::TestBackend::new(capture_component);
+    capture.set_viewport(bounds);
+    capture.render();
+    let frame = capture.capture_frame();
+    let visible_cells = frame
+        .images
+        .iter()
+        .flat_map(|image| image.visible.iter())
+        .filter(|&&visible| visible)
+        .count();
+    assert_eq!(
+        visible_cells, 30,
+        "captures must retain only the same picture fragments"
+    );
 }

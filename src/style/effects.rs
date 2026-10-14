@@ -209,6 +209,19 @@ pub trait CellEffect: Send + Sync + std::fmt::Debug + 'static {
         None
     }
 
+    /// Visible image cells inside an `EffectScope`, sampled once before its children paint.
+    ///
+    /// With `terminal-images` enabled, return a scope-local mask to clip Kitty child images and
+    /// captured image cells to its set bits. This lets a reveal or
+    /// dissolve remove picture fragments along with text without re-encoding image pixels.
+    /// Cells outside the mask are hidden. `None` leaves images unchanged, and `cells_only`
+    /// scopes ignore the mask. Style and hover effects do not use image masks.
+    ///
+    /// Use the same elapsed-time sample as [`Self::prepare`] so pictures and cells agree.
+    fn image_mask(&self, _ctx: &EffectPrepareContext) -> Option<CellMask> {
+        None
+    }
+
     /// Whether this effect requires a redraw every frame.
     fn is_animated(&self) -> bool {
         false

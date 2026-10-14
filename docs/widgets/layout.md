@@ -784,6 +784,14 @@ never re-encoded per animation frame.
 
 Effects are applied in insertion order. Nested `EffectScope`s compose naturally: the inner scope post-processes first, then the outer scope applies its own pass over the already-composed result.
 
+A custom effect can implement `CellEffect::image_mask` with `terminal-images` enabled to reveal or dissolve pictures with its
+text. Return a scope-local `CellMask` whose set bits keep the corresponding child image cells.
+The mask is sampled before child images draw, using the same clock as `CellEffect::prepare`.
+Kitty images use clipped source placements or placeholder spans, so changing the mask does not
+re-encode their pixels. Captures use the same visibility mask. Rectangular and cell-mask effect
+clips limit where it applies, nested masks combine, and `cells_only` leaves images unchanged.
+Other host image protocols retain their existing rendering behavior.
+
 Root-portal descendants, including default `Modal` overlays, inherit ancestor `EffectScope`s.
 You can wrap the portal element itself or a container that contains it; the overlay content is
 post-processed at its rendered portal bounds. If the wrapped child is just a component shell around

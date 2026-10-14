@@ -20,6 +20,80 @@ use crate::backend::ratatui_backend::renderers::image::ImageBackdrop;
 use crate::core::node::NodeId;
 use crate::style::{ColorTransform, Rect, Style, VisualEffect};
 
+#[cfg(feature = "terminal-images")]
+pub(crate) fn image_mask_holes(
+    effects: &[VisualEffect],
+    ctx: crate::style::EffectPrepareContext,
+) -> Vec<ratatui::layout::Rect> {
+    use crate::backend::ratatui_backend::common::strip_effect_wrappers;
+    let mut holes = Vec::new();
+    for effect in effects {
+        let VisualEffect::Custom(custom) = strip_effect_wrappers(effect) else {
+            continue;
+        };
+        let Some(mask) = custom.image_mask(&ctx) else {
+            continue;
+        };
+        append_mask_holes(&mut holes, effect, &mask, ctx.bounds);
+    }
+    holes
+}
+
+#[cfg(feature = "terminal-images")]
+fn hidden_image_spans(
+    effect: &VisualEffect,
+    mask: &crate::CellMask,
+    bounds: Rect,
+    y: u16,
+) -> Vec<(u16, u16)> {
+    use crate::backend::ratatui_backend::common::cell_passes_visual_clip;
+    let hidden = |x: u16| {
+        x < bounds.w
+            && !mask.test_scope_local(x as i16, y as i16)
+            && cell_passes_visual_clip(effect, bounds, bounds.x + x as i16, bounds.y + y as i16)
+    };
+    let mut spans = Vec::new();
+    let mut start = None;
+    for x in 0..=bounds.w {
+        if hidden(x) {
+            start.get_or_insert(x);
+        } else if let Some(left) = start.take() {
+            spans.push((left, x - left));
+        }
+    }
+    spans
+}
+
+#[cfg(feature = "terminal-images")]
+fn append_mask_holes(
+    holes: &mut Vec<ratatui::layout::Rect>,
+    effect: &VisualEffect,
+    mask: &crate::CellMask,
+    bounds: Rect,
+) {
+    let mut previous = std::collections::HashMap::<(u16, u16), usize>::new();
+    for y in 0..bounds.h {
+        let mut current = std::collections::HashMap::new();
+        for span @ (x, width) in hidden_image_spans(effect, mask, bounds, y) {
+            let index = if let Some(&index) = previous.get(&span) {
+                holes[index].height += 1;
+                index
+            } else {
+                let index = holes.len();
+                holes.push(ratatui::layout::Rect::new(
+                    bounds.x.max(0) as u16 + x,
+                    bounds.y.max(0) as u16 + y,
+                    width,
+                    1,
+                ));
+                index
+            };
+            current.insert(span, index);
+        }
+        previous = current;
+    }
+}
+
 thread_local! {
     /// Whether the layer drawing now holds anything that draws an image.
     static LAYER_DRAWS_IMAGES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };

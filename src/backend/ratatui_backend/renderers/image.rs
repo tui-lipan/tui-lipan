@@ -576,8 +576,13 @@ fn record_capture_image(
     let mut symbols = vec![String::new(); underlays.len()];
     let buffer = f.buffer_mut();
     let visible = area.intersection(buffer.area);
+    let mut holes = IMAGE_OCCLUSIONS.with(|slot| slot.borrow().clone());
+    holes.extend(super::image_effects::pending_image_occlusions());
     for y in visible.top()..visible.bottom() {
-        for x in visible.left()..visible.right() {
+        for x in uncovered_x_spans(visible.left(), visible.right(), y, &holes)
+            .into_iter()
+            .flat_map(|(left, right)| left..right)
+        {
             if capture_cell_shows_image(buffer, (x, y), area, &pixels, z_index) {
                 let offset =
                     usize::from(y - area.y) * usize::from(area.width) + usize::from(x - area.x);
