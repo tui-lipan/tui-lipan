@@ -1462,7 +1462,7 @@ fn graphics_only_updates_use_committed_plan_without_repainting_cells() {
     let retained = harness.runner.last_frame_snapshot.clone();
     for command in [
         b"\x1b_Ga=T,f=32,s=1,v=1,i=919,C=1,q=2;/////w==\x1b\\".as_slice(),
-        b"\x1b_Ga=t,f=32,s=1,v=1,i=919,q=2;AAAA/w==\x1b\\".as_slice(),
+        b"\x1b_Ga=T,f=32,s=1,v=1,i=919,C=1,q=2;AAAA/w==\x1b\\".as_slice(),
         b"\x1b_Ga=d,d=I,i=919,q=2;\x1b\\".as_slice(),
     ] {
         let start = terminal.backend().test_output().len();

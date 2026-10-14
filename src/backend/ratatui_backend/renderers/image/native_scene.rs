@@ -860,7 +860,7 @@ mod tests {
     }
 
     #[test]
-    fn replacements_reuse_source_and_placement_ids() {
+    fn source_only_retransmission_removes_host_placements_until_explicitly_placed() {
         let mut screen = screen();
         let output = Output::default();
         let mut host = HostBackend::new(output.clone());
@@ -868,13 +868,42 @@ mod tests {
         draw(&mut host).unwrap();
         let first = output.take();
         screen.process_bytes(b"\x1b_Ga=t,i=7,f=24,s=1,v=1,q=2;ZGVm\x1b\\");
+        assert!(screen.render_snapshot().images.is_empty());
+        begin(true);
+        {
+            let _owner = owner_scope(NodeId::new(1, 1));
+        }
+        draw(&mut host).unwrap();
+        let retired = output.take();
+        assert!(retired.contains("a=d"));
+        assert!(!retired.contains("a=p"));
+        screen.process_bytes(b"\x1b_Ga=p,i=7,p=9,C=1,q=2;\x1b\\");
+        stage_frame(&mut screen);
+        draw(&mut host).unwrap();
+        let placed = output.take();
+        assert_eq!(id(&first, "i="), id(&placed, "i="));
+        assert_eq!(placed.matches("a=p").count(), 1);
+    }
+
+    #[test]
+    fn replacements_reuse_source_ids_and_retire_old_placements() {
+        let mut screen = screen();
+        let output = Output::default();
+        let mut host = HostBackend::new(output.clone());
+        stage_frame(&mut screen);
+        draw(&mut host).unwrap();
+        let first = output.take();
+        screen.process_bytes(b"\x1b_Ga=T,i=7,f=24,s=1,v=1,C=1,q=2;ZGVm\x1b\\");
         stage_frame(&mut screen);
         draw(&mut host).unwrap();
         let update = output.take();
         assert_eq!(id(&first, "i="), id(&update, "i="));
-        assert_eq!(id(&first, "p="), id(&update, "p="));
+        assert_ne!(
+            id(&first, "p="),
+            id(update.split_once("a=p,").unwrap().1, "p=")
+        );
         assert_eq!(update.matches("a=p").count(), 1);
-        assert!(!update.contains("a=d"));
+        assert!(update.contains("a=d"));
     }
 
     #[test]
@@ -1038,7 +1067,7 @@ mod tests {
         assert_eq!(committed.frames_written, before.frames_written + 1);
         assert!(committed.upload_bytes > before.upload_bytes);
         let frame = host.begin_output_frame().unwrap();
-        screen.process_bytes(b"\x1b_Ga=t,i=7,f=24,s=1,v=1,q=2;ZGVm\x1b\\");
+        screen.process_bytes(b"\x1b_Ga=T,i=7,f=24,s=1,v=1,C=1,q=2;ZGVm\x1b\\");
         stage_frame(&mut screen);
         draw(&mut host).unwrap();
         drop(frame);
@@ -1121,7 +1150,7 @@ mod tests {
         stage_frame(&mut screen);
         draw(&mut host).unwrap();
         output.take();
-        screen.process_bytes(b"\x1b_Ga=t,i=7,f=24,s=1,v=1,q=2;ZGVm\x1b\\");
+        screen.process_bytes(b"\x1b_Ga=T,i=7,f=24,s=1,v=1,C=1,q=2;ZGVm\x1b\\");
         let before = crate::terminal_graphics_metrics();
         let frame = host.begin_output_frame().unwrap();
         for _ in 0..3 {
@@ -1154,7 +1183,7 @@ mod tests {
             .prepare(desired, None)
             .unwrap()
             .next;
-        screen.process_bytes(b"\x1b_Ga=t,i=7,f=24,s=1,v=1,q=2;ZGVm\x1b\\");
+        screen.process_bytes(b"\x1b_Ga=T,i=7,f=24,s=1,v=1,C=1,q=2;ZGVm\x1b\\");
         stage_frame(&mut screen);
         let mut changed = take_desired().unwrap();
         changed.full = false;
@@ -1213,7 +1242,7 @@ mod tests {
         stage_frame(&mut screen);
         draw(&mut host).unwrap();
         let initial = output.take();
-        screen.process_bytes(b"\x1b_Ga=t,i=7,f=24,s=1,v=1,q=2;ZGVm\x1b\\");
+        screen.process_bytes(b"\x1b_Ga=T,i=7,f=24,s=1,v=1,C=1,q=2;ZGVm\x1b\\");
         let frame = host.begin_output_frame().unwrap();
         for _ in 0..3 {
             stage_frame(&mut screen);

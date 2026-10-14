@@ -41,7 +41,7 @@ mod tests {
     use crate::widgets::TerminalScreen;
 
     const SEED: &[u8] = b"\x1b_Ga=T,i=7,p=9,f=24,s=1,v=1,C=1,q=2;YWJj\x1b\\";
-    const FRAME: &[u8] = b"\x1b_Ga=t,i=7,f=24,s=1,v=1,q=2;ZGVm\x1b\\";
+    const FRAME: &[u8] = b"\x1b_Ga=T,i=7,p=9,f=24,s=1,v=1,C=1,q=2;ZGVm\x1b\\";
 
     fn screen() -> TerminalScreen {
         let mut screen = TerminalScreen::new(4, 8, 0);
@@ -85,8 +85,8 @@ mod tests {
     #[test]
     fn mixed_output_is_lossless_at_every_split_boundary() {
         let wire = [
-            b"text".as_slice(),
             FRAME,
+            b"text".as_slice(),
             b"\x1b]2;title\x07tail".as_slice(),
         ]
         .concat();
@@ -226,7 +226,26 @@ mod tests {
     }
 
     #[test]
-    fn replacement_requires_the_same_retained_placement_state() {
+    fn retransmission_that_removes_placements_is_not_independent() {
+        for wire in [
+            b"\x1b_Ga=t,i=7,f=24,s=1,v=1,q=2;ZGVm\x1b\\".as_slice(),
+            FRAME,
+        ] {
+            let mut screen = screen();
+            screen.process_bytes(b"\x1b_Ga=p,i=7,p=10,C=1,q=2;\x1b\\");
+            screen.take_output_transactions();
+            screen.process_bytes(wire);
+            assert!(
+                screen
+                    .take_output_transactions()
+                    .iter()
+                    .all(|tx| !independent(tx.class))
+            );
+        }
+    }
+
+    #[test]
+    fn replacement_requires_the_same_displayed_placement_state() {
         for (wire, expected) in [
             (
                 b"\x1b_Ga=T,i=7,p=9,f=24,s=1,v=1,C=1,q=2;ZGVm\x1b\\".as_slice(),

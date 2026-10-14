@@ -43,7 +43,9 @@ pub struct TerminalReadGateStats {
 ///
 /// Credited mode admits one drain per granted credit: the reader keeps reading while the PTY has
 /// bytes immediately pending, up to the chosen byte budget, and delivers them as one output event.
-/// Holding a producer leaves its output queued in the kernel, oldest first, so a release has to
+/// Unix polls and drains the kernel PTY. Windows drains its byte-mode ConPTY pipe in one read
+/// whose buffer can hold the full credit. Neither platform waits for future bytes to fill it.
+/// Holding a producer leaves its output queued, oldest first, so a release has to
 /// take that whole backlog for a consumer to see current state instead of the oldest queued frame.
 /// At most one previously admitted drain is in flight. Exhausted credit holds this reader only. A safety timeout always admits another bounded read; closing a child or explicitly
 /// resuming the gate releases the reader so its final bytes can drain before the exit event.

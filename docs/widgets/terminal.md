@@ -1088,11 +1088,15 @@ do not require frame-rate polling. Sources without a wakeup retain the compatibi
 Managed terminal PTY output already enters through component messages and wakes the runtime.
 
 With `terminal-images`, `TerminalImage::source_key()` identifies the screen lifetime, producer ID,
-and incarnation. Replacing a retained producer ID increments `source_revision()` and preserves
-cursor placements. Deleting and reusing the ID creates a new incarnation. An id-less transmission
-receives a fresh assigned ID. `TerminalImagePlacement::placement_key()` survives source replacement
-and viewport scrolling; placeholder identities use their absolute retained grid origins. Host
-resource IDs are presentation details and are not part of replay or capture semantics.
+and incarnation. Retransmitting a retained producer ID increments `source_revision()` but deletes
+all its previous direct and virtual placements, as Kitty requires. `a=t` stores the replacement
+without displaying it; `a=T` creates only the placement requested by that command. Existing
+placeholder cells remain text and display no image until a new virtual placement is declared.
+The source key remains available for backend upload-ID reuse; it does not keep placements alive.
+Deleting and reusing the ID creates a new source incarnation. An id-less transmission receives a
+fresh assigned ID. `TerminalImagePlacement::placement_key()` survives viewport scrolling but a
+recreated cursor placement receives a new key. Placeholder identities use their absolute retained
+grid origins. Host resource IDs are presentation details, outside replay or capture semantics.
 
 ### Graphics-only updates and successful presentation
 
@@ -1125,9 +1129,9 @@ by default. Each `TerminalOutputTransaction` contains the exact original bytes a
 `Ordered` segments must retain their order and bytes. `Graphics` segments include the stable source
 key, its revision, and `GraphicsDependency`. Only `Independent` transactions can supersede earlier
 pending transactions for the same source without an intervening ordered barrier. Current eligibility
-requires a complete, accepted replacement of a nonzero image ID with unchanged placements, quiet
-responses, reusable media, and no cursor or grid effects. Partial patches, chunked uploads, queries,
-unknown controls, consuming media and id-less creations remain dependent or ordered.
+requires a complete, accepted replacement of a nonzero image ID with unchanged displayed placement
+state, quiet responses, reusable media, and no cursor or grid effects. Partial patches, chunked
+uploads, queries, unknown controls, consuming media and id-less creations remain dependent or ordered.
 
 A graphics escape spanning several parser calls is emitted only when complete. Additional recording
 buffers and ordered transactions are bounded to 1 MiB; larger commands stream as ordered fragments. Before an
@@ -1146,6 +1150,11 @@ transport can call `set_credit(bytes, available, maximum_hold)` to admit one dra
 PTY's reader. A drain keeps reading while the PTY has bytes immediately pending, up to the budget,
 and delivers them as one `Output` event. Budgets clamp to 1 byte through 64 KiB, and safety holds to
 1 through 250 ms.
+
+Unix readers poll and drain the kernel PTY directly. Windows ConPTY uses a byte-mode pipe: the
+first read has a buffer large enough for the full credit and returns when it has read the queued
+bytes or filled the budget. It does not wait for future writes to fill a short read. Unrestricted
+reads remain capped at 8 KiB on both platforms.
 
 While the reader is held, the producer's output queues in the kernel, oldest first. A release must
 take that whole backlog for the consumer to coalesce it to current state. A one-frame budget

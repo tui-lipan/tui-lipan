@@ -15,10 +15,21 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
+#[cfg(all(windows, test))]
+mod windows_tests;
+
 use super::events::{TerminalKeyModes, key_event_to_bytes};
-use super::read_gate::{PTY_READ_BUFFER_SIZE, TerminalReadGate};
+#[cfg(any(unix, test))]
+use super::read_gate::PTY_READ_BUFFER_SIZE;
+use super::read_gate::{ReadBudget, TerminalReadGate};
+
 use super::screen::TerminalCellSize;
 use crate::core::event::KeyEvent;
+
+#[cfg(unix)]
+const INITIAL_READ_BUFFER_SIZE: usize = PTY_READ_BUFFER_SIZE;
+#[cfg(not(unix))]
+const INITIAL_READ_BUFFER_SIZE: usize = super::read_gate::MAXIMUM_CREDIT;
 
 /// PTY launch error.
 #[derive(thiserror::Error, Debug)]
@@ -490,7 +501,7 @@ impl TerminalPty {
             let thread_inner = inner.clone();
             let reader_thread = std::thread::spawn(move || {
                 let mut reader = reader;
-                let mut buffer = [0u8; PTY_READ_BUFFER_SIZE];
+                let mut buffer = [0u8; INITIAL_READ_BUFFER_SIZE];
                 // Whether the loop ended because the stream itself ended, as opposed to the PTY
                 // being deactivated under it. Only the former proves there is nothing left to read.
                 let mut stream_ended = false;
@@ -516,7 +527,7 @@ impl TerminalPty {
                     if !thread_inner.active.load(Ordering::Acquire) {
                         break;
                     }
-                    match reader.read(&mut buffer[..budget.bytes.min(PTY_READ_BUFFER_SIZE)]) {
+                    match read_with_budget(&mut reader, &mut buffer, budget) {
                         Ok(0) => {
                             stream_ended = true;
                             break;
@@ -806,9 +817,19 @@ fn drain_pending(
     }
 }
 
-/// Windows pipes offer no readiness check that cannot block, so a credit admits one read there.
+/// ConPTY uses a byte-mode pipe: one ReadFile fills the requested budget from queued bytes
+/// and returns a short read when fewer bytes are available. A second read could block.
 #[cfg(not(unix))]
 fn drain_pending(_: &mut impl Read, _: &mut [u8], _: &mut Vec<u8>, _: usize) {}
+
+fn read_with_budget(
+    reader: &mut impl Read,
+    buffer: &mut [u8],
+    budget: ReadBudget,
+) -> std::io::Result<usize> {
+    let len = budget.bytes.min(buffer.len());
+    reader.read(&mut buffer[..len])
+}
 
 #[cfg(unix)]
 fn unix_wait_readable(fd: RawFd, active: &AtomicBool) -> PtyReadiness {

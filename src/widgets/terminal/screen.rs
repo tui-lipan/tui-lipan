@@ -6834,7 +6834,7 @@ mod tests {
             let cell = TerminalCellSize::new(10, 20);
             let mut source = screen(10, 40, 50);
             source.process_bytes(&placeholders(7, 6, 3, cell));
-            source.process_bytes(b"\x1b_Ga=t,f=24,s=1,v=1,t=d,i=7,I=42,q=2;YGBg\x1b\\");
+            source.process_bytes(b"\x1b_Ga=T,U=1,c=6,r=3,f=24,s=1,v=1,t=d,i=7,I=42,q=2;YGBg\x1b\\");
 
             let replay = source.export_replay_bytes();
             let mut restored = screen(10, 40, 50);

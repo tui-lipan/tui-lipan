@@ -308,7 +308,9 @@ when their host and source pixels are contiguous. More than 512 regions selects 
 
 `HostBackend` owns the committed sources and placements. Sources retain client-local image IDs
 across revision changes. Placements retain `p=` IDs and only emit commands for changed geometry or
-source revisions. Source replacement conservatively refreshes placements under their existing IDs.
+source revisions. Producer retransmission retires all old direct and virtual placements. A new
+`a=T` placement has a fresh lifetime and replaces the retired host placement, while its source
+upload can reuse the existing host image ID.
 Frame staging is transient; no committed scene lives in a thread-local cache.
 
 The backend prepares a scene transition before drawing cells and promotes it after a successful

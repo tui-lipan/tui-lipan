@@ -1569,9 +1569,10 @@ struct StoredImage {
     ///
     /// The protocol has a sender declare this once and then write placeholder cells naming
     /// positions *within it*, so without it a cell's position says nothing about which pixels it
-    /// covers. `None` for an image that never got a virtual placement, whose placeholders are read
-    /// against the cell grid its own pixels imply.
+    /// covers. `None` means no explicit virtual cell box; a declared virtual placement then uses
+    /// the cell grid its pixels imply. Without a virtual placement, placeholders display nothing.
     virtual_cells: Option<(u32, u32)>,
+    virtual_placement: bool,
 }
 
 impl StoredImage {
@@ -1618,6 +1619,33 @@ struct Placement {
 }
 
 impl Placement {
+    /// Ownership changes on retransmission; only the displayed state governs safe replacement.
+    fn same_display(&self, previous: &Self) -> bool {
+        (
+            self.image_id,
+            self.placement_id,
+            self.line,
+            self.col,
+            self.rows,
+            self.cols,
+            self.z,
+            self.crop,
+            self.geometry,
+            self.alt_screen,
+        ) == (
+            previous.image_id,
+            previous.placement_id,
+            previous.line,
+            previous.col,
+            previous.rows,
+            previous.cols,
+            previous.z,
+            previous.crop,
+            previous.geometry,
+            previous.alt_screen,
+        )
+    }
+
     fn covers_cell(&self, line: usize, col: u16) -> bool {
         self.covers_line(line) && self.covers_column(col)
     }
@@ -1656,14 +1684,21 @@ pub(super) struct ReplacementObservation {
     pub(super) revision: ImageSourceRevision,
     placements: Vec<Placement>,
     virtual_cells: Option<(u32, u32)>,
+    virtual_placement: bool,
 }
 
 impl ReplacementObservation {
     pub(super) fn independently_replaces(&self, previous: &Self) -> bool {
         self.source == previous.source
             && self.revision != previous.revision
-            && self.placements == previous.placements
+            && self.placements.len() == previous.placements.len()
+            && self
+                .placements
+                .iter()
+                .zip(&previous.placements)
+                .all(|(current, previous)| current.same_display(previous))
             && self.virtual_cells == previous.virtual_cells
+            && self.virtual_placement == previous.virtual_placement
     }
 }
 
@@ -1757,6 +1792,7 @@ impl TerminalGraphics {
                 .cloned()
                 .collect(),
             virtual_cells: image.virtual_cells,
+            virtual_placement: image.virtual_placement,
         })
     }
 
@@ -1997,6 +2033,9 @@ impl TerminalGraphics {
             .into_iter()
             .filter_map(|rect| {
                 let stored = self.images.get(&rect.image_id)?;
+                if !stored.virtual_placement {
+                    return None;
+                }
                 let (width, height) = (stored.image.width(), stored.image.height());
                 // The source region a rect covers. A virtual placement said how many cells the
                 // whole image spans, so a cell's share of the pixels follows from that; without one
@@ -2369,6 +2408,7 @@ impl TerminalGraphics {
                 }
             };
             self.damage.merge(super::damage::GraphicsDamage::Sources);
+            self.retire_placements(id);
             self.image_dimensions.insert(id, dimensions);
             if command.number != 0 {
                 self.numbers.insert(command.number, id);
@@ -2539,16 +2579,19 @@ impl TerminalGraphics {
     }
 
     fn set_virtual_cells(&mut self, id: u32, command: &GraphicsCommand) {
-        if command.cols != 0
-            && command.rows != 0
-            && let Some(stored) = self.images.get_mut(&id)
-        {
-            let cells = Some((command.cols, command.rows));
-            if stored.virtual_cells != cells {
-                stored.virtual_cells = cells;
-                self.damage.merge(super::damage::GraphicsDamage::Placements);
-            }
+        let Some(stored) = self.images.get_mut(&id) else {
+            return;
+        };
+        let cells = if command.cols != 0 && command.rows != 0 {
+            Some((command.cols, command.rows))
+        } else {
+            stored.virtual_cells
+        };
+        if !stored.virtual_placement || stored.virtual_cells != cells {
+            self.damage.merge(super::damage::GraphicsDamage::Placements);
         }
+        stored.virtual_placement = true;
+        stored.virtual_cells = cells;
     }
 
     fn delete(&mut self, command: &GraphicsCommand, ctx: GraphicsContext) {
@@ -2627,11 +2670,33 @@ impl TerminalGraphics {
         }
     }
 
+    fn retire_placements(&mut self, id: u32) {
+        let before = self.placements.len();
+        self.placements.retain(|placement| placement.image_id != id);
+        let had_virtual = self
+            .images
+            .get(&id)
+            .is_some_and(|stored| stored.virtual_placement);
+        if before != self.placements.len() || had_virtual {
+            self.damage.merge(super::damage::GraphicsDamage::Placements);
+        }
+        let mut lifetimes = self.placeholder_lifetimes.borrow_mut();
+        lifetimes.rows.retain(|_, placements| {
+            placements.retain(|key, _| key.source.producer_image_id != id);
+            !placements.is_empty()
+        });
+        lifetimes
+            .owners
+            .retain(|key, _| key.source.producer_image_id != id);
+        drop(lifetimes);
+        self.clear_composed_tiles();
+    }
+
     fn insert_image(&mut self, id: u32, mut image: TerminalImage, bytes: usize) {
         self.damage.merge(super::damage::GraphicsDamage::Sources);
-        // The cell box belongs to the id's virtual placement, not to one frame's pixels: the
-        // protocol has a sender declare it once and then send frame after frame under the same id.
-        let virtual_cells = self.images.get(&id).and_then(|stored| stored.virtual_cells);
+        // Kitty retransmission retires every producer placement. Retain only the source's
+        // internal reservation so the backend can reuse its upload ID for the next revision.
+        self.retire_placements(id);
         if let Some(previous) = self.images.remove(&id) {
             self.used_bytes = self.used_bytes.saturating_sub(previous.bytes);
             image.source_key = previous.image.source_key;
@@ -2657,7 +2722,8 @@ impl TerminalGraphics {
                 image,
                 bytes,
                 used: clock,
-                virtual_cells,
+                virtual_cells: None,
+                virtual_placement: false,
             },
         );
         self.used_bytes = self.used_bytes.saturating_add(bytes);
@@ -2752,7 +2818,9 @@ impl TerminalGraphics {
                 writer,
                 id,
                 (number != 0).then_some(number),
-                stored.virtual_cells,
+                stored
+                    .virtual_placement
+                    .then_some(stored.virtual_cells.unwrap_or((0, 0))),
                 stored.image.width,
                 stored.image.height,
                 format,

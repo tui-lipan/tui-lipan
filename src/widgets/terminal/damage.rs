@@ -310,12 +310,90 @@ mod mutation_tests {
     }
 
     #[test]
-    fn source_replacement_preserves_identity_and_retained_placement() {
+    fn retransmission_removes_all_old_placements_and_displays_only_the_requested_one() {
+        for action in ['t', 'T'] {
+            let mut screen = clean_screen();
+            screen.process_bytes(b"\x1b_Ga=T,i=7,p=9,f=24,s=1,v=1,q=2,C=1;YWJj\x1b\\");
+            screen.process_bytes(b"\x1b[2;3H\x1b_Ga=p,i=7,p=10,C=1,q=2;\x1b\\");
+            screen.process_bytes(b"\x1b_Ga=T,i=8,p=11,f=24,s=1,v=1,q=2,C=1;YWJj\x1b\\");
+            assert_eq!(screen.render_snapshot().images.len(), 3);
+            let mutation = screen.process_bytes(
+                format!("\x1b[3;4H\x1b_Ga={action},i=7,p=12,f=24,s=1,v=1,q=2,C=1;ZGVm\x1b\\")
+                    .as_bytes(),
+            );
+            assert_eq!(mutation.graphics, GraphicsDamage::SourcesAndPlacements);
+            let snapshot = screen.render_snapshot();
+            assert_eq!(
+                snapshot
+                    .images
+                    .iter()
+                    .filter(|image| image.image_id == 8)
+                    .count(),
+                1
+            );
+            let placements: Vec<_> = snapshot
+                .images
+                .iter()
+                .filter(|image| image.image_id == 7)
+                .collect();
+            if action == 't' {
+                assert!(placements.is_empty());
+            } else {
+                assert_eq!(placements.len(), 1);
+                assert_eq!((placements[0].row, placements[0].col), (2, 3));
+            }
+        }
+    }
+
+    #[test]
+    fn retransmission_retires_virtual_placement_until_it_is_declared_again() {
+        let mut screen = clean_screen();
+        screen.process_bytes(b"\x1b_Ga=T,U=1,i=7,p=9,c=1,r=1,f=24,s=1,v=1,q=2;YWJj\x1b\\");
+        screen.process_bytes("\x1b[38;2;0;0;7m\u{10eeee}\u{305}\u{305}".as_bytes());
+        assert_eq!(screen.render_snapshot().images.len(), 1);
+        screen.process_bytes(b"\x1b_Ga=t,i=7,f=24,s=1,v=1,q=2;ZGVm\x1b\\");
+        assert!(screen.render_snapshot().images.is_empty());
+        screen.process_bytes(b"\x1b_Ga=p,U=1,i=7,p=9,c=1,r=1,q=2;\x1b\\");
+        assert_eq!(screen.render_snapshot().images.len(), 1);
+    }
+
+    #[test]
+    fn virtual_placement_without_an_explicit_box_updates_visibility_and_replays() {
+        let mut screen = clean_screen();
+        screen.process_bytes(b"\x1b_Ga=t,i=7,f=24,s=1,v=1,q=2;YWJj\x1b\\");
+        screen.process_bytes("\x1b[38;2;0;0;7m\u{10eeee}\u{305}\u{305}".as_bytes());
+        assert!(screen.render_snapshot().images.is_empty());
+        let mutation = screen.process_bytes(b"\x1b_Ga=p,U=1,i=7,p=9,q=2;\x1b\\");
+        assert_eq!(mutation.graphics, GraphicsDamage::Placements);
+        assert_eq!(screen.render_snapshot().images.len(), 1);
+        let mut restored = clean_screen();
+        restored.process_bytes(&screen.export_replay_bytes());
+        assert_eq!(restored.render_snapshot().images.len(), 1);
+    }
+
+    #[test]
+    fn rejected_retransmission_keeps_the_previous_placements() {
+        let mut screen = clean_screen();
+        screen.process_bytes(b"\x1b_Ga=T,i=7,p=9,f=24,s=1,v=1,q=2,C=1;YWJj\x1b\\");
+        let before = screen.render_snapshot().images[0].placement_key();
+        screen.process_bytes(b"\x1b_Ga=t,i=7,f=24,s=1,v=1,q=2;@@bad@@\x1b\\");
+        assert_eq!(screen.render_snapshot().images[0].placement_key(), before);
+    }
+
+    #[test]
+    fn source_replacement_retires_placements_but_reuses_source_reservation() {
         let mut screen = clean_screen();
         screen.process_bytes(b"\x1b_Ga=T,i=7,f=24,s=1,v=1,q=2,C=1;YWJj\x1b\\");
+        let before_key = screen.render_snapshot().images[0].placement_key();
         let before = screen.render_snapshot().images[0].image.clone();
         screen.process_bytes(b"\x1b_Ga=t,i=7,f=24,s=1,v=1,q=2;ZGVm\x1b\\");
+        assert!(screen.render_snapshot().images.is_empty());
+        screen.process_bytes(b"\x1b_Ga=p,i=7,C=1,q=2;\x1b\\");
         let after = screen.render_snapshot().images[0].image.clone();
+        assert_ne!(
+            before_key,
+            screen.render_snapshot().images[0].placement_key()
+        );
         assert_eq!(before.source_key(), after.source_key());
         assert_eq!(after.source_revision().0, before.source_revision().0 + 1);
         screen.process_bytes(b"\x1b_Ga=d,d=I,i=7,q=2;\x1b\\");

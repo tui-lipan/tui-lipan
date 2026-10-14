@@ -599,8 +599,9 @@ warm unchanged renders last. The warm path is already expected to be cheap.
 
 Natural-size Kitty sources use a backend-owned retained host scene. Source revisions reuse the
 same host image ID. Unchanged placements emit no commands on an unrelated full-tree paint;
-geometry or source changes refresh only the affected persistent placement IDs. Visible scanline
-intervals merge into rectangles. An unobstructed pane-sized image needs one native region. More
+geometry or source changes refresh only the affected persistent placement IDs. Producer
+retransmission deletes its old direct and virtual placements; an explicit new placement can reuse
+the source upload ID but starts a new placement lifetime. Visible scanline intervals merge into rectangles. An unobstructed pane-sized image needs one native region. More
 than 512 regions selects the existing composed renderer.
 
 Terminal input classification comes from completed parser operations through `TerminalMutation`.
