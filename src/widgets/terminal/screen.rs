@@ -565,6 +565,11 @@ pub struct TerminalScreen {
     mutation_waker: Option<std::rc::Weak<dyn Fn()>>,
     #[cfg(feature = "terminal-images")]
     output_transactions: Option<Vec<super::output::TerminalOutputTransaction>>,
+    /// A synchronized update held until its end shows whether it is one replacement.
+    #[cfg(feature = "terminal-images")]
+    output_frame: Option<super::output::OpenFrame>,
+    #[cfg(feature = "terminal-images")]
+    replacement_run: super::output::ReplacementRun,
     /// Independent from paint damage: a snapshot reader must not consume the renderer's damage.
     snapshot_damage: DamageAccumulator,
     sequence: u64,
@@ -1273,6 +1278,10 @@ impl TerminalScreen {
             mutation_waker: None,
             #[cfg(feature = "terminal-images")]
             output_transactions: None,
+            #[cfg(feature = "terminal-images")]
+            output_frame: None,
+            #[cfg(feature = "terminal-images")]
+            replacement_run: super::output::ReplacementRun::default(),
             snapshot_damage: DamageAccumulator::default(),
             processor: VteProcessor::new(),
             term,
@@ -1444,11 +1453,14 @@ impl TerminalScreen {
     #[cfg(feature = "terminal-images")]
     pub fn set_output_transaction_recording(&mut self, enabled: bool) {
         self.output_transactions = enabled.then(Vec::new);
+        self.output_frame = None;
+        self.replacement_run.clear();
         self.graphics_scanner.set_record_output(enabled);
     }
 
     /// Take completed transactions in exact producer order. A split APC remains pending until
     /// complete; APCs exceeding the additional 1 MiB buffering bound stream as ordered fragments.
+    /// A synchronized update that may be one replacement is held until its end marker.
     #[cfg(feature = "terminal-images")]
     pub fn take_output_transactions(&mut self) -> Vec<super::output::TerminalOutputTransaction> {
         self.output_transactions
@@ -1460,15 +1472,107 @@ impl TerminalScreen {
     /// pacer can use this to grant continuation reads when no completed frame awaits presentation.
     #[cfg(feature = "terminal-images")]
     pub fn output_transaction_pending(&self) -> bool {
-        self.graphics_scanner.output_pending() || self.graphics.has_pending_transmission()
+        self.graphics_scanner.output_pending()
+            || self.graphics.has_pending_transmission()
+            || self.output_frame.is_some()
     }
 
     /// Make pending original bytes ordered before an external resize, reset or exit boundary.
     /// Subsequent continuation bytes remain ordered; the parser itself is not reset.
     #[cfg(feature = "terminal-images")]
     pub fn flush_output_transaction_boundary(&mut self) {
+        self.release_output_frame();
         let bytes = self.graphics_scanner.flush_pending_wire();
         self.record_owned_output(bytes, super::output::TerminalOutputClass::Ordered);
+        self.replacement_run.clear();
+    }
+
+    /// Feed text to the grid, holding a synchronized update that may prove to be one replacement.
+    #[cfg(feature = "terminal-images")]
+    fn feed_text(&mut self, mut bytes: &[u8]) -> usize {
+        use super::output::{BEGIN_SYNC, FrameText, OpenFrame, TerminalOutputClass};
+        let mut evicted = 0;
+        while !bytes.is_empty() {
+            if let Some(frame) = self.output_frame.as_mut() {
+                let outcome = frame.text(bytes);
+                let used = match outcome {
+                    FrameText::Open => bytes.len(),
+                    FrameText::Ended(used) | FrameText::Unproven(used) => used,
+                };
+                evicted += self.advance_vte(&bytes[..used]);
+                bytes = &bytes[used..];
+                match outcome {
+                    FrameText::Open => {}
+                    FrameText::Ended(_) => self.close_output_frame(),
+                    FrameText::Unproven(_) => self.release_output_frame(),
+                }
+                continue;
+            }
+            let start = match self.output_transactions {
+                Some(_) => bytes
+                    .windows(BEGIN_SYNC.len())
+                    .position(|window| window == BEGIN_SYNC),
+                None => None,
+            };
+            let Some(start) = start else {
+                self.record_output(bytes, TerminalOutputClass::Ordered);
+                return evicted + self.advance_vte(bytes);
+            };
+            let (head, tail) = bytes.split_at(start);
+            self.record_output(head, TerminalOutputClass::Ordered);
+            evicted += self.advance_vte(head);
+            // A begin marker inside an update that is already open does not start a frame.
+            let idle = !self.processor.sync_timeout().pending_timeout()
+                && self.processor.sync_bytes_count() == 0
+                && !self.graphics.has_pending_transmission();
+            if idle {
+                self.output_frame = Some(OpenFrame::new(self.graphics.evictions()));
+            } else {
+                self.record_output(BEGIN_SYNC, TerminalOutputClass::Ordered);
+            }
+            evicted += self.advance_vte(BEGIN_SYNC);
+            bytes = &tail[BEGIN_SYNC.len()..];
+        }
+        evicted
+    }
+
+    /// End a held update: one replaceable transaction if proven, otherwise exactly as recorded.
+    #[cfg(feature = "terminal-images")]
+    fn close_output_frame(&mut self) {
+        use super::output::{GraphicsDependency, TerminalOutputClass};
+        let Some(frame) = self.output_frame.take() else {
+            return;
+        };
+        let replacement = frame
+            .footprint(self.graphics.evictions())
+            .and_then(|footprint| {
+                let observation = frame
+                    .image_ids()
+                    .find_map(|id| self.graphics.replacement_observation(id))?;
+                Some((observation, footprint))
+            });
+        let Some((observation, footprint)) = replacement else {
+            self.output_frame = Some(frame);
+            self.release_output_frame();
+            return;
+        };
+        let class = TerminalOutputClass::Graphics {
+            source: observation.source,
+            revision: observation.revision,
+            dependency: GraphicsDependency::Independent,
+        };
+        self.push_output(frame.into_bytes(), class, Some(footprint));
+    }
+
+    /// Stream a held update's transactions unchanged, as if it had never been held.
+    #[cfg(feature = "terminal-images")]
+    fn release_output_frame(&mut self) {
+        let Some(frame) = self.output_frame.take() else {
+            return;
+        };
+        for transaction in frame.into_transactions() {
+            self.push_output(transaction.bytes, transaction.class, None);
+        }
     }
 
     #[cfg(feature = "terminal-images")]
@@ -1482,17 +1586,65 @@ impl TerminalScreen {
 
     #[cfg(feature = "terminal-images")]
     fn record_owned_output(&mut self, bytes: Vec<u8>, class: super::output::TerminalOutputClass) {
-        use super::output::{TerminalOutputClass, TerminalOutputTransaction};
+        self.record_graphics_output(bytes, class, None);
+    }
+
+    #[cfg(feature = "terminal-images")]
+    fn record_graphics_output(
+        &mut self,
+        bytes: Vec<u8>,
+        class: super::output::TerminalOutputClass,
+        footprint: Option<super::output::Footprint>,
+    ) {
+        use super::output::TerminalOutputClass;
         if bytes.len() > 1024 * 1024 {
             self.record_output(&bytes, TerminalOutputClass::Ordered);
             return;
         }
+        if self.output_transactions.is_none() || bytes.is_empty() {
+            return;
+        }
+        match self.output_frame.as_mut() {
+            Some(frame) => {
+                frame.push(bytes, class);
+                if !frame.proven() {
+                    self.release_output_frame();
+                }
+            }
+            None => self.push_output(bytes, class, footprint),
+        }
+    }
+
+    /// Append to the recorded list. A replaceable transaction that would share state with a
+    /// different source in the current run is downgraded, which also ends the run.
+    #[cfg(feature = "terminal-images")]
+    fn push_output(
+        &mut self,
+        bytes: Vec<u8>,
+        mut class: super::output::TerminalOutputClass,
+        footprint: Option<super::output::Footprint>,
+    ) {
+        use super::output::{GraphicsDependency, TerminalOutputClass, TerminalOutputTransaction};
+        let admitted = match (&class, footprint) {
+            (
+                TerminalOutputClass::Graphics {
+                    source,
+                    dependency: GraphicsDependency::Independent,
+                    ..
+                },
+                Some(footprint),
+            ) => self.replacement_run.admit(*source, footprint),
+            _ => false,
+        };
+        if !admitted {
+            if let TerminalOutputClass::Graphics { dependency, .. } = &mut class {
+                *dependency = GraphicsDependency::DependsOnPrevious;
+            }
+            self.replacement_run.clear();
+        }
         let Some(transactions) = self.output_transactions.as_mut() else {
             return;
         };
-        if bytes.is_empty() {
-            return;
-        }
         if class == TerminalOutputClass::Ordered
             && let Some(previous) = transactions.last_mut()
             && previous.class == TerminalOutputClass::Ordered
@@ -1680,8 +1832,7 @@ impl TerminalScreen {
     #[cfg(feature = "terminal-images")]
     fn feed_grid(&mut self, bytes: &[u8]) -> usize {
         if self.graphics_scanner.is_plain(bytes) {
-            self.record_output(bytes, super::output::TerminalOutputClass::Ordered);
-            let evicted = self.advance_vte(bytes);
+            let evicted = self.feed_text(bytes);
             self.settle_graphics(evicted);
             return evicted;
         }
@@ -1690,18 +1841,11 @@ impl TerminalScreen {
         let mut unsettled = 0;
         for segment in self.graphics_scanner.scan(bytes) {
             match segment {
-                GraphicsSegment::Text(range) => {
-                    self.record_output(
-                        &bytes[range.clone()],
-                        super::output::TerminalOutputClass::Ordered,
-                    );
-                    unsettled += self.advance_vte(&bytes[range]);
-                }
-                GraphicsSegment::HeldEscape => {
-                    self.record_output(&[0x1b], super::output::TerminalOutputClass::Ordered);
-                    unsettled += self.advance_vte(&[0x1b]);
-                }
+                GraphicsSegment::Text(range) => unsettled += self.feed_text(&bytes[range]),
+                GraphicsSegment::HeldEscape => unsettled += self.feed_text(&[0x1b]),
                 GraphicsSegment::Wire(bytes) => {
+                    // Ignored or oversized APC bytes have effects no frame can account for.
+                    self.release_output_frame();
                     self.record_owned_output(bytes, super::output::TerminalOutputClass::Ordered)
                 }
                 GraphicsSegment::Command(command) => {
@@ -1748,10 +1892,13 @@ impl TerminalScreen {
         mut command: GraphicsCommand,
         unsettled: usize,
     ) -> (usize, usize) {
-        use super::output::{GraphicsDependency, TerminalOutputClass};
+        use super::graphics::FrameOp;
+        use super::output::{Footprint, GraphicsDependency, TerminalOutputClass};
         let Some(wire) = command.take_wire() else {
+            self.release_output_frame();
             return self.apply_graphics(command, unsettled);
         };
+        let op = command.frame_op();
         let source_id = command.transmitted_id();
         let previous = source_id.and_then(|id| self.graphics.replacement_observation(id));
         let candidate = command.independent_candidate()
@@ -1782,7 +1929,22 @@ impl TerminalScreen {
             }
             _ => TerminalOutputClass::Ordered,
         };
-        self.record_owned_output(wire, class);
+        if let Some(frame) = self.output_frame.as_mut() {
+            let succeeded = match op {
+                // Only a transmission that stored a new revision is classified as graphics.
+                Some(FrameOp::Replace { .. }) => {
+                    matches!(class, TerminalOutputClass::Graphics { .. })
+                }
+                Some(FrameOp::Remove { id }) => self.graphics.replacement_observation(id).is_none(),
+                Some(FrameOp::Unplace { .. }) | None => true,
+            };
+            frame.graphics(op, succeeded);
+        }
+        let footprint = match op {
+            Some(FrameOp::Replace { id, places }) => Some(Footprint::transmission(id, places)),
+            _ => None,
+        };
+        self.record_graphics_output(wire, class, footprint);
         result
     }
 
@@ -3332,6 +3494,8 @@ impl TerminalScreen {
         // grid they were drawn on.
         #[cfg(feature = "terminal-images")]
         {
+            self.release_output_frame();
+            self.replacement_run.clear();
             self.graphics_scanner.reset();
             self.graphics.reset();
         }
