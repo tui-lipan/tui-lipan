@@ -2065,26 +2065,42 @@ fn native_frame_occlusions(
     if !frame.border {
         return Some(Vec::new());
     }
-    let outer = to_ratatui_rect(visually_offset_node_rect(tree, node.id));
-    let visible = to_ratatui_rect(clipped_layer_rect(tree, node.id).intersection(&content));
-    let middle_height = outer.height.saturating_sub(2);
+    Some(frame_border_occlusions(
+        visually_offset_node_rect(tree, node.id),
+        clipped_layer_rect(tree, node.id).intersection(&content),
+    ))
+}
+
+/// Build edges at their signed positions before clipping. Clamping the outer rectangle first
+/// invents a top or left border when the actual border has already moved off screen.
+#[cfg(feature = "terminal-images")]
+fn frame_border_occlusions(outer: Rect, visible: Rect) -> Vec<ratatui::layout::Rect> {
+    let middle_height = outer.h.saturating_sub(2);
     let ring = [
-        ratatui::layout::Rect::new(outer.x, outer.y, outer.width, 1),
-        ratatui::layout::Rect::new(outer.x, outer.bottom().saturating_sub(1), outer.width, 1),
-        ratatui::layout::Rect::new(outer.x, outer.y.saturating_add(1), 1, middle_height),
-        ratatui::layout::Rect::new(
-            outer.right().saturating_sub(1),
-            outer.y.saturating_add(1),
-            1,
-            middle_height,
-        ),
+        Rect { h: 1, ..outer },
+        Rect {
+            y: outer.y.saturating_add(outer.h.saturating_sub(1) as i16),
+            h: 1,
+            ..outer
+        },
+        Rect {
+            y: outer.y.saturating_add(1),
+            w: 1,
+            h: middle_height,
+            ..outer
+        },
+        Rect {
+            x: outer.x.saturating_add(outer.w.saturating_sub(1) as i16),
+            y: outer.y.saturating_add(1),
+            w: 1,
+            h: middle_height,
+        },
     ];
-    Some(
-        ring.into_iter()
-            .map(|edge| edge.intersection(visible))
-            .filter(|edge| !edge.is_empty())
-            .collect(),
-    )
+    ring.into_iter()
+        .map(|edge| edge.intersection(&visible))
+        .filter(|edge| !edge.is_empty())
+        .map(to_ratatui_rect)
+        .collect()
 }
 
 #[cfg(feature = "terminal-images")]
@@ -2877,6 +2893,51 @@ mod terminal_image_layer_tests {
             })
             .map(|node| node.id)
             .expect("keyed terminal node")
+    }
+
+    #[test]
+    fn offscreen_frame_edges_do_not_invent_a_border_at_the_viewport_edge() {
+        use super::frame_border_occlusions;
+        let viewport = Rect {
+            x: 0,
+            y: 0,
+            w: 10,
+            h: 5,
+        };
+        for (outer, expected) in [
+            (
+                Rect {
+                    x: 2,
+                    y: -2,
+                    w: 6,
+                    h: 5,
+                },
+                vec![
+                    ratatui::layout::Rect::new(2, 2, 6, 1),
+                    ratatui::layout::Rect::new(2, 0, 1, 2),
+                    ratatui::layout::Rect::new(7, 0, 1, 2),
+                ],
+            ),
+            (
+                Rect {
+                    x: -2,
+                    y: 1,
+                    w: 5,
+                    h: 3,
+                },
+                vec![
+                    ratatui::layout::Rect::new(0, 1, 3, 1),
+                    ratatui::layout::Rect::new(0, 3, 3, 1),
+                    ratatui::layout::Rect::new(2, 2, 1, 1),
+                ],
+            ),
+        ] {
+            assert_eq!(
+                frame_border_occlusions(outer, outer.intersection(&viewport)),
+                expected,
+                "only the real visible sides may cut holes in image pixels"
+            );
+        }
     }
 
     #[test]
