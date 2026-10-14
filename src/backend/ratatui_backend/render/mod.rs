@@ -2065,10 +2065,59 @@ fn native_frame_occlusions(
     if !frame.border {
         return Some(Vec::new());
     }
-    Some(frame_border_occlusions(
+    let holes = frame_border_occlusions(
         visually_offset_node_rect(tree, node.id),
         clipped_layer_rect(tree, node.id).intersection(&content),
-    ))
+    );
+    if holes.is_empty() {
+        return Some(holes);
+    }
+    match frame_crossfade_coverage(tree, node.id) {
+        FrameCrossfadeCoverage::Hidden => Some(Vec::new()),
+        FrameCrossfadeCoverage::Ambiguous => None,
+        FrameCrossfadeCoverage::Visible => Some(holes),
+    }
+}
+
+#[cfg(feature = "terminal-images")]
+#[derive(Clone, Copy)]
+enum FrameCrossfadeCoverage {
+    Visible,
+    Hidden,
+    Ambiguous,
+}
+
+/// Partial crossfades can select an underlay glyph instead of the border. The tree cannot tell
+/// which cells do so; keep those cases composed. At zero, restoration removes the entire ring.
+#[cfg(feature = "terminal-images")]
+fn frame_crossfade_coverage(tree: &NodeTree, frame: NodeId) -> FrameCrossfadeCoverage {
+    let mut coverage = FrameCrossfadeCoverage::Visible;
+    let mut current = Some(frame);
+    while let Some(id) = current {
+        let node = tree.node(id);
+        if let NodeKind::Animated(animated) = &node.kind {
+            if !animated.opacity_fg_only && animated.effective_opacity() <= f32::EPSILON {
+                return FrameCrossfadeCoverage::Hidden;
+            }
+            if crossfade_can_restore_underlay_glyphs(animated) {
+                coverage = FrameCrossfadeCoverage::Ambiguous;
+            }
+        }
+        // Ancestors outside a hoisted overlay are not painted around that overlay's cells.
+        if tree.overlay_roots().iter().any(|overlay| overlay.id == id) {
+            break;
+        }
+        current = node.parent;
+    }
+    coverage
+}
+
+#[cfg(feature = "terminal-images")]
+fn crossfade_can_restore_underlay_glyphs(
+    animated: &crate::widgets::internal::AnimatedNode,
+) -> bool {
+    let opacity = animated.effective_opacity();
+    !animated.opacity_fg_only && opacity > f32::EPSILON && opacity < 0.5
 }
 
 /// Build edges at their signed positions before clipping. Clamping the outer rectangle first
@@ -2131,7 +2180,8 @@ pub(crate) fn terminal_image_layer_occlusions(
     owner: NodeId,
     content: ratatui::layout::Rect,
 ) -> Vec<ratatui::layout::Rect> {
-    let Some(owner_rank) = tree.iter().position(|node| node.id == owner) else {
+    let Some(owner_rank) = terminal_layer_paint_order(tree).position(|node| node.id == owner)
+    else {
         return Vec::new();
     };
     let owner_ancestors: HashSet<NodeId> = std::iter::successors(Some(owner), |id| {
@@ -2145,7 +2195,7 @@ pub(crate) fn terminal_image_layer_occlusions(
         h: content.height,
     };
 
-    tree.iter()
+    terminal_layer_paint_order(tree)
         .enumerate()
         .filter(|(rank, _)| *rank > owner_rank)
         .flat_map(|(_, node)| {
