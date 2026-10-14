@@ -519,8 +519,13 @@ separate cached variant. See
 | `TUI_LIPAN_IMAGE_GIF_PRELOAD_MAX_FRAMES` | `24` | Preload frame cap |
 | `TUI_LIPAN_IMAGE_GIF_PRELOAD_BUDGET_MS` | `16` | Preload time cap |
 | `TUI_LIPAN_IMAGE_GIF_WORKER_QUEUE` | `2` | Worker queue size (1–4) |
-| `TUI_LIPAN_IMAGE_RESIZE_PAUSE_MS` | `180` | Pause rendering during resize |
+| `TUI_LIPAN_IMAGE_RESIZE_PAUSE_MS` | `0` | Optional pause after each host resize; `0` keeps image rendering active |
 | `TUI_LIPAN_IMAGE_LAYOUT_STABILIZE_MS` | `120` | Pause while layout changes |
+
+Host resizes impose no fixed image rendering delay by default, including pictures received from
+terminal applications. Set `TUI_LIPAN_IMAGE_RESIZE_PAUSE_MS=180` to restore the previous pause on
+hosts where repeated image uploads during a window drag are expensive. Animated `Image` widgets
+still use the separate layout stabilization pause above when their geometry changes.
 
 ---
 

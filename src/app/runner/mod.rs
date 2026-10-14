@@ -20,8 +20,6 @@ use web_time::Instant;
 
 use crate::Result;
 use crate::backend::ratatui_backend::TerminalGuard;
-#[cfg(feature = "image")]
-use crate::backend::ratatui_backend::image_support;
 use crate::backend::ratatui_backend::render::JoinIndex;
 #[cfg(feature = "image")]
 use crate::backend::ratatui_backend::renderers::image::image_protocol_ready_epoch;
@@ -3029,11 +3027,7 @@ impl<C: Component> AppRunner<C> {
                                 self.drag.scrollbar_recalc = true;
                             }
                             #[cfg(feature = "image")]
-                            {
-                                let pause = Duration::from_millis(image_resize_pause_ms() as u64);
-                                self.suspend_image_animations_for(pause);
-                                image_support::suspend_image_rendering_for(pause);
-                            }
+                            self.pause_images_after_resize();
                             if matches!(self.surface.mode(), SurfaceMode::InlineTranscript { .. }) {
                                 self.surface.inline.transcript_expanded = true;
                                 self.surface.inline.transcript_reset_pending = true;
@@ -3528,8 +3522,7 @@ pub(super) fn image_resize_pause_ms() -> u32 {
         std::env::var("TUI_LIPAN_IMAGE_RESIZE_PAUSE_MS")
             .ok()
             .and_then(|value| value.parse::<u32>().ok())
-            .unwrap_or(180)
-            .max(1)
+            .unwrap_or(0)
     })
 }
 

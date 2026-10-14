@@ -49,6 +49,13 @@ retained source images, so PNG output and replay do not depend on the host's ima
 Run `cargo run --example terminal_patch_layers --features terminal-images` to compare image-only,
 text-overlay, and filled-block scenes on a real host. The overlays leave the image anchor uncovered.
 Compare with the composed environment setting and resize the host in both modes.
+Host resize notifications do not pause image rendering by default. The optional
+`TUI_LIPAN_IMAGE_RESIZE_PAUSE_MS` setting applies to both terminal pictures and `Image` widgets;
+leave it unset or set it to `0` to avoid a fixed delay after resizing. See the
+[`Image` environment settings](display.md#image-requires-feature-image).
+Screen erase commands used during resize invalidate native host image uploads. The next paint
+restores unchanged pictures with their existing image and placement IDs, even when the producer
+has stopped sending updates.
 `TUI_LIPAN_PATCH_LAYER=t`, `b`, `m` or `p` selects an initial overlay in that example.
 The `m` key opens a backdrop-free transparent modal over a positive-z image; its text must remain
 visible in both native and composed modes. The `p` key hosts the terminal inside a root portal;
