@@ -83,7 +83,6 @@ pub(crate) struct RenderContext<'a> {
     pub mouse_pos: Option<(u16, u16)>,
     /// When set, List/Table skip pointer-derived `item_hover_style` for these node ids.
     pub suppress_pointer_item_hover_nodes: Option<&'a std::collections::HashSet<NodeId>>,
-    #[cfg_attr(not(feature = "terminal"), allow(dead_code))]
     pub blink_visible: bool,
     pub effect_phase: EffectPhase,
     pub copy_feedback: Option<&'a CopyFeedbackState>,

@@ -175,7 +175,7 @@ impl<C: Component> AppRunner<C> {
             self.animation.last_image_tick = self.clock_now();
         }
 
-        // Only software-blinking carets need paint ticks. Editable controls blink in hardware.
+        // Only software-blinking carets need paint ticks. Static carets never schedule them.
         if self.focus.window_focused {
             let has_blinking_cursor =
                 crate::app::caret::focused_caret(&self.core.tree, self.focus.focused, None)

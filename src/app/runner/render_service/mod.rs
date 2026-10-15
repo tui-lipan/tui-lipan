@@ -1442,7 +1442,7 @@ impl<C: Component> AppRunner<C> {
             hovered: self.mouse.hovered,
             mouse_pos: self.mouse.last_mouse.get(),
             suppress_pointer_item_hover_nodes: Some(&self.mouse.suppress_pointer_item_hover_nodes),
-            blink_visible: self.animation.blink_visible,
+            blink_visible: !self.focus.window_focused || self.animation.blink_visible,
             effect_phase: self.animation.effect_phase_tick,
             images_enabled: !self.surface.is_inline(),
             contrast_policy: self.contrast_policy,
@@ -1535,8 +1535,10 @@ impl<C: Component> AppRunner<C> {
         // render its native unfocused glyph (outlined block). Hiding the
         // cursor during the blink-off half-cycle would leave nothing for
         // the emulator to outline.
-        #[cfg(feature = "terminal")]
         let blink_on = !self.focus.window_focused || self.animation.blink_visible;
+        if !crate::app::caret::caret_is_lit(&self.core.tree, id, blink_on) {
+            return false;
+        }
 
         match &self.core.tree.node(id).kind {
             NodeKind::Input(node) => {
@@ -1558,7 +1560,6 @@ impl<C: Component> AppRunner<C> {
             #[cfg(feature = "terminal")]
             NodeKind::Terminal(node) => {
                 node.cursor_visible
-                    && (!node.cursor_blinking || blink_on)
                     && node.scrollback_offset == 0
                     && node
                         .selection
@@ -1595,6 +1596,7 @@ mod tests {
     use crate::app::App;
     use crate::app::interaction_state::{DirtyLevel, DirtyTracker};
     use crate::core::component::{Component, Context, Update};
+    use crate::core::element::IntoElement;
     use crate::runtime::RuntimeCore;
     use crate::style::{Length, Rect, Style, Theme};
     use crate::widgets::{
@@ -1912,7 +1914,7 @@ mod tests {
     }
 
     /// Paint the tree the way `draw_current_tree` does, returning the cells and caret it drew.
-    fn production_paint(runner: &AppRunner<ScrollWithInput>) -> (Buffer, Option<Position>) {
+    fn production_paint<C: Component>(runner: &AppRunner<C>) -> (Buffer, Option<Position>) {
         let mut terminal = Terminal::new(TestBackend::new(40, 10)).expect("test terminal");
         let cursor_position = Cell::new(None);
         let buffer = runner.with_render_context(&cursor_position, |ctx| {
@@ -1925,8 +1927,157 @@ mod tests {
         (buffer, cursor_position.get())
     }
 
+    #[derive(Clone)]
+    struct RepaintingEditable {
+        input: bool,
+        blinking: bool,
+        shape: crate::CaretShape,
+        tick: Rc<Cell<usize>>,
+    }
+
+    impl Component for RepaintingEditable {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _: &()) {}
+        fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+
+        fn view(&self, _: &Context<Self>) -> crate::Element {
+            let editable: crate::Element = if self.input {
+                crate::widgets::Input::new("query")
+                    .caret_shape(self.shape)
+                    .caret_blinking(self.blinking)
+                    .height(Length::Px(1))
+                    .border(false)
+                    .key("editable")
+            } else {
+                TextArea::new("query")
+                    .caret_shape(self.shape)
+                    .caret_blinking(self.blinking)
+                    .height(Length::Px(1))
+                    .border(false)
+                    .key("editable")
+            };
+            VStack::new()
+                .child(Text::new(format!("tick {}", self.tick.get())).height(Length::Px(1)))
+                .child(editable)
+                .into()
+        }
+    }
+
     #[test]
-    fn editable_carets_stay_placed_during_the_framework_blink_off_phase() {
+    fn editable_carets_keep_their_blink_cadence_while_other_content_repaints() {
+        use crate::CaretShape;
+        use crate::app::runner::terminal::TerminalManager;
+        let viewport = Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 10,
+        };
+        for shape in [CaretShape::Bar, CaretShape::TerminalDefault] {
+            for blinking in [false, true] {
+                for input in [false, true] {
+                    let tick = Rc::new(Cell::new(0));
+                    let component = RepaintingEditable {
+                        input,
+                        blinking,
+                        shape,
+                        tick: tick.clone(),
+                    };
+                    let mut runner = AppRunner::new(App::new().mouse(false), component.clone(), ());
+                    runner.core = RuntimeCore::new_test_with_clock(
+                        component,
+                        (),
+                        viewport,
+                        Theme::default(),
+                        SurfaceMode::Fullscreen,
+                        Rc::new(Cell::new(false)),
+                        crate::automation::ClockMode::Controlled,
+                    )
+                    .into();
+                    runner.core.init();
+                    runner.core.render_element(viewport, None, None, None);
+                    runner.focus.focused = runner
+                        .core
+                        .tree
+                        .iter()
+                        .find(|node| {
+                            matches!(
+                                node.kind,
+                                crate::core::node::NodeKind::Input(_)
+                                    | crate::core::node::NodeKind::TextArea(_)
+                            )
+                        })
+                        .map(|node| node.id);
+                    runner.focus.window_focused = true;
+                    runner.animation.last_blink = runner.core.ctx.env().now();
+                    let software_blinks = blinking && shape != CaretShape::TerminalDefault;
+                    let mut terminal = TerminalManager {
+                        osc12_supported: false,
+                        ..Default::default()
+                    };
+                    for frame in 1..=12 {
+                        tick.set(frame);
+                        runner
+                            .core
+                            .ctx
+                            .env()
+                            .advance_clock(std::time::Duration::from_millis(100));
+                        let mut dirty = DirtyTracker::default();
+                        runner.update_animation_cycle(&mut dirty);
+                        assert_eq!(
+                            dirty.level() == DirtyLevel::PaintOnly,
+                            software_blinks && frame % 5 == 0,
+                            "frame={frame}, input={input}, blinking={blinking}, shape={shape:?}",
+                        );
+                        runner.core.render_element(viewport, None, None, None);
+                        let expected = !software_blinks || frame / 5 % 2 == 0;
+                        let (buffer, cursor) = production_paint(&runner);
+                        assert_eq!(
+                            cursor.is_some(),
+                            expected,
+                            "frame={frame}, input={input}, blinking={blinking}, shape={shape:?}"
+                        );
+                        assert_eq!(runner.focused_node_requests_cursor(), expected);
+                        let label: String = (0..10).map(|x| buffer[(x, 0)].symbol()).collect();
+                        assert!(
+                            label.contains(&format!("tick {frame}")),
+                            "the sibling must repaint on every frame"
+                        );
+                        let captured = runner.capture_painted_frame();
+                        assert_eq!(captured.cursor.is_some(), expected);
+                        let mut commands = Vec::new();
+                        terminal
+                            .update_cursor(
+                                &mut commands,
+                                &runner.core.tree,
+                                runner.focus.focused,
+                                &std::collections::HashMap::new(),
+                            )
+                            .unwrap();
+                        let style = if shape == CaretShape::TerminalDefault {
+                            "\x1b[0 q"
+                        } else {
+                            "\x1b[6 q"
+                        };
+                        assert!(String::from_utf8_lossy(&commands).contains(style));
+                    }
+                    // An unfocused host must have a cursor to draw its native outline.
+                    runner.focus.window_focused = false;
+                    runner.animation.blink_visible = false;
+                    assert!(production_paint(&runner).1.is_some());
+                    assert!(runner.focused_node_requests_cursor());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn editable_carets_use_their_own_blink_policy_during_the_framework_blink_off_phase() {
         for blinking in [false, true] {
             for input in [false, true] {
                 let mut runner = make_runner();
@@ -1952,9 +2103,13 @@ mod tests {
                 runner.focus.focused = Some(runner.core.tree.root);
                 runner.animation.blink_visible = false;
                 let (_, cursor) = production_paint(&runner);
-                assert!(cursor.is_some(), "input={input}, blinking={blinking}");
+                assert_eq!(
+                    cursor.is_some(),
+                    !blinking,
+                    "input={input}, blinking={blinking}"
+                );
                 assert!(runner.incremental_cursor_position().is_some());
-                assert!(runner.focused_node_requests_cursor());
+                assert_eq!(runner.focused_node_requests_cursor(), !blinking);
             }
         }
     }
