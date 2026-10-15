@@ -1063,3 +1063,9 @@ callbacks run from their queue on the next pump, so the app hook executes before
 component handlers. If the old node has unmounted, its widget callback is skipped while the app
 hook still receives the retained old entry. Equal runtime nodes or equal non-empty keys are
 deduplicated; key dynamic focusable widgets when stable event identity matters.
+
+### TreeHoverEvent
+
+`Tree::on_hover` reports composed-row pointer transitions, including interactive descendants.
+`index` is the visible row index, `path` is the node's index path, and `hovered` indicates entry or
+exit. These fields are available from `tui_lipan::TreeHoverEvent` and the prelude.

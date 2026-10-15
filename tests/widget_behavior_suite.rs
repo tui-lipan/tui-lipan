@@ -87,3 +87,6 @@ mod visibility_animation;
 
 #[path = "suites/widget_behavior/tree_item_columns.rs"]
 mod tree_item_columns;
+
+#[path = "suites/widget_behavior/tree_composed_rows.rs"]
+mod tree_composed_rows;

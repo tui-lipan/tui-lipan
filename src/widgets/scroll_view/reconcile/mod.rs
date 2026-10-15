@@ -956,6 +956,8 @@ pub(crate) fn reconcile_scroll_view(
             scroll_override: next_scroll_override,
             scroll_handler_dirty: next_scroll_handler_dirty,
             on_scroll: sv.on_scroll.clone(),
+            on_focus: sv.on_focus.clone(),
+            on_blur: sv.on_blur.clone(),
             on_scroll_to: sv.on_scroll_to.clone(),
             on_viewport_change: sv.on_viewport_change.clone(),
             viewport_snapshot: None,

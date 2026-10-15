@@ -369,7 +369,13 @@ Hierarchical tree view with expand/collapse.
 
 | Prop | Type | Description |
 |------|------|-------------|
-| `root` | `TreeNode` | **Constructor** - root node |
+| `root` | `TreeNode` | **Constructor** - root node; use `Tree::forest(roots)` for multiple roots |
+| `controlled_expansion` | `bool` | Node `expanded` flags are authoritative; defaults to `false` |
+| `toggle_on_activate` | `bool` | Activation also toggles expandable nodes; defaults to `true` |
+| `item_hover_effect` | `Option<VisualEffect>` | Paint effect over composed rows and their interactive descendants |
+| `on_hover` | `Callback<TreeHoverEvent>` | Composed-row pointer entry and exit |
+| `on_pointer_move` | `Callback<TreeEvent>` | Pointer movement over composed rows |
+| `on_viewport_change` | `Callback<ScrollViewportEvent>` | Composed-row viewport metadata |
 | `selected` | `usize` | Controlled selected visible row index |
 | `clear_selection` | `bool` | When `true`, suppress the selection highlight (authoritative over `selected` and internal state) |
 | `force_scroll_to_selected` | `bool` | Force the internal list to reveal the selected row on next render |
@@ -408,13 +414,13 @@ Hierarchical tree view with expand/collapse.
 | `activate_on_click` | `bool` | Single-click activates |
 | `keymap` | `TreeKeymap` | Keyboard expand/collapse mapping |
 | `focus_policy` | `FocusAccordion` | Tree accordion behavior |
-| `focus_key` | `String` | Stable key assigned to the inner focusable list node |
+| `focus_key` | `String` | Stable key assigned to the inner focusable List or ScrollView |
 | `width` | `Length` | Width |
 | `height` | `Length` | Height |
 | `on_select` | `Callback<TreeEvent>` | Node selected |
 | `on_toggle` | `Callback<TreeToggleEvent>` | Node expanded/collapsed |
 
-`Tree` is implemented with an inner `List` (flattened visible rows). Per-row `item_hover_style` and **pointer vs keyboard row hover** behavior match `List` - see the callout under [List](#list).
+Text-only `Tree` uses an inner `List` of flattened visible rows. Its per-row `item_hover_style` and pointer versus keyboard row hover match [List](#list). Trees with composed row content use a `ScrollView`, with tree navigation and disclosure handling supplied by `Tree`.
 
 `IndentStyle` selects guide appearance. `Line` draws vertical guides; `LineCapped` and
 `LineCappedRounded` finish the last sibling with `└` and `╰`. `Branch` and `BranchRounded` add
@@ -431,6 +437,36 @@ hidden. It adds no space to rows with no prefix. Migration: replace `Tree::icon_
 
 Migration: replace `Short`/`Long` with `Branch` and `ShortRounded`/`LongRounded` with
 `BranchRounded`; use indentation width to control branch length.
+
+### Multiple roots and composed rows
+
+`Tree::forest(roots)` displays several top-level nodes without an artificial parent row. Events
+report paths starting with each root's index. `Tree::new(root)` continues to display one root.
+
+A node normally contains a `ListItem`, with styled spans, descriptions, status symbols, and detail
+lines. For independent buttons, badges, or other composed content, use `TreeNode::content(element)`.
+The original `ListItem` supplies the row's semantic label and selectable role. Set
+`content_height(n)` for content taller than one cell. `leading(element)` places a column before
+its guides, for example an active-row marker. `row_style(style)` styles the whole row, including
+the guides. `key(id)` gives composed content a stable reconciliation identity across reordering.
+Use `show_disclosure(false)` for structural section headings that need no disclosure column.
+
+Composed rows use the tree's scroll view and keyboard navigation. Their child controls handle their
+own clicks; a button click does not activate the surrounding row. `toggle_on_activate(false)`
+separates row activation from expansion. Composed-row disclosure arrows still toggle independently,
+and Left/Right, h/l, and Space retain tree navigation. Moving to a child or parent emits `on_select`,
+without emitting a spurious expansion event.
+
+With `controlled_expansion(true)`, every node's `expanded` value is authoritative after a props
+update. Store expansion under application data IDs and map `on_toggle` paths back to those IDs.
+This preserves the intended state when producers reorder nodes or supply lazy children.
+
+`on_hover`, `on_pointer_move`, and `on_viewport_change` describe composed rows. `item_hover_effect`
+can apply a paint effect over a hovered row, including interactive descendants. Text-only trees
+retain their List rendering. Selection symbols and List-specific column layout apply to text rows;
+composed rows supply those decorations through their content or leading column.
+
+Run `cargo run --example tree_rows` to try multiple roots, detail rows, and independent buttons.
 
 ### Building Nodes
 

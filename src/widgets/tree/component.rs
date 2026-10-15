@@ -1,10 +1,14 @@
 //! Tree component implementation.
 
+#[path = "rich.rs"]
+mod rich;
+
 use super::guides::{TreeBranch, TreeGuides};
 use super::types::*;
 use crate::core::component::{Component, Context, Update};
 use crate::core::element::{Element, IntoElement};
-use crate::style::Span;
+use crate::core::event::{KeyCode, KeyEvent};
+use crate::style::{Length, Span};
 use crate::widgets::ListItem;
 use std::borrow::Cow;
 use std::collections::HashSet;
@@ -14,6 +18,7 @@ use unicode_width::UnicodeWidthStr;
 pub(crate) struct TreeState {
     pub expanded: HashSet<TreePath>,
     pub selected: Option<usize>,
+    pub hovered: Option<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -21,6 +26,9 @@ pub(crate) enum TreeMsg {
     Select(usize),
     Activate(usize),
     Action(TreeAction),
+    Toggle(usize),
+    Hover(usize, bool),
+    PointerMove(usize),
 }
 
 pub(crate) struct TreeComponent;
@@ -38,6 +46,7 @@ impl Component for TreeComponent {
 
     fn create_state(&self, props: &Self::Properties) -> Self::State {
         TreeState {
+            hovered: None,
             expanded: expanded_paths_from_root(&props.root),
             selected: if props.clear_selection {
                 None
@@ -55,7 +64,7 @@ impl Component for TreeComponent {
         let old_expanded = expanded_paths_from_root(&old_props.root);
         let next_expanded = expanded_paths_from_root(&ctx.props.root);
 
-        if old_expanded != next_expanded {
+        if ctx.props.controlled_expansion || old_expanded != next_expanded {
             ctx.state.expanded = next_expanded;
             sync_selection_from_props(&ctx.props, &mut ctx.state);
             return Update::full();
@@ -78,6 +87,9 @@ impl Component for TreeComponent {
 
     fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
         match msg {
+            TreeMsg::Toggle(index) => rich::toggle(ctx, index),
+            TreeMsg::Hover(index, hovered) => rich::hover(ctx, index, hovered),
+            TreeMsg::PointerMove(index) => rich::pointer_move(ctx, index),
             TreeMsg::Select(index) => {
                 ctx.state.selected = Some(index);
                 if let Some(cb) = ctx.props.on_select.as_ref()
@@ -91,7 +103,9 @@ impl Component for TreeComponent {
                 Update::full()
             }
             TreeMsg::Activate(index) => {
-                let Some(entry) = entry_at_index(&ctx.props, &ctx.state, index) else {
+                let Some(entry) = entry_at_index(&ctx.props, &ctx.state, index)
+                    .filter(|entry| entry.node.item.is_selectable())
+                else {
                     return Update::none();
                 };
 
@@ -102,118 +116,33 @@ impl Component for TreeComponent {
                     });
                 }
 
-                if !entry.node.is_expandable() {
+                if !ctx.props.toggle_on_activate || !entry.node.is_expandable() {
                     return Update::full();
                 }
 
-                let next = toggle_path(&mut ctx.state.expanded, &entry.path);
-                if let Some(cb) = ctx.props.on_toggle.as_ref() {
-                    cb.emit(TreeToggleEvent {
-                        index,
-                        path: entry.path.clone(),
-                        expanded: next,
-                    });
-                }
-                Update::full()
+                rich::toggle(ctx, index)
             }
-            TreeMsg::Action(action) => {
-                let Some(selected) = selected_index(ctx) else {
-                    return Update::none();
-                };
-                let expanded_paths = resolved_expanded(ctx);
-                let entries = flatten_tree(&ctx.props.root, expanded_paths.as_ref());
-                let Some(entry) = entries.get(selected).cloned() else {
-                    return Update::none();
-                };
-
-                let is_currently_expanded = ctx.state.expanded.contains(&entry.path);
-
-                match action {
-                    TreeAction::Toggle => {
-                        if !entry.node.is_expandable() {
-                            return Update::none();
-                        }
-                        let next = toggle_path(&mut ctx.state.expanded, &entry.path);
-                        if let Some(cb) = ctx.props.on_toggle.as_ref() {
-                            cb.emit(TreeToggleEvent {
-                                index: selected,
-                                path: entry.path.clone(),
-                                expanded: next,
-                            });
-                        }
-                    }
-                    TreeAction::Expand => {
-                        if !is_currently_expanded {
-                            if entry.node.is_expandable() {
-                                ctx.state.expanded.insert(entry.path.clone());
-                                if let Some(cb) = ctx.props.on_toggle.as_ref() {
-                                    cb.emit(TreeToggleEvent {
-                                        index: selected,
-                                        path: entry.path.clone(),
-                                        expanded: true,
-                                    });
-                                }
-                            }
-                        } else {
-                            // Already expanded, select first child
-                            if selected + 1 < entries.len() {
-                                let next_entry = &entries[selected + 1];
-                                // Check if it's actually a child
-                                if next_entry
-                                    .path
-                                    .segments()
-                                    .starts_with(entry.path.segments())
-                                {
-                                    ctx.state.selected = Some(selected + 1);
-                                }
-                            }
-                        }
-                    }
-                    TreeAction::Collapse => {
-                        if is_currently_expanded {
-                            ctx.state.expanded.remove(&entry.path);
-                            if let Some(cb) = ctx.props.on_toggle.as_ref() {
-                                cb.emit(TreeToggleEvent {
-                                    index: selected,
-                                    path: entry.path.clone(),
-                                    expanded: false,
-                                });
-                            }
-                        } else {
-                            // Collapse parent
-                            if !entry.path.segments().is_empty() {
-                                let mut parent_segments = entry.path.segments().to_vec();
-                                parent_segments.pop();
-                                let parent_path = TreePath::from(parent_segments);
-                                ctx.state.expanded.remove(&parent_path);
-
-                                // Select parent
-                                if let Some(parent_idx) =
-                                    entries.iter().position(|e| e.path == parent_path)
-                                {
-                                    ctx.state.selected = Some(parent_idx);
-
-                                    if let Some(cb) = ctx.props.on_toggle.as_ref() {
-                                        cb.emit(TreeToggleEvent {
-                                            index: parent_idx,
-                                            path: parent_path,
-                                            expanded: false,
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                    }
-                };
-
-                Update::full()
-            }
+            TreeMsg::Action(action) => rich::action(ctx, action),
         }
     }
 
+    fn on_key(
+        &mut self,
+        key: KeyEvent,
+        ctx: &mut Context<Self>,
+    ) -> crate::core::component::KeyUpdate {
+        if rich::has_content(&ctx.props.root) {
+            return rich::on_key(self, key, ctx);
+        }
+        crate::core::component::KeyUpdate::unhandled(Update::none())
+    }
+
     fn view(&self, ctx: &Context<Self>) -> Element {
+        if rich::has_content(&ctx.props.root) {
+            return rich::view(ctx);
+        }
         let expanded = resolved_expanded(ctx);
-        let entries = flatten_tree(&ctx.props.root, expanded.as_ref());
+        let entries = visible_entries(&ctx.props, expanded.as_ref());
         let max_depth = entries
             .iter()
             .map(|entry| entry.branch.depth())
@@ -344,7 +273,27 @@ fn flatten_tree<'a>(root: &'a TreeNode, expanded: &HashSet<TreePath>) -> Vec<Tre
     out
 }
 
+fn visible_entries<'a>(props: &'a TreeProps, expanded: &HashSet<TreePath>) -> Vec<TreeEntry<'a>> {
+    if !props.forest {
+        return flatten_tree(&props.root, expanded);
+    }
+    let mut entries = Vec::new();
+    for (index, node) in props.root.children.iter().enumerate() {
+        push_entries(
+            node,
+            &mut vec![index],
+            TreeBranch::root(),
+            expanded,
+            &mut entries,
+        );
+    }
+    entries
+}
+
 fn resolved_expanded(ctx: &Context<TreeComponent>) -> Cow<'_, HashSet<TreePath>> {
+    if ctx.props.controlled_expansion {
+        return Cow::Owned(expanded_paths_from_root(&ctx.props.root));
+    }
     let Some(policy) = ctx.props.focus_policy else {
         return Cow::Borrowed(&ctx.state.expanded);
     };
@@ -393,7 +342,12 @@ fn selected_index(ctx: &Context<TreeComponent>) -> Option<usize> {
     if ctx.props.clear_selection {
         None
     } else {
-        ctx.props.selected.or(ctx.state.selected)
+        let preferred = ctx.props.selected.or(ctx.state.selected)?;
+        let items = visible_entries(&ctx.props, &ctx.state.expanded)
+            .iter()
+            .map(|entry| entry.node.item.clone())
+            .collect::<Vec<_>>();
+        crate::widgets::List::nearest_selectable_index(&items, preferred)
     }
 }
 
@@ -435,7 +389,12 @@ fn entry_at_index<'a>(
     state: &TreeState,
     index: usize,
 ) -> Option<TreeEntry<'a>> {
-    let entries = flatten_tree(&props.root, &state.expanded);
+    let expanded = if props.controlled_expansion {
+        Cow::Owned(expanded_paths_from_root(&props.root))
+    } else {
+        Cow::Borrowed(&state.expanded)
+    };
+    let entries = visible_entries(props, expanded.as_ref());
     entries.into_iter().nth(index)
 }
 
@@ -449,7 +408,7 @@ fn toggle_path(expanded: &mut HashSet<TreePath>, path: &TreePath) -> bool {
     }
 }
 
-fn build_item(entry: &TreeEntry<'_>, props: &TreeProps, max_depth: usize) -> ListItem {
+fn prefix_spans(entry: &TreeEntry<'_>, props: &TreeProps, max_depth: usize) -> Vec<Span> {
     let guides = tree_guides(props, entry.node.indent);
     let mut spans = guides.spans(&entry.branch, max_depth);
 
@@ -458,6 +417,12 @@ fn build_item(entry: &TreeEntry<'_>, props: &TreeProps, max_depth: usize) -> Lis
     if has_prefix && props.content_gap > 0 {
         spans.push(Span::new(" ".repeat(props.content_gap as usize)));
     }
+
+    spans
+}
+
+fn build_item(entry: &TreeEntry<'_>, props: &TreeProps, max_depth: usize) -> ListItem {
+    let mut spans = prefix_spans(entry, props, max_depth);
 
     // The tree's own chrome leads the label; everything else about the row is the node's. Gutter,
     // status, and prefix stay columns in front of the indentation, and extra lines move right with
@@ -484,6 +449,9 @@ fn disclosure_spans(
     guides: &TreeGuides,
     max_depth: usize,
 ) -> Vec<Span> {
+    if !entry.node.show_disclosure {
+        return Vec::new();
+    }
     if !props.show_icons {
         if !entry.node.disclosure.is_empty() {
             return entry.node.disclosure.clone();
@@ -712,6 +680,7 @@ mod tests {
         // Both branches of on_props_changed must run the same sync; the
         // expansion branch used to skip the restore and leave the tree blank.
         let mut state = TreeState {
+            hovered: None,
             expanded: HashSet::new(),
             selected: None,
         };

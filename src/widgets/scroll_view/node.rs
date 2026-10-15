@@ -118,6 +118,8 @@ pub struct ScrollViewNode {
     /// offset during a layout-only re-reconcile.
     pub scroll_handler_dirty: bool,
     pub on_scroll: Option<Callback<ScrollEvent>>,
+    pub on_focus: Option<Callback<()>>,
+    pub on_blur: Option<Callback<()>>,
     pub on_scroll_to: Option<Callback<usize>>,
     pub on_viewport_change: Option<Callback<ScrollViewportEvent>>,
     pub viewport_snapshot: Option<ScrollViewportSnapshot>,
@@ -421,6 +423,13 @@ impl ScrollViewNode {
 }
 
 impl WidgetNode for ScrollViewNode {
+    fn on_focus_callback(&self) -> Option<&Callback<()>> {
+        self.on_focus.as_ref()
+    }
+    fn on_blur_callback(&self) -> Option<&Callback<()>> {
+        self.on_blur.as_ref()
+    }
+
     fn is_focusable(&self) -> bool {
         self.focusable
     }
