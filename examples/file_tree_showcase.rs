@@ -228,7 +228,8 @@ impl Component for FileTreeShowcase {
             .child(
                 control_button(toggle_label("Nerd Font Git marks", state.git_icons))
                     .disabled(!state.git_status)
-                    .on_click(ctx.link().callback(|_| Msg::ToggleGitIcons)),
+                    .on_click(ctx.link().callback(|_| Msg::ToggleGitIcons))
+                    .automation_id("nerd-git-marks"),
             )
             .child(
                 control_button(toggle_label(
@@ -373,6 +374,42 @@ fn main() -> Result<()> {
 mod tests {
     use super::*;
     use tui_lipan::TestBackend;
+
+    #[test]
+    fn nerd_git_markers_reserve_a_cell_at_the_edge_but_diff_numbers_do_not() {
+        for width in [80, 100] {
+            let mut backend = TestBackend::new(FileTreeShowcase);
+            backend.set_viewport(Rect {
+                x: 0,
+                y: 0,
+                w: width,
+                h: 32,
+            });
+            backend.dispatch(Msg::ToggleGitIcons).unwrap();
+            backend.render();
+            let lines = backend.capture_frame().to_fixed_grid_lines();
+            let icon_only = lines.iter().find(|row| row.contains("lib.rs")).unwrap();
+            let with_stats = lines
+                .iter()
+                .find(|row| row.contains("file_tree.rs"))
+                .unwrap();
+            assert!(with_stats.trim_end().ends_with(" +42 -11"), "{with_stats}");
+            let icon_x = icon_only.chars().position(|ch| ch == '').unwrap();
+            let stats_end = with_stats
+                .chars()
+                .enumerate()
+                .filter(|(_, ch)| !ch.is_whitespace())
+                .map(|(x, _)| x)
+                .last()
+                .unwrap();
+            assert_eq!(
+                icon_x + 1,
+                stats_end,
+                "only the icon reserves a following cell"
+            );
+            assert_eq!(icon_only.chars().nth(icon_x + 1), Some(' '));
+        }
+    }
 
     #[test]
     fn live_controls_keep_arrows_independent_and_preserve_complete_rows() {

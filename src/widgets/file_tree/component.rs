@@ -2375,6 +2375,10 @@ fn git_description_spans(
             }
             spans.push(Span::new(format!("-{}", diff_stat.removed)).style(props.git_style_deleted));
         }
+    } else if props.git_icon_style == super::git::GitIconStyle::NerdFont && !spans.is_empty() {
+        // Nerd glyphs can use the following cell to render at full size. Diff stats already
+        // supply that separator; only a final status icon needs an additional blank cell.
+        spans.push(Span::new(" "));
     }
 
     spans
@@ -4783,6 +4787,58 @@ mod tests {
         assert_eq!(spans[0].style, base);
         assert_eq!(spans[1].style, base.patch(highlight));
         assert_eq!(spans[2].style, base);
+    }
+
+    #[test]
+    fn nerd_git_markers_reserve_a_following_cell_without_padding_diff_numbers() {
+        use crate::widgets::file_tree::git::{
+            GitChangeState::{Added, Modified},
+            GitDiffStat, GitFileDecorations, GitFileStatus, GitIconStyle,
+        };
+
+        for (staged, unstaged, diff_stat, show_stats, expected) in [
+            (None, Some(Modified), None, false, "  "),
+            (Some(Added), None, None, false, "  "),
+            (Some(Added), Some(Modified), None, false, "   "),
+            (
+                None,
+                Some(Modified),
+                Some(GitDiffStat::new(2, 1)),
+                true,
+                "  +2 -1",
+            ),
+            (
+                None,
+                Some(Modified),
+                Some(GitDiffStat::new(2, 1)),
+                false,
+                "  ",
+            ),
+            (
+                None,
+                Some(Modified),
+                Some(GitDiffStat::new(0, 0)),
+                true,
+                "  ",
+            ),
+            (None, None, Some(GitDiffStat::new(2, 1)), true, " +2 -1"),
+            (None, None, None, true, ""),
+        ] {
+            let props = crate::widgets::file_tree::FileTree::new("/repo")
+                .git_icon_style(GitIconStyle::NerdFont)
+                .show_diff_stats(show_stats)
+                .props;
+            let decoration = GitFileDecorations {
+                status: GitFileStatus::new(staged, unstaged),
+                diff_stat,
+                direct: true,
+            };
+            let actual = git_description_spans(Some(decoration), &props, false, false)
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>();
+            assert_eq!(actual, expected, "{decoration:?}, show_stats={show_stats}");
+        }
     }
 
     #[test]

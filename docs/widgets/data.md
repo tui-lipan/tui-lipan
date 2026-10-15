@@ -663,6 +663,9 @@ Plus all `Tree` styling/scrolling props, including `indent_style` and `scrollbar
 - `FileTreeGitView` is a compatibility alias for `FileTreeChangeView`; `git_view`, `git_changed_only`, and `git_diff_stats` remain available for git-focused call sites.
 - Changed-only mode respects `show_hidden`; paths under hidden components such as `.github/` appear only when hidden entries are enabled.
 - `show_diff_stats(true)` displays numeric diff stats when the selected change source provides them; untracked and binary files may show a status marker without `+N -M` counts.
+- Nerd Font Git status icons reserve a blank cell to their right so terminals can render them at
+  full size. When diff stats follow an icon, their existing one-cell separator provides this
+  space. Diff numbers and text status markers receive no additional trailing padding.
 - Filesystem fuzzy matching respects `.gitignore`/`.ignore` rules.
 - In changed-only mode, fuzzy matching is scoped to the changed-path projection instead of the whole filesystem.
 - Auto-expands ancestor directories to reveal search matches.
