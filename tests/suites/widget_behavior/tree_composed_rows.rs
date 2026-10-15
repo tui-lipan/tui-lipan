@@ -12,6 +12,8 @@ struct State {
     button: usize,
     reverse: bool,
     header: bool,
+    child_header: bool,
+    header_only: bool,
     reject_toggle: bool,
     lazy: bool,
     loaded: bool,
@@ -62,7 +64,7 @@ impl Component for ComposedTree {
                     .on_click(ctx.link().callback(|_| Msg::Button))
                     .key("close"),
             );
-        let children = if !ctx.state.lazy || ctx.state.loaded {
+        let mut children = if !ctx.state.lazy || ctx.state.loaded {
             vec![
                 TreeNode::new("child")
                     .content(Text::new("child"))
@@ -71,6 +73,12 @@ impl Component for ComposedTree {
         } else {
             Vec::new()
         };
+        if ctx.state.header_only {
+            children.clear();
+        }
+        if ctx.state.child_header {
+            children.insert(0, TreeNode::new(ListItem::header("Files")));
+        }
         let project = TreeNode::new("project")
             .content(content)
             .key("project")
@@ -236,6 +244,73 @@ fn composed_tree_skips_headers_for_initial_activation_and_navigation() {
     key(&mut backend, KeyCode::Home);
     assert_eq!(backend.state().selected, Some(1));
     assert!(backend.capture_frame().to_fixed_grid_lines()[0].starts_with("section"));
+}
+
+#[test]
+fn entering_an_expanded_subtree_skips_structural_headers() {
+    for code in [KeyCode::Right, KeyCode::Char('l')] {
+        let mut backend = backend();
+        backend.state_mut().expanded = true;
+        backend.state_mut().child_header = true;
+        backend.render();
+        backend.focus_key(&"tree".into());
+        key(&mut backend, code);
+        assert_eq!(backend.state().selected, Some(2));
+        assert!(backend.state().toggled.is_empty());
+    }
+}
+
+#[test]
+fn entering_a_subtree_with_only_headers_does_not_select_the_next_root() {
+    let mut backend = backend();
+    backend.state_mut().expanded = true;
+    backend.state_mut().child_header = true;
+    backend.state_mut().header_only = true;
+    backend.render();
+    backend.focus_key(&"tree".into());
+    key(&mut backend, KeyCode::Right);
+    key(&mut backend, KeyCode::Enter);
+    assert_eq!(backend.state().activated, [0]);
+    assert!(backend.state().selected.is_none());
+    assert!(backend.state().toggled.is_empty());
+}
+
+struct LeadingOnlyTree;
+
+impl Component for LeadingOnlyTree {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _: &()) {}
+
+    fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _: &Context<Self>) -> Element {
+        Tree::new(
+            TreeNode::new("project")
+                .expanded(true)
+                .child(TreeNode::new("child").leading(Text::new("●"))),
+        )
+        .into()
+    }
+}
+
+#[test]
+fn leading_content_renders_without_custom_row_content_anywhere_in_the_tree() {
+    let mut backend = TestBackend::new(LeadingOnlyTree);
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 32,
+        h: 8,
+    });
+    backend.render();
+    let rows = backend.capture_frame().to_fixed_grid_lines();
+    let child = rows.iter().find(|row| row.contains("child")).unwrap();
+    assert!(child.starts_with('●'), "{rows:?}");
 }
 
 #[test]

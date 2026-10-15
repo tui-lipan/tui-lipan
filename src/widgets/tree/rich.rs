@@ -5,7 +5,7 @@ use crate::widgets::scroll::{ScrollAction, has_command_modifier, scroll_action_f
 use crate::widgets::{HStack, MouseRegion, ScrollKeymap, ScrollView, Text, VStack};
 
 pub(super) fn has_content(node: &TreeNode) -> bool {
-    node.content.is_some() || node.children.iter().any(has_content)
+    node.content.is_some() || node.leading.is_some() || node.children.iter().any(has_content)
 }
 
 pub(super) fn toggle(ctx: &mut Context<TreeComponent>, index: usize) -> Update {
@@ -92,13 +92,14 @@ fn should_toggle(entry: &TreeEntry<'_>, action: TreeAction) -> bool {
 }
 
 fn child_index(entries: &[TreeEntry<'_>], index: usize) -> Option<usize> {
-    let child = entries.get(index + 1)?;
-    (child.node.item.is_selectable()
-        && child
-            .path
-            .segments()
-            .starts_with(entries[index].path.segments()))
-    .then_some(index + 1)
+    let parent = entries.get(index)?.path.segments();
+    entries
+        .iter()
+        .enumerate()
+        .skip(index + 1)
+        .take_while(|(_, entry)| entry.path.segments().starts_with(parent))
+        .find(|(_, entry)| entry.node.item.is_selectable())
+        .map(|(index, _)| index)
 }
 
 fn parent_index(entries: &[TreeEntry<'_>], entry: &TreeEntry<'_>) -> Option<usize> {
