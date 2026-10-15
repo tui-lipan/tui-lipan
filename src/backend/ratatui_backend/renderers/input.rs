@@ -611,7 +611,11 @@ pub(crate) fn render_input_node(
             mask: node.mask,
             is_focused,
             is_hovered,
-            blink_visible: state.ctx.blink_visible,
+            blink_visible: crate::app::caret::caret_is_lit(
+                state.ctx.tree,
+                node_id,
+                state.ctx.blink_visible,
+            ),
             disabled: node.disabled,
             read_only: node.read_only,
             caret: CursorPlacement::tracked(state.ctx.cursor_position, state.ctx.tree, node_id),

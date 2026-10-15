@@ -6,7 +6,6 @@ use web_time::Instant;
 #[cfg(feature = "image")]
 use crate::backend::ratatui_backend::image_support;
 use crate::core::component::Component;
-use crate::core::node::NodeKind;
 
 use super::{AppRunner, DirtyTracker};
 
@@ -176,27 +175,11 @@ impl<C: Component> AppRunner<C> {
             self.animation.last_image_tick = self.clock_now();
         }
 
-        // Cursor blink: only tick when a blinking text widget is focused.
+        // Only software-blinking carets need paint ticks. Static carets never schedule them.
         if self.focus.window_focused {
-            let has_blinking_cursor = if let Some(id) = self.focus.focused
-                && self.core.tree.is_valid(id)
-            {
-                let node = self.core.tree.node(id);
-                matches!(&node.kind, NodeKind::Input(n) if !n.read_only)
-                    || matches!(&node.kind, NodeKind::TextArea(n) if !n.read_only)
-                    || {
-                        #[cfg(feature = "terminal")]
-                        {
-                            matches!(&node.kind, NodeKind::Terminal(n) if n.cursor_visible && n.cursor_blinking)
-                        }
-                        #[cfg(not(feature = "terminal"))]
-                        {
-                            false
-                        }
-                    }
-            } else {
-                false
-            };
+            let has_blinking_cursor =
+                crate::app::caret::focused_caret(&self.core.tree, self.focus.focused, None)
+                    .is_some_and(|caret| caret.framework_blinks && caret.blinking);
 
             if has_blinking_cursor {
                 let blink_elapsed = self.clock_elapsed(self.animation.last_blink);

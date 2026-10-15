@@ -100,7 +100,7 @@ same live screen does not repeat the report. Paint-only updates also synchronize
 | `decorations` | `Arc<[TerminalDecoration]>` | Overlays applied on top of a live screen's snapshot |
 | `show_cursor` | `bool` | Show the hardware caret |
 | `cursor_shape` | `CaretShape` | Hardware caret shape |
-| `cursor_blinking` | `bool` | Child-requested caret blinking preference |
+| `cursor_blinking` | `bool` | Override blinking, including child requests on live screens |
 | `caret_color` | `Color` | Hardware caret color via OSC 12 (terminal support required) |
 | `style` | `Style` | Container style |
 | `hover_style` | `Style` | Hover style |

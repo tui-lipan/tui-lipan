@@ -42,8 +42,8 @@ impl TerminalManager {
             if self.osc12_supported {
                 desired_cursor_color = caret.color.and_then(Color::to_rgb);
             }
-            // A terminal's blinking is driven by the framework blink timer in the terminal
-            // renderer, so its hardware cursor stays a steady shape to avoid a double blink.
+            // Software-blinking carets use a steady hardware shape. Host output can reset a
+            // terminal's hardware blink timer, so the framework owns their visible phase.
             let blinking = caret.blinking && !caret.framework_blinks;
             if let Some(style) = cursor_style_for(caret.shape, blinking) {
                 target_style = style;
@@ -117,7 +117,7 @@ mod tests {
     use crate::style::{CaretShape, Color, Rect, Theme};
     use crate::widgets::{Input, TextArea, TextAreaVimMode, ThemeProvider};
 
-    use super::TerminalManager;
+    use super::{TerminalManager, focused_caret};
 
     fn text_area_tree() -> NodeTree {
         text_area_tree_with(TextArea::new("abc").vim_motions(true))
@@ -217,13 +217,13 @@ mod tests {
     }
 
     #[test]
-    fn caret_blinking_selects_the_blinking_decscusr_variant() {
-        // CSI 1/3/5 q are the blinking block/underline/bar forms; their steady
-        // counterparts are CSI 2/4/6 q.
+    fn software_blinking_uses_steady_hardware_shapes() {
+        // Both editable widgets blink in software. Sending a hardware blinking shape
+        // would double-blink, and output could continually reset its visible phase.
         for (shape, expected) in [
-            (CaretShape::Block, "\u{1b}[1 q"),
-            (CaretShape::Underline, "\u{1b}[3 q"),
-            (CaretShape::Bar, "\u{1b}[5 q"),
+            (CaretShape::Block, "\u{1b}[2 q"),
+            (CaretShape::Underline, "\u{1b}[4 q"),
+            (CaretShape::Bar, "\u{1b}[6 q"),
         ] {
             let tree = tree_with_theme(
                 Input::new("abc").caret_shape(shape).caret_blinking(true),
@@ -253,7 +253,12 @@ mod tests {
                 .caret_shape(CaretShape::Bar)
                 .caret_blinking(true),
         );
-        assert!(emitted(&tree).contains("\u{1b}[5 q"));
+        assert!(emitted(&tree).contains("\u{1b}[6 q"));
+        assert!(
+            focused_caret(&tree, Some(tree.root), None)
+                .unwrap()
+                .blinking
+        );
     }
 
     #[test]
@@ -265,6 +270,11 @@ mod tests {
                 .caret_blinking(true),
         );
         assert!(emitted(&tree).contains("\u{1b}[6 q"));
+        assert!(
+            !focused_caret(&tree, Some(tree.root), None)
+                .unwrap()
+                .blinking
+        );
     }
 
     #[test]

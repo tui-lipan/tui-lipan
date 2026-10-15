@@ -181,9 +181,11 @@ pub(crate) fn reconcile_terminal(
         cursor_shape: live
             .as_ref()
             .map_or(terminal.cursor_shape, |s| s.cursor_shape),
-        cursor_blinking: live
-            .as_ref()
-            .map_or(terminal.cursor_blinking, |s| s.cursor_blinking),
+        cursor_blinking: terminal.cursor_blinking_override.unwrap_or_else(|| {
+            live.as_ref()
+                .map_or(terminal.cursor_blinking, |s| s.cursor_blinking)
+        }),
+        cursor_blinking_override: terminal.cursor_blinking_override,
         caret_color: terminal.caret_color,
         selection,
         selection_controlled: terminal.selection_controlled,

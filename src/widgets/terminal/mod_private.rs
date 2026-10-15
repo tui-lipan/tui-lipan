@@ -26,6 +26,7 @@ pub struct Terminal {
     pub(crate) show_cursor: bool,
     pub(crate) cursor_shape: CaretShape,
     pub(crate) cursor_blinking: bool,
+    pub(crate) cursor_blinking_override: Option<bool>,
     pub(crate) caret_color: Option<Color>,
     pub(crate) color_lines: Option<Arc<[Vec<Span>]>>,
     pub(crate) color_cache_key: u64,

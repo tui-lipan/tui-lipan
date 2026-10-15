@@ -8245,6 +8245,53 @@ impl Component for LiveScreenSmoke {
     }
 }
 
+#[cfg(feature = "terminal")]
+#[test]
+fn live_cursor_blink_override_survives_child_requests_and_paint_only_refreshes() {
+    use crate::core::node::NodeKind;
+    use crate::layout::LayoutEngine;
+    for blinking in [false, true] {
+        let screen = Rc::new(RefCell::new(crate::widgets::TerminalScreen::new(
+            4, 20, 100,
+        )));
+        // Request the opposite before binding, then again on a paint-only refresh.
+        let request: &[u8] = if blinking { b"\x1b[2 q" } else { b"\x1b[1 q" };
+        screen.borrow_mut().process_bytes(request);
+        let widget: Element = Terminal::new()
+            .screen(crate::widgets::TerminalScreenHandle::new(screen.clone()))
+            .cursor_blinking(blinking)
+            .into();
+        let mut tree = crate::core::node::NodeTree::new();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &widget,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 20,
+                h: 4,
+            },
+            None,
+        );
+        let NodeKind::Terminal(node) = &tree.node(tree.root).kind else {
+            panic!("terminal")
+        };
+        assert_eq!(node.cursor_blinking, blinking);
+        screen.borrow_mut().process_bytes(b"x");
+        screen.borrow_mut().process_bytes(request);
+        let NodeKind::Terminal(node) = &mut tree.node_mut(tree.root).kind else {
+            panic!("terminal")
+        };
+        node.refresh_from_live_screen(None);
+        assert_eq!(node.cursor_blinking, blinking);
+        assert_eq!(
+            screen.borrow_mut().render_snapshot().cursor_blinking,
+            !blinking,
+            "the display override must not alter the child's terminal state"
+        );
+    }
+}
+
 /// Host state belongs to the runtime, and applies to screens bound before or after startup.
 #[cfg(feature = "terminal")]
 #[test]

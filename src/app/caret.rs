@@ -43,15 +43,18 @@ pub(crate) fn focused_caret(
                 shape,
                 blinking: node.caret_blinking.unwrap_or(theme.caret.blinking),
                 color: node.caret_color.or(theme.caret.color),
-                framework_blinks: false,
+                framework_blinks: !shape.is_terminal_default(),
             })
         }
-        NodeKind::Input(node) if !node.read_only => Some(FocusedCaret {
-            shape: node.caret_shape.unwrap_or(theme.caret.shape),
-            blinking: node.caret_blinking.unwrap_or(theme.caret.blinking),
-            color: node.caret_color.or(theme.caret.color),
-            framework_blinks: false,
-        }),
+        NodeKind::Input(node) if !node.read_only => {
+            let shape = node.caret_shape.unwrap_or(theme.caret.shape);
+            Some(FocusedCaret {
+                shape,
+                blinking: node.caret_blinking.unwrap_or(theme.caret.blinking),
+                color: node.caret_color.or(theme.caret.color),
+                framework_blinks: !shape.is_terminal_default(),
+            })
+        }
         // Honor the child program's DECSCUSR shape.
         #[cfg(feature = "terminal")]
         NodeKind::Terminal(node) if node.cursor_visible => Some(FocusedCaret {
@@ -62,4 +65,11 @@ pub(crate) fn focused_caret(
         }),
         _ => None,
     }
+}
+
+/// Static carets must remain lit even if another widget left the blink timer in its off phase.
+/// TerminalDefault explicitly leaves both shape and blinking to the host terminal.
+pub(crate) fn caret_is_lit(tree: &NodeTree, id: NodeId, blink_visible: bool) -> bool {
+    focused_caret(tree, Some(id), None)
+        .is_none_or(|caret| !caret.framework_blinks || !caret.blinking || blink_visible)
 }

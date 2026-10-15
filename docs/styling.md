@@ -853,13 +853,15 @@ Notes:
 ### Caret shape and blink
 
 `CaretShape` picks the hardware caret the terminal draws for the focused editable
-widget, and `blinking` picks between the steady and blinking form of that shape:
+widget. Concrete shapes blink in software when `blinking` is enabled; the framework
+sends the steady hardware shape and hides it during the off phase. This keeps blinking
+consistent even when application output resets the host terminal's hardware blink timer:
 
 | Shape | Steady | Blinking |
 | --- | --- | --- |
-| `CaretShape::Block` | `CSI 2 q` | `CSI 1 q` |
-| `CaretShape::Underline` | `CSI 4 q` | `CSI 3 q` |
-| `CaretShape::Bar` | `CSI 6 q` | `CSI 5 q` |
+| `CaretShape::Block` | `CSI 2 q` | `CSI 2 q`, software blink |
+| `CaretShape::Underline` | `CSI 4 q` | `CSI 4 q`, software blink |
+| `CaretShape::Bar` | `CSI 6 q` | `CSI 6 q`, software blink |
 | `CaretShape::TerminalDefault` | `CSI 0 q` | `CSI 0 q` |
 
 `CaretShape::TerminalDefault` deliberately declines to choose: it emits `CSI 0 q`
@@ -880,6 +882,9 @@ Theme::default().caret_shape(CaretShape::TerminalDefault)
 Blink is unset by default on both `Input` and `TextArea`, so a widget inherits
 `theme.caret.blinking` until it calls `.caret_blinking(..)`. `SearchPalette`
 forwards its own override through `.input_caret_blinking(..)`.
+Static editable carets stay placed in both framework blink phases and do not schedule
+blink repaints. Blinking editable carets use the framework timer. `TerminalDefault`
+keeps the host-controlled blink behavior described above.
 
 `TextArea::vim_motions` swaps a **`Block`** caret to `Bar` in insert mode. That
 swap keys off an explicit `Block`, so `Bar`, `Underline`, and `TerminalDefault`
