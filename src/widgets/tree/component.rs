@@ -1,12 +1,14 @@
 //! Tree component implementation.
 
+use super::guides::{TreeBranch, TreeGuides};
 use super::types::*;
 use crate::core::component::{Component, Context, Update};
 use crate::core::element::{Element, IntoElement};
-use crate::style::{Span, Style};
+use crate::style::Span;
 use crate::widgets::ListItem;
 use std::borrow::Cow;
 use std::collections::HashSet;
+use unicode_width::UnicodeWidthStr;
 
 #[derive(Clone, Debug)]
 pub(crate) struct TreeState {
@@ -212,7 +214,11 @@ impl Component for TreeComponent {
     fn view(&self, ctx: &Context<Self>) -> Element {
         let expanded = resolved_expanded(ctx);
         let entries = flatten_tree(&ctx.props.root, expanded.as_ref());
-        let max_depth = entries.iter().map(|entry| entry.depth).max().unwrap_or(0);
+        let max_depth = entries
+            .iter()
+            .map(|entry| entry.branch.depth())
+            .max()
+            .unwrap_or(0);
         let items = entries
             .iter()
             .map(|entry| build_item(entry, &ctx.props, max_depth))
@@ -307,11 +313,9 @@ impl Component for TreeComponent {
 #[derive(Clone, Debug)]
 struct TreeEntry<'a> {
     path: TreePath,
-    depth: usize,
     node: &'a TreeNode,
     expanded: bool,
-    continued_depths: Vec<bool>,
-    is_last_child: bool,
+    branch: TreeBranch,
 }
 
 fn collect_expanded_paths(node: &TreeNode, path: &mut Vec<usize>, out: &mut HashSet<TreePath>) {
@@ -336,16 +340,7 @@ fn expanded_paths_from_root(root: &TreeNode) -> HashSet<TreePath> {
 fn flatten_tree<'a>(root: &'a TreeNode, expanded: &HashSet<TreePath>) -> Vec<TreeEntry<'a>> {
     let mut out = Vec::new();
     let mut path = Vec::new();
-    let mut continued_depths = Vec::new();
-    push_entries(
-        root,
-        &mut path,
-        0,
-        expanded,
-        &mut continued_depths,
-        true,
-        &mut out,
-    );
+    push_entries(root, &mut path, TreeBranch::root(), expanded, &mut out);
     out
 }
 
@@ -405,39 +400,31 @@ fn selected_index(ctx: &Context<TreeComponent>) -> Option<usize> {
 fn push_entries<'a>(
     node: &'a TreeNode,
     path: &mut Vec<usize>,
-    depth: usize,
+    branch: TreeBranch,
     expanded: &HashSet<TreePath>,
-    continued_depths: &mut Vec<bool>,
-    is_last_child: bool,
     out: &mut Vec<TreeEntry<'a>>,
 ) {
     let path_key = TreePath::from(path.clone());
     let is_expanded = expanded.contains(&path_key);
+    let children = is_expanded.then_some(&node.children);
     out.push(TreeEntry {
         path: path_key,
-        depth,
         node,
         expanded: is_expanded,
-        continued_depths: continued_depths.clone(),
-        is_last_child,
+        branch: branch.clone(),
     });
 
-    if is_expanded {
-        let child_count = node.children.len();
-        for (idx, child) in node.children.iter().enumerate() {
-            let last = idx == child_count - 1;
+    if let Some(children) = children {
+        let child_count = children.len();
+        for (idx, child) in children.iter().enumerate() {
             path.push(idx);
-            continued_depths.push(!last);
             push_entries(
                 child,
                 path,
-                depth + 1,
+                branch.child(idx == child_count - 1),
                 expanded,
-                continued_depths,
-                last,
                 out,
             );
-            continued_depths.pop();
             path.pop();
         }
     }
@@ -463,108 +450,11 @@ fn toggle_path(expanded: &mut HashSet<TreePath>, path: &TreePath) -> bool {
 }
 
 fn build_item(entry: &TreeEntry<'_>, props: &TreeProps, max_depth: usize) -> ListItem {
-    let mut spans = Vec::new();
-
-    if props.indent_style != IndentStyle::None && entry.depth >= props.indent_guide_start_depth {
-        for i in 0..entry.depth - 1 {
-            if i + 1 >= props.indent_guide_start_depth && entry.continued_depths[i] {
-                spans.push(Span::new("│").style(depth_guide_style(props, i + 1, max_depth)));
-            } else {
-                spans.push(Span::new(" "));
-            }
-            let gap = entry.node.indent.saturating_sub(1);
-            if gap > 0 {
-                spans.push(Span::new(" ".repeat(gap as usize)));
-            }
-        }
-
-        // Branch connector for the current level
-        match props.indent_style {
-            IndentStyle::None => {} // Handled by outer if
-            IndentStyle::Line => {
-                spans.push(Span::new("│").style(depth_guide_style(props, entry.depth, max_depth)));
-            }
-            IndentStyle::Short => {
-                if entry.is_last_child {
-                    spans.push(Span::new("└").style(depth_guide_style(
-                        props,
-                        entry.depth,
-                        max_depth,
-                    )));
-                } else {
-                    spans.push(Span::new("├").style(depth_guide_style(
-                        props,
-                        entry.depth,
-                        max_depth,
-                    )));
-                }
-            }
-            IndentStyle::ShortRounded => {
-                if entry.is_last_child {
-                    spans.push(Span::new("╰").style(depth_guide_style(
-                        props,
-                        entry.depth,
-                        max_depth,
-                    )));
-                } else {
-                    spans.push(Span::new("├").style(depth_guide_style(
-                        props,
-                        entry.depth,
-                        max_depth,
-                    )));
-                }
-            }
-            IndentStyle::Long => {
-                if entry.is_last_child {
-                    spans.push(Span::new("└─").style(depth_guide_style(
-                        props,
-                        entry.depth,
-                        max_depth,
-                    )));
-                } else {
-                    spans.push(Span::new("├─").style(depth_guide_style(
-                        props,
-                        entry.depth,
-                        max_depth,
-                    )));
-                }
-            }
-            IndentStyle::LongRounded => {
-                if entry.is_last_child {
-                    spans.push(Span::new("╰─").style(depth_guide_style(
-                        props,
-                        entry.depth,
-                        max_depth,
-                    )));
-                } else {
-                    spans.push(Span::new("├─").style(depth_guide_style(
-                        props,
-                        entry.depth,
-                        max_depth,
-                    )));
-                }
-            }
-        }
-
-        let consumed = match props.indent_style {
-            IndentStyle::Long | IndentStyle::LongRounded => 2,
-            IndentStyle::Short | IndentStyle::ShortRounded | IndentStyle::Line => 1,
-            _ => 0,
-        };
-
-        let gap = entry.node.indent.saturating_sub(consumed);
-        if gap > 0 {
-            spans.push(indent_connector_gap_span(entry, props, max_depth, gap));
-        }
-    } else {
-        let indent = entry.node.indent.saturating_mul(entry.depth as u16);
-        if indent > 0 {
-            spans.push(Span::new(" ".repeat(indent as usize)));
-        }
-    }
+    let guides = tree_guides(props, entry.node.indent);
+    let mut spans = guides.spans(&entry.branch, max_depth);
 
     if entry.node.leading_guide_fill_cells > 0 {
-        spans.extend(leading_guide_fill_spans(entry, props, max_depth));
+        spans.extend(leading_guide_fill_spans(entry, &guides, max_depth));
     }
 
     if props.show_icons {
@@ -585,61 +475,40 @@ fn build_item(entry: &TreeEntry<'_>, props: &TreeProps, max_depth: usize) -> Lis
         }
     }
 
-    spans.extend(entry.node.item.spans.iter().cloned());
-
-    let mut item = ListItem::from_spans(spans)
-        .description_spans(entry.node.item.description_spans.clone())
-        .style(entry.node.item.style)
-        .role(entry.node.item.role)
-        .active(entry.node.item.active)
-        .primary_selection_label(entry.node.item.primary_selection_label)
-        .primary_selection_description(entry.node.item.primary_selection_description)
-        .primary_hover_label(entry.node.item.primary_hover_label)
-        .primary_hover_description(entry.node.item.primary_hover_description)
-        .primary_truncate_description_first(entry.node.item.primary_truncate_description_first)
-        .primary_wrap_description(entry.node.item.primary_wrap_description)
-        .primary_description_truncation(entry.node.item.primary_description_truncation)
-        .primary_description_gap(entry.node.item.primary_description_gap)
-        .symbol_line(entry.node.item.symbol_line);
-
-    for line in &entry.node.item.extra_lines {
-        item = item.line(line.clone());
-    }
-
+    // The tree's own chrome leads the label; everything else about the row is the node's. Gutter,
+    // status, and prefix stay columns in front of the indentation, and extra lines move right with
+    // the label so they keep reading as part of it.
+    let tree_width = spans
+        .iter()
+        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+        .sum::<usize>()
+        .min(u16::MAX as usize) as u16;
+    let mut item = entry.node.item.clone();
+    spans.append(&mut item.spans);
+    item.spans = spans;
+    item.label_prefix_width = tree_width;
+    item.extra_line_indent = item.extra_line_indent.saturating_add(tree_width);
+    item.primary_max_label_width = item
+        .primary_max_label_width
+        .map(|width| width.saturating_add(tree_width));
     item
 }
 
-fn indent_connector_gap_span(
-    entry: &TreeEntry<'_>,
-    props: &TreeProps,
-    max_depth: usize,
-    gap: u16,
-) -> Span {
-    let draw_solid_gap = props.solid_indent_connector_gap
-        && matches!(
-            props.indent_style,
-            IndentStyle::Short
-                | IndentStyle::ShortRounded
-                | IndentStyle::Long
-                | IndentStyle::LongRounded
-        );
-    let content = if draw_solid_gap {
-        "─".repeat(gap as usize)
-    } else {
-        " ".repeat(gap as usize)
-    };
-
-    let span = Span::new(content);
-    if draw_solid_gap {
-        span.style(depth_guide_style(props, entry.depth, max_depth))
-    } else {
-        span
+fn tree_guides(props: &TreeProps, indent: u16) -> TreeGuides {
+    let mut guides = TreeGuides::new(props.indent_style)
+        .indent(indent)
+        .guide_style(props.indent_guide_style)
+        .start_depth(props.indent_guide_start_depth)
+        .solid_connector_gap(props.solid_indent_connector_gap);
+    if let Some(gradient) = props.indent_gradient {
+        guides = guides.gradient(gradient);
     }
+    guides
 }
 
 fn leading_guide_fill_spans(
     entry: &TreeEntry<'_>,
-    props: &TreeProps,
+    guides: &TreeGuides,
     max_depth: usize,
 ) -> Vec<Span> {
     let cells = entry.node.leading_guide_fill_cells as usize;
@@ -647,7 +516,7 @@ fn leading_guide_fill_spans(
         return Vec::new();
     }
 
-    match props.indent_style {
+    match guides.style() {
         IndentStyle::Short
         | IndentStyle::ShortRounded
         | IndentStyle::Long
@@ -655,11 +524,10 @@ fn leading_guide_fill_spans(
             let fill_cells = cells.saturating_sub(1);
             let mut spans = Vec::new();
             if fill_cells > 0 {
-                spans.push(Span::new("─".repeat(fill_cells)).style(depth_guide_style(
-                    props,
-                    entry.depth,
-                    max_depth,
-                )));
+                spans.push(
+                    Span::new("─".repeat(fill_cells))
+                        .style(guides.style_at(entry.branch.depth, max_depth)),
+                );
             }
             spans.push(Span::new(" "));
             spans
@@ -668,11 +536,10 @@ fn leading_guide_fill_spans(
             let fill_cells = cells.saturating_sub(1);
             let mut spans = Vec::new();
             if fill_cells > 0 {
-                spans.push(Span::new("│".repeat(fill_cells)).style(depth_guide_style(
-                    props,
-                    entry.depth,
-                    max_depth,
-                )));
+                spans.push(
+                    Span::new("│".repeat(fill_cells))
+                        .style(guides.style_at(entry.branch.depth, max_depth)),
+                );
             }
             spans.push(Span::new(" "));
             spans
@@ -681,32 +548,18 @@ fn leading_guide_fill_spans(
     }
 }
 
-fn depth_guide_style(props: &TreeProps, depth: usize, max_depth: usize) -> Style {
-    let mut style = props.indent_guide_style;
-    if let Some(gradient) = props.indent_gradient {
-        let t = if max_depth <= 1 {
-            1.0
-        } else {
-            let depth_idx = depth.saturating_sub(1).min(max_depth.saturating_sub(1));
-            depth_idx as f64 / max_depth.saturating_sub(1) as f64
-        };
-        style = style.patch(Style::new().fg(gradient.color_at(t)));
-    }
-    style
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::style::Style;
     use crate::widgets::{ListItemGutter, ListItemLine};
 
+    /// A tree row is its node's `ListItem` with the tree's indentation in front of the label.
+    /// Nothing else about the item may be lost on the way: gutter, status, and prefix stay columns
+    /// in front of the indentation, and extra lines and label width limits move right with the
+    /// label.
     #[test]
-    fn build_item_documents_current_left_side_fields_dropped() {
-        // Tracking test for the List leading-column refactor: Tree currently
-        // rebuilds ListItem rows and intentionally does not copy the full
-        // left-side ListItem model through. A future Tree fix should update
-        // these assertions deliberately rather than changing rendering
-        // incidentally.
+    fn build_item_preserves_the_node_item_around_the_indentation() {
         let source = ListItem::new("Node")
             .status_symbol("!")
             .gutter(ListItemGutter::text("●"))
@@ -724,35 +577,34 @@ mod tests {
                     .wrap_label(true)
                     .max_label_width(2),
             );
-        let root = TreeNode::new(source).expanded(true);
-        let props = crate::widgets::Tree::new(root.clone())
+        let leaf = TreeNode::new(source.clone());
+        let props = crate::widgets::Tree::new(leaf.clone())
             .show_icons(false)
+            .indent_style(IndentStyle::Short)
             .props;
         let entry = TreeEntry {
-            path: TreePath::from(Vec::new()),
-            depth: 0,
-            node: &root,
-            expanded: true,
-            continued_depths: Vec::new(),
-            is_last_child: true,
+            path: TreePath::from(vec![0]),
+            node: &leaf,
+            expanded: false,
+            branch: TreeBranch::root().child(true),
         };
 
-        let out = build_item(&entry, &props, 0);
+        let out = build_item(&entry, &props, 1);
 
-        assert!(out.status.is_none());
-        assert!(out.gutter.is_none());
-        assert_eq!(out.gutter_line, 0);
-        assert!(out.prefix.is_none());
-        assert!(out.prefix_style.is_none());
-        assert_eq!(out.extra_line_indent, 0);
-        assert!(!out.primary_wrap_label);
+        let content: Vec<&str> = out.spans.iter().map(|span| span.content.as_ref()).collect();
+        assert_eq!(content, vec!["└", " ", "Node"]);
+        assert_eq!(out.status, source.status);
+        assert_eq!(out.gutter, source.gutter);
+        assert_eq!(out.gutter_line, 1);
+        assert_eq!(out.prefix, source.prefix);
+        assert_eq!(out.prefix_style, source.prefix_style);
+        assert_eq!(out.extra_line_indent, 4 + 2);
+        assert!(out.primary_wrap_label);
         assert!(out.primary_wrap_description);
-        assert_eq!(out.primary_max_label_width, None);
-        assert_eq!(out.primary_max_description_width, None);
+        assert_eq!(out.primary_max_label_width, Some(3 + 2));
+        assert_eq!(out.primary_max_description_width, Some(4));
         assert_eq!(out.symbol_line, 1);
-        assert_eq!(out.extra_lines.len(), 1);
-        assert!(out.extra_lines[0].wrap_label);
-        assert_eq!(out.extra_lines[0].max_label_width, Some(2));
+        assert_eq!(out.extra_lines, source.extra_lines);
     }
 
     #[test]
@@ -768,11 +620,13 @@ mod tests {
             .props;
         let entry = TreeEntry {
             path: TreePath::from(Vec::new()),
-            depth: 0,
             node: &root,
             expanded: false,
-            continued_depths: Vec::new(),
-            is_last_child: true,
+            branch: TreeBranch {
+                depth: 0,
+                last_child: true,
+                continued: Vec::new(),
+            },
         };
 
         let out = build_item(&entry, &props, 0);
@@ -931,11 +785,13 @@ mod tests {
             .props;
         let entry = TreeEntry {
             path: TreePath::from(vec![0]),
-            depth: 1,
             node: &child,
             expanded: false,
-            continued_depths: vec![false],
-            is_last_child: false,
+            branch: TreeBranch {
+                depth: 1,
+                last_child: false,
+                continued: vec![false],
+            },
         };
 
         let out = build_item(&entry, &props, 1);
@@ -955,11 +811,13 @@ mod tests {
             .props;
         let entry = TreeEntry {
             path: TreePath::from(vec![0]),
-            depth: 1,
             node: &child,
             expanded: false,
-            continued_depths: vec![false],
-            is_last_child: false,
+            branch: TreeBranch {
+                depth: 1,
+                last_child: false,
+                continued: vec![false],
+            },
         };
 
         let out = build_item(&entry, &props, 1);
@@ -978,11 +836,13 @@ mod tests {
             .props;
         let entry = TreeEntry {
             path: TreePath::from(vec![0]),
-            depth: 1,
             node: &child,
             expanded: false,
-            continued_depths: vec![false],
-            is_last_child: false,
+            branch: TreeBranch {
+                depth: 1,
+                last_child: false,
+                continued: vec![false],
+            },
         };
 
         let out = build_item(&entry, &props, 1);
@@ -1000,11 +860,13 @@ mod tests {
             .props;
         let entry = TreeEntry {
             path: TreePath::from(vec![0]),
-            depth: 1,
             node: &child,
             expanded: false,
-            continued_depths: vec![false],
-            is_last_child: true,
+            branch: TreeBranch {
+                depth: 1,
+                last_child: true,
+                continued: vec![false],
+            },
         };
 
         let out = build_item(&entry, &props, 1);
@@ -1022,11 +884,13 @@ mod tests {
             .props;
         let entry = TreeEntry {
             path: TreePath::from(vec![0]),
-            depth: 1,
             node: &child,
             expanded: false,
-            continued_depths: vec![false],
-            is_last_child: false,
+            branch: TreeBranch {
+                depth: 1,
+                last_child: false,
+                continued: vec![false],
+            },
         };
 
         let out = build_item(&entry, &props, 1);
@@ -1044,11 +908,13 @@ mod tests {
             .props;
         let entry = TreeEntry {
             path: TreePath::from(vec![0]),
-            depth: 1,
             node: &child,
             expanded: false,
-            continued_depths: vec![false],
-            is_last_child: true,
+            branch: TreeBranch {
+                depth: 1,
+                last_child: true,
+                continued: vec![false],
+            },
         };
 
         let out = build_item(&entry, &props, 1);
@@ -1066,11 +932,13 @@ mod tests {
             .props;
         let entry = TreeEntry {
             path: TreePath::from(vec![0]),
-            depth: 1,
             node: &child,
             expanded: false,
-            continued_depths: vec![false],
-            is_last_child: false,
+            branch: TreeBranch {
+                depth: 1,
+                last_child: false,
+                continued: vec![false],
+            },
         };
 
         let out = build_item(&entry, &props, 1);
@@ -1090,11 +958,13 @@ mod tests {
             .props;
         let entry = TreeEntry {
             path: TreePath::from(vec![0]),
-            depth: 1,
             node: &child,
             expanded: false,
-            continued_depths: vec![false],
-            is_last_child: true,
+            branch: TreeBranch {
+                depth: 1,
+                last_child: true,
+                continued: vec![false],
+            },
         };
 
         let out = build_item(&entry, &props, 1);
@@ -1115,11 +985,13 @@ mod tests {
             .props;
         let entry = TreeEntry {
             path: TreePath::from(vec![0]),
-            depth: 1,
             node: &child,
             expanded: false,
-            continued_depths: vec![false],
-            is_last_child: false,
+            branch: TreeBranch {
+                depth: 1,
+                last_child: false,
+                continued: vec![false],
+            },
         };
 
         let out = build_item(&entry, &props, 1);
@@ -1139,11 +1011,13 @@ mod tests {
             .props;
         let entry = TreeEntry {
             path: TreePath::from(vec![0]),
-            depth: 1,
             node: &child,
             expanded: false,
-            continued_depths: vec![false],
-            is_last_child: false,
+            branch: TreeBranch {
+                depth: 1,
+                last_child: false,
+                continued: vec![false],
+            },
         };
 
         let out = build_item(&entry, &props, 1);
@@ -1163,11 +1037,13 @@ mod tests {
             .props;
         let entry = TreeEntry {
             path: TreePath::from(vec![0]),
-            depth: 1,
             node: &child,
             expanded: false,
-            continued_depths: vec![false],
-            is_last_child: false,
+            branch: TreeBranch {
+                depth: 1,
+                last_child: false,
+                continued: vec![false],
+            },
         };
 
         let out = build_item(&entry, &props, 1);

@@ -511,6 +511,7 @@ fn wrap_item_right_lines(
     out.prefix_kind = item.prefix_kind.clone();
     out.prefix_style = item.prefix_style;
     out.extra_line_indent = extra_line_indent;
+    out.label_prefix_width = item.label_prefix_width;
     out.gutter = item.gutter.clone();
     out.gutter_line = gutter_line;
     out.description_spinner = item.description_spinner.clone();

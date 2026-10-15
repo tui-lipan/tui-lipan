@@ -390,6 +390,7 @@ ALLOWLIST: dict[tuple[str, str], str] = {
     ("src/widgets/toast/mod.rs", "title_style"): "non-state visual part style",
     ("src/widgets/tooltip.rs", "container_style"): "non-state visual part style",
     ("src/widgets/tooltip.rs", "text_style"): "non-state visual part style",
+    ("src/widgets/tree/guides.rs", "guide_style"): "tree connector glyph style; independent of interaction state",
     ("src/widgets/tree/types.rs", "empty_text_style"): "non-state visual part style",
     ("src/widgets/tree/types.rs", "icon_style"): "non-state visual part style",
     ("src/widgets/tree/types.rs", "indent_guide_style"): "non-state visual part style",

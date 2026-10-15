@@ -35,6 +35,29 @@ use crate::widgets::list::{
 };
 use crate::widgets::{ListItem, ListSymbolPosition, ListTruncation, SpinnerStyle};
 
+/// Separate tree chrome from the label so a left spinner follows the guides.
+fn split_label_prefix(spans: Vec<Span<'_>>, mut width: usize) -> (Vec<Span<'_>>, Vec<Span<'_>>) {
+    let mut prefix = Vec::new();
+    let mut label = Vec::new();
+    for span in spans {
+        if width == 0 {
+            label.push(span);
+            continue;
+        }
+        let span_width = UnicodeWidthStr::width(span.content.as_ref());
+        if span_width <= width {
+            width -= span_width;
+            prefix.push(span);
+            continue;
+        }
+        let end = crate::utils::text::end_at_width(span.content.as_ref(), 0, width);
+        prefix.push(Span::styled(span.content[..end].to_owned(), span.style));
+        label.push(Span::styled(span.content[end..].to_owned(), span.style));
+        width = 0;
+    }
+    (prefix, label)
+}
+
 /// Merge a list item rich-text span over its row/content base style.
 ///
 /// This is intentionally list-specific: non-empty spans do not inherit row text
@@ -1345,6 +1368,11 @@ pub(crate) fn render_list(params: ListRenderParams<'_, '_, '_>) {
                 available_left_width
             };
             let truncated_left = truncate_spans(content_spans, available_left_width);
+            let label_prefix_width = if sub_line == 0 {
+                usize::from(item.label_prefix_width).min(spans_width(&truncated_left))
+            } else {
+                0
+            };
             let truncated_left_width: usize = truncated_left
                 .iter()
                 .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
@@ -1354,7 +1382,7 @@ pub(crate) fn render_list(params: ListRenderParams<'_, '_, '_>) {
                 let slot_width = spinner.slot_width() as usize;
                 let text_gap = label_spinner_reserved.saturating_sub(slot_width);
                 let slot_x = match position {
-                    ListSymbolPosition::Left => item_spans_width,
+                    ListSymbolPosition::Left => item_spans_width.saturating_add(label_prefix_width),
                     ListSymbolPosition::Right => item_spans_width
                         .saturating_add(truncated_left_width)
                         .saturating_add(text_gap),
@@ -1376,8 +1404,11 @@ pub(crate) fn render_list(params: ListRenderParams<'_, '_, '_>) {
                 let blanks = Span::styled(spaces(label_spinner_reserved), rs_base);
                 match position {
                     ListSymbolPosition::Left => {
+                        let (prefix, label) =
+                            split_label_prefix(truncated_left, label_prefix_width);
+                        item_spans.extend(prefix);
                         item_spans.push(blanks);
-                        item_spans.extend(truncated_left);
+                        item_spans.extend(label);
                     }
                     ListSymbolPosition::Right => {
                         item_spans.extend(truncated_left);
