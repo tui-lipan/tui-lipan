@@ -119,6 +119,7 @@ impl Default for Terminal {
             show_cursor: true,
             cursor_shape: CaretShape::Block,
             cursor_blinking: true,
+            cursor_blinking_override: None,
             caret_color: None,
             color_lines: None,
             color_cache_key: 0,
@@ -213,9 +214,12 @@ impl Terminal {
         self
     }
 
-    /// Set whether the cursor should blink.
+    /// Override whether the cursor blinks, including on live screens.
+    ///
+    /// When unset, live screens follow the host default and child program requests.
     pub fn cursor_blinking(mut self, blinking: bool) -> Self {
         self.cursor_blinking = blinking;
+        self.cursor_blinking_override = Some(blinking);
         self
     }
 

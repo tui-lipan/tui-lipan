@@ -39,6 +39,7 @@ pub(crate) struct TerminalNode {
     pub cursor_visible: bool,
     pub cursor_shape: CaretShape,
     pub cursor_blinking: bool,
+    pub cursor_blinking_override: Option<bool>,
     pub caret_color: Option<Color>,
     pub selection: Option<TerminalSelection>,
     pub selection_controlled: bool,
@@ -194,7 +195,9 @@ impl TerminalNode {
         self.cursor_col = snapshot.cursor_col;
         self.cursor_visible = snapshot.cursor_visible && self.show_cursor_requested;
         self.cursor_shape = snapshot.cursor_shape;
-        self.cursor_blinking = snapshot.cursor_blinking;
+        self.cursor_blinking = self
+            .cursor_blinking_override
+            .unwrap_or(snapshot.cursor_blinking);
         self.mouse_mode = snapshot.mouse_mode;
         self.key_modes = snapshot.key_modes;
         #[cfg(feature = "terminal-images")]

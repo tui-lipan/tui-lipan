@@ -2351,7 +2351,8 @@ pub(crate) fn render_text_area_node(
                 is_focused,
                 show_selection_when_unfocused: ta.show_selection_when_unfocused,
                 is_hovered,
-                blink_visible: state.ctx.blink_visible,
+                // Editable widgets use the hardware cursor blink.
+                blink_visible: true,
                 disabled: ta.disabled,
                 read_only: ta.read_only,
                 caret: CursorPlacement::tracked(state.ctx.cursor_position, state.ctx.tree, node.id),

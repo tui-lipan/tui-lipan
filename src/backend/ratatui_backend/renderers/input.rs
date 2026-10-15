@@ -611,7 +611,8 @@ pub(crate) fn render_input_node(
             mask: node.mask,
             is_focused,
             is_hovered,
-            blink_visible: state.ctx.blink_visible,
+            // Editable widgets use the hardware cursor blink, never the framework timer.
+            blink_visible: true,
             disabled: node.disabled,
             read_only: node.read_only,
             caret: CursorPlacement::tracked(state.ctx.cursor_position, state.ctx.tree, node_id),

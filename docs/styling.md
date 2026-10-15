@@ -880,6 +880,8 @@ Theme::default().caret_shape(CaretShape::TerminalDefault)
 Blink is unset by default on both `Input` and `TextArea`, so a widget inherits
 `theme.caret.blinking` until it calls `.caret_blinking(..)`. `SearchPalette`
 forwards its own override through `.input_caret_blinking(..)`.
+Editable controls keep the hardware cursor placed in both framework blink phases;
+the host terminal handles the requested blink. Static controls do not schedule blink repaints.
 
 `TextArea::vim_motions` swaps a **`Block`** caret to `Bar` in insert mode. That
 swap keys off an explicit `Block`, so `Bar`, `Underline`, and `TerminalDefault`

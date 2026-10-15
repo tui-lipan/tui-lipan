@@ -1535,13 +1535,13 @@ impl<C: Component> AppRunner<C> {
         // render its native unfocused glyph (outlined block). Hiding the
         // cursor during the blink-off half-cycle would leave nothing for
         // the emulator to outline.
+        #[cfg(feature = "terminal")]
         let blink_on = !self.focus.window_focused || self.animation.blink_visible;
 
         match &self.core.tree.node(id).kind {
             NodeKind::Input(node) => {
                 !node.disabled
                     && !node.read_only
-                    && blink_on
                     && node
                         .anchor
                         .map(|anchor| anchor == node.cursor)
@@ -1550,7 +1550,6 @@ impl<C: Component> AppRunner<C> {
             NodeKind::TextArea(node) => {
                 !node.disabled
                     && !node.read_only
-                    && blink_on
                     && node
                         .anchor
                         .map(|anchor| anchor == node.cursor)
@@ -1559,7 +1558,7 @@ impl<C: Component> AppRunner<C> {
             #[cfg(feature = "terminal")]
             NodeKind::Terminal(node) => {
                 node.cursor_visible
-                    && blink_on
+                    && (!node.cursor_blinking || blink_on)
                     && node.scrollback_offset == 0
                     && node
                         .selection
@@ -1927,6 +1926,40 @@ mod tests {
     }
 
     #[test]
+    fn editable_carets_stay_placed_during_the_framework_blink_off_phase() {
+        for blinking in [false, true] {
+            for input in [false, true] {
+                let mut runner = make_runner();
+                let widget: crate::Element = if input {
+                    crate::widgets::Input::new("query")
+                        .caret_blinking(blinking)
+                        .into()
+                } else {
+                    TextArea::new("query").caret_blinking(blinking).into()
+                };
+                runner.core.tree = crate::core::node::NodeTree::new();
+                crate::layout::LayoutEngine::reconcile_with_focus(
+                    &mut runner.core.tree,
+                    &widget,
+                    Rect {
+                        x: 0,
+                        y: 0,
+                        w: 40,
+                        h: 10,
+                    },
+                    None,
+                );
+                runner.focus.focused = Some(runner.core.tree.root);
+                runner.animation.blink_visible = false;
+                let (_, cursor) = production_paint(&runner);
+                assert!(cursor.is_some(), "input={input}, blinking={blinking}");
+                assert!(runner.incremental_cursor_position().is_some());
+                assert!(runner.focused_node_requests_cursor());
+            }
+        }
+    }
+
+    #[test]
     fn painted_frame_matches_the_production_paint_through_a_cursor_blink() {
         let mut runner = make_runner();
         let viewport = Rect {
@@ -1956,10 +1989,9 @@ mod tests {
         for blink_visible in [true, false] {
             runner.animation.blink_visible = blink_visible;
             let (painted, painted_cursor) = production_paint(&runner);
-            assert_eq!(
+            assert!(
                 painted_cursor.is_some(),
-                blink_visible,
-                "the paint shows the caret only in the visible blink phase",
+                "editable carets remain placed through both framework blink phases",
             );
 
             let frame = runner.capture_painted_frame();
