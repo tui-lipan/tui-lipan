@@ -1972,6 +1972,9 @@ mod tests {
     fn editable_carets_keep_their_blink_cadence_while_other_content_repaints() {
         use crate::CaretShape;
         use crate::app::runner::terminal::TerminalManager;
+        #[cfg(feature = "terminal-images")]
+        let _image_host =
+            crate::backend::ratatui_backend::image_support::test_kitty_host((8, 16), true);
         let viewport = Rect {
             x: 0,
             y: 0,
