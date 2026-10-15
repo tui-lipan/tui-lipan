@@ -374,3 +374,93 @@ fn hovering_an_embedded_action_keeps_its_parent_row_hovered() {
     backend.render();
     assert!(backend.state().hovered.contains(&(0, false)));
 }
+
+struct ChromeTree {
+    composed: bool,
+    foreground: bool,
+}
+impl Component for ChromeTree {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+    fn create_state(&self, _: &()) {}
+    fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+    fn view(&self, _: &Context<Self>) -> Element {
+        let mut child = TreeNode::new("child").indent(2);
+        if self.composed {
+            child = child.content(Text::new("child"));
+        }
+        Tree::new(TreeNode::new("root").expanded(true).children([child]))
+            .show_icons(false)
+            .indent_style(IndentStyle::Branch)
+            .indent_guide_style(Style::new().fg(Color::rgb(30, 30, 30)))
+            .item_hover_style(if self.foreground {
+                Style::new()
+                    .fg(Color::Yellow)
+                    .bg(Color::rgb(70, 70, 70))
+                    .contrast_policy(tui_lipan::ContrastPolicy::Wcag)
+            } else {
+                Style::new()
+                    .bg(Color::rgb(70, 70, 70))
+                    .contrast_policy(tui_lipan::ContrastPolicy::Wcag)
+            })
+            .width(Length::Px(20))
+            .height(Length::Px(5))
+            .into()
+    }
+}
+
+#[test]
+fn composed_guides_match_text_tree_hover_contrast_and_foreground() {
+    for foreground in [false, true] {
+        let mut results = Vec::new();
+        for composed in [false, true] {
+            let mut backend = TestBackend::new(ChromeTree {
+                composed,
+                foreground,
+            });
+            backend.set_viewport(Rect {
+                x: 0,
+                y: 0,
+                w: 20,
+                h: 5,
+            });
+            backend.render();
+            let before = backend.capture_frame().cell(0, 1).clone();
+            backend
+                .send_mouse(MouseEvent {
+                    x: 4,
+                    y: 1,
+                    kind: MouseKind::Moved,
+                    mods: KeyMods::NONE,
+                })
+                .unwrap();
+            backend.render();
+            let after = backend.capture_frame().cell(0, 1).clone();
+            assert_ne!(
+                after.fg,
+                before.fg,
+                "hover keeps guides readable, composed={composed}: {:?}",
+                backend.capture_frame().to_fixed_grid_lines()
+            );
+            results.push((after.symbol.clone(), after.fg, after.bg));
+            backend
+                .send_mouse(MouseEvent {
+                    x: 19,
+                    y: 4,
+                    kind: MouseKind::Moved,
+                    mods: KeyMods::NONE,
+                })
+                .unwrap();
+            backend.render();
+            assert_eq!(
+                backend.capture_frame().cell(0, 1).fg,
+                before.fg,
+                "leaving restores guide color"
+            );
+        }
+        assert_eq!(results[0], results[1], "both Tree render paths agree");
+    }
+}

@@ -328,13 +328,14 @@ fn row(
                 .scroll_keys(ScrollKeymap::NONE)
                 .into()
         });
-    let content = composed_content(ctx, entry, index, max_depth, content);
+    let style = row_style(ctx, entry, index, selected);
+    let content = composed_content(ctx, entry, index, max_depth, content, style);
     let mut region = MouseRegion::new()
         .child(
             HStack::new()
                 .gap(0)
                 .height(Length::Auto)
-                .style(row_style(ctx, entry, index, selected))
+                .style(style)
                 .child(content),
         )
         .on_hover_change(
@@ -369,6 +370,7 @@ fn composed_content(
     index: usize,
     max_depth: usize,
     content: Element,
+    style: crate::style::Style,
 ) -> Element {
     let height = row_height(entry.node);
     let guides = tree_guides(&ctx.props, entry.node.indent);
@@ -377,8 +379,8 @@ fn composed_content(
     let mut first = HStack::new()
         .gap(0)
         .height(Length::Px(1))
-        .child(Text::from_spans(guide_spans).height(Length::Px(1)));
-    let arrow = Text::from_spans(disclosure).height(Length::Px(1));
+        .child(chrome(guide_spans, style));
+    let arrow = chrome(disclosure, style);
     if ctx.props.show_icons && entry.node.show_disclosure && entry.node.is_expandable() {
         let ctrl = ctx.props.on_ctrl_activate.is_some();
         let selectable = entry.node.item.is_selectable();
@@ -410,16 +412,36 @@ fn composed_content(
         .height(Length::Px(height))
         .child(first);
     for _ in 1..height {
-        prefix = prefix.child(
-            Text::from_spans(guides.continuation_spans(&entry.branch, max_depth))
-                .height(Length::Px(1)),
-        );
+        prefix = prefix.child(chrome(
+            guides.continuation_spans(&entry.branch, max_depth),
+            style,
+        ));
     }
     let mut row = HStack::new().gap(0).height(Length::Px(height));
     if let Some(leading) = &entry.node.leading {
         row = row.child(leading.element());
     }
     row.child(prefix).child(content).into()
+}
+
+/// Use the same span/state cascade and contrast resolution as text-only Tree rows.
+/// The list is a noninteractive text line; the enclosing row owns all input.
+fn chrome(spans: Vec<crate::style::Span>, style: crate::style::Style) -> Element {
+    crate::widgets::List::new()
+        .items([crate::widgets::ListItem::from_spans(spans)])
+        .selected(0)
+        .selection_style(style)
+        .unfocused_selection_style(style)
+        .hover_style(crate::style::Style::default())
+        .item_hover_style(crate::style::Style::default())
+        .focusable(false)
+        .tab_stop(false)
+        .symbol_column(false)
+        .scroll_wheel(false)
+        .scroll_keys(ScrollKeymap::NONE)
+        .width(Length::Auto)
+        .height(Length::Px(1))
+        .into()
 }
 
 fn row_style(
@@ -432,7 +454,7 @@ fn row_style(
     if ctx.state.hovered == Some(index) {
         style = style.patch(crate::style::resolve_slot(
             &ctx.theme(),
-            crate::style::ThemeRole::Hover,
+            crate::style::ThemeRole::ItemHover,
             &ctx.props.item_hover_style,
         ));
     }

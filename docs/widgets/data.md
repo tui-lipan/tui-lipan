@@ -453,7 +453,8 @@ its guides, for example an active-row marker. `row_style(style)` styles the whol
 the guides. `key(id)` gives composed content a stable reconciliation identity across reordering.
 Use `show_disclosure(false)` for structural section headings that need no disclosure column.
 
-Composed rows use the tree's scroll view and keyboard navigation. Their child controls handle their
+Composed rows use the tree's scroll view and keyboard navigation. Their guides and disclosure
+arrows use the same hover/selection foreground overrides and contrast adjustment as text-only trees. Their child controls handle their
 own clicks; a button click does not activate the surrounding row. `toggle_on_activate(false)`
 separates row activation from expansion. Composed-row disclosure arrows still toggle independently,
 and Left/Right, h/l, and Space retain tree navigation. Moving to a child or parent emits `on_select`,
