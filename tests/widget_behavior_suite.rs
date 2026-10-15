@@ -24,6 +24,8 @@ mod draggable_tab_bar_empty_transfer;
 mod draggable_tab_bar_hover_close_width;
 #[path = "suites/widget_behavior/effect_scope_backdrop.rs"]
 mod effect_scope_backdrop;
+#[path = "suites/widget_behavior/file_tree_arrows.rs"]
+mod file_tree_arrows;
 #[path = "suites/widget_behavior/file_tree_collapsed_projection.rs"]
 mod file_tree_collapsed_projection;
 #[path = "suites/widget_behavior/file_tree_explorer_focus.rs"]

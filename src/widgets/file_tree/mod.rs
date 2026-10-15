@@ -369,6 +369,11 @@ impl FileTree {
                 icon_palette: FileIconPalette::default(),
                 icon_overrides: HashMap::new(),
                 show_arrows: true,
+                expanded_arrow: "▼".into(),
+                collapsed_arrow: "▶".into(),
+                arrow_style: Style::default(),
+                content_gap: 1,
+                icon_gap: 1,
                 indent_style: crate::widgets::IndentStyle::None,
                 indent_guide_style: Style::default(),
                 indent_guide_start_depth: 1,
@@ -510,7 +515,7 @@ impl FileTree {
         self
     }
 
-    /// Toggle icon rendering.
+    /// Toggle file and directory icons independently of expansion arrows.
     pub fn show_icons(mut self, show_icons: bool) -> Self {
         self.props.show_icons = show_icons;
         self
@@ -548,9 +553,49 @@ impl FileTree {
         self
     }
 
-    /// Toggle expansion arrows before directories.
+    /// Toggle expansion arrows independently of file icons and icon style.
+    ///
+    /// Files reserve the same arrow column as directories so sibling labels align.
+    /// Branch guides extend through unused arrow cells, retaining the configured `content_gap`.
+    /// Set both `show_icons(false)` and `show_arrows(false)` for labels only.
     pub fn show_arrows(mut self, show: bool) -> Self {
         self.props.show_arrows = show;
+        self
+    }
+
+    /// Set the expanded-directory arrow (default `▼`).
+    pub fn expanded_arrow(mut self, arrow: impl Into<Arc<str>>) -> Self {
+        self.props.expanded_arrow = arrow.into();
+        self
+    }
+
+    /// Set the collapsed-directory arrow (default `▶`).
+    pub fn collapsed_arrow(mut self, arrow: impl Into<Arc<str>>) -> Self {
+        self.props.collapsed_arrow = arrow.into();
+        self
+    }
+
+    /// Set expansion arrow style, independently of icon and label styles.
+    pub fn arrow_style(mut self, style: Style) -> Self {
+        self.props.arrow_style = style;
+        self
+    }
+
+    /// Set blank cells between guides/disclosure arrows and item content (default 1).
+    ///
+    /// Applies with arrows enabled or disabled. Branch guides fill unused arrow glyph cells,
+    /// then leave this gap blank before the optional file icon and label. A root without an
+    /// arrow has no structural prefix and gets no leading gap. Zero is allowed.
+    pub fn content_gap(mut self, cells: u16) -> Self {
+        self.props.content_gap = cells;
+        self
+    }
+
+    /// Set blank cells after file and directory icons (default 1).
+    ///
+    /// Zero places the label directly after its icon. Ignored when icons are hidden.
+    pub fn icon_gap(mut self, cells: u16) -> Self {
+        self.props.icon_gap = cells;
         self
     }
 

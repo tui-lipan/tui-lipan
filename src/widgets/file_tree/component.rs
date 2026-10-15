@@ -4,6 +4,8 @@ use std::hash::{Hash, Hasher};
 use std::path::{Component as PathComponent, Path, PathBuf};
 use std::sync::Arc;
 
+use unicode_width::UnicodeWidthStr;
+
 use crate::core::component::{Command, Component, Context, Update};
 use crate::core::element::{Element, IntoElement};
 use crate::style::Style;
@@ -14,7 +16,7 @@ use super::events::{
     FileTreeEntryRequest, FileTreeEvent, FileTreeExplorerFocusOrigin, FileTreeToggleEvent,
 };
 use super::explorer::{ExplorerCandidate, ExplorerFilter, search_filesystem};
-use super::fs::{FileIconStyle, FileKind, FsNode, read_directory, root_node};
+use super::fs::{FileKind, FsNode, read_directory, root_node};
 use super::git::{
     GitFileDecorations, GitStatusCacheKey, GitStatusCacheRequest, GitStatusSnapshot,
     discover_git_root, insert_provided_decoration_path_and_parents, load_git_snapshot,
@@ -266,7 +268,7 @@ impl Component for FileTreeComponent {
 
         let mut tree = Tree::new(projection.root)
             .show_icons(false)
-            .solid_indent_connector_gap(file_tree_uses_guide_aware_nerd_arrows(&ctx.props))
+            .content_gap(ctx.props.content_gap)
             .indent_style(ctx.props.indent_style)
             .indent_guide_style(ctx.props.indent_guide_style)
             .indent_guide_start_depth(ctx.props.indent_guide_start_depth)
@@ -2111,12 +2113,12 @@ fn build_projected_tree_node(
     let path_style = ctx.path_styles.get(node.path.as_ref()).copied();
 
     if ctx.props.show_icons {
-        let mut icon_span = node.kind.icon(&node.name, is_expanded, is_root, ctx.props);
+        let mut icon_span = node.kind.icon(&node.name, is_expanded, ctx.props);
         if let Some(style) = path_style.and_then(|style| style.icon) {
             icon_span.style = icon_span.style.patch(style);
         }
         spans.push(icon_span);
-        spans.push(Span::new(" "));
+        spans.push(Span::new(" ".repeat(ctx.props.icon_gap as usize)));
     }
 
     // Build the label. Change status styles are opt-in so file names stay readable
@@ -2193,8 +2195,12 @@ fn build_projected_tree_node(
         .expanded(is_expanded)
         .expandable(node.is_dir())
         .indent(ctx.props.indent_width);
-    if file_tree_needs_nerd_arrow_placeholder(node, is_root, ctx.props) {
-        tree = tree.leading_guide_fill_cells(2);
+    if ctx.props.show_arrows {
+        tree = if node.is_dir() {
+            tree.disclosure(directory_disclosure_spans(ctx.props, is_expanded))
+        } else {
+            tree.disclosure_placeholder(arrow_column_width(ctx.props))
+        };
     }
 
     if node.is_dir() {
@@ -2803,27 +2809,26 @@ fn virtual_root_node_at(root: &Arc<str>, path: ProvidedPath) -> FsNode {
     }
 }
 
-fn file_tree_uses_guide_aware_nerd_arrows(props: &FileTreeProps) -> bool {
-    props.show_icons
-        && props.show_arrows
-        && matches!(
-            props.icon_style,
-            FileIconStyle::NerdFont | FileIconStyle::NerdFontColored
-        )
+fn directory_disclosure_spans(props: &FileTreeProps, expanded: bool) -> Vec<crate::style::Span> {
+    use crate::style::Span;
+    let arrow = if expanded {
+        &props.expanded_arrow
+    } else {
+        &props.collapsed_arrow
+    };
+    let padding = (arrow_column_width(props) as usize).saturating_sub(arrow.width());
+    vec![
+        Span::new(arrow.clone()).style(props.arrow_style),
+        Span::new(" ".repeat(padding)),
+    ]
 }
 
-fn file_tree_needs_nerd_arrow_placeholder(
-    node: &FsNode,
-    is_root: bool,
-    props: &FileTreeProps,
-) -> bool {
-    file_tree_uses_guide_aware_nerd_arrows(props)
-        && !is_root
-        && (node.kind != FileKind::Directory || directory_icon_is_overridden(&node.name, props))
-}
-
-fn directory_icon_is_overridden(name: &str, props: &FileTreeProps) -> bool {
-    props.icon_overrides.contains_key(name)
+fn arrow_column_width(props: &FileTreeProps) -> u16 {
+    props
+        .expanded_arrow
+        .width()
+        .max(props.collapsed_arrow.width())
+        .min(u16::MAX as usize) as u16
 }
 
 fn highlight_label_spans(
@@ -2902,6 +2907,7 @@ fn node_by_path_mut<'a>(root: &'a mut FsNode, path: &str) -> Option<&'a mut FsNo
 
 #[cfg(test)]
 mod tests {
+    use super::super::fs::FileIconStyle;
     use super::*;
     use crate::app::context::SurfaceMode;
     use crate::runtime::RuntimeCore;
@@ -4657,7 +4663,13 @@ mod tests {
 
         assert_eq!(projection.root.children.len(), 1);
         assert_eq!(
-            projection.root.children[0].item.spans[2].content.as_ref(),
+            projection.root.children[0]
+                .item
+                .spans
+                .last()
+                .unwrap()
+                .content
+                .as_ref(),
             "src"
         );
         assert_eq!(
@@ -4919,7 +4931,7 @@ mod tests {
     fn nerd_font_file_icon_uses_tree_guide_placeholder_instead_of_raw_spaces() {
         let props = crate::widgets::file_tree::FileTree::new("/repo")
             .icon_style(FileIconStyle::NerdFont)
-            .indent_style(crate::widgets::IndentStyle::Long)
+            .indent_style(crate::widgets::IndentStyle::Branch)
             .indent_width(1)
             .props;
         let node = FsNode {
@@ -4948,7 +4960,7 @@ mod tests {
         let tree = build_projected_tree_node(&node, false, vec![0], &mut ctx);
 
         assert_eq!(tree.indent, 1);
-        assert_eq!(tree.leading_guide_fill_cells, 2);
+        assert_eq!(tree.disclosure_placeholder_width, 1);
         assert!(!tree.item.spans[0].content.starts_with(' '));
         assert_eq!(tree.item.spans[1].content.as_ref(), " ");
         assert_eq!(tree.item.spans[2].content.as_ref(), "main.rs");
@@ -4994,17 +5006,17 @@ mod tests {
         let symlink_tree = build_projected_tree_node(&symlink, false, vec![0], &mut ctx);
         let other_tree = build_projected_tree_node(&other, false, vec![1], &mut ctx);
 
-        assert_eq!(symlink_tree.leading_guide_fill_cells, 2);
-        assert_eq!(other_tree.leading_guide_fill_cells, 2);
+        assert_eq!(symlink_tree.disclosure_placeholder_width, 1);
+        assert_eq!(other_tree.disclosure_placeholder_width, 1);
         assert!(!symlink_tree.item.spans[0].content.starts_with(' '));
         assert!(!other_tree.item.spans[0].content.starts_with(' '));
     }
 
     #[test]
-    fn nerd_font_directory_icon_override_reserves_arrow_gutter() {
+    fn directory_icon_override_keeps_its_expansion_arrow() {
         let props = crate::widgets::file_tree::FileTree::new("/repo")
             .icon_style(FileIconStyle::NerdFont)
-            .indent_style(crate::widgets::IndentStyle::Long)
+            .indent_style(crate::widgets::IndentStyle::Branch)
             .icon_override("src", "★", None)
             .props;
         let node = FsNode {
@@ -5032,7 +5044,8 @@ mod tests {
 
         let tree = build_projected_tree_node(&node, false, vec![0], &mut ctx);
 
-        assert_eq!(tree.leading_guide_fill_cells, 2);
+        assert_eq!(tree.disclosure_placeholder_width, 0);
+        assert_eq!(tree.disclosure[0].content.as_ref(), "▶");
         assert_eq!(tree.item.spans[0].content.as_ref(), "★");
         assert_eq!(tree.item.spans[1].content.as_ref(), " ");
         assert_eq!(tree.item.spans[2].content.as_ref(), "src");

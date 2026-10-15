@@ -48,7 +48,6 @@ impl FileKind {
         self,
         path: &str,
         expanded: bool,
-        is_root: bool,
         props: &super::mod_private::FileTreeProps,
     ) -> Span {
         let palette = &props.icon_palette;
@@ -77,18 +76,7 @@ impl FileKind {
                     FileIconStyle::Text => Span::new(base.as_ref()),
                     FileIconStyle::NerdFont | FileIconStyle::NerdFontColored => {
                         let (folder_glyph, folder_color) = directory_icon(expanded, palette);
-                        let icon = if is_root || !props.show_arrows {
-                            folder_glyph.to_string()
-                        } else {
-                            let arrow = if expanded {
-                                "\u{f47c} " // 
-                            } else {
-                                "\u{f460} " // 
-                            };
-                            format!("{arrow}{folder_glyph}")
-                        };
-
-                        let mut span = Span::new(icon);
+                        let mut span = Span::new(folder_glyph);
                         if props.icon_style == FileIconStyle::NerdFontColored
                             && let Some(c) = folder_color
                         {

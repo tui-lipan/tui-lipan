@@ -374,13 +374,13 @@ Hierarchical tree view with expand/collapse.
 | `clear_selection` | `bool` | When `true`, suppress the selection highlight (authoritative over `selected` and internal state) |
 | `force_scroll_to_selected` | `bool` | Force the internal list to reveal the selected row on next render |
 | `gap` | `u16` | Vertical gap between items |
-| `icon_gap` | `u16` | Gap between icon and label |
+| `content_gap` | `u16` | Gap after guides and optional disclosure icons, before item content; default `1`, allows `0` |
 | `show_icons` | `bool` | Show expand/collapse icons |
 | `expanded_icon` | `String` | Icon for expanded nodes |
 | `collapsed_icon` | `String` | Icon for collapsed nodes |
 | `leaf_icon` | `String` | Icon for leaf nodes |
 | `icon_style` | `Style` | Icon style |
-| `indent_style` | `IndentStyle` | Indent guide glyph variant: `None`, `Line`, `Short`, `Long`, `ShortRounded`, or `LongRounded` |
+| `indent_style` | `IndentStyle` | Indent guide glyph variant: `None`, `Line`, `LineCapped`, `LineCappedRounded`, `Branch`, or `BranchRounded` |
 | `indent_guide_style` | `Style` | Vertical indent guide |
 | `indent_guide_start_depth` | `usize` | First non-root depth that renders guides (default: `1`) |
 | `indent_gradient` | `ColorGradient` | Gradient for indent depth |
@@ -416,9 +416,21 @@ Hierarchical tree view with expand/collapse.
 
 `Tree` is implemented with an inner `List` (flattened visible rows). Per-row `item_hover_style` and **pointer vs keyboard row hover** behavior match `List` - see the callout under [List](#list).
 
-`IndentStyle` controls connector glyphs: `None` disables guides, `Line` uses
-`│`, `Short` uses `├`/`└`, `Long` uses `├─`/`└─`, `ShortRounded` uses
-`├`/`╰`, and `LongRounded` uses `├─`/`╰─`.
+`IndentStyle` selects guide appearance. `Line` draws vertical guides; `LineCapped` and
+`LineCappedRounded` finish the last sibling with `└` and `╰`. `Branch` and `BranchRounded` add
+horizontal branches, filling the available indentation width. `None` reserves indentation without
+guides. Every style uses exactly the configured cells per depth, including width zero, and the
+first line and continuation lines have equal widths. Arrows and icons occupy separate columns
+and never change indentation width. With `Branch` or `BranchRounded`, files extend the branch
+through the unused arrow cells, keeping the configured content gap blank before the icon or label.
+Other guide styles leave that column blank. Width zero suppresses the extension along with the guides.
+
+`content_gap` separates the complete tree prefix from item content, even with disclosure icons
+hidden. It adds no space to rows with no prefix. Migration: replace `Tree::icon_gap(n)` with
+`Tree::content_gap(n)`. FileTree keeps `icon_gap(n)` for spacing between file icons and labels.
+
+Migration: replace `Short`/`Long` with `Branch` and `ShortRounded`/`LongRounded` with
+`BranchRounded`; use indentation width to control branch length.
 
 ### Building Nodes
 
@@ -456,7 +468,7 @@ than `ListItem`s. Describe where each visible row sits with a `TreeBranch`, buil
 put the guide spans in front of the row's own content:
 
 ```rust
-let guides = TreeGuides::new(IndentStyle::Short)
+let guides = TreeGuides::new(IndentStyle::Branch)
     .indent(2)
     .guide_style(Style::new().fg(theme.border));
 let project = TreeBranch::root();
@@ -504,6 +516,16 @@ entries and git-backed or application-provided change projections.
 | `entry_refresh_token` | `u64` | Re-read local root and currently expanded directories when the token changes; ignored for provided entries |
 | `show_hidden` | `bool` | Show hidden files (`.` prefix) |
 | `max_entries_per_dir` | `usize` | Cap entries per directory |
+| `show_icons` | `bool` | Show file and directory icons independently of arrows (default: true) |
+| `show_arrows` | `bool` | Show directory expansion arrows independently of icons (default: true) |
+| `expanded_arrow` | `impl Into<Arc<str>>` | Expanded-directory arrow (default: `▼`) |
+| `collapsed_arrow` | `impl Into<Arc<str>>` | Collapsed-directory arrow (default: `▶`) |
+| `arrow_style` | `Style` | Expansion arrow style, independent of icon and label styles |
+| `content_gap` | `u16` | Blank cells after guides and optional arrows, before the item icon or label; default `1`, allows `0` |
+| `icon_gap` | `u16` | Blank cells between icons and labels; default `1`, allows `0`, ignored when icons are hidden |
+| `icon_style` | `FileIconStyle` | Text, Nerd Font, or colored Nerd Font icons |
+| `icon_palette` | `FileIconPalette` | Semantic icon colors |
+| `icon_override` | `(pattern, icon, Option<Color>)` | Override icons by filename, directory name, or file extension |
 | `directory_label_style` | `Style` | Style applied to directory names |
 | `file_label_style` | `Style` | Style applied to regular file names |
 | `path_style` | `(path, FileTreeItemStyle)` | Apply row/icon/label/suffix styles to one exact path |
@@ -534,8 +556,9 @@ entries and git-backed or application-provided change projections.
 | `expanded_paths` | `impl IntoIterator<Item = impl Into<Arc<str>>>` | Controlled expanded directory paths; the root path is kept expanded automatically |
 | `initial_expanded_paths` | `impl IntoIterator<Item = impl Into<Arc<str>>>` | Expansion seeded on mount and on each root change, which the tree then owns |
 | `empty_text_padding` | `impl Into<Padding>` | Inset around the empty-state text; defaults to none, flush with the rows |
-| `indent_width` | `u16` | Indentation cells per hierarchy level (default: `2`); use `1` with short guides for compact `├item` rows |
+| `indent_width` | `u16` | Indentation cells per hierarchy level (default: `2`); use `1` for compact guides and `content_gap` for the separator |
 | `directory_icon` | `String` | Directory icon |
+| `opened_directory_icon` | `String` | Expanded directory icon in text mode |
 | `file_icon` | `String` | File icon |
 | `symlink_icon` | `String` | Symlink icon |
 | `other_icon` | `String` | Other entry icon |
@@ -621,6 +644,21 @@ Plus all `Tree` styling/scrolling props, including `indent_style` and `scrollbar
   that hides it. Ignored when controlled `expanded_paths` is set.
 - Restores pre-search expansion state when query clears.
 - Queries containing file extensions (e.g. `layout.rs`) prioritize filename matches.
+
+Expansion arrows and file icons are independent in every icon style. For an arrow-only tree, use
+`.show_icons(false).show_arrows(true)`. For labels only, disable both. Sibling files reserve the
+arrow column so their labels align with directory labels. Custom arrow glyphs share a column sized
+to the wider glyph, followed by `content_gap` blank cells. `icon_gap` controls the blank cells
+between icons and labels. Both gaps default to one and allow zero. The content gap remains when
+arrows are hidden and follows the guides instead. Rows without a structural prefix, such as a root
+with no arrow, receive no content gap. Icons alone do not create a structural prefix.
+Override Nerd Font arrows with
+`.expanded_arrow("").collapsed_arrow("")` when desired.
+
+Migration: `show_icons(false)` now leaves expansion arrows visible, and text icons gain arrows when
+`show_arrows` is enabled. Add `.show_arrows(false)` to retain an arrow-free tree. Directory icon
+overrides now keep their expansion arrows; use `expanded_arrow` and `collapsed_arrow` to customize
+arrows instead of replacing directory icons.
 
 Run the complete asynchronous pattern with `cargo run --example provided_file_tree`.
 

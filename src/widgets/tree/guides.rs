@@ -9,7 +9,6 @@
 use super::IndentStyle;
 use crate::style::{Span, Style};
 use crate::utils::gradient::ColorGradient;
-use unicode_width::UnicodeWidthStr;
 
 /// Where one visible row sits in a tree.
 ///
@@ -61,7 +60,7 @@ impl TreeBranch {
 /// ```
 /// use tui_lipan::prelude::*;
 ///
-/// let guides = TreeGuides::new(IndentStyle::Short).indent(2);
+/// let guides = TreeGuides::new(IndentStyle::Branch).indent(2);
 /// let project = TreeBranch::root();
 /// let first = project.child(false);
 /// let last = project.child(true);
@@ -73,8 +72,8 @@ impl TreeBranch {
 ///         .collect::<String>()
 /// };
 /// assert_eq!(text(&project), "");
-/// assert_eq!(text(&first), "├ ");
-/// assert_eq!(text(&last), "└ ");
+/// assert_eq!(text(&first), "├─");
+/// assert_eq!(text(&last), "└─");
 /// ```
 #[derive(Clone, Debug, PartialEq)]
 pub struct TreeGuides {
@@ -83,7 +82,6 @@ pub struct TreeGuides {
     guide_style: Style,
     gradient: Option<ColorGradient>,
     start_depth: usize,
-    solid_connector_gap: bool,
 }
 
 impl Default for TreeGuides {
@@ -101,7 +99,6 @@ impl TreeGuides {
             guide_style: Style::default(),
             gradient: None,
             start_depth: 1,
-            solid_connector_gap: false,
         }
     }
 
@@ -130,69 +127,10 @@ impl TreeGuides {
         self
     }
 
-    pub(crate) fn solid_connector_gap(mut self, solid: bool) -> Self {
-        self.solid_connector_gap = solid;
-        self
-    }
-
     /// The indentation in front of a row at `branch`. `max_depth` is the deepest row on screen, which
     /// a [`gradient`](Self::gradient) spreads its colors across; it is ignored without one.
     pub fn spans(&self, branch: &TreeBranch, max_depth: usize) -> Vec<Span> {
-        let mut spans = Vec::new();
-        let depth = branch.depth;
-        if self.style == IndentStyle::None || depth < self.start_depth.max(1) {
-            let indent = self
-                .indent
-                .saturating_mul(depth.min(u16::MAX as usize) as u16);
-            if indent > 0 {
-                spans.push(Span::new(" ".repeat(indent as usize)));
-            }
-            return spans;
-        }
-
-        let gap = self.indent.saturating_sub(1);
-        for level in 0..depth - 1 {
-            if level + 1 >= self.start_depth
-                && branch.continued.get(level).copied().unwrap_or(false)
-            {
-                spans.push(Span::new("│").style(self.style_at(level + 1, max_depth)));
-            } else {
-                spans.push(Span::new(" "));
-            }
-            if gap > 0 {
-                spans.push(Span::new(" ".repeat(gap as usize)));
-            }
-        }
-
-        let style = self.style_at(depth, max_depth);
-        let connector = match (self.style, branch.last_child) {
-            (IndentStyle::None, _) => "",
-            (IndentStyle::Line, _) => "│",
-            (IndentStyle::Short, false)
-            | (IndentStyle::ShortRounded, false)
-            | (IndentStyle::Long, false)
-            | (IndentStyle::LongRounded, false) => match self.style {
-                IndentStyle::Long | IndentStyle::LongRounded => "├─",
-                _ => "├",
-            },
-            (IndentStyle::Short, true) => "└",
-            (IndentStyle::ShortRounded, true) => "╰",
-            (IndentStyle::Long, true) => "└─",
-            (IndentStyle::LongRounded, true) => "╰─",
-        };
-        spans.push(Span::new(connector).style(style));
-
-        let consumed = UnicodeWidthStr::width(connector) as u16;
-        let gap = self.indent.saturating_sub(consumed);
-        if gap > 0 {
-            let solid = self.solid_connector_gap && self.style != IndentStyle::Line;
-            if solid {
-                spans.push(Span::new("─".repeat(gap as usize)).style(style));
-            } else {
-                spans.push(Span::new(" ".repeat(gap as usize)));
-            }
-        }
-        spans
+        self.render_levels(branch, max_depth, true)
     }
 
     /// The indentation for a row's second and later lines.
@@ -201,45 +139,103 @@ impl TreeGuides {
     /// row's own column when it has a later sibling, so a multi-line row does not break the lines
     /// connecting what is above it to what is below. Same width as [`spans`](Self::spans).
     pub fn continuation_spans(&self, branch: &TreeBranch, max_depth: usize) -> Vec<Span> {
-        let depth = branch.depth;
-        if self.style == IndentStyle::None || depth < self.start_depth.max(1) {
-            let indent = self
-                .indent
-                .saturating_mul(depth.min(u16::MAX as usize) as u16);
-            return if indent > 0 {
-                vec![Span::new(" ".repeat(indent as usize))]
-            } else {
-                Vec::new()
-            };
+        self.render_levels(branch, max_depth, false)
+    }
+
+    fn render_levels(&self, branch: &TreeBranch, max_depth: usize, first_line: bool) -> Vec<Span> {
+        if self.indent == 0 {
+            return Vec::new();
         }
-        let gap = self.indent.saturating_sub(1);
-        let mut spans = Vec::new();
-        for level in 0..depth {
-            let open = if level + 1 == depth {
-                !branch.last_child
-            } else {
-                level + 1 >= self.start_depth
-                    && branch.continued.get(level).copied().unwrap_or(false)
-            };
-            if open {
-                spans.push(Span::new("│").style(self.style_at(level + 1, max_depth)));
-            } else {
-                spans.push(Span::new(" "));
-            }
-            if gap > 0 {
-                spans.push(Span::new(" ".repeat(gap as usize)));
-            }
+        let mut spans = Vec::with_capacity(branch.depth.saturating_mul(2));
+        for level in 0..branch.depth {
+            self.append_level(&mut spans, branch, level, max_depth, first_line);
         }
         spans
     }
 
+    fn append_level(
+        &self,
+        spans: &mut Vec<Span>,
+        branch: &TreeBranch,
+        level: usize,
+        max_depth: usize,
+        first_line: bool,
+    ) {
+        let glyph = self.level_glyph(branch, level, first_line);
+        let style = self.style_at(level + 1, max_depth);
+        spans.push(Span::new(glyph).style(if glyph == " " {
+            Style::default()
+        } else {
+            style
+        }));
+        let padding = self.indent - 1;
+        if padding > 0 {
+            let horizontal = first_line
+                && level + 1 == branch.depth
+                && level + 1 >= self.start_depth.max(1)
+                && matches!(self.style, IndentStyle::Branch | IndentStyle::BranchRounded);
+            let fill = if horizontal { "─" } else { " " };
+            spans.push(
+                Span::new(fill.repeat(padding as usize)).style(if horizontal {
+                    style
+                } else {
+                    Style::default()
+                }),
+            );
+        }
+    }
+
+    fn level_glyph(&self, branch: &TreeBranch, level: usize, first_line: bool) -> &'static str {
+        if self.style == IndentStyle::None || level + 1 < self.start_depth.max(1) {
+            return " ";
+        }
+        if first_line && level + 1 == branch.depth {
+            return self.connector(branch.last_child);
+        }
+        if branch.continued.get(level).copied().unwrap_or(false) {
+            "│"
+        } else {
+            " "
+        }
+    }
+
+    fn connector(&self, last: bool) -> &'static str {
+        match (self.style, last) {
+            (IndentStyle::None, _) => " ",
+            (IndentStyle::Line, _) => "│",
+            (IndentStyle::LineCapped | IndentStyle::LineCappedRounded, false) => "│",
+            (IndentStyle::LineCapped | IndentStyle::Branch, true) => "└",
+            (IndentStyle::LineCappedRounded | IndentStyle::BranchRounded, true) => "╰",
+            (IndentStyle::Branch | IndentStyle::BranchRounded, false) => "├",
+        }
+    }
+
+    /// Fill an unused disclosure column without changing indentation or its separator.
+    pub(crate) fn disclosure_placeholder_spans(
+        &self,
+        branch: &TreeBranch,
+        max_depth: usize,
+        cells: u16,
+    ) -> Vec<Span> {
+        if cells == 0 {
+            return Vec::new();
+        }
+        let extend = self.indent > 0
+            && branch.depth >= self.start_depth.max(1)
+            && matches!(self.style, IndentStyle::Branch | IndentStyle::BranchRounded);
+        if extend {
+            vec![
+                Span::new("─".repeat(cells as usize)).style(self.style_at(branch.depth, max_depth)),
+            ]
+        } else {
+            vec![Span::new(" ".repeat(cells as usize))]
+        }
+    }
+
     /// Cells the indentation in front of a row at `branch` occupies.
     pub fn width(&self, branch: &TreeBranch) -> u16 {
-        self.spans(branch, branch.depth)
-            .iter()
-            .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
-            .sum::<usize>()
-            .min(u16::MAX as usize) as u16
+        self.indent
+            .saturating_mul(branch.depth.min(u16::MAX as usize) as u16)
     }
 
     /// Guide style at `depth`, colored along the gradient when one is set.
@@ -255,10 +251,6 @@ impl TreeGuides {
             style = style.patch(Style::new().fg(gradient.color_at(t)));
         }
         style
-    }
-
-    pub(crate) fn style(&self) -> IndentStyle {
-        self.style
     }
 }
 
@@ -278,20 +270,20 @@ mod tests {
     /// which is what makes a deep last child end its branch instead of trailing a stray line.
     #[test]
     fn guides_continue_only_through_open_ancestors() {
-        let guides = TreeGuides::new(IndentStyle::Short).indent(2);
+        let guides = TreeGuides::new(IndentStyle::Branch).indent(2);
         let root = TreeBranch::root();
         let open = root.child(false);
         let closed = root.child(true);
-        assert_eq!(text(&guides, &open.child(true)), "│ └ ");
-        assert_eq!(text(&guides, &closed.child(false)), "  ├ ");
+        assert_eq!(text(&guides, &open.child(true)), "│ └─");
+        assert_eq!(text(&guides, &closed.child(false)), "  ├─");
         assert_eq!(guides.width(&open.child(true)), 4);
     }
 
     #[test]
-    fn long_rounded_connectors_fill_the_indent() {
-        let guides = TreeGuides::new(IndentStyle::LongRounded).indent(3);
+    fn rounded_branches_fill_the_indent() {
+        let guides = TreeGuides::new(IndentStyle::BranchRounded).indent(3);
         let leaf = TreeBranch::root().child(true);
-        assert_eq!(text(&guides, &leaf), "╰─ ");
+        assert_eq!(text(&guides, &leaf), "╰──");
     }
 
     /// Without a style, rows still indent by depth so a hierarchy stays readable.
@@ -306,7 +298,7 @@ mod tests {
     /// later sibling follows, and the width matches the first line's.
     #[test]
     fn continuation_lines_keep_open_guides_running() {
-        let guides = TreeGuides::new(IndentStyle::Short).indent(2);
+        let guides = TreeGuides::new(IndentStyle::Branch).indent(2);
         let root = TreeBranch::root();
         let middle = root.child(false);
         let last = root.child(true);
@@ -326,7 +318,112 @@ mod tests {
     /// A start depth of zero must not underflow on a top-level row.
     #[test]
     fn a_zero_start_depth_draws_nothing_for_top_level_rows() {
-        let guides = TreeGuides::new(IndentStyle::Short).start_depth(0);
+        let guides = TreeGuides::new(IndentStyle::Branch).start_depth(0);
         assert_eq!(text(&guides, &TreeBranch::root()), "");
+    }
+    #[test]
+    fn capped_lines_only_change_the_last_sibling() {
+        let root = TreeBranch::root();
+        let cases = [
+            (IndentStyle::Line, "│  ", "│  "),
+            (IndentStyle::LineCapped, "│  ", "└  "),
+            (IndentStyle::LineCappedRounded, "│  ", "╰  "),
+            (IndentStyle::Branch, "├──", "└──"),
+            (IndentStyle::BranchRounded, "├──", "╰──"),
+        ];
+        for (style, middle, last) in cases {
+            let guides = TreeGuides::new(style).indent(3);
+            assert_eq!(text(&guides, &root.child(false)), middle);
+            assert_eq!(text(&guides, &root.child(true)), last);
+            assert_eq!(
+                text(&guides, &root.child(false).child(true)),
+                format!("│  {last}")
+            );
+            assert_eq!(
+                text(&guides, &root.child(true).child(true)),
+                format!("   {last}")
+            );
+        }
+    }
+
+    #[test]
+    fn every_style_respects_the_width_on_first_and_continuation_lines() {
+        use unicode_width::UnicodeWidthStr;
+        for style in [
+            IndentStyle::None,
+            IndentStyle::Line,
+            IndentStyle::LineCapped,
+            IndentStyle::LineCappedRounded,
+            IndentStyle::Branch,
+            IndentStyle::BranchRounded,
+        ] {
+            for indent in 0..=4 {
+                for start in 0..=4 {
+                    let guides = TreeGuides::new(style).indent(indent).start_depth(start);
+                    let mut branch = TreeBranch::root();
+                    for depth in 0..=4 {
+                        let first = text(&guides, &branch);
+                        let rest: String = guides
+                            .continuation_spans(&branch, 4)
+                            .iter()
+                            .map(|span| span.content.as_ref())
+                            .collect();
+                        let expected = indent as usize * depth;
+                        assert_eq!(
+                            first.width(),
+                            expected,
+                            "{style:?}, indent={indent}, start={start}, depth={depth}"
+                        );
+                        assert_eq!(rest.width(), expected);
+                        assert_eq!(guides.width(&branch) as usize, expected);
+                        branch = branch.child(depth % 2 == 0);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn start_depth_hides_all_parts_of_a_connector() {
+        let guides = TreeGuides::new(IndentStyle::BranchRounded)
+            .indent(3)
+            .start_depth(2);
+        let branch = TreeBranch::root().child(false);
+        assert_eq!(text(&guides, &branch), "   ");
+        assert_eq!(text(&guides, &branch.child(true)), "   ╰──");
+    }
+    #[test]
+    fn only_visible_branches_extend_through_unused_disclosure_cells() {
+        let branch = TreeBranch::root().child(true);
+        let style = Style::new().bold();
+        for (kind, expected) in [
+            (IndentStyle::None, "   "),
+            (IndentStyle::Line, "   "),
+            (IndentStyle::LineCapped, "   "),
+            (IndentStyle::LineCappedRounded, "   "),
+            (IndentStyle::Branch, "───"),
+            (IndentStyle::BranchRounded, "───"),
+        ] {
+            let guides = TreeGuides::new(kind).indent(1).guide_style(style);
+            let spans = guides.disclosure_placeholder_spans(&branch, 1, 3);
+            let text: String = spans.iter().map(|span| span.content.as_ref()).collect();
+            assert_eq!(text, expected);
+            if expected.starts_with('─') {
+                assert_eq!(spans[0].style, style);
+            }
+            for guides in [guides.clone().indent(0), guides.clone().start_depth(2)] {
+                let text: String = guides
+                    .disclosure_placeholder_spans(&branch, 1, 3)
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect();
+                assert_eq!(text, "   ");
+            }
+            assert!(
+                guides
+                    .disclosure_placeholder_spans(&branch, 1, 0)
+                    .is_empty()
+            );
+        }
     }
 }

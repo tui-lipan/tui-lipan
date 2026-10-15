@@ -2,7 +2,7 @@
 
 use crate::callback::{Callback, KeyHandler};
 use crate::core::event::{KeyCode, KeyEvent, KeyMods};
-use crate::style::{Length, Style, StyleSlot};
+use crate::style::{Length, Span, Style, StyleSlot};
 use crate::utils::gradient::ColorGradient;
 use crate::widgets::ScrollKeymap;
 use crate::widgets::{FocusAccordion, ListItem};
@@ -177,7 +177,10 @@ pub struct TreeNode {
     pub(crate) expanded: bool,
     pub(crate) expandable: bool,
     pub(crate) indent: u16,
-    pub(crate) leading_guide_fill_cells: u16,
+    /// Unused disclosure cells, which branch guides may fill before the separator.
+    pub(crate) disclosure_placeholder_width: u16,
+    /// A disclosure supplied by FileTree, before item icons and labels.
+    pub(crate) disclosure: Vec<Span>,
 }
 
 impl TreeNode {
@@ -189,7 +192,8 @@ impl TreeNode {
             expanded: false,
             expandable: false,
             indent: 2,
-            leading_guide_fill_cells: 0,
+            disclosure_placeholder_width: 0,
+            disclosure: Vec::new(),
         }
     }
 
@@ -228,8 +232,13 @@ impl TreeNode {
         self
     }
 
-    pub(crate) fn leading_guide_fill_cells(mut self, cells: u16) -> Self {
-        self.leading_guide_fill_cells = cells;
+    pub(crate) fn disclosure_placeholder(mut self, cells: u16) -> Self {
+        self.disclosure_placeholder_width = cells;
+        self
+    }
+
+    pub(crate) fn disclosure(mut self, spans: Vec<Span>) -> Self {
+        self.disclosure = spans;
         self
     }
 }
@@ -237,19 +246,19 @@ impl TreeNode {
 /// Style of indentation guides.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum IndentStyle {
-    /// No guides.
+    /// No guides; indentation still reserves its configured width.
     #[default]
     None,
-    /// Vertical lines only (│).
+    /// Vertical lines (│), including the last sibling.
     Line,
-    /// Short branch connectors (├, └).
-    Short,
-    /// Short branch connectors with rounded terminal elbows (├, ╰).
-    ShortRounded,
-    /// Long branch connectors (├─, └─).
-    Long,
-    /// Long branch connectors with rounded terminal elbows (├─, ╰─).
-    LongRounded,
+    /// Vertical lines with a square cap (└) on the last sibling.
+    LineCapped,
+    /// Vertical lines with a rounded cap (╰) on the last sibling.
+    LineCappedRounded,
+    /// Branch connectors (├, └), filled horizontally to the indentation width.
+    Branch,
+    /// Branch connectors with rounded terminal elbows (├, ╰).
+    BranchRounded,
 }
 
 #[derive(Clone, PartialEq)]
@@ -259,7 +268,7 @@ pub(crate) struct TreeProps {
     pub clear_selection: bool,
     pub force_scroll_to_selected: bool,
     pub gap: u16,
-    pub icon_gap: u16,
+    pub content_gap: u16,
     pub show_icons: bool,
     pub expanded_icon: Arc<str>,
     pub collapsed_icon: Arc<str>,
@@ -297,7 +306,6 @@ pub(crate) struct TreeProps {
     pub indent_style: IndentStyle,
     pub indent_guide_style: Style,
     pub indent_gradient: Option<ColorGradient>,
-    pub(crate) solid_indent_connector_gap: bool,
     pub selection_full_width: bool,
     pub unselected_symbol: Option<Arc<str>>,
     pub key_interceptor: Option<KeyHandler>,
