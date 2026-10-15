@@ -378,6 +378,8 @@ fn hovering_an_embedded_action_keeps_its_parent_row_hovered() {
 struct ChromeTree {
     composed: bool,
     foreground: bool,
+    selected: bool,
+    active: bool,
 }
 impl Component for ChromeTree {
     type Message = ();
@@ -392,8 +394,20 @@ impl Component for ChromeTree {
         if self.composed {
             child = child.content(Text::new("child"));
         }
-        Tree::new(TreeNode::new("root").expanded(true).children([child]))
-            .show_icons(false)
+        let highlight = Style::new()
+            .bg(Color::rgb(70, 70, 70))
+            .contrast_policy(tui_lipan::ContrastPolicy::Wcag);
+        if self.active {
+            child = child.row_style(highlight);
+        }
+        let mut tree = Tree::new(TreeNode::new("root").expanded(true).children([child]));
+        if self.selected {
+            tree = tree
+                .selected(1)
+                .selection_style(highlight)
+                .unfocused_selection_style(highlight);
+        }
+        tree.show_icons(false)
             .indent_style(IndentStyle::Branch)
             .indent_guide_style(Style::new().fg(Color::rgb(30, 30, 30)))
             .item_hover_style(if self.foreground {
@@ -420,6 +434,8 @@ fn composed_guides_match_text_tree_hover_contrast_and_foreground() {
             let mut backend = TestBackend::new(ChromeTree {
                 composed,
                 foreground,
+                selected: false,
+                active: false,
             });
             backend.set_viewport(Rect {
                 x: 0,
@@ -462,5 +478,48 @@ fn composed_guides_match_text_tree_hover_contrast_and_foreground() {
             );
         }
         assert_eq!(results[0], results[1], "both Tree render paths agree");
+    }
+}
+
+#[test]
+fn composed_guides_only_adjust_contrast_while_hovered() {
+    for (selected, active) in [(true, false), (false, true)] {
+        let mut backend = TestBackend::new(ChromeTree {
+            composed: true,
+            foreground: false,
+            selected,
+            active,
+        });
+        backend.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 5,
+        });
+        backend.render();
+        let before = backend.capture_frame().cell(0, 1).clone();
+        assert_eq!(before.fg, Color::rgb(30, 30, 30));
+        assert_eq!(before.bg, Color::rgb(70, 70, 70));
+        backend
+            .send_mouse(MouseEvent {
+                x: 4,
+                y: 1,
+                kind: MouseKind::Moved,
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+        backend.render();
+        assert_ne!(backend.capture_frame().cell(0, 1).fg, before.fg);
+        backend
+            .send_mouse(MouseEvent {
+                x: 19,
+                y: 4,
+                kind: MouseKind::Moved,
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+        backend.render();
+        let after = backend.capture_frame().cell(0, 1).clone();
+        assert_eq!((after.fg, after.bg), (before.fg, before.bg));
     }
 }

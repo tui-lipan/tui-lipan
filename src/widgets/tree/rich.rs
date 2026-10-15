@@ -373,14 +373,16 @@ fn composed_content(
     style: crate::style::Style,
 ) -> Element {
     let height = row_height(entry.node);
+    let hovered = ctx.state.hovered == Some(index);
     let guides = tree_guides(&ctx.props, entry.node.indent);
     let guide_spans = guides.spans(&entry.branch, max_depth);
     let disclosure = disclosure_spans(entry, &ctx.props, &guides, max_depth);
-    let mut first = HStack::new()
-        .gap(0)
-        .height(Length::Px(1))
-        .child(chrome(guide_spans, style));
-    let arrow = chrome(disclosure, style);
+    let mut first =
+        HStack::new()
+            .gap(0)
+            .height(Length::Px(1))
+            .child(chrome(guide_spans, style, hovered));
+    let arrow = chrome(disclosure, style, hovered);
     if ctx.props.show_icons && entry.node.show_disclosure && entry.node.is_expandable() {
         let ctrl = ctx.props.on_ctrl_activate.is_some();
         let selectable = entry.node.item.is_selectable();
@@ -415,6 +417,7 @@ fn composed_content(
         prefix = prefix.child(chrome(
             guides.continuation_spans(&entry.branch, max_depth),
             style,
+            hovered,
         ));
     }
     let mut row = HStack::new().gap(0).height(Length::Px(height));
@@ -424,9 +427,12 @@ fn composed_content(
     row.child(prefix).child(content).into()
 }
 
-/// Use the same span/state cascade and contrast resolution as text-only Tree rows.
+/// Hover adjusts chrome contrast without recoloring guides on selected or active rows alone.
 /// The list is a noninteractive text line; the enclosing row owns all input.
-fn chrome(spans: Vec<crate::style::Span>, style: crate::style::Style) -> Element {
+fn chrome(spans: Vec<crate::style::Span>, style: crate::style::Style, hovered: bool) -> Element {
+    if !hovered {
+        return Text::from_spans(spans).height(Length::Px(1)).into();
+    }
     crate::widgets::List::new()
         .items([crate::widgets::ListItem::from_spans(spans)])
         .selected(0)
