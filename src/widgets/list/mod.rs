@@ -1575,6 +1575,7 @@ pub struct List {
     pub(crate) on_select: Option<Callback<ListEvent>>,
     pub(crate) on_item_click: Option<Callback<ListEvent>>,
     pub(crate) on_activate: Option<Callback<ListEvent>>,
+    pub(crate) on_ctrl_activate: Option<Callback<ListEvent>>,
     pub(crate) on_click: Option<Callback<MouseEvent>>,
     pub(crate) activate_on_click: bool,
     pub(crate) on_scroll_to: Option<Callback<usize>>,
@@ -1633,6 +1634,7 @@ impl Default for List {
             on_select: None,
             on_item_click: None,
             on_activate: None,
+            on_ctrl_activate: None,
             on_click: None,
             activate_on_click: true,
             on_scroll_to: None,
@@ -2057,6 +2059,15 @@ impl List {
     /// Callback fired when a row is clicked with the mouse.
     pub fn on_item_click(mut self, cb: Callback<ListEvent>) -> Self {
         self.on_item_click = Some(cb);
+        self
+    }
+
+    /// Activate an entry with Ctrl+click or Ctrl+Enter, separately from normal activation.
+    ///
+    /// When set, these gestures invoke this callback instead of `on_activate`. Ordinary
+    /// selection callbacks still run for pointer selection.
+    pub fn on_ctrl_activate(mut self, cb: Callback<ListEvent>) -> Self {
+        self.on_ctrl_activate = Some(cb);
         self
     }
 

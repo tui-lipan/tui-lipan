@@ -452,6 +452,7 @@ impl<C: Component> AppRunner<C> {
                         if select.on_select.is_none()
                             && select.on_item_click.is_none()
                             && select.on_activate.is_none()
+                            && select.on_ctrl_activate.is_none()
                         {
                             return false;
                         }
@@ -471,9 +472,7 @@ impl<C: Component> AppRunner<C> {
                         if let Some(cb) = &select.on_select {
                             cb.emit(ListEvent { index });
                         }
-                        if let Some(cb) = &select.on_activate
-                            && (select.activate_on_click || is_double)
-                        {
+                        if let Some(cb) = select.activation_callback(is_double) {
                             cb.emit(ListEvent { index });
                         }
                         return true;

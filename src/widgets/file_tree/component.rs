@@ -82,6 +82,9 @@ pub(crate) enum FileTreeMsg {
     TreeActivated {
         entry: Option<VisibleFileTreeEntry>,
     },
+    TreeCtrlActivated {
+        entry: Option<VisibleFileTreeEntry>,
+    },
     TreeToggled {
         entry: Option<VisibleFileTreeEntry>,
         expanded: bool,
@@ -311,6 +314,14 @@ impl Component for FileTreeComponent {
                     expanded: event.expanded,
                 }
             }));
+        if ctx.props.on_ctrl_activate.is_some() {
+            let lookup = projection.lookup.clone();
+            tree = tree.on_ctrl_activate(ctx.link().callback(move |event: TreeEvent| {
+                FileTreeMsg::TreeCtrlActivated {
+                    entry: lookup.get(&event.path).cloned(),
+                }
+            }));
+        }
         if let Some(selected) = selected_by_path
             .or(uncontrolled_selected_by_path)
             .or(ctx.props.selected)
@@ -581,6 +592,17 @@ impl Component for FileTreeComponent {
             FileTreeMsg::TreeActivated { entry } => {
                 if let Some(entry) = entry
                     && let Some(cb) = ctx.props.on_activate.as_ref()
+                {
+                    cb.emit(FileTreeEvent {
+                        path: entry.path,
+                        kind: entry.kind,
+                    });
+                }
+                Update::none()
+            }
+            FileTreeMsg::TreeCtrlActivated { entry } => {
+                if let Some(entry) = entry
+                    && let Some(cb) = &ctx.props.on_ctrl_activate
                 {
                     cb.emit(FileTreeEvent {
                         path: entry.path,

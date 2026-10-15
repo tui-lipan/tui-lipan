@@ -52,6 +52,7 @@ State-style setters use [StyleSlot semantics](../styling.md#state-style-slots):
 | `on_select` | `Callback<ListEvent>` | Selection changed |
 | `on_item_click` | `Callback<ListEvent>` | Row clicked with mouse |
 | `on_activate` | `Callback<ListEvent>` | Item activated by Enter, a single click by default, or a double-click when `activate_on_click` is false |
+| `on_ctrl_activate` | `Callback<ListEvent>` | Ctrl+click or Ctrl+Enter, independently of normal activation and `activate_on_click` |
 | `activate_on_click` | `bool` | Activate on a single row click (default: `true`); when false, double-click still activates |
 | `on_scroll_to` | `Callback<usize>` | Scroll position changed |
 
@@ -418,6 +419,7 @@ Hierarchical tree view with expand/collapse.
 | `width` | `Length` | Width |
 | `height` | `Length` | Height |
 | `on_select` | `Callback<TreeEvent>` | Node selected |
+| `on_ctrl_activate` | `Callback<TreeEvent>` | Ctrl+click or Ctrl+Enter activates without toggling expansion |
 | `on_toggle` | `Callback<TreeToggleEvent>` | Node expanded/collapsed |
 
 Text-only `Tree` uses an inner `List` of flattened visible rows. Its per-row `item_hover_style` and pointer versus keyboard row hover match [List](#list). Trees with composed row content use a `ScrollView`, with tree navigation and disclosure handling supplied by `Tree`.
@@ -614,6 +616,7 @@ entries and git-backed or application-provided change projections.
 | `tab_stop` | `bool` | Include the tree target in sequential Tab traversal (default: `true`) |
 | `on_focus` / `on_blur` | `Callback<()>` | Tree focus gained / lost |
 | `on_select` | `Callback<FileTreeEvent>` | File/dir selected |
+| `on_ctrl_activate` | `Callback<FileTreeEvent>` | Ctrl+click or Ctrl+Enter on a file or directory, without toggling expansion |
 | `on_toggle` | `Callback<FileTreeToggleEvent>` | Directory expanded/collapsed |
 | `on_entry_request` | `Callback<FileTreeEntryRequest>` | Missing provided directory listing requested |
 
@@ -621,6 +624,9 @@ Plus all `Tree` styling/scrolling props, including `indent_style` and `scrollbar
 
 **Behavior:**
 - Local directories load on demand on first expand.
+- When `on_ctrl_activate` is set, Ctrl+click and Ctrl+Enter invoke it instead of normal activation.
+  Ctrl+click still selects the entry, but leaves directory expansion unchanged. This works with
+  `activate_on_click(false)` too. Without the callback, existing activation behavior is retained.
 - Change `entry_refresh_token(...)` to refresh local directory entries in place without remounting or
   resetting expansion or explorer state. The root and currently expanded directories are reread;
   collapsed descendants are unloaded and reread when reopened. Reads run in a background command;

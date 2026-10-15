@@ -260,7 +260,7 @@ Source: `src/widgets/text_area/mod.rs:458` (`TextArea`).
 
 ## List
 
-Source: `src/widgets/list/mod.rs:1599` (`List`).
+Source: `src/widgets/list/mod.rs:1600` (`List`).
 
 | Field | Default initializer |
 |---|---|
@@ -300,6 +300,7 @@ Source: `src/widgets/list/mod.rs:1599` (`List`).
 | `on_select` | `None` |
 | `on_item_click` | `None` |
 | `on_activate` | `None` |
+| `on_ctrl_activate` | `None` |
 | `on_click` | `None` |
 | `activate_on_click` | `true` |
 | `on_scroll_to` | `None` |
@@ -1142,6 +1143,7 @@ Source: `src/widgets/file_tree/mod.rs:361` (`FileTree`).
 | `path_styles` | `HashMap::new()` |
 | `on_select` | `None` |
 | `on_activate` | `None` |
+| `on_ctrl_activate` | `None` |
 | `on_toggle` | `None` |
 | `on_entry_request` | `None` |
 
@@ -1279,6 +1281,7 @@ Source: `src/widgets/tree/mod.rs:29` (`Tree`).
 | `on_blur` | `None` |
 | `on_select` | `None` |
 | `on_activate` | `None` |
+| `on_ctrl_activate` | `None` |
 | `on_toggle` | `None` |
 | `keymap` | `TreeKeymap::default()` |
 | `focus_policy` | `None` |

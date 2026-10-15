@@ -1,7 +1,7 @@
 //! List and Table keyboard and scroll-wheel handlers.
 
 use crate::callback::KeyHandler;
-use crate::core::event::{KeyCode, KeyEvent};
+use crate::core::event::{KeyCode, KeyEvent, KeyMods};
 use crate::core::node::{NodeId, NodeKind, NodeTree};
 use crate::style::Rect;
 use crate::widgets::internal::{
@@ -65,7 +65,13 @@ pub(crate) fn handle_list_key(tree: &mut NodeTree, id: NodeId, key: KeyEvent) ->
         let scroll_keys_val = node.scroll_keys;
         let navigation_wrap = node.navigation_wrap;
         let on_select = node.on_select.clone();
-        let on_activate = node.on_activate.clone();
+        let on_activate = if key.mods == KeyMods::CTRL {
+            node.on_ctrl_activate
+                .clone()
+                .or_else(|| node.on_activate.clone())
+        } else {
+            node.on_activate.clone()
+        };
         let on_key = node.on_key.clone();
         let border_val = node.border;
         let padding_val = node.padding;

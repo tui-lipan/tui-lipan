@@ -697,6 +697,7 @@ pub(crate) fn handle_list_click_test_backend<C: Component>(
                 if select.on_select.is_none()
                     && select.on_item_click.is_none()
                     && select.on_activate.is_none()
+                    && select.on_ctrl_activate.is_none()
                 {
                     return false;
                 }
@@ -719,9 +720,7 @@ pub(crate) fn handle_list_click_test_backend<C: Component>(
                 if let Some(cb) = &select.on_select {
                     cb.emit(crate::widgets::ListEvent { index });
                 }
-                if let Some(cb) = &select.on_activate
-                    && (select.activate_on_click || is_double)
-                {
+                if let Some(cb) = select.activation_callback(is_double) {
                     cb.emit(crate::widgets::ListEvent { index });
                 }
                 return true;

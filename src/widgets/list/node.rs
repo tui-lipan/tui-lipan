@@ -63,6 +63,7 @@ pub struct ListNode {
     pub on_select: Option<Callback<ListEvent>>,
     pub on_item_click: Option<Callback<ListEvent>>,
     pub on_activate: Option<Callback<ListEvent>>,
+    pub on_ctrl_activate: Option<Callback<ListEvent>>,
     pub on_click: Option<Callback<MouseEvent>>,
     pub activate_on_click: bool,
     pub on_scroll_to: Option<Callback<usize>>,
@@ -100,6 +101,7 @@ impl WidgetNode for ListNode {
                 || self.on_select.is_some()
                 || self.on_item_click.is_some()
                 || self.on_activate.is_some()
+                || self.on_ctrl_activate.is_some()
                 || self.on_scroll_to.is_some()
                 || self.scrollbar
                 || self.show_scroll_indicators

@@ -25,6 +25,7 @@ pub(crate) struct TreeState {
 pub(crate) enum TreeMsg {
     Select(usize),
     Activate(usize),
+    CtrlActivate(usize),
     Action(TreeAction),
     Toggle(usize),
     Hover(usize, bool),
@@ -101,6 +102,18 @@ impl Component for TreeComponent {
                     });
                 }
                 Update::full()
+            }
+            TreeMsg::CtrlActivate(index) => {
+                if let Some(entry) = entry_at_index(&ctx.props, &ctx.state, index)
+                    .filter(|entry| entry.node.item.is_selectable())
+                    && let Some(cb) = &ctx.props.on_ctrl_activate
+                {
+                    cb.emit(TreeEvent {
+                        index,
+                        path: entry.path,
+                    });
+                }
+                Update::none()
             }
             TreeMsg::Activate(index) => {
                 let Some(entry) = entry_at_index(&ctx.props, &ctx.state, index)
@@ -203,6 +216,12 @@ impl Component for TreeComponent {
             .on_select(on_select)
             .on_activate(on_activate)
             .on_key(on_key);
+        if ctx.props.on_ctrl_activate.is_some() {
+            list =
+                list.on_ctrl_activate(ctx.link().callback(|event: crate::widgets::ListEvent| {
+                    TreeMsg::CtrlActivate(event.index)
+                }));
+        }
         if let Some(cb) = ctx.props.on_focus.clone() {
             list = list.on_focus(cb);
         }

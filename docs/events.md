@@ -66,7 +66,7 @@ to drive `TestBackend` and custom backends, so they stay constructible.
 
 ### `ListEvent`
 
-Emitted by: `List::on_select`, `List::on_activate`, `List::on_item_click`
+Emitted by: `List::on_select`, `List::on_activate`, `List::on_ctrl_activate`, `List::on_item_click`
 
 ```rust
 pub struct ListEvent {
@@ -875,6 +875,7 @@ Quick lookup - which callbacks does each widget support?
 |----------|---------|------|
 | `on_select` | `ListEvent` | Selection changes (keyboard or mouse) |
 | `on_activate` | `ListEvent` | Enter key (or click if `activate_on_click` is true) |
+| `on_ctrl_activate` | `ListEvent` | Ctrl+Enter or Ctrl+click; replaces ordinary activation when configured |
 | `on_item_click` | `ListEvent` | Row clicked with mouse |
 | `on_click` | `MouseEvent` | Raw mouse click on list area |
 | `on_scroll_to` | `usize` | Scrollbar interaction |

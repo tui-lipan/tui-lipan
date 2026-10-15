@@ -2,7 +2,7 @@ use tui_lipan::prelude::*;
 
 struct FileTreeShowcase;
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 struct State {
     guide: usize,
     icon: usize,
@@ -19,9 +19,10 @@ struct State {
     git_status_padding_right: u16,
     custom_icons: bool,
     path_style: bool,
+    last_path: Option<std::sync::Arc<str>>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Msg {
     NextGuide,
     NextIcon,
@@ -38,6 +39,7 @@ enum Msg {
     NextGitStatusPadding,
     ToggleCustomIcons,
     TogglePathStyle,
+    InsertPath(std::sync::Arc<str>),
 }
 
 const GUIDES: [IndentStyle; 6] = [
@@ -115,6 +117,7 @@ impl Component for FileTreeShowcase {
             }
             Msg::ToggleCustomIcons => ctx.state.custom_icons = !ctx.state.custom_icons,
             Msg::TogglePathStyle => ctx.state.path_style = !ctx.state.path_style,
+            Msg::InsertPath(path) => ctx.state.last_path = Some(path),
         }
         Update::full()
     }
@@ -153,6 +156,11 @@ impl Component for FileTreeShowcase {
             })
             .show_diff_stats(state.diff_stats)
             .git_status_padding_right(state.git_status_padding_right)
+            .tree_focus_key("showcase-tree")
+            .on_ctrl_activate(
+                ctx.link()
+                    .callback(|event: FileTreeEvent| Msg::InsertPath(event.path)),
+            )
             .indent_width(state.indent_width);
 
         let tree = if state.path_style {
@@ -283,8 +291,17 @@ impl Component for FileTreeShowcase {
                     .child(header)
                     .child(tree.height(Length::Flex(1)))
                     .child(
-                        Text::new("Enter/→ open · ← collapse · ↑/↓ navigate")
-                            .style(Style::new().fg(Color::DarkGray)),
+                        Text::new(
+                            state
+                                .last_path
+                                .as_ref()
+                                .map(|path| format!("Path: {path}"))
+                                .unwrap_or_else(|| {
+                                    "Ctrl+click/Ctrl+Enter: use path · Enter/→ open · ← collapse"
+                                        .into()
+                                }),
+                        )
+                        .style(Style::new().fg(Color::DarkGray)),
                     ),
             )
             .into()
@@ -389,6 +406,59 @@ fn main() -> Result<()> {
 mod tests {
     use super::*;
     use tui_lipan::TestBackend;
+
+    #[test]
+    fn ctrl_activation_reports_paths_without_closing_demo_directories() {
+        use tui_lipan::core::event::{MouseButton, MouseEvent, MouseKind};
+        let mut backend = TestBackend::new(FileTreeShowcase);
+        backend.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 110,
+            h: 34,
+        });
+        backend.render();
+        assert!(backend.focus_key(&"showcase-tree".into()));
+        backend
+            .send_key(KeyEvent {
+                code: KeyCode::Enter,
+                mods: KeyMods::CTRL,
+            })
+            .unwrap();
+        backend.render();
+        assert_eq!(backend.state().last_path.as_deref(), Some("/demo/project"));
+        let lines = backend.capture_frame().to_fixed_grid_lines();
+        let (y, row) = lines
+            .iter()
+            .enumerate()
+            .find(|(_, row)| row.trim_end().ends_with("docs"))
+            .unwrap();
+        let x = row[..row.find("docs").unwrap()].chars().count() as u16;
+        for kind in [
+            MouseKind::Down(MouseButton::Left),
+            MouseKind::Up(MouseButton::Left),
+        ] {
+            backend
+                .send_mouse(MouseEvent {
+                    x,
+                    y: y as u16,
+                    kind,
+                    mods: KeyMods::CTRL,
+                })
+                .unwrap();
+            backend.render();
+        }
+        assert_eq!(
+            backend.state().last_path.as_deref(),
+            Some("/demo/project/docs")
+        );
+        assert!(
+            backend
+                .capture_frame()
+                .plain_text()
+                .contains("components.md")
+        );
+    }
 
     #[test]
     fn git_status_padding_aligns_markers_after_diff_numbers() {

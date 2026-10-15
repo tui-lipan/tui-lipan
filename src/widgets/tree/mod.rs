@@ -70,6 +70,7 @@ impl Tree {
                 on_blur: None,
                 on_select: None,
                 on_activate: None,
+                on_ctrl_activate: None,
                 on_toggle: None,
                 keymap: TreeKeymap::default(),
                 focus_policy: None,
@@ -451,6 +452,15 @@ impl Tree {
     /// Set selection callback.
     pub fn on_select(mut self, cb: Callback<TreeEvent>) -> Self {
         self.props.on_select = Some(cb);
+        self
+    }
+
+    /// Activate an entry with Ctrl+click or Ctrl+Enter, separately from normal activation.
+    ///
+    /// When set, these gestures invoke this callback instead of `on_activate`. Ordinary
+    /// selection callbacks still run for pointer selection.
+    pub fn on_ctrl_activate(mut self, cb: Callback<TreeEvent>) -> Self {
+        self.props.on_ctrl_activate = Some(cb);
         self
     }
 

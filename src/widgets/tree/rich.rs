@@ -1,6 +1,7 @@
 //! Composed rows use the same tree model and selection events as text rows.
 use super::*;
 use crate::core::component::KeyUpdate;
+use crate::core::event::{KeyMods, MouseRegionEvent};
 use crate::widgets::scroll::{ScrollAction, has_command_modifier, scroll_action_from_key};
 use crate::widgets::{HStack, MouseRegion, ScrollKeymap, ScrollView, Text, VStack};
 
@@ -137,6 +138,13 @@ pub(super) fn on_key(
     }
     if let Some(action) = tree_action_from_key(&key, ctx.props.keymap) {
         return KeyUpdate::handled(self::action(ctx, action));
+    }
+    if key.code == KeyCode::Enter
+        && key.mods == KeyMods::CTRL
+        && ctx.props.on_ctrl_activate.is_some()
+        && let Some(index) = selected_index(ctx)
+    {
+        return KeyUpdate::handled(component.update(TreeMsg::CtrlActivate(index), ctx));
     }
     if has_command_modifier(&key) {
         return KeyUpdate::unhandled(Update::none());
@@ -335,14 +343,19 @@ fn row(
         )
         .on_mouse_move(ctx.link().callback(move |_| TreeMsg::PointerMove(index)));
     if entry.node.item.is_selectable() {
-        region = region.on_click(ctx.link().callback(move |_| TreeMsg::Select(index)));
-        if ctx.props.activate_on_click {
-            let link = ctx.link().clone();
-            region = region.on_click(crate::callback::Callback::new(move |_| {
+        let link = ctx.link().clone();
+        let activate = ctx.props.activate_on_click;
+        let ctrl = ctx.props.on_ctrl_activate.is_some();
+        region = region.on_click(crate::callback::Callback::new(
+            move |mouse: MouseRegionEvent| {
                 link.send(TreeMsg::Select(index));
-                link.send(TreeMsg::Activate(index));
-            }));
-        }
+                if ctrl && mouse.mods == KeyMods::CTRL {
+                    link.send(TreeMsg::CtrlActivate(index));
+                } else if activate {
+                    link.send(TreeMsg::Activate(index));
+                }
+            },
+        ));
     }
     if let Some(effect) = &ctx.props.item_hover_effect {
         region = region.hover_effect(effect.clone());
@@ -367,10 +380,22 @@ fn composed_content(
         .child(Text::from_spans(guide_spans).height(Length::Px(1)));
     let arrow = Text::from_spans(disclosure).height(Length::Px(1));
     if ctx.props.show_icons && entry.node.show_disclosure && entry.node.is_expandable() {
+        let ctrl = ctx.props.on_ctrl_activate.is_some();
+        let selectable = entry.node.item.is_selectable();
+        let link = ctx.link().clone();
         first = first.child(
             MouseRegion::new()
                 .child(arrow)
-                .on_click(ctx.link().callback(move |_| TreeMsg::Toggle(index))),
+                .on_click(ctx.link().callback(move |mouse: MouseRegionEvent| {
+                    if ctrl && mouse.mods == KeyMods::CTRL {
+                        if selectable {
+                            link.send(TreeMsg::Select(index));
+                        }
+                        TreeMsg::CtrlActivate(index)
+                    } else {
+                        TreeMsg::Toggle(index)
+                    }
+                })),
         );
     } else {
         first = first.child(arrow);
