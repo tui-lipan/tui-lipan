@@ -446,7 +446,8 @@ child list is empty, such as an asynchronously loaded directory.
 A node's `ListItem` renders with the tree's indentation and disclosure icon in front of its label.
 Everything else about the item is kept: `gutter`, `status`, and `prefix` stay columns in front of
 the indentation, and extra lines, `extra_line_indent`, and `primary_max_label_width` move right
-with the label so they keep lining up under it.
+with the label so they keep lining up under it, including on numbered rows. Left label spinners
+render after the tree guides and disclosure icon, keeping connectors aligned with adjacent rows.
 
 ### Guides for composed rows
 

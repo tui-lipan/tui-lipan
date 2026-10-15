@@ -486,6 +486,7 @@ fn build_item(entry: &TreeEntry<'_>, props: &TreeProps, max_depth: usize) -> Lis
     let mut item = entry.node.item.clone();
     spans.append(&mut item.spans);
     item.spans = spans;
+    item.label_prefix_width = tree_width;
     item.extra_line_indent = item.extra_line_indent.saturating_add(tree_width);
     item.primary_max_label_width = item
         .primary_max_label_width

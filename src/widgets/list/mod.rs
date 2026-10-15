@@ -527,6 +527,8 @@ pub enum ListTruncation {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ListItem {
     pub(crate) spans: Vec<Span>,
+    /// Width of tree chrome prepended to the label, before its spinner.
+    pub(crate) label_prefix_width: u16,
     pub(crate) description_spans: Vec<Span>,
     pub(crate) label_spinner: Option<ListItemSpinnerSlot>,
     pub(crate) label_spinner_position: ListSymbolPosition,
@@ -794,6 +796,7 @@ impl ListItem {
     pub fn new(content: impl Into<Arc<str>>) -> Self {
         Self {
             spans: vec![Span::new(content)],
+            label_prefix_width: 0,
             description_spans: Vec::new(),
             label_spinner: None,
             label_spinner_position: ListSymbolPosition::Left,
@@ -855,6 +858,7 @@ impl ListItem {
     pub fn spacer() -> Self {
         Self {
             spans: vec![Span::new("")],
+            label_prefix_width: 0,
             description_spans: Vec::new(),
             label_spinner: None,
             label_spinner_position: ListSymbolPosition::Left,
@@ -892,6 +896,7 @@ impl ListItem {
     pub fn from_spans(spans: impl IntoIterator<Item = Span>) -> Self {
         Self {
             spans: spans.into_iter().collect(),
+            label_prefix_width: 0,
             description_spans: Vec::new(),
             label_spinner: None,
             label_spinner_position: ListSymbolPosition::Left,
@@ -1513,7 +1518,9 @@ pub(crate) fn effective_extra_line_indent_for_width(
     numbered_prefix_width: u16,
 ) -> u16 {
     match item.prefix_kind {
-        ListItemPrefixKind::Numbered(_) => numbered_prefix_width,
+        ListItemPrefixKind::Numbered(_) => {
+            numbered_prefix_width.saturating_add(item.label_prefix_width)
+        }
         ListItemPrefixKind::Plain => item.extra_line_indent,
     }
 }
@@ -2364,6 +2371,7 @@ fn hash_list_item_layout(item: &ListItem, hasher: &mut impl std::hash::Hasher) {
     item.prefix.hash(hasher);
     item.prefix_kind.hash(hasher);
     item.extra_line_indent.hash(hasher);
+    item.label_prefix_width.hash(hasher);
     item.primary_truncate_description_first.hash(hasher);
     item.primary_wrap_label.hash(hasher);
     item.primary_wrap_description.hash(hasher);
