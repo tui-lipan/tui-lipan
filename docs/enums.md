@@ -1339,12 +1339,20 @@ guide glyphs.
 
 | Variant | Glyphs |
 |---------|--------|
-| `IndentStyle::None` | No guides |
-| `IndentStyle::Line` | `│` |
-| `IndentStyle::Short` | `├`, `└` |
-| `IndentStyle::Long` | `├─`, `└─` |
-| `IndentStyle::ShortRounded` | `├`, `╰` |
-| `IndentStyle::LongRounded` | `├─`, `╰─` |
+| `IndentStyle::None` | No guides; reserves indentation |
+| `IndentStyle::Line` | `│` on every sibling |
+| `IndentStyle::LineCapped` | `│`, with `└` on the last sibling |
+| `IndentStyle::LineCappedRounded` | `│`, with `╰` on the last sibling |
+| `IndentStyle::Branch` | `├`, `└`, extended with `─` to fill the indentation width |
+| `IndentStyle::BranchRounded` | `├`, `╰`, extended with `─` to fill the indentation width |
+
+Indentation sets the exact cells per depth, independently of guide style, arrows, and icons.
+At width one, branches are `├`/`└`; at width three they are `├──`/`└──`.
+Capped lines keep the rest of each indentation level blank. Width zero draws no guides.
+
+Migration: replace `Short` and `Long` with `Branch`, and `ShortRounded` and `LongRounded` with
+`BranchRounded`. Connector length now follows indentation width. Use `LineCapped` or
+`LineCappedRounded` for vertical guides that end with an elbow but have no horizontal branches.
 
 ### `FileTreeChangeView`
 

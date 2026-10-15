@@ -297,7 +297,7 @@ impl GradientWidgets {
 
     fn tree_indent_panel(&self) -> Element {
         let tree = Tree::new(sample_tree())
-            .indent_style(IndentStyle::Long)
+            .indent_style(IndentStyle::Branch)
             .indent_guide_style(Style::new().fg(Color::indexed(240)))
             .indent_gradient(
                 ColorGradient::new(Color::Rgb(86, 92, 108), Color::Rgb(255, 170, 84))

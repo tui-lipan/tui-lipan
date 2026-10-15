@@ -453,26 +453,10 @@ fn build_item(entry: &TreeEntry<'_>, props: &TreeProps, max_depth: usize) -> Lis
     let guides = tree_guides(props, entry.node.indent);
     let mut spans = guides.spans(&entry.branch, max_depth);
 
-    if entry.node.leading_guide_fill_cells > 0 {
-        spans.extend(leading_guide_fill_spans(entry, &guides, max_depth));
-    }
-
-    if props.show_icons {
-        let icon = if !entry.node.is_expandable() {
-            props.leaf_icon.clone().unwrap_or_else(|| "".into())
-        } else if entry.expanded {
-            props.expanded_icon.clone()
-        } else {
-            props.collapsed_icon.clone()
-        };
-
-        if !icon.is_empty() {
-            spans.push(Span::new(icon).style(props.icon_style));
-        }
-
-        if props.icon_gap > 0 {
-            spans.push(Span::new(" ".repeat(props.icon_gap as usize)));
-        }
+    spans.extend(disclosure_spans(entry, props, &guides, max_depth));
+    let has_prefix = spans.iter().any(|span| span.content.width() > 0);
+    if has_prefix && props.content_gap > 0 {
+        spans.push(Span::new(" ".repeat(props.content_gap as usize)));
     }
 
     // The tree's own chrome leads the label; everything else about the row is the node's. Gutter,
@@ -494,58 +478,57 @@ fn build_item(entry: &TreeEntry<'_>, props: &TreeProps, max_depth: usize) -> Lis
     item
 }
 
+fn disclosure_spans(
+    entry: &TreeEntry<'_>,
+    props: &TreeProps,
+    guides: &TreeGuides,
+    max_depth: usize,
+) -> Vec<Span> {
+    if !props.show_icons {
+        if !entry.node.disclosure.is_empty() {
+            return entry.node.disclosure.clone();
+        }
+        return guides.disclosure_placeholder_spans(
+            &entry.branch,
+            max_depth,
+            entry.node.disclosure_placeholder_width,
+        );
+    }
+    let icon = match (entry.node.is_expandable(), entry.expanded) {
+        (true, true) => props.expanded_icon.as_ref(),
+        (true, false) => props.collapsed_icon.as_ref(),
+        (false, _) => props.leaf_icon.as_deref().unwrap_or(""),
+    };
+    let width = props
+        .expanded_icon
+        .width()
+        .max(props.collapsed_icon.width())
+        .max(props.leaf_icon.as_deref().unwrap_or("").width());
+    if icon.is_empty() {
+        if entry.branch.depth() == 0 {
+            return Vec::new();
+        }
+        return guides.disclosure_placeholder_spans(
+            &entry.branch,
+            max_depth,
+            width.min(u16::MAX as usize) as u16,
+        );
+    }
+    vec![
+        Span::new(icon).style(props.icon_style),
+        Span::new(" ".repeat(width - icon.width())),
+    ]
+}
+
 fn tree_guides(props: &TreeProps, indent: u16) -> TreeGuides {
     let mut guides = TreeGuides::new(props.indent_style)
         .indent(indent)
         .guide_style(props.indent_guide_style)
-        .start_depth(props.indent_guide_start_depth)
-        .solid_connector_gap(props.solid_indent_connector_gap);
+        .start_depth(props.indent_guide_start_depth);
     if let Some(gradient) = props.indent_gradient {
         guides = guides.gradient(gradient);
     }
     guides
-}
-
-fn leading_guide_fill_spans(
-    entry: &TreeEntry<'_>,
-    guides: &TreeGuides,
-    max_depth: usize,
-) -> Vec<Span> {
-    let cells = entry.node.leading_guide_fill_cells as usize;
-    if cells == 0 {
-        return Vec::new();
-    }
-
-    match guides.style() {
-        IndentStyle::Short
-        | IndentStyle::ShortRounded
-        | IndentStyle::Long
-        | IndentStyle::LongRounded => {
-            let fill_cells = cells.saturating_sub(1);
-            let mut spans = Vec::new();
-            if fill_cells > 0 {
-                spans.push(
-                    Span::new("─".repeat(fill_cells))
-                        .style(guides.style_at(entry.branch.depth, max_depth)),
-                );
-            }
-            spans.push(Span::new(" "));
-            spans
-        }
-        IndentStyle::Line => {
-            let fill_cells = cells.saturating_sub(1);
-            let mut spans = Vec::new();
-            if fill_cells > 0 {
-                spans.push(
-                    Span::new("│".repeat(fill_cells))
-                        .style(guides.style_at(entry.branch.depth, max_depth)),
-                );
-            }
-            spans.push(Span::new(" "));
-            spans
-        }
-        IndentStyle::None => vec![Span::new(" ".repeat(cells))],
-    }
 }
 
 #[cfg(test)]
@@ -580,7 +563,8 @@ mod tests {
         let leaf = TreeNode::new(source.clone());
         let props = crate::widgets::Tree::new(leaf.clone())
             .show_icons(false)
-            .indent_style(IndentStyle::Short)
+            .content_gap(0)
+            .indent_style(IndentStyle::Branch)
             .props;
         let entry = TreeEntry {
             path: TreePath::from(vec![0]),
@@ -592,7 +576,7 @@ mod tests {
         let out = build_item(&entry, &props, 1);
 
         let content: Vec<&str> = out.spans.iter().map(|span| span.content.as_ref()).collect();
-        assert_eq!(content, vec!["└", " ", "Node"]);
+        assert_eq!(content, vec!["└", "─", "Node"]);
         assert_eq!(out.status, source.status);
         assert_eq!(out.gutter, source.gutter);
         assert_eq!(out.gutter_line, 1);
@@ -775,281 +759,52 @@ mod tests {
     }
 
     #[test]
-    fn solid_indent_connector_gap_fills_short_connector_spacing() {
-        let child = TreeNode::new("leaf").leading_guide_fill_cells(2);
-        let props = crate::widgets::Tree::new(child.clone())
-            .show_icons(false)
-            .indent_style(IndentStyle::Short)
-            .indent_guide_style(Style::new().bold())
-            .solid_indent_connector_gap(true)
-            .props;
-        let entry = TreeEntry {
-            path: TreePath::from(vec![0]),
-            node: &child,
-            expanded: false,
-            branch: TreeBranch {
-                depth: 1,
-                last_child: false,
-                continued: vec![false],
-            },
-        };
-
-        let out = build_item(&entry, &props, 1);
-        let content: Vec<&str> = out.spans.iter().map(|span| span.content.as_ref()).collect();
-
-        assert_eq!(content, vec!["├", "─", "─", " ", "leaf"]);
-        assert_eq!(out.spans[1].style, props.indent_guide_style);
-        assert_eq!(out.spans[2].style, props.indent_guide_style);
-    }
-
-    #[test]
-    fn one_cell_indent_places_short_connector_against_content() {
-        let child = TreeNode::new("leaf").indent(1);
-        let props = crate::widgets::Tree::new(child.clone())
-            .show_icons(false)
-            .indent_style(IndentStyle::Short)
-            .props;
-        let entry = TreeEntry {
-            path: TreePath::from(vec![0]),
-            node: &child,
-            expanded: false,
-            branch: TreeBranch {
-                depth: 1,
-                last_child: false,
-                continued: vec![false],
-            },
-        };
-
-        let out = build_item(&entry, &props, 1);
-        let content: Vec<&str> = out.spans.iter().map(|span| span.content.as_ref()).collect();
-
-        assert_eq!(content, vec!["├", "leaf"]);
-    }
-
-    #[test]
-    fn indent_guide_start_depth_leaves_root_children_unadorned() {
-        let child = TreeNode::new("leaf");
-        let props = crate::widgets::Tree::new(child.clone())
-            .show_icons(false)
-            .indent_style(IndentStyle::Short)
-            .indent_guide_start_depth(2)
-            .props;
-        let entry = TreeEntry {
-            path: TreePath::from(vec![0]),
-            node: &child,
-            expanded: false,
-            branch: TreeBranch {
-                depth: 1,
-                last_child: false,
-                continued: vec![false],
-            },
-        };
-
-        let out = build_item(&entry, &props, 1);
-        let content: Vec<&str> = out.spans.iter().map(|span| span.content.as_ref()).collect();
-
-        assert_eq!(content, vec!["  ", "leaf"]);
-    }
-
-    #[test]
-    fn short_rounded_indent_uses_rounded_last_child_elbow() {
-        let child = TreeNode::new("leaf");
-        let props = crate::widgets::Tree::new(child.clone())
-            .show_icons(false)
-            .indent_style(IndentStyle::ShortRounded)
-            .props;
-        let entry = TreeEntry {
-            path: TreePath::from(vec![0]),
-            node: &child,
-            expanded: false,
-            branch: TreeBranch {
-                depth: 1,
-                last_child: true,
-                continued: vec![false],
-            },
-        };
-
-        let out = build_item(&entry, &props, 1);
-        let content: Vec<&str> = out.spans.iter().map(|span| span.content.as_ref()).collect();
-
-        assert_eq!(content, vec!["╰", " ", "leaf"]);
-    }
-
-    #[test]
-    fn short_rounded_indent_uses_square_non_last_branch() {
-        let child = TreeNode::new("leaf");
-        let props = crate::widgets::Tree::new(child.clone())
-            .show_icons(false)
-            .indent_style(IndentStyle::ShortRounded)
-            .props;
-        let entry = TreeEntry {
-            path: TreePath::from(vec![0]),
-            node: &child,
-            expanded: false,
-            branch: TreeBranch {
-                depth: 1,
-                last_child: false,
-                continued: vec![false],
-            },
-        };
-
-        let out = build_item(&entry, &props, 1);
-        let content: Vec<&str> = out.spans.iter().map(|span| span.content.as_ref()).collect();
-
-        assert_eq!(content, vec!["├", " ", "leaf"]);
-    }
-
-    #[test]
-    fn long_rounded_indent_uses_rounded_last_child_elbow() {
-        let child = TreeNode::new("leaf");
-        let props = crate::widgets::Tree::new(child.clone())
-            .show_icons(false)
-            .indent_style(IndentStyle::LongRounded)
-            .props;
-        let entry = TreeEntry {
-            path: TreePath::from(vec![0]),
-            node: &child,
-            expanded: false,
-            branch: TreeBranch {
-                depth: 1,
-                last_child: true,
-                continued: vec![false],
-            },
-        };
-
-        let out = build_item(&entry, &props, 1);
-        let content: Vec<&str> = out.spans.iter().map(|span| span.content.as_ref()).collect();
-
-        assert_eq!(content, vec!["╰─", "leaf"]);
-    }
-
-    #[test]
-    fn long_rounded_indent_uses_square_non_last_branch() {
-        let child = TreeNode::new("leaf");
-        let props = crate::widgets::Tree::new(child.clone())
-            .show_icons(false)
-            .indent_style(IndentStyle::LongRounded)
-            .props;
-        let entry = TreeEntry {
-            path: TreePath::from(vec![0]),
-            node: &child,
-            expanded: false,
-            branch: TreeBranch {
-                depth: 1,
-                last_child: false,
-                continued: vec![false],
-            },
-        };
-
-        let out = build_item(&entry, &props, 1);
-        let content: Vec<&str> = out.spans.iter().map(|span| span.content.as_ref()).collect();
-
-        assert_eq!(content, vec!["├─", "leaf"]);
-    }
-
-    #[test]
-    fn long_rounded_leading_guide_fill_stays_solid_before_content() {
-        let child = TreeNode::new("leaf").leading_guide_fill_cells(2);
-        let props = crate::widgets::Tree::new(child.clone())
-            .show_icons(false)
-            .indent_style(IndentStyle::LongRounded)
-            .indent_guide_style(Style::new().bold())
-            .solid_indent_connector_gap(true)
-            .props;
-        let entry = TreeEntry {
-            path: TreePath::from(vec![0]),
-            node: &child,
-            expanded: false,
-            branch: TreeBranch {
-                depth: 1,
-                last_child: true,
-                continued: vec![false],
-            },
-        };
-
-        let out = build_item(&entry, &props, 1);
-        let content: Vec<&str> = out.spans.iter().map(|span| span.content.as_ref()).collect();
-
-        assert_eq!(content, vec!["╰─", "─", " ", "leaf"]);
-        assert_eq!(out.spans[1].style, props.indent_guide_style);
-    }
-
-    #[test]
-    fn leading_guide_fill_makes_long_connector_solid_before_content() {
-        let child = TreeNode::new("leaf").leading_guide_fill_cells(2);
-        let props = crate::widgets::Tree::new(child.clone())
-            .show_icons(false)
-            .indent_style(IndentStyle::Long)
-            .indent_guide_style(Style::new().bold())
-            .solid_indent_connector_gap(true)
-            .props;
-        let entry = TreeEntry {
-            path: TreePath::from(vec![0]),
-            node: &child,
-            expanded: false,
-            branch: TreeBranch {
-                depth: 1,
-                last_child: false,
-                continued: vec![false],
-            },
-        };
-
-        let out = build_item(&entry, &props, 1);
-        let content: Vec<&str> = out.spans.iter().map(|span| span.content.as_ref()).collect();
-
-        assert_eq!(content, vec!["├─", "─", " ", "leaf"]);
-        assert_eq!(out.spans[1].style, props.indent_guide_style);
-    }
-
-    #[test]
-    fn leading_guide_fill_keeps_plain_spacing_without_guides() {
-        let child = TreeNode::new("leaf").leading_guide_fill_cells(2);
-        let props = crate::widgets::Tree::new(child.clone())
-            .show_icons(false)
-            .indent_style(IndentStyle::None)
-            .solid_indent_connector_gap(true)
-            .props;
-        let entry = TreeEntry {
-            path: TreePath::from(vec![0]),
-            node: &child,
-            expanded: false,
-            branch: TreeBranch {
-                depth: 1,
-                last_child: false,
-                continued: vec![false],
-            },
-        };
-
-        let out = build_item(&entry, &props, 1);
-        let content: Vec<&str> = out.spans.iter().map(|span| span.content.as_ref()).collect();
-
-        assert_eq!(content, vec!["  ", "  ", "leaf"]);
-    }
-
-    #[test]
-    fn leading_guide_fill_uses_line_guide_without_collapsing_connector_gap() {
-        let child = TreeNode::new("leaf").leading_guide_fill_cells(2);
-        let props = crate::widgets::Tree::new(child.clone())
-            .show_icons(false)
-            .indent_style(IndentStyle::Line)
-            .indent_guide_style(Style::new().bold())
-            .solid_indent_connector_gap(true)
-            .props;
-        let entry = TreeEntry {
-            path: TreePath::from(vec![0]),
-            node: &child,
-            expanded: false,
-            branch: TreeBranch {
-                depth: 1,
-                last_child: false,
-                continued: vec![false],
-            },
-        };
-
-        let out = build_item(&entry, &props, 1);
-        let content: Vec<&str> = out.spans.iter().map(|span| span.content.as_ref()).collect();
-
-        assert_eq!(content, vec!["│", " ", "│", " ", "leaf"]);
-        assert_eq!(out.spans[2].style, props.indent_guide_style);
+    fn reserved_columns_do_not_change_the_guide_geometry() {
+        for style in [
+            IndentStyle::None,
+            IndentStyle::Line,
+            IndentStyle::LineCapped,
+            IndentStyle::LineCappedRounded,
+            IndentStyle::Branch,
+            IndentStyle::BranchRounded,
+        ] {
+            for indent in [0, 1, 3] {
+                let child = TreeNode::new("leaf")
+                    .indent(indent)
+                    .disclosure_placeholder(1);
+                let props = crate::widgets::Tree::new(child.clone())
+                    .show_icons(false)
+                    .indent_style(style)
+                    .props;
+                let branch = TreeBranch::root().child(true);
+                let entry = TreeEntry {
+                    path: TreePath::from(vec![0]),
+                    node: &child,
+                    expanded: false,
+                    branch: branch.clone(),
+                };
+                let item = build_item(&entry, &props, 1);
+                let actual: String = item
+                    .spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect();
+                let guides = TreeGuides::new(style).indent(indent);
+                let prefix: String = guides
+                    .spans(&branch, 1)
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect();
+                let fill = if indent > 0
+                    && matches!(style, IndentStyle::Branch | IndentStyle::BranchRounded)
+                {
+                    "─ "
+                } else {
+                    "  "
+                };
+                assert_eq!(actual, format!("{prefix}{fill}leaf"));
+                assert_eq!(item.label_prefix_width, indent + 2);
+            }
+        }
     }
 }

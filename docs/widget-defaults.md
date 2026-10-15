@@ -1031,6 +1031,11 @@ Source: `src/widgets/file_tree/mod.rs:361` (`FileTree`).
 | `icon_palette` | `FileIconPalette::default()` |
 | `icon_overrides` | `HashMap::new()` |
 | `show_arrows` | `true` |
+| `expanded_arrow` | `"▼".into()` |
+| `collapsed_arrow` | `"▶".into()` |
+| `arrow_style` | `Style::default()` |
+| `content_gap` | `1` |
+| `icon_gap` | `1` |
 | `indent_style` | `crate::widgets::IndentStyle::None` |
 | `indent_guide_style` | `Style::default()` |
 | `indent_guide_start_depth` | `1` |
@@ -1223,7 +1228,7 @@ Source: `src/widgets/tree/mod.rs:27` (`Tree`).
 | `clear_selection` | `false` |
 | `force_scroll_to_selected` | `false` |
 | `gap` | `0` |
-| `icon_gap` | `1` |
+| `content_gap` | `1` |
 | `show_icons` | `true` |
 | `expanded_icon` | `"▼".into()` |
 | `collapsed_icon` | `"▶".into()` |
@@ -1261,7 +1266,6 @@ Source: `src/widgets/tree/mod.rs:27` (`Tree`).
 | `indent_style` | `IndentStyle::None` |
 | `indent_guide_style` | `Style::default()` |
 | `indent_gradient` | `None` |
-| `solid_indent_connector_gap` | `false` |
 | `selection_full_width` | `false` |
 | `unselected_symbol` | `None` |
 | `key_interceptor` | `None` |

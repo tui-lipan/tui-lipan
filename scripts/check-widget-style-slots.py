@@ -132,6 +132,7 @@ ALLOWLIST: dict[tuple[str, str], str] = {
     ("src/widgets/er_diagram/mod.rs", "edge_style"): "ER diagram edge visual part style",
     ("src/widgets/er_diagram/mod.rs", "entity_style"): "ER diagram entity visual part style",
     ("src/widgets/er_diagram/mod.rs", "label_style"): "ER diagram label visual part style",
+    ("src/widgets/file_tree/mod_private.rs", "arrow_style"): "file-tree disclosure glyph visual part style, independent of interaction state",
     ("src/widgets/file_tree/mod_private.rs", "empty_text_style"): "non-state visual part style",
     ("src/widgets/file_tree/mod_private.rs", "directory_label_style"): "file-tree label visual part style",
     ("src/widgets/file_tree/mod_private.rs", "file_label_style"): "file-tree label visual part style",

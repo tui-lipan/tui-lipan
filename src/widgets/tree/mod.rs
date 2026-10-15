@@ -32,7 +32,7 @@ impl Tree {
                 clear_selection: false,
                 force_scroll_to_selected: false,
                 gap: 0,
-                icon_gap: 1,
+                content_gap: 1,
                 show_icons: true,
                 expanded_icon: "▼".into(),
                 collapsed_icon: "▶".into(),
@@ -70,7 +70,6 @@ impl Tree {
                 indent_style: IndentStyle::None,
                 indent_guide_style: Style::default(),
                 indent_gradient: None,
-                solid_indent_connector_gap: false,
                 selection_full_width: false,
                 unselected_symbol: None,
                 key_interceptor: None,
@@ -100,11 +99,6 @@ impl Tree {
     /// Set a depth-based gradient for indentation guides.
     pub fn indent_gradient(mut self, gradient: ColorGradient) -> Self {
         self.props.indent_gradient = Some(gradient);
-        self
-    }
-
-    pub(crate) fn solid_indent_connector_gap(mut self, solid: bool) -> Self {
-        self.props.solid_indent_connector_gap = solid;
         self
     }
 
@@ -150,9 +144,12 @@ impl Tree {
         self
     }
 
-    /// Set horizontal gap between icon and content.
-    pub fn icon_gap(mut self, gap: u16) -> Self {
-        self.props.icon_gap = gap;
+    /// Set blank cells between the tree prefix and item content (default 1).
+    ///
+    /// Applies after guides and optional disclosure icons, including when icons are hidden.
+    /// A row with no prefix, such as a root without an icon, gets no leading gap. Zero is allowed.
+    pub fn content_gap(mut self, gap: u16) -> Self {
+        self.props.content_gap = gap;
         self
     }
 
