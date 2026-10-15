@@ -16,6 +16,7 @@ struct State {
     git_status: bool,
     diff_stats: bool,
     git_icons: bool,
+    git_status_padding_right: u16,
     custom_icons: bool,
     path_style: bool,
 }
@@ -34,6 +35,7 @@ enum Msg {
     ToggleGit,
     ToggleDiffStats,
     ToggleGitIcons,
+    NextGitStatusPadding,
     ToggleCustomIcons,
     TogglePathStyle,
 }
@@ -108,6 +110,9 @@ impl Component for FileTreeShowcase {
             Msg::ToggleGit => ctx.state.git_status = !ctx.state.git_status,
             Msg::ToggleDiffStats => ctx.state.diff_stats = !ctx.state.diff_stats,
             Msg::ToggleGitIcons => ctx.state.git_icons = !ctx.state.git_icons,
+            Msg::NextGitStatusPadding => {
+                ctx.state.git_status_padding_right = (ctx.state.git_status_padding_right + 1) % 4;
+            }
             Msg::ToggleCustomIcons => ctx.state.custom_icons = !ctx.state.custom_icons,
             Msg::TogglePathStyle => ctx.state.path_style = !ctx.state.path_style,
         }
@@ -147,6 +152,7 @@ impl Component for FileTreeShowcase {
                 GitIconStyle::Text
             })
             .show_diff_stats(state.diff_stats)
+            .git_status_padding_right(state.git_status_padding_right)
             .indent_width(state.indent_width);
 
         let tree = if state.path_style {
@@ -230,6 +236,15 @@ impl Component for FileTreeShowcase {
                     .disabled(!state.git_status)
                     .on_click(ctx.link().callback(|_| Msg::ToggleGitIcons))
                     .automation_id("nerd-git-marks"),
+            )
+            .child(
+                control_button(format!(
+                    "Git status right pad: {}",
+                    state.git_status_padding_right
+                ))
+                .disabled(!state.git_status)
+                .on_click(ctx.link().callback(|_| Msg::NextGitStatusPadding))
+                .automation_id("git-status-padding-right"),
             )
             .child(
                 control_button(toggle_label(
@@ -376,7 +391,7 @@ mod tests {
     use tui_lipan::TestBackend;
 
     #[test]
-    fn nerd_git_markers_reserve_a_cell_at_the_edge_but_diff_numbers_do_not() {
+    fn git_status_padding_aligns_markers_after_diff_numbers() {
         for width in [80, 100] {
             let mut backend = TestBackend::new(FileTreeShowcase);
             backend.set_viewport(Rect {
@@ -386,6 +401,7 @@ mod tests {
                 h: 32,
             });
             backend.dispatch(Msg::ToggleGitIcons).unwrap();
+            backend.dispatch(Msg::NextGitStatusPadding).unwrap();
             backend.render();
             let lines = backend.capture_frame().to_fixed_grid_lines();
             let icon_only = lines.iter().find(|row| row.contains("lib.rs")).unwrap();
@@ -393,7 +409,7 @@ mod tests {
                 .iter()
                 .find(|row| row.contains("file_tree.rs"))
                 .unwrap();
-            assert!(with_stats.trim_end().ends_with(" +42 -11"), "{with_stats}");
+            assert!(with_stats.trim_end().ends_with("+42 -11 "), "{with_stats}");
             let icon_x = icon_only.chars().position(|ch| ch == '').unwrap();
             let stats_end = with_stats
                 .chars()
@@ -403,11 +419,39 @@ mod tests {
                 .last()
                 .unwrap();
             assert_eq!(
-                icon_x + 1,
-                stats_end,
-                "only the icon reserves a following cell"
+                icon_x, stats_end,
+                "status icons align with and without diff counts"
             );
             assert_eq!(icon_only.chars().nth(icon_x + 1), Some(' '));
+            let unpadded_x = icon_x + 1;
+            for padding in [2, 3, 0] {
+                backend.dispatch(Msg::NextGitStatusPadding).unwrap();
+                backend.render();
+                let lines = backend.capture_frame().to_fixed_grid_lines();
+                for label in ["lib.rs", "file_tree.rs"] {
+                    let row = lines.iter().find(|row| row.contains(label)).unwrap();
+                    let marker_x = row.chars().position(|ch| ch == '').unwrap();
+                    assert_eq!(marker_x + padding, unpadded_x);
+                    assert!(
+                        row.chars()
+                            .skip(marker_x + 1)
+                            .take(padding)
+                            .all(|ch| ch == ' ')
+                    );
+                }
+            }
+            backend.dispatch(Msg::NextGitStatusPadding).unwrap();
+            backend.dispatch(Msg::ToggleGit).unwrap();
+            backend.render();
+            let lines = backend.capture_frame().to_fixed_grid_lines();
+            let stats_only = lines
+                .iter()
+                .find(|row| row.contains("file_tree.rs"))
+                .unwrap();
+            assert!(
+                stats_only.ends_with("+42 -11"),
+                "stats-only rows have no trailing padding: {stats_only}"
+            );
         }
     }
 
@@ -460,7 +504,7 @@ mod tests {
                 .unwrap();
             let suffix = changed_row.split_once("file_tree.rs").unwrap().1.trim();
             let expected = match (backend.state().git_status, backend.state().diff_stats) {
-                (true, true) => "M +42 -11",
+                (true, true) => "+42 -11 M",
                 (true, false) => "M",
                 (false, true) => "+42 -11",
                 (false, false) => "",

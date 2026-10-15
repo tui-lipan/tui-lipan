@@ -570,6 +570,7 @@ entries and git-backed or application-provided change projections.
 | `symlink_target_arrow` | `impl Into<Arc<str>>` | What separates a symlink from its target (default: `"→"`) |
 | `symlink_target_style` | `Style` | Style of the arrow and target after a symlink's name (default: dim) |
 | `git_status` | `bool` | Show change status badges for git/provided changes (default: true) |
+| `git_status_padding_right` | `u16` | Blank cells after the final status marker; default 0. Use 1 for Nerd Font icons that need room to render at full size |
 | `highlight_changed_labels` | `bool` | Also apply change status colors to file/directory labels (default: false) |
 | `change_suffix_style` | `Style` | Style only the right-side change metadata suffix, such as status markers and diff stats |
 | `change_suffix_priority` | `FileTreeSuffixPriority` | Whether labels or right-side change metadata are preserved first when rows are narrow |
@@ -656,16 +657,18 @@ Plus all `Tree` styling/scrolling props, including `indent_style` and `scrollbar
   status-only and diff-stat data, ignores provided sources, and revalidates every mount.
 - `directory_label_style(...)` and `file_label_style(...)` style names independently from icons and right-aligned change indicators.
 - `path_style(...)` / `path_styles(...)` match exact paths and can override row, icon, label, and suffix styling for reviewed, pinned, or otherwise annotated files.
-- `change_suffix_style(...)` and `git_suffix_style(...)` style only right-side metadata such as `M +30 -21`, leaving icons and labels unchanged.
+- `change_suffix_style(...)` and `git_suffix_style(...)` style only right-side metadata such as `+30 -21 M`, leaving icons and labels unchanged.
 - `change_suffix_priority(FileTreeSuffixPriority::Suffix)` keeps right-side metadata visible first on narrow rows, truncating labels before suffixes.
 - Change colors apply to the right-aligned indicators by default; use `highlight_changed_labels(true)` to also color dirty file and directory names, layered over their label styles.
 - `FileTreeChangeView::ChangedOnly` shows changed files only, grouped by ancestor directories. With provided change data this projection is virtual/source-agnostic and can include nonexistent or deleted paths supplied by the backend.
 - `FileTreeGitView` is a compatibility alias for `FileTreeChangeView`; `git_view`, `git_changed_only`, and `git_diff_stats` remain available for git-focused call sites.
 - Changed-only mode respects `show_hidden`; paths under hidden components such as `.github/` appear only when hidden entries are enabled.
 - `show_diff_stats(true)` displays numeric diff stats when the selected change source provides them; untracked and binary files may show a status marker without `+N -M` counts.
-- Nerd Font Git status icons reserve a blank cell to their right so terminals can render them at
-  full size. When diff stats follow an icon, their existing one-cell separator provides this
-  space. Diff numbers and text status markers receive no additional trailing padding.
+- Change metadata displays diff statistics first, followed by staged and unstaged status markers,
+  for example `+42 -11 M`. Status markers align at the right edge across rows with and without
+  statistics. `git_status_padding_right(1)` reserves a blank cell after the final marker for Nerd
+  Font glyphs that need room to render at full size. The default is 0, and rows with only diff
+  statistics receive no trailing padding.
 - Filesystem fuzzy matching respects `.gitignore`/`.ignore` rules.
 - In changed-only mode, fuzzy matching is scoped to the changed-path projection instead of the whole filesystem.
 - Auto-expands ancestor directories to reveal search matches.

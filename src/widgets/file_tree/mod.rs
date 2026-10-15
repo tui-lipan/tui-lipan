@@ -452,6 +452,7 @@ impl FileTree {
                 change_view: FileTreeChangeView::default(),
                 git_diff_stats: false,
                 git_icon_style: GitIconStyle::NerdFont,
+                git_status_padding_right: 0,
                 git_status_cache: None,
                 git_refresh_nonce: 0,
                 git_marker_modified: "M".into(),
@@ -1213,6 +1214,15 @@ impl FileTree {
     /// Set icon style for Git status indicators.
     pub fn git_icon_style(mut self, style: GitIconStyle) -> Self {
         self.props.git_icon_style = style;
+        self
+    }
+
+    /// Blank cells after the final Git status marker. Default 0.
+    ///
+    /// Set to 1 for Nerd Font icons that need a following blank cell to render at full size.
+    /// Applies only when status markers are visible; diff statistics alone receive no padding.
+    pub fn git_status_padding_right(mut self, cells: u16) -> Self {
+        self.props.git_status_padding_right = cells;
         self
     }
 

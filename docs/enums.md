@@ -1431,7 +1431,7 @@ right-aligned change metadata.
 | Variant | Description |
 |---------|-------------|
 | `FileTreeSuffixPriority::Label` | Preserve the label and truncate suffix metadata first **(default)** |
-| `FileTreeSuffixPriority::Suffix` | Preserve suffix metadata such as `M +30 -21` and truncate the label first |
+| `FileTreeSuffixPriority::Suffix` | Preserve suffix metadata such as `+30 -21 M` and truncate the label first |
 
 ---
 
