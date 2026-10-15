@@ -51,7 +51,8 @@ These properties answer independent questions:
 A left-button press focuses the pressed widget when it is focusable. Otherwise it focuses the
 pressed widget's first focusable descendant, and failing that its nearest focusable ancestor. For
 example, clicking a `MouseRegion` row inside a `.focusable(true)` `ScrollView` focuses the
-`ScrollView`.
+`ScrollView`. Splitter handle presses preserve the current keyboard focus throughout a resize;
+clicking content inside a splitter still follows the normal pointer focus rules.
 
 A widget with `.focusable(true).tab_stop(false)` is omitted from Tab traversal but remains
 reachable by pointer focus and `ctx.request_focus(key)`. A non-focusable widget cannot become a
