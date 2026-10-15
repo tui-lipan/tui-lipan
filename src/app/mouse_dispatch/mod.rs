@@ -455,10 +455,12 @@ fn dispatch_mouse_inner<C: Component, T: MouseDispatchCtx<C>>(
     }
 
     let mut dirty = selection_dirty;
-    if is_down && ctx.focus_for_node(hit) {
+    // Resizing changes geometry without choosing a keyboard input target.
+    let acquire_focus = is_down && !matches!(ctx.tree().node(hit).kind, NodeKind::Splitter(_));
+    if acquire_focus && ctx.focus_for_node(hit) {
         dirty = true;
     }
-    if is_down
+    if acquire_focus
         && !ctx.tree().node(hit).is_focusable()
         && let Some(pan_id) = nearest_pan_view(ctx.tree(), hit)
         && ctx.focus_for_node(pan_id)

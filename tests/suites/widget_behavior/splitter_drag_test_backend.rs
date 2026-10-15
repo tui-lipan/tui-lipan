@@ -230,3 +230,86 @@ fn touching_nested_splitters_render_directional_tees() {
     right.render();
     assert_eq!(right.capture_frame().cell(10, 4).symbol, "├");
 }
+
+struct FocusSplitter {
+    horizontal: bool,
+    border: bool,
+}
+
+impl Component for FocusSplitter {
+    type State = ();
+    type Message = ();
+    type Properties = ();
+
+    fn create_state(&self, _: &()) {}
+    fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+    fn view(&self, _: &Context<Self>) -> Element {
+        let splitter = if self.horizontal {
+            Splitter::horizontal()
+        } else {
+            Splitter::vertical()
+        };
+        splitter
+            .handle_mode(if self.border {
+                SplitterHandleMode::Border
+            } else {
+                SplitterHandleMode::Gutter
+            })
+            .child(
+                Frame::new()
+                    .border(self.border)
+                    .child(Input::new("first").key("first")),
+            )
+            .child(
+                Frame::new()
+                    .border(self.border)
+                    .child(Input::new("second").key("second")),
+            )
+            .into()
+    }
+}
+
+#[test]
+fn splitter_handle_preserves_focus_and_content_clicks_still_focus() {
+    for horizontal in [false, true] {
+        for border in [false, true] {
+            let mut backend = TestBackend::new(FocusSplitter { horizontal, border });
+            backend.set_viewport(Rect {
+                x: 0,
+                y: 0,
+                w: 21,
+                h: 11,
+            });
+            backend.render();
+            backend.focus_next();
+            backend.focus_next();
+            assert_eq!(backend.focused_key().unwrap().as_ref(), "second");
+            let (x, y, to_x, to_y) = if horizontal {
+                (10, 5, 10, 7)
+            } else {
+                (10, 5, 12, 5)
+            };
+            for (x, y, kind) in [
+                (x, y, MouseKind::Down(MouseButton::Left)),
+                (to_x, to_y, MouseKind::Drag(MouseButton::Left)),
+                (to_x, to_y, MouseKind::Up(MouseButton::Left)),
+            ] {
+                backend.send_mouse(mouse(x, y, kind)).unwrap();
+                assert_eq!(
+                    backend.focused_key().unwrap().as_ref(),
+                    "second",
+                    "horizontal={horizontal}, border={border}, {kind:?}"
+                );
+            }
+            for kind in [
+                MouseKind::Down(MouseButton::Left),
+                MouseKind::Up(MouseButton::Left),
+            ] {
+                backend.send_mouse(mouse(2, 1, kind)).unwrap();
+            }
+            assert_eq!(backend.focused_key().unwrap().as_ref(), "first");
+        }
+    }
+}
