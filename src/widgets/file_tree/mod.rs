@@ -452,6 +452,7 @@ impl FileTree {
                 change_view: FileTreeChangeView::default(),
                 git_diff_stats: false,
                 git_icon_style: GitIconStyle::NerdFont,
+                git_status_padding_right: 0,
                 git_status_cache: None,
                 git_refresh_nonce: 0,
                 git_marker_modified: "M".into(),
@@ -476,6 +477,7 @@ impl FileTree {
                 path_styles: HashMap::new(),
                 on_select: None,
                 on_activate: None,
+                on_ctrl_activate: None,
                 on_toggle: None,
                 on_entry_request: None,
             },
@@ -1216,6 +1218,15 @@ impl FileTree {
         self
     }
 
+    /// Blank cells after the final Git status marker. Default 0.
+    ///
+    /// Set to 1 for Nerd Font icons that need a following blank cell to render at full size.
+    /// Applies only when status markers are visible; diff statistics alone receive no padding.
+    pub fn git_status_padding_right(mut self, cells: u16) -> Self {
+        self.props.git_status_padding_right = cells;
+        self
+    }
+
     /// Retain successful local Git snapshots across mounts of trees sharing this cache.
     ///
     /// Cached status is rendered immediately and revalidated in the background. The cache is used
@@ -1369,6 +1380,15 @@ impl FileTree {
     /// Set selection callback.
     pub fn on_select(mut self, cb: Callback<FileTreeEvent>) -> Self {
         self.props.on_select = Some(cb);
+        self
+    }
+
+    /// Activate an entry with Ctrl+click or Ctrl+Enter, separately from normal activation.
+    ///
+    /// When set, these gestures invoke this callback instead of `on_activate`. Ordinary
+    /// selection callbacks still run for pointer selection.
+    pub fn on_ctrl_activate(mut self, cb: Callback<FileTreeEvent>) -> Self {
+        self.props.on_ctrl_activate = Some(cb);
         self
     }
 

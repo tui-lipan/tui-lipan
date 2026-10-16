@@ -28,6 +28,13 @@ impl Tree {
         Self {
             props: TreeProps {
                 root,
+                forest: false,
+                item_hover_effect: None,
+                controlled_expansion: false,
+                toggle_on_activate: true,
+                on_hover: None,
+                on_pointer_move: None,
+                on_viewport_change: None,
                 selected: None,
                 clear_selection: false,
                 force_scroll_to_selected: false,
@@ -63,6 +70,7 @@ impl Tree {
                 on_blur: None,
                 on_select: None,
                 on_activate: None,
+                on_ctrl_activate: None,
                 on_toggle: None,
                 keymap: TreeKeymap::default(),
                 focus_policy: None,
@@ -76,6 +84,54 @@ impl Tree {
                 indent_guide_start_depth: 1,
             },
         }
+    }
+
+    /// A tree with multiple top-level nodes and no artificial parent row.
+    pub fn forest(roots: impl IntoIterator<Item = TreeNode>) -> Self {
+        let mut tree = Self::new(TreeNode::new("").expanded(true).children(roots));
+        tree.props.forest = true;
+        tree
+    }
+
+    /// Resolve expansion exclusively from node `expanded` values on each update.
+    /// Use with `on_toggle` when the application owns expansion by stable data identity.
+    pub fn controlled_expansion(mut self, controlled: bool) -> Self {
+        self.props.controlled_expansion = controlled;
+        self
+    }
+
+    /// Whether activating an expandable row also toggles it. Default true.
+    /// Disclosure clicks and expansion keys remain independent.
+    pub fn toggle_on_activate(mut self, toggle: bool) -> Self {
+        self.props.toggle_on_activate = toggle;
+        self
+    }
+
+    /// A paint effect over a composed row while hovered, including interactive descendants.
+    pub fn item_hover_effect(mut self, effect: Option<crate::style::VisualEffect>) -> Self {
+        self.props.item_hover_effect = effect;
+        self
+    }
+
+    /// Receive hover changes for composed rows, including inert headers.
+    pub fn on_hover(mut self, callback: Callback<TreeHoverEvent>) -> Self {
+        self.props.on_hover = Some(callback);
+        self
+    }
+
+    /// Receive pointer movement over composed rows.
+    pub fn on_pointer_move(mut self, callback: Callback<TreeEvent>) -> Self {
+        self.props.on_pointer_move = Some(callback);
+        self
+    }
+
+    /// Receive viewport metadata for composed rows.
+    pub fn on_viewport_change(
+        mut self,
+        callback: Callback<crate::widgets::ScrollViewportEvent>,
+    ) -> Self {
+        self.props.on_viewport_change = Some(callback);
+        self
     }
 
     /// Set style of indentation guides.
@@ -396,6 +452,15 @@ impl Tree {
     /// Set selection callback.
     pub fn on_select(mut self, cb: Callback<TreeEvent>) -> Self {
         self.props.on_select = Some(cb);
+        self
+    }
+
+    /// Activate an entry with Ctrl+click or Ctrl+Enter, separately from normal activation.
+    ///
+    /// When set, these gestures invoke this callback instead of `on_activate`. Ordinary
+    /// selection callbacks still run for pointer selection.
+    pub fn on_ctrl_activate(mut self, cb: Callback<TreeEvent>) -> Self {
+        self.props.on_ctrl_activate = Some(cb);
         self
     }
 

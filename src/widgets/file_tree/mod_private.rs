@@ -129,6 +129,7 @@ pub(crate) struct FileTreeProps {
     pub(crate) change_view: FileTreeChangeView,
     pub(crate) git_diff_stats: bool,
     pub(crate) git_icon_style: GitIconStyle,
+    pub(crate) git_status_padding_right: u16,
     pub(crate) git_status_cache: Option<FileTreeGitStatusCache>,
     pub(crate) git_refresh_nonce: u64,
     pub(crate) git_marker_modified: Arc<str>,
@@ -151,6 +152,7 @@ pub(crate) struct FileTreeProps {
     pub(crate) path_styles: HashMap<Arc<str>, FileTreeItemStyle>,
     pub(crate) on_select: Option<Callback<FileTreeEvent>>,
     pub(crate) on_activate: Option<Callback<FileTreeEvent>>,
+    pub(crate) on_ctrl_activate: Option<Callback<FileTreeEvent>>,
     pub(crate) on_toggle: Option<Callback<FileTreeToggleEvent>>,
     pub(crate) on_entry_request: Option<Callback<super::events::FileTreeEntryRequest>>,
 }

@@ -52,6 +52,7 @@ State-style setters use [StyleSlot semantics](../styling.md#state-style-slots):
 | `on_select` | `Callback<ListEvent>` | Selection changed |
 | `on_item_click` | `Callback<ListEvent>` | Row clicked with mouse |
 | `on_activate` | `Callback<ListEvent>` | Item activated by Enter, a single click by default, or a double-click when `activate_on_click` is false |
+| `on_ctrl_activate` | `Callback<ListEvent>` | Ctrl+click or Ctrl+Enter, independently of normal activation and `activate_on_click` |
 | `activate_on_click` | `bool` | Activate on a single row click (default: `true`); when false, double-click still activates |
 | `on_scroll_to` | `Callback<usize>` | Scroll position changed |
 
@@ -369,7 +370,13 @@ Hierarchical tree view with expand/collapse.
 
 | Prop | Type | Description |
 |------|------|-------------|
-| `root` | `TreeNode` | **Constructor** - root node |
+| `root` | `TreeNode` | **Constructor** - root node; use `Tree::forest(roots)` for multiple roots |
+| `controlled_expansion` | `bool` | Node `expanded` flags are authoritative; defaults to `false` |
+| `toggle_on_activate` | `bool` | Activation also toggles expandable nodes; defaults to `true` |
+| `item_hover_effect` | `Option<VisualEffect>` | Paint effect over composed rows and their interactive descendants |
+| `on_hover` | `Callback<TreeHoverEvent>` | Composed-row pointer entry and exit |
+| `on_pointer_move` | `Callback<TreeEvent>` | Pointer movement over composed rows |
+| `on_viewport_change` | `Callback<ScrollViewportEvent>` | Composed-row viewport metadata |
 | `selected` | `usize` | Controlled selected visible row index |
 | `clear_selection` | `bool` | When `true`, suppress the selection highlight (authoritative over `selected` and internal state) |
 | `force_scroll_to_selected` | `bool` | Force the internal list to reveal the selected row on next render |
@@ -408,13 +415,14 @@ Hierarchical tree view with expand/collapse.
 | `activate_on_click` | `bool` | Single-click activates |
 | `keymap` | `TreeKeymap` | Keyboard expand/collapse mapping |
 | `focus_policy` | `FocusAccordion` | Tree accordion behavior |
-| `focus_key` | `String` | Stable key assigned to the inner focusable list node |
+| `focus_key` | `String` | Stable key assigned to the inner focusable List or ScrollView |
 | `width` | `Length` | Width |
 | `height` | `Length` | Height |
 | `on_select` | `Callback<TreeEvent>` | Node selected |
+| `on_ctrl_activate` | `Callback<TreeEvent>` | Ctrl+click or Ctrl+Enter activates without toggling expansion |
 | `on_toggle` | `Callback<TreeToggleEvent>` | Node expanded/collapsed |
 
-`Tree` is implemented with an inner `List` (flattened visible rows). Per-row `item_hover_style` and **pointer vs keyboard row hover** behavior match `List` - see the callout under [List](#list).
+Text-only `Tree` uses an inner `List` of flattened visible rows. Its per-row `item_hover_style` and pointer versus keyboard row hover match [List](#list). Trees with composed row content use a `ScrollView`, with tree navigation and disclosure handling supplied by `Tree`.
 
 `IndentStyle` selects guide appearance. `Line` draws vertical guides; `LineCapped` and
 `LineCappedRounded` finish the last sibling with `└` and `╰`. `Branch` and `BranchRounded` add
@@ -431,6 +439,38 @@ hidden. It adds no space to rows with no prefix. Migration: replace `Tree::icon_
 
 Migration: replace `Short`/`Long` with `Branch` and `ShortRounded`/`LongRounded` with
 `BranchRounded`; use indentation width to control branch length.
+
+### Multiple roots and composed rows
+
+`Tree::forest(roots)` displays several top-level nodes without an artificial parent row. Events
+report paths starting with each root's index. `Tree::new(root)` continues to display one root.
+
+A node normally contains a `ListItem`, with styled spans, descriptions, status symbols, and detail
+lines. For independent buttons, badges, or other composed content, use `TreeNode::content(element)`.
+The original `ListItem` supplies the row's semantic label and selectable role. Set
+`content_height(n)` for content taller than one cell. `leading(element)` places a column before
+its guides, for example an active-row marker. `row_style(style)` styles the whole row, including
+the guides. `key(id)` gives composed content a stable reconciliation identity across reordering.
+Use `show_disclosure(false)` for structural section headings that need no disclosure column.
+
+Composed rows use the tree's scroll view and keyboard navigation. Their guides and disclosure
+arrows gain hover foreground overrides and contrast adjustment while the pointer is over the row.
+Selection and active-row backgrounds alone preserve the authored guide and arrow colors. Their child controls handle their
+own clicks; a button click does not activate the surrounding row. `toggle_on_activate(false)`
+separates row activation from expansion. Composed-row disclosure arrows still toggle independently,
+and Left/Right, h/l, and Space retain tree navigation. Moving to a child or parent emits `on_select`,
+without emitting a spurious expansion event.
+
+With `controlled_expansion(true)`, every node's `expanded` value is authoritative after a props
+update. Store expansion under application data IDs and map `on_toggle` paths back to those IDs.
+This preserves the intended state when producers reorder nodes or supply lazy children.
+
+`on_hover`, `on_pointer_move`, and `on_viewport_change` describe composed rows. `item_hover_effect`
+can apply a paint effect over a hovered row, including interactive descendants. Text-only trees
+retain their List rendering. Selection symbols and List-specific column layout apply to text rows;
+composed rows supply those decorations through their content or leading column.
+
+Run `cargo run --example tree_rows` to try multiple roots, detail rows, and independent buttons.
 
 ### Building Nodes
 
@@ -452,8 +492,24 @@ TreeNode::new(ListItem::from_spans(vec![
 ]))
 ```
 
-Use `TreeNode::expandable(true)` when a node must retain expand/collapse behavior while its current
-child list is empty, such as an asynchronously loaded directory.
+Choose a node's behavior with `TreeNode::expansion_mode(TreeExpansionMode::...)`:
+
+- `Auto` (default): nodes with children are collapsible; empty nodes are leaves.
+- `Collapsible`: retain disclosure and expand/collapse behavior even before lazy children arrive.
+- `AlwaysOpen`: always show children, with no disclosure arrow or reserved disclosure column.
+  Child guides align beneath the parent label, including its content gap. Label styling is
+  unchanged: expansion mode controls disclosure and navigation, not the supplied `ListItem`
+  or composed content. Click and Enter still activate the node;
+  Space does not toggle it, Right enters its children, and Left moves to its parent.
+
+`expanded(bool)` supplies the initial or controlled state for collapsible nodes. `AlwaysOpen`
+ignores that flag, including under controlled expansion and focus-based squashing. A collapsed
+ancestor still hides the whole subtree. Changing expansion mode preserves unrelated user-expanded
+branches in an uncontrolled Tree.
+
+**Migration:** replace `.expandable(true)` with
+`.expansion_mode(TreeExpansionMode::Collapsible)`. Replace `.expandable(false)` with `Auto`,
+or omit it. The `expandable(bool)` builder has been removed.
 
 A node's `ListItem` renders with the tree's indentation and disclosure icon in front of its label.
 Everything else about the item is kept: `gutter`, `status`, and `prefix` stay columns in front of
@@ -534,6 +590,7 @@ entries and git-backed or application-provided change projections.
 | `symlink_target_arrow` | `impl Into<Arc<str>>` | What separates a symlink from its target (default: `"→"`) |
 | `symlink_target_style` | `Style` | Style of the arrow and target after a symlink's name (default: dim) |
 | `git_status` | `bool` | Show change status badges for git/provided changes (default: true) |
+| `git_status_padding_right` | `u16` | Blank cells after the final status marker; default 0. Use 1 for Nerd Font icons that need room to render at full size |
 | `highlight_changed_labels` | `bool` | Also apply change status colors to file/directory labels (default: false) |
 | `change_suffix_style` | `Style` | Style only the right-side change metadata suffix, such as status markers and diff stats |
 | `change_suffix_priority` | `FileTreeSuffixPriority` | Whether labels or right-side change metadata are preserved first when rows are narrow |
@@ -577,6 +634,7 @@ entries and git-backed or application-provided change projections.
 | `tab_stop` | `bool` | Include the tree target in sequential Tab traversal (default: `true`) |
 | `on_focus` / `on_blur` | `Callback<()>` | Tree focus gained / lost |
 | `on_select` | `Callback<FileTreeEvent>` | File/dir selected |
+| `on_ctrl_activate` | `Callback<FileTreeEvent>` | Ctrl+click or Ctrl+Enter on a file or directory, without toggling expansion |
 | `on_toggle` | `Callback<FileTreeToggleEvent>` | Directory expanded/collapsed |
 | `on_entry_request` | `Callback<FileTreeEntryRequest>` | Missing provided directory listing requested |
 
@@ -584,6 +642,9 @@ Plus all `Tree` styling/scrolling props, including `indent_style` and `scrollbar
 
 **Behavior:**
 - Local directories load on demand on first expand.
+- When `on_ctrl_activate` is set, Ctrl+click and Ctrl+Enter invoke it instead of normal activation.
+  Ctrl+click still selects the entry, but leaves directory expansion unchanged. This works with
+  `activate_on_click(false)` too. Without the callback, existing activation behavior is retained.
 - Change `entry_refresh_token(...)` to refresh local directory entries in place without remounting or
   resetting expansion or explorer state. The root and currently expanded directories are reread;
   collapsed descendants are unloaded and reread when reopened. Reads run in a background command;
@@ -620,13 +681,18 @@ Plus all `Tree` styling/scrolling props, including `indent_style` and `scrollbar
   status-only and diff-stat data, ignores provided sources, and revalidates every mount.
 - `directory_label_style(...)` and `file_label_style(...)` style names independently from icons and right-aligned change indicators.
 - `path_style(...)` / `path_styles(...)` match exact paths and can override row, icon, label, and suffix styling for reviewed, pinned, or otherwise annotated files.
-- `change_suffix_style(...)` and `git_suffix_style(...)` style only right-side metadata such as `M +30 -21`, leaving icons and labels unchanged.
+- `change_suffix_style(...)` and `git_suffix_style(...)` style only right-side metadata such as `+30 -21 M`, leaving icons and labels unchanged.
 - `change_suffix_priority(FileTreeSuffixPriority::Suffix)` keeps right-side metadata visible first on narrow rows, truncating labels before suffixes.
 - Change colors apply to the right-aligned indicators by default; use `highlight_changed_labels(true)` to also color dirty file and directory names, layered over their label styles.
 - `FileTreeChangeView::ChangedOnly` shows changed files only, grouped by ancestor directories. With provided change data this projection is virtual/source-agnostic and can include nonexistent or deleted paths supplied by the backend.
 - `FileTreeGitView` is a compatibility alias for `FileTreeChangeView`; `git_view`, `git_changed_only`, and `git_diff_stats` remain available for git-focused call sites.
 - Changed-only mode respects `show_hidden`; paths under hidden components such as `.github/` appear only when hidden entries are enabled.
 - `show_diff_stats(true)` displays numeric diff stats when the selected change source provides them; untracked and binary files may show a status marker without `+N -M` counts.
+- Change metadata displays diff statistics first, followed by staged and unstaged status markers,
+  for example `+42 -11 M`. Status markers align at the right edge across rows with and without
+  statistics. `git_status_padding_right(1)` reserves a blank cell after the final marker for Nerd
+  Font glyphs that need room to render at full size. The default is 0, and rows with only diff
+  statistics receive no trailing padding.
 - Filesystem fuzzy matching respects `.gitignore`/`.ignore` rules.
 - In changed-only mode, fuzzy matching is scoped to the changed-path projection instead of the whole filesystem.
 - Auto-expands ancestor directories to reveal search matches.

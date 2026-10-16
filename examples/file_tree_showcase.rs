@@ -2,7 +2,7 @@ use tui_lipan::prelude::*;
 
 struct FileTreeShowcase;
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 struct State {
     guide: usize,
     icon: usize,
@@ -16,11 +16,13 @@ struct State {
     git_status: bool,
     diff_stats: bool,
     git_icons: bool,
+    git_status_padding_right: u16,
     custom_icons: bool,
     path_style: bool,
+    last_path: Option<std::sync::Arc<str>>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Msg {
     NextGuide,
     NextIcon,
@@ -34,8 +36,10 @@ enum Msg {
     ToggleGit,
     ToggleDiffStats,
     ToggleGitIcons,
+    NextGitStatusPadding,
     ToggleCustomIcons,
     TogglePathStyle,
+    InsertPath(std::sync::Arc<str>),
 }
 
 const GUIDES: [IndentStyle; 6] = [
@@ -108,8 +112,12 @@ impl Component for FileTreeShowcase {
             Msg::ToggleGit => ctx.state.git_status = !ctx.state.git_status,
             Msg::ToggleDiffStats => ctx.state.diff_stats = !ctx.state.diff_stats,
             Msg::ToggleGitIcons => ctx.state.git_icons = !ctx.state.git_icons,
+            Msg::NextGitStatusPadding => {
+                ctx.state.git_status_padding_right = (ctx.state.git_status_padding_right + 1) % 4;
+            }
             Msg::ToggleCustomIcons => ctx.state.custom_icons = !ctx.state.custom_icons,
             Msg::TogglePathStyle => ctx.state.path_style = !ctx.state.path_style,
+            Msg::InsertPath(path) => ctx.state.last_path = Some(path),
         }
         Update::full()
     }
@@ -147,6 +155,12 @@ impl Component for FileTreeShowcase {
                 GitIconStyle::Text
             })
             .show_diff_stats(state.diff_stats)
+            .git_status_padding_right(state.git_status_padding_right)
+            .tree_focus_key("showcase-tree")
+            .on_ctrl_activate(
+                ctx.link()
+                    .callback(|event: FileTreeEvent| Msg::InsertPath(event.path)),
+            )
             .indent_width(state.indent_width);
 
         let tree = if state.path_style {
@@ -228,7 +242,17 @@ impl Component for FileTreeShowcase {
             .child(
                 control_button(toggle_label("Nerd Font Git marks", state.git_icons))
                     .disabled(!state.git_status)
-                    .on_click(ctx.link().callback(|_| Msg::ToggleGitIcons)),
+                    .on_click(ctx.link().callback(|_| Msg::ToggleGitIcons))
+                    .automation_id("nerd-git-marks"),
+            )
+            .child(
+                control_button(format!(
+                    "Git status right pad: {}",
+                    state.git_status_padding_right
+                ))
+                .disabled(!state.git_status)
+                .on_click(ctx.link().callback(|_| Msg::NextGitStatusPadding))
+                .automation_id("git-status-padding-right"),
             )
             .child(
                 control_button(toggle_label(
@@ -267,8 +291,17 @@ impl Component for FileTreeShowcase {
                     .child(header)
                     .child(tree.height(Length::Flex(1)))
                     .child(
-                        Text::new("Enter/→ open · ← collapse · ↑/↓ navigate")
-                            .style(Style::new().fg(Color::DarkGray)),
+                        Text::new(
+                            state
+                                .last_path
+                                .as_ref()
+                                .map(|path| format!("Path: {path}"))
+                                .unwrap_or_else(|| {
+                                    "Ctrl+click/Ctrl+Enter: use path · Enter/→ open · ← collapse"
+                                        .into()
+                                }),
+                        )
+                        .style(Style::new().fg(Color::DarkGray)),
                     ),
             )
             .into()
@@ -375,6 +408,124 @@ mod tests {
     use tui_lipan::TestBackend;
 
     #[test]
+    fn ctrl_activation_reports_paths_without_closing_demo_directories() {
+        use tui_lipan::core::event::{MouseButton, MouseEvent, MouseKind};
+        let mut backend = TestBackend::new(FileTreeShowcase);
+        backend.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 110,
+            h: 34,
+        });
+        backend.render();
+        assert!(backend.focus_key(&"showcase-tree".into()));
+        backend
+            .send_key(KeyEvent {
+                code: KeyCode::Enter,
+                mods: KeyMods::CTRL,
+            })
+            .unwrap();
+        backend.render();
+        assert_eq!(backend.state().last_path.as_deref(), Some("/demo/project"));
+        let lines = backend.capture_frame().to_fixed_grid_lines();
+        let (y, row) = lines
+            .iter()
+            .enumerate()
+            .find(|(_, row)| row.trim_end().ends_with("docs"))
+            .unwrap();
+        let x = row[..row.find("docs").unwrap()].chars().count() as u16;
+        for kind in [
+            MouseKind::Down(MouseButton::Left),
+            MouseKind::Up(MouseButton::Left),
+        ] {
+            backend
+                .send_mouse(MouseEvent {
+                    x,
+                    y: y as u16,
+                    kind,
+                    mods: KeyMods::CTRL,
+                })
+                .unwrap();
+            backend.render();
+        }
+        assert_eq!(
+            backend.state().last_path.as_deref(),
+            Some("/demo/project/docs")
+        );
+        assert!(
+            backend
+                .capture_frame()
+                .plain_text()
+                .contains("components.md")
+        );
+    }
+
+    #[test]
+    fn git_status_padding_aligns_markers_after_diff_numbers() {
+        for width in [80, 100] {
+            let mut backend = TestBackend::new(FileTreeShowcase);
+            backend.set_viewport(Rect {
+                x: 0,
+                y: 0,
+                w: width,
+                h: 32,
+            });
+            backend.dispatch(Msg::ToggleGitIcons).unwrap();
+            backend.dispatch(Msg::NextGitStatusPadding).unwrap();
+            backend.render();
+            let lines = backend.capture_frame().to_fixed_grid_lines();
+            let icon_only = lines.iter().find(|row| row.contains("lib.rs")).unwrap();
+            let with_stats = lines
+                .iter()
+                .find(|row| row.contains("file_tree.rs"))
+                .unwrap();
+            assert!(with_stats.trim_end().ends_with("+42 -11 "), "{with_stats}");
+            let icon_x = icon_only.chars().position(|ch| ch == '').unwrap();
+            let stats_end = with_stats
+                .chars()
+                .enumerate()
+                .filter(|(_, ch)| !ch.is_whitespace())
+                .map(|(x, _)| x)
+                .last()
+                .unwrap();
+            assert_eq!(
+                icon_x, stats_end,
+                "status icons align with and without diff counts"
+            );
+            assert_eq!(icon_only.chars().nth(icon_x + 1), Some(' '));
+            let unpadded_x = icon_x + 1;
+            for padding in [2, 3, 0] {
+                backend.dispatch(Msg::NextGitStatusPadding).unwrap();
+                backend.render();
+                let lines = backend.capture_frame().to_fixed_grid_lines();
+                for label in ["lib.rs", "file_tree.rs"] {
+                    let row = lines.iter().find(|row| row.contains(label)).unwrap();
+                    let marker_x = row.chars().position(|ch| ch == '').unwrap();
+                    assert_eq!(marker_x + padding, unpadded_x);
+                    assert!(
+                        row.chars()
+                            .skip(marker_x + 1)
+                            .take(padding)
+                            .all(|ch| ch == ' ')
+                    );
+                }
+            }
+            backend.dispatch(Msg::NextGitStatusPadding).unwrap();
+            backend.dispatch(Msg::ToggleGit).unwrap();
+            backend.render();
+            let lines = backend.capture_frame().to_fixed_grid_lines();
+            let stats_only = lines
+                .iter()
+                .find(|row| row.contains("file_tree.rs"))
+                .unwrap();
+            assert!(
+                stats_only.ends_with("+42 -11"),
+                "stats-only rows have no trailing padding: {stats_only}"
+            );
+        }
+    }
+
+    #[test]
     fn live_controls_keep_arrows_independent_and_preserve_complete_rows() {
         let mut backend = TestBackend::new(FileTreeShowcase);
         backend.set_viewport(Rect {
@@ -423,7 +574,7 @@ mod tests {
                 .unwrap();
             let suffix = changed_row.split_once("file_tree.rs").unwrap().1.trim();
             let expected = match (backend.state().git_status, backend.state().diff_stats) {
-                (true, true) => "M +42 -11",
+                (true, true) => "+42 -11 M",
                 (true, false) => "M",
                 (false, true) => "+42 -11",
                 (false, false) => "",

@@ -271,6 +271,7 @@ pub fn reconcile_list(tree: &mut NodeTree, id: NodeId, list: &List, rect: Rect) 
             on_select: list.on_select.clone(),
             on_item_click: list.on_item_click.clone(),
             on_activate: list.on_activate.clone(),
+            on_ctrl_activate: list.on_ctrl_activate.clone(),
             on_click: list.on_click.clone(),
             activate_on_click: list.activate_on_click,
             on_scroll_to: list.on_scroll_to.clone(),

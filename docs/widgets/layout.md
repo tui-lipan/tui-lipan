@@ -383,6 +383,7 @@ Scrollable container with optional scrollbar.
 | `show_scroll_indicators` | `bool` | Show top/bottom overflow indicators |
 | `scroll_indicator_style` | `Style` | Overflow indicator style |
 | `estimated_child_height` | `u16` | Cold-start fallback height for unmeasured off-screen children (default `3`) |
+| `on_focus` / `on_blur` | `Callback<()>` | Keyboard focus gained or lost |
 | `on_scroll` | `Callback<ScrollEvent>` | Scroll event (includes metrics) |
 | `on_scroll_to` | `Callback<usize>` | Target offset |
 | `on_viewport_change` | `Callback<ScrollViewportEvent>` | Fires when the visible immediate-child snapshot changes after layout/reconcile |

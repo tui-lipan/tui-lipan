@@ -60,6 +60,8 @@ pub struct ScrollView {
     pub(crate) tab_stop: bool,
     /// Callback fired when the scroll offset changes.
     pub(crate) on_scroll: Option<Callback<ScrollEvent>>,
+    pub(crate) on_focus: Option<Callback<()>>,
+    pub(crate) on_blur: Option<Callback<()>>,
     /// Callback fired when the scrollbar is dragged/clicked.
     pub(crate) on_scroll_to: Option<Callback<usize>>,
     /// Callback fired when visible children or viewport metadata changes.
@@ -112,6 +114,8 @@ impl Default for ScrollView {
             virtualize: true,
             tab_stop: true,
             on_scroll: None,
+            on_focus: None,
+            on_blur: None,
             on_scroll_to: None,
             on_viewport_change: None,
             scrollbar: false,
@@ -379,6 +383,18 @@ impl ScrollView {
     /// `Context::request_focus`.
     pub fn tab_stop(mut self, tab_stop: bool) -> Self {
         self.tab_stop = tab_stop;
+        self
+    }
+
+    /// Called when this scroll view receives keyboard focus.
+    pub fn on_focus(mut self, callback: Callback<()>) -> Self {
+        self.on_focus = Some(callback);
+        self
+    }
+
+    /// Called when this scroll view loses keyboard focus.
+    pub fn on_blur(mut self, callback: Callback<()>) -> Self {
+        self.on_blur = Some(callback);
         self
     }
 

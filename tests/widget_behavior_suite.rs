@@ -87,3 +87,11 @@ mod visibility_animation;
 
 #[path = "suites/widget_behavior/tree_item_columns.rs"]
 mod tree_item_columns;
+
+#[path = "suites/widget_behavior/tree_composed_rows.rs"]
+mod tree_composed_rows;
+#[path = "suites/widget_behavior/tree_ctrl_activation.rs"]
+mod tree_ctrl_activation;
+
+#[path = "suites/widget_behavior/tree_expansion_mode.rs"]
+mod tree_expansion_mode;

@@ -85,7 +85,7 @@ For layout reorders, wrap the moving subtree in `Animated::new(...)`, enable `.p
 |--------|-------------|
 | `List` | Selectable list with headers, spacers, prefixes, scrollbar |
 | `Table` | Structured table with heatmaps, inspector presets |
-| `Tree` | Hierarchical tree with expand/collapse |
+| `Tree` | Hierarchical tree or forest with text or composed rows and expand/collapse |
 | `FileTree` | Lazy local/async-provided filesystem explorer with git status, ignore state, and changed-only view |
 | `LogView` | High-throughput log stream with fuzzy filtering |
 

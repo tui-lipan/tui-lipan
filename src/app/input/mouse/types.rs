@@ -1,5 +1,5 @@
 use crate::callback::Callback;
-use crate::core::event::{MouseDragEvent, MouseEvent};
+use crate::core::event::{KeyMods, MouseDragEvent, MouseEvent};
 use crate::core::node::NodeId;
 use crate::style::{Padding, Rect, ScrollbarVariant};
 use crate::utils::text::SentinelInfo;
@@ -87,9 +87,11 @@ pub(crate) struct InputChange {
 }
 
 pub(crate) struct ListSelect {
+    pub mods: KeyMods,
     pub on_select: Option<Callback<ListEvent>>,
     pub on_item_click: Option<Callback<ListEvent>>,
     pub on_activate: Option<Callback<ListEvent>>,
+    pub on_ctrl_activate: Option<Callback<ListEvent>>,
     pub on_scroll_to: Option<Callback<usize>>,
     pub activate_on_click: bool,
     pub len: usize,
@@ -99,6 +101,17 @@ pub(crate) struct ListSelect {
     pub scrollbar_variant: ScrollbarVariant,
     pub show_scroll_indicators: bool,
     pub rect: Rect,
+}
+
+impl ListSelect {
+    pub(crate) fn activation_callback(&self, is_double: bool) -> Option<&Callback<ListEvent>> {
+        if self.mods == KeyMods::CTRL && self.on_ctrl_activate.is_some() {
+            return self.on_ctrl_activate.as_ref();
+        }
+        (self.activate_on_click || is_double)
+            .then_some(self.on_activate.as_ref())
+            .flatten()
+    }
 }
 
 pub(crate) struct TableSelect {

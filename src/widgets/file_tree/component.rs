@@ -82,6 +82,9 @@ pub(crate) enum FileTreeMsg {
     TreeActivated {
         entry: Option<VisibleFileTreeEntry>,
     },
+    TreeCtrlActivated {
+        entry: Option<VisibleFileTreeEntry>,
+    },
     TreeToggled {
         entry: Option<VisibleFileTreeEntry>,
         expanded: bool,
@@ -311,6 +314,14 @@ impl Component for FileTreeComponent {
                     expanded: event.expanded,
                 }
             }));
+        if ctx.props.on_ctrl_activate.is_some() {
+            let lookup = projection.lookup.clone();
+            tree = tree.on_ctrl_activate(ctx.link().callback(move |event: TreeEvent| {
+                FileTreeMsg::TreeCtrlActivated {
+                    entry: lookup.get(&event.path).cloned(),
+                }
+            }));
+        }
         if let Some(selected) = selected_by_path
             .or(uncontrolled_selected_by_path)
             .or(ctx.props.selected)
@@ -581,6 +592,17 @@ impl Component for FileTreeComponent {
             FileTreeMsg::TreeActivated { entry } => {
                 if let Some(entry) = entry
                     && let Some(cb) = ctx.props.on_activate.as_ref()
+                {
+                    cb.emit(FileTreeEvent {
+                        path: entry.path,
+                        kind: entry.kind,
+                    });
+                }
+                Update::none()
+            }
+            FileTreeMsg::TreeCtrlActivated { entry } => {
+                if let Some(entry) = entry
+                    && let Some(cb) = &ctx.props.on_ctrl_activate
                 {
                     cb.emit(FileTreeEvent {
                         path: entry.path,
@@ -2193,7 +2215,11 @@ fn build_projected_tree_node(
         // Deriving this from the loaded children instead would strand an empty one: opening it
         // loads nothing, so closing it again would leave a row with no arrow and no way back open.
         .expanded(is_expanded)
-        .expandable(node.is_dir())
+        .expansion_mode(if node.is_dir() {
+            crate::widgets::TreeExpansionMode::Collapsible
+        } else {
+            crate::widgets::TreeExpansionMode::Auto
+        })
         .indent(ctx.props.indent_width);
     if ctx.props.show_arrows {
         tree = if node.is_dir() {
@@ -2357,10 +2383,6 @@ fn git_description_spans(
     }
 
     let mut spans = Vec::new();
-    if props.git_status {
-        push_git_status_spans(&mut spans, decoration.status, props);
-    }
-
     if props.git_diff_stats
         && let Some(diff_stat) = decoration.diff_stat
         && !diff_stat.is_empty()
@@ -2375,6 +2397,10 @@ fn git_description_spans(
             }
             spans.push(Span::new(format!("-{}", diff_stat.removed)).style(props.git_style_deleted));
         }
+    }
+
+    if props.git_status {
+        push_git_status_spans(&mut spans, decoration.status, props);
     }
 
     spans
@@ -2401,6 +2427,11 @@ fn push_git_status_spans(
             spans.push(Span::new(" "));
         }
         spans.push(Span::new(git_marker(unstaged, props, false)).style(unstaged.style(props)));
+    }
+    if props.git_status_padding_right > 0 {
+        spans.push(Span::new(
+            " ".repeat(props.git_status_padding_right as usize),
+        ));
     }
 }
 
@@ -3233,7 +3264,7 @@ mod tests {
         // Neither `src/widgets` nor `src/widgets/tree.rs` is materialized, and the row is still
         // expandable on its own rather than through a stand-in child.
         assert!(src.children.is_empty());
-        assert!(src.is_expandable());
+        assert!(src.is_collapsible());
         assert!(!src.expanded);
 
         // Nothing below a collapsed directory reaches the event lookup, because
@@ -3257,14 +3288,14 @@ mod tests {
         let projection = build_projection(&props, &state, None);
         let empty = projected_child(&projection.root, "empty");
         assert!(empty.children.is_empty());
-        assert!(empty.is_expandable());
+        assert!(empty.is_collapsible());
         assert!(!empty.expanded);
 
         state.expanded.insert(Arc::from("/remote/repo/empty"));
         let projection = build_projection(&props, &state, None);
         let empty = projected_child(&projection.root, "empty");
         assert!(empty.children.is_empty());
-        assert!(empty.is_expandable());
+        assert!(empty.is_collapsible());
         assert!(empty.expanded);
     }
 
@@ -3282,7 +3313,7 @@ mod tests {
         assert_eq!(src.children.len(), 1);
         // `widgets` is itself still collapsed, so its own subtree is not built.
         assert!(widgets.children.is_empty());
-        assert!(widgets.is_expandable());
+        assert!(widgets.is_collapsible());
         assert!(
             projection
                 .lookup
@@ -3306,7 +3337,7 @@ mod tests {
         let mut state = FileTreeComponent::new().create_state(&props);
 
         let expandable = |state: &FileTreeState| {
-            projected_child(&build_projection(&props, state, None).root, "empty").is_expandable()
+            projected_child(&build_projection(&props, state, None).root, "empty").is_collapsible()
         };
         assert!(expandable(&state), "unopened directory offers a toggle");
 
@@ -4786,6 +4817,59 @@ mod tests {
     }
 
     #[test]
+    fn git_status_padding_follows_markers_without_padding_stats_only_rows() {
+        use crate::widgets::file_tree::git::{
+            GitChangeState::{Added, Modified},
+            GitDiffStat, GitFileDecorations, GitFileStatus, GitIconStyle,
+        };
+
+        for (staged, unstaged, diff_stat, show_stats, expected) in [
+            (None, Some(Modified), None, false, "  "),
+            (Some(Added), None, None, false, "  "),
+            (Some(Added), Some(Modified), None, false, "   "),
+            (
+                None,
+                Some(Modified),
+                Some(GitDiffStat::new(2, 1)),
+                true,
+                " +2 -1  ",
+            ),
+            (
+                None,
+                Some(Modified),
+                Some(GitDiffStat::new(2, 1)),
+                false,
+                "  ",
+            ),
+            (
+                None,
+                Some(Modified),
+                Some(GitDiffStat::new(0, 0)),
+                true,
+                "  ",
+            ),
+            (None, None, Some(GitDiffStat::new(2, 1)), true, " +2 -1"),
+            (None, None, None, true, ""),
+        ] {
+            let props = crate::widgets::file_tree::FileTree::new("/repo")
+                .git_icon_style(GitIconStyle::NerdFont)
+                .git_status_padding_right(1)
+                .show_diff_stats(show_stats)
+                .props;
+            let decoration = GitFileDecorations {
+                status: GitFileStatus::new(staged, unstaged),
+                diff_stat,
+                direct: true,
+            };
+            let actual = git_description_spans(Some(decoration), &props, false, false)
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>();
+            assert_eq!(actual, expected, "{decoration:?}, show_stats={show_stats}");
+        }
+    }
+
+    #[test]
     fn git_status_description_has_no_trailing_padding() {
         let props = crate::widgets::file_tree::FileTree::new("/repo")
             .git_icon_style(crate::widgets::file_tree::git::GitIconStyle::Text)
@@ -4839,7 +4923,7 @@ mod tests {
         let spans = git_description_spans(Some(decoration), &props, false, false);
         let content: Vec<&str> = spans.iter().map(|span| span.content.as_ref()).collect();
 
-        assert_eq!(content, vec![" ", "M", " ", "+2", " ", "-1"]);
+        assert_eq!(content, vec![" ", "+2", " ", "-1", " ", "M"]);
     }
 
     #[test]
@@ -5300,15 +5384,15 @@ mod tests {
                 .all(|span| span.style.dim == Some(true))
         );
         assert_eq!(
-            tree.item.description_spans[1].style.fg,
+            tree.item.description_spans[5].style.fg,
             props.git_style_modified.fg
         );
         assert_eq!(
-            tree.item.description_spans[3].style.fg,
+            tree.item.description_spans[1].style.fg,
             props.git_style_added.fg
         );
         assert_eq!(
-            tree.item.description_spans[5].style.fg,
+            tree.item.description_spans[3].style.fg,
             props.git_style_deleted.fg
         );
     }
@@ -5338,12 +5422,12 @@ mod tests {
                 .iter()
                 .map(|span| span.content.as_ref())
                 .collect::<Vec<_>>(),
-            vec![" ", "M", " ", "+30", " ", "-21"]
+            vec![" ", "+30", " ", "-21", " ", "M"]
         );
         assert!(spans.iter().all(|span| span.style.dim == Some(true)));
-        assert_eq!(spans[1].style.fg, props.git_style_modified.fg);
-        assert_eq!(spans[3].style.fg, props.git_style_added.fg);
-        assert_eq!(spans[5].style.fg, props.git_style_deleted.fg);
+        assert_eq!(spans[5].style.fg, props.git_style_modified.fg);
+        assert_eq!(spans[1].style.fg, props.git_style_added.fg);
+        assert_eq!(spans[3].style.fg, props.git_style_deleted.fg);
     }
 
     #[test]

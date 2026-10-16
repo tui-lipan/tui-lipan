@@ -11,7 +11,7 @@ Regenerate with `python3 scripts/generate-widget-defaults.py --write`. Check fre
 
 ## Accordion
 
-Source: `src/widgets/accordion/mod.rs:45` (`Accordion`).
+Source: `src/widgets/accordion/mod.rs:48` (`Accordion`).
 
 | Field | Default initializer |
 |---|---|
@@ -32,6 +32,7 @@ Source: `src/widgets/accordion/mod.rs:45` (`Accordion`).
 | `content_border_style` | `BorderStyle::Plain` |
 | `content_style` | `Style::default()` |
 | `disabled_style` | `Style::default()` |
+| `animation` | `None` |
 | `expanded_icon` | `"▼ ".into()` |
 | `collapsed_icon` | `"▶ ".into()` |
 | `focusable` | `false` |
@@ -76,7 +77,7 @@ Source: `src/widgets/button/mod.rs:100` (`Button`).
 
 ## Checkbox
 
-Source: `src/widgets/checkbox/mod.rs:187` (`Checkbox`).
+Source: `src/widgets/checkbox/mod.rs:188` (`Checkbox`).
 
 | Field | Default initializer |
 |---|---|
@@ -156,7 +157,7 @@ Source: `src/widgets/input/mod.rs:86` (`Input`).
 
 ## TextArea
 
-Source: `src/widgets/text_area/mod.rs:457` (`TextArea`).
+Source: `src/widgets/text_area/mod.rs:458` (`TextArea`).
 
 | Field | Default initializer |
 |---|---|
@@ -259,7 +260,7 @@ Source: `src/widgets/text_area/mod.rs:457` (`TextArea`).
 
 ## List
 
-Source: `src/widgets/list/mod.rs:1483` (`List`).
+Source: `src/widgets/list/mod.rs:1600` (`List`).
 
 | Field | Default initializer |
 |---|---|
@@ -299,6 +300,7 @@ Source: `src/widgets/list/mod.rs:1483` (`List`).
 | `on_select` | `None` |
 | `on_item_click` | `None` |
 | `on_activate` | `None` |
+| `on_ctrl_activate` | `None` |
 | `on_click` | `None` |
 | `activate_on_click` | `true` |
 | `on_scroll_to` | `None` |
@@ -347,7 +349,7 @@ Source: `src/widgets/list/mod.rs:81` (`ListConfig`).
 
 ## ScrollView
 
-Source: `src/widgets/scroll_view/mod.rs:94` (`ScrollView`).
+Source: `src/widgets/scroll_view/mod.rs:99` (`ScrollView`).
 
 | Field | Default initializer |
 |---|---|
@@ -356,6 +358,7 @@ Source: `src/widgets/scroll_view/mod.rs:94` (`ScrollView`).
 | `horizontal_reveal_range` | `None` |
 | `scroll_request` | `None` |
 | `scroll_target` | `None` |
+| `reveal_target` | `false` |
 | `scroll_behavior` | `ScrollBehavior::default()` |
 | `scroll_keys` | `ScrollKeymap::default()` |
 | `scroll_wheel` | `true` |
@@ -364,8 +367,11 @@ Source: `src/widgets/scroll_view/mod.rs:94` (`ScrollView`).
 | `scroll_wheel_behavior` | `ScrollWheelBehavior::default()` |
 | `ambient_page_scroll` | `false` |
 | `focusable` | `false` |
+| `virtualize` | `true` |
 | `tab_stop` | `true` |
 | `on_scroll` | `None` |
+| `on_focus` | `None` |
+| `on_blur` | `None` |
 | `on_scroll_to` | `None` |
 | `on_viewport_change` | `None` |
 | `scrollbar` | `false` |
@@ -440,7 +446,7 @@ Note: `Frame` is the public builder; these defaults come from its `FrameNode` ba
 
 ## ProgressBar
 
-Source: `src/widgets/progress/mod.rs:239` (`ProgressBar`).
+Source: `src/widgets/progress/mod.rs:240` (`ProgressBar`).
 
 | Field | Default initializer |
 |---|---|
@@ -490,7 +496,7 @@ Source: `src/widgets/spinner/mod.rs:184` (`Spinner`).
 
 ## Select
 
-Source: `src/widgets/select/mod.rs:58` (`Select`).
+Source: `src/widgets/select/mod.rs:60` (`Select`).
 
 | Field | Default initializer |
 |---|---|
@@ -498,6 +504,7 @@ Source: `src/widgets/select/mod.rs:58` (`Select`).
 | `selected` | `None` |
 | `placeholder` | `"Select...".into()` |
 | `expanded` | `false` |
+| `animation` | `None` |
 | `on_toggle` | `None` |
 | `on_select` | `None` |
 | `on_change` | `None` |
@@ -532,7 +539,7 @@ Source: `src/widgets/select/mod.rs:58` (`Select`).
 
 ## ComboBox
 
-Source: `src/widgets/combo_box.rs:71` (`ComboBox`).
+Source: `src/widgets/combo_box.rs:74` (`ComboBox`).
 
 | Field | Default initializer |
 |---|---|
@@ -540,6 +547,7 @@ Source: `src/widgets/combo_box.rs:71` (`ComboBox`).
 | `query` | `Arc::from("")` |
 | `placeholder` | `Some("Type to filter...".into())` |
 | `open` | `false` |
+| `animation` | `None` |
 | `active_index` | `None` |
 | `selected` | `None` |
 | `allow_custom_value` | `false` |
@@ -578,7 +586,7 @@ Source: `src/widgets/combo_box.rs:71` (`ComboBox`).
 
 ## MultiSelect
 
-Source: `src/widgets/multi_select.rs:143` (`MultiSelect`).
+Source: `src/widgets/multi_select.rs:146` (`MultiSelect`).
 
 | Field | Default initializer |
 |---|---|
@@ -614,7 +622,7 @@ Source: `src/widgets/multi_select.rs:143` (`MultiSelect`).
 
 ## Modal
 
-Source: `src/widgets/modal.rs:38` (`Modal`).
+Source: `src/widgets/modal.rs:42` (`Modal`).
 
 | Field | Default initializer |
 |---|---|
@@ -636,10 +644,11 @@ Source: `src/widgets/modal.rs:38` (`Modal`).
 | `title_style` | `Style::default()` |
 | `title_alignment` | `Align::Start` |
 | `dismiss_on_escape` | `true` |
+| `animation` | `None` |
 
 ## Popover
 
-Source: `src/widgets/popover/mod.rs:95` (`Popover`).
+Source: `src/widgets/popover/mod.rs:104` (`Popover`).
 
 | Field | Default initializer |
 |---|---|
@@ -647,6 +656,7 @@ Source: `src/widgets/popover/mod.rs:95` (`Popover`).
 | `content` | `Box::new(crate::widgets::Spacer::new().into())` |
 | `on_close` | `None` |
 | `open` | `false` |
+| `animation` | `None` |
 | `scope` | `OverlayScope::RootPortal` |
 | `placement` | `PopoverPlacement::default()` |
 | `offset` | `PopoverOffset::ZERO` |
@@ -661,7 +671,7 @@ Source: `src/widgets/popover/mod.rs:95` (`Popover`).
 
 ## HexArea
 
-Source: `src/widgets/hex_area/mod.rs:114` (`HexArea`).
+Source: `src/widgets/hex_area/mod.rs:117` (`HexArea`).
 
 | Field | Default initializer |
 |---|---|
@@ -700,7 +710,7 @@ Source: `src/widgets/hex_area/mod.rs:114` (`HexArea`).
 
 ## Hyperlink
 
-Source: `src/widgets/hyperlink.rs:50` (`Hyperlink`).
+Source: `src/widgets/hyperlink.rs:51` (`Hyperlink`).
 
 | Field | Default initializer |
 |---|---|
@@ -726,7 +736,7 @@ Source: `src/widgets/hyperlink.rs:50` (`Hyperlink`).
 
 ## PanView
 
-Source: `src/widgets/pan_view/mod.rs:238` (`PanView`).
+Source: `src/widgets/pan_view/mod.rs:239` (`PanView`).
 
 | Field | Default initializer |
 |---|---|
@@ -789,7 +799,7 @@ Source: `src/widgets/slider/mod.rs:93` (`Slider`).
 
 ## Table
 
-Source: `src/widgets/table/mod.rs:356` (`Table`).
+Source: `src/widgets/table/mod.rs:357` (`Table`).
 
 | Field | Default initializer |
 |---|---|
@@ -844,7 +854,7 @@ Source: `src/widgets/table/mod.rs:356` (`Table`).
 
 ## Tabs
 
-Source: `src/widgets/tabs/mod.rs:125` (`Tabs`).
+Source: `src/widgets/tabs/mod.rs:126` (`Tabs`).
 
 | Field | Default initializer |
 |---|---|
@@ -875,11 +885,11 @@ Source: `src/widgets/tabs/mod.rs:125` (`Tabs`).
 
 ## DraggableTabBar
 
-Source: `src/widgets/draggable_tab_bar/mod.rs:520` (`DraggableTabBar`).
+Source: `src/widgets/draggable_tab_bar/mod.rs:525` (`DraggableTabBar`).
 
 | Field | Default initializer |
 |---|---|
-| `tabs` | `Arc::new([])` |
+| `tabs` | `Arc::default()` |
 | `active` | `0` |
 | `style` | `Style::default()` |
 | `focus_style` | `StyleSlot::Inherit` |
@@ -919,6 +929,7 @@ Source: `src/widgets/draggable_tab_bar/mod.rs:520` (`DraggableTabBar`).
 | `file_icon_overrides` | `HashMap::new()` |
 | `bar_id` | `None` |
 | `drag_group` | `None` |
+| `drop_area` | `None` |
 | `draggable` | `true` |
 | `drag_preview` | `true` |
 | `reorder_mode` | `DragReorderMode::Live` |
@@ -939,7 +950,7 @@ Source: `src/widgets/draggable_tab_bar/mod.rs:520` (`DraggableTabBar`).
 
 ## DocumentView
 
-Source: `src/widgets/document_view/mod.rs:331` (`DocumentView`).
+Source: `src/widgets/document_view/mod.rs:333` (`DocumentView`).
 
 | Field | Default initializer |
 |---|---|
@@ -1109,6 +1120,7 @@ Source: `src/widgets/file_tree/mod.rs:361` (`FileTree`).
 | `change_view` | `FileTreeChangeView::default()` |
 | `git_diff_stats` | `false` |
 | `git_icon_style` | `GitIconStyle::NerdFont` |
+| `git_status_padding_right` | `0` |
 | `git_status_cache` | `None` |
 | `git_refresh_nonce` | `0` |
 | `git_marker_modified` | `"M".into()` |
@@ -1131,12 +1143,13 @@ Source: `src/widgets/file_tree/mod.rs:361` (`FileTree`).
 | `path_styles` | `HashMap::new()` |
 | `on_select` | `None` |
 | `on_activate` | `None` |
+| `on_ctrl_activate` | `None` |
 | `on_toggle` | `None` |
 | `on_entry_request` | `None` |
 
 ## SearchPalette
 
-Source: `src/widgets/search_palette/mod.rs:803` (`SearchPalette`).
+Source: `src/widgets/search_palette/mod.rs:825` (`SearchPalette`).
 
 | Field | Default initializer |
 |---|---|
@@ -1146,8 +1159,10 @@ Source: `src/widgets/search_palette/mod.rs:803` (`SearchPalette`).
 | `sync_selection` | `false` |
 | `initial_query` | `"".into()` |
 | `initial_selected_item_index` | `None` |
+| `item_key` | `None` |
 | `query` | `None` |
 | `placeholder` | `"Search...".into()` |
+| `results_header` | `None` |
 | `width` | `Length::Flex(1)` |
 | `height` | `Length::Flex(1)` |
 | `max_width` | `None` |
@@ -1219,11 +1234,18 @@ Source: `src/widgets/search_palette/mod.rs:803` (`SearchPalette`).
 
 ## Tree
 
-Source: `src/widgets/tree/mod.rs:27` (`Tree`).
+Source: `src/widgets/tree/mod.rs:29` (`Tree`).
 
 | Field | Default initializer |
 |---|---|
 | `root` | `constructor/local value (not a default)` |
+| `forest` | `false` |
+| `item_hover_effect` | `None` |
+| `controlled_expansion` | `false` |
+| `toggle_on_activate` | `true` |
+| `on_hover` | `None` |
+| `on_pointer_move` | `None` |
+| `on_viewport_change` | `None` |
 | `selected` | `None` |
 | `clear_selection` | `false` |
 | `force_scroll_to_selected` | `false` |
@@ -1259,6 +1281,7 @@ Source: `src/widgets/tree/mod.rs:27` (`Tree`).
 | `on_blur` | `None` |
 | `on_select` | `None` |
 | `on_activate` | `None` |
+| `on_ctrl_activate` | `None` |
 | `on_toggle` | `None` |
 | `keymap` | `TreeKeymap::default()` |
 | `focus_policy` | `None` |
@@ -1273,7 +1296,7 @@ Source: `src/widgets/tree/mod.rs:27` (`Tree`).
 
 ## Terminal
 
-Source: `src/widgets/terminal/mod.rs:94` (`Terminal`).
+Source: `src/widgets/terminal/mod.rs:115` (`Terminal`).
 
 | Field | Default initializer |
 |---|---|
@@ -1283,6 +1306,7 @@ Source: `src/widgets/terminal/mod.rs:94` (`Terminal`).
 | `show_cursor` | `true` |
 | `cursor_shape` | `CaretShape::Block` |
 | `cursor_blinking` | `true` |
+| `cursor_blinking_override` | `None` |
 | `caret_color` | `None` |
 | `color_lines` | `None` |
 | `color_cache_key` | `0` |
@@ -1397,7 +1421,7 @@ Note: `DiffView::new()` delegates to `new_internal("", "", None)`; argument-back
 
 ## ManagedTerminal
 
-Source: `src/widgets/managed_terminal.rs:109` (`ManagedTerminalProps`).
+Source: `src/widgets/managed_terminal.rs:119` (`ManagedTerminalProps`).
 
 Note: `ManagedTerminal` is a component; defaults come from `ManagedTerminalProps`.
 
@@ -1427,21 +1451,22 @@ Note: `ManagedTerminal` is a component; defaults come from `ManagedTerminalProps
 
 ## CommandPalette
 
-Source: `src/widgets/command_palette.rs:325` (`CommandPalette`).
+Source: `src/widgets/command_palette.rs:334` (`CommandPalette`).
 
 | Field | Default initializer |
 |---|---|
-| `props` | `CommandPaletteProps { on_close: None, show_disabled: false, width: Length::Px(80), height: Length::Px(20), backdrop_style: Style::default(), frame_style: Style::default(), border: true, border_style: BorderStyle::Plain, padding: 0.into(), title: None, title_style: Style::default(), title_alignment: Align::Start, scope: OverlayScope::RootPortal, }` |
+| `props` | `CommandPaletteProps { on_close: None, show_disabled: false, width: Length::Px(80), height: Length::Px(20), backdrop_style: Style::default(), frame_style: Style::default(), border: true, border_style: BorderStyle::Plain, padding: 0.into(), title: None, title_style: Style::default(), title_alignment: Align::Start, scope: OverlayScope::RootPortal, animation: None, }` |
 
 ## ContextMenu
 
-Source: `src/widgets/context_menu.rs:42` (`ContextMenu`).
+Source: `src/widgets/context_menu.rs:51` (`ContextMenu`).
 
 | Field | Default initializer |
 |---|---|
 | `trigger` | `constructor/local value (not a default)` |
 | `items` | `Vec::new()` |
 | `open` | `false` |
+| `animation` | `None` |
 | `on_select` | `None` |
 | `on_close` | `None` |
 | `placement` | `PopoverPlacement::BelowStart` |

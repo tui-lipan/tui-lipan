@@ -1,6 +1,8 @@
-use figlet_rs::FIGlet;
-use font8x8::{BASIC_FONTS, UnicodeFonts};
 use std::sync::{Arc, OnceLock};
+
+use font8x8::{BASIC_FONTS, UnicodeFonts};
+
+use self::figlet::FigletFont;
 
 use crate::core::element::{Element, ElementKind};
 use crate::style::{RichText, Span, Style};
@@ -8,6 +10,7 @@ use crate::utils::gradient::{ColorGradient, GradientDirection};
 
 pub(crate) use node::BigTextCacheKey;
 
+mod figlet;
 mod font;
 mod layout;
 mod node;
@@ -24,18 +27,18 @@ use self::font::{
 
 // Cached parsed FIGlet objects to avoid expensive parsing on every render.
 // Wrapped in Option so that load failures are cached too (no repeated retries).
-static FIGFONT_STANDARD: OnceLock<Option<FIGlet>> = OnceLock::new();
-static FIGFONT_SLANT: OnceLock<Option<FIGlet>> = OnceLock::new();
-static FIGFONT_BLOODY: OnceLock<Option<FIGlet>> = OnceLock::new();
-static FIGFONT_COLOSSAL: OnceLock<Option<FIGlet>> = OnceLock::new();
-static FIGFONT_ROMAN: OnceLock<Option<FIGlet>> = OnceLock::new();
-static FIGFONT_SUB_ZERO: OnceLock<Option<FIGlet>> = OnceLock::new();
-static FIGFONT_POISON: OnceLock<Option<FIGlet>> = OnceLock::new();
-static FIGFONT_NANCYJ: OnceLock<Option<FIGlet>> = OnceLock::new();
-static FIGFONT_SMALL_POISON: OnceLock<Option<FIGlet>> = OnceLock::new();
-static FIGFONT_DOS_REBEL: OnceLock<Option<FIGlet>> = OnceLock::new();
-static FIGFONT_ANSI_SHADOW: OnceLock<Option<FIGlet>> = OnceLock::new();
-static FIGFONT_SMALL: OnceLock<Option<FIGlet>> = OnceLock::new();
+static FIGFONT_STANDARD: OnceLock<Option<FigletFont>> = OnceLock::new();
+static FIGFONT_SLANT: OnceLock<Option<FigletFont>> = OnceLock::new();
+static FIGFONT_BLOODY: OnceLock<Option<FigletFont>> = OnceLock::new();
+static FIGFONT_COLOSSAL: OnceLock<Option<FigletFont>> = OnceLock::new();
+static FIGFONT_ROMAN: OnceLock<Option<FigletFont>> = OnceLock::new();
+static FIGFONT_SUB_ZERO: OnceLock<Option<FigletFont>> = OnceLock::new();
+static FIGFONT_POISON: OnceLock<Option<FigletFont>> = OnceLock::new();
+static FIGFONT_NANCYJ: OnceLock<Option<FigletFont>> = OnceLock::new();
+static FIGFONT_SMALL_POISON: OnceLock<Option<FigletFont>> = OnceLock::new();
+static FIGFONT_DOS_REBEL: OnceLock<Option<FigletFont>> = OnceLock::new();
+static FIGFONT_ANSI_SHADOW: OnceLock<Option<FigletFont>> = OnceLock::new();
+static FIGFONT_SMALL: OnceLock<Option<FigletFont>> = OnceLock::new();
 
 // Cached custom FIGlet fonts to avoid repeated parsing.
 static CUSTOM_FIGFONT_CACHE: OnceLock<std::sync::Mutex<CustomFigletCache>> = OnceLock::new();
@@ -116,7 +119,7 @@ pub(crate) struct BigTextVisualCache {
 }
 
 struct CustomFigletCache {
-    entries: Vec<(Arc<str>, Arc<FIGlet>)>,
+    entries: Vec<(Arc<str>, Arc<FigletFont>)>,
 }
 
 impl CustomFigletCache {
@@ -126,14 +129,14 @@ impl CustomFigletCache {
         }
     }
 
-    fn get(&self, content: &Arc<str>) -> Option<Arc<FIGlet>> {
+    fn get(&self, content: &Arc<str>) -> Option<Arc<FigletFont>> {
         self.entries
             .iter()
             .find(|(k, _)| k.as_ref() == content.as_ref())
             .map(|(_, v)| Arc::clone(v))
     }
 
-    fn insert(&mut self, content: Arc<str>, font: Arc<FIGlet>) {
+    fn insert(&mut self, content: Arc<str>, font: Arc<FigletFont>) {
         if let Some(idx) = self
             .entries
             .iter()
@@ -522,12 +525,12 @@ impl BigText {
         }
 
         fn load_font<'a>(
-            slot: &'a OnceLock<Option<FIGlet>>,
+            slot: &'a OnceLock<Option<FigletFont>>,
             font_data: &str,
-        ) -> Option<&'a FIGlet> {
+        ) -> Option<&'a FigletFont> {
             slot.get_or_init(|| {
-                FIGlet::from_content(font_data)
-                    .or_else(|_| FIGlet::standard())
+                FigletFont::from_content(font_data)
+                    .or_else(|_| FigletFont::standard())
                     .ok()
             })
             .as_ref()
@@ -567,7 +570,7 @@ impl BigText {
         }
     }
 
-    fn custom_figlet_font(&self) -> Option<Arc<FIGlet>> {
+    fn custom_figlet_font(&self) -> Option<Arc<FigletFont>> {
         let content = self.custom_figlet.as_ref()?;
         let cache_mutex =
             CUSTOM_FIGFONT_CACHE.get_or_init(|| std::sync::Mutex::new(CustomFigletCache::new()));
@@ -577,7 +580,7 @@ impl BigText {
             return Some(cached);
         }
 
-        let parsed = FIGlet::from_content(content.as_ref()).ok()?;
+        let parsed = FigletFont::from_content(content.as_ref()).ok()?;
         let font = Arc::new(parsed);
 
         if let Ok(mut cache) = cache_mutex.lock() {

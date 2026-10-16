@@ -102,6 +102,7 @@ The layout uses two columns in wider terminals and a scrollable single column in
 | `log_viewer` | `LogView` over a sample file: filter, follow, pause, level coloring |
 | `provided_file_tree` | Async application-provided `FileTree` listings with loading, Git, and ignore metadata |
 | `file_tree_showcase` | Interactive `FileTree` demo: branch and capped-line guide styles with independent indent width, file icons, independent arrows, arrow glyphs, and content/icon gaps, Git marks, separate diff counts, per-file highlighting, and theme accents |
+| `tree_rows` | Generic Tree with multiple roots, composed rows, and independent actions |
 
 ---
 

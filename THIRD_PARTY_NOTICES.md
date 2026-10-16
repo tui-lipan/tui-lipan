@@ -1,4 +1,17 @@
-These notices apply only when tui-lipan is built with the `syntax-extra` feature.
+# BigText FIGfont engine
+
+When the `big-text` feature is enabled, `src/widgets/big_text/figlet/` contains the in-memory
+parser and rendering engine adapted from [figlet-rs 1.0.0](https://github.com/yuanbohan/rs-figlet),
+licensed under Apache-2.0. Copyrights remain with its contributors. The original
+[COPYRIGHT](src/widgets/big_text/figlet/COPYRIGHT) and
+[Apache license](src/widgets/big_text/figlet/LICENSE-APACHE) are included beside the source.
+The file/archive-loading code was removed; tui-lipan supplies already loaded font text.
+The bundled upstream Standard font is retained for identical error fallback rendering and keeps
+its authorship and permission notices in the font header.
+
+# Extra syntax definitions
+
+The syntax notices below apply only when tui-lipan is built with the `syntax-extra` feature.
 Redistributors enabling that feature must retain the applicable notices.
 
 Most of the code for generating both theme and syntax dumps along with the

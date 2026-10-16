@@ -688,13 +688,16 @@ pub(crate) fn gather_hit_actions(
             if list_node.on_select.is_some()
                 || list_node.on_item_click.is_some()
                 || list_node.on_activate.is_some()
+                || list_node.on_ctrl_activate.is_some()
                 || list_node.on_scroll_to.is_some()
                 || list_node.show_scroll_indicators =>
         {
             Some(ListSelect {
+                mods,
                 on_select: list_node.on_select.clone(),
                 on_item_click: list_node.on_item_click.clone(),
                 on_activate: list_node.on_activate.clone(),
+                on_ctrl_activate: list_node.on_ctrl_activate.clone(),
                 on_scroll_to: list_node.on_scroll_to.clone(),
                 activate_on_click: list_node.activate_on_click,
                 len: list_node.items.len(),

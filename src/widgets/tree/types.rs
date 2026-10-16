@@ -1,11 +1,13 @@
 //! Tree widget types.
 
 use crate::callback::{Callback, KeyHandler};
+use crate::core::element::Element;
 use crate::core::event::{KeyCode, KeyEvent, KeyMods};
 use crate::style::{Length, Span, Style, StyleSlot};
 use crate::utils::gradient::ColorGradient;
 use crate::widgets::ScrollKeymap;
 use crate::widgets::{FocusAccordion, ListItem};
+use std::rc::Rc;
 use std::sync::Arc;
 
 /// A path to a tree node (index-based).
@@ -169,13 +171,63 @@ mod tests {
     }
 }
 
+/// A composed tree row's immutable visual content.
+#[derive(Clone)]
+pub(crate) struct TreeContent(Rc<Element>);
+
+impl std::fmt::Debug for TreeContent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("TreeContent(..)")
+    }
+}
+impl PartialEq for TreeContent {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+impl Eq for TreeContent {}
+impl TreeContent {
+    pub(super) fn element(&self) -> Element {
+        self.0.as_ref().clone()
+    }
+}
+
+/// Pointer entering or leaving a tree row, including non-selectable rows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct TreeHoverEvent {
+    /// Visible row index.
+    pub index: usize,
+    /// Index path to the row.
+    pub path: TreePath,
+    /// Whether the pointer is within the row or an interactive descendant.
+    pub hovered: bool,
+}
+
+/// Whether a tree node infers collapsibility, reserves it for lazy children, or stays open.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum TreeExpansionMode {
+    /// Nodes with children are collapsible; empty nodes are leaves.
+    #[default]
+    Auto,
+    /// Allow expansion and collapse even before children are loaded.
+    Collapsible,
+    /// Always show children, without a disclosure column or collapse actions.
+    AlwaysOpen,
+}
+
 /// A node in a tree.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TreeNode {
     pub(crate) item: ListItem,
+    pub(crate) content: Option<TreeContent>,
+    pub(crate) leading: Option<TreeContent>,
+    pub(crate) content_height: u16,
+    pub(crate) show_disclosure: bool,
+    pub(crate) key: Option<Arc<str>>,
     pub(crate) children: Vec<TreeNode>,
     pub(crate) expanded: bool,
-    pub(crate) expandable: bool,
+    pub(crate) expansion_mode: TreeExpansionMode,
     pub(crate) indent: u16,
     /// Unused disclosure cells, which branch guides may fill before the separator.
     pub(crate) disclosure_placeholder_width: u16,
@@ -188,13 +240,55 @@ impl TreeNode {
     pub fn new(item: impl Into<ListItem>) -> Self {
         Self {
             item: item.into(),
+            content: None,
+            leading: None,
+            content_height: 1,
+            show_disclosure: true,
+            key: None,
             children: Vec::new(),
             expanded: false,
-            expandable: false,
+            expansion_mode: TreeExpansionMode::Auto,
             indent: 2,
             disclosure_placeholder_width: 0,
             disclosure: Vec::new(),
         }
+    }
+
+    /// Show or reserve the node's disclosure column. Disable for structural headings.
+    pub fn show_disclosure(mut self, show: bool) -> Self {
+        self.show_disclosure = show;
+        self
+    }
+
+    /// Supply composed row content. The tree still owns guides, disclosure, and navigation.
+    /// Interactive descendants may consume clicks independently of row activation.
+    pub fn content(mut self, content: impl Into<Element>) -> Self {
+        self.content = Some(TreeContent(Rc::new(content.into())));
+        self
+    }
+
+    /// A visual column before the tree guides, such as an active-row marker.
+    pub fn leading(mut self, content: impl Into<Element>) -> Self {
+        self.leading = Some(TreeContent(Rc::new(content.into())));
+        self
+    }
+
+    /// Base style for the entire composed row, including its tree prefix.
+    pub fn row_style(mut self, style: Style) -> Self {
+        self.item.style = style;
+        self
+    }
+
+    /// Height of composed content in terminal rows, including its detail lines. Default 1.
+    pub fn content_height(mut self, height: u16) -> Self {
+        self.content_height = height.max(1);
+        self
+    }
+
+    /// Stable reconciliation identity for composed content, independent of its index path.
+    pub fn key(mut self, key: impl Into<Arc<str>>) -> Self {
+        self.key = Some(key.into());
+        self
     }
 
     /// Add a child node.
@@ -216,14 +310,19 @@ impl TreeNode {
         self
     }
 
-    /// Set whether this node can expand even when it currently has no children.
-    pub fn expandable(mut self, expandable: bool) -> Self {
-        self.expandable = expandable;
+    /// Choose expansion behavior (default [`TreeExpansionMode::Auto`]).
+    /// [`TreeExpansionMode::AlwaysOpen`] ignores [`Self::expanded`] and suppresses disclosure.
+    pub fn expansion_mode(mut self, mode: TreeExpansionMode) -> Self {
+        self.expansion_mode = mode;
         self
     }
 
-    pub(crate) fn is_expandable(&self) -> bool {
-        self.expandable || !self.children.is_empty()
+    pub(crate) fn is_collapsible(&self) -> bool {
+        match self.expansion_mode {
+            TreeExpansionMode::Auto => !self.children.is_empty(),
+            TreeExpansionMode::Collapsible => true,
+            TreeExpansionMode::AlwaysOpen => false,
+        }
     }
 
     /// Set indentation per level (default 2).
@@ -264,6 +363,13 @@ pub enum IndentStyle {
 #[derive(Clone, PartialEq)]
 pub(crate) struct TreeProps {
     pub root: TreeNode,
+    pub forest: bool,
+    pub item_hover_effect: Option<crate::style::VisualEffect>,
+    pub controlled_expansion: bool,
+    pub toggle_on_activate: bool,
+    pub on_hover: Option<Callback<TreeHoverEvent>>,
+    pub on_pointer_move: Option<Callback<TreeEvent>>,
+    pub on_viewport_change: Option<Callback<crate::widgets::ScrollViewportEvent>>,
     pub selected: Option<usize>,
     pub clear_selection: bool,
     pub force_scroll_to_selected: bool,
@@ -299,6 +405,7 @@ pub(crate) struct TreeProps {
     pub on_blur: Option<Callback<()>>,
     pub on_select: Option<Callback<TreeEvent>>,
     pub on_activate: Option<Callback<TreeEvent>>,
+    pub on_ctrl_activate: Option<Callback<TreeEvent>>,
     pub on_toggle: Option<Callback<TreeToggleEvent>>,
     pub keymap: TreeKeymap,
     pub focus_policy: Option<FocusAccordion>,
