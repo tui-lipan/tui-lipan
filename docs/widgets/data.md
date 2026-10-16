@@ -497,7 +497,9 @@ Choose a node's behavior with `TreeNode::expansion_mode(TreeExpansionMode::...)`
 - `Auto` (default): nodes with children are collapsible; empty nodes are leaves.
 - `Collapsible`: retain disclosure and expand/collapse behavior even before lazy children arrive.
 - `AlwaysOpen`: always show children, with no disclosure arrow or reserved disclosure column.
-  Normal guides and descendant indentation remain. Click and Enter still activate the node;
+  Child guides align beneath the parent label, including its content gap. Label styling is
+  unchanged: expansion mode controls disclosure and navigation, not the supplied `ListItem`
+  or composed content. Click and Enter still activate the node;
   Space does not toggle it, Right enters its children, and Left moves to its parent.
 
 `expanded(bool)` supplies the initial or controlled state for collapsible nodes. `AlwaysOpen`

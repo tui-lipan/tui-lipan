@@ -53,9 +53,15 @@ impl Component for Projects {
                     .child(
                         TreeNode::new("development")
                             .key(format!("{name}-development"))
-                            .content(VStack::new().gap(0).child(Text::new("development")).child(
-                                Text::new("2 panes · waiting for review").style(theme.muted),
-                            ))
+                            .content(
+                                VStack::new()
+                                    .gap(0)
+                                    .child(Text::new("development").style(theme.accent))
+                                    .child(
+                                        Text::new("2 panes · waiting for review")
+                                            .style(theme.muted),
+                                    ),
+                            )
                             .content_height(2)
                             .expansion_mode(TreeExpansionMode::AlwaysOpen)
                             .child(TreeNode::new("shell")),

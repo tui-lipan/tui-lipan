@@ -285,16 +285,27 @@ fn expanded_paths_from_root(root: &TreeNode) -> HashSet<TreePath> {
     expanded
 }
 
-fn flatten_tree<'a>(root: &'a TreeNode, expanded: &HashSet<TreePath>) -> Vec<TreeEntry<'a>> {
+fn flatten_tree<'a>(
+    root: &'a TreeNode,
+    expanded: &HashSet<TreePath>,
+    content_gap: u16,
+) -> Vec<TreeEntry<'a>> {
     let mut out = Vec::new();
     let mut path = Vec::new();
-    push_entries(root, &mut path, TreeBranch::root(), expanded, &mut out);
+    push_entries(
+        root,
+        &mut path,
+        TreeBranch::root(),
+        expanded,
+        content_gap,
+        &mut out,
+    );
     out
 }
 
 fn visible_entries<'a>(props: &'a TreeProps, expanded: &HashSet<TreePath>) -> Vec<TreeEntry<'a>> {
     if !props.forest {
-        return flatten_tree(&props.root, expanded);
+        return flatten_tree(&props.root, expanded, props.content_gap);
     }
     let mut entries = Vec::new();
     for (index, node) in props.root.children.iter().enumerate() {
@@ -303,6 +314,7 @@ fn visible_entries<'a>(props: &'a TreeProps, expanded: &HashSet<TreePath>) -> Ve
             &mut vec![index],
             TreeBranch::root(),
             expanded,
+            props.content_gap,
             &mut entries,
         );
     }
@@ -375,6 +387,7 @@ fn push_entries<'a>(
     path: &mut Vec<usize>,
     branch: TreeBranch,
     expanded: &HashSet<TreePath>,
+    content_gap: u16,
     out: &mut Vec<TreeEntry<'a>>,
 ) {
     let path_key = TreePath::from(path.clone());
@@ -389,14 +402,25 @@ fn push_entries<'a>(
     });
 
     if let Some(children) = children {
+        // An always-open row has no disclosure column. Its children branch beneath its
+        // label, after the content gap, rather than one gap to the left of the label.
+        let child_gap = if node.expansion_mode == TreeExpansionMode::AlwaysOpen
+            && branch.depth() > 0
+            && node.indent > 0
+        {
+            content_gap
+        } else {
+            0
+        };
         let child_count = children.len();
         for (idx, child) in children.iter().enumerate() {
             path.push(idx);
             push_entries(
                 child,
                 path,
-                branch.child(idx == child_count - 1),
+                branch.child_with_gap(idx == child_count - 1, child_gap),
                 expanded,
+                content_gap,
                 out,
             );
             path.pop();
@@ -598,6 +622,7 @@ mod tests {
                 depth: 0,
                 last_child: true,
                 continued: Vec::new(),
+                level_gaps: Vec::new(),
             },
         };
 
@@ -796,6 +821,52 @@ mod tests {
                 assert_eq!(actual, format!("{prefix}{fill}leaf"));
                 assert_eq!(item.label_prefix_width, indent + 2);
             }
+        }
+    }
+
+    #[test]
+    fn nested_always_open_guides_accumulate_gaps_without_offsetting_roots() {
+        let props = crate::widgets::Tree::new(
+            TreeNode::new("root")
+                .expansion_mode(TreeExpansionMode::AlwaysOpen)
+                .child(
+                    TreeNode::new("group")
+                        .expansion_mode(TreeExpansionMode::AlwaysOpen)
+                        .child(
+                            TreeNode::new("nested")
+                                .expansion_mode(TreeExpansionMode::AlwaysOpen)
+                                .child(TreeNode::new("leaf")),
+                        ),
+                ),
+        )
+        .indent_style(IndentStyle::Branch)
+        .content_gap(3)
+        .props;
+        let entries = visible_entries(&props, &HashSet::new());
+        let prefixes: Vec<String> = entries
+            .iter()
+            .map(|entry| {
+                prefix_spans(entry, &props, 3)
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect()
+            })
+            .collect();
+        assert_eq!(prefixes, ["", "└─   ", "     └─   ", "          └──   "]);
+        for entry in &entries {
+            let guides = tree_guides(&props, entry.node.indent);
+            let first: String = guides
+                .spans(&entry.branch, 3)
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect();
+            let continuation: String = guides
+                .continuation_spans(&entry.branch, 3)
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect();
+            assert_eq!(first.width(), guides.width(&entry.branch) as usize);
+            assert_eq!(continuation.width(), first.width());
         }
     }
 }

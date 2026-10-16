@@ -21,6 +21,8 @@ pub struct TreeBranch {
     /// One entry per level below the root: whether the ancestor at that level has a later sibling,
     /// so a guide line continues through this row's column for it.
     pub(crate) continued: Vec<bool>,
+    /// Extra separation before each guide level, inherited from always-open parent labels.
+    pub(crate) level_gaps: Vec<u16>,
 }
 
 impl TreeBranch {
@@ -30,17 +32,25 @@ impl TreeBranch {
             depth: 0,
             last_child: true,
             continued: Vec::new(),
+            level_gaps: Vec::new(),
         }
     }
 
     /// A row directly under this one. `last` says it has no later sibling.
     pub fn child(&self, last: bool) -> Self {
+        self.child_with_gap(last, 0)
+    }
+
+    pub(crate) fn child_with_gap(&self, last: bool, gap: u16) -> Self {
         let mut continued = self.continued.clone();
         continued.push(!last);
+        let mut level_gaps = self.level_gaps.clone();
+        level_gaps.push(gap);
         Self {
             depth: self.depth + 1,
             last_child: last,
             continued,
+            level_gaps,
         }
     }
 
@@ -161,6 +171,10 @@ impl TreeGuides {
         max_depth: usize,
         first_line: bool,
     ) {
+        let gap = branch.level_gaps.get(level).copied().unwrap_or(0);
+        if gap > 0 {
+            spans.push(Span::new(" ".repeat(gap as usize)));
+        }
         let glyph = self.level_glyph(branch, level, first_line);
         let style = self.style_at(level + 1, max_depth);
         spans.push(Span::new(glyph).style(if glyph == " " {
@@ -234,8 +248,14 @@ impl TreeGuides {
 
     /// Cells the indentation in front of a row at `branch` occupies.
     pub fn width(&self, branch: &TreeBranch) -> u16 {
-        self.indent
-            .saturating_mul(branch.depth.min(u16::MAX as usize) as u16)
+        if self.indent == 0 {
+            return 0;
+        }
+        branch.level_gaps.iter().fold(
+            self.indent
+                .saturating_mul(branch.depth.min(u16::MAX as usize) as u16),
+            |width, gap| width.saturating_add(*gap),
+        )
     }
 
     /// Guide style at `depth`, colored along the gradient when one is set.

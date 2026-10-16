@@ -5,6 +5,9 @@ use tui_lipan::prelude::*;
 struct ExpansionTree {
     composed: bool,
     controlled: bool,
+    content_gap: u16,
+    indent: u16,
+    icons: bool,
 }
 struct State {
     mode: TreeExpansionMode,
@@ -52,19 +55,22 @@ impl Component for ExpansionTree {
     }
     fn view(&self, ctx: &Context<Self>) -> Element {
         let mut group = TreeNode::new("group")
+            .indent(self.indent)
             .expansion_mode(ctx.state.mode)
             .expanded(ctx.state.group_open);
         if self.composed {
             group = group.content(Text::new("group"));
         }
         if ctx.state.loaded {
-            group = group.child(TreeNode::new("leaf"));
+            group = group.child(TreeNode::new("leaf").indent(self.indent));
         }
         Tree::new(
             TreeNode::new("root")
                 .expanded(ctx.state.root_open)
                 .children([group, TreeNode::new("sibling")]),
         )
+        .content_gap(self.content_gap)
+        .show_icons(self.icons)
         .controlled_expansion(self.controlled)
         .selected(ctx.state.selected)
         .indent_style(IndentStyle::Branch)
@@ -82,6 +88,9 @@ fn backend(composed: bool, controlled: bool) -> TestBackend<ExpansionTree> {
     let mut backend = TestBackend::new(ExpansionTree {
         composed,
         controlled,
+        content_gap: 1,
+        indent: 2,
+        icons: true,
     });
     backend.set_viewport(Rect {
         x: 0,
@@ -201,6 +210,49 @@ fn expansion_modes_handle_empty_nodes_lazy_children_and_live_mode_changes() {
             key(&mut backend, KeyCode::Char(' '));
             assert_eq!(backend.state().toggles, toggles);
             assert!(lines(&backend)[1].starts_with("├─ group"));
+        }
+    }
+}
+
+#[test]
+fn always_open_child_guides_start_under_parent_label_in_both_renderers() {
+    for composed in [false, true] {
+        for controlled in [false, true] {
+            for icons in [false, true] {
+                for content_gap in [0, 1, 3] {
+                    for indent in [0, 1, 2, 4] {
+                        let mut backend = TestBackend::new(ExpansionTree {
+                            composed,
+                            controlled,
+                            content_gap,
+                            indent,
+                            icons,
+                        });
+                        backend.set_viewport(Rect {
+                            x: 0,
+                            y: 0,
+                            w: 40,
+                            h: 8,
+                        });
+                        backend.render();
+                        let rows = lines(&backend);
+                        if indent == 0 {
+                            assert!(!rows[2].contains('└'), "{rows:?}");
+                        } else {
+                            let label_column = rows[1].chars().position(|c| c == 'g').unwrap();
+                            let guide_column = rows[2].chars().position(|c| c == '└').unwrap();
+                            assert_eq!(
+                                guide_column, label_column,
+                                "composed={composed} controlled={controlled} icons={icons} gap={content_gap} indent={indent}: {rows:?}"
+                            );
+                            assert!(
+                                rows[2].starts_with('│'),
+                                "ancestor guide stays in place: {rows:?}"
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 }
