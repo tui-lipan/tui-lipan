@@ -1341,7 +1341,7 @@ Used by `TreeNode::expansion_mode(...)`. Expansion behavior is separate from the
 |---------|----------|
 | `Auto` | Infer collapsibility from children; empty nodes are leaves **(default)** |
 | `Collapsible` | Allow expansion/collapse even when lazy children are not loaded |
-| `AlwaysOpen` | Keep children visible and omit disclosure; collapse actions emit no toggle |
+| `AlwaysOpen` | Keep children visible with no arrow, keeping the arrow column; collapse actions emit no toggle |
 
 ### `IndentStyle`
 

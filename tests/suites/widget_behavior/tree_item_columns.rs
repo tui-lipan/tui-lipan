@@ -6,6 +6,7 @@ struct TreeRows {
     width: u16,
     content_gap: u16,
     icons: bool,
+    indent: u16,
 }
 
 impl Component for TreeRows {
@@ -25,7 +26,8 @@ impl Component for TreeRows {
                 .expanded(true)
                 .children(self.nodes.clone()),
         )
-        .show_icons(self.icons)
+        .show_arrows(self.icons)
+        .indent(self.indent)
         .content_gap(self.content_gap)
         .indent_style(IndentStyle::Branch)
         .selection_symbol(Some(""))
@@ -42,6 +44,7 @@ fn rows(nodes: Vec<TreeNode>, width: u16) -> Vec<String> {
         width,
         content_gap: 0,
         icons: false,
+        indent: 2,
     });
     backend.set_viewport(Rect {
         x: 0,
@@ -144,16 +147,16 @@ fn content_gap_follows_guides_and_disclosures_but_never_creates_a_root_prefix() 
             for content_gap in 0..=3 {
                 let nodes = vec![
                     TreeNode::new("folder")
-                        .indent(indent)
                         .expanded(true)
-                        .child(TreeNode::new("nested").indent(indent)),
-                    TreeNode::new(ListItem::new("file").line("detail")).indent(indent),
+                        .child(TreeNode::new("nested")),
+                    TreeNode::new(ListItem::new("file").line("detail")),
                 ];
                 let mut backend = TestBackend::new(TreeRows {
                     nodes,
                     width: 60,
                     content_gap,
                     icons,
+                    indent,
                 });
                 backend.set_viewport(Rect {
                     x: 0,
@@ -177,7 +180,17 @@ fn content_gap_follows_guides_and_disclosures_but_never_creates_a_root_prefix() 
                 assert_eq!(column("folder"), first_level);
                 assert_eq!(column("file"), first_level);
                 assert_eq!(column("detail"), first_level);
-                assert_eq!(column("nested"), 2 * indent as usize + disclosure + gap);
+                // Without an arrow, the folder's children hang beneath its label, one content
+                // gap after its branch.
+                let hang = if !icons && indent > 0 {
+                    content_gap as usize
+                } else {
+                    0
+                };
+                assert_eq!(
+                    column("nested"),
+                    2 * indent as usize + disclosure + gap + hang
+                );
                 assert_eq!(
                     column("root"),
                     if icons { 1 + content_gap as usize } else { 0 }

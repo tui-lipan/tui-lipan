@@ -393,7 +393,7 @@ ALLOWLIST: dict[tuple[str, str], str] = {
     ("src/widgets/tooltip.rs", "text_style"): "non-state visual part style",
     ("src/widgets/tree/guides.rs", "guide_style"): "tree connector glyph style; independent of interaction state",
     ("src/widgets/tree/types.rs", "empty_text_style"): "non-state visual part style",
-    ("src/widgets/tree/types.rs", "icon_style"): "non-state visual part style",
+    ("src/widgets/tree/types.rs", "arrow_style"): "tree and per-row arrow glyph visual part style, independent of interaction state, as FileTree's arrow_style",
     ("src/widgets/tree/types.rs", "indent_guide_style"): "non-state visual part style",
     ("src/widgets/tree/types.rs", "scroll_indicator_style"): "non-state visual part style",
     ("src/widgets/tree/types.rs", "selection_symbol_style"): "legacy raw state style; TODO migrate to StyleSlot",

@@ -64,7 +64,16 @@ impl Component for Projects {
                             )
                             .content_height(2)
                             .expansion_mode(TreeExpansionMode::AlwaysOpen)
-                            .child(TreeNode::new("shell")),
+                            .child(
+                                TreeNode::new("shell").icon(
+                                    Text::new("●").style(Style::new().fg(theme.status.success)),
+                                ),
+                            )
+                            .child(
+                                TreeNode::new("tests")
+                                    .icon(Spinner::new().style(Style::new().fg(theme.status.info))),
+                            )
+                            .child(TreeNode::new("notes")),
                     )
             });
         VStack::new()
@@ -90,7 +99,7 @@ impl Component for Projects {
                 ctx.state.activated, ctx.state.closed
             )))
             .child(
-                Text::new("Development groups stay open · Arrow: toggle project · Row: activate · ×: close")
+                Text::new("Development groups stay open · Markers share the arrow column · Arrow: toggle project · Row: activate · ×: close")
                     .style(theme.muted),
             )
             .into()

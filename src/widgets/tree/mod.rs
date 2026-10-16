@@ -39,12 +39,16 @@ impl Tree {
                 clear_selection: false,
                 force_scroll_to_selected: false,
                 gap: 0,
+                indent: 2,
                 content_gap: 1,
+                show_arrows: true,
+                expanded_arrow: "▼".into(),
+                collapsed_arrow: "▶".into(),
+                leaf_arrow: None,
+                arrow_style: Style::default(),
                 show_icons: true,
-                expanded_icon: "▼".into(),
-                collapsed_icon: "▶".into(),
-                leaf_icon: None,
-                icon_style: Style::default(),
+                icon_width: 1,
+                icon_gap: 1,
                 width: Length::Flex(1),
                 height: Length::Flex(1),
                 style: Style::default(),
@@ -200,42 +204,71 @@ impl Tree {
         self
     }
 
-    /// Set blank cells between the tree prefix and item content (default 1).
+    /// Cells each level of depth adds in front of a row (default 2). Guides fill them. Zero puts
+    /// every level in one column.
+    pub fn indent(mut self, cells: u16) -> Self {
+        self.props.indent = cells;
+        self
+    }
+
+    /// Blank cells after the guides and arrow column, before a row's icon or content (default 1).
     ///
-    /// Applies after guides and optional disclosure icons, including when icons are hidden.
-    /// A row with no prefix, such as a root without an icon, gets no leading gap. Zero is allowed.
+    /// A row with nothing in front of it, such as a root while arrows are hidden, gets no gap.
+    /// Zero is allowed.
     pub fn content_gap(mut self, gap: u16) -> Self {
         self.props.content_gap = gap;
         self
     }
 
-    /// Toggle showing expand/collapse icons.
+    /// Show the arrow column: expand/collapse arrows on parents, and the same width on every
+    /// other row so labels line up (default true). Hidden, children hang beneath the content gap.
+    pub fn show_arrows(mut self, show: bool) -> Self {
+        self.props.show_arrows = show;
+        self
+    }
+
+    /// Arrow on an expanded row (default `▼`).
+    pub fn expanded_arrow(mut self, arrow: impl Into<Arc<str>>) -> Self {
+        self.props.expanded_arrow = arrow.into();
+        self
+    }
+
+    /// Arrow on a collapsed row (default `▶`).
+    pub fn collapsed_arrow(mut self, arrow: impl Into<Arc<str>>) -> Self {
+        self.props.collapsed_arrow = arrow.into();
+        self
+    }
+
+    /// Glyph in the arrow column of a leaf, a row with nothing to expand. `None` (default) leaves
+    /// the column to the guides. An [`AlwaysOpen`](TreeExpansionMode::AlwaysOpen) row is a
+    /// parent, not a leaf: it shows no arrow and keeps its junction.
+    pub fn leaf_arrow(mut self, arrow: Option<impl Into<Arc<str>>>) -> Self {
+        self.props.leaf_arrow = arrow.map(Into::into);
+        self
+    }
+
+    /// Style of the arrows. [`TreeNode::arrow_style`] overrides it for one row.
+    pub fn arrow_style(mut self, style: Style) -> Self {
+        self.props.arrow_style = style;
+        self
+    }
+
+    /// Show row icons from [`TreeNode::icon`] (default true). Once any row has one, every row
+    /// keeps the icon column so labels line up.
     pub fn show_icons(mut self, show: bool) -> Self {
         self.props.show_icons = show;
         self
     }
 
-    /// Set expanded icon.
-    pub fn expanded_icon(mut self, icon: impl Into<Arc<str>>) -> Self {
-        self.props.expanded_icon = icon.into();
+    /// Cells of the icon column (default 1). Icons are clipped to it.
+    pub fn icon_width(mut self, cells: u16) -> Self {
+        self.props.icon_width = cells;
         self
     }
 
-    /// Set collapsed icon.
-    pub fn collapsed_icon(mut self, icon: impl Into<Arc<str>>) -> Self {
-        self.props.collapsed_icon = icon.into();
-        self
-    }
-
-    /// Set leaf icon.
-    pub fn leaf_icon(mut self, icon: Option<impl Into<Arc<str>>>) -> Self {
-        self.props.leaf_icon = icon.map(Into::into);
-        self
-    }
-
-    /// Set icon style.
-    pub fn icon_style(mut self, style: Style) -> Self {
-        self.props.icon_style = style;
+    /// Blank cells between the icon column and the row's content (default 1).
+    pub fn icon_gap(mut self, gap: u16) -> Self {
+        self.props.icon_gap = gap;
         self
     }
 

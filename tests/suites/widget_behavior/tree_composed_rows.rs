@@ -83,7 +83,6 @@ impl Component for ComposedTree {
             .content(content)
             .key("project")
             .expanded(ctx.state.expanded)
-            .indent(2)
             .expansion_mode(TreeExpansionMode::Collapsible)
             .children(children);
         let second = TreeNode::new("second")
@@ -99,7 +98,7 @@ impl Component for ComposedTree {
                 0,
                 TreeNode::new(ListItem::header("section"))
                     .content(Text::new("section"))
-                    .show_disclosure(false),
+                    .show_arrow(false),
             );
         }
         let mut tree = Tree::forest(roots)
@@ -390,7 +389,7 @@ impl Component for ChromeTree {
         Update::none()
     }
     fn view(&self, _: &Context<Self>) -> Element {
-        let mut child = TreeNode::new("child").indent(2);
+        let mut child = TreeNode::new("child");
         if self.composed {
             child = child.content(Text::new("child"));
         }
@@ -407,7 +406,7 @@ impl Component for ChromeTree {
                 .selection_style(highlight)
                 .unfocused_selection_style(highlight);
         }
-        tree.show_icons(false)
+        tree.show_arrows(false)
             .indent_style(IndentStyle::Branch)
             .indent_guide_style(Style::new().fg(Color::rgb(30, 30, 30)))
             .item_hover_style(if self.foreground {

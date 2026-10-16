@@ -21,7 +21,8 @@ pub struct TreeBranch {
     /// One entry per level below the root: whether the ancestor at that level has a later sibling,
     /// so a guide line continues through this row's column for it.
     pub(crate) continued: Vec<bool>,
-    /// Extra separation before each guide level, inherited from always-open parent labels.
+    /// Blank cells before each level's guide: where a parent had no arrow column, its children
+    /// hang beneath its icon or label, one content gap after its branch.
     pub(crate) level_gaps: Vec<u16>,
 }
 
@@ -224,8 +225,8 @@ impl TreeGuides {
         }
     }
 
-    /// Fill an unused disclosure column without changing indentation or its separator.
-    pub(crate) fn disclosure_placeholder_spans(
+    /// Fill an unused arrow column without changing indentation or its separator.
+    pub(crate) fn arrow_placeholder_spans(
         &self,
         branch: &TreeBranch,
         max_depth: usize,
@@ -425,7 +426,7 @@ mod tests {
             (IndentStyle::BranchRounded, "───"),
         ] {
             let guides = TreeGuides::new(kind).indent(1).guide_style(style);
-            let spans = guides.disclosure_placeholder_spans(&branch, 1, 3);
+            let spans = guides.arrow_placeholder_spans(&branch, 1, 3);
             let text: String = spans.iter().map(|span| span.content.as_ref()).collect();
             assert_eq!(text, expected);
             if expected.starts_with('─') {
@@ -433,17 +434,13 @@ mod tests {
             }
             for guides in [guides.clone().indent(0), guides.clone().start_depth(2)] {
                 let text: String = guides
-                    .disclosure_placeholder_spans(&branch, 1, 3)
+                    .arrow_placeholder_spans(&branch, 1, 3)
                     .iter()
                     .map(|span| span.content.as_ref())
                     .collect();
                 assert_eq!(text, "   ");
             }
-            assert!(
-                guides
-                    .disclosure_placeholder_spans(&branch, 1, 0)
-                    .is_empty()
-            );
+            assert!(guides.arrow_placeholder_spans(&branch, 1, 0).is_empty());
         }
     }
 }

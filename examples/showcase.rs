@@ -603,9 +603,9 @@ impl Showcase {
                             gap: 1,
                             {
                                 Tree::new(root)
-                                    .show_icons(true)
-                                    .expanded_icon("▼")
-                                    .collapsed_icon("▶")
+                                    .show_arrows(true)
+                                    .expanded_arrow("▼")
+                                    .collapsed_arrow("▶")
                                     .scrollbar(true)
                                     .show_scroll_indicators(true)
                                     .focus_policy(FocusAccordion::default())
