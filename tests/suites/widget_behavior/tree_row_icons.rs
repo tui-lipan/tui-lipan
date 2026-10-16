@@ -80,7 +80,7 @@ fn row(rows: &[String], label: &str) -> (usize, String) {
 fn always_open_rows_markers_and_arrows_share_one_label_column() {
     let backend = backend();
     let rows = backend.capture_frame().to_fixed_grid_lines();
-    assert_eq!(row(&rows, "group").1, "├── group");
+    assert_eq!(row(&rows, "group").1, "├─┬ group");
     assert_eq!(row(&rows, "inner").1, "│ └─● inner");
     assert_eq!(row(&rows, "plain").1, "├── plain");
     assert_eq!(row(&rows, "folded").1, "├─▶ folded");
@@ -218,5 +218,121 @@ fn rows_without_markers_keep_the_column_with_arrows_hidden_and_at_the_top_level(
             column("repo"),
             "arrows={arrows}: {rows:#?}"
         );
+    }
+}
+
+/// A parent's extra lines carry the guide from its junction or arrow down to its children.
+#[test]
+fn two_line_parents_connect_their_column_to_their_children() {
+    struct TwoLine;
+    impl Component for TwoLine {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+        fn create_state(&self, _: &()) {}
+        fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+        fn view(&self, _: &Context<Self>) -> Element {
+            let two_lines = |label: &'static str| {
+                VStack::new()
+                    .gap(0)
+                    .child(Text::new(label))
+                    .child(Text::new("detail"))
+            };
+            Tree::forest([TreeNode::new("repo")
+                .expanded(true)
+                .child(
+                    TreeNode::new("group")
+                        .content(two_lines("group"))
+                        .content_height(2)
+                        .expansion_mode(TreeExpansionMode::AlwaysOpen)
+                        .child(TreeNode::new("inner")),
+                )
+                .child(
+                    TreeNode::new("folder")
+                        .content(two_lines("folder"))
+                        .content_height(2)
+                        .expanded(true)
+                        .child(TreeNode::new("leaf")),
+                )])
+            .indent_style(IndentStyle::Branch)
+            .expanded_icon("▼")
+            .collapsed_icon("▶")
+            .into()
+        }
+    }
+    let mut backend = TestBackend::new(TwoLine);
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 24,
+        h: 10,
+    });
+    backend.render();
+    let rows = backend.capture_frame().to_fixed_grid_lines();
+    for (label, glyph) in [("group", '┬'), ("folder", '▼')] {
+        let (y, line) = row(&rows, label);
+        let x = line.chars().position(|ch| ch == glyph).unwrap();
+        assert_eq!(rows[y + 1].chars().nth(x), Some('│'), "{label}: {rows:#?}");
+        assert!(
+            matches!(rows[y + 2].chars().nth(x), Some('└' | '├')),
+            "{label}'s child hangs from its column: {rows:#?}"
+        );
+    }
+}
+
+/// A composed row without custom content draws its `ListItem` label through an inner list. That
+/// list must not keep a click on the label from activating the row.
+#[test]
+fn clicking_the_label_of_a_row_with_a_marker_activates_it() {
+    struct Clickable;
+    impl Component for Clickable {
+        type Message = TreeEvent;
+        type Properties = ();
+        type State = Vec<usize>;
+        fn create_state(&self, _: &()) -> Vec<usize> {
+            Vec::new()
+        }
+        fn update(&mut self, event: TreeEvent, ctx: &mut Context<Self>) -> Update {
+            ctx.state.push(event.index);
+            Update::full()
+        }
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            Tree::forest([
+                TreeNode::new("marked").icon(Text::new("●")),
+                TreeNode::new("plain"),
+            ])
+            .on_activate(ctx.link().callback(|event| event))
+            .into()
+        }
+    }
+    let mut backend = TestBackend::new(Clickable);
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 24,
+        h: 4,
+    });
+    backend.render();
+    let rows = backend.capture_frame().to_fixed_grid_lines();
+    for (index, label) in ["marked", "plain"].into_iter().enumerate() {
+        let (y, line) = row(&rows, label);
+        let x = line[..line.find(label).unwrap()].chars().count() + 2;
+        for kind in [
+            MouseKind::Down(MouseButton::Left),
+            MouseKind::Up(MouseButton::Left),
+        ] {
+            backend
+                .send_mouse(MouseEvent {
+                    x: x as u16,
+                    y: y as u16,
+                    kind,
+                    mods: KeyMods::NONE,
+                })
+                .unwrap();
+        }
+        backend.render();
+        assert_eq!(backend.state().last(), Some(&index), "{label}");
     }
 }

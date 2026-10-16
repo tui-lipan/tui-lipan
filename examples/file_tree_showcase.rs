@@ -8,6 +8,8 @@ struct FileTreeShowcase;
 #[derive(Clone, Default)]
 struct State {
     tab: usize,
+    /// Hides the options column so the tree can take the full width, for example to copy rows.
+    controls_hidden: bool,
     guide: usize,
     icon: usize,
     arrow: usize,
@@ -67,6 +69,7 @@ impl Default for TreeOptions {
 #[derive(Clone)]
 enum Msg {
     SelectTab(usize),
+    ToggleControls,
     NextGuide,
     NextIcon,
     NextArrow,
@@ -180,6 +183,7 @@ impl Component for FileTreeShowcase {
             Msg::TogglePathStyle => ctx.state.path_style = !ctx.state.path_style,
             Msg::InsertPath(path) => ctx.state.last_path = Some(path),
             Msg::SelectTab(tab) => ctx.state.tab = tab,
+            Msg::ToggleControls => ctx.state.controls_hidden = !ctx.state.controls_hidden,
             Msg::Tree(msg) => update_tree(&mut ctx.state.tree, msg),
         }
         Update::full()
@@ -194,11 +198,23 @@ impl Component for FileTreeShowcase {
                 ctx.link()
                     .callback(|event: TabsEvent| Msg::SelectTab(event.index)),
             );
+        let toggle = control_button(if ctx.state.controls_hidden {
+            "▸ Show options".into()
+        } else {
+            "◂ Hide options".into()
+        })
+        .on_click(ctx.link().callback(|_| Msg::ToggleControls))
+        .automation_id("toggle-options");
+        let bar = HStack::new()
+            .height(Length::Px(1))
+            .child(tabs.width(Length::Auto))
+            .child(Spacer::new())
+            .child(toggle);
         let body = match ctx.state.tab {
             0 => file_tree_tab(ctx),
             _ => tree_tab(ctx),
         };
-        VStack::new().gap(1).child(tabs).child(body).into()
+        VStack::new().gap(1).child(bar).child(body).into()
     }
 }
 
@@ -364,10 +380,7 @@ fn file_tree_tab(ctx: &Context<FileTreeShowcase>) -> Element {
         )))
         .height(Length::Px(1));
 
-    HStack::new()
-        .gap(0)
-        .child(controls)
-        .child(Divider::vertical().style(Style::new().fg(Color::indexed(238))))
+    with_controls(&ctx.state, controls)
         .child(
             VStack::new()
                 .gap(1)
@@ -522,10 +535,7 @@ fn tree_tab(ctx: &Context<FileTreeShowcase>) -> Element {
         .map(|label| format!("Activated: {label}"))
         .unwrap_or_else(|| "Enter/click: activate · arrow or Space/←/→: fold".into());
 
-    HStack::new()
-        .gap(0)
-        .child(controls)
-        .child(Divider::vertical().style(Style::new().fg(Color::indexed(238))))
+    with_controls(&ctx.state, controls)
         .child(
             VStack::new()
                 .gap(1)
@@ -711,6 +721,16 @@ fn label_at(rows: &[Row], path: &[usize]) -> Option<&'static str> {
     } else {
         label_at(&row.children, rest)
     }
+}
+
+/// A tab's row: its options column and a divider, unless the options are hidden.
+fn with_controls(state: &State, controls: VStack) -> HStack {
+    let row = HStack::new().gap(0);
+    if state.controls_hidden {
+        return row;
+    }
+    row.child(controls)
+        .child(Divider::vertical().style(Style::new().fg(Color::indexed(238))))
 }
 
 fn spacing_label(label: &str, cells: u16) -> String {
@@ -1149,5 +1169,84 @@ mod tests {
             None,
             "the arrow folds, not activates"
         );
+    }
+
+    #[test]
+    fn tree_tab_labels_activate_rows_when_clicked() {
+        use tui_lipan::core::event::{MouseButton, MouseEvent, MouseKind};
+        for details in [false, true] {
+            let mut backend = tree_backend();
+            if details {
+                backend
+                    .dispatch(Msg::Tree(TreeTabMsg::ToggleDetails))
+                    .unwrap();
+                backend.render();
+            }
+            let lines = backend.capture_frame().to_fixed_grid_lines();
+            let (y, line) = lines
+                .iter()
+                .enumerate()
+                .find(|(_, line)| line.contains("Codex"))
+                .unwrap();
+            let x = line[..line.find("Codex").unwrap()].chars().count() + 2;
+            for kind in [
+                MouseKind::Down(MouseButton::Left),
+                MouseKind::Up(MouseButton::Left),
+            ] {
+                backend
+                    .send_mouse(MouseEvent {
+                        x: x as u16,
+                        y: y as u16,
+                        kind,
+                        mods: KeyMods::NONE,
+                    })
+                    .unwrap();
+            }
+            backend.render();
+            assert_eq!(
+                backend.state().tree.activated.as_deref(),
+                Some("Codex"),
+                "details={details}"
+            );
+        }
+    }
+
+    #[test]
+    fn options_column_hides_and_returns_on_both_tabs() {
+        for (tab, title, content) in [
+            (0, "FILE TREE CONTROLS", "components.md"),
+            (1, "TREE CONTROLS", "Claude Code"),
+        ] {
+            let mut backend = TestBackend::new(FileTreeShowcase);
+            backend.set_viewport(Rect {
+                x: 0,
+                y: 0,
+                w: 100,
+                h: 34,
+            });
+            backend.dispatch(Msg::SelectTab(tab)).unwrap();
+            backend.render();
+            assert!(backend.capture_frame().plain_text().contains(title));
+            backend.dispatch(Msg::ToggleControls).unwrap();
+            backend.render();
+            let text = backend.capture_frame().plain_text();
+            assert!(!text.contains(title), "{text}");
+            assert!(
+                text.contains(content) && text.contains("Show options"),
+                "{text}"
+            );
+            let lines = backend.capture_frame().to_fixed_grid_lines();
+            let tree_top = lines
+                .iter()
+                .find(|line| line.contains(if tab == 0 { "/demo/project" } else { "rozi" }))
+                .unwrap();
+            assert!(
+                tree_top.chars().take(4).any(|ch| !ch.is_whitespace()),
+                "the tree takes the full width: {tree_top:?}"
+            );
+            backend.dispatch(Msg::ToggleControls).unwrap();
+            backend.render();
+            assert!(backend.capture_frame().plain_text().contains(title));
+        }
     }
 }

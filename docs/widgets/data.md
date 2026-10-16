@@ -437,6 +437,12 @@ Other guide styles leave that column blank. Width zero suppresses the extension 
 hidden. It adds no space to rows with no prefix. Migration: replace `Tree::icon_gap(n)` with
 `Tree::content_gap(n)`. FileTree keeps `icon_gap(n)` for spacing between file icons and labels.
 
+Children hang from their parent's disclosure column: their guide drops from the parent's arrow,
+from its marker (see `TreeNode::icon` below), or, where a branch guide runs through an unused
+column, from a `┬` where that branch turns down to meet them. FileTree draws arrows and file icons
+in separate columns, with `content_gap` between them and `icon_gap` before the label; `Tree`
+draws markers in the arrow column, so its `content_gap` is the space between marker and label.
+
 Migration: replace `Short`/`Long` with `Branch` and `ShortRounded`/`LongRounded` with
 `BranchRounded`; use indentation width to control branch length.
 
@@ -517,8 +523,9 @@ Choose a node's behavior with `TreeNode::expansion_mode(TreeExpansionMode::...)`
 - `Auto` (default): nodes with children are collapsible; empty nodes are leaves.
 - `Collapsible`: retain disclosure and expand/collapse behavior even before lazy children arrive.
 - `AlwaysOpen`: always show children, with no disclosure arrow. The row keeps its disclosure
-  column, filled like a leaf's, so its label lines up with collapsible and leaf siblings, and its
-  children hang from it like any parent's. Add `show_disclosure(false)` for a heading without the
+  column, filled like a leaf's, so its label lines up with collapsible and leaf siblings. Its
+  children hang from that column like any parent's; a branch guide running through it turns down
+  into them (`├─┬ group`). Add `show_disclosure(false)` for a heading without the
   column; its child guides then align beneath its label, including its content gap. Label styling
   is unchanged: expansion mode controls disclosure and navigation, not the supplied `ListItem`
   or composed content. Click and Enter still activate the node;

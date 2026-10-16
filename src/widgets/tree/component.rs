@@ -514,6 +514,59 @@ fn disclosure_spans(
     guides: &TreeGuides,
     max_depth: usize,
 ) -> Vec<Span> {
+    let spans = column_spans(entry, props, guides, max_depth);
+    // Children hang from this column. Where it holds an arrow or a marker, their guide drops from
+    // that glyph; where the branch runs straight through it, the branch turns down to meet them.
+    if entry.expanded && !entry.node.children.is_empty() {
+        return branch_down(spans);
+    }
+    spans
+}
+
+/// The disclosure column on a row's extra lines. Where the row's children hang from that column,
+/// a guide carries down from its arrow, marker, or junction to meet them.
+fn column_continuation(
+    entry: &TreeEntry<'_>,
+    props: &TreeProps,
+    max_depth: usize,
+    width: usize,
+) -> Vec<Span> {
+    if width == 0 {
+        return Vec::new();
+    }
+    let depth = entry.branch.depth() + 1;
+    if let Some(child) = entry.node.children.first().filter(|_| entry.expanded)
+        && child.indent > 0
+        && !matches!(props.indent_style, IndentStyle::None)
+        && depth >= props.indent_guide_start_depth.max(1)
+    {
+        let guides = tree_guides(props, child.indent);
+        return vec![
+            Span::new("│").style(guides.style_at(depth, max_depth)),
+            Span::new(" ".repeat(width - 1)),
+        ];
+    }
+    vec![Span::new(" ".repeat(width))]
+}
+
+/// Turn a branch that runs through an unused column down into the children beneath it.
+fn branch_down(mut spans: Vec<Span>) -> Vec<Span> {
+    if let Some(first) = spans.first_mut()
+        && let Some(rest) = first.content.strip_prefix('─')
+    {
+        first.content = format!("┬{rest}").into();
+    }
+    spans
+}
+
+/// The disclosure column's own content: an arrow, a marker's cells, or the unused cells a branch
+/// guide may run through.
+fn column_spans(
+    entry: &TreeEntry<'_>,
+    props: &TreeProps,
+    guides: &TreeGuides,
+    max_depth: usize,
+) -> Vec<Span> {
     if !entry.node.show_disclosure {
         return Vec::new();
     }
@@ -925,8 +978,8 @@ mod tests {
             .collect();
         assert_eq!(
             prefixes,
-            ["", "└──   ", "  └──   "],
-            "with its column, an always-open row is laid out like a leaf and parents like one"
+            ["", "└─┬   ", "  └──   "],
+            "with its column, an always-open row lines up like a leaf and turns its branch down into its children"
         );
         for entry in &entries {
             let guides = tree_guides(&props, entry.node.indent);

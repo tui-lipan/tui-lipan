@@ -130,7 +130,7 @@ fn always_open_nodes_keep_guides_and_children_without_disclosure_or_toggle_event
         for controlled in [false, true] {
             let mut backend = backend(composed, controlled);
             let rows = lines(&backend);
-            assert!(rows[1].starts_with("├── group"), "{rows:?}");
+            assert!(rows[1].starts_with("├─┬ group"), "{rows:?}");
             assert!(
                 rows[2].contains("leaf"),
                 "expanded(false) cannot close an AlwaysOpen group"

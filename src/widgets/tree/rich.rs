@@ -326,9 +326,13 @@ fn row(
                 .items([entry.node.item.clone()])
                 .height(Length::Auto)
                 .focusable(false)
+                .tab_stop(false)
                 .symbol_column(false)
                 .selected(None)
                 .scroll_keys(ScrollKeymap::NONE)
+                // A wheel-scrollable list is a hit target and would keep clicks on the label
+                // from reaching the row. The tree's own scroll view owns the wheel.
+                .scroll_wheel(false)
                 .into()
         });
     let style = row_style(ctx, entry, index, selected);
@@ -385,6 +389,10 @@ fn composed_content(
             .gap(0)
             .height(Length::Px(1))
             .child(chrome(guide_spans, style, hovered));
+    let column_width = disclosure
+        .iter()
+        .map(|span| span.content.width())
+        .sum::<usize>();
     let arrow = chrome(disclosure, style, hovered);
     let collapsible = ctx.props.show_icons && entry.node.is_collapsible();
     if let Some(icon) = entry.node.icon.as_ref().filter(|_| !collapsible)
@@ -428,11 +436,14 @@ fn composed_content(
         .height(Length::Px(height))
         .child(first);
     for _ in 1..height {
-        prefix = prefix.child(chrome(
-            guides.continuation_spans(&entry.branch, max_depth),
-            style,
-            hovered,
+        let mut spans = guides.continuation_spans(&entry.branch, max_depth);
+        spans.extend(column_continuation(
+            entry,
+            &ctx.props,
+            max_depth,
+            column_width,
         ));
+        prefix = prefix.child(chrome(spans, style, hovered));
     }
     let mut row = HStack::new().gap(0).height(Length::Px(height));
     if let Some(leading) = &entry.node.leading {
