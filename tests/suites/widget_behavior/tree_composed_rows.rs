@@ -84,7 +84,7 @@ impl Component for ComposedTree {
             .key("project")
             .expanded(ctx.state.expanded)
             .indent(2)
-            .expandable(true)
+            .expansion_mode(TreeExpansionMode::Collapsible)
             .children(children);
         let second = TreeNode::new("second")
             .content(Text::new("second"))

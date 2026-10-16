@@ -56,7 +56,9 @@ impl Component for Projects {
                             .content(VStack::new().gap(0).child(Text::new("development")).child(
                                 Text::new("2 panes · waiting for review").style(theme.muted),
                             ))
-                            .content_height(2),
+                            .content_height(2)
+                            .expansion_mode(TreeExpansionMode::AlwaysOpen)
+                            .child(TreeNode::new("shell")),
                     )
             });
         VStack::new()
@@ -82,7 +84,7 @@ impl Component for Projects {
                 ctx.state.activated, ctx.state.closed
             )))
             .child(
-                Text::new("Arrow: expand/collapse · Row: activate · ×: independent action")
+                Text::new("Development groups stay open · Arrow: toggle project · Row: activate · ×: close")
                     .style(theme.muted),
             )
             .into()

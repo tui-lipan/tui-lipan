@@ -92,3 +92,6 @@ mod tree_item_columns;
 mod tree_composed_rows;
 #[path = "suites/widget_behavior/tree_ctrl_activation.rs"]
 mod tree_ctrl_activation;
+
+#[path = "suites/widget_behavior/tree_expansion_mode.rs"]
+mod tree_expansion_mode;

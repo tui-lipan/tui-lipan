@@ -129,7 +129,7 @@ impl Component for TreeComponent {
                     });
                 }
 
-                if !ctx.props.toggle_on_activate || !entry.node.is_expandable() {
+                if !ctx.props.toggle_on_activate || !entry.node.is_collapsible() {
                     return Update::full();
                 }
 
@@ -267,7 +267,7 @@ struct TreeEntry<'a> {
 }
 
 fn collect_expanded_paths(node: &TreeNode, path: &mut Vec<usize>, out: &mut HashSet<TreePath>) {
-    if node.expanded {
+    if node.expanded || node.expansion_mode == TreeExpansionMode::AlwaysOpen {
         out.insert(TreePath::from(path.clone()));
     }
 
@@ -378,7 +378,8 @@ fn push_entries<'a>(
     out: &mut Vec<TreeEntry<'a>>,
 ) {
     let path_key = TreePath::from(path.clone());
-    let is_expanded = expanded.contains(&path_key);
+    let is_expanded =
+        node.expansion_mode == TreeExpansionMode::AlwaysOpen || expanded.contains(&path_key);
     let children = is_expanded.then_some(&node.children);
     out.push(TreeEntry {
         path: path_key,
@@ -468,7 +469,7 @@ fn disclosure_spans(
     guides: &TreeGuides,
     max_depth: usize,
 ) -> Vec<Span> {
-    if !entry.node.show_disclosure {
+    if !entry.node.show_disclosure || entry.node.expansion_mode == TreeExpansionMode::AlwaysOpen {
         return Vec::new();
     }
     if !props.show_icons {
@@ -481,7 +482,7 @@ fn disclosure_spans(
             entry.node.disclosure_placeholder_width,
         );
     }
-    let icon = match (entry.node.is_expandable(), entry.expanded) {
+    let icon = match (entry.node.is_collapsible(), entry.expanded) {
         (true, true) => props.expanded_icon.as_ref(),
         (true, false) => props.collapsed_icon.as_ref(),
         (false, _) => props.leaf_icon.as_deref().unwrap_or(""),
@@ -624,7 +625,9 @@ mod tests {
 
     #[test]
     fn activation_collapses_an_expandable_node_without_children() {
-        let root = TreeNode::new("empty").expanded(true).expandable(true);
+        let root = TreeNode::new("empty")
+            .expanded(true)
+            .expansion_mode(TreeExpansionMode::Collapsible);
         let tree = crate::widgets::Tree::new(root);
         let mut backend = crate::TestBackend::new_with_props(TreeComponent::new(), tree.props);
 

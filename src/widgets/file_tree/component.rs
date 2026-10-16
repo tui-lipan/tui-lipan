@@ -2215,7 +2215,11 @@ fn build_projected_tree_node(
         // Deriving this from the loaded children instead would strand an empty one: opening it
         // loads nothing, so closing it again would leave a row with no arrow and no way back open.
         .expanded(is_expanded)
-        .expandable(node.is_dir())
+        .expansion_mode(if node.is_dir() {
+            crate::widgets::TreeExpansionMode::Collapsible
+        } else {
+            crate::widgets::TreeExpansionMode::Auto
+        })
         .indent(ctx.props.indent_width);
     if ctx.props.show_arrows {
         tree = if node.is_dir() {
@@ -3260,7 +3264,7 @@ mod tests {
         // Neither `src/widgets` nor `src/widgets/tree.rs` is materialized, and the row is still
         // expandable on its own rather than through a stand-in child.
         assert!(src.children.is_empty());
-        assert!(src.is_expandable());
+        assert!(src.is_collapsible());
         assert!(!src.expanded);
 
         // Nothing below a collapsed directory reaches the event lookup, because
@@ -3284,14 +3288,14 @@ mod tests {
         let projection = build_projection(&props, &state, None);
         let empty = projected_child(&projection.root, "empty");
         assert!(empty.children.is_empty());
-        assert!(empty.is_expandable());
+        assert!(empty.is_collapsible());
         assert!(!empty.expanded);
 
         state.expanded.insert(Arc::from("/remote/repo/empty"));
         let projection = build_projection(&props, &state, None);
         let empty = projected_child(&projection.root, "empty");
         assert!(empty.children.is_empty());
-        assert!(empty.is_expandable());
+        assert!(empty.is_collapsible());
         assert!(empty.expanded);
     }
 
@@ -3309,7 +3313,7 @@ mod tests {
         assert_eq!(src.children.len(), 1);
         // `widgets` is itself still collapsed, so its own subtree is not built.
         assert!(widgets.children.is_empty());
-        assert!(widgets.is_expandable());
+        assert!(widgets.is_collapsible());
         assert!(
             projection
                 .lookup
@@ -3333,7 +3337,7 @@ mod tests {
         let mut state = FileTreeComponent::new().create_state(&props);
 
         let expandable = |state: &FileTreeState| {
-            projected_child(&build_projection(&props, state, None).root, "empty").is_expandable()
+            projected_child(&build_projection(&props, state, None).root, "empty").is_collapsible()
         };
         assert!(expandable(&state), "unopened directory offers a toggle");
 

@@ -351,8 +351,8 @@ pub use text_area::{
 pub use toast::{Toast, ToastCopyAffordance};
 pub use tooltip::Tooltip;
 pub use tree::{
-    IndentStyle, Tree, TreeBranch, TreeEvent, TreeGuides, TreeHoverEvent, TreeKeymap, TreeNode,
-    TreePath, TreeToggleEvent,
+    IndentStyle, Tree, TreeBranch, TreeEvent, TreeExpansionMode, TreeGuides, TreeHoverEvent,
+    TreeKeymap, TreeNode, TreePath, TreeToggleEvent,
 };
 pub use zstack::ZStack;
 

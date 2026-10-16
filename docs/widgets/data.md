@@ -492,8 +492,21 @@ TreeNode::new(ListItem::from_spans(vec![
 ]))
 ```
 
-Use `TreeNode::expandable(true)` when a node must retain expand/collapse behavior while its current
-child list is empty, such as an asynchronously loaded directory.
+Choose a node's behavior with `TreeNode::expansion_mode(TreeExpansionMode::...)`:
+
+- `Auto` (default): nodes with children are collapsible; empty nodes are leaves.
+- `Collapsible`: retain disclosure and expand/collapse behavior even before lazy children arrive.
+- `AlwaysOpen`: always show children, with no disclosure arrow or reserved disclosure column.
+  Normal guides and descendant indentation remain. Click and Enter still activate the node;
+  Space does not toggle it, Right enters its children, and Left moves to its parent.
+
+`expanded(bool)` supplies the initial or controlled state for collapsible nodes. `AlwaysOpen`
+ignores that flag, including under controlled expansion and focus-based squashing. A collapsed
+ancestor still hides the whole subtree.
+
+**Migration:** replace `.expandable(true)` with
+`.expansion_mode(TreeExpansionMode::Collapsible)`. Replace `.expandable(false)` with `Auto`,
+or omit it. The `expandable(bool)` builder has been removed.
 
 A node's `ListItem` renders with the tree's indentation and disclosure icon in front of its label.
 Everything else about the item is kept: `gutter`, `status`, and `prefix` stay columns in front of

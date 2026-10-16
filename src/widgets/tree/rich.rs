@@ -13,7 +13,7 @@ pub(super) fn toggle(ctx: &mut Context<TreeComponent>, index: usize) -> Update {
     let Some(entry) = entry_at_index(&ctx.props, &ctx.state, index) else {
         return Update::none();
     };
-    if !entry.node.is_expandable() {
+    if !entry.node.is_collapsible() {
         return Update::none();
     }
     let path = entry.path.clone();
@@ -85,7 +85,7 @@ pub(super) fn action(ctx: &mut Context<TreeComponent>, action: TreeAction) -> Up
 
 fn should_toggle(entry: &TreeEntry<'_>, action: TreeAction) -> bool {
     matches!(
-        (action, entry.expanded, entry.node.is_expandable()),
+        (action, entry.expanded, entry.node.is_collapsible()),
         (TreeAction::Toggle, _, true)
             | (TreeAction::Expand, false, true)
             | (TreeAction::Collapse, true, true)
@@ -383,7 +383,7 @@ fn composed_content(
             .height(Length::Px(1))
             .child(chrome(guide_spans, style, hovered));
     let arrow = chrome(disclosure, style, hovered);
-    if ctx.props.show_icons && entry.node.show_disclosure && entry.node.is_expandable() {
+    if ctx.props.show_icons && entry.node.show_disclosure && entry.node.is_collapsible() {
         let ctrl = ctx.props.on_ctrl_activate.is_some();
         let selectable = entry.node.item.is_selectable();
         let link = ctx.link().clone();

@@ -204,6 +204,18 @@ pub struct TreeHoverEvent {
     pub hovered: bool,
 }
 
+/// Whether a tree node infers collapsibility, reserves it for lazy children, or stays open.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum TreeExpansionMode {
+    /// Nodes with children are collapsible; empty nodes are leaves.
+    #[default]
+    Auto,
+    /// Allow expansion and collapse even before children are loaded.
+    Collapsible,
+    /// Always show children, without a disclosure column or collapse actions.
+    AlwaysOpen,
+}
+
 /// A node in a tree.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TreeNode {
@@ -215,7 +227,7 @@ pub struct TreeNode {
     pub(crate) key: Option<Arc<str>>,
     pub(crate) children: Vec<TreeNode>,
     pub(crate) expanded: bool,
-    pub(crate) expandable: bool,
+    pub(crate) expansion_mode: TreeExpansionMode,
     pub(crate) indent: u16,
     /// Unused disclosure cells, which branch guides may fill before the separator.
     pub(crate) disclosure_placeholder_width: u16,
@@ -235,7 +247,7 @@ impl TreeNode {
             key: None,
             children: Vec::new(),
             expanded: false,
-            expandable: false,
+            expansion_mode: TreeExpansionMode::Auto,
             indent: 2,
             disclosure_placeholder_width: 0,
             disclosure: Vec::new(),
@@ -298,14 +310,19 @@ impl TreeNode {
         self
     }
 
-    /// Set whether this node can expand even when it currently has no children.
-    pub fn expandable(mut self, expandable: bool) -> Self {
-        self.expandable = expandable;
+    /// Choose expansion behavior (default [`TreeExpansionMode::Auto`]).
+    /// [`TreeExpansionMode::AlwaysOpen`] ignores [`Self::expanded`] and suppresses disclosure.
+    pub fn expansion_mode(mut self, mode: TreeExpansionMode) -> Self {
+        self.expansion_mode = mode;
         self
     }
 
-    pub(crate) fn is_expandable(&self) -> bool {
-        self.expandable || !self.children.is_empty()
+    pub(crate) fn is_collapsible(&self) -> bool {
+        match self.expansion_mode {
+            TreeExpansionMode::Auto => !self.children.is_empty(),
+            TreeExpansionMode::Collapsible => true,
+            TreeExpansionMode::AlwaysOpen => false,
+        }
     }
 
     /// Set indentation per level (default 2).

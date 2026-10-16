@@ -1332,6 +1332,17 @@ delivering stale messages.
 
 ## Data Widgets
 
+### `TreeExpansionMode`
+
+Used by `TreeNode::expansion_mode(...)`. Expansion behavior is separate from the node's
+`expanded(bool)` state.
+
+| Variant | Behavior |
+|---------|----------|
+| `Auto` | Infer collapsibility from children; empty nodes are leaves **(default)** |
+| `Collapsible` | Allow expansion/collapse even when lazy children are not loaded |
+| `AlwaysOpen` | Keep children visible and omit disclosure; collapse actions emit no toggle |
+
 ### `IndentStyle`
 
 Used by `Tree::indent_style(...)` and inherited by `FileTree` for hierarchy
