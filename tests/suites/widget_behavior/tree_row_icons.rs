@@ -124,7 +124,8 @@ fn hidden_arrows_remove_the_column_from_every_row_and_keep_labels_aligned() {
         assert_eq!(row(&rows, label).1, format!("├─   {label}"));
     }
     assert_eq!(row(&rows, "marked").1, "└─ ● marked");
-    assert_eq!(row(&rows, "inner").1, "│ └─ ● inner");
+    // Without an arrow, the group's children hang beneath its icon column.
+    assert_eq!(row(&rows, "inner").1, "│  └─ ● inner");
 }
 
 #[test]
@@ -143,9 +144,9 @@ fn a_row_arrow_takes_its_own_style_and_still_toggles() {
 }
 
 /// A heading has no arrow column: its label starts where its siblings' arrows do, and its
-/// children hang from the cell after its guides, as every row's do, at any depth.
+/// children hang beneath its first glyph, its icon or label, at any depth.
 #[test]
-fn headings_hang_their_children_from_the_end_of_their_branch() {
+fn headings_hang_their_children_beneath_their_first_glyph() {
     struct Headings;
     impl Component for Headings {
         type Message = ();
@@ -170,8 +171,8 @@ fn headings_hang_their_children_from_the_end_of_their_branch() {
     let rows = lines(&render(Headings, 24, 4));
     assert_eq!(row(&rows, "repo").1, "  repo");
     assert_eq!(row(&rows, "section").1, "└─   section");
-    // The leaf hangs where the section's branch ends, one indent deeper than the section.
-    assert_eq!(row(&rows, "leaf").1, "  └── ● leaf");
+    // The leaf hangs beneath the section's icon column, its first glyph.
+    assert_eq!(row(&rows, "leaf").1, "   └── ● leaf");
 }
 
 /// A parent's extra lines carry the guide from its arrow, junction, or heading label down to its
@@ -196,8 +197,11 @@ fn two_line_parents_connect_to_their_children() {
                     .child(Text::new(label))
                     .child(Text::new("detail"))
             };
+            // Rows with icons: where a parent has no arrow, its children hang beneath its icon,
+            // and the icon column is free on the parent's second line.
             let parent = |label: &'static str| {
                 TreeNode::new(label)
+                    .icon(Text::new("●"))
                     .content(two_lines(label))
                     .content_height(2)
             };

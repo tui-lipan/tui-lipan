@@ -266,7 +266,7 @@ fn an_always_open_row_lines_up_with_a_collapsible_sibling_in_both_renderers() {
 }
 
 #[test]
-fn always_open_heading_children_hang_from_the_end_of_its_branch_in_both_renderers() {
+fn always_open_heading_children_hang_beneath_its_label_in_both_renderers() {
     for composed in [false, true] {
         for controlled in [false, true] {
             for icons in [false, true] {
@@ -291,13 +291,12 @@ fn always_open_heading_children_hang_from_the_end_of_its_branch_in_both_renderer
                         if indent == 0 {
                             assert!(!rows[2].contains('└'), "{rows:?}");
                         } else {
-                            // A heading has no arrow column: its children hang from the cell
-                            // after its guides, one content gap before its label.
+                            // A heading has no arrow column: its children hang beneath its
+                            // label, the first glyph after its branch.
                             let label_column = rows[1].chars().position(|c| c == 'g').unwrap();
                             let guide_column = rows[2].chars().position(|c| c == '└').unwrap();
                             assert_eq!(
-                                guide_column + content_gap as usize,
-                                label_column,
+                                guide_column, label_column,
                                 "composed={composed} controlled={controlled} icons={icons} gap={content_gap} indent={indent}: {rows:?}"
                             );
                             assert!(

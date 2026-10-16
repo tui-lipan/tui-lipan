@@ -289,10 +289,21 @@ fn expanded_paths_from_root(root: &TreeNode) -> HashSet<TreePath> {
     expanded
 }
 
-fn flatten_tree<'a>(root: &'a TreeNode, expanded: &HashSet<TreePath>) -> Vec<TreeEntry<'a>> {
+fn flatten_tree<'a>(
+    root: &'a TreeNode,
+    expanded: &HashSet<TreePath>,
+    props: &TreeProps,
+) -> Vec<TreeEntry<'a>> {
     let mut out = Vec::new();
     let mut path = Vec::new();
-    push_entries(root, &mut path, TreeBranch::root(), expanded, &mut out);
+    push_entries(
+        root,
+        &mut path,
+        TreeBranch::root(),
+        expanded,
+        props,
+        &mut out,
+    );
     out
 }
 
@@ -312,7 +323,7 @@ fn has_icon(node: &TreeNode) -> bool {
 
 fn nested_entries<'a>(props: &'a TreeProps, expanded: &HashSet<TreePath>) -> Vec<TreeEntry<'a>> {
     if !props.forest {
-        return flatten_tree(&props.root, expanded);
+        return flatten_tree(&props.root, expanded, props);
     }
     let mut entries = Vec::new();
     for (index, node) in props.root.children.iter().enumerate() {
@@ -321,6 +332,7 @@ fn nested_entries<'a>(props: &'a TreeProps, expanded: &HashSet<TreePath>) -> Vec
             &mut vec![index],
             TreeBranch::root(),
             expanded,
+            props,
             &mut entries,
         );
     }
@@ -393,6 +405,7 @@ fn push_entries<'a>(
     path: &mut Vec<usize>,
     branch: TreeBranch,
     expanded: &HashSet<TreePath>,
+    props: &TreeProps,
     out: &mut Vec<TreeEntry<'a>>,
 ) {
     let path_key = TreePath::from(path.clone());
@@ -408,20 +421,33 @@ fn push_entries<'a>(
     });
 
     if let Some(children) = children {
-        // Children hang from the first cell after their parent's guides: its arrow column, or,
-        // for a row without one, its content gap.
+        let gap = child_gap(node, &branch, props);
         let child_count = children.len();
         for (idx, child) in children.iter().enumerate() {
             path.push(idx);
             push_entries(
                 child,
                 path,
-                branch.child(idx == child_count - 1),
+                branch.child_with_gap(idx == child_count - 1, gap),
                 expanded,
+                props,
                 out,
             );
             path.pop();
         }
+    }
+}
+
+/// Children hang beneath their parent's first glyph after its branch: its arrow, or, on a row
+/// without an arrow column, its icon or label, one content gap further on. A row with nothing in
+/// front of it has no gap, so its children hang beneath its first glyph directly.
+fn child_gap(node: &TreeNode, branch: &TreeBranch, props: &TreeProps) -> u16 {
+    let arrow = props.show_arrows && node.show_arrow;
+    let guides = branch.depth() > 0 && props.indent > 0;
+    if arrow || !guides {
+        0
+    } else {
+        props.content_gap
     }
 }
 
@@ -597,7 +623,7 @@ fn continuation_spans(
         && !matches!(props.indent_style, IndentStyle::None)
         && depth >= props.indent_guide_start_depth.max(1);
     if hangs {
-        let at = guides.width(&entry.branch);
+        let at = guides.width(&entry.branch) + child_gap(entry.node, &entry.branch, props);
         if at >= used && at < width {
             spans.push(Span::new(" ".repeat((at - used) as usize)));
             spans.push(Span::new("│").style(guides.style_at(depth, max_depth)));
@@ -701,6 +727,7 @@ mod tests {
                 depth: 0,
                 last_child: true,
                 continued: Vec::new(),
+                level_gaps: Vec::new(),
             },
             icon_column: false,
         };
@@ -903,7 +930,7 @@ mod tests {
     }
 
     #[test]
-    fn nested_headings_hang_their_children_from_the_end_of_their_branch() {
+    fn nested_headings_hang_their_children_beneath_their_label() {
         let heading = |label| {
             TreeNode::new(label)
                 .expansion_mode(TreeExpansionMode::AlwaysOpen)
@@ -926,9 +953,9 @@ mod tests {
                     .collect()
             })
             .collect();
-        // Without an arrow column, each heading's children hang from the cell after its guides,
-        // so every level steps by the indent alone and the content gap never accumulates.
-        assert_eq!(prefixes, ["", "└─   ", "  └─   ", "    └──   "]);
+        // Without an arrow column, each heading's children hang beneath its label, one content
+        // gap after its branch, so every level steps by the indent and the gap.
+        assert_eq!(prefixes, ["", "└─   ", "     └─   ", "          └──   "]);
         let props = crate::widgets::Tree::new(
             TreeNode::new("root")
                 .expansion_mode(TreeExpansionMode::AlwaysOpen)

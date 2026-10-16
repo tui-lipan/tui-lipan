@@ -452,11 +452,12 @@ From left to right, a row is:
 5. `icon_gap` blank cells after the icon column;
 6. the row's label or composed content.
 
-Children hang from the first cell after their parent's guides: the parent's arrow column, or, on a
-row without one, its content gap. Each level therefore sits `indent` cells deeper than its parent.
-An `AlwaysOpen` row has no arrow there, so with `Branch` guides its branch turns down into its
-children instead: `├─┬ group`. On a row taller than one line, a guide carries down from that cell
-to the first child.
+Children hang beneath their parent's first glyph after its branch: its arrow, or, on a row without
+an arrow column, its icon or the first character of its label. Each level therefore sits `indent`
+cells deeper than its parent beneath an arrow, and `indent` plus `content_gap` cells deeper beneath
+an icon or label. An `AlwaysOpen` row shows no arrow, so with `Branch` guides its branch turns down
+into its children instead: `├─┬ group`. On a row taller than one line, a guide carries down to the
+first child, except where the row's own content occupies that column on its later lines.
 
 **Migration:** `Tree` now uses FileTree's option names. Replace `show_icons(bool)` with
 `show_arrows(bool)`, `expanded_icon` / `collapsed_icon` / `leaf_icon` with `expanded_arrow` /
@@ -495,8 +496,7 @@ TreeNode::new("agents")
     .child(TreeNode::new("review").icon(Spinner::new()))
 ```
 
-**Migration:** replace `TreeNode::show_disclosure(false)` with `show_arrow(false)`. A heading's
-children now hang from the end of its branch, like every row's, rather than beneath its label.
+**Migration:** replace `TreeNode::show_disclosure(false)` with `show_arrow(false)`.
 
 Composed rows use the tree's scroll view and keyboard navigation. Their guides and arrows gain
 hover foreground overrides and contrast adjustment while the pointer is over the row.
@@ -769,8 +769,9 @@ arrow column so their labels align with directory labels. Custom arrow glyphs sh
 to the wider glyph, followed by `content_gap` blank cells. `icon_gap` controls the blank cells
 between icons and labels. Both gaps default to one and allow zero. The content gap remains when
 arrows are hidden and follows the guides instead. Rows without a structural prefix, such as a root
-with no arrow, receive no content gap. Icons alone do not create a structural prefix. This is the
-same [row layout](#row-layout) `Tree` uses, with the same option names.
+with no arrow, receive no content gap. Icons alone do not create a structural prefix. With arrows
+hidden, a directory's children hang beneath its icon, or its name when icons are hidden too. This
+is the same [row layout](#row-layout) `Tree` uses, with the same option names.
 Override Nerd Font arrows with
 `.expanded_arrow("").collapsed_arrow("")` when desired.
 

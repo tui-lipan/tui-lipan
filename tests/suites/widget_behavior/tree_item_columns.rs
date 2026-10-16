@@ -180,7 +180,17 @@ fn content_gap_follows_guides_and_disclosures_but_never_creates_a_root_prefix() 
                 assert_eq!(column("folder"), first_level);
                 assert_eq!(column("file"), first_level);
                 assert_eq!(column("detail"), first_level);
-                assert_eq!(column("nested"), 2 * indent as usize + disclosure + gap);
+                // Without an arrow, the folder's children hang beneath its label, one content
+                // gap after its branch.
+                let hang = if !icons && indent > 0 {
+                    content_gap as usize
+                } else {
+                    0
+                };
+                assert_eq!(
+                    column("nested"),
+                    2 * indent as usize + disclosure + gap + hang
+                );
                 assert_eq!(
                     column("root"),
                     if icons { 1 + content_gap as usize } else { 0 }

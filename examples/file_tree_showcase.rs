@@ -1184,8 +1184,8 @@ mod tests {
         }
     }
 
-    /// Every level is one indent deeper than its parent, and its connector sits where the
-    /// parent's branch ends, whatever the guides, arrows, and icons.
+    /// Every level steps the same distance from its parent, whatever the guides, arrows, and
+    /// icons: one indent beneath an arrow, or an indent and a content gap beneath a first glyph.
     #[test]
     fn tree_tab_children_sit_one_indent_deeper_than_their_parent() {
         for guide in 0..GUIDES.len() {
@@ -1209,12 +1209,12 @@ mod tests {
                         ("master", "dev"),
                         ("Claude Code", "github issue review"),
                     ] {
-                        // As in FileTree, a root with no arrow has nothing in front of it and so
-                        // no content gap; its children, with guides in front, do.
-                        let root_gap = if !arrows && parent == "rozi" { 1 } else { 0 };
+                        // Without arrows, children hang beneath their parent's first glyph, one
+                        // content gap after its branch, so every level steps by the gap as well.
+                        let hang = if arrows { 0 } else { 1 };
                         assert_eq!(
                             label_column(&lines, child),
-                            label_column(&lines, parent) + indent as usize + root_gap,
+                            label_column(&lines, parent) + indent as usize + hang,
                             "{parent} → {child}, {context}"
                         );
                     }
