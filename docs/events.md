@@ -559,9 +559,10 @@ pub struct KeyMods {
 `ctx.set_modifier_key_reporting(true)` while an overlay needs physical Alt identity, then disable
 it on close. Supported terminals supply standalone modifier reports; otherwise `alt_side` stays
 `Unknown`. Unix inline surfaces ignore the request until their reader supports associated text.
-Focus loss and reporting-mode changes clear the tracked sides. Right Alt/AltGr is separate from
-left Alt. `key.left_alt_arrow()` maps left Alt+h/j/k/l to arrow codes, with no
-other modifiers. Generic `KeyBinding` strings such as `alt-j` continue to match either side.
+Focus loss and reporting-mode changes clear the tracked sides. A lone Shift press pauses
+reporting so the host's Shift+drag selection survives; see [Components](components.md). Right
+Alt/AltGr is separate from left Alt. `key.left_alt_arrow()` maps left Alt+h/j/k/l to arrow codes,
+with no other modifiers. Generic `KeyBinding` strings such as `alt-j` continue to match either side.
 
 Migration: explicit `KeyMods` literals must add `alt_side: AltSide::Unknown` or use
 `..KeyMods::NONE`. `KeyMods::ALT` represents Alt with an unknown physical side.

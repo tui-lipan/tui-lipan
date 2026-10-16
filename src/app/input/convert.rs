@@ -29,6 +29,47 @@ impl AltTracker {
     }
 }
 
+/// Pauses modifier-key reporting from a lone Shift press until Shift is known to be released.
+///
+/// Host terminals select text with Shift+drag while the app captures the mouse. With every key
+/// reported, the Shift release becomes a key report, and a host may treat it as typing and clear
+/// that selection. Ghostty does under XKB `shift:both_capslock_cancel`, where the release
+/// resolves to `Caps_Lock`. Without all-keys reporting a modifier release sends nothing. The next
+/// key, or a mouse event without Shift, resumes reporting.
+#[derive(Default)]
+pub(crate) struct ShiftPause {
+    paused: bool,
+}
+
+impl ShiftPause {
+    pub(crate) fn paused(&self) -> bool {
+        self.paused
+    }
+
+    pub(crate) fn reset(&mut self) {
+        self.paused = false;
+    }
+
+    pub(crate) fn observe_key(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::{KeyCode as C, KeyEventKind, KeyModifiers, ModifierKeyCode as M};
+        match key.code {
+            C::Modifier(M::LeftShift | M::RightShift) => {
+                if key.kind != KeyEventKind::Release && KeyModifiers::SHIFT.contains(key.modifiers)
+                {
+                    self.paused = true;
+                }
+            }
+            _ => self.paused = false,
+        }
+    }
+
+    pub(crate) fn observe_mouse(&mut self, modifiers: crossterm::event::KeyModifiers) {
+        if !modifiers.contains(crossterm::event::KeyModifiers::SHIFT) {
+            self.paused = false;
+        }
+    }
+}
+
 pub(crate) fn to_key_event(k: crossterm::event::KeyEvent) -> Option<KeyEvent> {
     if !matches!(
         k.kind,
@@ -372,5 +413,69 @@ mod tests {
 
         let translated = translate_mouse_to_viewport(event, 2, 10, 20, 5);
         assert!(translated.is_none());
+    }
+
+    fn shift_key(
+        code: crossterm::event::ModifierKeyCode,
+        kind: crossterm::event::KeyEventKind,
+        modifiers: crossterm::event::KeyModifiers,
+    ) -> crossterm::event::KeyEvent {
+        crossterm::event::KeyEvent::new_with_kind(
+            crossterm::event::KeyCode::Modifier(code),
+            modifiers,
+            kind,
+        )
+    }
+
+    #[test]
+    fn a_lone_shift_press_pauses_until_a_mouse_event_without_shift() {
+        use crossterm::event::{KeyEventKind, KeyModifiers, ModifierKeyCode as M};
+        let mut pause = ShiftPause::default();
+        pause.observe_key(shift_key(
+            M::LeftShift,
+            KeyEventKind::Press,
+            KeyModifiers::SHIFT,
+        ));
+        assert!(pause.paused());
+
+        // Motion while Shift is still held keeps the host's release silent.
+        pause.observe_mouse(KeyModifiers::SHIFT);
+        assert!(pause.paused());
+        pause.observe_mouse(KeyModifiers::NONE);
+        assert!(!pause.paused());
+    }
+
+    #[test]
+    fn any_other_key_resumes_reporting() {
+        use crossterm::event::{
+            KeyCode, KeyEvent, KeyEventKind, KeyModifiers, ModifierKeyCode as M,
+        };
+        let mut pause = ShiftPause::default();
+        pause.observe_key(shift_key(
+            M::RightShift,
+            KeyEventKind::Press,
+            KeyModifiers::SHIFT,
+        ));
+        assert!(pause.paused());
+        pause.observe_key(KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT));
+        assert!(!pause.paused());
+    }
+
+    #[test]
+    fn shift_with_other_modifiers_or_a_release_does_not_pause() {
+        use crossterm::event::{KeyEventKind, KeyModifiers, ModifierKeyCode as M};
+        let mut pause = ShiftPause::default();
+        pause.observe_key(shift_key(
+            M::LeftShift,
+            KeyEventKind::Press,
+            KeyModifiers::SHIFT | KeyModifiers::ALT,
+        ));
+        assert!(!pause.paused());
+        pause.observe_key(shift_key(
+            M::LeftShift,
+            KeyEventKind::Release,
+            KeyModifiers::NONE,
+        ));
+        assert!(!pause.paused());
     }
 }
