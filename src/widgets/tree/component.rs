@@ -575,10 +575,16 @@ fn arrow_spans(
         return Vec::new();
     }
     let width = arrow_column_width(props);
-    let arrow = match (entry.node.is_collapsible(), entry.expanded) {
-        (true, true) => props.expanded_arrow.as_ref(),
-        (true, false) => props.collapsed_arrow.as_ref(),
-        (false, _) => props.leaf_arrow.as_deref().unwrap_or(""),
+    // An always-open row is a parent that shows no arrow, not a leaf: `leaf_arrow` is not its glyph.
+    let arrow = match (
+        entry.node.expansion_mode,
+        entry.node.is_collapsible(),
+        entry.expanded,
+    ) {
+        (TreeExpansionMode::AlwaysOpen, ..) => "",
+        (_, true, true) => props.expanded_arrow.as_ref(),
+        (_, true, false) => props.collapsed_arrow.as_ref(),
+        (_, false, _) => props.leaf_arrow.as_deref().unwrap_or(""),
     };
     if arrow.is_empty() {
         let unused = guides.arrow_placeholder_spans(&entry.branch, max_depth, width);

@@ -115,6 +115,52 @@ fn every_kind_of_sibling_starts_its_label_in_one_column() {
     assert_eq!(row(&rows, "marked").1, "└── ● marked");
 }
 
+/// `leaf_arrow` marks rows with nothing to expand. An always-open row is a parent, not a leaf: it
+/// keeps its junction, in text-only trees and in trees with an icon column alike.
+#[test]
+fn an_always_open_row_keeps_its_junction_when_leaves_have_an_arrow() {
+    struct LeafArrow {
+        icons: bool,
+    }
+    impl Component for LeafArrow {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+        fn create_state(&self, _: &()) {}
+        fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+        fn view(&self, _: &Context<Self>) -> Element {
+            let mut inner = TreeNode::new("inner");
+            if self.icons {
+                inner = inner.icon(Text::new("●"));
+            }
+            Tree::new(
+                TreeNode::new("project")
+                    .expanded(true)
+                    .child(
+                        TreeNode::new("group")
+                            .expansion_mode(TreeExpansionMode::AlwaysOpen)
+                            .child(inner),
+                    )
+                    .child(TreeNode::new("plain")),
+            )
+            .indent_style(IndentStyle::Branch)
+            .leaf_arrow(Some("•"))
+            .into()
+        }
+    }
+    let text = lines(&render(LeafArrow { icons: false }, 24, 6));
+    assert_eq!(row(&text, "group").1, "├─┬ group");
+    assert_eq!(row(&text, "inner").1, "│ └─• inner");
+    assert_eq!(row(&text, "plain").1, "└─• plain");
+
+    let composed = lines(&render(LeafArrow { icons: true }, 24, 6));
+    assert_eq!(row(&composed, "group").1, "├─┬   group");
+    assert_eq!(row(&composed, "inner").1, "│ └─• ● inner");
+    assert_eq!(row(&composed, "plain").1, "└─•   plain");
+}
+
 #[test]
 fn hidden_arrows_remove_the_column_from_every_row_and_keep_labels_aligned() {
     let backend = render(Siblings { arrows: false }, 24, 8);

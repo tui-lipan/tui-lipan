@@ -847,7 +847,7 @@ fn demo_listings() -> Vec<FileTreeDirectoryListing> {
         FileTreeDirectoryListing::new(
             "/demo/project/examples",
             [
-                FileTreeEntry::file("file_tree_showcase.rs"),
+                FileTreeEntry::file("tree_showcase.rs"),
                 FileTreeEntry::file("lazygit.rs"),
                 FileTreeEntry::file("showcase.rs"),
             ],
@@ -870,12 +870,9 @@ fn demo_changes() -> Vec<FileTreeChange> {
             .kind(FileKind::File)
             .diff_stat(42, 11),
         FileTreeChange::new("src/lib.rs", FileTreeChangeStatus::Modified).kind(FileKind::File),
-        FileTreeChange::new(
-            "examples/file_tree_showcase.rs",
-            FileTreeChangeStatus::Added,
-        )
-        .kind(FileKind::File)
-        .staged(true),
+        FileTreeChange::new("examples/tree_showcase.rs", FileTreeChangeStatus::Added)
+            .kind(FileKind::File)
+            .staged(true),
         FileTreeChange::new("docs/data.md", FileTreeChangeStatus::Renamed).kind(FileKind::File),
         FileTreeChange::new("README.md", FileTreeChangeStatus::Untracked).kind(FileKind::File),
     ]

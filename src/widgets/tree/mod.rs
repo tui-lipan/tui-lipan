@@ -239,8 +239,9 @@ impl Tree {
         self
     }
 
-    /// Glyph in the arrow column of a row with nothing to expand. `None` (default) leaves the
-    /// column to the guides.
+    /// Glyph in the arrow column of a leaf, a row with nothing to expand. `None` (default) leaves
+    /// the column to the guides. An [`AlwaysOpen`](TreeExpansionMode::AlwaysOpen) row is a
+    /// parent, not a leaf: it shows no arrow and keeps its junction.
     pub fn leaf_arrow(mut self, arrow: Option<impl Into<Arc<str>>>) -> Self {
         self.props.leaf_arrow = arrow.map(Into::into);
         self

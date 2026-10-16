@@ -386,7 +386,7 @@ Hierarchical tree view with expand/collapse.
 | `show_arrows` | `bool` | Show the arrow column (default: `true`) |
 | `expanded_arrow` | `String` | Arrow on expanded rows (default: `▼`) |
 | `collapsed_arrow` | `String` | Arrow on collapsed rows (default: `▶`) |
-| `leaf_arrow` | `Option<String>` | Glyph in the arrow column of rows with nothing to expand (default: none) |
+| `leaf_arrow` | `Option<String>` | Glyph in the arrow column of leaves, rows with nothing to expand (default: none); `AlwaysOpen` rows keep their junction |
 | `arrow_style` | `Style` | Arrow style; `TreeNode::arrow_style` overrides it per row |
 | `show_icons` | `bool` | Show row icons from `TreeNode::icon` (default: `true`) |
 | `icon_width` | `u16` | Cells of the icon column (default: `1`) |
@@ -516,7 +516,7 @@ retain their List rendering. Selection symbols and List-specific column layout a
 composed rows supply those decorations through their content or leading column.
 
 Run `cargo run --example tree_rows` to try multiple roots, detail rows, and independent buttons.
-`cargo run --example file_tree_showcase` shows FileTree and Tree side by side, each with live
+`cargo run --example tree_showcase` shows FileTree and Tree side by side, each with live
 controls for the shared layout options, and for Tree's tinted arrows, always-open rows, section
 headings, and detail lines.
 

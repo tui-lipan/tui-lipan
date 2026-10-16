@@ -101,7 +101,7 @@ The layout uses two columns in wider terminals and a scrollable single column in
 | `list_description_spinners` | Spinners anchored to row text in `List` and `SearchPalette`, across every `DescriptionPlacement` |
 | `log_viewer` | `LogView` over a sample file: filter, follow, pause, level coloring |
 | `provided_file_tree` | Async application-provided `FileTree` listings with loading, Git, and ignore metadata |
-| `file_tree_showcase` | Interactive `FileTree` and `Tree` demo in two tabs. FileTree: branch and capped-line guide styles with independent indent width, file icons, independent arrows, arrow glyphs, and content/icon gaps, Git marks, separate diff counts, per-file highlighting, and theme accents. Tree: guides, indent, content gap, arrows, row icons sharing the arrow column, tinted folded arrows, always-open rows and headings, and two-line detail rows |
+| `tree_showcase` | Interactive `FileTree` and `Tree` demo in two tabs, with the shared layout options in the same order on both. FileTree: guide styles, indent width, file icons, independent arrows and arrow glyphs, content and icon gaps, Git marks, separate diff counts, per-file highlighting, and theme accents. Tree: the same layout options with row icons, plus tinted folded arrows, always-open rows, root section headings, and two-line detail rows. Either tab can hide its options |
 | `tree_rows` | Generic Tree with multiple roots, composed rows, and independent actions |
 
 ---
