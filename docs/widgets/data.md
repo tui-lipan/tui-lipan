@@ -453,6 +453,22 @@ its guides, for example an active-row marker. `row_style(style)` styles the whol
 the guides. `key(id)` gives composed content a stable reconciliation identity across reordering.
 Use `show_disclosure(false)` for structural section headings that need no disclosure column.
 
+`icon(element)` gives a row a marker, such as a status glyph or a spinner, drawn in its disclosure
+column whenever the row has no arrow to show: a leaf or an `AlwaysOpen` row. A collapsible row
+shows its arrow there instead, so markers and arrows share one column and every sibling's label
+starts at the same cell. The marker is clipped to the column's width: the widest of
+`expanded_icon`, `collapsed_icon`, and `leaf_icon`, and at least one cell. It is drawn only, not a
+toggle; a click on it activates the row. Setting an icon renders the tree with composed rows.
+`disclosure_style(style)` replaces the tree's `icon_style` for one row's arrow, for example to tint
+a collapsed row with the state of the rows it hides.
+
+```rust
+TreeNode::new("agents")
+    .disclosure_style(Style::new().fg(theme.status.warning))
+    .child(TreeNode::new("fix login").icon(Text::new("▲")))
+    .child(TreeNode::new("review").icon(Spinner::new()))
+```
+
 Composed rows use the tree's scroll view and keyboard navigation. Their guides and disclosure
 arrows gain hover foreground overrides and contrast adjustment while the pointer is over the row.
 Selection and active-row backgrounds alone preserve the authored guide and arrow colors. Their child controls handle their
@@ -496,11 +512,17 @@ Choose a node's behavior with `TreeNode::expansion_mode(TreeExpansionMode::...)`
 
 - `Auto` (default): nodes with children are collapsible; empty nodes are leaves.
 - `Collapsible`: retain disclosure and expand/collapse behavior even before lazy children arrive.
-- `AlwaysOpen`: always show children, with no disclosure arrow or reserved disclosure column.
-  Child guides align beneath the parent label, including its content gap. Label styling is
-  unchanged: expansion mode controls disclosure and navigation, not the supplied `ListItem`
+- `AlwaysOpen`: always show children, with no disclosure arrow. The row keeps its disclosure
+  column, filled like a leaf's, so its label lines up with collapsible and leaf siblings, and its
+  children hang from it like any parent's. Add `show_disclosure(false)` for a heading without the
+  column; its child guides then align beneath its label, including its content gap. Label styling
+  is unchanged: expansion mode controls disclosure and navigation, not the supplied `ListItem`
   or composed content. Click and Enter still activate the node;
   Space does not toggle it, Right enters its children, and Left moves to its parent.
+
+**Migration:** an `AlwaysOpen` row below the top level now keeps its disclosure column. To keep
+the previous heading layout, with no column and children beneath the label, add
+`.show_disclosure(false)` to the node.
 
 `expanded(bool)` supplies the initial or controlled state for collapsible nodes. `AlwaysOpen`
 ignores that flag, including under controlled expansion and focus-based squashing. A collapsed

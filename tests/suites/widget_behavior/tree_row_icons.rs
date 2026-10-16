@@ -1,0 +1,155 @@
+use tui_lipan::TestBackend;
+use tui_lipan::core::event::{MouseButton, MouseEvent, MouseKind};
+use tui_lipan::prelude::*;
+
+const FOLDED: Color = Color::rgb(200, 40, 40);
+
+/// Siblings of every kind under one parent: an always-open group, a plain leaf, a collapsed
+/// parent with a tinted arrow, and a leaf with a marker.
+struct IconTree;
+
+#[derive(Default)]
+struct State {
+    unfolded: bool,
+    toggles: usize,
+}
+
+impl Component for IconTree {
+    type Message = TreeToggleEvent;
+    type Properties = ();
+    type State = State;
+
+    fn create_state(&self, _: &()) -> State {
+        State::default()
+    }
+
+    fn update(&mut self, event: TreeToggleEvent, ctx: &mut Context<Self>) -> Update {
+        ctx.state.toggles += 1;
+        ctx.state.unfolded = event.expanded;
+        Update::full()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        Tree::new(
+            TreeNode::new("project")
+                .expanded(true)
+                .child(
+                    TreeNode::new("group")
+                        .expansion_mode(TreeExpansionMode::AlwaysOpen)
+                        .child(TreeNode::new("inner").icon(Text::new("●"))),
+                )
+                .child(TreeNode::new("plain"))
+                .child(
+                    TreeNode::new("folded")
+                        .expanded(ctx.state.unfolded)
+                        .disclosure_style(Style::new().fg(FOLDED))
+                        .child(TreeNode::new("hidden").icon(Text::new("▲"))),
+                )
+                .child(TreeNode::new("marked").icon(Text::new("●"))),
+        )
+        .controlled_expansion(true)
+        .indent_style(IndentStyle::Branch)
+        .expanded_icon("▼")
+        .collapsed_icon("▶")
+        .on_toggle(ctx.link().callback(|event| event))
+        .into()
+    }
+}
+
+fn backend() -> TestBackend<IconTree> {
+    let mut backend = TestBackend::new(IconTree);
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 24,
+        h: 8,
+    });
+    backend.render();
+    backend
+}
+
+fn row(rows: &[String], label: &str) -> (usize, String) {
+    rows.iter()
+        .enumerate()
+        .find(|(_, row)| row.contains(label))
+        .map(|(index, row)| (index, row.trim_end().to_string()))
+        .unwrap_or_else(|| panic!("{label} is on screen: {rows:#?}"))
+}
+
+#[test]
+fn always_open_rows_markers_and_arrows_share_one_label_column() {
+    let backend = backend();
+    let rows = backend.capture_frame().to_fixed_grid_lines();
+    assert_eq!(row(&rows, "group").1, "├── group");
+    assert_eq!(row(&rows, "inner").1, "│ └─● inner");
+    assert_eq!(row(&rows, "plain").1, "├── plain");
+    assert_eq!(row(&rows, "folded").1, "├─▶ folded");
+    assert_eq!(row(&rows, "marked").1, "└─● marked");
+}
+
+#[test]
+fn a_row_arrow_takes_its_own_style_and_still_toggles() {
+    let mut backend = backend();
+    let rows = backend.capture_frame().to_fixed_grid_lines();
+    let (y, _) = row(&rows, "folded");
+    let y = y as u16;
+    assert_eq!(backend.capture_frame().cell(2, y).fg, FOLDED);
+
+    for kind in [
+        MouseKind::Down(MouseButton::Left),
+        MouseKind::Up(MouseButton::Left),
+    ] {
+        backend
+            .send_mouse(MouseEvent {
+                x: 2,
+                y,
+                kind,
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+    }
+    backend.render();
+
+    assert_eq!(backend.state().toggles, 1);
+    let rows = backend.capture_frame().to_fixed_grid_lines();
+    assert_eq!(row(&rows, "folded").1, "├─▼ folded");
+    assert_eq!(row(&rows, "hidden").1, "│ └─▲ hidden");
+}
+
+/// A heading keeps the old geometry by opting out of the column explicitly.
+#[test]
+fn an_always_open_heading_without_a_column_hangs_children_under_its_label() {
+    struct Heading;
+    impl Component for Heading {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+        fn create_state(&self, _: &()) {}
+        fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+        fn view(&self, _: &Context<Self>) -> Element {
+            Tree::forest([TreeNode::new("repo").expanded(true).child(
+                TreeNode::new("heading")
+                    .expansion_mode(TreeExpansionMode::AlwaysOpen)
+                    .show_disclosure(false)
+                    .child(TreeNode::new("leaf").icon(Text::new("●"))),
+            )])
+            .indent_style(IndentStyle::Branch)
+            .expanded_icon("▼")
+            .collapsed_icon("▶")
+            .into()
+        }
+    }
+    let mut backend = TestBackend::new(Heading);
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 24,
+        h: 4,
+    });
+    backend.render();
+    let rows = backend.capture_frame().to_fixed_grid_lines();
+    assert_eq!(row(&rows, "heading").1, "└─ heading");
+    assert_eq!(row(&rows, "leaf").1, "   └─● leaf");
+}

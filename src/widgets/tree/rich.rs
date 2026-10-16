@@ -6,7 +6,10 @@ use crate::widgets::scroll::{ScrollAction, has_command_modifier, scroll_action_f
 use crate::widgets::{HStack, MouseRegion, ScrollKeymap, ScrollView, Text, VStack};
 
 pub(super) fn has_content(node: &TreeNode) -> bool {
-    node.content.is_some() || node.leading.is_some() || node.children.iter().any(has_content)
+    node.content.is_some()
+        || node.leading.is_some()
+        || node.icon.is_some()
+        || node.children.iter().any(has_content)
 }
 
 pub(super) fn toggle(ctx: &mut Context<TreeComponent>, index: usize) -> Update {
@@ -383,7 +386,18 @@ fn composed_content(
             .height(Length::Px(1))
             .child(chrome(guide_spans, style, hovered));
     let arrow = chrome(disclosure, style, hovered);
-    if ctx.props.show_icons && entry.node.show_disclosure && entry.node.is_collapsible() {
+    let collapsible = ctx.props.show_icons && entry.node.is_collapsible();
+    if let Some(icon) = entry.node.icon.as_ref().filter(|_| !collapsible)
+        && entry.node.show_disclosure
+    {
+        first = first.child(
+            HStack::new()
+                .gap(0)
+                .width(Length::Px(icon_column_width(&ctx.props)))
+                .height(Length::Px(1))
+                .child(icon.element()),
+        );
+    } else if collapsible && entry.node.show_disclosure {
         let ctrl = ctx.props.on_ctrl_activate.is_some();
         let selectable = entry.node.item.is_selectable();
         let link = ctx.link().clone();

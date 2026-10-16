@@ -95,3 +95,5 @@ mod tree_ctrl_activation;
 
 #[path = "suites/widget_behavior/tree_expansion_mode.rs"]
 mod tree_expansion_mode;
+#[path = "suites/widget_behavior/tree_row_icons.rs"]
+mod tree_row_icons;

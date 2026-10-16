@@ -404,9 +404,11 @@ fn push_entries<'a>(
     });
 
     if let Some(children) = children {
-        // An always-open row has no disclosure column. Its children branch beneath its
-        // label, after the content gap, rather than one gap to the left of the label.
+        // An always-open heading without a disclosure column has its children branch beneath its
+        // label, after the content gap, rather than one gap to the left of the label. With the
+        // column, they hang from it like any other parent's.
         let child_gap = if node.expansion_mode == TreeExpansionMode::AlwaysOpen
+            && !node.show_disclosure
             && branch.depth() > 0
             && node.indent > 0
         {
@@ -495,8 +497,13 @@ fn disclosure_spans(
     guides: &TreeGuides,
     max_depth: usize,
 ) -> Vec<Span> {
-    if !entry.node.show_disclosure || entry.node.expansion_mode == TreeExpansionMode::AlwaysOpen {
+    if !entry.node.show_disclosure {
         return Vec::new();
+    }
+    let collapsible = entry.node.is_collapsible();
+    // A marker takes the column a leaf would fill; composed rendering draws it over these cells.
+    if entry.node.icon.is_some() && !(collapsible && props.show_icons) {
+        return vec![Span::new(" ".repeat(icon_column_width(props) as usize))];
     }
     if !props.show_icons {
         if !entry.node.disclosure.is_empty() {
@@ -508,7 +515,7 @@ fn disclosure_spans(
             entry.node.disclosure_placeholder_width,
         );
     }
-    let icon = match (entry.node.is_collapsible(), entry.expanded) {
+    let icon = match (collapsible, entry.expanded) {
         (true, true) => props.expanded_icon.as_ref(),
         (true, false) => props.collapsed_icon.as_ref(),
         (false, _) => props.leaf_icon.as_deref().unwrap_or(""),
@@ -529,9 +536,22 @@ fn disclosure_spans(
         );
     }
     vec![
-        Span::new(icon).style(props.icon_style),
+        Span::new(icon).style(entry.node.disclosure_style.unwrap_or(props.icon_style)),
         Span::new(" ".repeat(width - icon.width())),
     ]
+}
+
+/// Cells a row marker occupies: the disclosure column's width, at least one cell.
+pub(super) fn icon_column_width(props: &TreeProps) -> u16 {
+    if !props.show_icons {
+        return 1;
+    }
+    props
+        .expanded_icon
+        .width()
+        .max(props.collapsed_icon.width())
+        .max(props.leaf_icon.as_deref().unwrap_or("").width())
+        .clamp(1, u16::MAX as usize) as u16
 }
 
 fn tree_guides(props: &TreeProps, indent: u16) -> TreeGuides {
@@ -827,19 +847,15 @@ mod tests {
     }
 
     #[test]
-    fn nested_always_open_guides_accumulate_gaps_without_offsetting_roots() {
-        let props = crate::widgets::Tree::new(
-            TreeNode::new("root")
+    fn nested_always_open_headings_accumulate_gaps_without_offsetting_roots() {
+        let heading = |label| {
+            TreeNode::new(label)
                 .expansion_mode(TreeExpansionMode::AlwaysOpen)
-                .child(
-                    TreeNode::new("group")
-                        .expansion_mode(TreeExpansionMode::AlwaysOpen)
-                        .child(
-                            TreeNode::new("nested")
-                                .expansion_mode(TreeExpansionMode::AlwaysOpen)
-                                .child(TreeNode::new("leaf")),
-                        ),
-                ),
+                .show_disclosure(false)
+        };
+        let props = crate::widgets::Tree::new(
+            heading("root")
+                .child(heading("group").child(heading("nested").child(TreeNode::new("leaf")))),
         )
         .indent_style(IndentStyle::Branch)
         .content_gap(3)
@@ -855,6 +871,32 @@ mod tests {
             })
             .collect();
         assert_eq!(prefixes, ["", "└─   ", "     └─   ", "          └──   "]);
+        let props = crate::widgets::Tree::new(
+            TreeNode::new("root")
+                .expansion_mode(TreeExpansionMode::AlwaysOpen)
+                .child(
+                    TreeNode::new("group")
+                        .expansion_mode(TreeExpansionMode::AlwaysOpen)
+                        .child(TreeNode::new("leaf")),
+                ),
+        )
+        .indent_style(IndentStyle::Branch)
+        .content_gap(3)
+        .props;
+        let prefixes: Vec<String> = visible_entries(&props, &HashSet::new())
+            .iter()
+            .map(|entry| {
+                prefix_spans(entry, &props, 2)
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect()
+            })
+            .collect();
+        assert_eq!(
+            prefixes,
+            ["", "└──   ", "  └──   "],
+            "with its column, an always-open row is laid out like a leaf and parents like one"
+        );
         for entry in &entries {
             let guides = tree_guides(&props, entry.node.indent);
             let first: String = guides

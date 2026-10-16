@@ -8,6 +8,8 @@ struct ExpansionTree {
     content_gap: u16,
     indent: u16,
     icons: bool,
+    /// Whether the group keeps its disclosure column. Off makes it a heading.
+    column: bool,
 }
 struct State {
     mode: TreeExpansionMode,
@@ -57,6 +59,7 @@ impl Component for ExpansionTree {
         let mut group = TreeNode::new("group")
             .indent(self.indent)
             .expansion_mode(ctx.state.mode)
+            .show_disclosure(self.column)
             .expanded(ctx.state.group_open);
         if self.composed {
             group = group.content(Text::new("group"));
@@ -69,7 +72,9 @@ impl Component for ExpansionTree {
                 .expanded(ctx.state.root_open)
                 .children([
                     group,
-                    TreeNode::new("sibling").child(TreeNode::new("sibling-child")),
+                    TreeNode::new("sibling")
+                        .indent(self.indent)
+                        .child(TreeNode::new("sibling-child")),
                 ]),
         )
         .content_gap(self.content_gap)
@@ -94,6 +99,7 @@ fn backend(composed: bool, controlled: bool) -> TestBackend<ExpansionTree> {
         content_gap: 1,
         indent: 2,
         icons: true,
+        column: true,
     });
     backend.set_viewport(Rect {
         x: 0,
@@ -124,7 +130,7 @@ fn always_open_nodes_keep_guides_and_children_without_disclosure_or_toggle_event
         for controlled in [false, true] {
             let mut backend = backend(composed, controlled);
             let rows = lines(&backend);
-            assert!(rows[1].starts_with("├─ group"), "{rows:?}");
+            assert!(rows[1].starts_with("├── group"), "{rows:?}");
             assert!(
                 rows[2].contains("leaf"),
                 "expanded(false) cannot close an AlwaysOpen group"
@@ -185,7 +191,7 @@ fn expansion_modes_handle_empty_nodes_lazy_children_and_live_mode_changes() {
             let mut backend = backend(composed, controlled);
             backend.state_mut().loaded = false;
             backend.render();
-            assert!(lines(&backend)[1].starts_with("├─ group"));
+            assert!(lines(&backend)[1].starts_with("├── group"));
             key(&mut backend, KeyCode::Char(' '));
             assert_eq!(backend.state().toggles, 0);
             backend.state_mut().loaded = true;
@@ -212,13 +218,57 @@ fn expansion_modes_handle_empty_nodes_lazy_children_and_live_mode_changes() {
             let toggles = backend.state().toggles;
             key(&mut backend, KeyCode::Char(' '));
             assert_eq!(backend.state().toggles, toggles);
-            assert!(lines(&backend)[1].starts_with("├─ group"));
+            assert!(lines(&backend)[1].starts_with("├── group"));
         }
     }
 }
 
+/// Every combination the geometry tests sweep: renderer, expansion ownership, icons, gap, indent.
+fn geometries(column: bool) -> impl Iterator<Item = ExpansionTree> {
+    [false, true].into_iter().flat_map(move |composed| {
+        [false, true].into_iter().flat_map(move |controlled| {
+            [false, true].into_iter().flat_map(move |icons| {
+                [0, 1, 3].into_iter().flat_map(move |content_gap| {
+                    [0, 1, 2, 4].into_iter().map(move |indent| ExpansionTree {
+                        composed,
+                        controlled,
+                        content_gap,
+                        indent,
+                        icons,
+                        column,
+                    })
+                })
+            })
+        })
+    })
+}
+
 #[test]
-fn always_open_child_guides_start_under_parent_label_in_both_renderers() {
+fn an_always_open_row_lines_up_with_a_collapsible_sibling_in_both_renderers() {
+    for tree in geometries(true) {
+        let context = format!(
+            "composed={} controlled={} icons={} gap={} indent={}",
+            tree.composed, tree.controlled, tree.icons, tree.content_gap, tree.indent
+        );
+        let mut backend = TestBackend::new(tree);
+        backend.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 8,
+        });
+        backend.render();
+        let rows = lines(&backend);
+        let label = |name: &str| {
+            let row = rows.iter().find(|row| row.contains(name)).unwrap();
+            row[..row.find(name).unwrap()].chars().count()
+        };
+        assert_eq!(label("group"), label("sibling"), "{context}: {rows:?}");
+    }
+}
+
+#[test]
+fn always_open_heading_child_guides_start_under_its_label_in_both_renderers() {
     for composed in [false, true] {
         for controlled in [false, true] {
             for icons in [false, true] {
@@ -230,6 +280,7 @@ fn always_open_child_guides_start_under_parent_label_in_both_renderers() {
                             content_gap,
                             indent,
                             icons,
+                            column: false,
                         });
                         backend.set_viewport(Rect {
                             x: 0,
