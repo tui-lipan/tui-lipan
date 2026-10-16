@@ -504,7 +504,8 @@ Choose a node's behavior with `TreeNode::expansion_mode(TreeExpansionMode::...)`
 
 `expanded(bool)` supplies the initial or controlled state for collapsible nodes. `AlwaysOpen`
 ignores that flag, including under controlled expansion and focus-based squashing. A collapsed
-ancestor still hides the whole subtree.
+ancestor still hides the whole subtree. Changing expansion mode preserves unrelated user-expanded
+branches in an uncontrolled Tree.
 
 **Migration:** replace `.expandable(true)` with
 `.expansion_mode(TreeExpansionMode::Collapsible)`. Replace `.expandable(false)` with `Auto`,

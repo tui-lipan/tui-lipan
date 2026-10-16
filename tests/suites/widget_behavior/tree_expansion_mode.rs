@@ -45,7 +45,7 @@ impl Component for ExpansionTree {
                 ctx.state.toggles += 1;
                 if event.path.segments().is_empty() {
                     ctx.state.root_open = event.expanded;
-                } else {
+                } else if event.path.segments() == [0] {
                     ctx.state.group_open = event.expanded;
                 }
             }
@@ -67,7 +67,10 @@ impl Component for ExpansionTree {
         Tree::new(
             TreeNode::new("root")
                 .expanded(ctx.state.root_open)
-                .children([group, TreeNode::new("sibling")]),
+                .children([
+                    group,
+                    TreeNode::new("sibling").child(TreeNode::new("sibling-child")),
+                ]),
         )
         .content_gap(self.content_gap)
         .show_icons(self.icons)
@@ -252,6 +255,48 @@ fn always_open_child_guides_start_under_parent_label_in_both_renderers() {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+#[test]
+fn mode_changes_preserve_uncontrolled_user_expansion_of_siblings() {
+    for composed in [false, true] {
+        for initial_mode in [TreeExpansionMode::Auto, TreeExpansionMode::AlwaysOpen] {
+            let mut backend = backend(composed, false);
+            backend.state_mut().mode = initial_mode;
+            backend.render();
+            let sibling_index = lines(&backend)
+                .iter()
+                .position(|row| row.contains("sibling"))
+                .unwrap();
+            backend.state_mut().selected = sibling_index;
+            backend.render();
+            key(&mut backend, KeyCode::Right);
+            assert!(
+                lines(&backend)
+                    .iter()
+                    .any(|row| row.contains("sibling-child"))
+            );
+            for mode in [
+                TreeExpansionMode::AlwaysOpen,
+                TreeExpansionMode::Auto,
+                TreeExpansionMode::AlwaysOpen,
+                TreeExpansionMode::Auto,
+            ] {
+                backend.state_mut().mode = mode;
+                backend.render();
+                let rows = lines(&backend);
+                assert!(
+                    rows.iter().any(|row| row.contains("sibling-child")),
+                    "composed={composed} initial={initial_mode:?} mode={mode:?}: {rows:?}"
+                );
+                assert_eq!(
+                    rows.iter().any(|row| row.trim_end().ends_with(" leaf")),
+                    mode == TreeExpansionMode::AlwaysOpen,
+                    "mode change must still update the affected group"
+                );
             }
         }
     }

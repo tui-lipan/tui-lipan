@@ -267,7 +267,9 @@ struct TreeEntry<'a> {
 }
 
 fn collect_expanded_paths(node: &TreeNode, path: &mut Vec<usize>, out: &mut HashSet<TreePath>) {
-    if node.expanded || node.expansion_mode == TreeExpansionMode::AlwaysOpen {
+    // AlwaysOpen is a visibility rule, not authored expansion state. Storing it here
+    // would make a mode-only prop change reset unrelated uncontrolled user expansions.
+    if node.expanded {
         out.insert(TreePath::from(path.clone()));
     }
 
