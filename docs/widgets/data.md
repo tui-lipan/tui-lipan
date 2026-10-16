@@ -456,8 +456,10 @@ Use `show_disclosure(false)` for structural section headings that need no disclo
 `icon(element)` gives a row a marker, such as a status glyph or a spinner, drawn in its disclosure
 column whenever the row has no arrow to show: a leaf or an `AlwaysOpen` row. A collapsible row
 shows its arrow there instead, so markers and arrows share one column and every sibling's label
-starts at the same cell. The marker is clipped to the column's width: the widest of
-`expanded_icon`, `collapsed_icon`, and `leaf_icon`, and at least one cell. It is drawn only, not a
+starts at the same cell. Once any row in the tree has a marker, rows without one keep the column
+too, including top-level leaves and every row while `show_icons(false)` hides the arrows. The marker
+is clipped to the column's width: the widest of `expanded_icon`, `collapsed_icon`, and
+`leaf_icon`, and at least one cell; one cell while arrows are hidden. It is drawn only, not a
 toggle; a click on it activates the row. Setting an icon renders the tree with composed rows.
 `disclosure_style(style)` replaces the tree's `icon_style` for one row's arrow, for example to tint
 a collapsed row with the state of the rows it hides.
@@ -487,6 +489,8 @@ retain their List rendering. Selection symbols and List-specific column layout a
 composed rows supply those decorations through their content or leading column.
 
 Run `cargo run --example tree_rows` to try multiple roots, detail rows, and independent buttons.
+The Tree tab of `cargo run --example file_tree_showcase` toggles guides, arrows, row icons, tinted
+folded arrows, always-open rows, and detail lines live.
 
 ### Building Nodes
 

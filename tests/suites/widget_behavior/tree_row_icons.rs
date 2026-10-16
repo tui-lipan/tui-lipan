@@ -153,3 +153,70 @@ fn an_always_open_heading_without_a_column_hangs_children_under_its_label() {
     assert_eq!(row(&rows, "heading").1, "└─ heading");
     assert_eq!(row(&rows, "leaf").1, "   └─● leaf");
 }
+
+/// Once any row has a marker, rows without one keep its column: with arrows hidden, and for
+/// top-level leaves, which otherwise draw no disclosure column at all.
+#[test]
+fn rows_without_markers_keep_the_column_with_arrows_hidden_and_at_the_top_level() {
+    struct Mixed {
+        arrows: bool,
+    }
+    impl Component for Mixed {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+        fn create_state(&self, _: &()) {}
+        fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+        fn view(&self, _: &Context<Self>) -> Element {
+            Tree::forest([
+                TreeNode::new("repo")
+                    .expanded(true)
+                    .child(
+                        TreeNode::new("group")
+                            .expansion_mode(TreeExpansionMode::AlwaysOpen)
+                            .child(TreeNode::new("inner")),
+                    )
+                    .child(TreeNode::new("plain"))
+                    .child(TreeNode::new("folded").child(TreeNode::new("hidden")))
+                    .child(TreeNode::new("marked").icon(Text::new("●"))),
+                TreeNode::new("loose"),
+                TreeNode::new("flagged").icon(Text::new("▲")),
+            ])
+            .show_icons(self.arrows)
+            .indent_style(IndentStyle::Branch)
+            .expanded_icon("▼")
+            .collapsed_icon("▶")
+            .into()
+        }
+    }
+    for arrows in [true, false] {
+        let mut backend = TestBackend::new(Mixed { arrows });
+        backend.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 24,
+            h: 10,
+        });
+        backend.render();
+        let rows = backend.capture_frame().to_fixed_grid_lines();
+        let column = |label: &str| {
+            let (_, line) = row(&rows, label);
+            line[..line.find(label).unwrap()].chars().count()
+        };
+        for label in ["plain", "folded", "marked"] {
+            assert_eq!(column(label), column("group"), "arrows={arrows}: {rows:#?}");
+        }
+        assert_eq!(
+            column("loose"),
+            column("repo"),
+            "arrows={arrows}: {rows:#?}"
+        );
+        assert_eq!(
+            column("flagged"),
+            column("repo"),
+            "arrows={arrows}: {rows:#?}"
+        );
+    }
+}

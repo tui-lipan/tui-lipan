@@ -264,6 +264,8 @@ struct TreeEntry<'a> {
     node: &'a TreeNode,
     expanded: bool,
     branch: TreeBranch,
+    /// Some node in the tree has an icon, so every row keeps the column icons share.
+    icon_column: bool,
 }
 
 fn collect_expanded_paths(node: &TreeNode, path: &mut Vec<usize>, out: &mut HashSet<TreePath>) {
@@ -306,6 +308,20 @@ fn flatten_tree<'a>(
 }
 
 fn visible_entries<'a>(props: &'a TreeProps, expanded: &HashSet<TreePath>) -> Vec<TreeEntry<'a>> {
+    let mut entries = nested_entries(props, expanded);
+    if has_icon(&props.root) {
+        for entry in &mut entries {
+            entry.icon_column = true;
+        }
+    }
+    entries
+}
+
+fn has_icon(node: &TreeNode) -> bool {
+    node.icon.is_some() || node.children.iter().any(has_icon)
+}
+
+fn nested_entries<'a>(props: &'a TreeProps, expanded: &HashSet<TreePath>) -> Vec<TreeEntry<'a>> {
     if !props.forest {
         return flatten_tree(&props.root, expanded, props.content_gap);
     }
@@ -401,6 +417,7 @@ fn push_entries<'a>(
         node,
         expanded: is_expanded,
         branch: branch.clone(),
+        icon_column: false,
     });
 
     if let Some(children) = children {
@@ -501,9 +518,20 @@ fn disclosure_spans(
         return Vec::new();
     }
     let collapsible = entry.node.is_collapsible();
-    // A marker takes the column a leaf would fill; composed rendering draws it over these cells.
-    if entry.node.icon.is_some() && !(collapsible && props.show_icons) {
-        return vec![Span::new(" ".repeat(icon_column_width(props) as usize))];
+    if !(collapsible && props.show_icons) {
+        // A marker takes the column a leaf would fill; composed rendering draws it over these
+        // cells. Once any row has one, rows without keep the column too, even at the top level
+        // or with arrows hidden, so every label still starts at the same cell.
+        if entry.node.icon.is_some() {
+            return vec![Span::new(" ".repeat(icon_column_width(props) as usize))];
+        }
+        if entry.icon_column && entry.node.disclosure.is_empty() {
+            return guides.disclosure_placeholder_spans(
+                &entry.branch,
+                max_depth,
+                icon_column_width(props),
+            );
+        }
     }
     if !props.show_icons {
         if !entry.node.disclosure.is_empty() {
@@ -605,6 +633,7 @@ mod tests {
             node: &leaf,
             expanded: false,
             branch: TreeBranch::root().child(true),
+            icon_column: false,
         };
 
         let out = build_item(&entry, &props, 1);
@@ -646,6 +675,7 @@ mod tests {
                 continued: Vec::new(),
                 level_gaps: Vec::new(),
             },
+            icon_column: false,
         };
 
         let out = build_item(&entry, &props, 0);
@@ -820,6 +850,7 @@ mod tests {
                     node: &child,
                     expanded: false,
                     branch: branch.clone(),
+                    icon_column: false,
                 };
                 let item = build_item(&entry, &props, 1);
                 let actual: String = item
