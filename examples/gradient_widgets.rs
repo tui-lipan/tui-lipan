@@ -303,9 +303,9 @@ impl GradientWidgets {
                 ColorGradient::new(Color::Rgb(86, 92, 108), Color::Rgb(255, 170, 84))
                     .with_center(Color::Rgb(104, 213, 255)),
             )
-            .show_icons(true)
-            .expanded_icon("v")
-            .collapsed_icon(">")
+            .show_arrows(true)
+            .expanded_arrow("v")
+            .collapsed_arrow(">")
             .selection_style(Style::new().reverse())
             .scrollbar(true)
             .height(Length::Auto);

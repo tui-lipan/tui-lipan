@@ -381,75 +381,79 @@ fn composed_content(
 ) -> Element {
     let height = row_height(entry.node);
     let hovered = ctx.state.hovered == Some(index);
-    let guides = tree_guides(&ctx.props, entry.node.indent);
-    let guide_spans = guides.spans(&entry.branch, max_depth);
-    let disclosure = disclosure_spans(entry, &ctx.props, &guides, max_depth);
+    let prefix = prefix(entry, &ctx.props, max_depth);
+    let width = prefix.width();
+    let blank = |cells: u16| {
+        chrome(
+            vec![crate::style::Span::new(" ".repeat(cells as usize))],
+            style,
+            hovered,
+        )
+    };
+
     let mut first =
         HStack::new()
             .gap(0)
             .height(Length::Px(1))
-            .child(chrome(guide_spans, style, hovered));
-    let column_width = disclosure
-        .iter()
-        .map(|span| span.content.width())
-        .sum::<usize>();
-    let arrow = chrome(disclosure, style, hovered);
-    let collapsible = ctx.props.show_icons && entry.node.is_collapsible();
-    if let Some(icon) = entry.node.icon.as_ref().filter(|_| !collapsible)
-        && entry.node.show_disclosure
-    {
-        first = first.child(
-            HStack::new()
-                .gap(0)
-                .width(Length::Px(icon_column_width(&ctx.props)))
-                .height(Length::Px(1))
-                .child(icon.element()),
-        );
-    } else if collapsible && entry.node.show_disclosure {
-        let ctrl = ctx.props.on_ctrl_activate.is_some();
-        let selectable = entry.node.item.is_selectable();
-        let link = ctx.link().clone();
-        first = first.child(
-            MouseRegion::new()
-                .child(arrow)
-                .on_click(ctx.link().callback(move |mouse: MouseRegionEvent| {
-                    if ctrl && mouse.mods == KeyMods::CTRL {
-                        if selectable {
-                            link.send(TreeMsg::Select(index));
+            .child(chrome(prefix.guides, style, hovered));
+    if !prefix.arrow.is_empty() {
+        let arrow = chrome(prefix.arrow, style, hovered);
+        first = if entry.node.is_collapsible() {
+            let ctrl = ctx.props.on_ctrl_activate.is_some();
+            let selectable = entry.node.item.is_selectable();
+            let link = ctx.link().clone();
+            first.child(
+                MouseRegion::new()
+                    .child(arrow)
+                    .on_click(ctx.link().callback(move |mouse: MouseRegionEvent| {
+                        if ctrl && mouse.mods == KeyMods::CTRL {
+                            if selectable {
+                                link.send(TreeMsg::Select(index));
+                            }
+                            TreeMsg::CtrlActivate(index)
+                        } else {
+                            TreeMsg::Toggle(index)
                         }
-                        TreeMsg::CtrlActivate(index)
-                    } else {
-                        TreeMsg::Toggle(index)
-                    }
-                })),
-        );
-    } else {
-        first = first.child(arrow);
+                    })),
+            )
+        } else {
+            first.child(arrow)
+        };
     }
-    let width = prefix_spans(entry, &ctx.props, max_depth)
-        .iter()
-        .map(|s| s.content.width())
-        .sum::<usize>();
-    let mut prefix = VStack::new()
+    if prefix.content_gap > 0 {
+        first = first.child(blank(prefix.content_gap));
+    }
+    if let Some((icon_width, icon_gap)) = prefix.icon {
+        let mut cell = HStack::new()
+            .gap(0)
+            .width(Length::Px(icon_width))
+            .height(Length::Px(1));
+        if let Some(icon) = &entry.node.icon {
+            cell = cell.child(icon.element());
+        }
+        first = first.child(cell);
+        if icon_gap > 0 {
+            first = first.child(blank(icon_gap));
+        }
+    }
+
+    let mut column = VStack::new()
         .gap(0)
-        .width(Length::Px(width.min(u16::MAX as usize) as u16))
+        .width(Length::Px(width))
         .height(Length::Px(height))
         .child(first);
     for _ in 1..height {
-        let mut spans = guides.continuation_spans(&entry.branch, max_depth);
-        spans.extend(column_continuation(
-            entry,
-            &ctx.props,
-            max_depth,
-            column_width,
+        column = column.child(chrome(
+            continuation_spans(entry, &ctx.props, max_depth, width),
+            style,
+            hovered,
         ));
-        prefix = prefix.child(chrome(spans, style, hovered));
     }
     let mut row = HStack::new().gap(0).height(Length::Px(height));
     if let Some(leading) = &entry.node.leading {
         row = row.child(leading.element());
     }
-    row.child(prefix).child(content).into()
+    row.child(column).child(content).into()
 }
 
 /// Hover adjusts chrome contrast without recoloring guides on selected or active rows alone.

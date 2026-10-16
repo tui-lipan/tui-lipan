@@ -381,12 +381,16 @@ Hierarchical tree view with expand/collapse.
 | `clear_selection` | `bool` | When `true`, suppress the selection highlight (authoritative over `selected` and internal state) |
 | `force_scroll_to_selected` | `bool` | Force the internal list to reveal the selected row on next render |
 | `gap` | `u16` | Vertical gap between items |
-| `content_gap` | `u16` | Gap after guides and optional disclosure icons, before item content; default `1`, allows `0` |
-| `show_icons` | `bool` | Show expand/collapse icons |
-| `expanded_icon` | `String` | Icon for expanded nodes |
-| `collapsed_icon` | `String` | Icon for collapsed nodes |
-| `leaf_icon` | `String` | Icon for leaf nodes |
-| `icon_style` | `Style` | Icon style |
+| `indent` | `u16` | Cells each level of depth adds (default: `2`); zero puts every level in one column |
+| `content_gap` | `u16` | Gap after the guides and arrow column, before the icon or content (default: `1`); allows `0` |
+| `show_arrows` | `bool` | Show the arrow column (default: `true`) |
+| `expanded_arrow` | `String` | Arrow on expanded rows (default: `▼`) |
+| `collapsed_arrow` | `String` | Arrow on collapsed rows (default: `▶`) |
+| `leaf_arrow` | `Option<String>` | Glyph in the arrow column of rows with nothing to expand (default: none) |
+| `arrow_style` | `Style` | Arrow style; `TreeNode::arrow_style` overrides it per row |
+| `show_icons` | `bool` | Show row icons from `TreeNode::icon` (default: `true`) |
+| `icon_width` | `u16` | Cells of the icon column (default: `1`) |
+| `icon_gap` | `u16` | Gap after the icon column, before the content (default: `1`) |
 | `indent_style` | `IndentStyle` | Indent guide glyph variant: `None`, `Line`, `LineCapped`, `LineCappedRounded`, `Branch`, or `BranchRounded` |
 | `indent_guide_style` | `Style` | Vertical indent guide |
 | `indent_guide_start_depth` | `usize` | First non-root depth that renders guides (default: `1`) |
@@ -422,26 +426,43 @@ Hierarchical tree view with expand/collapse.
 | `on_ctrl_activate` | `Callback<TreeEvent>` | Ctrl+click or Ctrl+Enter activates without toggling expansion |
 | `on_toggle` | `Callback<TreeToggleEvent>` | Node expanded/collapsed |
 
-Text-only `Tree` uses an inner `List` of flattened visible rows. Its per-row `item_hover_style` and pointer versus keyboard row hover match [List](#list). Trees with composed row content use a `ScrollView`, with tree navigation and disclosure handling supplied by `Tree`.
+Text-only `Tree` uses an inner `List` of flattened visible rows. Its per-row `item_hover_style` and pointer versus keyboard row hover match [List](#list). Trees with composed row content use a `ScrollView`, with tree navigation and arrows supplied by `Tree`.
 
 `IndentStyle` selects guide appearance. `Line` draws vertical guides; `LineCapped` and
 `LineCappedRounded` finish the last sibling with `└` and `╰`. `Branch` and `BranchRounded` add
 horizontal branches, filling the available indentation width. `None` reserves indentation without
-guides. Every style uses exactly the configured cells per depth, including width zero, and the
-first line and continuation lines have equal widths. Arrows and icons occupy separate columns
-and never change indentation width. With `Branch` or `BranchRounded`, files extend the branch
-through the unused arrow cells, keeping the configured content gap blank before the icon or label.
-Other guide styles leave that column blank. Width zero suppresses the extension along with the guides.
+guides. Every style uses exactly the `indent` cells per depth, including width zero, and the
+first line and continuation lines have equal widths. Arrows and icons occupy their own columns
+and never change indentation width. With `Branch` or `BranchRounded`, a row without an arrow
+extends its branch through the unused arrow cells, keeping the content gap blank before the icon or
+label. Other guide styles leave that column blank. Width zero suppresses the extension along with
+the guides.
 
-`content_gap` separates the complete tree prefix from item content, even with disclosure icons
-hidden. It adds no space to rows with no prefix. Migration: replace `Tree::icon_gap(n)` with
-`Tree::content_gap(n)`. FileTree keeps `icon_gap(n)` for spacing between file icons and labels.
+#### Row layout
 
-Children hang from their parent's disclosure column: their guide drops from the parent's arrow,
-from its marker (see `TreeNode::icon` below), or, where a branch guide runs through an unused
-column, from a `┬` where that branch turns down to meet them. FileTree draws arrows and file icons
-in separate columns, with `content_gap` between them and `icon_gap` before the label; `Tree`
-draws markers in the arrow column, so its `content_gap` is the space between marker and label.
+`Tree` and [FileTree](#filetree) lay rows out the same way, and their options mean the same thing.
+From left to right, a row is:
+
+1. its guides, `indent` cells per level of depth;
+2. the arrow column, while `show_arrows` is on: an arrow on rows that can expand or collapse, and
+   the same width on every other row, so sibling labels line up;
+3. `content_gap` blank cells, on any row with guides or an arrow column in front of it;
+4. the icon column, `icon_width` cells, once any row has a `TreeNode::icon` and `show_icons` is on;
+   rows without an icon keep it blank;
+5. `icon_gap` blank cells after the icon column;
+6. the row's label or composed content.
+
+Children hang from the first cell after their parent's guides: the parent's arrow column, or, on a
+row without one, its content gap. Each level therefore sits `indent` cells deeper than its parent.
+An `AlwaysOpen` row has no arrow there, so with `Branch` guides its branch turns down into its
+children instead: `├─┬ group`. On a row taller than one line, a guide carries down from that cell
+to the first child.
+
+**Migration:** `Tree` now uses FileTree's option names. Replace `show_icons(bool)` with
+`show_arrows(bool)`, `expanded_icon` / `collapsed_icon` / `leaf_icon` with `expanded_arrow` /
+`collapsed_arrow` / `leaf_arrow`, and `icon_style` with `arrow_style`. `show_icons` and `icon_gap`
+now control row icons. Replace `TreeNode::indent(n)` on every node with one `Tree::indent(n)`.
+A top-level leaf now keeps the arrow column, like its expandable siblings.
 
 Migration: replace `Short`/`Long` with `Branch` and `ShortRounded`/`LongRounded` with
 `BranchRounded`; use indentation width to control branch length.
@@ -457,31 +478,31 @@ The original `ListItem` supplies the row's semantic label and selectable role. S
 `content_height(n)` for content taller than one cell. `leading(element)` places a column before
 its guides, for example an active-row marker. `row_style(style)` styles the whole row, including
 the guides. `key(id)` gives composed content a stable reconciliation identity across reordering.
-Use `show_disclosure(false)` for structural section headings that need no disclosure column.
+`show_arrow(false)` makes a row a section heading: it has no arrow column, so its label starts
+where its siblings' arrows would. Use it for titles over groups, typically at the top level with
+`TreeExpansionMode::AlwaysOpen`.
 
-`icon(element)` gives a row a marker, such as a status glyph or a spinner, drawn in its disclosure
-column whenever the row has no arrow to show: a leaf or an `AlwaysOpen` row. A collapsible row
-shows its arrow there instead, so markers and arrows share one column and every sibling's label
-starts at the same cell. Once any row in the tree has a marker, rows without one keep the column
-too, including top-level leaves and every row while `show_icons(false)` hides the arrows. The marker
-is clipped to the column's width: the widest of `expanded_icon`, `collapsed_icon`, and
-`leaf_icon`, and at least one cell; one cell while arrows are hidden. It is drawn only, not a
-toggle; a click on it activates the row. Setting an icon renders the tree with composed rows.
-`disclosure_style(style)` replaces the tree's `icon_style` for one row's arrow, for example to tint
-a collapsed row with the state of the rows it hides.
+`icon(element)` gives a row an icon, such as a status glyph or a spinner, in the tree's icon column
+(see [Row layout](#row-layout)). It is drawn only, not a toggle; a click on it activates the row.
+Setting an icon renders the tree with composed rows. `arrow_style(style)` replaces the tree's
+`arrow_style` for one row's arrow, for example to tint a collapsed row with the state of the rows
+it hides.
 
 ```rust
 TreeNode::new("agents")
-    .disclosure_style(Style::new().fg(theme.status.warning))
+    .arrow_style(Style::new().fg(theme.status.warning))
     .child(TreeNode::new("fix login").icon(Text::new("▲")))
     .child(TreeNode::new("review").icon(Spinner::new()))
 ```
 
-Composed rows use the tree's scroll view and keyboard navigation. Their guides and disclosure
-arrows gain hover foreground overrides and contrast adjustment while the pointer is over the row.
+**Migration:** replace `TreeNode::show_disclosure(false)` with `show_arrow(false)`. A heading's
+children now hang from the end of its branch, like every row's, rather than beneath its label.
+
+Composed rows use the tree's scroll view and keyboard navigation. Their guides and arrows gain
+hover foreground overrides and contrast adjustment while the pointer is over the row.
 Selection and active-row backgrounds alone preserve the authored guide and arrow colors. Their child controls handle their
 own clicks; a button click does not activate the surrounding row. `toggle_on_activate(false)`
-separates row activation from expansion. Composed-row disclosure arrows still toggle independently,
+separates row activation from expansion. Composed-row arrows still toggle independently,
 and Left/Right, h/l, and Space retain tree navigation. Moving to a child or parent emits `on_select`,
 without emitting a spurious expansion event.
 
@@ -495,8 +516,9 @@ retain their List rendering. Selection symbols and List-specific column layout a
 composed rows supply those decorations through their content or leading column.
 
 Run `cargo run --example tree_rows` to try multiple roots, detail rows, and independent buttons.
-The Tree tab of `cargo run --example file_tree_showcase` toggles guides, arrows, row icons, tinted
-folded arrows, always-open rows, and detail lines live.
+`cargo run --example file_tree_showcase` shows FileTree and Tree side by side, each with live
+controls for the shared layout options, and for Tree's tinted arrows, always-open rows, section
+headings, and detail lines.
 
 ### Building Nodes
 
@@ -521,19 +543,16 @@ TreeNode::new(ListItem::from_spans(vec![
 Choose a node's behavior with `TreeNode::expansion_mode(TreeExpansionMode::...)`:
 
 - `Auto` (default): nodes with children are collapsible; empty nodes are leaves.
-- `Collapsible`: retain disclosure and expand/collapse behavior even before lazy children arrive.
-- `AlwaysOpen`: always show children, with no disclosure arrow. The row keeps its disclosure
-  column, filled like a leaf's, so its label lines up with collapsible and leaf siblings. Its
-  children hang from that column like any parent's; a branch guide running through it turns down
-  into them (`├─┬ group`). Add `show_disclosure(false)` for a heading without the
-  column; its child guides then align beneath its label, including its content gap. Label styling
-  is unchanged: expansion mode controls disclosure and navigation, not the supplied `ListItem`
-  or composed content. Click and Enter still activate the node;
-  Space does not toggle it, Right enters its children, and Left moves to its parent.
+- `Collapsible`: keep the arrow and expand/collapse behavior even before lazy children arrive.
+- `AlwaysOpen`: always show children, with no arrow. The row keeps its arrow column, filled like a
+  leaf's, so its label lines up with its siblings, and its branch turns down into its children
+  (`├─┬ group`). Add `show_arrow(false)` for a section heading. Label styling is unchanged:
+  expansion mode controls arrows and navigation, not the supplied `ListItem` or composed content.
+  Click and Enter still activate the node; Space does not toggle it, Right enters its children,
+  and Left moves to its parent.
 
-**Migration:** an `AlwaysOpen` row below the top level now keeps its disclosure column. To keep
-the previous heading layout, with no column and children beneath the label, add
-`.show_disclosure(false)` to the node.
+**Migration:** an `AlwaysOpen` row below the top level now keeps its arrow column. Add
+`.show_arrow(false)` for a row without one.
 
 `expanded(bool)` supplies the initial or controlled state for collapsible nodes. `AlwaysOpen`
 ignores that flag, including under controlled expansion and focus-based squashing. A collapsed
@@ -544,11 +563,11 @@ branches in an uncontrolled Tree.
 `.expansion_mode(TreeExpansionMode::Collapsible)`. Replace `.expandable(false)` with `Auto`,
 or omit it. The `expandable(bool)` builder has been removed.
 
-A node's `ListItem` renders with the tree's indentation and disclosure icon in front of its label.
+A node's `ListItem` renders with the tree's indentation, arrow, and icon columns in front of its label.
 Everything else about the item is kept: `gutter`, `status`, and `prefix` stay columns in front of
 the indentation, and extra lines, `extra_line_indent`, and `primary_max_label_width` move right
 with the label so they keep lining up under it, including on numbered rows. Left label spinners
-render after the tree guides and disclosure icon, keeping connectors aligned with adjacent rows.
+render after the tree guides and arrow, keeping connectors aligned with adjacent rows.
 
 ### Guides for composed rows
 
@@ -750,7 +769,8 @@ arrow column so their labels align with directory labels. Custom arrow glyphs sh
 to the wider glyph, followed by `content_gap` blank cells. `icon_gap` controls the blank cells
 between icons and labels. Both gaps default to one and allow zero. The content gap remains when
 arrows are hidden and follows the guides instead. Rows without a structural prefix, such as a root
-with no arrow, receive no content gap. Icons alone do not create a structural prefix.
+with no arrow, receive no content gap. Icons alone do not create a structural prefix. This is the
+same [row layout](#row-layout) `Tree` uses, with the same option names.
 Override Nerd Font arrows with
 `.expanded_arrow("").collapsed_arrow("")` when desired.
 

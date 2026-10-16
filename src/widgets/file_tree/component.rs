@@ -4,8 +4,6 @@ use std::hash::{Hash, Hasher};
 use std::path::{Component as PathComponent, Path, PathBuf};
 use std::sync::Arc;
 
-use unicode_width::UnicodeWidthStr;
-
 use crate::core::component::{Command, Component, Context, Update};
 use crate::core::element::{Element, IntoElement};
 use crate::style::Style;
@@ -270,7 +268,11 @@ impl Component for FileTreeComponent {
         let has_explorer = ctx.props.explorer;
 
         let mut tree = Tree::new(projection.root)
-            .show_icons(false)
+            .indent(ctx.props.indent_width)
+            .show_arrows(ctx.props.show_arrows)
+            .expanded_arrow(ctx.props.expanded_arrow.clone())
+            .collapsed_arrow(ctx.props.collapsed_arrow.clone())
+            .arrow_style(ctx.props.arrow_style)
             .content_gap(ctx.props.content_gap)
             .indent_style(ctx.props.indent_style)
             .indent_guide_style(ctx.props.indent_guide_style)
@@ -2219,28 +2221,15 @@ fn build_projected_tree_node(
             crate::widgets::TreeExpansionMode::Collapsible
         } else {
             crate::widgets::TreeExpansionMode::Auto
-        })
-        .indent(ctx.props.indent_width);
-    if ctx.props.show_arrows {
-        tree = if node.is_dir() {
-            tree.disclosure(directory_disclosure_spans(ctx.props, is_expanded))
-        } else {
-            tree.disclosure_placeholder(arrow_column_width(ctx.props))
-        };
-    }
+        });
 
     if node.is_dir() {
         if node.loading {
-            tree = tree.child(
-                TreeNode::new(ctx.props.loading_label.clone()).indent(ctx.props.indent_width),
-            );
+            tree = tree.child(TreeNode::new(ctx.props.loading_label.clone()));
         } else if !node.loaded {
-            tree = tree.child(TreeNode::new(" ").indent(ctx.props.indent_width));
+            tree = tree.child(TreeNode::new(" "));
         } else if let Some(error) = node.error.as_ref() {
-            tree = tree.child(
-                TreeNode::new(format!("{} {error}", ctx.props.error_prefix))
-                    .indent(ctx.props.indent_width),
-            );
+            tree = tree.child(TreeNode::new(format!("{} {error}", ctx.props.error_prefix)));
         } else if !is_expanded && ctx.explorer_filter.is_none() {
             // A collapsed directory contributes no visible rows — `Tree` never flattens past one —
             // so materializing its subtree is wasted work on every frame. Its real children are
@@ -2838,28 +2827,6 @@ fn virtual_root_node_at(root: &Arc<str>, path: ProvidedPath) -> FsNode {
         error: None,
         children: Vec::new(),
     }
-}
-
-fn directory_disclosure_spans(props: &FileTreeProps, expanded: bool) -> Vec<crate::style::Span> {
-    use crate::style::Span;
-    let arrow = if expanded {
-        &props.expanded_arrow
-    } else {
-        &props.collapsed_arrow
-    };
-    let padding = (arrow_column_width(props) as usize).saturating_sub(arrow.width());
-    vec![
-        Span::new(arrow.clone()).style(props.arrow_style),
-        Span::new(" ".repeat(padding)),
-    ]
-}
-
-fn arrow_column_width(props: &FileTreeProps) -> u16 {
-    props
-        .expanded_arrow
-        .width()
-        .max(props.collapsed_arrow.width())
-        .min(u16::MAX as usize) as u16
 }
 
 fn highlight_label_spans(
@@ -5043,8 +5010,8 @@ mod tests {
 
         let tree = build_projected_tree_node(&node, false, vec![0], &mut ctx);
 
-        assert_eq!(tree.indent, 1);
-        assert_eq!(tree.disclosure_placeholder_width, 1);
+        // A file is a leaf: the tree fills its arrow column, so it lines up with directories.
+        assert!(!tree.is_collapsible());
         assert!(!tree.item.spans[0].content.starts_with(' '));
         assert_eq!(tree.item.spans[1].content.as_ref(), " ");
         assert_eq!(tree.item.spans[2].content.as_ref(), "main.rs");
@@ -5090,8 +5057,8 @@ mod tests {
         let symlink_tree = build_projected_tree_node(&symlink, false, vec![0], &mut ctx);
         let other_tree = build_projected_tree_node(&other, false, vec![1], &mut ctx);
 
-        assert_eq!(symlink_tree.disclosure_placeholder_width, 1);
-        assert_eq!(other_tree.disclosure_placeholder_width, 1);
+        assert!(!symlink_tree.is_collapsible());
+        assert!(!other_tree.is_collapsible());
         assert!(!symlink_tree.item.spans[0].content.starts_with(' '));
         assert!(!other_tree.item.spans[0].content.starts_with(' '));
     }
@@ -5128,8 +5095,8 @@ mod tests {
 
         let tree = build_projected_tree_node(&node, false, vec![0], &mut ctx);
 
-        assert_eq!(tree.disclosure_placeholder_width, 0);
-        assert_eq!(tree.disclosure[0].content.as_ref(), "▶");
+        // The tree draws the directory's collapsed arrow in front of its icon.
+        assert!(tree.is_collapsible() && !tree.expanded);
         assert_eq!(tree.item.spans[0].content.as_ref(), "★");
         assert_eq!(tree.item.spans[1].content.as_ref(), " ");
         assert_eq!(tree.item.spans[2].content.as_ref(), "src");

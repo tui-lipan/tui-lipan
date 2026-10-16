@@ -35,13 +35,14 @@ struct State {
 struct TreeOptions {
     guide: usize,
     indent: u16,
-    content_gap: u16,
+    icons: bool,
     arrows: bool,
     arrow: usize,
-    row_icons: bool,
+    content_gap: u16,
+    icon_gap: u16,
     tint_folded: bool,
     always_open: bool,
-    headings: bool,
+    root_headings: bool,
     details: bool,
     collapsed: HashSet<Vec<usize>>,
     activated: Option<String>,
@@ -52,13 +53,14 @@ impl Default for TreeOptions {
         Self {
             guide: 4,
             indent: 2,
-            content_gap: 1,
+            icons: true,
             arrows: true,
             arrow: 0,
-            row_icons: true,
+            content_gap: 1,
+            icon_gap: 1,
             tint_folded: true,
             always_open: true,
-            headings: false,
+            root_headings: false,
             details: false,
             collapsed: HashSet::from([vec![1]]),
             activated: None,
@@ -94,13 +96,14 @@ enum Msg {
 enum TreeTabMsg {
     NextGuide,
     NextIndent,
-    NextContentGap,
+    ToggleIcons,
     ToggleArrows,
     NextArrow,
-    ToggleRowIcons,
+    NextContentGap,
+    NextIconGap,
     ToggleTintFolded,
     ToggleAlwaysOpen,
-    ToggleHeadings,
+    ToggleRootHeadings,
     ToggleDetails,
     Toggled(Vec<usize>, bool),
     Activated(Vec<usize>),
@@ -407,13 +410,14 @@ fn update_tree(tree: &mut TreeOptions, msg: TreeTabMsg) {
     match msg {
         TreeTabMsg::NextGuide => tree.guide = (tree.guide + 1) % GUIDES.len(),
         TreeTabMsg::NextIndent => tree.indent = (tree.indent + 1) % 5,
-        TreeTabMsg::NextContentGap => tree.content_gap = (tree.content_gap + 1) % 4,
+        TreeTabMsg::ToggleIcons => tree.icons = !tree.icons,
         TreeTabMsg::ToggleArrows => tree.arrows = !tree.arrows,
         TreeTabMsg::NextArrow => tree.arrow = (tree.arrow + 1) % ARROWS.len(),
-        TreeTabMsg::ToggleRowIcons => tree.row_icons = !tree.row_icons,
+        TreeTabMsg::NextContentGap => tree.content_gap = (tree.content_gap + 1) % 4,
+        TreeTabMsg::NextIconGap => tree.icon_gap = (tree.icon_gap + 1) % 4,
         TreeTabMsg::ToggleTintFolded => tree.tint_folded = !tree.tint_folded,
         TreeTabMsg::ToggleAlwaysOpen => tree.always_open = !tree.always_open,
-        TreeTabMsg::ToggleHeadings => tree.headings = !tree.headings,
+        TreeTabMsg::ToggleRootHeadings => tree.root_headings = !tree.root_headings,
         TreeTabMsg::ToggleDetails => tree.details = !tree.details,
         TreeTabMsg::Toggled(path, expanded) => {
             if expanded {
@@ -435,37 +439,63 @@ fn tree_tab(ctx: &Context<FileTreeShowcase>) -> Element {
     let button = |label: String, msg: TreeTabMsg| {
         control_button(label).on_click(link.callback(move |_| Msg::Tree(msg.clone())))
     };
+    // The same options, in the same order, as the FileTree tab; then what only Tree has.
     let controls = VStack::new()
         .gap(1)
         .width(Length::Px(34))
         .child(Text::new("TREE CONTROLS").style(Style::new().fg(accent).bold()))
-        .child(button(
-            format!("Guides: {}", GUIDE_NAMES[options.guide]),
-            TreeTabMsg::NextGuide,
-        ))
-        .child(button(
-            spacing_label("Indent", options.indent),
-            TreeTabMsg::NextIndent,
-        ))
-        .child(button(
-            spacing_label("Content gap", options.content_gap),
-            TreeTabMsg::NextContentGap,
-        ))
-        .child(button(
-            toggle_label("Expand arrows", options.arrows),
-            TreeTabMsg::ToggleArrows,
-        ))
+        .child(
+            button(
+                format!("Guides: {}", GUIDE_NAMES[options.guide]),
+                TreeTabMsg::NextGuide,
+            )
+            .automation_id("tree-guide-style"),
+        )
+        .child(
+            button(
+                spacing_label("Indent", options.indent),
+                TreeTabMsg::NextIndent,
+            )
+            .automation_id("tree-indent"),
+        )
+        .child(
+            button(
+                toggle_label("Row icons", options.icons),
+                TreeTabMsg::ToggleIcons,
+            )
+            .automation_id("tree-row-icons"),
+        )
+        .child(
+            button(
+                toggle_label("Expand arrows", options.arrows),
+                TreeTabMsg::ToggleArrows,
+            )
+            .automation_id("tree-expand-arrows"),
+        )
         .child(
             button(
                 format!("Arrow glyphs: {}", ARROWS[options.arrow].0),
                 TreeTabMsg::NextArrow,
             )
-            .disabled(!options.arrows),
+            .disabled(!options.arrows)
+            .automation_id("tree-arrow-glyphs"),
         )
-        .child(button(
-            toggle_label("Row icons", options.row_icons),
-            TreeTabMsg::ToggleRowIcons,
-        ))
+        .child(
+            button(
+                spacing_label("Content gap", options.content_gap),
+                TreeTabMsg::NextContentGap,
+            )
+            .automation_id("tree-content-gap"),
+        )
+        .child(
+            button(
+                spacing_label("Icon gap", options.icon_gap),
+                TreeTabMsg::NextIconGap,
+            )
+            .disabled(!options.icons)
+            .automation_id("tree-icon-gap"),
+        )
+        .child(Text::new("TREE ONLY").style(Style::new().fg(accent).bold()))
         .child(
             button(
                 toggle_label("Tint folded arrows", options.tint_folded),
@@ -477,13 +507,10 @@ fn tree_tab(ctx: &Context<FileTreeShowcase>) -> Element {
             toggle_label("Checkouts always open", options.always_open),
             TreeTabMsg::ToggleAlwaysOpen,
         ))
-        .child(
-            button(
-                toggle_label("Open rows as headings", options.headings),
-                TreeTabMsg::ToggleHeadings,
-            )
-            .disabled(!options.always_open),
-        )
+        .child(button(
+            toggle_label("Roots as section headings", options.root_headings),
+            TreeTabMsg::ToggleRootHeadings,
+        ))
         .child(button(
             toggle_label("Detail lines", options.details),
             TreeTabMsg::ToggleDetails,
@@ -497,18 +524,21 @@ fn tree_tab(ctx: &Context<FileTreeShowcase>) -> Element {
     let nodes = rows
         .iter()
         .enumerate()
-        .map(|(index, row)| tree_node(row, vec![index], options))
+        .map(|(index, row)| tree_node(row, vec![index], options, accent))
         .collect::<Vec<_>>();
     let tree = Tree::forest(nodes)
         .controlled_expansion(true)
         .toggle_on_activate(false)
         .indent_style(GUIDES[options.guide])
         .indent_guide_style(Style::new().fg(accent).dim())
+        .indent(options.indent)
+        .show_icons(options.icons)
+        .icon_gap(options.icon_gap)
+        .show_arrows(options.arrows)
+        .expanded_arrow(ARROWS[options.arrow].1)
+        .collapsed_arrow(ARROWS[options.arrow].2)
+        .arrow_style(Style::new().fg(accent))
         .content_gap(options.content_gap)
-        .show_icons(options.arrows)
-        .expanded_icon(ARROWS[options.arrow].1)
-        .collapsed_icon(ARROWS[options.arrow].2)
-        .icon_style(Style::new().fg(accent))
         .selection_style(Style::new().bg(Color::indexed(236)).fg(Color::White).bold())
         .focus_key("showcase-rows")
         .on_toggle(ctx.link().callback(|event: TreeToggleEvent| {
@@ -584,9 +614,20 @@ struct Row {
     label: &'static str,
     status: Option<Status>,
     detail: Option<&'static str>,
+    /// An icon for a row without a status, such as a checkout.
+    marker: Option<&'static str>,
     /// A checkout: a group the "always open" control keeps open.
     group: bool,
     children: Vec<Row>,
+}
+
+/// A row's icon: its status, or its marker.
+fn row_icon(row: &Row) -> Option<Element> {
+    match (row.status, row.marker) {
+        (Some(status), _) => Some(status.icon()),
+        (None, Some(marker)) => Some(Text::new(marker).style(Style::new().fg(Color::Gray)).into()),
+        (None, None) => None,
+    }
 }
 
 fn row(label: &'static str) -> Row {
@@ -594,6 +635,7 @@ fn row(label: &'static str) -> Row {
         label,
         status: None,
         detail: None,
+        marker: None,
         group: false,
         children: Vec::new(),
     }
@@ -610,8 +652,15 @@ impl Row {
         self
     }
 
+    /// A checkout, which the "always open" control keeps open.
     fn group(mut self) -> Self {
         self.group = true;
+        self.marker = Some("◇");
+        self
+    }
+
+    fn marker(mut self, marker: &'static str) -> Self {
+        self.marker = Some(marker);
         self
     }
 
@@ -631,7 +680,7 @@ impl Row {
 
 fn demo_rows() -> Vec<Row> {
     vec![
-        row("rozi").children([
+        row("rozi").marker("◈").children([
             row("master")
                 .group()
                 .detail("primary checkout")
@@ -644,23 +693,26 @@ fn demo_rows() -> Vec<Row> {
                 .children([row("review")
                     .status(Status::Idle)
                     .detail("Background · 2 panes")]),
-            row("Claude Code").detail("4 sessions").children([
-                row("fix login redirect")
-                    .status(Status::Blocked)
-                    .detail("Approve edit to src/auth.rs?"),
-                row("github issue review")
-                    .status(Status::Working)
-                    .detail("Working · 14m"),
-                row("sidebar audit")
-                    .status(Status::Done)
-                    .detail("Done · 1h"),
-                row("notes").status(Status::Idle).detail("Idle"),
-            ]),
+            row("Claude Code")
+                .marker("◆")
+                .detail("4 sessions")
+                .children([
+                    row("fix login redirect")
+                        .status(Status::Blocked)
+                        .detail("Approve edit to src/auth.rs?"),
+                    row("github issue review")
+                        .status(Status::Working)
+                        .detail("Working · 14m"),
+                    row("sidebar audit")
+                        .status(Status::Done)
+                        .detail("Done · 1h"),
+                    row("notes").status(Status::Idle).detail("Idle"),
+                ]),
             row("Codex")
                 .status(Status::Working)
                 .detail("Running cargo test"),
         ]),
-        row("tui-lipan").children([
+        row("tui-lipan").marker("◈").children([
             row("main")
                 .group()
                 .children([row("docs").status(Status::Done).detail("Done")]),
@@ -671,10 +723,19 @@ fn demo_rows() -> Vec<Row> {
     ]
 }
 
-fn tree_node(row: &Row, path: Vec<usize>, options: &TreeOptions) -> TreeNode {
-    let mut node = TreeNode::new(row.label)
-        .key(row.label)
-        .indent(options.indent);
+fn tree_node(row: &Row, path: Vec<usize>, options: &TreeOptions, accent: Color) -> TreeNode {
+    // A section heading has no arrow column: it starts where its siblings' arrows would, and its
+    // children hang from the end of its branch.
+    let heading = options.root_headings && path.len() == 1;
+    let label_style = if heading {
+        Style::new().fg(accent).bold()
+    } else {
+        Style::default()
+    };
+    let mut node = TreeNode::new(ListItem::from_spans([
+        Span::new(row.label).style(label_style)
+    ]))
+    .key(row.label);
     if options.details
         && let Some(detail) = row.detail
     {
@@ -682,20 +743,20 @@ fn tree_node(row: &Row, path: Vec<usize>, options: &TreeOptions) -> TreeNode {
             .content(
                 VStack::new()
                     .gap(0)
-                    .child(Text::new(row.label))
+                    .child(Text::new(row.label).style(label_style))
                     .child(Text::new(detail).style(Style::new().fg(Color::DarkGray))),
             )
             .content_height(2);
     }
-    if options.row_icons
-        && let Some(status) = row.status
-    {
-        node = node.icon(status.icon());
+    if let Some(icon) = row_icon(row) {
+        node = node.icon(icon);
     }
-    if row.group && options.always_open {
+    if heading {
         node = node
             .expansion_mode(TreeExpansionMode::AlwaysOpen)
-            .show_disclosure(!options.headings);
+            .show_arrow(false);
+    } else if row.group && options.always_open {
+        node = node.expansion_mode(TreeExpansionMode::AlwaysOpen);
     } else if !row.children.is_empty() {
         let expanded = !options.collapsed.contains(&path);
         node = node.expanded(expanded);
@@ -703,13 +764,13 @@ fn tree_node(row: &Row, path: Vec<usize>, options: &TreeOptions) -> TreeNode {
             && !expanded
             && let Some(status) = row.hidden_status()
         {
-            node = node.disclosure_style(Style::new().fg(status.color()));
+            node = node.arrow_style(Style::new().fg(status.color()));
         }
     }
     node.children(row.children.iter().enumerate().map(|(index, child)| {
         let mut path = path.clone();
         path.push(index);
-        tree_node(child, path, options)
+        tree_node(child, path, options, accent)
     }))
 }
 
@@ -1094,14 +1155,17 @@ mod tests {
             Some(TreeTabMsg::NextIndent),
             Some(TreeTabMsg::NextContentGap),
             Some(TreeTabMsg::ToggleArrows),
-            Some(TreeTabMsg::ToggleRowIcons),
+            Some(TreeTabMsg::ToggleIcons),
             Some(TreeTabMsg::ToggleArrows),
-            Some(TreeTabMsg::ToggleRowIcons),
+            Some(TreeTabMsg::ToggleIcons),
             Some(TreeTabMsg::NextArrow),
             Some(TreeTabMsg::ToggleAlwaysOpen),
             Some(TreeTabMsg::ToggleAlwaysOpen),
             Some(TreeTabMsg::ToggleDetails),
+            Some(TreeTabMsg::NextIconGap),
+            Some(TreeTabMsg::ToggleRootHeadings),
             Some(TreeTabMsg::NextGuide),
+            Some(TreeTabMsg::ToggleRootHeadings),
             Some(TreeTabMsg::NextGuide),
         ] {
             if let Some(message) = message {
@@ -1117,6 +1181,45 @@ mod tests {
                 label_column(&lines, "tui-lipan"),
                 label_column(&lines, "rozi")
             );
+        }
+    }
+
+    /// Every level is one indent deeper than its parent, and its connector sits where the
+    /// parent's branch ends, whatever the guides, arrows, and icons.
+    #[test]
+    fn tree_tab_children_sit_one_indent_deeper_than_their_parent() {
+        for guide in 0..GUIDES.len() {
+            for indent in 1..=4u16 {
+                for (arrows, icons) in [(true, true), (true, false), (false, true), (false, false)]
+                {
+                    let mut backend = tree_backend();
+                    let state = backend.state_mut();
+                    state.tree.guide = guide;
+                    state.tree.indent = indent;
+                    state.tree.arrows = arrows;
+                    state.tree.icons = icons;
+                    backend.render();
+                    let lines = backend.capture_frame().to_fixed_grid_lines();
+                    let context = format!(
+                        "{} indent={indent} arrows={arrows} icons={icons}: {lines:#?}",
+                        GUIDE_NAMES[guide]
+                    );
+                    for (parent, child) in [
+                        ("rozi", "master"),
+                        ("master", "dev"),
+                        ("Claude Code", "github issue review"),
+                    ] {
+                        // As in FileTree, a root with no arrow has nothing in front of it and so
+                        // no content gap; its children, with guides in front, do.
+                        let root_gap = if !arrows && parent == "rozi" { 1 } else { 0 };
+                        assert_eq!(
+                            label_column(&lines, child),
+                            label_column(&lines, parent) + indent as usize + root_gap,
+                            "{parent} → {child}, {context}"
+                        );
+                    }
+                }
+            }
         }
     }
 

@@ -3,7 +3,7 @@
 use crate::callback::{Callback, KeyHandler};
 use crate::core::element::Element;
 use crate::core::event::{KeyCode, KeyEvent, KeyMods};
-use crate::style::{Length, Span, Style, StyleSlot};
+use crate::style::{Length, Style, StyleSlot};
 use crate::utils::gradient::ColorGradient;
 use crate::widgets::ScrollKeymap;
 use crate::widgets::{FocusAccordion, ListItem};
@@ -212,9 +212,9 @@ pub enum TreeExpansionMode {
     Auto,
     /// Allow expansion and collapse even before children are loaded.
     Collapsible,
-    /// Always show children, without a disclosure arrow or collapse actions. The row keeps its
-    /// disclosure column, as a leaf does, so it lines up with its siblings; pair it with
-    /// [`TreeNode::show_disclosure`]`(false)` for a heading that needs no column.
+    /// Always show children, without an arrow or collapse actions. The row keeps its arrow column,
+    /// as a leaf does, so it lines up with its siblings; pair it with
+    /// [`TreeNode::show_arrow`]`(false)` for a section heading.
     AlwaysOpen,
 }
 
@@ -225,18 +225,13 @@ pub struct TreeNode {
     pub(crate) content: Option<TreeContent>,
     pub(crate) leading: Option<TreeContent>,
     pub(crate) icon: Option<TreeContent>,
-    pub(crate) disclosure_style: Option<Style>,
+    pub(crate) arrow_style: Option<Style>,
     pub(crate) content_height: u16,
-    pub(crate) show_disclosure: bool,
+    pub(crate) show_arrow: bool,
     pub(crate) key: Option<Arc<str>>,
     pub(crate) children: Vec<TreeNode>,
     pub(crate) expanded: bool,
     pub(crate) expansion_mode: TreeExpansionMode,
-    pub(crate) indent: u16,
-    /// Unused disclosure cells, which branch guides may fill before the separator.
-    pub(crate) disclosure_placeholder_width: u16,
-    /// A disclosure supplied by FileTree, before item icons and labels.
-    pub(crate) disclosure: Vec<Span>,
 }
 
 impl TreeNode {
@@ -247,22 +242,20 @@ impl TreeNode {
             content: None,
             leading: None,
             icon: None,
-            disclosure_style: None,
+            arrow_style: None,
             content_height: 1,
-            show_disclosure: true,
+            show_arrow: true,
             key: None,
             children: Vec::new(),
             expanded: false,
             expansion_mode: TreeExpansionMode::Auto,
-            indent: 2,
-            disclosure_placeholder_width: 0,
-            disclosure: Vec::new(),
         }
     }
 
-    /// Show or reserve the node's disclosure column. Disable for structural headings.
-    pub fn show_disclosure(mut self, show: bool) -> Self {
-        self.show_disclosure = show;
+    /// Keep this row's arrow column (default true). Disable for a section heading: its label
+    /// starts where siblings' arrows would, and its children hang beneath its label.
+    pub fn show_arrow(mut self, show: bool) -> Self {
+        self.show_arrow = show;
         self
     }
 
@@ -279,21 +272,19 @@ impl TreeNode {
         self
     }
 
-    /// A marker drawn in the disclosure column when the row has nothing to disclose: a leaf, or an
-    /// [`AlwaysOpen`](TreeExpansionMode::AlwaysOpen) row. A collapsible row shows its arrow there
-    /// instead, so markers and arrows share one column and labels stay aligned. The element is
-    /// clipped to the column's width (the widest disclosure icon, at least one cell). Setting an
-    /// icon renders the tree with composed rows.
+    /// The row's icon, such as a status glyph or a spinner, in the tree's icon column after the
+    /// arrow column and content gap. The column is [`Tree::icon_width`](crate::widgets::Tree::icon_width)
+    /// cells wide and clips the element. Setting an icon renders the tree with composed rows.
     pub fn icon(mut self, icon: impl Into<Element>) -> Self {
         self.icon = Some(TreeContent(Rc::new(icon.into())));
         self
     }
 
-    /// Style for this row's disclosure arrow, in place of the tree's
-    /// [`icon_style`](crate::widgets::Tree::icon_style). Useful for a collapsed row that tints
+    /// Style for this row's arrow, in place of the tree's
+    /// [`arrow_style`](crate::widgets::Tree::arrow_style). Useful for a collapsed row that tints
     /// its arrow with the state of the rows it hides.
-    pub fn disclosure_style(mut self, style: Style) -> Self {
-        self.disclosure_style = Some(style);
+    pub fn arrow_style(mut self, style: Style) -> Self {
+        self.arrow_style = Some(style);
         self
     }
 
@@ -348,22 +339,6 @@ impl TreeNode {
             TreeExpansionMode::AlwaysOpen => false,
         }
     }
-
-    /// Set indentation per level (default 2).
-    pub fn indent(mut self, indent: u16) -> Self {
-        self.indent = indent;
-        self
-    }
-
-    pub(crate) fn disclosure_placeholder(mut self, cells: u16) -> Self {
-        self.disclosure_placeholder_width = cells;
-        self
-    }
-
-    pub(crate) fn disclosure(mut self, spans: Vec<Span>) -> Self {
-        self.disclosure = spans;
-        self
-    }
 }
 
 /// Style of indentation guides.
@@ -398,12 +373,16 @@ pub(crate) struct TreeProps {
     pub clear_selection: bool,
     pub force_scroll_to_selected: bool,
     pub gap: u16,
+    pub indent: u16,
     pub content_gap: u16,
+    pub show_arrows: bool,
+    pub expanded_arrow: Arc<str>,
+    pub collapsed_arrow: Arc<str>,
+    pub leaf_arrow: Option<Arc<str>>,
+    pub arrow_style: Style,
     pub show_icons: bool,
-    pub expanded_icon: Arc<str>,
-    pub collapsed_icon: Arc<str>,
-    pub leaf_icon: Option<Arc<str>>,
-    pub icon_style: Style,
+    pub icon_width: u16,
+    pub icon_gap: u16,
     pub width: Length,
     pub height: Length,
     pub style: Style,

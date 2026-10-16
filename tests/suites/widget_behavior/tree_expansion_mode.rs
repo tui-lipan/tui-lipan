@@ -57,28 +57,26 @@ impl Component for ExpansionTree {
     }
     fn view(&self, ctx: &Context<Self>) -> Element {
         let mut group = TreeNode::new("group")
-            .indent(self.indent)
             .expansion_mode(ctx.state.mode)
-            .show_disclosure(self.column)
+            .show_arrow(self.column)
             .expanded(ctx.state.group_open);
         if self.composed {
             group = group.content(Text::new("group"));
         }
         if ctx.state.loaded {
-            group = group.child(TreeNode::new("leaf").indent(self.indent));
+            group = group.child(TreeNode::new("leaf"));
         }
         Tree::new(
             TreeNode::new("root")
                 .expanded(ctx.state.root_open)
                 .children([
                     group,
-                    TreeNode::new("sibling")
-                        .indent(self.indent)
-                        .child(TreeNode::new("sibling-child")),
+                    TreeNode::new("sibling").child(TreeNode::new("sibling-child")),
                 ]),
         )
+        .indent(self.indent)
         .content_gap(self.content_gap)
-        .show_icons(self.icons)
+        .show_arrows(self.icons)
         .controlled_expansion(self.controlled)
         .selected(ctx.state.selected)
         .indent_style(IndentStyle::Branch)
@@ -268,7 +266,7 @@ fn an_always_open_row_lines_up_with_a_collapsible_sibling_in_both_renderers() {
 }
 
 #[test]
-fn always_open_heading_child_guides_start_under_its_label_in_both_renderers() {
+fn always_open_heading_children_hang_from_the_end_of_its_branch_in_both_renderers() {
     for composed in [false, true] {
         for controlled in [false, true] {
             for icons in [false, true] {
@@ -293,10 +291,13 @@ fn always_open_heading_child_guides_start_under_its_label_in_both_renderers() {
                         if indent == 0 {
                             assert!(!rows[2].contains('└'), "{rows:?}");
                         } else {
+                            // A heading has no arrow column: its children hang from the cell
+                            // after its guides, one content gap before its label.
                             let label_column = rows[1].chars().position(|c| c == 'g').unwrap();
                             let guide_column = rows[2].chars().position(|c| c == '└').unwrap();
                             assert_eq!(
-                                guide_column, label_column,
+                                guide_column + content_gap as usize,
+                                label_column,
                                 "composed={composed} controlled={controlled} icons={icons} gap={content_gap} indent={indent}: {rows:?}"
                             );
                             assert!(
