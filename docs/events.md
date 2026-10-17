@@ -72,7 +72,7 @@ Emitted by: `List::on_select`, `List::on_activate`, `List::on_ctrl_activate`, `L
 pub struct ListEvent {
     pub index: usize,   // Selected/activated item index
     pub mods: KeyMods,  // Modifiers held during the click; empty when a key caused the event
-    pub clicks: u8,     // 1 for a single click, 2 for a double-click's second; 0 for a key
+    pub clicks: u8,     // 2 for a double-click's second click, 1 for any other; 0 for a key
 }
 ```
 

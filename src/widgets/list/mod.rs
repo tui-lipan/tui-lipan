@@ -280,8 +280,8 @@ pub struct ListEvent {
     pub index: usize,
     /// Modifiers held during the click that caused the event. Empty when a key caused it.
     pub mods: crate::core::event::KeyMods,
-    /// Which click of a run of clicks on the row caused the event: 1 for a single click, 2 for
-    /// the second click of a double-click. 0 when a key caused it.
+    /// 2 for the second click of a double-click, the one that activates; 1 for any other click,
+    /// including a third in a quick run. 0 when a key caused the event.
     pub clicks: u8,
 }
 
@@ -295,12 +295,13 @@ impl ListEvent {
         }
     }
 
-    /// An event caused by the `clicks`th click on a row with `mods` held.
-    pub(crate) fn click(index: usize, mods: crate::core::event::KeyMods, clicks: u8) -> Self {
+    /// An event caused by the `click_count`th click of a run on a row with `mods` held. Only the
+    /// second is a double-click; the detector's third reads as a single click.
+    pub(crate) fn click(index: usize, mods: crate::core::event::KeyMods, click_count: u8) -> Self {
         Self {
             index,
             mods,
-            clicks,
+            clicks: if click_count == 2 { 2 } else { 1 },
         }
     }
 }
