@@ -227,8 +227,12 @@ fn page_target(
         if next == target {
             break;
         }
+        // The distance between neighbouring rows includes the gap above the lower of the two: the
+        // row entered going down, the row left going up.
+        let lower = target.max(next);
+        let gap = gap_before(lower, &entries[lower]) as usize;
         target = next;
-        remaining = remaining.saturating_sub(row_height(entries[target].node) as usize);
+        remaining = remaining.saturating_sub(gap + row_height(entries[target].node) as usize);
     }
     target
 }
@@ -270,6 +274,15 @@ pub(super) fn view(ctx: &Context<TreeComponent>) -> Element {
         view = view.scroll_to_key(row_key(entry));
     }
     for (index, entry) in entries.iter().enumerate() {
+        let gap = gap_before(index, entry);
+        if gap > 0 {
+            // Space, not a row: nothing in it hovers, selects, or takes an index.
+            view = view.child(
+                Text::new("")
+                    .height(Length::Px(gap))
+                    .key(format!("{}-gap", row_key(entry))),
+            );
+        }
         view = view.child(row(ctx, entry, index, max_depth, selected).key(row_key(entry)));
     }
     if entries.is_empty()

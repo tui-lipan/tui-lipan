@@ -3,6 +3,8 @@
 #[path = "rich.rs"]
 mod rich;
 
+use std::sync::Arc;
+
 use super::guides::{TreeBranch, TreeGuides};
 use super::types::*;
 use crate::core::component::{Component, Context, Update};
@@ -167,28 +169,48 @@ impl Component for TreeComponent {
             .map(|entry| entry.branch.depth())
             .max()
             .unwrap_or(0);
-        let items = entries
-            .iter()
-            .map(|entry| build_item(entry, &ctx.props, max_depth))
-            .collect::<Vec<_>>();
+        // Gaps before top-level nodes are spacer items, so the list's positions run ahead of the
+        // tree's row indices; `rows` maps one onto the other.
+        let mut items = Vec::with_capacity(entries.len());
+        let mut positions = Vec::with_capacity(entries.len());
+        for (index, entry) in entries.iter().enumerate() {
+            items.extend((0..gap_before(index, entry)).map(|_| ListItem::spacer()));
+            positions.push(items.len());
+            items.push(build_item(entry, &ctx.props, max_depth));
+        }
+        let rows = ListRows(Arc::from(positions));
 
-        let selected = selected_index(ctx).map(|s| s.min(items.len().saturating_sub(1)));
+        let selected = selected_index(ctx)
+            .map(|s| s.min(entries.len().saturating_sub(1)))
+            .and_then(|s| rows.position(s));
 
-        let on_select = ctx
-            .link()
-            .callback(|event: crate::widgets::ListEvent| TreeMsg::Select(event.index));
-        let on_activate = ctx
-            .link()
-            .callback(|event: crate::widgets::ListEvent| TreeMsg::Activate(event.index));
-        let on_item_click = ctx.link().callback(|event: crate::widgets::ListEvent| {
-            TreeMsg::Click(
-                event.index,
-                Click {
-                    mods: event.mods,
-                    double: event.clicks == 2,
-                },
-            )
-        });
+        let on_select = {
+            let rows = rows.clone();
+            ctx.link()
+                .callback(move |event: crate::widgets::ListEvent| {
+                    TreeMsg::Select(rows.row(event.index))
+                })
+        };
+        let on_activate = {
+            let rows = rows.clone();
+            ctx.link()
+                .callback(move |event: crate::widgets::ListEvent| {
+                    TreeMsg::Activate(rows.row(event.index))
+                })
+        };
+        let on_item_click = {
+            let rows = rows.clone();
+            ctx.link()
+                .callback(move |event: crate::widgets::ListEvent| {
+                    TreeMsg::Click(
+                        rows.row(event.index),
+                        Click {
+                            mods: event.mods,
+                            double: event.clicks == 2,
+                        },
+                    )
+                })
+        };
 
         let keymap = ctx.props.keymap;
         let interceptor = ctx.props.key_interceptor.clone();
@@ -233,10 +255,11 @@ impl Component for TreeComponent {
             .on_activate(on_activate)
             .on_key(on_key);
         if ctx.props.on_ctrl_activate.is_some() {
-            list =
-                list.on_ctrl_activate(ctx.link().callback(|event: crate::widgets::ListEvent| {
-                    TreeMsg::CtrlActivate(event.index)
-                }));
+            list = list.on_ctrl_activate(ctx.link().callback(
+                move |event: crate::widgets::ListEvent| {
+                    TreeMsg::CtrlActivate(rows.row(event.index))
+                },
+            ));
         }
         if let Some(cb) = ctx.props.on_focus.clone() {
             list = list.on_focus(cb);
@@ -400,6 +423,33 @@ fn sync_selection_from_props(props: &TreeProps, state: &mut TreeState) {
         state.selected = Some(selected);
     } else if state.selected.is_none() {
         state.selected = Some(0);
+    }
+}
+
+/// The blank lines [`TreeNode::gap_before`] puts before row `index`: only on a top-level node, and
+/// not on the first row.
+fn gap_before(index: usize, entry: &TreeEntry<'_>) -> u16 {
+    if index > 0 && entry.branch.depth() == 0 {
+        entry.node.gap_before
+    } else {
+        0
+    }
+}
+
+/// Where each tree row sits in a text tree's list, which also holds the gaps' spacers.
+#[derive(Clone)]
+struct ListRows(Arc<[usize]>);
+
+impl ListRows {
+    /// The list position of tree row `row`.
+    fn position(&self, row: usize) -> Option<usize> {
+        self.0.get(row).copied()
+    }
+
+    /// The tree row at list position `position`, or the first after it for a spacer, which the
+    /// list never reports since it cannot be selected.
+    fn row(&self, position: usize) -> usize {
+        self.0.partition_point(|&row| row < position)
     }
 }
 

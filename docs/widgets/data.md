@@ -470,7 +470,10 @@ Migration: replace `Short`/`Long` with `Branch` and `ShortRounded`/`LongRounded`
 
 ### Multiple roots and composed rows
 
-`Tree::forest(roots)` displays several top-level nodes without an artificial parent row. Events
+`Tree::forest(roots)` displays several top-level nodes without an artificial parent row. A top-level node's
+`TreeNode::gap_before(n)` sets its group apart with `n` blank lines that are space between rows,
+not rows of their own: the pointer hovers nothing there, the keyboard steps over it, and row
+indices are unchanged. It is ignored on the first row and below the top level. Events
 report paths starting with each root's index. `Tree::new(root)` continues to display one root.
 
 A node normally contains a `ListItem`, with styled spans, descriptions, status symbols, and detail

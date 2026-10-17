@@ -40,6 +40,7 @@ struct TreeOptions {
     arrow: usize,
     content_gap: u16,
     icon_gap: u16,
+    root_gap: u16,
     tint_folded: bool,
     always_open: bool,
     root_headings: bool,
@@ -58,6 +59,7 @@ impl Default for TreeOptions {
             arrow: 0,
             content_gap: 1,
             icon_gap: 1,
+            root_gap: 0,
             tint_folded: true,
             always_open: true,
             root_headings: false,
@@ -101,6 +103,7 @@ enum TreeTabMsg {
     NextArrow,
     NextContentGap,
     NextIconGap,
+    NextRootGap,
     ToggleTintFolded,
     ToggleAlwaysOpen,
     ToggleRootHeadings,
@@ -415,6 +418,7 @@ fn update_tree(tree: &mut TreeOptions, msg: TreeTabMsg) {
         TreeTabMsg::NextArrow => tree.arrow = (tree.arrow + 1) % ARROWS.len(),
         TreeTabMsg::NextContentGap => tree.content_gap = (tree.content_gap + 1) % 4,
         TreeTabMsg::NextIconGap => tree.icon_gap = (tree.icon_gap + 1) % 4,
+        TreeTabMsg::NextRootGap => tree.root_gap = (tree.root_gap + 1) % 3,
         TreeTabMsg::ToggleTintFolded => tree.tint_folded = !tree.tint_folded,
         TreeTabMsg::ToggleAlwaysOpen => tree.always_open = !tree.always_open,
         TreeTabMsg::ToggleRootHeadings => tree.root_headings = !tree.root_headings,
@@ -496,6 +500,13 @@ fn tree_tab(ctx: &Context<FileTreeShowcase>) -> Element {
             .automation_id("tree-icon-gap"),
         )
         .child(Text::new("TREE ONLY").style(Style::new().fg(accent).bold()))
+        .child(
+            button(
+                spacing_label("Gap before roots", options.root_gap),
+                TreeTabMsg::NextRootGap,
+            )
+            .automation_id("tree-root-gap"),
+        )
         .child(
             button(
                 toggle_label("Tint folded arrows", options.tint_folded),
@@ -735,7 +746,8 @@ fn tree_node(row: &Row, path: Vec<usize>, options: &TreeOptions, accent: Color) 
     let mut node = TreeNode::new(ListItem::from_spans([
         Span::new(row.label).style(label_style)
     ]))
-    .key(row.label);
+    .key(row.label)
+    .gap_before(if path.len() == 1 { options.root_gap } else { 0 });
     if options.details
         && let Some(detail) = row.detail
     {
