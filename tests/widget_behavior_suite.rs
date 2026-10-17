@@ -99,9 +99,9 @@ mod tree_ctrl_activation;
 mod tree_expansion_mode;
 #[path = "suites/widget_behavior/tree_file_tree_parity.rs"]
 mod tree_file_tree_parity;
+#[path = "suites/widget_behavior/tree_gap_before.rs"]
+mod tree_gap_before;
 #[path = "suites/widget_behavior/tree_pages_and_clicks.rs"]
 mod tree_pages_and_clicks;
-#[path = "suites/widget_behavior/tree_root_gap.rs"]
-mod tree_root_gap;
 #[path = "suites/widget_behavior/tree_row_icons.rs"]
 mod tree_row_icons;

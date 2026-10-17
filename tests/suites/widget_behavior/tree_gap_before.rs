@@ -1,4 +1,4 @@
-//! `Tree::root_gap` sets top-level nodes apart with space that is not a row: it draws blank, takes
+//! `TreeNode::gap_before` sets a top-level node apart with space that is not a row: it draws blank, takes
 //! no hover, and leaves row indices as they are, in text and composed trees alike.
 use tui_lipan::TestBackend;
 use tui_lipan::core::event::{MouseButton, MouseEvent, MouseKind};
@@ -33,9 +33,11 @@ impl Component for Groups {
         };
         Tree::forest([
             node("alpha").expanded(true).child(node("one")),
-            node("beta").expanded(true).child(node("two")),
+            node("beta")
+                .expanded(true)
+                .gap_before(1)
+                .child(node("two").gap_before(1)),
         ])
-        .root_gap(1)
         .show_arrows(false)
         .item_hover_style(Style::new().bg(HOVER))
         .focus_key("groups")
@@ -86,7 +88,7 @@ fn hovered(backend: &TestBackend<Groups>) -> bool {
 }
 
 #[test]
-fn a_root_gap_is_a_blank_line_between_top_level_nodes_only() {
+fn a_gap_before_is_a_blank_line_above_a_top_level_node_only() {
     for composed in [false, true] {
         let backend = backend(composed);
         let lines = backend.capture_frame().to_fixed_grid_lines();
@@ -96,7 +98,11 @@ fn a_root_gap_is_a_blank_line_between_top_level_nodes_only() {
             0,
             "no gap before the first: {context}"
         );
-        assert_eq!(line_of(&backend, "one"), 1, "none under a node: {context}");
+        assert_eq!(
+            line_of(&backend, "one"),
+            1,
+            "none under a node, nor below the top level: {context}"
+        );
         assert!(lines[2].trim().is_empty(), "{context}");
         assert_eq!(line_of(&backend, "beta"), 3, "{context}");
         assert_eq!(line_of(&backend, "two"), 4, "{context}");
@@ -104,7 +110,7 @@ fn a_root_gap_is_a_blank_line_between_top_level_nodes_only() {
 }
 
 #[test]
-fn the_pointer_over_a_root_gap_hovers_nothing() {
+fn the_pointer_over_a_gap_hovers_nothing() {
     for composed in [false, true] {
         let mut backend = backend(composed);
         // `one`, not `alpha`: a text tree starts with its first row selected, which outranks hover.
@@ -120,7 +126,7 @@ fn the_pointer_over_a_root_gap_hovers_nothing() {
 }
 
 #[test]
-fn rows_keep_their_tree_indices_across_a_root_gap() {
+fn rows_keep_their_tree_indices_across_a_gap() {
     let click = [
         MouseKind::Down(MouseButton::Left),
         MouseKind::Up(MouseButton::Left),

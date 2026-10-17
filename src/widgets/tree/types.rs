@@ -228,6 +228,7 @@ pub struct TreeNode {
     pub(crate) arrow_style: Option<Style>,
     pub(crate) content_height: u16,
     pub(crate) show_arrow: bool,
+    pub(crate) gap_before: u16,
     pub(crate) key: Option<Arc<str>>,
     pub(crate) children: Vec<TreeNode>,
     pub(crate) expanded: bool,
@@ -245,6 +246,7 @@ impl TreeNode {
             arrow_style: None,
             content_height: 1,
             show_arrow: true,
+            gap_before: 0,
             key: None,
             children: Vec::new(),
             expanded: false,
@@ -256,6 +258,14 @@ impl TreeNode {
     /// starts where siblings' arrows would, and its children hang beneath its label.
     pub fn show_arrow(mut self, show: bool) -> Self {
         self.show_arrow = show;
+        self
+    }
+
+    /// Blank lines before this node when it is a top-level node, setting its group apart from the
+    /// rows above it. The space sits between rows: it takes no hover, selection, or index. Ignored
+    /// on the first row, and below the top level, where it would break the guides.
+    pub fn gap_before(mut self, lines: u16) -> Self {
+        self.gap_before = lines;
         self
     }
 
@@ -373,7 +383,6 @@ pub(crate) struct TreeProps {
     pub clear_selection: bool,
     pub force_scroll_to_selected: bool,
     pub gap: u16,
-    pub root_gap: u16,
     pub indent: u16,
     pub content_gap: u16,
     pub show_arrows: bool,

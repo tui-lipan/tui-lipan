@@ -169,14 +169,12 @@ impl Component for TreeComponent {
             .map(|entry| entry.branch.depth())
             .max()
             .unwrap_or(0);
-        // Top-level nodes are set apart by spacer items, so the list's positions run ahead of the
+        // Gaps before top-level nodes are spacer items, so the list's positions run ahead of the
         // tree's row indices; `rows` maps one onto the other.
         let mut items = Vec::with_capacity(entries.len());
         let mut positions = Vec::with_capacity(entries.len());
         for (index, entry) in entries.iter().enumerate() {
-            if root_gap_before(index, entry) {
-                items.extend((0..ctx.props.root_gap).map(|_| ListItem::spacer()));
-            }
+            items.extend((0..gap_before(index, entry)).map(|_| ListItem::spacer()));
             positions.push(items.len());
             items.push(build_item(entry, &ctx.props, max_depth));
         }
@@ -428,13 +426,17 @@ fn sync_selection_from_props(props: &TreeProps, state: &mut TreeState) {
     }
 }
 
-/// Whether [`TreeProps::root_gap`] sets row `index` apart from the rows before it: it is a
-/// top-level node, and not the first row.
-fn root_gap_before(index: usize, entry: &TreeEntry<'_>) -> bool {
-    index > 0 && entry.branch.depth() == 0
+/// The blank lines [`TreeNode::gap_before`] puts before row `index`: only on a top-level node, and
+/// not on the first row.
+fn gap_before(index: usize, entry: &TreeEntry<'_>) -> u16 {
+    if index > 0 && entry.branch.depth() == 0 {
+        entry.node.gap_before
+    } else {
+        0
+    }
 }
 
-/// Where each tree row sits in a text tree's list, which also holds the root gaps' spacers.
+/// Where each tree row sits in a text tree's list, which also holds the gaps' spacers.
 #[derive(Clone)]
 struct ListRows(Arc<[usize]>);
 

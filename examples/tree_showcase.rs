@@ -502,7 +502,7 @@ fn tree_tab(ctx: &Context<FileTreeShowcase>) -> Element {
         .child(Text::new("TREE ONLY").style(Style::new().fg(accent).bold()))
         .child(
             button(
-                spacing_label("Root gap", options.root_gap),
+                spacing_label("Gap before roots", options.root_gap),
                 TreeTabMsg::NextRootGap,
             )
             .automation_id("tree-root-gap"),
@@ -550,7 +550,6 @@ fn tree_tab(ctx: &Context<FileTreeShowcase>) -> Element {
         .collapsed_arrow(ARROWS[options.arrow].2)
         .arrow_style(Style::new().fg(accent))
         .content_gap(options.content_gap)
-        .root_gap(options.root_gap)
         .selection_style(Style::new().bg(Color::indexed(236)).fg(Color::White).bold())
         .focus_key("showcase-rows")
         .on_toggle(ctx.link().callback(|event: TreeToggleEvent| {
@@ -747,7 +746,8 @@ fn tree_node(row: &Row, path: Vec<usize>, options: &TreeOptions, accent: Color) 
     let mut node = TreeNode::new(ListItem::from_spans([
         Span::new(row.label).style(label_style)
     ]))
-    .key(row.label);
+    .key(row.label)
+    .gap_before(if path.len() == 1 { options.root_gap } else { 0 });
     if options.details
         && let Some(detail) = row.detail
     {
