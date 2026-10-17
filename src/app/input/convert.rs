@@ -54,10 +54,8 @@ impl ShiftPause {
         use crossterm::event::{KeyCode as C, KeyEventKind, KeyModifiers, ModifierKeyCode as M};
         match key.code {
             C::Modifier(M::LeftShift | M::RightShift) => {
-                if key.kind != KeyEventKind::Release && KeyModifiers::SHIFT.contains(key.modifiers)
-                {
-                    self.paused = true;
-                }
+                self.paused = key.kind != KeyEventKind::Release
+                    && KeyModifiers::SHIFT.contains(key.modifiers);
             }
             _ => self.paused = false,
         }
@@ -458,6 +456,25 @@ mod tests {
         ));
         assert!(pause.paused());
         pause.observe_key(KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT));
+        assert!(!pause.paused());
+    }
+
+    #[test]
+    fn a_reported_shift_release_ends_the_pause() {
+        // The release can be queued before the runner leaves all-keys reporting.
+        use crossterm::event::{KeyEventKind, KeyModifiers, ModifierKeyCode as M};
+        let mut pause = ShiftPause::default();
+        pause.observe_key(shift_key(
+            M::LeftShift,
+            KeyEventKind::Press,
+            KeyModifiers::SHIFT,
+        ));
+        assert!(pause.paused());
+        pause.observe_key(shift_key(
+            M::LeftShift,
+            KeyEventKind::Release,
+            KeyModifiers::SHIFT,
+        ));
         assert!(!pause.paused());
     }
 
