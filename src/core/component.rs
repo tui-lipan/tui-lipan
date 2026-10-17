@@ -1405,6 +1405,22 @@ impl<C: Component> Context<C> {
         self.env.modifier_key_reporting.get()
     }
 
+    /// Choose whether modifier-key reporting stays active while Shift is held. Defaults to `true`.
+    ///
+    /// Pass `false` while users may select host text with Shift+drag, such as in a picker. A lone
+    /// Shift press then pauses reporting until Shift is released, the next key, or a mouse event
+    /// without Shift. Some hosts treat a reported Shift release as typing and clear that selection.
+    /// Modifiers pressed after Shift are not reported during the pause, so keep the default while
+    /// recording shortcuts.
+    pub fn set_modifier_key_reporting_keeps_shift(&self, keep: bool) {
+        self.env.modifier_key_reporting_keeps_shift.set(keep);
+    }
+
+    /// Returns whether modifier-key reporting stays active while Shift is held.
+    pub fn modifier_key_reporting_keeps_shift(&self) -> bool {
+        self.env.modifier_key_reporting_keeps_shift.get()
+    }
+
     /// Stop the app to the shell, the way `ctrl+z` does in an ordinary program.
     ///
     /// Wire this to whatever key your app uses for suspend: raw mode clears the

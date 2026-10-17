@@ -346,6 +346,7 @@ pub(crate) struct RuntimeEnv {
     pub focus_request: Rc<RefCell<Option<FocusRequest>>>,
     pub mouse_capture: Rc<Cell<bool>>,
     pub modifier_key_reporting: Rc<Cell<bool>>,
+    pub modifier_key_reporting_keeps_shift: Rc<Cell<bool>>,
     pub surface_mode: SurfaceMode,
     pub transcript_history: Rc<RefCell<Vec<TranscriptEntry>>>,
     pub pending_transcript_entries: Rc<RefCell<VecDeque<TranscriptEntry>>>,

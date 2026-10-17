@@ -42,6 +42,12 @@ terminals also leave physical sides unknown, while ordinary combined `KeyEvent`s
 modifiers. Losing host focus clears the held set. Tests can drive the callback with
 `TestBackend::set_held_modifiers`.
 
+Some hosts clear a Shift+drag text selection when a reported Shift release looks like typing. Call
+`ctx.set_modifier_key_reporting_keeps_shift(false)` while users may select host text, such as in a
+picker. A lone Shift press then pauses reporting until Shift is released, the next key, or a mouse
+event without Shift. Modifiers pressed after Shift are not reported during the pause, so keep the
+default `true` while recording shortcuts.
+
 ## State Flow
 
 ```

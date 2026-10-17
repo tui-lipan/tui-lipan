@@ -587,6 +587,7 @@ pub struct AppRunner<C: Component> {
     pub(crate) focus: FocusState,
     held_modifiers: KeyMods,
     alt_tracker: crate::app::input::convert::AltTracker,
+    shift_pause: crate::app::input::convert::ShiftPause,
     on_focus_changed: Option<crate::app::context::FocusChangedHook>,
     pub(crate) drag: DragState,
     pub(crate) mouse: MouseTrackingState,
@@ -913,6 +914,7 @@ impl<C: Component> AppRunner<C> {
             focus,
             held_modifiers: KeyMods::NONE,
             alt_tracker: Default::default(),
+            shift_pause: Default::default(),
             on_focus_changed,
             drag,
             mouse: MouseTrackingState::with_pointer_cell(last_mouse),
@@ -2336,6 +2338,10 @@ impl<C: Component> AppRunner<C> {
                 // Whether this pass handled nothing but pointer motion, a drag, or the wheel.
                 let mut pointer_motion_only = false;
                 let modifier_reporting = self.core.ctx.modifier_key_reporting_enabled();
+                if !modifier_reporting || self.core.ctx.modifier_key_reporting_keeps_shift() {
+                    self.shift_pause.reset();
+                }
+                let modifier_reporting = modifier_reporting && !self.shift_pause.paused();
                 if guard.set_modifier_key_reporting(modifier_reporting)? {
                     self.alt_tracker = Default::default();
                     self.set_held_modifiers(KeyMods::NONE, &mut dirty);
@@ -2506,12 +2512,14 @@ impl<C: Component> AppRunner<C> {
                         CEvent::FocusLost => {
                             self.set_window_focused(false, &mut dirty);
                             self.alt_tracker = Default::default();
+                            self.shift_pause.reset();
                             self.set_held_modifiers(KeyMods::NONE, &mut dirty);
                             self.animation.reset_blink();
                             dirty.mark_paint();
                         }
                         CEvent::Key(k) => {
                             let alt_side = self.alt_tracker.update(k);
+                            self.shift_pause.observe_key(k);
                             #[cfg(feature = "terminal")]
                             if let Some(mods) = modifier_key_state(k)
                                 && self.refresh_terminal_link_hover_at_pointer(mods)
@@ -2617,6 +2625,7 @@ impl<C: Component> AppRunner<C> {
                         }
                         CEvent::Mouse(m) if self.mouse_enabled => {
                             crate::debug::increment_mouse_events();
+                            self.shift_pause.observe_mouse(m.modifiers);
 
                             match self.classify_host_mouse(m) {
                                 CoalescedPointer::Ignored => {}
