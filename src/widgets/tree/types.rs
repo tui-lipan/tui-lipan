@@ -373,6 +373,7 @@ pub(crate) struct TreeProps {
     pub clear_selection: bool,
     pub force_scroll_to_selected: bool,
     pub gap: u16,
+    pub root_gap: u16,
     pub indent: u16,
     pub content_gap: u16,
     pub show_arrows: bool,

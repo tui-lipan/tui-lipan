@@ -381,6 +381,7 @@ Hierarchical tree view with expand/collapse.
 | `clear_selection` | `bool` | When `true`, suppress the selection highlight (authoritative over `selected` and internal state) |
 | `force_scroll_to_selected` | `bool` | Force the internal list to reveal the selected row on next render |
 | `gap` | `u16` | Vertical gap between items |
+| `root_gap` | `u16` | Blank lines between top-level nodes, on top of `gap`. Not a row: no hover, selection, or index |
 | `indent` | `u16` | Cells each level of depth adds (default: `2`); zero puts every level in one column |
 | `content_gap` | `u16` | Gap after the guides and arrow column, before the icon or content (default: `1`); allows `0` |
 | `show_arrows` | `bool` | Show the arrow column (default: `true`) |
@@ -470,7 +471,9 @@ Migration: replace `Short`/`Long` with `Branch` and `ShortRounded`/`LongRounded`
 
 ### Multiple roots and composed rows
 
-`Tree::forest(roots)` displays several top-level nodes without an artificial parent row. Events
+`Tree::forest(roots)` displays several top-level nodes without an artificial parent row. `root_gap(n)` sets
+them apart with `n` blank lines that are space between rows, not rows of their own: the pointer
+hovers nothing there, the keyboard steps over it, and row indices are unchanged. Events
 report paths starting with each root's index. `Tree::new(root)` continues to display one root.
 
 A node normally contains a `ListItem`, with styled spans, descriptions, status symbols, and detail

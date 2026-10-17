@@ -101,5 +101,7 @@ mod tree_expansion_mode;
 mod tree_file_tree_parity;
 #[path = "suites/widget_behavior/tree_pages_and_clicks.rs"]
 mod tree_pages_and_clicks;
+#[path = "suites/widget_behavior/tree_root_gap.rs"]
+mod tree_root_gap;
 #[path = "suites/widget_behavior/tree_row_icons.rs"]
 mod tree_row_icons;

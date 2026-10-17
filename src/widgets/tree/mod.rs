@@ -39,6 +39,7 @@ impl Tree {
                 clear_selection: false,
                 force_scroll_to_selected: false,
                 gap: 0,
+                root_gap: 0,
                 indent: 2,
                 content_gap: 1,
                 show_arrows: true,
@@ -177,6 +178,14 @@ impl Tree {
     /// Set vertical gap between rows.
     pub fn gap(mut self, gap: u16) -> Self {
         self.props.gap = gap;
+        self
+    }
+
+    /// Blank lines between top-level nodes, on top of [`gap`](Self::gap), so the groups of a
+    /// [`forest`](Self::forest) read apart. The space is not a row: it takes no hover, selection,
+    /// or index.
+    pub fn root_gap(mut self, lines: u16) -> Self {
+        self.props.root_gap = lines;
         self
     }
 

@@ -270,6 +270,14 @@ pub(super) fn view(ctx: &Context<TreeComponent>) -> Element {
         view = view.scroll_to_key(row_key(entry));
     }
     for (index, entry) in entries.iter().enumerate() {
+        if ctx.props.root_gap > 0 && root_gap_before(index, entry) {
+            // Space, not a row: nothing in it hovers, selects, or takes an index.
+            view = view.child(
+                Text::new("")
+                    .height(Length::Px(ctx.props.root_gap))
+                    .key(format!("{}-gap", row_key(entry))),
+            );
+        }
         view = view.child(row(ctx, entry, index, max_depth, selected).key(row_key(entry)));
     }
     if entries.is_empty()
