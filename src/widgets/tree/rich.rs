@@ -227,8 +227,12 @@ fn page_target(
         if next == target {
             break;
         }
+        // The distance between neighbouring rows includes the gap above the lower of the two: the
+        // row entered going down, the row left going up.
+        let lower = target.max(next);
+        let gap = gap_before(lower, &entries[lower]) as usize;
         target = next;
-        remaining = remaining.saturating_sub(row_height(entries[target].node) as usize);
+        remaining = remaining.saturating_sub(gap + row_height(entries[target].node) as usize);
     }
     target
 }

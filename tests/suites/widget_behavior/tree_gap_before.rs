@@ -155,3 +155,75 @@ fn rows_keep_their_tree_indices_across_a_gap() {
         );
     }
 }
+
+/// Ten one-line roots with a two-line gap above the fourth, in a five-line viewport.
+struct Pager {
+    composed: bool,
+}
+
+impl Component for Pager {
+    type Message = TreeEvent;
+    type Properties = ();
+    type State = Option<usize>;
+    fn create_state(&self, _: &()) -> Option<usize> {
+        None
+    }
+    fn update(&mut self, event: TreeEvent, ctx: &mut Context<Self>) -> Update {
+        ctx.state = Some(event.index);
+        Update::full()
+    }
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        Tree::forest((0..10).map(|index| {
+            let label = format!("row {index}");
+            let node = TreeNode::new(label.clone()).gap_before(if index == 3 { 2 } else { 0 });
+            if self.composed {
+                node.content(Text::new(label))
+            } else {
+                node
+            }
+        }))
+        .focus_key("pager")
+        .on_select(ctx.link().callback(|event| event))
+        .into()
+    }
+}
+
+/// Where each of PageDown, PageDown, PageUp, PageUp lands, from the first row.
+fn page(composed: bool) -> Vec<usize> {
+    let mut backend = TestBackend::new(Pager { composed });
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 5,
+    });
+    backend.render();
+    assert!(backend.focus_key(&"pager".into()));
+    let mut seen = Vec::new();
+    for code in [
+        KeyCode::PageDown,
+        KeyCode::PageDown,
+        KeyCode::PageUp,
+        KeyCode::PageUp,
+    ] {
+        backend
+            .send_key(KeyEvent {
+                code,
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+        backend.render();
+        seen.push(backend.state().expect("paging selects a row"));
+    }
+    seen
+}
+
+/// A page is a viewport of lines, gaps included, so paging across a gap lands on the same row in
+/// both render paths.
+#[test]
+fn paging_counts_a_gap_as_the_lines_it_takes() {
+    // Down from row 0: rows 1 and 2, then the two-line gap, fill the page to row 3. Up from row 7
+    // crosses the same gap on the way back.
+    assert_eq!(page(false), [3, 7, 3, 1], "text tree");
+    assert_eq!(page(true), [3, 7, 3, 1], "composed tree");
+}
