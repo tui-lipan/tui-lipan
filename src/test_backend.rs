@@ -238,6 +238,10 @@ where
             .env()
             .command_chord_reveal_delay
             .set(app.command_chord_reveal_delay);
+        core.ctx
+            .env()
+            .scroll_wheel_multiplier
+            .set(app.scroll_wheel_multiplier.max(1));
         let key_dispatch_config = RuntimeKeyDispatchConfig {
             focus_policy: app.focus_policy,
             key_dispatch_policy: app.key_dispatch_policy,
@@ -4218,6 +4222,70 @@ mod tests {
             .ctx
             .set_command_chord_reveal_delay(std::time::Duration::from_secs(60));
         assert!(!backend.core.ctx.command_chord_revealed());
+    }
+
+    #[test]
+    fn scroll_wheel_multiplier_applies_to_test_backend_and_updates_at_runtime() {
+        struct WheelListApp;
+
+        impl Component for WheelListApp {
+            type Message = u16;
+            type Properties = ();
+            type State = ();
+
+            fn create_state(&self, _props: &()) {}
+
+            fn update(&mut self, multiplier: u16, ctx: &mut Context<Self>) -> Update {
+                ctx.set_scroll_wheel_multiplier(multiplier);
+                Update::none()
+            }
+
+            fn view(&self, _ctx: &Context<Self>) -> Element {
+                Element::from(
+                    crate::widgets::List::new()
+                        .items((0..50).map(|i| crate::widgets::ListItem::new(format!("row-{i}")))),
+                )
+                .key("wheel-list")
+            }
+        }
+
+        let mut backend = TestBackend::new_with_app(
+            crate::App::new().scroll_wheel_multiplier(3),
+            WheelListApp,
+            (),
+        );
+        assert_eq!(backend.core.ctx.scroll_wheel_multiplier(), 3);
+
+        let wheel_down = MouseEvent {
+            x: 1,
+            y: 1,
+            kind: MouseKind::ScrollDown,
+            mods: KeyMods::default(),
+        };
+        let list_offset = |backend: &TestBackend<WheelListApp>| {
+            backend
+                .core
+                .tree
+                .iter()
+                .find_map(|node| match &node.kind {
+                    crate::core::node::NodeKind::List(list) => Some(list.offset),
+                    _ => None,
+                })
+                .expect("list node")
+        };
+
+        assert!(backend.send_mouse(wheel_down).expect("wheel down"));
+        assert_eq!(list_offset(&backend), 3);
+
+        backend.dispatch(5).expect("update multiplier to 5");
+        assert_eq!(backend.core.ctx.scroll_wheel_multiplier(), 5);
+        assert!(backend.send_mouse(wheel_down).expect("wheel down"));
+        assert_eq!(list_offset(&backend), 8);
+
+        backend.dispatch(0).expect("clamp multiplier to 1");
+        assert_eq!(backend.core.ctx.scroll_wheel_multiplier(), 1);
+        assert!(backend.send_mouse(wheel_down).expect("wheel down"));
+        assert_eq!(list_offset(&backend), 9);
     }
 
     #[test]

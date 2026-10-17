@@ -75,6 +75,7 @@ fn new_registry() -> ComponentRegistry {
             copy_feedback_request: Rc::new(RefCell::new(Vec::new())),
             command_chord_pending_since: Rc::new(Cell::new(None)),
             command_chord_reveal_delay: Rc::new(Cell::new(std::time::Duration::ZERO)),
+            scroll_wheel_multiplier: Rc::new(Cell::new(1)),
             clock: crate::core::runtime_env::SessionClock::new(
                 crate::automation::ClockMode::Controlled,
             ),

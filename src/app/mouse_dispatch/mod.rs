@@ -611,7 +611,7 @@ impl<C: Component> MouseDispatchCtx<C> for AppRunner<C> {
     }
 
     fn scroll_wheel_multiplier(&self) -> u16 {
-        self.scroll_wheel_multiplier
+        self.core.ctx.env().scroll_wheel_multiplier.get()
     }
 
     fn refresh_active_selection_drag_after_scroll(&mut self, x: u16, y: u16) -> bool {
@@ -1178,6 +1178,10 @@ impl<C: Component> MouseDispatchCtx<C> for TestBackend<C> {
     ) {
         let config = self.core.ctx.env().clipboard_config.borrow();
         (config.right_click_action, config.middle_click_paste)
+    }
+
+    fn scroll_wheel_multiplier(&self) -> u16 {
+        self.core.ctx.env().scroll_wheel_multiplier.get()
     }
 
     fn focused_node(&self) -> Option<crate::core::node::NodeId> {

@@ -607,7 +607,6 @@ pub struct AppRunner<C: Component> {
     pub(crate) contrast_policy: ContrastPolicy,
     pub(crate) mouse_enabled: bool,
     require_utf8: bool,
-    pub(crate) scroll_wheel_multiplier: u16,
     /// How often the loop wakes for content nothing asked it to draw - a terminal's child program
     /// writing, or geometry/layout animation advancing. See [`crate::app::App::frame_rate`].
     pub(crate) frame_interval: Duration,
@@ -800,6 +799,10 @@ impl<C: Component> AppRunner<C> {
             .env()
             .command_chord_reveal_delay
             .set(app.command_chord_reveal_delay);
+        core.ctx
+            .env()
+            .scroll_wheel_multiplier
+            .set(app.scroll_wheel_multiplier.max(1));
         let key_dispatch_config = RuntimeKeyDispatchConfig {
             focus_policy: app.focus_policy,
             key_dispatch_policy: app.key_dispatch_policy,
@@ -934,7 +937,6 @@ impl<C: Component> AppRunner<C> {
             contrast_policy: app.contrast_policy,
             mouse_enabled,
             require_utf8: app.require_utf8,
-            scroll_wheel_multiplier: app.scroll_wheel_multiplier.max(1),
             frame_interval,
             color_animation_interval,
             mouse_capture_requested,
