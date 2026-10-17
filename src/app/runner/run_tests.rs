@@ -1638,6 +1638,7 @@ fn init_runner<C: Component>(runner: &mut AppRunner<C>, component: C, viewport: 
 where
     C::Properties: Default,
 {
+    let scroll_wheel_multiplier = runner.core.ctx.env().scroll_wheel_multiplier.get();
     runner.core = RuntimeCore::new_test(
         component,
         Default::default(),
@@ -1647,6 +1648,12 @@ where
         Rc::new(Cell::new(false)),
     )
     .into();
+    runner
+        .core
+        .ctx
+        .env()
+        .scroll_wheel_multiplier
+        .set(scroll_wheel_multiplier);
     runner.core.init();
     runner.core.render_element(viewport, None, None, None);
 }

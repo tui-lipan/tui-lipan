@@ -1220,6 +1220,21 @@ impl<C: Component> Context<C> {
         self.env.command_chord_reveal_delay.set(delay);
     }
 
+    /// Current app-wide mouse wheel step multiplier.
+    pub fn scroll_wheel_multiplier(&self) -> u16 {
+        self.env.scroll_wheel_multiplier.get()
+    }
+
+    /// Change the app-wide mouse wheel step multiplier set by
+    /// [`App::scroll_wheel_multiplier`](crate::App::scroll_wheel_multiplier) at runtime, for an app
+    /// whose multiplier comes from a config file or settings UI it updates while running.
+    ///
+    /// Values below `1` are clamped to `1`. Per-widget `scroll_wheel_multiplier` overrides continue
+    /// to take precedence on the widgets that set them.
+    pub fn set_scroll_wheel_multiplier(&self, multiplier: u16) {
+        self.env.scroll_wheel_multiplier.set(multiplier.max(1));
+    }
+
     /// Whether a command chord has been pending for at least
     /// [`App::command_chord_reveal_delay`](crate::App::command_chord_reveal_delay).
     ///

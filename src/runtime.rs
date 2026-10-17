@@ -221,6 +221,7 @@ where
         let memo_dependency_recorder = Rc::new(RefCell::new(None));
         let command_chord_pending_since = Rc::new(Cell::new(None));
         let command_chord_reveal_delay = Rc::new(Cell::new(std::time::Duration::ZERO));
+        let scroll_wheel_multiplier = Rc::new(Cell::new(1));
         let last_mouse = Rc::new(Cell::new(None));
 
         let env = RuntimeEnv {
@@ -265,6 +266,7 @@ where
             copy_feedback_request,
             command_chord_pending_since,
             command_chord_reveal_delay,
+            scroll_wheel_multiplier,
             clock,
             activity: std::sync::Arc::new(crate::core::runtime_env::RuntimeActivity::new(
                 command_wake.clone(),

@@ -569,7 +569,8 @@ impl App {
     ///
     /// Each wheel tick scrolls `multiplier` lines instead of the default single
     /// line. Coalesced wheel bursts multiply by this value too, so two ticks with
-    /// `multiplier = 3` scroll six lines total.
+    /// `multiplier = 3` scroll six lines total. Components can later change it at
+    /// runtime with [`Context::set_scroll_wheel_multiplier`](crate::Context::set_scroll_wheel_multiplier).
     pub fn scroll_wheel_multiplier(mut self, multiplier: u16) -> Self {
         self.scroll_wheel_multiplier = multiplier.max(1);
         self

@@ -1224,11 +1224,12 @@ impl<C: Component> AppRunner<C> {
             return super::DirtyLevel::LayoutOnly;
         }
 
+        let fallback_multiplier = self.core.ctx.env().scroll_wheel_multiplier.get();
         let scrolled = mouse::scroll_wheel_n(
             &mut self.core.tree,
             adjusted_mouse,
             usize::from(scroll_ticks),
-            self.scroll_wheel_multiplier,
+            fallback_multiplier,
         );
         let selection_dirty = if scrolled != mouse::WheelScroll::None && self.drag.is_active() {
             self.drag.remember_pointer(x, y);
