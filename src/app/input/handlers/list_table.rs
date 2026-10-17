@@ -121,7 +121,7 @@ pub(crate) fn handle_list_key(tree: &mut NodeTree, id: NodeId, key: KeyEvent) ->
                     if let Some(next) = next
                         && next != selected
                     {
-                        cb.emit(ListEvent { index: next });
+                        cb.emit(ListEvent::key(next));
                         if let NodeKind::List(list_node) = &mut tree.node_mut(id).kind {
                             list_node.scroll_override = None;
                         }
@@ -135,7 +135,7 @@ pub(crate) fn handle_list_key(tree: &mut NodeTree, id: NodeId, key: KeyEvent) ->
                     navigation_wrap,
                 ) {
                     if next != selected {
-                        cb.emit(ListEvent { index: next });
+                        cb.emit(ListEvent::key(next));
                         if let NodeKind::List(list_node) = &mut tree.node_mut(id).kind {
                             list_node.scroll_override = None;
                         }
@@ -155,7 +155,7 @@ pub(crate) fn handle_list_key(tree: &mut NodeTree, id: NodeId, key: KeyEvent) ->
                     None => None,
                 };
                 if let Some(next) = next {
-                    cb.emit(ListEvent { index: next });
+                    cb.emit(ListEvent::key(next));
                     if let NodeKind::List(list_node) = &mut tree.node_mut(id).kind {
                         list_node.scroll_override = None;
                     }
@@ -169,7 +169,7 @@ pub(crate) fn handle_list_key(tree: &mut NodeTree, id: NodeId, key: KeyEvent) ->
             && let Some(cb) = on_activate.as_ref()
             && let Some(selected) = selected
         {
-            cb.emit(ListEvent { index: selected });
+            cb.emit(ListEvent::key(selected));
             handled = true;
         }
 

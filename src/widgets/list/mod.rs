@@ -278,6 +278,31 @@ impl ListConfig {
 pub struct ListEvent {
     /// Selected item index.
     pub index: usize,
+    /// Modifiers held during the click that caused the event. Empty when a key caused it.
+    pub mods: crate::core::event::KeyMods,
+    /// Which click of a run of clicks on the row caused the event: 1 for a single click, 2 for
+    /// the second click of a double-click. 0 when a key caused it.
+    pub clicks: u8,
+}
+
+impl ListEvent {
+    /// An event caused by a key.
+    pub(crate) fn key(index: usize) -> Self {
+        Self {
+            index,
+            mods: crate::core::event::KeyMods::NONE,
+            clicks: 0,
+        }
+    }
+
+    /// An event caused by the `clicks`th click on a row with `mods` held.
+    pub(crate) fn click(index: usize, mods: crate::core::event::KeyMods, clicks: u8) -> Self {
+        Self {
+            index,
+            mods,
+            clicks,
+        }
+    }
 }
 
 /// Semantic role of a list row.

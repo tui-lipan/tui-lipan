@@ -62,23 +62,55 @@ fn page_down_moves_a_composed_tree_selection_by_a_page() {
     assert_eq!(*backend.state(), Some(0), "and PageUp pages back");
 }
 
-/// A parent with two children, collapsed. `composed` draws rows through composed content.
+/// A parent with two children, collapsed. `composed` draws rows through composed content. Counts
+/// the expansion changes and Ctrl activations it is told about.
 #[derive(Clone, Copy)]
 struct Folder {
     arrows: bool,
     composed: bool,
     toggle_on_activate: bool,
+    activate_on_click: bool,
+    ctrl: bool,
+}
+
+impl Folder {
+    fn new(arrows: bool, composed: bool, toggle_on_activate: bool) -> Self {
+        Self {
+            arrows,
+            composed,
+            toggle_on_activate,
+            activate_on_click: true,
+            ctrl: false,
+        }
+    }
+}
+
+#[derive(Default)]
+struct Seen {
+    toggles: usize,
+    ctrl_activations: usize,
+}
+
+enum Event {
+    Toggled,
+    CtrlActivated,
 }
 
 impl Component for Folder {
-    type Message = ();
+    type Message = Event;
     type Properties = ();
-    type State = ();
-    fn create_state(&self, _: &()) {}
-    fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
-        Update::none()
+    type State = Seen;
+    fn create_state(&self, _: &()) -> Seen {
+        Seen::default()
     }
-    fn view(&self, _: &Context<Self>) -> Element {
+    fn update(&mut self, event: Event, ctx: &mut Context<Self>) -> Update {
+        match event {
+            Event::Toggled => ctx.state.toggles += 1,
+            Event::CtrlActivated => ctx.state.ctrl_activations += 1,
+        }
+        Update::full()
+    }
+    fn view(&self, ctx: &Context<Self>) -> Element {
         let node = |label: &'static str| {
             let node = TreeNode::new(label);
             if self.composed {
@@ -87,14 +119,23 @@ impl Component for Folder {
                 node
             }
         };
-        Tree::forest([node("folder").child(node("first")).child(node("second"))])
+        let mut tree = Tree::forest([node("folder").child(node("first")).child(node("second"))])
             .show_arrows(self.arrows)
             .toggle_on_activate(self.toggle_on_activate)
-            .into()
+            .activate_on_click(self.activate_on_click)
+            .on_toggle(ctx.link().callback(|_| Event::Toggled));
+        if self.ctrl {
+            tree = tree.on_ctrl_activate(ctx.link().callback(|_| Event::CtrlActivated));
+        }
+        tree.into()
     }
 }
 
 fn click_label(backend: &mut TestBackend<Folder>, label: &str) {
+    click_with(backend, label, KeyMods::NONE);
+}
+
+fn click_with(backend: &mut TestBackend<Folder>, label: &str, mods: KeyMods) {
     let lines = backend.capture_frame().to_fixed_grid_lines();
     let (y, line) = lines
         .iter()
@@ -111,7 +152,7 @@ fn click_label(backend: &mut TestBackend<Folder>, label: &str) {
                 x: x as u16,
                 y: y as u16,
                 kind,
-                mods: KeyMods::NONE,
+                mods,
             })
             .unwrap();
     }
@@ -138,11 +179,7 @@ fn backend(folder: Folder) -> TestBackend<Folder> {
 fn with_arrows_hidden_a_click_expands_and_collapses_a_row() {
     for composed in [false, true] {
         for toggle_on_activate in [false, true] {
-            let mut backend = backend(Folder {
-                arrows: false,
-                composed,
-                toggle_on_activate,
-            });
+            let mut backend = backend(Folder::new(false, composed, toggle_on_activate));
             let context = format!("composed={composed} toggle_on_activate={toggle_on_activate}");
             assert!(!shows(&backend, "first"), "{context}");
             click_label(&mut backend, "folder");
@@ -156,15 +193,45 @@ fn with_arrows_hidden_a_click_expands_and_collapses_a_row() {
 #[test]
 fn with_arrows_shown_the_arrow_alone_expands_a_row_that_does_not_toggle_on_activate() {
     for composed in [false, true] {
-        let mut backend = backend(Folder {
-            arrows: true,
-            composed,
-            toggle_on_activate: false,
-        });
+        let mut backend = backend(Folder::new(true, composed, false));
         click_label(&mut backend, "folder");
         assert!(
             !shows(&backend, "first"),
             "the label activates without expanding, composed={composed}"
         );
     }
+}
+
+/// Ctrl+click is Ctrl activation and only that, arrow or no arrow: it never also folds the row.
+#[test]
+fn with_arrows_hidden_a_ctrl_click_activates_without_expanding() {
+    for composed in [false, true] {
+        let mut backend = backend(Folder {
+            ctrl: true,
+            ..Folder::new(false, composed, false)
+        });
+        click_with(&mut backend, "folder", KeyMods::CTRL);
+        assert_eq!(backend.state().ctrl_activations, 1, "composed={composed}");
+        assert_eq!(backend.state().toggles, 0, "composed={composed}");
+        assert!(!shows(&backend, "first"), "composed={composed}");
+    }
+}
+
+/// Without click activation, a double-click is one activation. Each of its clicks folds the row
+/// once: the first by the click, the second by the activation, never by both.
+#[test]
+fn with_arrows_hidden_each_click_of_a_double_click_folds_the_row_once() {
+    let mut backend = backend(Folder {
+        activate_on_click: false,
+        ..Folder::new(false, false, true)
+    });
+    click_label(&mut backend, "folder");
+    assert_eq!(backend.state().toggles, 1, "the first click expands");
+    click_label(&mut backend, "folder");
+    assert_eq!(
+        backend.state().toggles,
+        2,
+        "the second click's activation collapses, and the click itself adds nothing"
+    );
+    assert!(!shows(&backend, "first"));
 }

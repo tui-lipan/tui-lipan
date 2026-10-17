@@ -466,14 +466,14 @@ impl<C: Component> AppRunner<C> {
                         );
                         let is_double = click_count == 2;
                         if let Some(cb) = &select.on_item_click {
-                            cb.emit(ListEvent { index });
+                            cb.emit(ListEvent::click(index, select.mods, click_count));
                         }
                         self.mouse.pointer_driven_item_hover_selection.insert(hit);
                         if let Some(cb) = &select.on_select {
-                            cb.emit(ListEvent { index });
+                            cb.emit(ListEvent::click(index, select.mods, click_count));
                         }
                         if let Some(cb) = select.activation_callback(is_double) {
-                            cb.emit(ListEvent { index });
+                            cb.emit(ListEvent::click(index, select.mods, click_count));
                         }
                         return true;
                     }

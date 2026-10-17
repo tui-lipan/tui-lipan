@@ -505,7 +505,9 @@ own clicks; a button click does not activate the surrounding row. `toggle_on_act
 separates row activation from expansion. Composed-row arrows still toggle independently,
 and Left/Right, h/l, and Space retain tree navigation. A row with no arrow to click, because
 `show_arrows(false)` or `TreeNode::show_arrow(false)` hides it, expands and collapses when it is
-clicked, in addition to activating. PageUp and PageDown move the selection by a page. Moving to a child or parent emits `on_select`,
+clicked, in addition to activating. Each click folds it at most once: a click whose activation
+already toggles the row does not toggle it again, and a Ctrl+click handled by `on_ctrl_activate`
+only activates. PageUp and PageDown move the selection by a page. Moving to a child or parent emits `on_select`,
 without emitting a spurious expansion event.
 
 With `controlled_expansion(true)`, every node's `expanded` value is authoritative after a props
