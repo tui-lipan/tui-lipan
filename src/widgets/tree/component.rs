@@ -28,6 +28,8 @@ pub(crate) enum TreeMsg {
     CtrlActivate(usize),
     Action(TreeAction),
     Toggle(usize),
+    /// A mouse click on a row, beyond its selection and activation.
+    Click(usize, Click),
     Hover(usize, bool),
     PointerMove(usize),
 }
@@ -103,6 +105,10 @@ impl Component for TreeComponent {
                 }
                 Update::full()
             }
+            TreeMsg::Click(index, click) => match entry_at_index(&ctx.props, &ctx.state, index) {
+                Some(entry) if click.toggles(entry.node, &ctx.props) => rich::toggle(ctx, index),
+                _ => Update::none(),
+            },
             TreeMsg::CtrlActivate(index) => {
                 if let Some(entry) = entry_at_index(&ctx.props, &ctx.state, index)
                     .filter(|entry| entry.node.item.is_selectable())
@@ -174,6 +180,15 @@ impl Component for TreeComponent {
         let on_activate = ctx
             .link()
             .callback(|event: crate::widgets::ListEvent| TreeMsg::Activate(event.index));
+        let on_item_click = ctx.link().callback(|event: crate::widgets::ListEvent| {
+            TreeMsg::Click(
+                event.index,
+                Click {
+                    mods: event.mods,
+                    double: event.clicks == 2,
+                },
+            )
+        });
 
         let keymap = ctx.props.keymap;
         let interceptor = ctx.props.key_interceptor.clone();
@@ -214,6 +229,7 @@ impl Component for TreeComponent {
             .focusable(ctx.props.focusable)
             .tab_stop(ctx.props.tab_stop)
             .on_select(on_select)
+            .on_item_click(on_item_click)
             .on_activate(on_activate)
             .on_key(on_key);
         if ctx.props.on_ctrl_activate.is_some() {
@@ -448,6 +464,34 @@ fn child_gap(node: &TreeNode, branch: &TreeBranch, props: &TreeProps) -> u16 {
         0
     } else {
         props.content_gap
+    }
+}
+
+/// The gesture behind a click on a row. Text and composed rows read it by the same rules.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Click {
+    pub mods: crate::core::event::KeyMods,
+    /// The second click of a double-click.
+    pub double: bool,
+}
+
+impl Click {
+    /// Ctrl+click while the tree takes Ctrl activation: that, and nothing else.
+    fn ctrl_activates(self, props: &TreeProps) -> bool {
+        props.on_ctrl_activate.is_some() && self.mods == crate::core::event::KeyMods::CTRL
+    }
+
+    /// Whether the click activates the row.
+    fn activates(self, props: &TreeProps) -> bool {
+        !self.ctrl_activates(props) && (props.activate_on_click || self.double)
+    }
+
+    /// Whether the click should also expand or collapse the row: the row can, it has no arrow to
+    /// click, the click is not a Ctrl activation, and its activation does not already toggle it.
+    fn toggles(self, node: &TreeNode, props: &TreeProps) -> bool {
+        let arrow = props.show_arrows && node.show_arrow;
+        let activation_toggles = self.activates(props) && props.toggle_on_activate;
+        node.is_collapsible() && !arrow && !self.ctrl_activates(props) && !activation_toggles
     }
 }
 

@@ -359,9 +359,19 @@ fn row(
                 link.send(TreeMsg::Select(index));
                 if ctrl && mouse.mods == KeyMods::CTRL {
                     link.send(TreeMsg::CtrlActivate(index));
-                } else if activate {
+                    return;
+                }
+                if activate {
                     link.send(TreeMsg::Activate(index));
                 }
+                // With no arrow to click, the row itself expands and collapses.
+                link.send(TreeMsg::Click(
+                    index,
+                    Click {
+                        mods: mouse.mods,
+                        double: false,
+                    },
+                ));
             },
         ));
     }

@@ -40,6 +40,8 @@ mod flow_wrap_height_floor;
 mod focus_removed_widget_step;
 #[path = "suites/widget_behavior/gantt_diagram_render.rs"]
 mod gantt_diagram_render;
+#[path = "suites/widget_behavior/list_click_events.rs"]
+mod list_click_events;
 #[path = "suites/widget_behavior/list_description_fit_render.rs"]
 mod list_description_fit_render;
 #[path = "suites/widget_behavior/list_description_spinner_render.rs"]
@@ -97,5 +99,7 @@ mod tree_ctrl_activation;
 mod tree_expansion_mode;
 #[path = "suites/widget_behavior/tree_file_tree_parity.rs"]
 mod tree_file_tree_parity;
+#[path = "suites/widget_behavior/tree_pages_and_clicks.rs"]
+mod tree_pages_and_clicks;
 #[path = "suites/widget_behavior/tree_row_icons.rs"]
 mod tree_row_icons;

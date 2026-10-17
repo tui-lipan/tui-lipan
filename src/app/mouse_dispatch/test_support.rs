@@ -711,17 +711,29 @@ pub(crate) fn handle_list_click_test_backend<C: Component>(
                 );
                 let is_double = click_count == 2;
                 if let Some(cb) = &select.on_item_click {
-                    cb.emit(crate::widgets::ListEvent { index });
+                    cb.emit(crate::widgets::ListEvent::click(
+                        index,
+                        select.mods,
+                        click_count,
+                    ));
                 }
                 backend
                     .mouse
                     .pointer_driven_item_hover_selection
                     .insert(hit);
                 if let Some(cb) = &select.on_select {
-                    cb.emit(crate::widgets::ListEvent { index });
+                    cb.emit(crate::widgets::ListEvent::click(
+                        index,
+                        select.mods,
+                        click_count,
+                    ));
                 }
                 if let Some(cb) = select.activation_callback(is_double) {
-                    cb.emit(crate::widgets::ListEvent { index });
+                    cb.emit(crate::widgets::ListEvent::click(
+                        index,
+                        select.mods,
+                        click_count,
+                    ));
                 }
                 return true;
             }
