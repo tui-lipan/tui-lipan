@@ -354,13 +354,20 @@ fn row(
         let link = ctx.link().clone();
         let activate = ctx.props.activate_on_click;
         let ctrl = ctx.props.on_ctrl_activate.is_some();
+        // With no arrow to click, the row itself expands and collapses.
+        let toggles = click_toggles(entry.node, &ctx.props);
         region = region.on_click(crate::callback::Callback::new(
             move |mouse: MouseRegionEvent| {
                 link.send(TreeMsg::Select(index));
                 if ctrl && mouse.mods == KeyMods::CTRL {
                     link.send(TreeMsg::CtrlActivate(index));
-                } else if activate {
+                    return;
+                }
+                if activate {
                     link.send(TreeMsg::Activate(index));
+                }
+                if toggles {
+                    link.send(TreeMsg::Toggle(index));
                 }
             },
         ));

@@ -28,6 +28,8 @@ pub(crate) enum TreeMsg {
     CtrlActivate(usize),
     Action(TreeAction),
     Toggle(usize),
+    /// A mouse click on a row, beyond its selection and activation.
+    Click(usize),
     Hover(usize, bool),
     PointerMove(usize),
 }
@@ -103,6 +105,10 @@ impl Component for TreeComponent {
                 }
                 Update::full()
             }
+            TreeMsg::Click(index) => match entry_at_index(&ctx.props, &ctx.state, index) {
+                Some(entry) if click_toggles(entry.node, &ctx.props) => rich::toggle(ctx, index),
+                _ => Update::none(),
+            },
             TreeMsg::CtrlActivate(index) => {
                 if let Some(entry) = entry_at_index(&ctx.props, &ctx.state, index)
                     .filter(|entry| entry.node.item.is_selectable())
@@ -174,6 +180,9 @@ impl Component for TreeComponent {
         let on_activate = ctx
             .link()
             .callback(|event: crate::widgets::ListEvent| TreeMsg::Activate(event.index));
+        let on_item_click = ctx
+            .link()
+            .callback(|event: crate::widgets::ListEvent| TreeMsg::Click(event.index));
 
         let keymap = ctx.props.keymap;
         let interceptor = ctx.props.key_interceptor.clone();
@@ -214,6 +223,7 @@ impl Component for TreeComponent {
             .focusable(ctx.props.focusable)
             .tab_stop(ctx.props.tab_stop)
             .on_select(on_select)
+            .on_item_click(on_item_click)
             .on_activate(on_activate)
             .on_key(on_key);
         if ctx.props.on_ctrl_activate.is_some() {
@@ -449,6 +459,14 @@ fn child_gap(node: &TreeNode, branch: &TreeBranch, props: &TreeProps) -> u16 {
     } else {
         props.content_gap
     }
+}
+
+/// Whether a mouse click on the row should also expand or collapse it: the row can, it has no
+/// arrow to click, and the click's activation would not already toggle it.
+fn click_toggles(node: &TreeNode, props: &TreeProps) -> bool {
+    let arrow = props.show_arrows && node.show_arrow;
+    let activation_toggles = props.activate_on_click && props.toggle_on_activate;
+    node.is_collapsible() && !arrow && !activation_toggles
 }
 
 fn entry_at_index<'a>(

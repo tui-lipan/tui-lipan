@@ -221,7 +221,8 @@ impl Tree {
     }
 
     /// Show the arrow column: expand/collapse arrows on parents, and the same width on every
-    /// other row so labels line up (default true). Hidden, children hang beneath the content gap.
+    /// other row so labels line up (default true). Hidden, children hang beneath their parent's
+    /// icon or label, and a click on an expandable row expands or collapses it.
     pub fn show_arrows(mut self, show: bool) -> Self {
         self.props.show_arrows = show;
         self

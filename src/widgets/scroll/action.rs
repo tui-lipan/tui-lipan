@@ -108,7 +108,7 @@ impl ScrollRequest {
 pub struct ScrollKeymap(u8);
 
 impl ScrollKeymap {
-    /// Disable key handling.
+    /// Disable key handling, PageUp and PageDown included.
     pub const NONE: Self = Self(0);
     /// Arrow keys.
     pub const ARROWS: Self = Self(1 << 0);

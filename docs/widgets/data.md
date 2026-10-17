@@ -503,7 +503,9 @@ hover foreground overrides and contrast adjustment while the pointer is over the
 Selection and active-row backgrounds alone preserve the authored guide and arrow colors. Their child controls handle their
 own clicks; a button click does not activate the surrounding row. `toggle_on_activate(false)`
 separates row activation from expansion. Composed-row arrows still toggle independently,
-and Left/Right, h/l, and Space retain tree navigation. Moving to a child or parent emits `on_select`,
+and Left/Right, h/l, and Space retain tree navigation. A row with no arrow to click, because
+`show_arrows(false)` or `TreeNode::show_arrow(false)` hides it, expands and collapses when it is
+clicked, in addition to activating. PageUp and PageDown move the selection by a page. Moving to a child or parent emits `on_select`,
 without emitting a spurious expansion event.
 
 With `controlled_expansion(true)`, every node's `expanded` value is authoritative after a props

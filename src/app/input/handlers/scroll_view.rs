@@ -91,6 +91,19 @@ fn scroll_action_delta(action: crate::widgets::internal::ScrollAction) -> isize 
 /// `handle_scroll` does for mouse wheel) so that a layout-only re-reconcile
 /// picks up the change without a full view() rebuild.
 pub(crate) fn handle_key(tree: &mut NodeTree, node_id: NodeId, key: &KeyEvent) -> bool {
+    // `ScrollKeymap::NONE` hands every key to the view's owner, page keys included: a widget that
+    // moves its own selection, such as a composed Tree, pages by itself.
+    if matches!(
+        &tree.node(node_id).kind,
+        NodeKind::ScrollView(sv) if sv.scroll_keys == crate::widgets::ScrollKeymap::NONE
+    ) {
+        return false;
+    }
+    scroll_by_key(tree, node_id, key)
+}
+
+/// Scroll for `key`, whatever the view's own key map: the ambient page fallback is its own opt-in.
+pub(crate) fn scroll_by_key(tree: &mut NodeTree, node_id: NodeId, key: &KeyEvent) -> bool {
     // Every key this handler consumes scrolls; command-modifier chords belong to the app.
     if has_command_modifier(key) {
         return false;

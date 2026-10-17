@@ -234,7 +234,7 @@ Bitflag-style key set for `scroll_keys(...)` on `ScrollView`, `List`, `Table`, `
 | `HOME_END` | `Home` / `End` | Yes |
 | `VIM_JUMP` | `g` / `G`, same as `Home` / `End` | No |
 
-`VIM` is `VIM_VERTICAL | VIM_HORIZONTAL`; `NONE` disables keyboard scrolling. `VIM_JUMP` is opt-in so a bare `g` stays available to app shortcuts: `.scroll_keys(ScrollKeymap::DEFAULT | ScrollKeymap::VIM_JUMP)`.
+`VIM` is `VIM_VERTICAL | VIM_HORIZONTAL`; `NONE` disables keyboard scrolling, PageUp and PageDown included, so a widget that moves its own selection can page by itself; a `ScrollView` opted into `ambient_page_scroll` still pages as that fallback. `VIM_JUMP` is opt-in so a bare `g` stays available to app shortcuts: `.scroll_keys(ScrollKeymap::DEFAULT | ScrollKeymap::VIM_JUMP)`.
 
 ### `FrameworkAction`
 

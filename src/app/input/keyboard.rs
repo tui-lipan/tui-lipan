@@ -705,7 +705,7 @@ pub(crate) fn dispatch_ambient_page_scroll(tree: &mut NodeTree, key: KeyEvent) -
         _ => false,
     };
 
-    can_scroll && handlers::scroll_view::handle_key(tree, target, &key)
+    can_scroll && handlers::scroll_view::scroll_by_key(tree, target, &key)
 }
 
 #[cfg(test)]
