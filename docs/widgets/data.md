@@ -643,6 +643,8 @@ entries and git-backed or application-provided change projections.
 | `icon_override` | `(pattern, icon, Option<Color>)` | Override icons by filename, directory name, or file extension |
 | `directory_label_style` | `Style` | Style applied to directory names |
 | `file_label_style` | `Style` | Style applied to regular file names |
+| `hidden_style` | `Style` | Style patched onto the icon and label of dot-prefixed entries, e.g. `Style::new().dim()` (default: none) |
+| `ignored_style` | `Style` | Style patched onto the icon and label of entries that ignore rules exclude, and everything inside them (default: none) |
 | `path_style` | `(path, FileTreeItemStyle)` | Apply row/icon/label/suffix styles to one exact path |
 | `path_styles` | `impl IntoIterator<Item = (path, FileTreeItemStyle)>` | Apply exact path-specific item styles in bulk |
 | `symlink_targets` | `bool` | Show where each symlink points, as `link → target` (default: true) |
@@ -655,6 +657,7 @@ entries and git-backed or application-provided change projections.
 | `change_suffix_priority` | `FileTreeSuffixPriority` | Whether labels or right-side change metadata are preserved first when rows are narrow |
 | `change_source` | `FileTreeChangeSource` | Change metadata source; defaults to local git status/diff data |
 | `change_view` | `FileTreeChangeView` | `AllFiles` (default) or `ChangedOnly` source-agnostic view |
+| `compact_directories` | `bool` | In `ChangedOnly`, fold single-subdirectory chains into one `a/b/c` row (default: false) |
 | `show_diff_stats` | `bool` | Show `+N -M` diff stats next to change markers |
 | `git_suffix_style` | `Style` | Compatibility setter for styling only right-side git metadata |
 | `git_suffix_priority` | `FileTreeSuffixPriority` | Compatibility setter for right-side git metadata truncation priority |
@@ -738,7 +741,10 @@ Plus all `Tree` styling/scrolling props, including `indent_style` and `scrollbar
 - Clone one `FileTreeGitStatusCache` into trees that replace one another to avoid blank Git
   indicators after a keyed remount. The cache retains successful local snapshots only, separates
   status-only and diff-stat data, ignores provided sources, and revalidates every mount.
-- `directory_label_style(...)` and `file_label_style(...)` style names independently from icons and right-aligned change indicators.
+- `directory_label_style(...)` and `file_label_style(...)` style names independently from icons and right-aligned change indicators. A symlink takes the label style of what it resolves to.
+- `hidden_style(...)` patches the icon and label of entries whose name starts with a dot, so dotfiles can recede without being filtered out. Path styles and changed-label colors still layer over it.
+- `ignored_style(...)` does the same for ignored entries, such as a `target/` build directory and everything in it. A local tree learns them from Git status, so it needs the Git change source; a provided tree reads `FileTreeEntry::ignored`.
+- With Nerd Font icons, a symlink draws as a linked file or a linked directory, depending on what it resolves to. The row stays a leaf either way.
 - `path_style(...)` / `path_styles(...)` match exact paths and can override row, icon, label, and suffix styling for reviewed, pinned, or otherwise annotated files.
 - `change_suffix_style(...)` and `git_suffix_style(...)` style only right-side metadata such as `+30 -21 M`, leaving icons and labels unchanged.
 - `change_suffix_priority(FileTreeSuffixPriority::Suffix)` keeps right-side metadata visible first on narrow rows, truncating labels before suffixes.
@@ -746,6 +752,7 @@ Plus all `Tree` styling/scrolling props, including `indent_style` and `scrollbar
 - `FileTreeChangeView::ChangedOnly` shows changed files only, grouped by ancestor directories. With provided change data this projection is virtual/source-agnostic and can include nonexistent or deleted paths supplied by the backend.
 - `FileTreeGitView` is a compatibility alias for `FileTreeChangeView`; `git_view`, `git_changed_only`, and `git_diff_stats` remain available for git-focused call sites.
 - Changed-only mode respects `show_hidden`; paths under hidden components such as `.github/` appear only when hidden entries are enabled.
+- `compact_directories(true)` folds each run of directories that hold only one subdirectory into a single changed-only row, such as `src/widgets/file_tree`. The row stands for the innermost directory, so expansion, selection, and events use that path. An active explorer query shows the tree unfolded.
 - `show_diff_stats(true)` displays numeric diff stats when the selected change source provides them; untracked and binary files may show a status marker without `+N -M` counts.
 - Change metadata displays diff statistics first, followed by staged and unstaged status markers,
   for example `+42 -11 M`. Status markers align at the right edge across rows with and without

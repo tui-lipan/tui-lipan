@@ -116,7 +116,7 @@ pub fn file_icon(name: &str, palette: &FileIconPalette) -> (&'static str, Option
         "package.json" => ("", Some(palette.green)),
         "package-lock.json" => ("", Some(palette.grey)),
         "readme.md" | "readme" => ("", Some(palette.yellow)),
-        "license" | "license.md" | "license.txt" => ("󰘥", Some(palette.cyan)),
+        "license" | "license.md" | "license.txt" => ("", Some(palette.yellow)),
         "makefile" | "makefile.am" | "makefile.in" => ("", Some(palette.yellow)),
         "cmakelists.txt" => ("", Some(palette.red)),
         ".gitignore" | ".gitattributes" | ".gitmodules" => ("", Some(palette.red)),
@@ -180,7 +180,7 @@ pub fn file_icon(name: &str, palette: &FileIconPalette) -> (&'static str, Option
 
                 // Documentation
                 "md" | "markdown" | "rst" => ("", Some(palette.azure)),
-                "txt" => ("", Some(palette.grey)),
+                "txt" => ("󰈙", Some(palette.grey)),
 
                 // Images
                 "png" => ("󰸭", Some(palette.purple)),
