@@ -22,7 +22,9 @@ use super::git::{
 };
 use super::mod_private::FileTreeProps;
 use super::provided_path::ProvidedPath;
-use super::watch::{self, WatchSession, WatchState, plan_flush, visible_directories};
+use super::watch::{
+    self, RepositoryWatch, WatchSession, WatchState, plan_flush, visible_directories,
+};
 use super::{
     FileTreeChangeSource, FileTreeChangeView, FileTreeDirectoryListing, FileTreeEntrySource,
     FileTreeItemStyle, FileTreeRefreshPolicy, FileTreeSuffixPriority,
@@ -120,9 +122,14 @@ pub(crate) enum FileTreeMsg {
     WatchUnavailable {
         generation: u64,
     },
-    GitWatchDirectoriesResolved {
+    /// Resolve the tracked directories and bring the repository watch up to date.
+    RepositoryWatchResolve {
         generation: u64,
-        dirs: Vec<Arc<str>>,
+    },
+    RepositoryWatchUpdated {
+        generation: u64,
+        repository: Option<Arc<RepositoryWatch>>,
+        complete: bool,
     },
     /// The watcher recorded the first change of a new batch.
     WatchDirty {
@@ -491,11 +498,17 @@ impl Component for FileTreeComponent {
     }
 
     fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
-        let update = update_file_tree(msg, ctx);
         let was_degraded = ctx.state.watch.degraded();
-        reconcile_watches(&mut ctx.state, &ctx.props);
+        let update = update_file_tree(msg, ctx);
+        let stale = reconcile_watches(&mut ctx.state, &ctx.props);
+        if !stale.is_empty() {
+            ctx.state.watch.dirty.extend(stale);
+            ctx.link().send(FileTreeMsg::WatchReload {
+                generation: ctx.state.watch.generation,
+            });
+        }
         if !was_degraded && ctx.state.watch.degraded() {
-            // A directory just refused its watch: poll at the degraded interval from now on,
+            // Something just lost watch coverage: poll at the degraded interval from now on,
             // rather than after the repair interval already armed.
             rearm_refresh_tick(ctx);
         }
@@ -871,15 +884,29 @@ fn update_file_tree(msg: FileTreeMsg, ctx: &mut Context<FileTreeComponent>) -> U
             Update::none()
         }
         FileTreeMsg::WatchUnavailable { generation } => {
-            if generation == ctx.state.watch.generation && !ctx.state.watch.unavailable {
+            if generation == ctx.state.watch.generation {
                 ctx.state.watch.unavailable = true;
-                rearm_refresh_tick(ctx);
             }
             Update::none()
         }
-        FileTreeMsg::GitWatchDirectoriesResolved { generation, dirs } => {
-            if generation == ctx.state.watch.generation {
-                ctx.state.watch.git_dirs = dirs.into_iter().collect();
+        FileTreeMsg::RepositoryWatchResolve { generation } => {
+            resolve_repository_watch(ctx, generation)
+        }
+        FileTreeMsg::RepositoryWatchUpdated {
+            generation,
+            repository,
+            complete,
+        } => {
+            if generation != ctx.state.watch.generation {
+                return Update::none();
+            }
+            let watch = &mut ctx.state.watch;
+            watch.repository_resolving = false;
+            watch.repository_partial = !complete;
+            watch.repository = repository;
+            if std::mem::take(&mut watch.repository_resolve_again) {
+                ctx.link()
+                    .send(FileTreeMsg::RepositoryWatchResolve { generation });
             }
             Update::none()
         }
@@ -1748,10 +1775,11 @@ fn restart_refresh_policy(ctx: &mut Context<FileTreeComponent>) -> Update {
     }
 
     let generation = ctx.state.watch.generation;
+    if needs_git_snapshot(&ctx.props) {
+        ctx.link()
+            .send(FileTreeMsg::RepositoryWatchResolve { generation });
+    }
     let pending = ctx.state.watch.pending.clone();
-    let repo_root = needs_git_snapshot(&ctx.props)
-        .then(|| discover_git_root(Path::new(ctx.props.root.as_ref())))
-        .flatten();
     Update::command_only(ctx.link().command(move |link| {
         let wake = link.clone();
         match WatchSession::start(pending, move || {
@@ -1761,18 +1789,61 @@ fn restart_refresh_policy(ctx: &mut Context<FileTreeComponent>) -> Update {
                 generation,
                 session: Arc::new(session),
             }),
-            Err(_) => {
-                link.send(FileTreeMsg::WatchUnavailable { generation });
-                return;
+            Err(_) => link.send(FileTreeMsg::WatchUnavailable { generation }),
+        }
+    }))
+}
+
+/// Bring the repository watch up to date in the background: resolve the metadata directories and
+/// every directory holding tracked files, then add and remove watches to match. One resolve runs at
+/// a time; a change meanwhile queues exactly one more.
+fn resolve_repository_watch(ctx: &mut Context<FileTreeComponent>, generation: u64) -> Update {
+    let watch = &mut ctx.state.watch;
+    if generation != watch.generation
+        || !watches_filesystem(&ctx.props)
+        || !needs_git_snapshot(&ctx.props)
+    {
+        return Update::none();
+    }
+    if watch.repository_resolving {
+        watch.repository_resolve_again = true;
+        return Update::none();
+    }
+    let Some(repo_root) = discover_git_root(Path::new(ctx.props.root.as_ref())) else {
+        watch.repository = None;
+        watch.repository_partial = false;
+        return Update::none();
+    };
+    watch.repository_resolving = true;
+    let existing = watch.repository.clone();
+    let pending = watch.pending.clone();
+    Update::command_only(ctx.link().command(move |link| {
+        let repository = match existing {
+            Some(repository) => repository,
+            None => {
+                let wake = link.clone();
+                match RepositoryWatch::start(pending, move || {
+                    wake.send(FileTreeMsg::WatchDirty { generation });
+                }) {
+                    Ok(repository) => Arc::new(repository),
+                    Err(_) => {
+                        link.send(FileTreeMsg::RepositoryWatchUpdated {
+                            generation,
+                            repository: None,
+                            complete: false,
+                        });
+                        return;
+                    }
+                }
             }
-        }
-        if let Some(repo_root) = repo_root {
-            let dirs = super::git::git_watch_directories(&repo_root)
-                .into_iter()
-                .map(|dir| Arc::<str>::from(dir.to_string_lossy().as_ref()))
-                .collect();
-            link.send(FileTreeMsg::GitWatchDirectoriesResolved { generation, dirs });
-        }
+        };
+        let dirs = super::git::repository_watch_directories(&repo_root);
+        let complete = repository.update(dirs);
+        link.send(FileTreeMsg::RepositoryWatchUpdated {
+            generation,
+            repository: Some(repository),
+            complete,
+        });
     }))
 }
 
@@ -1786,9 +1857,11 @@ fn refresh_tick(ctx: &mut Context<FileTreeComponent>, poll_generation: u64) -> U
     // Cleared here and retried by the reconcile that follows this update.
     ctx.state.watch.failed.clear();
     if needs_git_snapshot(&ctx.props) {
-        ctx.link().send(FileTreeMsg::WatchGitFlush {
-            generation: ctx.state.watch.generation,
-        });
+        let generation = ctx.state.watch.generation;
+        ctx.link().send(FileTreeMsg::WatchGitFlush { generation });
+        // Also picks up tracked directories whose metadata event was missed.
+        ctx.link()
+            .send(FileTreeMsg::RepositoryWatchResolve { generation });
     }
     if ctx.state.entry_refresh_pending {
         return Update::none();
@@ -1799,14 +1872,13 @@ fn refresh_tick(ctx: &mut Context<FileTreeComponent>, poll_generation: u64) -> U
     begin_local_entry_refresh(ctx, token, expanded, options)
 }
 
-/// Watch the visible directories and the Git metadata directories, and nothing else.
-fn reconcile_watches(state: &mut FileTreeState, props: &FileTreeProps) {
-    if state.watch.session.is_none() || !watches_filesystem(props) {
-        return;
+/// Watch exactly the visible directories, and return those whose listing must be reread.
+fn reconcile_watches(state: &mut FileTreeState, props: &FileTreeProps) -> Vec<Arc<str>> {
+    if !watches_filesystem(props) {
+        return Vec::new();
     }
-    let mut desired = visible_directories(&state.root, &effective_expanded_paths(props, state));
-    desired.extend(state.watch.git_dirs.iter().cloned());
-    state.watch.reconcile(&desired);
+    let desired = visible_directories(&state.root, &effective_expanded_paths(props, state));
+    state.watch.reconcile(desired)
 }
 
 /// Close a batch: queue the directories whose listing changed, and a Git refresh if one is due.
@@ -1815,7 +1887,7 @@ fn watch_flush(ctx: &mut Context<FileTreeComponent>, generation: u64) -> Update 
         return Update::none();
     }
     ctx.state.watch.flush_scheduled = false;
-    let (changes, rescan) = ctx
+    let batch = ctx
         .state
         .watch
         .pending
@@ -1826,9 +1898,13 @@ fn watch_flush(ctx: &mut Context<FileTreeComponent>, generation: u64) -> Update 
         &ctx.state.root,
         &effective_expanded_paths(&ctx.props, &ctx.state),
     );
-    let plan = plan_flush(changes, rescan, &entry_dirs, &ctx.state.watch.git_dirs);
+    let plan = plan_flush(batch, &entry_dirs);
     if plan.git && needs_git_snapshot(&ctx.props) {
         ctx.link().send(FileTreeMsg::WatchGitDirty { generation });
+    }
+    if plan.repository_changed {
+        ctx.link()
+            .send(FileTreeMsg::RepositoryWatchResolve { generation });
     }
     if plan.rescan {
         ctx.state.watch.dirty.extend(entry_dirs);
@@ -1913,8 +1989,9 @@ fn apply_watch_reload(
             node.loading = true;
         }
     }
-    if !unloaded.is_empty() {
-        ctx.state.watch.dirty.extend(unloaded);
+    ctx.state.watch.dirty.extend(unloaded);
+    // Changes that arrived while this reread ran.
+    if !ctx.state.watch.dirty.is_empty() {
         ctx.link().send(FileTreeMsg::WatchReload { generation });
     }
 
@@ -4005,7 +4082,6 @@ mod tests {
 
     /// Run `command` and collect what it and everything already queued send, up to and including
     /// the first message `done` accepts.
-    #[cfg(all(feature = "file-tree-watch", not(target_arch = "wasm32")))]
     fn run_command_until(
         runtime: &mut RuntimeCore<FileTreeComponent>,
         command: Command,
@@ -4023,7 +4099,6 @@ mod tests {
         collect_messages_until(runtime, done)
     }
 
-    #[cfg(all(feature = "file-tree-watch", not(target_arch = "wasm32")))]
     fn collect_messages_until(
         runtime: &mut RuntimeCore<FileTreeComponent>,
         mut done: impl FnMut(&FileTreeMsg) -> bool,
@@ -4118,6 +4193,63 @@ mod tests {
             Some(watch::DEGRADED_INTERVAL),
             "an unwatchable directory falls back to polling"
         );
+    }
+
+    /// Changes made while a directory was collapsed went unwatched, so reopening it must not trust
+    /// the listing it had before. Needs no watcher: the reread comes from it becoming visible.
+    #[test]
+    fn reopening_a_collapsed_directory_rereads_it() {
+        let dir = unique_component_test_dir("watch-reopen");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/before.rs"), "").unwrap();
+        let props = crate::widgets::file_tree::FileTree::new(dir.to_string_lossy().into_owned())
+            .initial_expanded_paths(["src"])
+            .refresh_policy(FileTreeRefreshPolicy::Watch)
+            .props;
+        let mut runtime = file_tree_runtime(props);
+        let src: Arc<str> = Arc::from(
+            Path::new(runtime.ctx.state.root.path.as_ref())
+                .join("src")
+                .to_string_lossy()
+                .as_ref(),
+        );
+        let toggle = |expanded| FileTreeMsg::TreeToggled {
+            entry: Some(VisibleFileTreeEntry {
+                path: src.clone(),
+                kind: FileKind::Directory,
+            }),
+            expanded,
+        };
+
+        runtime.component.update(toggle(false), &mut runtime.ctx);
+        std::fs::remove_file(dir.join("src/before.rs")).unwrap();
+        std::fs::write(dir.join("src/after.rs"), "").unwrap();
+        runtime.component.update(toggle(true), &mut runtime.ctx);
+
+        let reload = collect_messages_until(&mut runtime, |message| {
+            matches!(message, FileTreeMsg::WatchReload { .. })
+        })
+        .pop()
+        .unwrap();
+        let reload = runtime.component.update(reload, &mut runtime.ctx);
+        let loaded = run_command_until(
+            &mut runtime,
+            reload.command.expect("the reopened directory is reread"),
+            |message| matches!(message, FileTreeMsg::WatchDirectoriesLoaded { .. }),
+        )
+        .pop()
+        .unwrap();
+        runtime.component.update(loaded, &mut runtime.ctx);
+
+        let names: Vec<String> = node_by_path_mut(&mut runtime.ctx.state.root, &src)
+            .unwrap()
+            .children
+            .iter()
+            .map(|child| child.name.to_string())
+            .collect();
+        assert_eq!(names, ["after.rs"]);
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[cfg(all(feature = "file-tree-watch", not(target_arch = "wasm32")))]

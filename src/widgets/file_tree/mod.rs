@@ -134,12 +134,14 @@ pub enum FileTreeRefreshPolicy {
     /// Reread the root and expanded directories, and Git status, at this interval.
     Polling(std::time::Duration),
     /// Watch the root and every expanded directory, one level each, and reread a directory shortly
-    /// after something in it changes. File changes and Git metadata changes also refresh Git
-    /// status.
+    /// after something in it changes. A directory that is reopened is reread too. With Git status
+    /// shown, every directory holding a tracked file, open or not, and the repository metadata are
+    /// watched as well, and any change there refreshes Git status.
     ///
-    /// The whole visible tree is still reread every 30 seconds to repair missed events. While any
-    /// directory cannot be watched, such as one on a filesystem that reports no events, the tree
-    /// is reread every 5 seconds instead. Watching needs the `file-tree-watch` feature; without it
+    /// The whole visible tree and Git status are still reread every 30 seconds to repair missed
+    /// events. While anything cannot be watched, such as a directory on a filesystem that reports
+    /// no events or a repository with more than 4,096 tracked directories, that interval drops to
+    /// 5 seconds. Watching needs the `file-tree-watch` feature; without it
     /// this policy polls every 5 seconds.
     Watch,
 }

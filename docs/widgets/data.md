@@ -719,11 +719,16 @@ Plus all `Tree` styling/scrolling props, including `indent_style` and `scrollbar
   one level each, so the watch set follows what is on screen rather than the size of the tree.
   Changes in a directory are collected for about 100 ms and that directory alone is reread; open
   subdirectories stay open. A busy directory still refreshes several times a second instead of
-  waiting for writes to stop. File changes, and changes to the repository's `HEAD`, index, and
-  refs, refresh Git status after about 400 ms; linked worktrees are resolved through Git. The whole
-  tree is reread every 30 seconds to repair missed events, or every 5 seconds while any directory
-  cannot be watched. Watching stops when the tree unmounts. It needs the `file-tree-watch`
-  feature; without it, `Watch` polls every 5 seconds.
+  waiting for writes to stop. Reopening a collapsed directory rereads it, since nothing watched it
+  while it was closed.
+- With Git status shown, `Watch` also watches every directory that holds a tracked file, open or
+  not, plus the repository's metadata (`HEAD`, index, refs, `packed-refs`; linked worktrees are
+  resolved through Git). Any change there, including a mode change such as `chmod +x`, refreshes
+  Git status after about 400 ms. Ignored directories such as build output hold no tracked files and
+  stay unwatched. A repository with more than 4,096 such directories is not watched this way.
+- The whole tree and Git status are reread every 30 seconds to repair missed events, or every 5
+  seconds while anything cannot be watched. Watching stops when the tree unmounts. It needs the
+  `file-tree-watch` feature; without it, `Watch` polls every 5 seconds.
 - Git status reads run with `GIT_OPTIONAL_LOCKS=0`, so refreshing never rewrites the index.
 - Every directory is expandable, including one that turns out to be empty; a lazy tree cannot know
   a directory is empty until it has been opened, so its row keeps the same shape either way.
