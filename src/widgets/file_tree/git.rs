@@ -455,7 +455,9 @@ fn git_command(repo_root: &Path) -> ProcessCommand {
 /// A linked worktree's `.git` is a file pointing elsewhere, and its branch refs and `packed-refs`
 /// live in the common directory shared with the main checkout, so neither can be derived from
 /// `repo_root/.git`. The result holds the worktree's Git directory (`HEAD`, `index`), the common
-/// directory (`packed-refs`), and the directory holding the checked-out branch's ref, when any.
+/// directory (`packed-refs`), its `info` directory (`info/exclude` ignore rules) when it exists,
+/// and the directory holding the checked-out branch's ref, when any. A global
+/// `core.excludesFile` is left to the periodic repair.
 pub(crate) fn git_watch_directories(repo_root: &Path) -> Vec<PathBuf> {
     let Some(output) = git_command(repo_root)
         .args([
@@ -473,6 +475,12 @@ pub(crate) fn git_watch_directories(repo_root: &Path) -> Vec<PathBuf> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut dirs: Vec<PathBuf> = stdout.lines().map(PathBuf::from).collect();
 
+    // Only when present: a directory that cannot be watched would mark the whole watch incomplete.
+    if let Some(info) = dirs.get(1).map(|common_dir| common_dir.join("info"))
+        && info.is_dir()
+    {
+        dirs.push(info);
+    }
     if let Some(common_dir) = dirs.get(1).cloned()
         && let Some(branch_ref) = git_command(repo_root)
             .args(["symbolic-ref", "-q", "HEAD"])
@@ -932,7 +940,9 @@ mod watch_directory_tests {
         std::fs::create_dir_all(dir.join("target/debug")).unwrap();
         std::fs::write(dir.join("src/main.rs"), "").unwrap();
         std::fs::write(dir.join("target/debug/out"), "").unwrap();
-        std::fs::write(dir.join(".gitignore"), "target/\n").unwrap();
+        std::fs::create_dir_all(dir.join("local")).unwrap();
+        std::fs::write(dir.join("local/note.txt"), "").unwrap();
+        std::fs::write(dir.join(".gitignore"), "target/\nlocal/\n").unwrap();
         let git = |args: &[&str]| {
             ProcessCommand::new("git")
                 .arg("-C")
@@ -966,7 +976,19 @@ mod watch_directory_tests {
             "removing the last untracked file changes status"
         );
         assert!(!dirs.worktree.contains(&key(root.join("target"))));
+        assert!(!dirs.worktree.contains(&key(root.join("local"))));
         assert!(!dirs.metadata.is_empty(), "the Git directory is watched");
+        if root.join(".git/info").is_dir() {
+            assert!(
+                dirs.metadata.contains(&key(root.join(".git/info"))),
+                "info/exclude holds ignore rules"
+            );
+        }
+
+        // Un-ignoring a directory makes its contents part of `git status`.
+        std::fs::write(dir.join(".gitignore"), "target/\n").unwrap();
+        let dirs = repository_watch_directories(&root);
+        assert!(dirs.worktree.contains(&key(root.join("local"))));
 
         let _ = std::fs::remove_dir_all(dir);
     }

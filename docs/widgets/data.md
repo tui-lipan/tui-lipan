@@ -726,12 +726,13 @@ Plus all `Tree` styling/scrolling props, including `indent_style` and `scrollbar
   while it was closed.
 - With Git status shown, `Watch` also watches, open or not, every directory that holds a tracked
   file or a non-ignored untracked file, and every untracked directory including empty ones, plus
-  the repository's metadata (`HEAD`, index, refs, `packed-refs`; linked worktrees are resolved
-  through Git). Any change there, including a mode change such as `chmod +x`, refreshes Git status
-  after about 400 ms, and a created or removed entry updates what is watched. Ignored directories
-  such as build output stay unwatched. A repository with more than 4,096 such directories is not
-  watched this way. A file added to an empty directory nested inside an otherwise empty untracked
-  directory waits for the repair reread.
+  the repository's metadata (`HEAD`, index, refs, `packed-refs`, `info/exclude`; linked worktrees
+  are resolved through Git). Any change there, including a mode change such as `chmod +x`,
+  refreshes Git status after about 400 ms. A created or removed entry, or an edit to a
+  `.gitignore`, also updates what is watched. Ignored directories such as build output stay
+  unwatched. A repository with more than 4,096 such directories is not watched this way. Two cases
+  wait for the repair reread: a file added to an empty directory nested inside an otherwise empty
+  untracked directory, and an edit to a global `core.excludesFile`.
 - The whole tree and Git status are reread every 30 seconds to repair missed events, or every 5
   seconds while anything cannot be watched. Watching stops when the tree unmounts. It needs the
   `file-tree-watch` feature; without it, `Watch` polls every 5 seconds.

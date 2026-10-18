@@ -411,8 +411,9 @@ mod backend {
                                 return;
                             };
                             // A created or removed entry can add or retire a directory to cover,
-                            // such as a new untracked one; so can any metadata change.
-                            mask.entries || {
+                            // such as a new untracked one; so can any metadata change, and any
+                            // edit to ignore rules, which decide what is untracked at all.
+                            mask.entries || event.paths.iter().any(|path| is_ignore_file(path)) || {
                                 let Ok(metadata) = handler_metadata.lock() else {
                                     return;
                                 };
@@ -498,6 +499,12 @@ mod backend {
             }
             _ => Some(ChangeMask::ENTRIES),
         }
+    }
+
+    /// Whether `path` holds ignore rules that `--exclude-standard` reads from the working tree.
+    /// `info/exclude` needs no check here: its directory is a metadata directory.
+    fn is_ignore_file(path: &Path) -> bool {
+        path.file_name().is_some_and(|name| name == ".gitignore")
     }
 
     /// The directories an event touches: each path's parent, and the path itself in case it is a
@@ -656,6 +663,7 @@ mod backend {
             std::fs::create_dir_all(&collapsed).unwrap();
             std::fs::create_dir_all(&metadata).unwrap();
             std::fs::write(collapsed.join("main.rs"), "").unwrap();
+            std::fs::write(dir.join(".gitignore"), "scratch/\n").unwrap();
             let key = |path: &std::path::Path| Arc::<str>::from(path.to_string_lossy().as_ref());
             let pending = SharedPending::default();
             let (tx, rx) = std::sync::mpsc::channel();
@@ -679,6 +687,13 @@ mod backend {
 
             // A new directory may need covering itself, such as an untracked one.
             std::fs::create_dir_all(dir.join("scratch")).unwrap();
+            wait_for_batch(&pending, &rx, |batch| batch.git && batch.repository_changed);
+
+            // Editing ignore rules in place is only a content change, yet it decides what is
+            // untracked. Let earlier events settle so they cannot satisfy this check.
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            pending.lock().unwrap().take();
+            std::fs::write(dir.join(".gitignore"), "").unwrap();
             wait_for_batch(&pending, &rx, |batch| batch.git && batch.repository_changed);
 
             drop(repository);
