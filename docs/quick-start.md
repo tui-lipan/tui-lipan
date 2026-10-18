@@ -76,6 +76,7 @@ tui-lipan = { version = "*", features = ["image", "big-text"] }
 | `image` | No | Protocol-aware image rendering (Kitty, iTerm2, Sixel, halfblocks) with PNG/JPEG/GIF/WebP codecs - includes `clipboard-images` |
 | `image-full-formats` | No | Restores the broad `image` crate default codec set for `image`, `clipboard-images`, or `ui-snapshot-png` builds |
 | `hints-regex` | No | `regex-lite` scanner for string-configured custom text hints; the dependency-free `HintScanner` trait and URL/path/Git scanners are always available |
+| `file-tree-watch` | No | Filesystem watching for `FileTree` with `FileTreeRefreshPolicy::Watch`; without it that policy polls |
 | `markdown` | No | Markdown formatter for `DocumentView` + markdown preview example |
 | `qr-code` | No | Scannable QR symbols rendered as terminal cells - `QrCode` |
 | `profiling-tracing` | No | `tracing` spans/events around render loop and `DocumentView` formatting/reconcile hot paths |

@@ -437,13 +437,162 @@ pub(crate) fn discover_git_root(path: &Path) -> Option<PathBuf> {
     None
 }
 
+/// A `git` invocation for reading status in `repo_root`.
+///
+/// Optional locks are off so that reading never rewrites the index: a refresh would otherwise
+/// write a file a watching tree observes, and refresh again in a loop.
+fn git_command(repo_root: &Path) -> ProcessCommand {
+    let mut command = ProcessCommand::new("git");
+    command
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .arg("-C")
+        .arg(repo_root);
+    command
+}
+
+/// The metadata directories whose changes can alter `repo_root`'s status, asked of Git itself.
+///
+/// A linked worktree's `.git` is a file pointing elsewhere, and its branch refs and `packed-refs`
+/// live in the common directory shared with the main checkout, so neither can be derived from
+/// `repo_root/.git`. The result holds the worktree's Git directory (`HEAD`, `index`), the common
+/// directory (`packed-refs`), its `info` directory (`info/exclude` ignore rules) when it exists,
+/// and the directory holding the checked-out branch's ref, when any. A global
+/// `core.excludesFile` is left to the periodic repair.
+pub(crate) fn git_watch_directories(repo_root: &Path) -> Vec<PathBuf> {
+    let Some(output) = git_command(repo_root)
+        .args([
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-dir",
+            "--git-common-dir",
+        ])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+    else {
+        return Vec::new();
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut dirs: Vec<PathBuf> = stdout.lines().map(PathBuf::from).collect();
+
+    // Only when present: a directory that cannot be watched would mark the whole watch incomplete.
+    if let Some(info) = dirs.get(1).map(|common_dir| common_dir.join("info"))
+        && info.is_dir()
+    {
+        dirs.push(info);
+    }
+    if let Some(common_dir) = dirs.get(1).cloned()
+        && let Some(branch_ref) = git_command(repo_root)
+            .args(["symbolic-ref", "-q", "HEAD"])
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+        && let Some(ref_dir) = common_dir
+            .join(String::from_utf8_lossy(&branch_ref.stdout).trim())
+            .parent()
+    {
+        dirs.push(ref_dir.to_path_buf());
+    }
+
+    dirs.sort();
+    dirs.dedup();
+    dirs
+}
+
+/// Everything a repository watch needs: the metadata directories, and the repository root plus
+/// every directory whose contents can change `git status`, with their ancestors.
+///
+/// Watches are one level deep, so every such directory is listed rather than relying on an
+/// ancestor: each directory holding a tracked file (from the index, so staged paths count), each
+/// holding an untracked file that is not ignored, and each untracked directory, empty ones
+/// included. Deleting the last file of an untracked directory, or adding the first file to an empty
+/// one, is then seen. Ignored build output holds none of these and stays unwatched. Past
+/// [`MAX_REPOSITORY_WATCH_DIRS`] only the root is kept and the result is marked incomplete, so the
+/// tree polls Git status rather than adding watches without bound.
+///
+/// [`MAX_REPOSITORY_WATCH_DIRS`]: super::watch::MAX_REPOSITORY_WATCH_DIRS
+pub(crate) fn repository_watch_directories(repo_root: &Path) -> super::watch::RepositoryWatchDirs {
+    let key = |path: &Path| Arc::<str>::from(path.to_string_lossy().as_ref());
+    let metadata = git_watch_directories(repo_root)
+        .iter()
+        .map(|dir| key(dir))
+        .collect();
+    let list = |args: &[&str]| {
+        git_command(repo_root)
+            .args(["ls-files", "-z"])
+            .args(args)
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|output| {
+                output
+                    .stdout
+                    .split(|byte| *byte == 0)
+                    .filter(|path| !path.is_empty())
+                    .map(|path| String::from_utf8_lossy(path).into_owned())
+                    .collect::<Vec<_>>()
+            })
+    };
+    // Every file `git status` can report on, then untracked directories (`--directory` lists an
+    // untracked tree once, as `dir/`, and lists empty ones that hold no file to find them by).
+    let files = list(&["--cached", "--others", "--exclude-standard"]);
+    let untracked = list(&["--others", "--directory", "--exclude-standard"]);
+    let (Some(files), Some(untracked)) = (files, untracked) else {
+        return super::watch::RepositoryWatchDirs {
+            metadata,
+            worktree: HashSet::from([key(repo_root)]),
+            complete: false,
+        };
+    };
+    let relative = status_directories(
+        files,
+        untracked
+            .into_iter()
+            .filter_map(|path| path.strip_suffix('/').map(str::to_owned)),
+    );
+    let complete = relative.len() <= super::watch::MAX_REPOSITORY_WATCH_DIRS;
+    let mut worktree = HashSet::from([key(repo_root)]);
+    if complete {
+        worktree.extend(relative.iter().map(|dir| key(&repo_root.join(dir))));
+    }
+    super::watch::RepositoryWatchDirs {
+        metadata,
+        worktree,
+        complete,
+    }
+}
+
+/// The distinct non-root directories, relative to the repository, that contain one of `files`
+/// directly or through a subdirectory, plus each of `dirs` and its ancestors.
+fn status_directories(
+    files: impl IntoIterator<Item = String>,
+    dirs: impl IntoIterator<Item = String>,
+) -> HashSet<PathBuf> {
+    let mut found = HashSet::new();
+    let mut insert_with_ancestors = |start: Option<&Path>| {
+        let mut next = start;
+        while let Some(dir) = next.filter(|dir| !dir.as_os_str().is_empty()) {
+            if !found.insert(dir.to_path_buf()) {
+                // Its ancestors were added along with it.
+                break;
+            }
+            next = dir.parent();
+        }
+    };
+    for file in files {
+        insert_with_ancestors(Path::new(&file).parent());
+    }
+    for dir in dirs {
+        insert_with_ancestors(Some(Path::new(&dir)));
+    }
+    found
+}
+
 pub(crate) fn load_git_snapshot(
     repo_root: &Path,
     include_diff_stats: bool,
 ) -> Option<GitStatusSnapshot> {
-    let output = ProcessCommand::new("git")
-        .arg("-C")
-        .arg(repo_root)
+    let output = git_command(repo_root)
         .arg("status")
         .arg("--porcelain=v1")
         // NUL-separated and unquoted: a path with a space or a non-ASCII name arrives verbatim, and
@@ -555,9 +704,7 @@ fn normalize_numstat_path(path: &str) -> String {
 }
 
 fn load_git_diff_stats(repo_root: &Path, entries: &mut HashMap<Arc<str>, GitFileDecorations>) {
-    let Some(output) = ProcessCommand::new("git")
-        .arg("-C")
-        .arg(repo_root)
+    let Some(output) = git_command(repo_root)
         .arg("diff")
         .arg("--numstat")
         .arg("HEAD")
@@ -741,6 +888,109 @@ fn merge_diff_stat(
         (Some(existing), None) => Some(existing),
         (None, Some(diff_stat)) => Some(diff_stat),
         (None, None) => None,
+    }
+}
+
+#[cfg(test)]
+mod watch_directory_tests {
+    use super::*;
+
+    #[test]
+    fn status_directories_include_every_ancestor_once() {
+        let dirs = status_directories(
+            [
+                "README.md",
+                "src/main.rs",
+                "src/update/tree.rs",
+                "docs/a/b/c.md",
+            ]
+            .map(String::from),
+            ["scratch/empty"].map(String::from),
+        );
+        let mut dirs: Vec<_> = dirs
+            .iter()
+            .map(|dir| dir.to_string_lossy().into_owned())
+            .collect();
+        dirs.sort();
+        assert_eq!(
+            dirs,
+            [
+                "docs",
+                "docs/a",
+                "docs/a/b",
+                "scratch",
+                "scratch/empty",
+                "src",
+                "src/update"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_repository_watch_covers_status_directories_but_not_ignored_ones() {
+        let dir = std::env::temp_dir().join(format!(
+            "tui-lipan-file-tree-repo-watch-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::create_dir_all(dir.join("target/debug")).unwrap();
+        std::fs::write(dir.join("src/main.rs"), "").unwrap();
+        std::fs::write(dir.join("target/debug/out"), "").unwrap();
+        std::fs::create_dir_all(dir.join("local")).unwrap();
+        std::fs::write(dir.join("local/note.txt"), "").unwrap();
+        std::fs::write(dir.join(".gitignore"), "target/\nlocal/\n").unwrap();
+        let git = |args: &[&str]| {
+            ProcessCommand::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .output()
+                .is_ok_and(|output| output.status.success())
+        };
+        if !git(&["init", "-q"]) || !git(&["add", "-A"]) {
+            eprintln!("skipping: git is unavailable");
+            return;
+        }
+        // Untracked after the add: an empty directory, and a tree with a file two levels down.
+        std::fs::create_dir_all(dir.join("scratch")).unwrap();
+        std::fs::create_dir_all(dir.join("notes/drafts")).unwrap();
+        std::fs::write(dir.join("notes/drafts/idea.md"), "").unwrap();
+        let root = dunce::canonicalize(&dir).unwrap();
+
+        let dirs = repository_watch_directories(&root);
+
+        let key = |path: PathBuf| Arc::<str>::from(path.to_string_lossy().as_ref());
+        assert!(dirs.complete);
+        assert!(dirs.worktree.contains(&key(root.clone())));
+        assert!(dirs.worktree.contains(&key(root.join("src"))));
+        assert!(
+            dirs.worktree.contains(&key(root.join("scratch"))),
+            "adding the first file to an empty untracked directory changes status"
+        );
+        assert!(
+            dirs.worktree.contains(&key(root.join("notes/drafts"))),
+            "removing the last untracked file changes status"
+        );
+        assert!(!dirs.worktree.contains(&key(root.join("target"))));
+        assert!(!dirs.worktree.contains(&key(root.join("local"))));
+        assert!(!dirs.metadata.is_empty(), "the Git directory is watched");
+        if root.join(".git/info").is_dir() {
+            assert!(
+                dirs.metadata.contains(&key(root.join(".git/info"))),
+                "info/exclude holds ignore rules"
+            );
+        }
+
+        // Un-ignoring a directory makes its contents part of `git status`.
+        std::fs::write(dir.join(".gitignore"), "target/\n").unwrap();
+        let dirs = repository_watch_directories(&root);
+        assert!(dirs.worktree.contains(&key(root.join("local"))));
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
 

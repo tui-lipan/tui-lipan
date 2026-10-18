@@ -22,9 +22,12 @@ use super::git::{
 };
 use super::mod_private::FileTreeProps;
 use super::provided_path::ProvidedPath;
+use super::watch::{
+    self, RepositoryWatch, WatchSession, WatchState, plan_flush, visible_directories,
+};
 use super::{
     FileTreeChangeSource, FileTreeChangeView, FileTreeDirectoryListing, FileTreeEntrySource,
-    FileTreeItemStyle, FileTreeSuffixPriority,
+    FileTreeItemStyle, FileTreeRefreshPolicy, FileTreeSuffixPriority,
 };
 use crate::widgets::{TreeEvent, TreeToggleEvent};
 
@@ -62,6 +65,8 @@ pub(crate) struct FileTreeState {
     pub(crate) symlink_targets: HashMap<Arc<str>, SymlinkInfo>,
     /// Whether the tree itself has keyboard focus, which decides whether the cursor row shows.
     pub(crate) tree_focused: bool,
+    /// Filesystem watching and periodic rereads, driven by [`FileTreeRefreshPolicy`].
+    pub(crate) watch: WatchState,
 }
 
 /// Where a symlink points, and whether that is a directory.
@@ -112,6 +117,57 @@ pub(crate) enum FileTreeMsg {
         generation: u64,
         snapshot: Option<GitStatusSnapshot>,
         cache_request: Option<GitStatusCacheRequest>,
+    },
+    /// Start the refresh policy over: drop any watcher, and arm what the policy asks for.
+    RefreshPolicyRestart,
+    /// Schedule the next periodic reread of a chain.
+    ArmRefreshTick {
+        poll_generation: u64,
+    },
+    /// Periodic reread: the polling policy's interval, or a watching tree's repair pass.
+    RefreshTick {
+        poll_generation: u64,
+    },
+    WatchStarted {
+        generation: u64,
+        session: Arc<WatchSession>,
+    },
+    WatchUnavailable {
+        generation: u64,
+    },
+    /// Resolve the tracked directories and bring the repository watch up to date.
+    RepositoryWatchResolve {
+        generation: u64,
+    },
+    RepositoryWatchUpdated {
+        generation: u64,
+        repository: Option<Arc<RepositoryWatch>>,
+        complete: bool,
+    },
+    /// The watcher recorded the first change of a new batch.
+    WatchDirty {
+        generation: u64,
+    },
+    /// The batch window closed: sort what changed into rereads and a Git refresh.
+    WatchFlush {
+        generation: u64,
+    },
+    /// Reread dirty directories, unless a reread is already running.
+    WatchReload {
+        generation: u64,
+    },
+    WatchDirectoriesLoaded {
+        generation: u64,
+        entry_generation: u64,
+        root: Arc<str>,
+        options: (bool, usize),
+        results: Vec<(Arc<str>, super::fs::DirectoryLoadResult)>,
+    },
+    WatchGitDirty {
+        generation: u64,
+    },
+    WatchGitFlush {
+        generation: u64,
     },
     SyncRootMode,
     EnsureChangedOnlyExpanded,
@@ -205,6 +261,7 @@ impl Component for FileTreeComponent {
             uncontrolled_selected_path,
             symlink_targets: HashMap::new(),
             tree_focused: false,
+            watch: WatchState::default(),
         };
 
         apply_initial_expanded_paths(&mut state, props);
@@ -215,6 +272,9 @@ impl Component for FileTreeComponent {
 
     fn init(&mut self, ctx: &mut Context<Self>) -> Option<Command> {
         request_missing_provided_directories(&mut ctx.state, &ctx.props);
+        if refresh_policy_active(&ctx.props) {
+            ctx.link().send(FileTreeMsg::RefreshPolicyRestart);
+        }
 
         if !needs_git_snapshot(&ctx.props) {
             return None;
@@ -457,368 +517,14 @@ impl Component for FileTreeComponent {
     }
 
     fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
-        match msg {
-            FileTreeMsg::ExplorerQueryChanged(event) => {
-                ctx.state
-                    .explorer_input
-                    .set_text(event.value.as_ref().to_string());
-                ctx.state.explorer_input.set_cursor(event.cursor);
-                ctx.state.explorer_input.set_anchor(event.anchor);
+        let was_degraded = ctx.state.watch.degraded();
+        let update = update_file_tree(msg, ctx);
+        sync_watches(ctx, was_degraded);
+        update
+    }
 
-                let query: Arc<str> = Arc::from(ctx.state.explorer_input.text().to_owned());
-                if query.trim().is_empty() {
-                    let restore_dir = ctx
-                        .state
-                        .search_found_dir
-                        .clone()
-                        .or_else(|| ctx.state.explorer_filter.primary_match_directory.clone());
-
-                    ctx.state.explorer_filter = ExplorerFilter::default();
-
-                    if let Some(snapshot) = ctx.state.search_expanded_snapshot.take() {
-                        ctx.state.expanded = snapshot;
-                    }
-
-                    if let Some(path) = restore_dir {
-                        insert_path_with_ancestors_for(
-                            &mut ctx.state.expanded,
-                            &path,
-                            &ctx.state.root.path,
-                            uses_provided_paths(&ctx.props),
-                        );
-                    }
-
-                    ctx.state.search_found_dir = None;
-
-                    let expanded = ctx.state.expanded.clone();
-                    load_expanded_directories(&mut ctx.state, &ctx.props, expanded);
-                    return Update::full();
-                }
-
-                if ctx.state.search_expanded_snapshot.is_none() {
-                    ctx.state.search_expanded_snapshot = Some(ctx.state.expanded.clone());
-                    ctx.state.search_found_dir = None;
-                }
-
-                let query_id = ctx.state.explorer_query_id.saturating_add(1);
-                ctx.state.explorer_query_id = query_id;
-                let search_root = if ctx.props.change_view == FileTreeChangeView::ChangedOnly {
-                    ctx.state.root.path.clone()
-                } else {
-                    ctx.props.root.clone()
-                };
-                Update::with_command(spawn_explorer_search(
-                    ctx.link().clone(),
-                    query_id,
-                    query,
-                    search_root,
-                    ctx.props.show_hidden,
-                    ctx.props.max_entries_per_dir,
-                    explorer_search_candidates(&ctx.props, &ctx.state),
-                ))
-            }
-            FileTreeMsg::ExplorerResultsReady { query_id, filter } => {
-                if query_id != ctx.state.explorer_query_id {
-                    return Update::none();
-                }
-
-                if ctx.state.explorer_input.text().trim().is_empty() {
-                    return Update::none();
-                }
-
-                ctx.state.explorer_filter = filter;
-
-                if ctx.state.search_found_dir.is_none() {
-                    ctx.state.search_found_dir =
-                        ctx.state.explorer_filter.primary_match_directory.clone();
-                }
-
-                for path in &ctx.state.explorer_filter.expanded_paths {
-                    ctx.state.expanded.insert(path.clone());
-                }
-
-                let expanded = ctx.state.expanded.clone();
-                load_expanded_directories(&mut ctx.state, &ctx.props, expanded);
-                normalize_uncontrolled_selection(&ctx.props, &mut ctx.state);
-                Update::full()
-            }
-            FileTreeMsg::RequestEntryRefresh(token) => {
-                let options = entry_refresh_options(&ctx.props);
-                if !uses_local_entries(&ctx.props) || token != ctx.props.entry_refresh_token {
-                    return Update::none();
-                }
-                if token == ctx.state.entry_refresh_requested_token
-                    && options == ctx.state.entry_refresh_requested_options
-                    && (ctx.state.entry_refresh_pending
-                        || token == ctx.state.entry_refresh_completed_token)
-                {
-                    return Update::none();
-                }
-
-                let expanded = effective_expanded_paths(&ctx.props, &ctx.state).into_owned();
-                begin_local_entry_refresh(ctx, token, expanded, options)
-            }
-            FileTreeMsg::EntryRefreshLoaded(result) => {
-                if !uses_local_entries(&ctx.props)
-                    || result.generation != ctx.state.entry_refresh_generation
-                    || result.token != ctx.state.entry_refresh_requested_token
-                    || result.token != ctx.props.entry_refresh_token
-                    || result.root != ctx.state.root.path
-                    || result.options != entry_refresh_options(&ctx.props)
-                    || !ctx.state.entry_refresh_pending
-                {
-                    return Update::none();
-                }
-
-                let expanded = effective_expanded_paths(&ctx.props, &ctx.state).into_owned();
-                if result.expanded != expanded {
-                    return begin_local_entry_refresh(ctx, result.token, expanded, result.options);
-                }
-
-                let link = ctx.link().clone();
-                ctx.state.root = result.snapshot;
-                ctx.state.entry_refresh_pending = false;
-                ctx.state.entry_refresh_completed_token = result.token;
-                sync_symlink_targets(&mut ctx.state, &ctx.props);
-                if !ctx.props.explorer || ctx.state.explorer_input.text().trim().is_empty() {
-                    normalize_uncontrolled_selection(&ctx.props, &mut ctx.state);
-                }
-                let command =
-                    restart_explorer_search_after_entry_refresh(&ctx.props, &mut ctx.state, link);
-                Update::with_command(command)
-            }
-            FileTreeMsg::TreeFocusChanged(focused) => {
-                ctx.state.tree_focused = focused;
-                let callback = if focused {
-                    ctx.props.on_focus.as_ref()
-                } else {
-                    ctx.props.on_blur.as_ref()
-                };
-                if let Some(callback) = callback {
-                    callback.emit(());
-                }
-                // The cursor row shows or hides with focus, and it lifts a receded row's style.
-                if recedes_rows(&ctx.props) {
-                    Update::full()
-                } else {
-                    Update::none()
-                }
-            }
-            FileTreeMsg::TreeSelected { entry } => {
-                let restyle = recedes_rows(&ctx.props);
-                if let Some(entry) = entry {
-                    if tracks_uncontrolled_selection(&ctx.props) {
-                        ctx.state.uncontrolled_selected_path = Some(entry.path.clone());
-                    }
-                    if !ctx.state.explorer_input.text().trim().is_empty() {
-                        ctx.state.search_found_dir = Some(selected_directory_for_restore(
-                            &entry.path,
-                            entry.kind,
-                            &ctx.state.root.path,
-                            uses_provided_paths(&ctx.props),
-                        ));
-                    }
-
-                    if let Some(cb) = ctx.props.on_select.as_ref() {
-                        cb.emit(FileTreeEvent {
-                            path: entry.path,
-                            kind: entry.kind,
-                        });
-                    }
-                }
-                // The row the cursor left recedes again, and the one it reached lifts.
-                if restyle {
-                    Update::full()
-                } else {
-                    Update::none()
-                }
-            }
-            FileTreeMsg::TreeActivated { entry } => {
-                if let Some(entry) = entry
-                    && let Some(cb) = ctx.props.on_activate.as_ref()
-                {
-                    cb.emit(FileTreeEvent {
-                        path: entry.path,
-                        kind: entry.kind,
-                    });
-                }
-                Update::none()
-            }
-            FileTreeMsg::TreeCtrlActivated { entry } => {
-                if let Some(entry) = entry
-                    && let Some(cb) = &ctx.props.on_ctrl_activate
-                {
-                    cb.emit(FileTreeEvent {
-                        path: entry.path,
-                        kind: entry.kind,
-                    });
-                }
-                Update::none()
-            }
-            FileTreeMsg::TreeToggled { entry, expanded } => {
-                let node_path = if let Some(entry) = entry {
-                    if ctx.props.expanded_paths.is_none() {
-                        if expanded {
-                            ctx.state.expanded.insert(entry.path.clone());
-                        } else {
-                            ctx.state.expanded.remove(&entry.path);
-                        }
-                    }
-
-                    if let Some(cb) = ctx.props.on_toggle.as_ref() {
-                        cb.emit(FileTreeToggleEvent {
-                            path: entry.path.clone(),
-                            kind: entry.kind,
-                            expanded,
-                        });
-                    }
-
-                    Some(entry.path)
-                } else {
-                    None
-                };
-
-                if expanded
-                    && node_path.is_some()
-                    && (ctx.props.change_view != FileTreeChangeView::ChangedOnly
-                        || uses_provided_entries(&ctx.props))
-                {
-                    let expanded_paths =
-                        effective_expanded_paths(&ctx.props, &ctx.state).into_owned();
-                    load_expanded_directories(&mut ctx.state, &ctx.props, expanded_paths);
-                }
-
-                Update::full()
-            }
-            FileTreeMsg::RequestGitRefresh(nonce) => {
-                if !needs_git_snapshot(&ctx.props) || nonce == ctx.state.last_git_refresh_nonce {
-                    return Update::none();
-                }
-
-                ctx.state.last_git_refresh_nonce = nonce;
-                ctx.state.git_load_generation = ctx.state.git_load_generation.wrapping_add(1);
-                let Some(repo_root) = discover_git_root(Path::new(ctx.props.root.as_ref())) else {
-                    ctx.state.git_snapshot_pending = false;
-                    return Update::none();
-                };
-                let repo_root = Arc::<str>::from(repo_root.to_string_lossy().as_ref());
-                let include_diff_stats = ctx.props.git_diff_stats;
-                let generation = ctx.state.git_load_generation;
-                let (_, cache_request) =
-                    prepare_git_cache(&ctx.props, Path::new(repo_root.as_ref()));
-                Update::with_command(git_snapshot_command(
-                    ctx.link().clone(),
-                    repo_root,
-                    include_diff_stats,
-                    generation,
-                    cache_request,
-                ))
-            }
-            FileTreeMsg::GitSnapshotLoaded {
-                generation,
-                snapshot,
-                cache_request,
-            } => {
-                if generation != ctx.state.git_load_generation || !needs_git_snapshot(&ctx.props) {
-                    return Update::none();
-                }
-                ctx.state.git_snapshot_pending = false;
-                if let (Some(cache), Some(request)) =
-                    (ctx.props.git_status_cache.as_ref(), cache_request.as_ref())
-                {
-                    cache.finish_request(request, snapshot.as_ref());
-                }
-                let Some(snapshot) = snapshot else {
-                    return Update::none();
-                };
-                ctx.state.git_snapshot = snapshot;
-                let snapshot = effective_change_snapshot(&ctx.state);
-                if should_auto_expand_changed_only(&ctx.props, &ctx.state, snapshot) {
-                    let changed_paths = snapshot.changed_paths.clone();
-                    let provided = snapshot.virtual_changes;
-                    let signature = change_snapshot_signature(snapshot);
-                    expand_changed_only_directories(&mut ctx.state, &changed_paths, provided);
-                    ctx.state.changed_only_auto_expand_signature = signature;
-                }
-                Update::full()
-            }
-            FileTreeMsg::SyncRootMode => {
-                if ctx.state.root_virtual == uses_virtual_root(&ctx.props) {
-                    return Update::none();
-                }
-
-                rebuild_root_for_props(&mut ctx.state, &ctx.props);
-                Update::full()
-            }
-            FileTreeMsg::EnsureChangedOnlyExpanded => {
-                let snapshot = effective_change_snapshot(&ctx.state);
-                if should_auto_expand_changed_only(&ctx.props, &ctx.state, snapshot) {
-                    let changed_paths = snapshot.changed_paths.clone();
-                    let provided = snapshot.virtual_changes;
-                    let signature = change_snapshot_signature(snapshot);
-                    expand_changed_only_directories(&mut ctx.state, &changed_paths, provided);
-                    ctx.state.changed_only_auto_expand_signature = signature;
-                    return Update::full();
-                }
-                Update::none()
-            }
-            FileTreeMsg::EnsureRevealPaths => {
-                if apply_reveal_paths_to_state(&mut ctx.state, &ctx.props) {
-                    return Update::full();
-                }
-                Update::none()
-            }
-            FileTreeMsg::FocusExplorer { from_tree } => {
-                ctx.state.explorer_entered_from_tree = from_tree;
-                ctx.state.explorer_focused = true;
-                ctx.request_focus(ctx.props.explorer_focus_key.clone());
-                if let Some(callback) = ctx.props.on_explorer_focus.as_ref() {
-                    callback.emit(if from_tree {
-                        FileTreeExplorerFocusOrigin::Tree
-                    } else {
-                        FileTreeExplorerFocusOrigin::Pointer
-                    });
-                }
-                Update::none()
-            }
-            FileTreeMsg::FocusTree => {
-                ctx.state.explorer_entered_from_tree = false;
-                ctx.state.explorer_focused = false;
-                ctx.request_focus(ctx.props.tree_focus_key.clone());
-                Update::none()
-            }
-            FileTreeMsg::TreePointerDown => {
-                if !ctx.state.explorer_focused {
-                    return Update::none();
-                }
-
-                ctx.state.explorer_entered_from_tree = false;
-                ctx.state.explorer_focused = false;
-                if let Some(callback) = ctx.props.on_explorer_escape.as_ref() {
-                    callback.emit(());
-                } else {
-                    ctx.request_focus(ctx.props.tree_focus_key.clone());
-                }
-                Update::none()
-            }
-            FileTreeMsg::ExplorerBlurred => {
-                ctx.state.explorer_focused = false;
-                if let Some(callback) = ctx.props.on_explorer_blur.as_ref() {
-                    callback.emit(());
-                }
-                Update::none()
-            }
-            FileTreeMsg::EscapeExplorer => {
-                ctx.state.explorer_focused = false;
-                if ctx.state.explorer_entered_from_tree || ctx.props.on_explorer_escape.is_none() {
-                    ctx.state.explorer_entered_from_tree = false;
-                    ctx.request_focus(ctx.props.tree_focus_key.clone());
-                } else if let Some(callback) = ctx.props.on_explorer_escape.as_ref() {
-                    callback.emit(());
-                }
-                Update::none()
-            }
-        }
+    fn unmount(&mut self, ctx: &mut Context<Self>) {
+        ctx.state.watch.reset();
     }
 
     fn on_props_changed(
@@ -915,9 +621,481 @@ impl Component for FileTreeComponent {
             ctx.state.git_snapshot_pending = false;
         }
 
+        // A new root or entry mode needs a new watch set and new Git metadata directories.
+        let was_degraded = ctx.state.watch.degraded();
+        if old_props.refresh_policy != ctx.props.refresh_policy
+            || root_mode_changed
+            || needs_git_snapshot(old_props) != needs_git_snapshot(&ctx.props)
+        {
+            if refresh_policy_active(&ctx.props) {
+                ctx.link().send(FileTreeMsg::RefreshPolicyRestart);
+            } else {
+                ctx.state.watch.reset();
+            }
+        }
+        // Controlled `expanded_paths` can reopen a directory here, not only through a toggle.
+        sync_watches(ctx, was_degraded);
+
         if dirty {
             Update::with_command(command)
         } else {
+            Update::none()
+        }
+    }
+}
+
+fn update_file_tree(msg: FileTreeMsg, ctx: &mut Context<FileTreeComponent>) -> Update {
+    match msg {
+        FileTreeMsg::ExplorerQueryChanged(event) => {
+            ctx.state
+                .explorer_input
+                .set_text(event.value.as_ref().to_string());
+            ctx.state.explorer_input.set_cursor(event.cursor);
+            ctx.state.explorer_input.set_anchor(event.anchor);
+
+            let query: Arc<str> = Arc::from(ctx.state.explorer_input.text().to_owned());
+            if query.trim().is_empty() {
+                let restore_dir = ctx
+                    .state
+                    .search_found_dir
+                    .clone()
+                    .or_else(|| ctx.state.explorer_filter.primary_match_directory.clone());
+
+                ctx.state.explorer_filter = ExplorerFilter::default();
+
+                if let Some(snapshot) = ctx.state.search_expanded_snapshot.take() {
+                    ctx.state.expanded = snapshot;
+                }
+
+                if let Some(path) = restore_dir {
+                    insert_path_with_ancestors_for(
+                        &mut ctx.state.expanded,
+                        &path,
+                        &ctx.state.root.path,
+                        uses_provided_paths(&ctx.props),
+                    );
+                }
+
+                ctx.state.search_found_dir = None;
+
+                let expanded = ctx.state.expanded.clone();
+                load_expanded_directories(&mut ctx.state, &ctx.props, expanded);
+                return Update::full();
+            }
+
+            if ctx.state.search_expanded_snapshot.is_none() {
+                ctx.state.search_expanded_snapshot = Some(ctx.state.expanded.clone());
+                ctx.state.search_found_dir = None;
+            }
+
+            let query_id = ctx.state.explorer_query_id.saturating_add(1);
+            ctx.state.explorer_query_id = query_id;
+            let search_root = if ctx.props.change_view == FileTreeChangeView::ChangedOnly {
+                ctx.state.root.path.clone()
+            } else {
+                ctx.props.root.clone()
+            };
+            Update::with_command(spawn_explorer_search(
+                ctx.link().clone(),
+                query_id,
+                query,
+                search_root,
+                ctx.props.show_hidden,
+                ctx.props.max_entries_per_dir,
+                explorer_search_candidates(&ctx.props, &ctx.state),
+            ))
+        }
+        FileTreeMsg::ExplorerResultsReady { query_id, filter } => {
+            if query_id != ctx.state.explorer_query_id {
+                return Update::none();
+            }
+
+            if ctx.state.explorer_input.text().trim().is_empty() {
+                return Update::none();
+            }
+
+            ctx.state.explorer_filter = filter;
+
+            if ctx.state.search_found_dir.is_none() {
+                ctx.state.search_found_dir =
+                    ctx.state.explorer_filter.primary_match_directory.clone();
+            }
+
+            for path in &ctx.state.explorer_filter.expanded_paths {
+                ctx.state.expanded.insert(path.clone());
+            }
+
+            let expanded = ctx.state.expanded.clone();
+            load_expanded_directories(&mut ctx.state, &ctx.props, expanded);
+            normalize_uncontrolled_selection(&ctx.props, &mut ctx.state);
+            Update::full()
+        }
+        FileTreeMsg::RequestEntryRefresh(token) => {
+            let options = entry_refresh_options(&ctx.props);
+            if !uses_local_entries(&ctx.props) || token != ctx.props.entry_refresh_token {
+                return Update::none();
+            }
+            if token == ctx.state.entry_refresh_requested_token
+                && options == ctx.state.entry_refresh_requested_options
+                && (ctx.state.entry_refresh_pending
+                    || token == ctx.state.entry_refresh_completed_token)
+            {
+                return Update::none();
+            }
+
+            let expanded = effective_expanded_paths(&ctx.props, &ctx.state).into_owned();
+            begin_local_entry_refresh(ctx, token, expanded, options)
+        }
+        FileTreeMsg::EntryRefreshLoaded(result) => {
+            if !uses_local_entries(&ctx.props)
+                || result.generation != ctx.state.entry_refresh_generation
+                || result.token != ctx.state.entry_refresh_requested_token
+                || result.token != ctx.props.entry_refresh_token
+                || result.root != ctx.state.root.path
+                || result.options != entry_refresh_options(&ctx.props)
+                || !ctx.state.entry_refresh_pending
+            {
+                return Update::none();
+            }
+
+            let expanded = effective_expanded_paths(&ctx.props, &ctx.state).into_owned();
+            if result.expanded != expanded {
+                return begin_local_entry_refresh(ctx, result.token, expanded, result.options);
+            }
+
+            let link = ctx.link().clone();
+            ctx.state.root = result.snapshot;
+            ctx.state.entry_refresh_pending = false;
+            ctx.state.entry_refresh_completed_token = result.token;
+            sync_symlink_targets(&mut ctx.state, &ctx.props);
+            if !ctx.props.explorer || ctx.state.explorer_input.text().trim().is_empty() {
+                normalize_uncontrolled_selection(&ctx.props, &mut ctx.state);
+            }
+            // Changes that arrived while this reread ran may predate what it read.
+            if !ctx.state.watch.dirty.is_empty() {
+                ctx.link().send(FileTreeMsg::WatchReload {
+                    generation: ctx.state.watch.generation,
+                });
+            }
+            let command =
+                restart_explorer_search_after_entry_refresh(&ctx.props, &mut ctx.state, link);
+            Update::with_command(command)
+        }
+        FileTreeMsg::TreeFocusChanged(focused) => {
+            ctx.state.tree_focused = focused;
+            let callback = if focused {
+                ctx.props.on_focus.as_ref()
+            } else {
+                ctx.props.on_blur.as_ref()
+            };
+            if let Some(callback) = callback {
+                callback.emit(());
+            }
+            // The cursor row shows or hides with focus, and it lifts a receded row's style.
+            if recedes_rows(&ctx.props) {
+                Update::full()
+            } else {
+                Update::none()
+            }
+        }
+        FileTreeMsg::TreeSelected { entry } => {
+            let restyle = recedes_rows(&ctx.props);
+            if let Some(entry) = entry {
+                if tracks_uncontrolled_selection(&ctx.props) {
+                    ctx.state.uncontrolled_selected_path = Some(entry.path.clone());
+                }
+                if !ctx.state.explorer_input.text().trim().is_empty() {
+                    ctx.state.search_found_dir = Some(selected_directory_for_restore(
+                        &entry.path,
+                        entry.kind,
+                        &ctx.state.root.path,
+                        uses_provided_paths(&ctx.props),
+                    ));
+                }
+
+                if let Some(cb) = ctx.props.on_select.as_ref() {
+                    cb.emit(FileTreeEvent {
+                        path: entry.path,
+                        kind: entry.kind,
+                    });
+                }
+            }
+            // The row the cursor left recedes again, and the one it reached lifts.
+            if restyle {
+                Update::full()
+            } else {
+                Update::none()
+            }
+        }
+        FileTreeMsg::TreeActivated { entry } => {
+            if let Some(entry) = entry
+                && let Some(cb) = ctx.props.on_activate.as_ref()
+            {
+                cb.emit(FileTreeEvent {
+                    path: entry.path,
+                    kind: entry.kind,
+                });
+            }
+            Update::none()
+        }
+        FileTreeMsg::TreeCtrlActivated { entry } => {
+            if let Some(entry) = entry
+                && let Some(cb) = &ctx.props.on_ctrl_activate
+            {
+                cb.emit(FileTreeEvent {
+                    path: entry.path,
+                    kind: entry.kind,
+                });
+            }
+            Update::none()
+        }
+        FileTreeMsg::TreeToggled { entry, expanded } => {
+            let node_path = if let Some(entry) = entry {
+                if ctx.props.expanded_paths.is_none() {
+                    if expanded {
+                        ctx.state.expanded.insert(entry.path.clone());
+                    } else {
+                        ctx.state.expanded.remove(&entry.path);
+                    }
+                }
+
+                if let Some(cb) = ctx.props.on_toggle.as_ref() {
+                    cb.emit(FileTreeToggleEvent {
+                        path: entry.path.clone(),
+                        kind: entry.kind,
+                        expanded,
+                    });
+                }
+
+                Some(entry.path)
+            } else {
+                None
+            };
+
+            if expanded
+                && node_path.is_some()
+                && (ctx.props.change_view != FileTreeChangeView::ChangedOnly
+                    || uses_provided_entries(&ctx.props))
+            {
+                let expanded_paths = effective_expanded_paths(&ctx.props, &ctx.state).into_owned();
+                load_expanded_directories(&mut ctx.state, &ctx.props, expanded_paths);
+            }
+
+            Update::full()
+        }
+        FileTreeMsg::RequestGitRefresh(nonce) => {
+            if !needs_git_snapshot(&ctx.props) || nonce == ctx.state.last_git_refresh_nonce {
+                return Update::none();
+            }
+
+            ctx.state.last_git_refresh_nonce = nonce;
+            start_git_refresh(ctx)
+        }
+        FileTreeMsg::RefreshPolicyRestart => restart_refresh_policy(ctx),
+        FileTreeMsg::ArmRefreshTick { poll_generation } => {
+            let interval = refresh_interval(&ctx.props, &ctx.state.watch);
+            match interval {
+                Some(interval) if poll_generation == ctx.state.watch.poll_generation => {
+                    Update::command_only(Command::after(
+                        interval,
+                        move |link: crate::callback::CommandLink<FileTreeMsg>| {
+                            link.send(FileTreeMsg::RefreshTick { poll_generation });
+                        },
+                    ))
+                }
+                _ => Update::none(),
+            }
+        }
+        FileTreeMsg::RefreshTick { poll_generation } => refresh_tick(ctx, poll_generation),
+        FileTreeMsg::WatchStarted {
+            generation,
+            session,
+        } => {
+            if generation == ctx.state.watch.generation {
+                ctx.state.watch.session = Some(session);
+            }
+            Update::none()
+        }
+        FileTreeMsg::WatchUnavailable { generation } => {
+            if generation == ctx.state.watch.generation {
+                ctx.state.watch.unavailable = true;
+            }
+            Update::none()
+        }
+        FileTreeMsg::RepositoryWatchResolve { generation } => {
+            resolve_repository_watch(ctx, generation)
+        }
+        FileTreeMsg::RepositoryWatchUpdated {
+            generation,
+            repository,
+            complete,
+        } => {
+            if generation != ctx.state.watch.generation {
+                return Update::none();
+            }
+            let watch = &mut ctx.state.watch;
+            watch.repository_resolving = false;
+            watch.repository_partial = !complete;
+            watch.repository = repository;
+            if std::mem::take(&mut watch.repository_resolve_again) {
+                ctx.link()
+                    .send(FileTreeMsg::RepositoryWatchResolve { generation });
+            }
+            Update::none()
+        }
+        FileTreeMsg::WatchDirty { generation } => {
+            if generation != ctx.state.watch.generation || ctx.state.watch.flush_scheduled {
+                return Update::none();
+            }
+            ctx.state.watch.flush_scheduled = true;
+            Update::command_only(Command::after(
+                watch::WATCH_BATCH,
+                move |link: crate::callback::CommandLink<FileTreeMsg>| {
+                    link.send(FileTreeMsg::WatchFlush { generation });
+                },
+            ))
+        }
+        FileTreeMsg::WatchFlush { generation } => watch_flush(ctx, generation),
+        FileTreeMsg::WatchReload { generation } => {
+            if generation != ctx.state.watch.generation {
+                return Update::none();
+            }
+            start_watch_reload(ctx).map_or_else(Update::none, Update::command_only)
+        }
+        FileTreeMsg::WatchDirectoriesLoaded {
+            generation,
+            entry_generation,
+            root,
+            options,
+            results,
+        } => apply_watch_reload(ctx, generation, entry_generation, root, options, results),
+        FileTreeMsg::WatchGitDirty { generation } => {
+            if generation != ctx.state.watch.generation
+                || ctx.state.watch.git_scheduled
+                || !needs_git_snapshot(&ctx.props)
+            {
+                return Update::none();
+            }
+            ctx.state.watch.git_scheduled = true;
+            Update::command_only(Command::after(
+                watch::GIT_BATCH,
+                move |link: crate::callback::CommandLink<FileTreeMsg>| {
+                    link.send(FileTreeMsg::WatchGitFlush { generation });
+                },
+            ))
+        }
+        FileTreeMsg::WatchGitFlush { generation } => {
+            if generation != ctx.state.watch.generation {
+                return Update::none();
+            }
+            ctx.state.watch.git_scheduled = false;
+            if !needs_git_snapshot(&ctx.props) {
+                return Update::none();
+            }
+            start_git_refresh(ctx)
+        }
+        FileTreeMsg::GitSnapshotLoaded {
+            generation,
+            snapshot,
+            cache_request,
+        } => {
+            if generation != ctx.state.git_load_generation || !needs_git_snapshot(&ctx.props) {
+                return Update::none();
+            }
+            ctx.state.git_snapshot_pending = false;
+            if let (Some(cache), Some(request)) =
+                (ctx.props.git_status_cache.as_ref(), cache_request.as_ref())
+            {
+                cache.finish_request(request, snapshot.as_ref());
+            }
+            let Some(snapshot) = snapshot else {
+                return Update::none();
+            };
+            ctx.state.git_snapshot = snapshot;
+            let snapshot = effective_change_snapshot(&ctx.state);
+            if should_auto_expand_changed_only(&ctx.props, &ctx.state, snapshot) {
+                let changed_paths = snapshot.changed_paths.clone();
+                let provided = snapshot.virtual_changes;
+                let signature = change_snapshot_signature(snapshot);
+                expand_changed_only_directories(&mut ctx.state, &changed_paths, provided);
+                ctx.state.changed_only_auto_expand_signature = signature;
+            }
+            Update::full()
+        }
+        FileTreeMsg::SyncRootMode => {
+            if ctx.state.root_virtual == uses_virtual_root(&ctx.props) {
+                return Update::none();
+            }
+
+            rebuild_root_for_props(&mut ctx.state, &ctx.props);
+            Update::full()
+        }
+        FileTreeMsg::EnsureChangedOnlyExpanded => {
+            let snapshot = effective_change_snapshot(&ctx.state);
+            if should_auto_expand_changed_only(&ctx.props, &ctx.state, snapshot) {
+                let changed_paths = snapshot.changed_paths.clone();
+                let provided = snapshot.virtual_changes;
+                let signature = change_snapshot_signature(snapshot);
+                expand_changed_only_directories(&mut ctx.state, &changed_paths, provided);
+                ctx.state.changed_only_auto_expand_signature = signature;
+                return Update::full();
+            }
+            Update::none()
+        }
+        FileTreeMsg::EnsureRevealPaths => {
+            if apply_reveal_paths_to_state(&mut ctx.state, &ctx.props) {
+                return Update::full();
+            }
+            Update::none()
+        }
+        FileTreeMsg::FocusExplorer { from_tree } => {
+            ctx.state.explorer_entered_from_tree = from_tree;
+            ctx.state.explorer_focused = true;
+            ctx.request_focus(ctx.props.explorer_focus_key.clone());
+            if let Some(callback) = ctx.props.on_explorer_focus.as_ref() {
+                callback.emit(if from_tree {
+                    FileTreeExplorerFocusOrigin::Tree
+                } else {
+                    FileTreeExplorerFocusOrigin::Pointer
+                });
+            }
+            Update::none()
+        }
+        FileTreeMsg::FocusTree => {
+            ctx.state.explorer_entered_from_tree = false;
+            ctx.state.explorer_focused = false;
+            ctx.request_focus(ctx.props.tree_focus_key.clone());
+            Update::none()
+        }
+        FileTreeMsg::TreePointerDown => {
+            if !ctx.state.explorer_focused {
+                return Update::none();
+            }
+
+            ctx.state.explorer_entered_from_tree = false;
+            ctx.state.explorer_focused = false;
+            if let Some(callback) = ctx.props.on_explorer_escape.as_ref() {
+                callback.emit(());
+            } else {
+                ctx.request_focus(ctx.props.tree_focus_key.clone());
+            }
+            Update::none()
+        }
+        FileTreeMsg::ExplorerBlurred => {
+            ctx.state.explorer_focused = false;
+            if let Some(callback) = ctx.props.on_explorer_blur.as_ref() {
+                callback.emit(());
+            }
+            Update::none()
+        }
+        FileTreeMsg::EscapeExplorer => {
+            ctx.state.explorer_focused = false;
+            if ctx.state.explorer_entered_from_tree || ctx.props.on_explorer_escape.is_none() {
+                ctx.state.explorer_entered_from_tree = false;
+                ctx.request_focus(ctx.props.tree_focus_key.clone());
+            } else if let Some(callback) = ctx.props.on_explorer_escape.as_ref() {
+                callback.emit(());
+            }
             Update::none()
         }
     }
@@ -1601,6 +1779,336 @@ fn begin_local_entry_refresh(
         expanded,
         options,
     ))
+}
+
+/// Run `git status` for the current root, superseding any snapshot still loading.
+fn start_git_refresh(ctx: &mut Context<FileTreeComponent>) -> Update {
+    ctx.state.git_load_generation = ctx.state.git_load_generation.wrapping_add(1);
+    let Some(repo_root) = discover_git_root(Path::new(ctx.props.root.as_ref())) else {
+        ctx.state.git_snapshot_pending = false;
+        return Update::none();
+    };
+    let repo_root = Arc::<str>::from(repo_root.to_string_lossy().as_ref());
+    let include_diff_stats = ctx.props.git_diff_stats;
+    let generation = ctx.state.git_load_generation;
+    let (_, cache_request) = prepare_git_cache(&ctx.props, Path::new(repo_root.as_ref()));
+    Update::with_command(git_snapshot_command(
+        ctx.link().clone(),
+        repo_root,
+        include_diff_stats,
+        generation,
+        cache_request,
+    ))
+}
+
+fn refresh_policy_active(props: &FileTreeProps) -> bool {
+    uses_local_entries(props) && props.refresh_policy != FileTreeRefreshPolicy::Manual
+}
+
+fn watches_filesystem(props: &FileTreeProps) -> bool {
+    uses_local_entries(props) && props.refresh_policy == FileTreeRefreshPolicy::Watch
+}
+
+/// The interval of the periodic full reread, or `None` when the policy has none.
+fn refresh_interval(props: &FileTreeProps, watch: &WatchState) -> Option<std::time::Duration> {
+    if !uses_local_entries(props) {
+        return None;
+    }
+    match props.refresh_policy {
+        FileTreeRefreshPolicy::Manual => None,
+        FileTreeRefreshPolicy::Polling(interval) => Some(interval.max(watch::MIN_POLL_INTERVAL)),
+        FileTreeRefreshPolicy::Watch if watch.degraded() => Some(watch::DEGRADED_INTERVAL),
+        FileTreeRefreshPolicy::Watch => Some(watch::REPAIR_INTERVAL),
+    }
+}
+
+/// Replace the running periodic chain with one at the current interval.
+fn rearm_refresh_tick(ctx: &mut Context<FileTreeComponent>) {
+    let poll_generation = ctx.state.watch.poll_generation.wrapping_add(1);
+    ctx.state.watch.poll_generation = poll_generation;
+    ctx.link()
+        .send(FileTreeMsg::ArmRefreshTick { poll_generation });
+}
+
+/// Drop any watcher and start what the policy asks for from a clean slate.
+fn restart_refresh_policy(ctx: &mut Context<FileTreeComponent>) -> Update {
+    ctx.state.watch.reset();
+    if !refresh_policy_active(&ctx.props) {
+        return Update::none();
+    }
+    ctx.link().send(FileTreeMsg::ArmRefreshTick {
+        poll_generation: ctx.state.watch.poll_generation,
+    });
+    if !watches_filesystem(&ctx.props) {
+        return Update::none();
+    }
+
+    let generation = ctx.state.watch.generation;
+    if needs_git_snapshot(&ctx.props) {
+        ctx.link()
+            .send(FileTreeMsg::RepositoryWatchResolve { generation });
+    }
+    let pending = ctx.state.watch.pending.clone();
+    Update::command_only(ctx.link().command(move |link| {
+        let wake = link.clone();
+        match WatchSession::start(pending, move || {
+            wake.send(FileTreeMsg::WatchDirty { generation });
+        }) {
+            Ok(session) => link.send(FileTreeMsg::WatchStarted {
+                generation,
+                session: Arc::new(session),
+            }),
+            Err(_) => link.send(FileTreeMsg::WatchUnavailable { generation }),
+        }
+    }))
+}
+
+/// Bring the repository watch up to date in the background: resolve the metadata directories and
+/// every directory holding tracked files, then add and remove watches to match. One resolve runs at
+/// a time; a change meanwhile queues exactly one more.
+fn resolve_repository_watch(ctx: &mut Context<FileTreeComponent>, generation: u64) -> Update {
+    let watch = &mut ctx.state.watch;
+    if generation != watch.generation
+        || !watches_filesystem(&ctx.props)
+        || !needs_git_snapshot(&ctx.props)
+    {
+        return Update::none();
+    }
+    if watch.repository_resolving {
+        watch.repository_resolve_again = true;
+        return Update::none();
+    }
+    let Some(repo_root) = discover_git_root(Path::new(ctx.props.root.as_ref())) else {
+        watch.repository = None;
+        watch.repository_partial = false;
+        return Update::none();
+    };
+    watch.repository_resolving = true;
+    let existing = watch.repository.clone();
+    let pending = watch.pending.clone();
+    Update::command_only(ctx.link().command(move |link| {
+        let repository = match existing {
+            Some(repository) => repository,
+            None => {
+                let wake = link.clone();
+                match RepositoryWatch::start(pending, move || {
+                    wake.send(FileTreeMsg::WatchDirty { generation });
+                }) {
+                    Ok(repository) => Arc::new(repository),
+                    Err(_) => {
+                        link.send(FileTreeMsg::RepositoryWatchUpdated {
+                            generation,
+                            repository: None,
+                            complete: false,
+                        });
+                        return;
+                    }
+                }
+            }
+        };
+        let dirs = super::git::repository_watch_directories(&repo_root);
+        let complete = repository.update(dirs);
+        link.send(FileTreeMsg::RepositoryWatchUpdated {
+            generation,
+            repository: Some(repository),
+            complete,
+        });
+    }))
+}
+
+/// One periodic pass: reread the visible tree and Git status, retry refused watches, and rearm.
+fn refresh_tick(ctx: &mut Context<FileTreeComponent>, poll_generation: u64) -> Update {
+    if poll_generation != ctx.state.watch.poll_generation || !refresh_policy_active(&ctx.props) {
+        return Update::none();
+    }
+    ctx.link()
+        .send(FileTreeMsg::ArmRefreshTick { poll_generation });
+    // Cleared here and retried by the reconcile that follows this update.
+    ctx.state.watch.failed.clear();
+    if needs_git_snapshot(&ctx.props) {
+        let generation = ctx.state.watch.generation;
+        ctx.link().send(FileTreeMsg::WatchGitFlush { generation });
+        // Also picks up tracked directories whose metadata event was missed.
+        ctx.link()
+            .send(FileTreeMsg::RepositoryWatchResolve { generation });
+    }
+    if ctx.state.entry_refresh_pending {
+        return Update::none();
+    }
+    let expanded = effective_expanded_paths(&ctx.props, &ctx.state).into_owned();
+    let token = ctx.props.entry_refresh_token;
+    let options = entry_refresh_options(&ctx.props);
+    begin_local_entry_refresh(ctx, token, expanded, options)
+}
+
+/// Watch exactly the visible directories, and return those whose listing must be reread.
+fn reconcile_watches(state: &mut FileTreeState, props: &FileTreeProps) -> Vec<Arc<str>> {
+    if !watches_filesystem(props) {
+        return Vec::new();
+    }
+    let desired = visible_directories(&state.root, &effective_expanded_paths(props, state));
+    state.watch.reconcile(desired)
+}
+
+/// Reconcile the watch set after anything that can change what is visible, an update or new props
+/// alike: reread directories whose listing can no longer be trusted, and poll faster if coverage
+/// was just lost. `was_degraded` is the coverage before the change.
+fn sync_watches(ctx: &mut Context<FileTreeComponent>, was_degraded: bool) {
+    let stale = reconcile_watches(&mut ctx.state, &ctx.props);
+    if !stale.is_empty() {
+        ctx.state.watch.dirty.extend(stale);
+        ctx.link().send(FileTreeMsg::WatchReload {
+            generation: ctx.state.watch.generation,
+        });
+    }
+    if !was_degraded && ctx.state.watch.degraded() {
+        // Something just lost watch coverage: poll at the degraded interval from now on, rather
+        // than after the repair interval already armed.
+        rearm_refresh_tick(ctx);
+    }
+}
+
+/// Close a batch: queue the directories whose listing changed, and a Git refresh if one is due.
+fn watch_flush(ctx: &mut Context<FileTreeComponent>, generation: u64) -> Update {
+    if generation != ctx.state.watch.generation {
+        return Update::none();
+    }
+    ctx.state.watch.flush_scheduled = false;
+    let batch = ctx
+        .state
+        .watch
+        .pending
+        .lock()
+        .map(|mut pending| pending.take())
+        .unwrap_or_default();
+    let entry_dirs = visible_directories(
+        &ctx.state.root,
+        &effective_expanded_paths(&ctx.props, &ctx.state),
+    );
+    let plan = plan_flush(batch, &entry_dirs);
+    if plan.git && needs_git_snapshot(&ctx.props) {
+        ctx.link().send(FileTreeMsg::WatchGitDirty { generation });
+    }
+    if plan.repository_changed {
+        ctx.link()
+            .send(FileTreeMsg::RepositoryWatchResolve { generation });
+    }
+    if plan.rescan {
+        ctx.state.watch.dirty.extend(entry_dirs);
+    } else {
+        ctx.state.watch.dirty.extend(plan.dirs);
+    }
+    start_watch_reload(ctx).map_or_else(Update::none, Update::command_only)
+}
+
+/// Reread the dirty directories in the background. One reread runs at a time, and none while a
+/// full reread is pending; changes meanwhile wait in the dirty set and join the next one.
+fn start_watch_reload(ctx: &mut Context<FileTreeComponent>) -> Option<Command> {
+    let watch = &mut ctx.state.watch;
+    if watch.reload_in_flight || ctx.state.entry_refresh_pending || watch.dirty.is_empty() {
+        return None;
+    }
+    let mut dirs: Vec<Arc<str>> = watch.dirty.drain().collect();
+    dirs.sort();
+    watch.reload_in_flight = true;
+    let generation = watch.generation;
+    let entry_generation = ctx.state.entry_refresh_generation;
+    let root = ctx.state.root.path.clone();
+    let options = entry_refresh_options(&ctx.props);
+    Some(ctx.link().command(move |link| {
+        let (show_hidden, max_entries_per_dir) = options;
+        let results = dirs
+            .into_iter()
+            .map(|dir| {
+                let result = read_directory(dir.as_ref(), show_hidden, max_entries_per_dir);
+                (dir, result)
+            })
+            .collect();
+        link.send(FileTreeMsg::WatchDirectoriesLoaded {
+            generation,
+            entry_generation,
+            root,
+            options,
+            results,
+        });
+    }))
+}
+
+/// Merge rereads into the tree, keeping every subtree that is still there.
+fn apply_watch_reload(
+    ctx: &mut Context<FileTreeComponent>,
+    generation: u64,
+    entry_generation: u64,
+    root: Arc<str>,
+    options: (bool, usize),
+    results: Vec<(Arc<str>, super::fs::DirectoryLoadResult)>,
+) -> Update {
+    if generation != ctx.state.watch.generation {
+        return Update::none();
+    }
+    ctx.state.watch.reload_in_flight = false;
+    if entry_generation != ctx.state.entry_refresh_generation
+        || root != ctx.state.root.path
+        || options != entry_refresh_options(&ctx.props)
+    {
+        // The tree was replaced while these were read. Read them again against the new one.
+        ctx.state
+            .watch
+            .dirty
+            .extend(results.into_iter().map(|(dir, _)| dir));
+        return start_watch_reload(ctx).map_or_else(Update::none, Update::command_only);
+    }
+
+    for (dir, result) in results {
+        if let Some(node) = node_by_path_mut(&mut ctx.state.root, &dir)
+            && node.is_dir()
+        {
+            merge_directory_load(node, result);
+        }
+    }
+
+    // A directory that reappeared expanded, such as one renamed back, has no listing yet.
+    let expanded = effective_expanded_paths(&ctx.props, &ctx.state).into_owned();
+    let mut unloaded = Vec::new();
+    collect_pending_expanded_paths(&ctx.state.root, &expanded, &mut unloaded);
+    for path in &unloaded {
+        if let Some(node) = node_by_path_mut(&mut ctx.state.root, path) {
+            node.loading = true;
+        }
+    }
+    ctx.state.watch.dirty.extend(unloaded);
+    // Changes that arrived while this reread ran.
+    if !ctx.state.watch.dirty.is_empty() {
+        ctx.link().send(FileTreeMsg::WatchReload { generation });
+    }
+
+    sync_symlink_targets(&mut ctx.state, &ctx.props);
+    if !ctx.props.explorer || ctx.state.explorer_input.text().trim().is_empty() {
+        normalize_uncontrolled_selection(&ctx.props, &mut ctx.state);
+    }
+    Update::full()
+}
+
+/// Replace a directory's listing, keeping the loaded subtree of every child directory that is
+/// still present. Unlike [`apply_directory_load`], rereading a parent does not collapse what was
+/// open beneath it.
+fn merge_directory_load(node: &mut FsNode, result: super::fs::DirectoryLoadResult) {
+    let mut previous: HashMap<Arc<str>, FsNode> = std::mem::take(&mut node.children)
+        .into_iter()
+        .filter(FsNode::is_dir)
+        .map(|child| (child.path.clone(), child))
+        .collect();
+    apply_directory_load(node, result);
+    for child in &mut node.children {
+        if child.is_dir()
+            && let Some(old) = previous.remove(&child.path)
+        {
+            *child = FsNode {
+                name: child.name.clone(),
+                ..old
+            };
+        }
+    }
 }
 
 fn prepare_git_cache(
@@ -3210,6 +3718,7 @@ mod tests {
             uncontrolled_selected_path: Some(Arc::from("/repo")),
             symlink_targets: HashMap::new(),
             tree_focused: false,
+            watch: WatchState::default(),
         }
     }
 
@@ -3812,6 +4321,294 @@ mod tests {
                     .iter()
                     .any(|entry| entry.name.as_ref() == "before.rs")
         }));
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Run `command` and collect what it and everything already queued send, up to and including
+    /// the first message `done` accepts.
+    fn run_command_until(
+        runtime: &mut RuntimeCore<FileTreeComponent>,
+        command: Command,
+        done: impl FnMut(&FileTreeMsg) -> bool,
+    ) -> Vec<FileTreeMsg> {
+        command.run(crate::core::component::CommandRuntime {
+            scope: crate::callback::ScopeId(1),
+            tx: runtime.command_tx.clone(),
+            runtime_id: runtime.ctx.env().runtime_id,
+            now: runtime.ctx.env().now(),
+            clock_mode: runtime.ctx.env().clock.mode(),
+            clock: runtime.ctx.env().clock.clone(),
+            activity: std::sync::Arc::clone(&runtime.ctx.env().activity),
+        });
+        collect_messages_until(runtime, done)
+    }
+
+    fn collect_messages_until(
+        runtime: &mut RuntimeCore<FileTreeComponent>,
+        mut done: impl FnMut(&FileTreeMsg) -> bool,
+    ) -> Vec<FileTreeMsg> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut messages = Vec::new();
+        loop {
+            runtime.drain_commands();
+            while let Some(message) = runtime.queue.borrow_mut().pop_front().map(|(_, message)| {
+                *message
+                    .downcast::<FileTreeMsg>()
+                    .expect("expected a FileTree message")
+            }) {
+                let finished = done(&message);
+                messages.push(message);
+                if finished {
+                    return messages;
+                }
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the expected message never arrived; got {messages:?}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn merging_a_reread_keeps_open_subdirectories_open() {
+        let mut root = test_root();
+        let result = super::super::fs::DirectoryLoadResult {
+            entries: vec![
+                super::super::fs::LoadedEntry {
+                    name: Arc::from("new.rs"),
+                    path: Arc::from("/repo/new.rs"),
+                    kind: FileKind::File,
+                },
+                super::super::fs::LoadedEntry {
+                    name: Arc::from("src"),
+                    path: Arc::from("/repo/src"),
+                    kind: FileKind::Directory,
+                },
+            ],
+            omitted: 0,
+            error: None,
+        };
+
+        merge_directory_load(&mut root, result);
+
+        let names: Vec<&str> = root
+            .children
+            .iter()
+            .map(|child| child.name.as_ref())
+            .collect();
+        assert_eq!(names, ["new.rs", "src"]);
+        let src = node_by_path_mut(&mut root, "/repo/src").unwrap();
+        assert!(
+            src.loaded,
+            "rereading the parent must not unload an open child"
+        );
+        assert_eq!(src.children[0].name.as_ref(), "main.rs");
+    }
+
+    #[test]
+    fn only_a_polling_or_watching_tree_arms_a_periodic_reread() {
+        let manual = file_tree_runtime(crate::widgets::file_tree::FileTree::new("/repo").props);
+        assert_eq!(
+            refresh_interval(&manual.ctx.props, &manual.ctx.state.watch),
+            None
+        );
+
+        let props = crate::widgets::file_tree::FileTree::new("/repo")
+            .refresh_policy(FileTreeRefreshPolicy::Polling(std::time::Duration::ZERO))
+            .props;
+        assert_eq!(
+            refresh_interval(&props, &WatchState::default()),
+            Some(watch::MIN_POLL_INTERVAL),
+            "a zero interval must not spin"
+        );
+
+        let props = crate::widgets::file_tree::FileTree::new("/repo")
+            .refresh_policy(FileTreeRefreshPolicy::Watch)
+            .props;
+        let mut watch_state = WatchState::default();
+        assert_eq!(
+            refresh_interval(&props, &watch_state),
+            Some(watch::REPAIR_INTERVAL)
+        );
+        watch_state.failed.insert(Arc::from("/mnt/nfs"));
+        assert_eq!(
+            refresh_interval(&props, &watch_state),
+            Some(watch::DEGRADED_INTERVAL),
+            "an unwatchable directory falls back to polling"
+        );
+    }
+
+    /// Changes made while a directory was collapsed went unwatched, so reopening it must not trust
+    /// the listing it had before. Needs no watcher: the reread comes from it becoming visible.
+    #[test]
+    fn reopening_a_collapsed_directory_rereads_it() {
+        let dir = unique_component_test_dir("watch-reopen");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/before.rs"), "").unwrap();
+        let props = crate::widgets::file_tree::FileTree::new(dir.to_string_lossy().into_owned())
+            .initial_expanded_paths(["src"])
+            .refresh_policy(FileTreeRefreshPolicy::Watch)
+            .props;
+        let mut runtime = file_tree_runtime(props);
+        let src: Arc<str> = Arc::from(
+            Path::new(runtime.ctx.state.root.path.as_ref())
+                .join("src")
+                .to_string_lossy()
+                .as_ref(),
+        );
+        let toggle = |expanded| FileTreeMsg::TreeToggled {
+            entry: Some(VisibleFileTreeEntry {
+                path: src.clone(),
+                kind: FileKind::Directory,
+            }),
+            expanded,
+        };
+
+        runtime.component.update(toggle(false), &mut runtime.ctx);
+        std::fs::remove_file(dir.join("src/before.rs")).unwrap();
+        std::fs::write(dir.join("src/after.rs"), "").unwrap();
+        runtime.component.update(toggle(true), &mut runtime.ctx);
+
+        let reload = collect_messages_until(&mut runtime, |message| {
+            matches!(message, FileTreeMsg::WatchReload { .. })
+        })
+        .pop()
+        .unwrap();
+        let reload = runtime.component.update(reload, &mut runtime.ctx);
+        let loaded = run_command_until(
+            &mut runtime,
+            reload.command.expect("the reopened directory is reread"),
+            |message| matches!(message, FileTreeMsg::WatchDirectoriesLoaded { .. }),
+        )
+        .pop()
+        .unwrap();
+        runtime.component.update(loaded, &mut runtime.ctx);
+
+        let names: Vec<String> = node_by_path_mut(&mut runtime.ctx.state.root, &src)
+            .unwrap()
+            .children
+            .iter()
+            .map(|child| child.name.to_string())
+            .collect();
+        assert_eq!(names, ["after.rs"]);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The same reopen, driven by an application that controls expansion through props.
+    #[test]
+    fn reopening_a_directory_through_controlled_expansion_rereads_it() {
+        let dir = unique_component_test_dir("watch-reopen-controlled");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/before.rs"), "").unwrap();
+        let root = dunce::canonicalize(&dir).unwrap();
+        let root_path = root.to_string_lossy().into_owned();
+        let src: Arc<str> = Arc::from(root.join("src").to_string_lossy().as_ref());
+        let props = |expanded: &[&Arc<str>]| {
+            crate::widgets::file_tree::FileTree::new(root_path.clone())
+                .expanded_paths(expanded.iter().map(|path| Arc::clone(path)))
+                .refresh_policy(FileTreeRefreshPolicy::Watch)
+                .props
+        };
+        let mut runtime = file_tree_runtime(props(&[&src]));
+
+        replace_file_tree_props(&mut runtime, props(&[]));
+        std::fs::remove_file(dir.join("src/before.rs")).unwrap();
+        std::fs::write(dir.join("src/after.rs"), "").unwrap();
+        replace_file_tree_props(&mut runtime, props(&[&src]));
+
+        let reload = collect_messages_until(&mut runtime, |message| {
+            matches!(message, FileTreeMsg::WatchReload { .. })
+        })
+        .pop()
+        .unwrap();
+        let reload = runtime.component.update(reload, &mut runtime.ctx);
+        let loaded = run_command_until(
+            &mut runtime,
+            reload.command.expect("the reopened directory is reread"),
+            |message| matches!(message, FileTreeMsg::WatchDirectoriesLoaded { .. }),
+        )
+        .pop()
+        .unwrap();
+        runtime.component.update(loaded, &mut runtime.ctx);
+
+        let names: Vec<String> = node_by_path_mut(&mut runtime.ctx.state.root, &src)
+            .unwrap()
+            .children
+            .iter()
+            .map(|child| child.name.to_string())
+            .collect();
+        assert_eq!(names, ["after.rs"]);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(all(feature = "file-tree-watch", not(target_arch = "wasm32")))]
+    #[test]
+    fn a_watching_tree_shows_a_new_file_and_drops_collapsed_watches() {
+        let dir = unique_component_test_dir("watch-new-file");
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("before.rs"), "").unwrap();
+        let props = crate::widgets::file_tree::FileTree::new(dir.to_string_lossy().into_owned())
+            .initial_expanded_paths(["sub"])
+            .refresh_policy(FileTreeRefreshPolicy::Watch)
+            .props;
+        let mut runtime = file_tree_runtime(props);
+
+        let restart = runtime
+            .component
+            .update(FileTreeMsg::RefreshPolicyRestart, &mut runtime.ctx);
+        let started = run_command_until(
+            &mut runtime,
+            restart.command.expect("watching starts a watcher"),
+            |message| matches!(message, FileTreeMsg::WatchStarted { .. }),
+        )
+        .pop()
+        .unwrap();
+        runtime.component.update(started, &mut runtime.ctx);
+        let root = runtime.ctx.state.root.path.clone();
+        let sub: Arc<str> = Arc::from(
+            Path::new(root.as_ref())
+                .join("sub")
+                .to_string_lossy()
+                .as_ref(),
+        );
+        assert!(runtime.ctx.state.watch.watched.contains(&root));
+        assert!(runtime.ctx.state.watch.watched.contains(&sub));
+
+        std::fs::write(dir.join("after.rs"), "").unwrap();
+        collect_messages_until(&mut runtime, |message| {
+            matches!(message, FileTreeMsg::WatchDirty { .. })
+        });
+        // The batch window is a timer; close it directly instead of waiting it out.
+        let generation = runtime.ctx.state.watch.generation;
+        let flush = runtime
+            .component
+            .update(FileTreeMsg::WatchFlush { generation }, &mut runtime.ctx);
+        let loaded = run_command_until(
+            &mut runtime,
+            flush.command.expect("a new file rereads its directory"),
+            |message| matches!(message, FileTreeMsg::WatchDirectoriesLoaded { .. }),
+        )
+        .pop()
+        .unwrap();
+        runtime.component.update(loaded, &mut runtime.ctx);
+        assert!(
+            runtime
+                .ctx
+                .state
+                .root
+                .children
+                .iter()
+                .any(|child| child.name.as_ref() == "after.rs")
+        );
+
+        runtime.ctx.state.expanded.remove(&sub);
+        reconcile_watches(&mut runtime.ctx.state, &runtime.ctx.props);
+        assert!(!runtime.ctx.state.watch.watched.contains(&sub));
+        assert!(runtime.ctx.state.watch.watched.contains(&root));
 
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -6313,6 +7110,7 @@ mod tests {
             uncontrolled_selected_path: Some(Arc::from("/repo")),
             symlink_targets: HashMap::new(),
             tree_focused: false,
+            watch: WatchState::default(),
         };
 
         let projection = build_projection(&props, &state, None);

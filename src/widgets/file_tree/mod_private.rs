@@ -44,6 +44,7 @@ pub(crate) struct FileTreeProps {
     pub(crate) root: Arc<str>,
     pub(crate) entry_source: FileTreeEntrySource,
     pub(crate) entry_refresh_token: u64,
+    pub(crate) refresh_policy: super::FileTreeRefreshPolicy,
     pub(crate) show_hidden: bool,
     pub(crate) max_entries_per_dir: usize,
     pub(crate) show_icons: bool,

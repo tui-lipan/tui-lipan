@@ -183,6 +183,7 @@ profiling-tracing = ["dep:tracing"]
 # Investigation-only allocation attribution hooks; see src/alloc_probe.rs.
 alloc-probe = []
 hints-regex = ["dep:regex-lite"]
+file-tree-watch = ["dep:notify"]
 theme-reload = ["dep:serde", "dep:toml", "dep:notify"]
 ui-snapshot-json = ["dep:serde", "dep:serde_json"]
 ui-snapshot-png = ["dep:image", "dep:font8x8", "dep:fontdb", "dep:ttf-parser", "dep:ab_glyph_rasterizer", "dep:png"]

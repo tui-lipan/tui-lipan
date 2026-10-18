@@ -629,6 +629,7 @@ entries and git-backed or application-provided change projections.
 | `root` | `impl Into<Arc<str>>` | **Constructor** - root directory path |
 | `entry_source` | `FileTreeEntrySource` | Directory entry source; defaults to local filesystem enumeration |
 | `entry_refresh_token` | `u64` | Re-read local root and currently expanded directories when the token changes; ignored for provided entries |
+| `refresh_policy` | `FileTreeRefreshPolicy` | How local entries notice filesystem changes: `Manual` (default, tokens only), `Polling(Duration)`, or `Watch` |
 | `show_hidden` | `bool` | Show hidden files (`.` prefix) |
 | `max_entries_per_dir` | `usize` | Cap entries per directory |
 | `show_icons` | `bool` | Show file and directory icons independently of arrows (default: true) |
@@ -715,6 +716,27 @@ Plus all `Tree` styling/scrolling props, including `indent_style` and `scrollbar
   deterministic fallback when that path disappears. This does not refresh Git status; use
   `git_refresh_token(...)` separately. Provided entry sources ignore the token because their
   listings are owned by the application.
+- `refresh_policy(FileTreeRefreshPolicy::Polling(interval))` rereads the root, the expanded
+  directories, and Git status at that interval, with a floor of 100 ms.
+- `refresh_policy(FileTreeRefreshPolicy::Watch)` watches the root and each expanded directory,
+  one level each, so the watch set follows what is on screen rather than the size of the tree.
+  Changes in a directory are collected for about 100 ms and that directory alone is reread; open
+  subdirectories stay open. A busy directory still refreshes several times a second instead of
+  waiting for writes to stop. Reopening a collapsed directory rereads it, since nothing watched it
+  while it was closed.
+- With Git status shown, `Watch` also watches, open or not, every directory that holds a tracked
+  file or a non-ignored untracked file, and every untracked directory including empty ones, plus
+  the repository's metadata (`HEAD`, index, refs, `packed-refs`, `info/exclude`; linked worktrees
+  are resolved through Git). Any change there, including a mode change such as `chmod +x`,
+  refreshes Git status after about 400 ms. A created or removed entry, or an edit to a
+  `.gitignore`, also updates what is watched. Ignored directories such as build output stay
+  unwatched. A repository with more than 4,096 such directories is not watched this way. Two cases
+  wait for the repair reread: a file added to an empty directory nested inside an otherwise empty
+  untracked directory, and an edit to a global `core.excludesFile`.
+- The whole tree and Git status are reread every 30 seconds to repair missed events, or every 5
+  seconds while anything cannot be watched. Watching stops when the tree unmounts. It needs the
+  `file-tree-watch` feature; without it, `Watch` polls every 5 seconds.
+- Git status reads run with `GIT_OPTIONAL_LOCKS=0`, so refreshing never rewrites the index.
 - Every directory is expandable, including one that turns out to be empty; a lazy tree cannot know
   a directory is empty until it has been opened, so its row keeps the same shape either way.
 - `empty_text` renders in place of the tree when a `ChangedOnly` view has nothing changed. Browsing
