@@ -68,6 +68,7 @@ pub(crate) struct FileTreeProps {
     pub(crate) directory_label_style: Style,
     pub(crate) file_label_style: Style,
     pub(crate) hidden_style: Style,
+    pub(crate) ignored_style: Style,
     pub(crate) loading_label: Arc<str>,
     pub(crate) error_prefix: Arc<str>,
     pub(crate) width: Length,

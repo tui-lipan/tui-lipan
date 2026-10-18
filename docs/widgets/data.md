@@ -644,6 +644,7 @@ entries and git-backed or application-provided change projections.
 | `directory_label_style` | `Style` | Style applied to directory names |
 | `file_label_style` | `Style` | Style applied to regular file names |
 | `hidden_style` | `Style` | Style patched onto the icon and label of dot-prefixed entries, e.g. `Style::new().dim()` (default: none) |
+| `ignored_style` | `Style` | Style patched onto the icon and label of entries that ignore rules exclude, and everything inside them (default: none) |
 | `path_style` | `(path, FileTreeItemStyle)` | Apply row/icon/label/suffix styles to one exact path |
 | `path_styles` | `impl IntoIterator<Item = (path, FileTreeItemStyle)>` | Apply exact path-specific item styles in bulk |
 | `symlink_targets` | `bool` | Show where each symlink points, as `link → target` (default: true) |
@@ -742,6 +743,7 @@ Plus all `Tree` styling/scrolling props, including `indent_style` and `scrollbar
   status-only and diff-stat data, ignores provided sources, and revalidates every mount.
 - `directory_label_style(...)` and `file_label_style(...)` style names independently from icons and right-aligned change indicators. A symlink takes the label style of what it resolves to.
 - `hidden_style(...)` patches the icon and label of entries whose name starts with a dot, so dotfiles can recede without being filtered out. Path styles and changed-label colors still layer over it.
+- `ignored_style(...)` does the same for ignored entries, such as a `target/` build directory and everything in it. A local tree learns them from Git status, so it needs the Git change source; a provided tree reads `FileTreeEntry::ignored`.
 - With Nerd Font icons, a symlink draws as a linked file or a linked directory, depending on what it resolves to. The row stays a leaf either way.
 - `path_style(...)` / `path_styles(...)` match exact paths and can override row, icon, label, and suffix styling for reviewed, pinned, or otherwise annotated files.
 - `change_suffix_style(...)` and `git_suffix_style(...)` style only right-side metadata such as `+30 -21 M`, leaving icons and labels unchanged.

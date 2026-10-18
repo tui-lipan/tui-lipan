@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use crate::core::component::{Command, Component, Context, Update};
 use crate::core::element::{Element, IntoElement};
-use crate::style::Style;
+use crate::style::{Style, StyleSlot};
 use crate::text::input::TextInput;
 use crate::widgets::{Divider, Input, InputEvent, ListItem, MouseRegion, Tree, TreeNode, VStack};
 
@@ -60,6 +60,8 @@ pub(crate) struct FileTreeState {
     /// Kept beside the tree rather than on `FsNode` for the same reason the git decorations are:
     /// it describes a rare kind of node, and every other node would carry an empty slot.
     pub(crate) symlink_targets: HashMap<Arc<str>, SymlinkInfo>,
+    /// Whether the tree itself has keyboard focus, which decides whether the cursor row shows.
+    pub(crate) tree_focused: bool,
 }
 
 /// Where a symlink points, and whether that is a directory.
@@ -84,6 +86,7 @@ pub(crate) struct LocalEntryRefreshResult {
 
 #[derive(Clone, Debug)]
 pub(crate) enum FileTreeMsg {
+    TreeFocusChanged(bool),
     TreeSelected {
         entry: Option<VisibleFileTreeEntry>,
     },
@@ -150,6 +153,9 @@ struct ProjectionBuildContext<'a> {
     explorer_filter: Option<&'a ExplorerFilter>,
     git_decorations: &'a HashMap<Arc<str>, GitFileDecorations>,
     symlink_targets: &'a HashMap<Arc<str>, SymlinkInfo>,
+    ignored_paths: &'a HashSet<Arc<str>>,
+    root_path: &'a str,
+    highlighted_path: Option<&'a str>,
     path_styles: &'a HashMap<Arc<str>, FileTreeItemStyle>,
     lookup: &'a mut HashMap<crate::widgets::TreePath, VisibleFileTreeEntry>,
 }
@@ -195,6 +201,7 @@ impl Component for FileTreeComponent {
             requested_entry_paths: HashSet::new(),
             uncontrolled_selected_path,
             symlink_targets: HashMap::new(),
+            tree_focused: false,
         };
 
         apply_initial_expanded_paths(&mut state, props);
@@ -366,12 +373,15 @@ impl Component for FileTreeComponent {
         if let Some(style) = ctx.props.unfocused_selection_symbol_style {
             tree = tree.unfocused_selection_symbol_style(Some(style));
         }
-        if let Some(on_focus) = ctx.props.on_focus.clone() {
-            tree = tree.on_focus(on_focus);
-        }
-        if let Some(on_blur) = ctx.props.on_blur.clone() {
-            tree = tree.on_blur(on_blur);
-        }
+        tree = tree
+            .on_focus(
+                ctx.link()
+                    .callback(|()| FileTreeMsg::TreeFocusChanged(true)),
+            )
+            .on_blur(
+                ctx.link()
+                    .callback(|()| FileTreeMsg::TreeFocusChanged(false)),
+            );
         if let Some(text) = ctx.props.empty_text.clone() {
             tree = tree
                 .empty_text(text)
@@ -578,7 +588,25 @@ impl Component for FileTreeComponent {
                     restart_explorer_search_after_entry_refresh(&ctx.props, &mut ctx.state, link);
                 Update::with_command(command)
             }
+            FileTreeMsg::TreeFocusChanged(focused) => {
+                ctx.state.tree_focused = focused;
+                let callback = if focused {
+                    ctx.props.on_focus.as_ref()
+                } else {
+                    ctx.props.on_blur.as_ref()
+                };
+                if let Some(callback) = callback {
+                    callback.emit(());
+                }
+                // The cursor row shows or hides with focus, and it lifts a receded row's style.
+                if recedes_rows(&ctx.props) {
+                    Update::full()
+                } else {
+                    Update::none()
+                }
+            }
             FileTreeMsg::TreeSelected { entry } => {
+                let restyle = recedes_rows(&ctx.props);
                 if let Some(entry) = entry {
                     if tracks_uncontrolled_selection(&ctx.props) {
                         ctx.state.uncontrolled_selected_path = Some(entry.path.clone());
@@ -599,7 +627,12 @@ impl Component for FileTreeComponent {
                         });
                     }
                 }
-                Update::none()
+                // The row the cursor left recedes again, and the one it reached lifts.
+                if restyle {
+                    Update::full()
+                } else {
+                    Update::none()
+                }
             }
             FileTreeMsg::TreeActivated { entry } => {
                 if let Some(entry) = entry
@@ -1371,7 +1404,13 @@ fn selected_visible_index_by_path(
     state: &FileTreeState,
     projection: &FileTreeProjection,
 ) -> Option<usize> {
-    let path = props
+    let path = controlled_selected_path(props, state)?;
+    projection.path_to_visible_index.get(path.as_ref()).copied()
+}
+
+/// The app-chosen selection, resolved to the path its row is keyed by.
+fn controlled_selected_path(props: &FileTreeProps, state: &FileTreeState) -> Option<Arc<str>> {
+    props
         .select_path
         .as_ref()
         .or(props.selected_path.as_ref())
@@ -1383,8 +1422,28 @@ fn selected_visible_index_by_path(
             } else {
                 resolve_path_under_root(&state.root.path, path.as_ref())
             }
-        })?;
-    projection.path_to_visible_index.get(path.as_ref()).copied()
+        })
+}
+
+/// Whether hidden or ignored rows are drawn receded at all.
+fn recedes_rows(props: &FileTreeProps) -> bool {
+    props.hidden_style != Style::default() || props.ignored_style != Style::default()
+}
+
+/// The row whose cursor highlight is on screen, if any. That row drops its hidden or ignored style:
+/// the highlight replaces the background but not the label's own colors, and a receded label on it
+/// all but disappears.
+fn highlighted_path(props: &FileTreeProps, state: &FileTreeState) -> Option<Arc<str>> {
+    let highlight_shown = state.tree_focused
+        || props.unfocused_selection_style != StyleSlot::Replace(Style::default());
+    if !highlight_shown || !recedes_rows(props) {
+        return None;
+    }
+    controlled_selected_path(props, state).or_else(|| {
+        tracks_uncontrolled_selection(props)
+            .then(|| state.uncontrolled_selected_path.clone())
+            .flatten()
+    })
 }
 
 fn uncontrolled_selected_visible_index(
@@ -2016,12 +2075,17 @@ fn build_projection(
         root.path.as_ref(),
         uses_provided_paths(props),
     );
+    let ignored_paths = ignored_paths(props, snapshot);
+    let highlighted_path = highlighted_path(props, state);
     let mut build_ctx = ProjectionBuildContext {
         props,
         expanded: expanded.as_ref(),
         explorer_filter,
         git_decorations: &snapshot.entries,
         symlink_targets: &state.symlink_targets,
+        ignored_paths: ignored_paths.as_ref(),
+        root_path: root.path.as_ref(),
+        highlighted_path: highlighted_path.as_deref(),
         path_styles: &path_styles,
         lookup: &mut lookup,
     };
@@ -2064,6 +2128,55 @@ fn is_single_directory_chain(node: &FsNode) -> bool {
         && !node.loading
         && node.error.is_none()
         && matches!(node.children.as_slice(), [only] if only.is_dir())
+}
+
+/// The paths ignore rules exclude, for `ignored_style`. A provided tree carries them on its
+/// listings, whatever its change source; a local one learns them from Git status.
+fn ignored_paths<'a>(
+    props: &FileTreeProps,
+    snapshot: &'a GitStatusSnapshot,
+) -> Cow<'a, HashSet<Arc<str>>> {
+    if props.ignored_style == Style::default() {
+        return Cow::Owned(HashSet::new());
+    }
+    let FileTreeEntrySource::Provided(listings) = &props.entry_source else {
+        return Cow::Borrowed(&snapshot.ignored_paths);
+    };
+    let root = ProvidedPath::root(props.root.as_ref());
+    let mut ignored = HashSet::new();
+    for listing in listings {
+        let (Some(directory), Ok(entries)) =
+            (root.resolve(listing.path.as_ref()), &listing.entries)
+        else {
+            continue;
+        };
+        for entry in entries.iter() {
+            if entry.ignored && root.is_valid_name(entry.name.as_ref()) {
+                let path = directory.join_name(entry.name.as_ref());
+                ignored.insert(Arc::from(path.as_str()));
+            }
+        }
+    }
+    Cow::Owned(ignored)
+}
+
+/// Whether `path`, or a directory above it short of `root`, is ignored. Everything inside an
+/// ignored directory is ignored too, and git names only the directory.
+fn under_ignored_path(path: &str, root: &str, ignored: &HashSet<Arc<str>>) -> bool {
+    if ignored.is_empty() {
+        return false;
+    }
+    let mut current = path;
+    while current.len() > root.len() {
+        if ignored.contains(current) {
+            return true;
+        }
+        let Some(separator) = current.rfind(['/', '\\']) else {
+            break;
+        };
+        current = &current[..separator];
+    }
+    false
 }
 
 fn sync_projected_load_states(projected: &mut FsNode, source: &FsNode) {
@@ -2196,7 +2309,11 @@ fn build_projected_tree_node(
 
     let path_style = ctx.path_styles.get(node.path.as_ref()).copied();
     // A folded `src/.config` row is as hidden as a `.config` one, so every segment counts.
-    let is_hidden = !is_root && node.name.split('/').any(is_hidden_entry);
+    // The cursor row keeps full color; see `highlighted_path`.
+    let recedes = !is_root && ctx.highlighted_path != Some(node.path.as_ref());
+    let is_hidden = recedes && node.name.split('/').any(is_hidden_entry);
+    let is_ignored =
+        recedes && under_ignored_path(node.path.as_ref(), ctx.root_path, ctx.ignored_paths);
     let links_to_dir = ctx
         .symlink_targets
         .get(node.path.as_ref())
@@ -2208,6 +2325,9 @@ fn build_projected_tree_node(
             .icon(&node.name, is_expanded || links_to_dir, ctx.props);
         if is_hidden {
             icon_span.style = icon_span.style.patch(ctx.props.hidden_style);
+        }
+        if is_ignored {
+            icon_span.style = icon_span.style.patch(ctx.props.ignored_style);
         }
         if let Some(style) = path_style.and_then(|style| style.icon) {
             icon_span.style = icon_span.style.patch(style);
@@ -2238,6 +2358,9 @@ fn build_projected_tree_node(
     };
     if is_hidden {
         kind_label_style = kind_label_style.patch(ctx.props.hidden_style);
+    }
+    if is_ignored {
+        kind_label_style = kind_label_style.patch(ctx.props.ignored_style);
     }
 
     let mut label_base_style = if ctx.props.highlight_changed_labels
@@ -2999,6 +3122,7 @@ mod tests {
     /// no targets, and a borrow of an empty map has to outlive the context that holds it.
     static NO_SYMLINK_TARGETS: LazyLock<HashMap<Arc<str>, SymlinkInfo>> =
         LazyLock::new(HashMap::new);
+    static NO_IGNORED_PATHS: LazyLock<HashSet<Arc<str>>> = LazyLock::new(HashSet::new);
 
     fn test_root() -> FsNode {
         FsNode {
@@ -3056,6 +3180,7 @@ mod tests {
             requested_entry_paths: HashSet::new(),
             uncontrolled_selected_path: Some(Arc::from("/repo")),
             symlink_targets: HashMap::new(),
+            tree_focused: false,
         }
     }
 
@@ -5046,6 +5171,9 @@ mod tests {
             explorer_filter: None,
             git_decorations: &decorations,
             symlink_targets: &NO_SYMLINK_TARGETS,
+            ignored_paths: &NO_IGNORED_PATHS,
+            root_path: "/repo",
+            highlighted_path: None,
             path_styles: &path_styles,
             lookup: &mut lookup,
         };
@@ -5086,6 +5214,9 @@ mod tests {
             explorer_filter: None,
             git_decorations: &decorations,
             symlink_targets: &NO_SYMLINK_TARGETS,
+            ignored_paths: &NO_IGNORED_PATHS,
+            root_path: "/repo",
+            highlighted_path: None,
             path_styles: &path_styles,
             lookup: &mut lookup,
         };
@@ -5114,6 +5245,9 @@ mod tests {
             explorer_filter: None,
             git_decorations: &decorations,
             symlink_targets: &NO_SYMLINK_TARGETS,
+            ignored_paths: &NO_IGNORED_PATHS,
+            root_path: "/repo",
+            highlighted_path: None,
             path_styles: &path_styles,
             lookup: &mut lookup,
         };
@@ -5171,6 +5305,9 @@ mod tests {
             explorer_filter: None,
             git_decorations: &decorations,
             symlink_targets: &NO_SYMLINK_TARGETS,
+            ignored_paths: &NO_IGNORED_PATHS,
+            root_path: "/repo",
+            highlighted_path: None,
             path_styles: &path_styles,
             lookup: &mut lookup,
         };
@@ -5219,6 +5356,9 @@ mod tests {
             explorer_filter: None,
             git_decorations: &decorations,
             symlink_targets: &NO_SYMLINK_TARGETS,
+            ignored_paths: &NO_IGNORED_PATHS,
+            root_path: "/repo",
+            highlighted_path: None,
             path_styles: &path_styles,
             lookup: &mut lookup,
         };
@@ -5248,6 +5388,9 @@ mod tests {
             explorer_filter: None,
             git_decorations: &decorations,
             symlink_targets: &NO_SYMLINK_TARGETS,
+            ignored_paths: &NO_IGNORED_PATHS,
+            root_path: "/repo",
+            highlighted_path: None,
             path_styles: &path_styles,
             lookup: &mut lookup,
         };
@@ -5316,6 +5459,9 @@ mod tests {
             explorer_filter: None,
             git_decorations: &decorations,
             symlink_targets: &NO_SYMLINK_TARGETS,
+            ignored_paths: &NO_IGNORED_PATHS,
+            root_path: "/repo",
+            highlighted_path: None,
             path_styles: &path_styles,
             lookup: &mut lookup,
         };
@@ -5364,6 +5510,9 @@ mod tests {
             explorer_filter: None,
             git_decorations: &decorations,
             symlink_targets: &NO_SYMLINK_TARGETS,
+            ignored_paths: &NO_IGNORED_PATHS,
+            root_path: "/repo",
+            highlighted_path: None,
             path_styles: &path_styles,
             lookup: &mut lookup,
         };
@@ -5418,6 +5567,9 @@ mod tests {
             explorer_filter: None,
             git_decorations: &decorations,
             symlink_targets: &NO_SYMLINK_TARGETS,
+            ignored_paths: &NO_IGNORED_PATHS,
+            root_path: "/repo",
+            highlighted_path: None,
             path_styles: &path_styles,
             lookup: &mut lookup,
         };
@@ -5503,6 +5655,9 @@ mod tests {
             explorer_filter: None,
             git_decorations: &decorations,
             symlink_targets: &NO_SYMLINK_TARGETS,
+            ignored_paths: &NO_IGNORED_PATHS,
+            root_path: "/repo",
+            highlighted_path: None,
             path_styles: &path_styles,
             lookup: &mut lookup,
         };
@@ -5537,6 +5692,9 @@ mod tests {
             explorer_filter: None,
             git_decorations: &decorations,
             symlink_targets: &NO_SYMLINK_TARGETS,
+            ignored_paths: &NO_IGNORED_PATHS,
+            root_path: "/repo",
+            highlighted_path: None,
             path_styles: &path_styles,
             lookup: &mut lookup,
         };
@@ -5588,6 +5746,7 @@ mod tests {
             ],
             kinds: HashMap::new(),
             virtual_changes: false,
+            ignored_paths: HashSet::new(),
         };
 
         let root = build_changed_only_root(&source_root, &snapshot, true);
@@ -5620,6 +5779,7 @@ mod tests {
             changed_paths: vec![Arc::from("/repo/.env"), Arc::from("/repo/src/main.rs")],
             kinds: HashMap::new(),
             virtual_changes: false,
+            ignored_paths: HashSet::new(),
         };
 
         let root = build_changed_only_root(&source_root, &snapshot, false);
@@ -5643,6 +5803,7 @@ mod tests {
             changed_paths: changed.iter().map(|path| Arc::from(*path)).collect(),
             kinds: HashMap::new(),
             virtual_changes: false,
+            ignored_paths: HashSet::new(),
         };
         build_changed_only_root(&source_root, &snapshot, true)
     }
@@ -5723,6 +5884,9 @@ mod tests {
             explorer_filter: None,
             git_decorations: &decorations,
             symlink_targets: &NO_SYMLINK_TARGETS,
+            ignored_paths: &NO_IGNORED_PATHS,
+            root_path: "/repo",
+            highlighted_path: None,
             path_styles: &path_styles,
             lookup: &mut lookup,
         };
@@ -5745,6 +5909,110 @@ mod tests {
             assert_eq!(tree.item.spans[2].style, hidden, "label");
         }
         assert_eq!(plain.item.spans[2].style, Style::default());
+    }
+
+    #[test]
+    fn the_cursor_row_drops_its_receded_style_while_the_highlight_shows() {
+        let hidden = Style::new().dim();
+        let props = crate::widgets::file_tree::FileTree::new("/repo")
+            .show_icons(false)
+            .hidden_style(hidden)
+            .unfocused_selection_style(Style::default())
+            .props;
+        let file = |name: &str| FsNode {
+            name: Arc::from(name),
+            path: Arc::from(format!("/repo/{name}")),
+            kind: FileKind::File,
+            loaded: true,
+            loading: false,
+            error: None,
+            children: Vec::new(),
+        };
+        let mut root = file("repo");
+        root.path = Arc::from("/repo");
+        root.kind = FileKind::Directory;
+        root.children = vec![file(".env"), file(".envrc")];
+        let mut state = test_state_with_root(root);
+        state.expanded.insert(Arc::from("/repo"));
+        state.uncontrolled_selected_path = Some(Arc::from("/repo/.env"));
+        let label_styles = |state: &FileTreeState| {
+            let projection = build_projection(&props, state, None);
+            projection
+                .root
+                .children
+                .iter()
+                .map(|row| row.item.spans[0].style)
+                .collect::<Vec<_>>()
+        };
+
+        // Unfocused, this tree draws no cursor, so the selected row recedes like any other.
+        assert_eq!(label_styles(&state), [hidden, hidden]);
+        state.tree_focused = true;
+        assert_eq!(label_styles(&state), [Style::default(), hidden]);
+    }
+
+    #[test]
+    fn an_ignored_directory_covers_everything_beneath_it() {
+        let ignored: HashSet<Arc<str>> = [Arc::from("/repo/target")].into_iter().collect();
+
+        assert!(under_ignored_path("/repo/target", "/repo", &ignored));
+        assert!(under_ignored_path(
+            "/repo/target/debug/rozi",
+            "/repo",
+            &ignored
+        ));
+        assert!(!under_ignored_path(
+            "/repo/target-notes.md",
+            "/repo",
+            &ignored
+        ));
+        assert!(!under_ignored_path("/repo/src/main.rs", "/repo", &ignored));
+        // Nothing at or above the root is looked up, even when the root itself is listed.
+        let root_listed: HashSet<Arc<str>> = [Arc::from("/repo")].into_iter().collect();
+        assert!(!under_ignored_path("/repo/src", "/repo", &root_listed));
+    }
+
+    #[test]
+    fn ignored_style_patches_rows_inside_an_ignored_directory() {
+        let ignored_style = Style::new().fg(Color::DarkGray);
+        let props = crate::widgets::file_tree::FileTree::new("/repo")
+            .icon_style(FileIconStyle::NerdFont)
+            .ignored_style(ignored_style)
+            .props;
+        let ignored: HashSet<Arc<str>> = [Arc::from("/repo/target")].into_iter().collect();
+        let expanded = HashSet::new();
+        let decorations = HashMap::new();
+        let mut lookup = HashMap::new();
+        let path_styles = HashMap::new();
+        let mut ctx = ProjectionBuildContext {
+            props: &props,
+            expanded: &expanded,
+            explorer_filter: None,
+            git_decorations: &decorations,
+            symlink_targets: &NO_SYMLINK_TARGETS,
+            ignored_paths: &ignored,
+            root_path: "/repo",
+            highlighted_path: None,
+            path_styles: &path_styles,
+            lookup: &mut lookup,
+        };
+        let file = |path: &str| FsNode {
+            name: Arc::from(path.rsplit('/').next().unwrap_or(path)),
+            path: Arc::from(path),
+            kind: FileKind::File,
+            loaded: true,
+            loading: false,
+            error: None,
+            children: Vec::new(),
+        };
+
+        let built = build_projected_tree_node(&file("/repo/target/rozi"), false, vec![0], &mut ctx);
+        let source =
+            build_projected_tree_node(&file("/repo/src/main.rs"), false, vec![1], &mut ctx);
+
+        assert_eq!(built.item.spans[0].style, ignored_style, "icon");
+        assert_eq!(built.item.spans[2].style, ignored_style, "label");
+        assert_eq!(source.item.spans[2].style, Style::default());
     }
 
     #[test]
@@ -5775,6 +6043,9 @@ mod tests {
             explorer_filter: None,
             git_decorations: &decorations,
             symlink_targets: &links,
+            ignored_paths: &NO_IGNORED_PATHS,
+            root_path: "/repo",
+            highlighted_path: None,
             path_styles: &path_styles,
             lookup: &mut lookup,
         };
@@ -5862,6 +6133,7 @@ mod tests {
                 changed_paths: vec![Arc::from("/repo/src/main.rs")],
                 kinds: HashMap::new(),
                 virtual_changes: false,
+                ignored_paths: HashSet::new(),
             },
             git_snapshot_pending: false,
             git_load_generation: 0,
@@ -5882,6 +6154,7 @@ mod tests {
             requested_entry_paths: HashSet::new(),
             uncontrolled_selected_path: Some(Arc::from("/repo")),
             symlink_targets: HashMap::new(),
+            tree_focused: false,
         };
 
         let projection = build_projection(&props, &state, None);

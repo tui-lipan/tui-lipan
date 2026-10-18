@@ -387,6 +387,7 @@ impl FileTree {
                 directory_label_style: Style::default(),
                 file_label_style: Style::default(),
                 hidden_style: Style::default(),
+                ignored_style: Style::default(),
                 loading_label: "loading...".into(),
                 error_prefix: "error:".into(),
                 width: Length::Flex(1),
@@ -677,6 +678,18 @@ impl FileTree {
     /// A path style or a change-status label style still patches over it.
     pub fn hidden_style(mut self, style: Style) -> Self {
         self.props.hidden_style = style;
+        self
+    }
+
+    /// Set the style patched onto the icon and label of an entry that ignore rules exclude, such
+    /// as a `target/` build directory and everything in it. The default leaves them looking like
+    /// any other row.
+    ///
+    /// Local trees learn ignored paths from Git status, so they need a Git change source. A provided
+    /// tree reads [`FileTreeEntry::ignored`]. A path style or a change-status label style still
+    /// patches over it.
+    pub fn ignored_style(mut self, style: Style) -> Self {
+        self.props.ignored_style = style;
         self
     }
 

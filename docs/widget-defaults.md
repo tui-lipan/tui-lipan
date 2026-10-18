@@ -1059,6 +1059,7 @@ Source: `src/widgets/file_tree/mod.rs:362` (`FileTree`).
 | `directory_label_style` | `Style::default()` |
 | `file_label_style` | `Style::default()` |
 | `hidden_style` | `Style::default()` |
+| `ignored_style` | `Style::default()` |
 | `loading_label` | `"loading...".into()` |
 | `error_prefix` | `"error:".into()` |
 | `width` | `Length::Flex(1)` |

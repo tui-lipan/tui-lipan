@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 use std::rc::Rc;
@@ -351,6 +351,9 @@ pub(crate) struct GitStatusSnapshot {
     pub(crate) changed_paths: Vec<Arc<str>>,
     pub(crate) kinds: HashMap<Arc<str>, FileKind>,
     pub(crate) virtual_changes: bool,
+    /// Paths that ignore rules exclude. A directory stands for everything beneath it: git reports
+    /// `target/` once rather than descending into it.
+    pub(crate) ignored_paths: HashSet<Arc<str>>,
 }
 
 impl GitDiffStat {
@@ -369,6 +372,7 @@ pub(crate) fn provided_change_snapshot(
         changed_paths: Vec::new(),
         kinds: HashMap::new(),
         virtual_changes: true,
+        ignored_paths: HashSet::new(),
     };
 
     for change in changes {
@@ -443,7 +447,9 @@ pub(crate) fn load_git_snapshot(
         .arg("status")
         .arg("--porcelain=v1")
         .arg("--untracked-files=normal")
-        .arg("--ignored=no")
+        // `matching` names an ignored directory once instead of walking into it, so this costs
+        // little over `no` even beside a large build directory.
+        .arg("--ignored=matching")
         .output()
         .ok()?;
 
@@ -452,14 +458,33 @@ pub(crate) fn load_git_snapshot(
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut snapshot = snapshot_from_status(&stdout, repo_root);
+
+    if include_diff_stats {
+        load_git_diff_stats(repo_root, &mut snapshot.entries);
+    }
+
+    Some(snapshot)
+}
+
+/// Read `git status --porcelain=v1 --ignored=matching` output: `!!` lines are ignored paths, and
+/// every other status line is a change.
+fn snapshot_from_status(stdout: &str, repo_root: &Path) -> GitStatusSnapshot {
     let mut snapshot = GitStatusSnapshot {
         entries: HashMap::new(),
         changed_paths: Vec::new(),
         kinds: HashMap::new(),
         virtual_changes: false,
+        ignored_paths: HashSet::new(),
     };
 
     for line in stdout.lines() {
+        if let Some(relative_path) = line.strip_prefix("!! ") {
+            let relative_path = relative_path.trim_end_matches('/');
+            let full_path = super::fs::normalize_path(&repo_root.join(relative_path));
+            snapshot.ignored_paths.insert(full_path);
+            continue;
+        }
         let Some((relative_path, status)) = parse_git_porcelain_line(line) else {
             continue;
         };
@@ -473,11 +498,7 @@ pub(crate) fn load_git_snapshot(
         );
     }
 
-    if include_diff_stats {
-        load_git_diff_stats(repo_root, &mut snapshot.entries);
-    }
-
-    Some(snapshot)
+    snapshot
 }
 
 pub(crate) fn parse_git_porcelain_line(line: &str) -> Option<(&str, GitFileStatus)> {
@@ -735,6 +756,31 @@ fn merge_diff_stat(
 #[cfg(test)]
 mod cache_tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn status_output_separates_ignored_paths_from_changes() {
+        let root = Path::new("/no-such-repo");
+        let snapshot = snapshot_from_status(
+            " M src/main.rs\n?? notes.md\n!! target/\n!! .env.local\n",
+            root,
+        );
+
+        assert_eq!(
+            snapshot.changed_paths,
+            [
+                Arc::<str>::from("/no-such-repo/src/main.rs"),
+                Arc::from("/no-such-repo/notes.md"),
+            ]
+        );
+        let mut ignored: Vec<&str> = snapshot.ignored_paths.iter().map(AsRef::as_ref).collect();
+        ignored.sort_unstable();
+        // A directory loses its trailing slash, so it matches the row's path.
+        assert_eq!(
+            ignored,
+            ["/no-such-repo/.env.local", "/no-such-repo/target"]
+        );
+    }
 
     fn snapshot(path: &'static str) -> GitStatusSnapshot {
         GitStatusSnapshot {
