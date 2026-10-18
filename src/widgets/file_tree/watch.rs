@@ -7,9 +7,10 @@
 //! leave a stale watch behind.
 //!
 //! *Whether Git status is stale* is a question about the whole working tree, including directories
-//! nobody has opened. A separate [`RepositoryWatch`] covers every directory holding tracked files,
-//! plus the repository's metadata directories, and only ever invalidates Git status. Ignored output
-//! such as build directories holds no tracked files, so it stays unwatched.
+//! nobody has opened. A separate [`RepositoryWatch`] covers every directory whose contents can
+//! change `git status` (holding tracked or non-ignored untracked files, or untracked itself), plus
+//! the repository's metadata directories, and only ever invalidates Git status. Ignored output such
+//! as build directories holds none of these, so it stays unwatched.
 //!
 //! Events are invalidations, never mutations. The watcher threads only record what changed; the
 //! component rereads. That absorbs rename pairs, atomic saves through temporary files, coalesced
@@ -90,7 +91,8 @@ pub(crate) struct ChangeBatch {
     pub(crate) rescan: bool,
     /// Something in the working tree or the repository metadata changed.
     pub(crate) git: bool,
-    /// The repository metadata changed, so the set of tracked directories may have too.
+    /// The repository metadata changed, or an entry appeared or vanished in the working tree, so
+    /// the set of directories the repository watch must cover may have too.
     pub(crate) repository_changed: bool,
 }
 
@@ -152,7 +154,7 @@ pub(crate) struct FlushPlan {
     pub(crate) git: bool,
     /// Whether listing events were lost, so the whole visible tree must be reread.
     pub(crate) rescan: bool,
-    /// Whether the repository watch must re-resolve the tracked directories.
+    /// Whether the repository watch must re-resolve the directories it covers.
     pub(crate) repository_changed: bool,
 }
 
@@ -405,17 +407,21 @@ mod backend {
                     let repository_changed = match &result {
                         Ok(event) if event.need_rescan() => true,
                         Ok(event) => {
-                            if classify(&event.kind).is_none() {
-                                return;
-                            }
-                            let Ok(metadata) = handler_metadata.lock() else {
+                            let Some(mask) = classify(&event.kind) else {
                                 return;
                             };
-                            event.paths.iter().any(|path| {
-                                path.parent().is_some_and(|parent| {
-                                    metadata.contains(parent.to_string_lossy().as_ref())
+                            // A created or removed entry can add or retire a directory to cover,
+                            // such as a new untracked one; so can any metadata change.
+                            mask.entries || {
+                                let Ok(metadata) = handler_metadata.lock() else {
+                                    return;
+                                };
+                                event.paths.iter().any(|path| {
+                                    path.parent().is_some_and(|parent| {
+                                        metadata.contains(parent.to_string_lossy().as_ref())
+                                    })
                                 })
-                            })
+                            }
                         }
                         Err(_) => true,
                     };
@@ -669,6 +675,10 @@ mod backend {
             });
 
             std::fs::write(metadata.join("index"), "").unwrap();
+            wait_for_batch(&pending, &rx, |batch| batch.git && batch.repository_changed);
+
+            // A new directory may need covering itself, such as an untracked one.
+            std::fs::create_dir_all(dir.join("scratch")).unwrap();
             wait_for_batch(&pending, &rx, |batch| batch.git && batch.repository_changed);
 
             drop(repository);

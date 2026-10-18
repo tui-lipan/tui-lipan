@@ -1387,7 +1387,7 @@ Migration: replace `Short` and `Long` with `Branch`, and `ShortRounded` and `Lon
 |---------|-------------|
 | `FileTreeRefreshPolicy::Manual` | Refresh only when `entry_refresh_token` or `git_refresh_token` changes **(default)** |
 | `FileTreeRefreshPolicy::Polling(Duration)` | Reread the root, expanded directories, and Git status at this interval (at least 100 ms) |
-| `FileTreeRefreshPolicy::Watch` | Watch the root and expanded directories and reread a directory shortly after it changes; with Git status shown, also watch every directory holding tracked files and the repository metadata. A 30 s full reread repairs missed events, 5 s while anything cannot be watched. Needs the `file-tree-watch` feature, otherwise polls every 5 s |
+| `FileTreeRefreshPolicy::Watch` | Watch the root and expanded directories and reread a directory shortly after it changes; with Git status shown, also watch every directory whose contents can change `git status` and the repository metadata. A 30 s full reread repairs missed events, 5 s while anything cannot be watched. Needs the `file-tree-watch` feature, otherwise polls every 5 s |
 
 The policy applies to local entries only; provided entry sources ignore it.
 

@@ -519,18 +519,7 @@ impl Component for FileTreeComponent {
     fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
         let was_degraded = ctx.state.watch.degraded();
         let update = update_file_tree(msg, ctx);
-        let stale = reconcile_watches(&mut ctx.state, &ctx.props);
-        if !stale.is_empty() {
-            ctx.state.watch.dirty.extend(stale);
-            ctx.link().send(FileTreeMsg::WatchReload {
-                generation: ctx.state.watch.generation,
-            });
-        }
-        if !was_degraded && ctx.state.watch.degraded() {
-            // Something just lost watch coverage: poll at the degraded interval from now on,
-            // rather than after the repair interval already armed.
-            rearm_refresh_tick(ctx);
-        }
+        sync_watches(ctx, was_degraded);
         update
     }
 
@@ -633,6 +622,7 @@ impl Component for FileTreeComponent {
         }
 
         // A new root or entry mode needs a new watch set and new Git metadata directories.
+        let was_degraded = ctx.state.watch.degraded();
         if old_props.refresh_policy != ctx.props.refresh_policy
             || root_mode_changed
             || needs_git_snapshot(old_props) != needs_git_snapshot(&ctx.props)
@@ -643,7 +633,8 @@ impl Component for FileTreeComponent {
                 ctx.state.watch.reset();
             }
         }
-        reconcile_watches(&mut ctx.state, &ctx.props);
+        // Controlled `expanded_paths` can reopen a directory here, not only through a toggle.
+        sync_watches(ctx, was_degraded);
 
         if dirty {
             Update::with_command(command)
@@ -1957,6 +1948,24 @@ fn reconcile_watches(state: &mut FileTreeState, props: &FileTreeProps) -> Vec<Ar
     }
     let desired = visible_directories(&state.root, &effective_expanded_paths(props, state));
     state.watch.reconcile(desired)
+}
+
+/// Reconcile the watch set after anything that can change what is visible, an update or new props
+/// alike: reread directories whose listing can no longer be trusted, and poll faster if coverage
+/// was just lost. `was_degraded` is the coverage before the change.
+fn sync_watches(ctx: &mut Context<FileTreeComponent>, was_degraded: bool) {
+    let stale = reconcile_watches(&mut ctx.state, &ctx.props);
+    if !stale.is_empty() {
+        ctx.state.watch.dirty.extend(stale);
+        ctx.link().send(FileTreeMsg::WatchReload {
+            generation: ctx.state.watch.generation,
+        });
+    }
+    if !was_degraded && ctx.state.watch.degraded() {
+        // Something just lost watch coverage: poll at the degraded interval from now on, rather
+        // than after the repair interval already armed.
+        rearm_refresh_tick(ctx);
+    }
 }
 
 /// Close a batch: queue the directories whose listing changed, and a Git refresh if one is due.
@@ -4461,6 +4470,54 @@ mod tests {
         std::fs::remove_file(dir.join("src/before.rs")).unwrap();
         std::fs::write(dir.join("src/after.rs"), "").unwrap();
         runtime.component.update(toggle(true), &mut runtime.ctx);
+
+        let reload = collect_messages_until(&mut runtime, |message| {
+            matches!(message, FileTreeMsg::WatchReload { .. })
+        })
+        .pop()
+        .unwrap();
+        let reload = runtime.component.update(reload, &mut runtime.ctx);
+        let loaded = run_command_until(
+            &mut runtime,
+            reload.command.expect("the reopened directory is reread"),
+            |message| matches!(message, FileTreeMsg::WatchDirectoriesLoaded { .. }),
+        )
+        .pop()
+        .unwrap();
+        runtime.component.update(loaded, &mut runtime.ctx);
+
+        let names: Vec<String> = node_by_path_mut(&mut runtime.ctx.state.root, &src)
+            .unwrap()
+            .children
+            .iter()
+            .map(|child| child.name.to_string())
+            .collect();
+        assert_eq!(names, ["after.rs"]);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The same reopen, driven by an application that controls expansion through props.
+    #[test]
+    fn reopening_a_directory_through_controlled_expansion_rereads_it() {
+        let dir = unique_component_test_dir("watch-reopen-controlled");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/before.rs"), "").unwrap();
+        let root = dunce::canonicalize(&dir).unwrap();
+        let root_path = root.to_string_lossy().into_owned();
+        let src: Arc<str> = Arc::from(root.join("src").to_string_lossy().as_ref());
+        let props = |expanded: &[&Arc<str>]| {
+            crate::widgets::file_tree::FileTree::new(root_path.clone())
+                .expanded_paths(expanded.iter().map(|path| Arc::clone(path)))
+                .refresh_policy(FileTreeRefreshPolicy::Watch)
+                .props
+        };
+        let mut runtime = file_tree_runtime(props(&[&src]));
+
+        replace_file_tree_props(&mut runtime, props(&[]));
+        std::fs::remove_file(dir.join("src/before.rs")).unwrap();
+        std::fs::write(dir.join("src/after.rs"), "").unwrap();
+        replace_file_tree_props(&mut runtime, props(&[&src]));
 
         let reload = collect_messages_until(&mut runtime, |message| {
             matches!(message, FileTreeMsg::WatchReload { .. })

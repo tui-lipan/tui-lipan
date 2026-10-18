@@ -492,12 +492,15 @@ pub(crate) fn git_watch_directories(repo_root: &Path) -> Vec<PathBuf> {
 }
 
 /// Everything a repository watch needs: the metadata directories, and the repository root plus
-/// every directory holding a tracked file, with their ancestors.
+/// every directory whose contents can change `git status`, with their ancestors.
 ///
-/// Tracked files come from the index, so staged-but-uncommitted paths count and ignored build
-/// output does not. Untracked files appear in `git status` against the nearest tracked ancestor,
-/// which is watched. Past [`MAX_REPOSITORY_WATCH_DIRS`] only the root is kept and the result is
-/// marked incomplete, so the tree polls Git status rather than adding watches without bound.
+/// Watches are one level deep, so every such directory is listed rather than relying on an
+/// ancestor: each directory holding a tracked file (from the index, so staged paths count), each
+/// holding an untracked file that is not ignored, and each untracked directory, empty ones
+/// included. Deleting the last file of an untracked directory, or adding the first file to an empty
+/// one, is then seen. Ignored build output holds none of these and stays unwatched. Past
+/// [`MAX_REPOSITORY_WATCH_DIRS`] only the root is kept and the result is marked incomplete, so the
+/// tree polls Git status rather than adding watches without bound.
 ///
 /// [`MAX_REPOSITORY_WATCH_DIRS`]: super::watch::MAX_REPOSITORY_WATCH_DIRS
 pub(crate) fn repository_watch_directories(repo_root: &Path) -> super::watch::RepositoryWatchDirs {
@@ -506,24 +509,38 @@ pub(crate) fn repository_watch_directories(repo_root: &Path) -> super::watch::Re
         .iter()
         .map(|dir| key(dir))
         .collect();
-    let tracked = git_command(repo_root)
-        .args(["ls-files", "-z", "--cached"])
-        .output()
-        .ok()
-        .filter(|output| output.status.success());
-    let Some(tracked) = tracked else {
+    let list = |args: &[&str]| {
+        git_command(repo_root)
+            .args(["ls-files", "-z"])
+            .args(args)
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|output| {
+                output
+                    .stdout
+                    .split(|byte| *byte == 0)
+                    .filter(|path| !path.is_empty())
+                    .map(|path| String::from_utf8_lossy(path).into_owned())
+                    .collect::<Vec<_>>()
+            })
+    };
+    // Every file `git status` can report on, then untracked directories (`--directory` lists an
+    // untracked tree once, as `dir/`, and lists empty ones that hold no file to find them by).
+    let files = list(&["--cached", "--others", "--exclude-standard"]);
+    let untracked = list(&["--others", "--directory", "--exclude-standard"]);
+    let (Some(files), Some(untracked)) = (files, untracked) else {
         return super::watch::RepositoryWatchDirs {
             metadata,
             worktree: HashSet::from([key(repo_root)]),
             complete: false,
         };
     };
-    let relative = tracked_directories(
-        tracked
-            .stdout
-            .split(|byte| *byte == 0)
-            .filter(|path| !path.is_empty())
-            .map(|path| String::from_utf8_lossy(path).into_owned()),
+    let relative = status_directories(
+        files,
+        untracked
+            .into_iter()
+            .filter_map(|path| path.strip_suffix('/').map(str::to_owned)),
     );
     let complete = relative.len() <= super::watch::MAX_REPOSITORY_WATCH_DIRS;
     let mut worktree = HashSet::from([key(repo_root)]);
@@ -537,21 +554,30 @@ pub(crate) fn repository_watch_directories(repo_root: &Path) -> super::watch::Re
     }
 }
 
-/// The distinct non-root directories, relative to the repository, that contain the given tracked
-/// paths, directly or through a subdirectory.
-fn tracked_directories(paths: impl IntoIterator<Item = String>) -> HashSet<PathBuf> {
-    let mut dirs = HashSet::new();
-    for path in paths {
-        let mut parent = Path::new(&path).parent();
-        while let Some(dir) = parent.filter(|dir| !dir.as_os_str().is_empty()) {
-            if !dirs.insert(dir.to_path_buf()) {
+/// The distinct non-root directories, relative to the repository, that contain one of `files`
+/// directly or through a subdirectory, plus each of `dirs` and its ancestors.
+fn status_directories(
+    files: impl IntoIterator<Item = String>,
+    dirs: impl IntoIterator<Item = String>,
+) -> HashSet<PathBuf> {
+    let mut found = HashSet::new();
+    let mut insert_with_ancestors = |start: Option<&Path>| {
+        let mut next = start;
+        while let Some(dir) = next.filter(|dir| !dir.as_os_str().is_empty()) {
+            if !found.insert(dir.to_path_buf()) {
                 // Its ancestors were added along with it.
                 break;
             }
-            parent = dir.parent();
+            next = dir.parent();
         }
+    };
+    for file in files {
+        insert_with_ancestors(Path::new(&file).parent());
     }
-    dirs
+    for dir in dirs {
+        insert_with_ancestors(Some(Path::new(&dir)));
+    }
+    found
 }
 
 pub(crate) fn load_git_snapshot(
@@ -862,8 +888,8 @@ mod watch_directory_tests {
     use super::*;
 
     #[test]
-    fn tracked_directories_include_every_ancestor_once() {
-        let dirs = tracked_directories(
+    fn status_directories_include_every_ancestor_once() {
+        let dirs = status_directories(
             [
                 "README.md",
                 "src/main.rs",
@@ -871,17 +897,29 @@ mod watch_directory_tests {
                 "docs/a/b/c.md",
             ]
             .map(String::from),
+            ["scratch/empty"].map(String::from),
         );
         let mut dirs: Vec<_> = dirs
             .iter()
             .map(|dir| dir.to_string_lossy().into_owned())
             .collect();
         dirs.sort();
-        assert_eq!(dirs, ["docs", "docs/a", "docs/a/b", "src", "src/update"]);
+        assert_eq!(
+            dirs,
+            [
+                "docs",
+                "docs/a",
+                "docs/a/b",
+                "scratch",
+                "scratch/empty",
+                "src",
+                "src/update"
+            ]
+        );
     }
 
     #[test]
-    fn a_repository_watch_covers_tracked_directories_but_not_ignored_ones() {
+    fn a_repository_watch_covers_status_directories_but_not_ignored_ones() {
         let dir = std::env::temp_dir().join(format!(
             "tui-lipan-file-tree-repo-watch-{}-{}",
             std::process::id(),
@@ -907,6 +945,10 @@ mod watch_directory_tests {
             eprintln!("skipping: git is unavailable");
             return;
         }
+        // Untracked after the add: an empty directory, and a tree with a file two levels down.
+        std::fs::create_dir_all(dir.join("scratch")).unwrap();
+        std::fs::create_dir_all(dir.join("notes/drafts")).unwrap();
+        std::fs::write(dir.join("notes/drafts/idea.md"), "").unwrap();
         let root = dunce::canonicalize(&dir).unwrap();
 
         let dirs = repository_watch_directories(&root);
@@ -915,6 +957,14 @@ mod watch_directory_tests {
         assert!(dirs.complete);
         assert!(dirs.worktree.contains(&key(root.clone())));
         assert!(dirs.worktree.contains(&key(root.join("src"))));
+        assert!(
+            dirs.worktree.contains(&key(root.join("scratch"))),
+            "adding the first file to an empty untracked directory changes status"
+        );
+        assert!(
+            dirs.worktree.contains(&key(root.join("notes/drafts"))),
+            "removing the last untracked file changes status"
+        );
         assert!(!dirs.worktree.contains(&key(root.join("target"))));
         assert!(!dirs.metadata.is_empty(), "the Git directory is watched");
 
