@@ -1458,25 +1458,19 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
-    fn parses_untracked_line() {
-        use git::GitChangeState;
-        use git::parse_git_porcelain_line;
-        let parsed = parse_git_porcelain_line("?? src/new.rs");
-        assert_eq!(
-            parsed.map(|(p, s)| (p, s.unstaged)),
-            Some(("src/new.rs", Some(GitChangeState::Untracked)))
-        );
+    fn untracked_code_is_an_unstaged_change() {
+        use git::{GitChangeState, status_from_code};
+        let status = status_from_code("??").expect("untracked is a change");
+        assert_eq!(status.unstaged, Some(GitChangeState::Untracked));
+        assert_eq!(status.staged, None);
     }
 
     #[test]
-    fn parses_rename_destination() {
-        use git::GitChangeState;
-        use git::parse_git_porcelain_line;
-        let parsed = parse_git_porcelain_line("R  old/name.rs -> new/name.rs");
-        assert_eq!(
-            parsed.map(|(p, s)| (p, s.staged)),
-            Some(("new/name.rs", Some(GitChangeState::Renamed)))
-        );
+    fn rename_code_is_a_staged_change_and_ignored_is_none() {
+        use git::{GitChangeState, status_from_code};
+        let status = status_from_code("R ").expect("a rename is a change");
+        assert_eq!(status.staged, Some(GitChangeState::Renamed));
+        assert!(status_from_code("!!").is_none(), "ignored is not a change");
     }
 
     #[test]
