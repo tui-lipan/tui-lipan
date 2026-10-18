@@ -260,7 +260,7 @@ Source: `src/widgets/text_area/mod.rs:458` (`TextArea`).
 
 ## List
 
-Source: `src/widgets/list/mod.rs:1600` (`List`).
+Source: `src/widgets/list/mod.rs:1626` (`List`).
 
 | Field | Default initializer |
 |---|---|
@@ -1028,7 +1028,7 @@ Source: `src/widgets/document_view/mod.rs:333` (`DocumentView`).
 
 ## FileTree
 
-Source: `src/widgets/file_tree/mod.rs:361` (`FileTree`).
+Source: `src/widgets/file_tree/mod.rs:362` (`FileTree`).
 
 | Field | Default initializer |
 |---|---|
@@ -1058,6 +1058,7 @@ Source: `src/widgets/file_tree/mod.rs:361` (`FileTree`).
 | `other_icon` | `"[?]".into()` |
 | `directory_label_style` | `Style::default()` |
 | `file_label_style` | `Style::default()` |
+| `hidden_style` | `Style::default()` |
 | `loading_label` | `"loading...".into()` |
 | `error_prefix` | `"error:".into()` |
 | `width` | `Length::Flex(1)` |
@@ -1118,6 +1119,7 @@ Source: `src/widgets/file_tree/mod.rs:361` (`FileTree`).
 | `highlight_changed_labels` | `false` |
 | `change_source` | `FileTreeChangeSource::default()` |
 | `change_view` | `FileTreeChangeView::default()` |
+| `compact_directories` | `false` |
 | `git_diff_stats` | `false` |
 | `git_icon_style` | `GitIconStyle::NerdFont` |
 | `git_status_padding_right` | `0` |

@@ -55,11 +55,21 @@ pub(crate) struct FileTreeState {
     pub(crate) search_found_dir: Option<Arc<str>>,
     pub(crate) requested_entry_paths: HashSet<Arc<str>>,
     pub(crate) uncontrolled_selected_path: Option<Arc<str>>,
-    /// Where each symlink in the tree points, keyed by the link's own path.
+    /// What each symlink in the tree points at, keyed by the link's own path.
     ///
     /// Kept beside the tree rather than on `FsNode` for the same reason the git decorations are:
-    /// it is one string for a rare kind of node, and every other node would carry an empty slot.
-    pub(crate) symlink_targets: HashMap<Arc<str>, Arc<str>>,
+    /// it describes a rare kind of node, and every other node would carry an empty slot.
+    pub(crate) symlink_targets: HashMap<Arc<str>, SymlinkInfo>,
+}
+
+/// Where a symlink points, and whether that is a directory.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SymlinkInfo {
+    /// The target as the link itself spells it, when it is known.
+    pub(crate) target: Option<Arc<str>>,
+    /// Whether the link resolves to a directory. Only the icon reads it: the row stays a leaf
+    /// either way, because following the link would open a second copy of what it names.
+    pub(crate) is_dir: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -139,7 +149,7 @@ struct ProjectionBuildContext<'a> {
     expanded: &'a HashSet<Arc<str>>,
     explorer_filter: Option<&'a ExplorerFilter>,
     git_decorations: &'a HashMap<Arc<str>, GitFileDecorations>,
-    symlink_targets: &'a HashMap<Arc<str>, Arc<str>>,
+    symlink_targets: &'a HashMap<Arc<str>, SymlinkInfo>,
     path_styles: &'a HashMap<Arc<str>, FileTreeItemStyle>,
     lookup: &'a mut HashMap<crate::widgets::TreePath, VisibleFileTreeEntry>,
 }
@@ -822,6 +832,11 @@ impl Component for FileTreeComponent {
             sync_symlink_targets(&mut ctx.state, &ctx.props);
         } else if source_changed && uses_provided_entries(&ctx.props) {
             apply_changed_provided_listings(&mut ctx.state.root, old_props, &ctx.props);
+            sync_symlink_targets(&mut ctx.state, &ctx.props);
+        } else if old_props.symlink_targets != ctx.props.symlink_targets
+            || old_props.show_icons != ctx.props.show_icons
+        {
+            // Nothing is collected while neither reads it, so turning one on has to look now.
             sync_symlink_targets(&mut ctx.state, &ctx.props);
         }
 
@@ -1602,20 +1617,22 @@ fn restart_explorer_search_after_entry_refresh(
     ))
 }
 
-/// Learn where the tree's symlinks point, for the `link → target` suffix.
+/// Learn where the tree's symlinks point, for the `link → target` suffix and the icon that tells a
+/// linked directory from a linked file.
 ///
 /// Rebuilt from the tree rather than accumulated, so a link that was repointed between listings
 /// reports where it points now, and a directory that has since collapsed out of the tree stops
-/// being remembered. That costs one `read_link` per link on the tree, which is why this runs where
-/// the tree changes shape rather than per frame — and why a tree with no links costs a walk.
+/// being remembered. That costs a `read_link` and a `stat` per link on the tree, which is why this
+/// runs where the tree changes shape rather than per frame — and why a tree with no links costs a
+/// walk.
 ///
 /// Under a provided entry source the targets come from the listings: the widget cannot follow a
 /// link that lives on another host.
 fn sync_symlink_targets(state: &mut FileTreeState, props: &FileTreeProps) {
-    if !props.symlink_targets {
+    state.symlink_targets.clear();
+    if !props.symlink_targets && !props.show_icons {
         return;
     }
-    state.symlink_targets.clear();
     if uses_provided_paths(props) {
         collect_provided_symlink_targets(&state.root, props, &mut state.symlink_targets);
     } else {
@@ -1624,13 +1641,18 @@ fn sync_symlink_targets(state: &mut FileTreeState, props: &FileTreeProps) {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn collect_local_symlink_targets(node: &FsNode, targets: &mut HashMap<Arc<str>, Arc<str>>) {
-    if matches!(node.kind, FileKind::Symlink)
-        && let Ok(target) = std::fs::read_link(node.path.as_ref())
-    {
+fn collect_local_symlink_targets(node: &FsNode, targets: &mut HashMap<Arc<str>, SymlinkInfo>) {
+    if matches!(node.kind, FileKind::Symlink) {
+        let path = Path::new(node.path.as_ref());
         targets.insert(
             node.path.clone(),
-            Arc::from(target.to_string_lossy().as_ref()),
+            SymlinkInfo {
+                target: std::fs::read_link(path)
+                    .ok()
+                    .map(|target| Arc::from(target.to_string_lossy().as_ref())),
+                // `metadata` follows the link; a dangling one is an error and draws as a file.
+                is_dir: std::fs::metadata(path).is_ok_and(|meta| meta.is_dir()),
+            },
         );
     }
     for child in &node.children {
@@ -1639,12 +1661,12 @@ fn collect_local_symlink_targets(node: &FsNode, targets: &mut HashMap<Arc<str>, 
 }
 
 #[cfg(target_arch = "wasm32")]
-fn collect_local_symlink_targets(_node: &FsNode, _targets: &mut HashMap<Arc<str>, Arc<str>>) {}
+fn collect_local_symlink_targets(_node: &FsNode, _targets: &mut HashMap<Arc<str>, SymlinkInfo>) {}
 
 fn collect_provided_symlink_targets(
     root: &FsNode,
     props: &FileTreeProps,
-    targets: &mut HashMap<Arc<str>, Arc<str>>,
+    targets: &mut HashMap<Arc<str>, SymlinkInfo>,
 ) {
     let FileTreeEntrySource::Provided(listings) = &props.entry_source else {
         return;
@@ -1655,14 +1677,17 @@ fn collect_provided_symlink_targets(
             continue;
         };
         for entry in entries.iter() {
-            let Some(target) = entry.symlink_target.as_ref() else {
-                continue;
-            };
-            if !directory.is_valid_name(entry.name.as_ref()) {
+            if !entry.is_symlink || !directory.is_valid_name(entry.name.as_ref()) {
                 continue;
             }
             let path = directory.join_name(entry.name.as_ref());
-            targets.insert(Arc::from(path.as_str()), target.clone());
+            targets.insert(
+                Arc::from(path.as_str()),
+                SymlinkInfo {
+                    target: entry.symlink_target.clone(),
+                    is_dir: entry.is_dir,
+                },
+            );
         }
     }
 }
@@ -1962,6 +1987,11 @@ fn build_projection(
             sort_virtual_tree(&mut root);
             sync_projected_load_states(&mut root, &state.root);
         }
+        // The explorer's matches are keyed by each directory's own path and name, which a folded
+        // row no longer has, so a query shows the tree unfolded.
+        if props.compact_directories && explorer_filter.is_none() {
+            compact_directory_chains(&mut root);
+        }
         root
     } else {
         state.root.clone()
@@ -2004,6 +2034,36 @@ fn build_projection(
         lookup: Arc::new(lookup),
         path_to_visible_index,
     }
+}
+
+/// Fold every run of directories holding nothing but one subdirectory into one node named
+/// `outer/inner`. The node takes the innermost directory's path, state, and children, since those
+/// are what its row opens onto. The root itself is never folded: it is the tree's heading.
+///
+/// The separator is always `/`, whatever the platform: it is a label, never parsed back as a path.
+fn compact_directory_chains(node: &mut FsNode) {
+    for child in &mut node.children {
+        while is_single_directory_chain(child) {
+            let Some(only) = child.children.pop() else {
+                break;
+            };
+            child.name = Arc::from(format!("{}/{}", child.name, only.name));
+            child.path = only.path;
+            child.loaded = only.loaded;
+            child.loading = only.loading;
+            child.error = only.error;
+            child.children = only.children;
+        }
+        compact_directory_chains(child);
+    }
+}
+
+fn is_single_directory_chain(node: &FsNode) -> bool {
+    node.is_dir()
+        && node.loaded
+        && !node.loading
+        && node.error.is_none()
+        && matches!(node.children.as_slice(), [only] if only.is_dir())
 }
 
 fn sync_projected_load_states(projected: &mut FsNode, source: &FsNode) {
@@ -2135,9 +2195,20 @@ fn build_projected_tree_node(
     let git_status = git_decoration.map(|decoration| decoration.status);
 
     let path_style = ctx.path_styles.get(node.path.as_ref()).copied();
+    // A folded `src/.config` row is as hidden as a `.config` one, so every segment counts.
+    let is_hidden = !is_root && node.name.split('/').any(is_hidden_entry);
+    let links_to_dir = ctx
+        .symlink_targets
+        .get(node.path.as_ref())
+        .is_some_and(|link| link.is_dir);
 
     if ctx.props.show_icons {
-        let mut icon_span = node.kind.icon(&node.name, is_expanded, ctx.props);
+        let mut icon_span = node
+            .kind
+            .icon(&node.name, is_expanded || links_to_dir, ctx.props);
+        if is_hidden {
+            icon_span.style = icon_span.style.patch(ctx.props.hidden_style);
+        }
         if let Some(style) = path_style.and_then(|style| style.icon) {
             icon_span.style = icon_span.style.patch(style);
         }
@@ -2157,11 +2228,17 @@ fn build_projected_tree_node(
         node.name.as_ref().to_string()
     };
 
-    let kind_label_style = match node.kind {
+    // A link takes the label of what it stands for; the icon and the target suffix already say it
+    // is a link.
+    let mut kind_label_style = match node.kind {
         FileKind::Directory => ctx.props.directory_label_style,
-        FileKind::File => ctx.props.file_label_style,
-        FileKind::Symlink | FileKind::Other => Style::default(),
+        FileKind::Symlink if links_to_dir => ctx.props.directory_label_style,
+        FileKind::File | FileKind::Symlink => ctx.props.file_label_style,
+        FileKind::Other => Style::default(),
     };
+    if is_hidden {
+        kind_label_style = kind_label_style.patch(ctx.props.hidden_style);
+    }
 
     let mut label_base_style = if ctx.props.highlight_changed_labels
         && ctx.props.git_status
@@ -2271,7 +2348,11 @@ fn symlink_target_span(
     if !ctx.props.symlink_targets || !matches!(node.kind, FileKind::Symlink) {
         return None;
     }
-    let target = ctx.symlink_targets.get(node.path.as_ref())?;
+    let target = ctx
+        .symlink_targets
+        .get(node.path.as_ref())?
+        .target
+        .as_ref()?;
     Some(
         crate::style::Span::new(format!(" {} {target}", ctx.props.symlink_target_arrow))
             .style(ctx.props.symlink_target_style),
@@ -2916,7 +2997,8 @@ mod tests {
 
     /// For the projection tests that build their own context: a tree with no symlinks in it needs
     /// no targets, and a borrow of an empty map has to outlive the context that holds it.
-    static NO_SYMLINK_TARGETS: LazyLock<HashMap<Arc<str>, Arc<str>>> = LazyLock::new(HashMap::new);
+    static NO_SYMLINK_TARGETS: LazyLock<HashMap<Arc<str>, SymlinkInfo>> =
+        LazyLock::new(HashMap::new);
 
     fn test_root() -> FsNode {
         FsNode {
@@ -5544,6 +5626,212 @@ mod tests {
 
         assert_eq!(root.children.len(), 1);
         assert_eq!(root.children[0].name.as_ref(), "src");
+    }
+
+    fn changed_only_tree(changed: &[&str]) -> FsNode {
+        let source_root = FsNode {
+            name: Arc::from("repo"),
+            path: Arc::from("/repo"),
+            kind: FileKind::Directory,
+            loaded: true,
+            loading: false,
+            error: None,
+            children: Vec::new(),
+        };
+        let snapshot = GitStatusSnapshot {
+            entries: HashMap::new(),
+            changed_paths: changed.iter().map(|path| Arc::from(*path)).collect(),
+            kinds: HashMap::new(),
+            virtual_changes: false,
+        };
+        build_changed_only_root(&source_root, &snapshot, true)
+    }
+
+    #[test]
+    fn compacting_folds_single_directory_chains_into_the_innermost_path() {
+        let mut root = changed_only_tree(&[
+            "/repo/src/view/sidebar/tree.rs",
+            "/repo/src/view/sidebar/row.rs",
+            "/repo/docs/index.md",
+            "/repo/docs/guide/intro.md",
+        ]);
+
+        compact_directory_chains(&mut root);
+
+        // The root is the heading and never folds, even with a single child of its own.
+        assert_eq!(root.path.as_ref(), "/repo");
+        let names: Vec<&str> = root.children.iter().map(|c| c.name.as_ref()).collect();
+        assert_eq!(names, ["docs", "src/view/sidebar"]);
+        let folded = &root.children[1];
+        assert_eq!(folded.path.as_ref(), "/repo/src/view/sidebar");
+        assert_eq!(folded.kind, FileKind::Directory);
+        assert_eq!(folded.children.len(), 2);
+        // `docs` holds a file beside its directory, so it stays; `guide` holds only a file.
+        let docs = &root.children[0];
+        let names: Vec<&str> = docs.children.iter().map(|c| c.name.as_ref()).collect();
+        assert_eq!(names, ["guide", "index.md"]);
+    }
+
+    #[test]
+    fn a_query_unfolds_compacted_directories() {
+        let props = crate::widgets::file_tree::FileTree::new("/repo")
+            .change_view(crate::widgets::file_tree::FileTreeChangeView::ChangedOnly)
+            .compact_directories(true)
+            .show_icons(false)
+            .props;
+        let mut state = test_state_with_root(FsNode {
+            name: Arc::from("repo"),
+            path: Arc::from("/repo"),
+            kind: FileKind::Directory,
+            loaded: true,
+            loading: false,
+            error: None,
+            children: Vec::new(),
+        });
+        state.git_snapshot.changed_paths = vec![Arc::from("/repo/src/widgets/tree.rs")];
+        state.expanded.insert(Arc::from("/repo"));
+        let label = |projection: &FileTreeProjection| {
+            projection.root.children[0].item.spans[0]
+                .content
+                .as_ref()
+                .to_owned()
+        };
+
+        let folded = build_projection(&props, &state, None);
+        let mut filter = ExplorerFilter::default();
+        filter.visible_paths.insert(Arc::from("/repo/src"));
+        let searching = build_projection(&props, &state, Some(&filter));
+
+        assert_eq!(label(&folded), "src/widgets");
+        assert_eq!(label(&searching), "src");
+    }
+
+    #[test]
+    fn hidden_style_patches_the_icon_and_label_of_dot_entries() {
+        let hidden = Style::new().dim();
+        let props = crate::widgets::file_tree::FileTree::new("/repo")
+            .icon_style(FileIconStyle::NerdFont)
+            .hidden_style(hidden)
+            .props;
+        let expanded = HashSet::new();
+        let decorations = HashMap::new();
+        let mut lookup = HashMap::new();
+        let path_styles = HashMap::new();
+        let mut ctx = ProjectionBuildContext {
+            props: &props,
+            expanded: &expanded,
+            explorer_filter: None,
+            git_decorations: &decorations,
+            symlink_targets: &NO_SYMLINK_TARGETS,
+            path_styles: &path_styles,
+            lookup: &mut lookup,
+        };
+        let directory = |name: &str| FsNode {
+            name: Arc::from(name),
+            path: Arc::from(format!("/repo/{name}")),
+            kind: FileKind::Directory,
+            loaded: true,
+            loading: false,
+            error: None,
+            children: Vec::new(),
+        };
+
+        let dotted = build_projected_tree_node(&directory(".github"), false, vec![0], &mut ctx);
+        let folded = build_projected_tree_node(&directory("src/.cfg"), false, vec![1], &mut ctx);
+        let plain = build_projected_tree_node(&directory("src"), false, vec![2], &mut ctx);
+
+        for tree in [&dotted, &folded] {
+            assert_eq!(tree.item.spans[0].style, hidden, "icon");
+            assert_eq!(tree.item.spans[2].style, hidden, "label");
+        }
+        assert_eq!(plain.item.spans[2].style, Style::default());
+    }
+
+    #[test]
+    fn a_link_to_a_directory_draws_as_a_linked_directory() {
+        let directory_style = Style::new().fg(Color::Blue);
+        let file_style = Style::new().fg(Color::Green);
+        let props = crate::widgets::file_tree::FileTree::new("/repo")
+            .icon_style(FileIconStyle::NerdFont)
+            .directory_label_style(directory_style)
+            .file_label_style(file_style)
+            .props;
+        let mut links = HashMap::new();
+        links.insert(
+            Arc::from("/repo/docs"),
+            SymlinkInfo {
+                target: None,
+                is_dir: true,
+            },
+        );
+        links.insert(Arc::from("/repo/CLAUDE.md"), SymlinkInfo::default());
+        let expanded = HashSet::new();
+        let decorations = HashMap::new();
+        let mut lookup = HashMap::new();
+        let path_styles = HashMap::new();
+        let mut ctx = ProjectionBuildContext {
+            props: &props,
+            expanded: &expanded,
+            explorer_filter: None,
+            git_decorations: &decorations,
+            symlink_targets: &links,
+            path_styles: &path_styles,
+            lookup: &mut lookup,
+        };
+        let link = |name: &str| FsNode {
+            name: Arc::from(name),
+            path: Arc::from(format!("/repo/{name}")),
+            kind: FileKind::Symlink,
+            loaded: true,
+            loading: false,
+            error: None,
+            children: Vec::new(),
+        };
+
+        let to_dir = build_projected_tree_node(&link("docs"), false, vec![0], &mut ctx);
+        let to_file = build_projected_tree_node(&link("CLAUDE.md"), false, vec![1], &mut ctx);
+
+        assert_eq!(to_dir.item.spans[0].content.as_ref(), "\u{f482}");
+        assert_eq!(to_dir.item.spans[2].style, directory_style);
+        assert!(!to_dir.is_collapsible(), "a link stays a leaf");
+        assert_eq!(to_file.item.spans[0].content.as_ref(), "\u{f481}");
+        assert_eq!(to_file.item.spans[2].style, file_style);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_links_learn_whether_they_resolve_to_a_directory() {
+        let dir = std::env::temp_dir().join(format!(
+            "tui-lipan-file-tree-link-kind-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("real")).expect("create dir");
+        std::fs::write(dir.join("file.txt"), "x").expect("write file");
+        std::os::unix::fs::symlink("real", dir.join("to-dir")).expect("dir link");
+        std::os::unix::fs::symlink("file.txt", dir.join("to-file")).expect("file link");
+        std::os::unix::fs::symlink("missing", dir.join("dangling")).expect("dangling link");
+        let node = |name: &str| FsNode {
+            name: Arc::from(name),
+            path: Arc::from(dir.join(name).to_string_lossy().as_ref()),
+            kind: FileKind::Symlink,
+            loaded: true,
+            loading: false,
+            error: None,
+            children: Vec::new(),
+        };
+        let mut root = node("root");
+        root.kind = FileKind::Directory;
+        root.children = vec![node("to-dir"), node("to-file"), node("dangling")];
+
+        let mut links = HashMap::new();
+        collect_local_symlink_targets(&root, &mut links);
+        let is_dir = |name: &str| links[dir.join(name).to_string_lossy().as_ref()].is_dir;
+
+        assert!(is_dir("to-dir"));
+        assert!(!is_dir("to-file"));
+        assert!(!is_dir("dangling"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -126,7 +126,8 @@ impl FileTreeEntrySource {
 pub struct FileTreeEntry {
     /// Entry name relative to the listed directory.
     pub name: Arc<str>,
-    /// Whether the entry is a directory.
+    /// Whether the entry is a directory. On a symlink, whether it resolves to one: the row stays
+    /// a leaf, and only its icon changes.
     pub is_dir: bool,
     /// Whether the entry is a symbolic link.
     pub is_symlink: bool,
@@ -385,6 +386,7 @@ impl FileTree {
                 other_icon: "[?]".into(),
                 directory_label_style: Style::default(),
                 file_label_style: Style::default(),
+                hidden_style: Style::default(),
                 loading_label: "loading...".into(),
                 error_prefix: "error:".into(),
                 width: Length::Flex(1),
@@ -450,6 +452,7 @@ impl FileTree {
                 highlight_changed_labels: false,
                 change_source: FileTreeChangeSource::default(),
                 change_view: FileTreeChangeView::default(),
+                compact_directories: false,
                 git_diff_stats: false,
                 git_icon_style: GitIconStyle::NerdFont,
                 git_status_padding_right: 0,
@@ -664,6 +667,16 @@ impl FileTree {
     /// Set the label style for regular file rows.
     pub fn file_label_style(mut self, style: Style) -> Self {
         self.props.file_label_style = style;
+        self
+    }
+
+    /// Set the style patched onto the icon and label of a hidden entry: one whose name starts with
+    /// a dot. `Style::new().dim()` sets dotfiles back without hiding them; the default leaves them
+    /// looking like any other row.
+    ///
+    /// A path style or a change-status label style still patches over it.
+    pub fn hidden_style(mut self, style: Style) -> Self {
+        self.props.hidden_style = style;
         self
     }
 
@@ -1188,6 +1201,19 @@ impl FileTree {
     /// Set the source-agnostic changed-file display mode.
     pub fn change_view(mut self, view: FileTreeChangeView) -> Self {
         self.props.change_view = view;
+        self
+    }
+
+    /// Fold a run of directories that each hold only one subdirectory into a single row, so a
+    /// change in `src/widgets/file_tree` reads as one `src/widgets/file_tree` row instead of three
+    /// nested ones. The row stands for the deepest directory: expanding, selecting, or activating
+    /// it addresses that path. Off by default.
+    ///
+    /// Only the changed-only view folds, since it knows the whole tree up front; browsing loads a
+    /// directory only when it opens. An explorer query unfolds the tree while it is active, so each
+    /// match is highlighted in its own row.
+    pub fn compact_directories(mut self, enabled: bool) -> Self {
+        self.props.compact_directories = enabled;
         self
     }
 
