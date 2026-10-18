@@ -136,6 +136,8 @@ ALLOWLIST: dict[tuple[str, str], str] = {
     ("src/widgets/file_tree/mod_private.rs", "empty_text_style"): "non-state visual part style",
     ("src/widgets/file_tree/mod_private.rs", "directory_label_style"): "file-tree label visual part style",
     ("src/widgets/file_tree/mod_private.rs", "file_label_style"): "file-tree label visual part style",
+    ("src/widgets/file_tree/mod_private.rs", "hidden_style"): "file-tree entry-kind visual part style, independent of interaction state",
+    ("src/widgets/file_tree/mod_private.rs", "ignored_style"): "file-tree entry-kind visual part style, independent of interaction state",
     ("src/widgets/file_tree/mod_private.rs", "change_suffix_style"): "file-tree suffix visual part style",
     ("src/widgets/file_tree/mod_private.rs", "symlink_target_style"): "file-tree suffix visual part style",
     ("src/widgets/file_tree/mod_private.rs", "explorer_divider_style"): "non-state visual part style",

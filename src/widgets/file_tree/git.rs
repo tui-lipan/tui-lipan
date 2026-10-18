@@ -351,6 +351,9 @@ pub(crate) struct GitStatusSnapshot {
     pub(crate) changed_paths: Vec<Arc<str>>,
     pub(crate) kinds: HashMap<Arc<str>, FileKind>,
     pub(crate) virtual_changes: bool,
+    /// Paths that ignore rules exclude. A directory stands for everything beneath it: git reports
+    /// `target/` once rather than descending into it.
+    pub(crate) ignored_paths: HashSet<Arc<str>>,
 }
 
 impl GitDiffStat {
@@ -369,6 +372,7 @@ pub(crate) fn provided_change_snapshot(
         changed_paths: Vec::new(),
         kinds: HashMap::new(),
         virtual_changes: true,
+        ignored_paths: HashSet::new(),
     };
 
     for change in changes {
@@ -557,8 +561,13 @@ pub(crate) fn load_git_snapshot(
     let output = git_command(repo_root)
         .arg("status")
         .arg("--porcelain=v1")
+        // NUL-separated and unquoted: a path with a space or a non-ASCII name arrives verbatim, and
+        // a rename's two paths are separate fields instead of one ` -> ` string.
+        .arg("-z")
         .arg("--untracked-files=normal")
-        .arg("--ignored=no")
+        // `matching` names an ignored directory once instead of walking into it, so this costs
+        // little over `no` even beside a large build directory.
+        .arg("--ignored=matching")
         .output()
         .ok()?;
 
@@ -567,15 +576,42 @@ pub(crate) fn load_git_snapshot(
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut snapshot = snapshot_from_status(&stdout, repo_root);
+
+    if include_diff_stats {
+        load_git_diff_stats(repo_root, &mut snapshot.entries);
+    }
+
+    Some(snapshot)
+}
+
+/// Read `git status --porcelain=v1 -z --ignored=matching` output: `!!` records are ignored paths,
+/// and every other record is a change.
+fn snapshot_from_status(stdout: &str, repo_root: &Path) -> GitStatusSnapshot {
     let mut snapshot = GitStatusSnapshot {
         entries: HashMap::new(),
         changed_paths: Vec::new(),
         kinds: HashMap::new(),
         virtual_changes: false,
+        ignored_paths: HashSet::new(),
     };
 
-    for line in stdout.lines() {
-        let Some((relative_path, status)) = parse_git_porcelain_line(line) else {
+    let mut records = stdout.split('\0');
+    while let Some(record) = records.next() {
+        let (Some(code), Some(relative_path)) = (record.get(..2), record.get(3..)) else {
+            continue;
+        };
+        // A rename or copy is followed by the path it came from, as a record of its own.
+        if code.contains(['R', 'C']) {
+            records.next();
+        }
+        if code == "!!" {
+            let relative_path = relative_path.trim_end_matches('/');
+            let full_path = super::fs::normalize_path(&repo_root.join(relative_path));
+            snapshot.ignored_paths.insert(full_path);
+            continue;
+        }
+        let Some(status) = status_from_code(code) else {
             continue;
         };
         let full_path = super::fs::normalize_path(&repo_root.join(relative_path));
@@ -588,40 +624,16 @@ pub(crate) fn load_git_snapshot(
         );
     }
 
-    if include_diff_stats {
-        load_git_diff_stats(repo_root, &mut snapshot.entries);
-    }
-
-    Some(snapshot)
+    snapshot
 }
 
-pub(crate) fn parse_git_porcelain_line(line: &str) -> Option<(&str, GitFileStatus)> {
-    if line.len() < 3 {
-        return None;
+/// The status a porcelain `XY` code describes, or `None` for one that is not a change (`!!`).
+pub(crate) fn status_from_code(code: &str) -> Option<GitFileStatus> {
+    if code == "??" {
+        return Some(GitFileStatus::new(None, Some(GitChangeState::Untracked)));
     }
-
-    let status_code = &line[..2];
-    let path_field = line.get(3..)?.trim();
-
-    let status = if status_code == "??" {
-        GitFileStatus::new(None, Some(GitChangeState::Untracked))
-    } else {
-        let mut chars = status_code.chars();
-        let x = chars.next()?;
-        let y = chars.next()?;
-        git_status_from_xy(x, y)?
-    };
-
-    let path = if status_code.contains('R') {
-        path_field
-            .rsplit_once(" -> ")
-            .map(|(_, to)| to)
-            .unwrap_or(path_field)
-    } else {
-        path_field
-    };
-
-    Some((path, status))
+    let mut chars = code.chars();
+    git_status_from_xy(chars.next()?, chars.next()?)
 }
 
 pub(crate) fn parse_git_numstat_line(line: &str) -> Option<(String, GitDiffStat)> {
@@ -913,6 +925,31 @@ mod watch_directory_tests {
 #[cfg(test)]
 mod cache_tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn status_output_separates_ignored_paths_from_changes() {
+        let root = Path::new("/no-such-repo");
+        let snapshot = snapshot_from_status(
+            " M src/main.rs\0R  new name.rs\0old name.rs\0?? notes.md\0!! target/\0!! foo bar/\0",
+            root,
+        );
+
+        // The rename counts once, by its new path; the path it came from is not a record.
+        assert_eq!(
+            snapshot.changed_paths,
+            [
+                Arc::<str>::from("/no-such-repo/src/main.rs"),
+                Arc::from("/no-such-repo/new name.rs"),
+                Arc::from("/no-such-repo/notes.md"),
+            ]
+        );
+        let mut ignored: Vec<&str> = snapshot.ignored_paths.iter().map(AsRef::as_ref).collect();
+        ignored.sort_unstable();
+        // A directory loses its trailing slash, and a space arrives unquoted, so both match the
+        // row's path.
+        assert_eq!(ignored, ["/no-such-repo/foo bar", "/no-such-repo/target"]);
+    }
 
     fn snapshot(path: &'static str) -> GitStatusSnapshot {
         GitStatusSnapshot {

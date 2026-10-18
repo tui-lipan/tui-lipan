@@ -44,10 +44,11 @@ impl FileKind {
         }
     }
 
+    /// The row's icon. `open` means an expanded directory, or a symlink that resolves to one.
     pub(crate) fn icon(
         self,
         path: &str,
-        expanded: bool,
+        open: bool,
         props: &super::mod_private::FileTreeProps,
     ) -> Span {
         let palette = &props.icon_palette;
@@ -66,7 +67,7 @@ impl FileKind {
                     return span;
                 }
 
-                let base = if expanded {
+                let base = if open {
                     &props.opened_directory_icon
                 } else {
                     &props.directory_icon
@@ -75,7 +76,7 @@ impl FileKind {
                 match props.icon_style {
                     FileIconStyle::Text => Span::new(base.as_ref()),
                     FileIconStyle::NerdFont | FileIconStyle::NerdFontColored => {
-                        let (folder_glyph, folder_color) = directory_icon(expanded, palette);
+                        let (folder_glyph, folder_color) = directory_icon(open, palette);
                         let mut span = Span::new(folder_glyph);
                         if props.icon_style == FileIconStyle::NerdFontColored
                             && let Some(c) = folder_color
@@ -142,7 +143,9 @@ impl FileKind {
                 match props.icon_style {
                     FileIconStyle::Text => Span::new(props.symlink_icon.clone()),
                     FileIconStyle::NerdFont | FileIconStyle::NerdFontColored => {
-                        let mut span = Span::new("󰁔");
+                        // Octicons' linked file and linked directory, so a link still reads as the
+                        // kind of entry it stands for.
+                        let mut span = Span::new(if open { "" } else { "" });
                         if props.icon_style == FileIconStyle::NerdFontColored {
                             // Symlinks are typically cyan in mini.icons
                             span = span.fg(palette.cyan);

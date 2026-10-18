@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use crate::core::component::{Command, Component, Context, Update};
 use crate::core::element::{Element, IntoElement};
-use crate::style::Style;
+use crate::style::{Style, StyleSlot};
 use crate::text::input::TextInput;
 use crate::widgets::{Divider, Input, InputEvent, ListItem, MouseRegion, Tree, TreeNode, VStack};
 
@@ -58,13 +58,25 @@ pub(crate) struct FileTreeState {
     pub(crate) search_found_dir: Option<Arc<str>>,
     pub(crate) requested_entry_paths: HashSet<Arc<str>>,
     pub(crate) uncontrolled_selected_path: Option<Arc<str>>,
-    /// Where each symlink in the tree points, keyed by the link's own path.
+    /// What each symlink in the tree points at, keyed by the link's own path.
     ///
     /// Kept beside the tree rather than on `FsNode` for the same reason the git decorations are:
-    /// it is one string for a rare kind of node, and every other node would carry an empty slot.
-    pub(crate) symlink_targets: HashMap<Arc<str>, Arc<str>>,
+    /// it describes a rare kind of node, and every other node would carry an empty slot.
+    pub(crate) symlink_targets: HashMap<Arc<str>, SymlinkInfo>,
+    /// Whether the tree itself has keyboard focus, which decides whether the cursor row shows.
+    pub(crate) tree_focused: bool,
     /// Filesystem watching and periodic rereads, driven by [`FileTreeRefreshPolicy`].
     pub(crate) watch: WatchState,
+}
+
+/// Where a symlink points, and whether that is a directory.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SymlinkInfo {
+    /// The target as the link itself spells it, when it is known.
+    pub(crate) target: Option<Arc<str>>,
+    /// Whether the link resolves to a directory. Only the icon reads it: the row stays a leaf
+    /// either way, because following the link would open a second copy of what it names.
+    pub(crate) is_dir: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -79,6 +91,7 @@ pub(crate) struct LocalEntryRefreshResult {
 
 #[derive(Clone, Debug)]
 pub(crate) enum FileTreeMsg {
+    TreeFocusChanged(bool),
     TreeSelected {
         entry: Option<VisibleFileTreeEntry>,
     },
@@ -188,6 +201,8 @@ struct FileTreeProjection {
     source_is_empty: bool,
     lookup: Arc<HashMap<crate::widgets::TreePath, VisibleFileTreeEntry>>,
     path_to_visible_index: HashMap<Arc<str>, usize>,
+    /// Rows drawn with their hidden or ignored style, so the cursor row knows whether to lift one.
+    receded_paths: HashSet<Arc<str>>,
 }
 
 struct ProjectionBuildContext<'a> {
@@ -195,7 +210,11 @@ struct ProjectionBuildContext<'a> {
     expanded: &'a HashSet<Arc<str>>,
     explorer_filter: Option<&'a ExplorerFilter>,
     git_decorations: &'a HashMap<Arc<str>, GitFileDecorations>,
-    symlink_targets: &'a HashMap<Arc<str>, Arc<str>>,
+    symlink_targets: &'a HashMap<Arc<str>, SymlinkInfo>,
+    ignored_paths: &'a HashSet<Arc<str>>,
+    root_path: &'a str,
+    highlighted_path: Option<&'a str>,
+    receded_paths: &'a mut HashSet<Arc<str>>,
     path_styles: &'a HashMap<Arc<str>, FileTreeItemStyle>,
     lookup: &'a mut HashMap<crate::widgets::TreePath, VisibleFileTreeEntry>,
 }
@@ -241,6 +260,7 @@ impl Component for FileTreeComponent {
             requested_entry_paths: HashSet::new(),
             uncontrolled_selected_path,
             symlink_targets: HashMap::new(),
+            tree_focused: false,
             watch: WatchState::default(),
         };
 
@@ -319,8 +339,7 @@ impl Component for FileTreeComponent {
         let empty_changed_only =
             changed_only_projection_is_empty(&ctx.props, &ctx.state, &projection);
         let selected_by_path = selected_visible_index_by_path(&ctx.props, &ctx.state, &projection);
-        let uncontrolled_selected_by_path =
-            uncontrolled_selected_visible_index(&ctx.props, &ctx.state, &projection);
+        let effective_selected = effective_selected_index(&ctx.props, &ctx.state, &projection);
         let select_lookup = projection.lookup.clone();
         let activate_lookup = projection.lookup.clone();
         let toggle_lookup = projection.lookup.clone();
@@ -384,10 +403,7 @@ impl Component for FileTreeComponent {
                 }
             }));
         }
-        if let Some(selected) = selected_by_path
-            .or(uncontrolled_selected_by_path)
-            .or(ctx.props.selected)
-        {
+        if let Some(selected) = effective_selected {
             tree = tree.selected(selected);
         }
         if ctx.props.clear_selection {
@@ -416,12 +432,15 @@ impl Component for FileTreeComponent {
         if let Some(style) = ctx.props.unfocused_selection_symbol_style {
             tree = tree.unfocused_selection_symbol_style(Some(style));
         }
-        if let Some(on_focus) = ctx.props.on_focus.clone() {
-            tree = tree.on_focus(on_focus);
-        }
-        if let Some(on_blur) = ctx.props.on_blur.clone() {
-            tree = tree.on_blur(on_blur);
-        }
+        tree = tree
+            .on_focus(
+                ctx.link()
+                    .callback(|()| FileTreeMsg::TreeFocusChanged(true)),
+            )
+            .on_blur(
+                ctx.link()
+                    .callback(|()| FileTreeMsg::TreeFocusChanged(false)),
+            );
         if let Some(text) = ctx.props.empty_text.clone() {
             tree = tree
                 .empty_text(text)
@@ -771,7 +790,25 @@ fn update_file_tree(msg: FileTreeMsg, ctx: &mut Context<FileTreeComponent>) -> U
                 restart_explorer_search_after_entry_refresh(&ctx.props, &mut ctx.state, link);
             Update::with_command(command)
         }
+        FileTreeMsg::TreeFocusChanged(focused) => {
+            ctx.state.tree_focused = focused;
+            let callback = if focused {
+                ctx.props.on_focus.as_ref()
+            } else {
+                ctx.props.on_blur.as_ref()
+            };
+            if let Some(callback) = callback {
+                callback.emit(());
+            }
+            // The cursor row shows or hides with focus, and it lifts a receded row's style.
+            if recedes_rows(&ctx.props) {
+                Update::full()
+            } else {
+                Update::none()
+            }
+        }
         FileTreeMsg::TreeSelected { entry } => {
+            let restyle = recedes_rows(&ctx.props);
             if let Some(entry) = entry {
                 if tracks_uncontrolled_selection(&ctx.props) {
                     ctx.state.uncontrolled_selected_path = Some(entry.path.clone());
@@ -792,7 +829,12 @@ fn update_file_tree(msg: FileTreeMsg, ctx: &mut Context<FileTreeComponent>) -> U
                     });
                 }
             }
-            Update::none()
+            // The row the cursor left recedes again, and the one it reached lifts.
+            if restyle {
+                Update::full()
+            } else {
+                Update::none()
+            }
         }
         FileTreeMsg::TreeActivated { entry } => {
             if let Some(entry) = entry
@@ -1125,7 +1167,9 @@ fn needs_git_snapshot(props: &FileTreeProps) -> bool {
         && matches!(props.change_source, FileTreeChangeSource::Git)
         && (props.git_status
             || props.git_diff_stats
-            || props.change_view == FileTreeChangeView::ChangedOnly)
+            || props.change_view == FileTreeChangeView::ChangedOnly
+            // Ignored paths come from the same status query, markers or not.
+            || props.ignored_style != Style::default())
 }
 
 fn should_load_git_after_props_change(old_props: &FileTreeProps, props: &FileTreeProps) -> bool {
@@ -1543,7 +1587,13 @@ fn selected_visible_index_by_path(
     state: &FileTreeState,
     projection: &FileTreeProjection,
 ) -> Option<usize> {
-    let path = props
+    let path = controlled_selected_path(props, state)?;
+    projection.path_to_visible_index.get(path.as_ref()).copied()
+}
+
+/// The app-chosen selection, resolved to the path its row is keyed by.
+fn controlled_selected_path(props: &FileTreeProps, state: &FileTreeState) -> Option<Arc<str>> {
+    props
         .select_path
         .as_ref()
         .or(props.selected_path.as_ref())
@@ -1555,8 +1605,36 @@ fn selected_visible_index_by_path(
             } else {
                 resolve_path_under_root(&state.root.path, path.as_ref())
             }
-        })?;
-    projection.path_to_visible_index.get(path.as_ref()).copied()
+        })
+}
+
+/// Whether hidden or ignored rows are drawn receded at all.
+fn recedes_rows(props: &FileTreeProps) -> bool {
+    props.hidden_style != Style::default() || props.ignored_style != Style::default()
+}
+
+/// The row the `Tree` selects, in the order it resolves one: an app-chosen path, the tracked
+/// uncontrolled selection, then an app-chosen index. `clear_selection` draws no cursor at all.
+fn effective_selected_index(
+    props: &FileTreeProps,
+    state: &FileTreeState,
+    projection: &FileTreeProjection,
+) -> Option<usize> {
+    if props.clear_selection {
+        return None;
+    }
+    selected_visible_index_by_path(props, state, projection)
+        .or_else(|| uncontrolled_selected_visible_index(props, state, projection))
+        .or(props.selected)
+}
+
+/// Whether a selected row would be highlighted now. That row drops its hidden or ignored style: the
+/// highlight replaces the background but not the label's own colors, and a receded label on it all
+/// but disappears.
+fn cursor_highlight_shown(props: &FileTreeProps, state: &FileTreeState) -> bool {
+    recedes_rows(props)
+        && (state.tree_focused
+            || props.unfocused_selection_style != StyleSlot::Replace(Style::default()))
 }
 
 fn uncontrolled_selected_visible_index(
@@ -2101,19 +2179,18 @@ fn restart_explorer_search_after_entry_refresh(
     ))
 }
 
-/// Learn where the tree's symlinks point, for the `link → target` suffix.
+/// Learn where the tree's symlinks point, for the `link → target` suffix, and whether they resolve
+/// to a directory, for the icon and label style.
 ///
 /// Rebuilt from the tree rather than accumulated, so a link that was repointed between listings
 /// reports where it points now, and a directory that has since collapsed out of the tree stops
-/// being remembered. That costs one `read_link` per link on the tree, which is why this runs where
-/// the tree changes shape rather than per frame — and why a tree with no links costs a walk.
+/// being remembered. That costs a `read_link` and a `stat` per link on the tree, which is why this
+/// runs where the tree changes shape rather than per frame — and why a tree with no links costs a
+/// walk.
 ///
 /// Under a provided entry source the targets come from the listings: the widget cannot follow a
 /// link that lives on another host.
 fn sync_symlink_targets(state: &mut FileTreeState, props: &FileTreeProps) {
-    if !props.symlink_targets {
-        return;
-    }
     state.symlink_targets.clear();
     if uses_provided_paths(props) {
         collect_provided_symlink_targets(&state.root, props, &mut state.symlink_targets);
@@ -2123,13 +2200,18 @@ fn sync_symlink_targets(state: &mut FileTreeState, props: &FileTreeProps) {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn collect_local_symlink_targets(node: &FsNode, targets: &mut HashMap<Arc<str>, Arc<str>>) {
-    if matches!(node.kind, FileKind::Symlink)
-        && let Ok(target) = std::fs::read_link(node.path.as_ref())
-    {
+fn collect_local_symlink_targets(node: &FsNode, targets: &mut HashMap<Arc<str>, SymlinkInfo>) {
+    if matches!(node.kind, FileKind::Symlink) {
+        let path = Path::new(node.path.as_ref());
         targets.insert(
             node.path.clone(),
-            Arc::from(target.to_string_lossy().as_ref()),
+            SymlinkInfo {
+                target: std::fs::read_link(path)
+                    .ok()
+                    .map(|target| Arc::from(target.to_string_lossy().as_ref())),
+                // `metadata` follows the link; a dangling one is an error and draws as a file.
+                is_dir: std::fs::metadata(path).is_ok_and(|meta| meta.is_dir()),
+            },
         );
     }
     for child in &node.children {
@@ -2138,12 +2220,12 @@ fn collect_local_symlink_targets(node: &FsNode, targets: &mut HashMap<Arc<str>, 
 }
 
 #[cfg(target_arch = "wasm32")]
-fn collect_local_symlink_targets(_node: &FsNode, _targets: &mut HashMap<Arc<str>, Arc<str>>) {}
+fn collect_local_symlink_targets(_node: &FsNode, _targets: &mut HashMap<Arc<str>, SymlinkInfo>) {}
 
 fn collect_provided_symlink_targets(
     root: &FsNode,
     props: &FileTreeProps,
-    targets: &mut HashMap<Arc<str>, Arc<str>>,
+    targets: &mut HashMap<Arc<str>, SymlinkInfo>,
 ) {
     let FileTreeEntrySource::Provided(listings) = &props.entry_source else {
         return;
@@ -2154,14 +2236,17 @@ fn collect_provided_symlink_targets(
             continue;
         };
         for entry in entries.iter() {
-            let Some(target) = entry.symlink_target.as_ref() else {
-                continue;
-            };
-            if !directory.is_valid_name(entry.name.as_ref()) {
+            if !entry.is_symlink || !directory.is_valid_name(entry.name.as_ref()) {
                 continue;
             }
             let path = directory.join_name(entry.name.as_ref());
-            targets.insert(Arc::from(path.as_str()), target.clone());
+            targets.insert(
+                Arc::from(path.as_str()),
+                SymlinkInfo {
+                    target: entry.symlink_target.clone(),
+                    is_dir: entry.is_dir,
+                },
+            );
         }
     }
 }
@@ -2453,6 +2538,29 @@ fn build_projection(
     state: &FileTreeState,
     explorer_filter: Option<&ExplorerFilter>,
 ) -> FileTreeProjection {
+    let projection = build_projection_lifting(props, state, explorer_filter, None);
+    // The cursor row is only known once the rows are: a selection by index names a row, not a path.
+    // Rebuilding is rare, since it takes a cursor resting on a hidden or ignored row.
+    if cursor_highlight_shown(props, state)
+        && let Some(index) = effective_selected_index(props, state, &projection)
+        && let Some(path) = projection
+            .path_to_visible_index
+            .iter()
+            .find_map(|(path, &row)| (row == index).then(|| path.clone()))
+        && projection.receded_paths.contains(&path)
+    {
+        return build_projection_lifting(props, state, explorer_filter, Some(&path));
+    }
+    projection
+}
+
+/// Build the rows, drawing `lifted` without its hidden or ignored style.
+fn build_projection_lifting(
+    props: &FileTreeProps,
+    state: &FileTreeState,
+    explorer_filter: Option<&ExplorerFilter>,
+    lifted: Option<&str>,
+) -> FileTreeProjection {
     let snapshot = effective_change_snapshot(state);
     let root = if props.change_view == FileTreeChangeView::ChangedOnly {
         let mut root = build_changed_only_root(&state.root, snapshot, props.show_hidden);
@@ -2460,6 +2568,11 @@ fn build_projection(
             insert_unknown_provided_directories(&mut root, &state.root);
             sort_virtual_tree(&mut root);
             sync_projected_load_states(&mut root, &state.root);
+        }
+        // The explorer's matches are keyed by each directory's own path and name, which a folded
+        // row no longer has, so a query shows the tree unfolded.
+        if props.compact_directories && explorer_filter.is_none() {
+            compact_directory_chains(&mut root);
         }
         root
     } else {
@@ -2485,12 +2598,18 @@ fn build_projection(
         root.path.as_ref(),
         uses_provided_paths(props),
     );
+    let ignored_paths = ignored_paths(props, snapshot);
+    let mut receded_paths = HashSet::new();
     let mut build_ctx = ProjectionBuildContext {
         props,
         expanded: expanded.as_ref(),
         explorer_filter,
         git_decorations: &snapshot.entries,
         symlink_targets: &state.symlink_targets,
+        ignored_paths: ignored_paths.as_ref(),
+        root_path: root.path.as_ref(),
+        highlighted_path: lifted,
+        receded_paths: &mut receded_paths,
         path_styles: &path_styles,
         lookup: &mut lookup,
     };
@@ -2502,7 +2621,87 @@ fn build_projection(
         source_is_empty,
         lookup: Arc::new(lookup),
         path_to_visible_index,
+        receded_paths,
     }
+}
+
+/// Fold every run of directories holding nothing but one subdirectory into one node named
+/// `outer/inner`. The node takes the innermost directory's path, state, and children, since those
+/// are what its row opens onto. The root itself is never folded: it is the tree's heading.
+///
+/// The separator is always `/`, whatever the platform: it is a label, never parsed back as a path.
+fn compact_directory_chains(node: &mut FsNode) {
+    for child in &mut node.children {
+        while is_single_directory_chain(child) {
+            let Some(only) = child.children.pop() else {
+                break;
+            };
+            child.name = Arc::from(format!("{}/{}", child.name, only.name));
+            child.path = only.path;
+            child.loaded = only.loaded;
+            child.loading = only.loading;
+            child.error = only.error;
+            child.children = only.children;
+        }
+        compact_directory_chains(child);
+    }
+}
+
+fn is_single_directory_chain(node: &FsNode) -> bool {
+    node.is_dir()
+        && node.loaded
+        && !node.loading
+        && node.error.is_none()
+        && matches!(node.children.as_slice(), [only] if only.is_dir())
+}
+
+/// The paths ignore rules exclude, for `ignored_style`. A provided tree carries them on its
+/// listings, whatever its change source; a local one learns them from Git status.
+fn ignored_paths<'a>(
+    props: &FileTreeProps,
+    snapshot: &'a GitStatusSnapshot,
+) -> Cow<'a, HashSet<Arc<str>>> {
+    if props.ignored_style == Style::default() {
+        return Cow::Owned(HashSet::new());
+    }
+    let FileTreeEntrySource::Provided(listings) = &props.entry_source else {
+        return Cow::Borrowed(&snapshot.ignored_paths);
+    };
+    let root = ProvidedPath::root(props.root.as_ref());
+    let mut ignored = HashSet::new();
+    for listing in listings {
+        let (Some(directory), Ok(entries)) =
+            (root.resolve(listing.path.as_ref()), &listing.entries)
+        else {
+            continue;
+        };
+        for entry in entries.iter() {
+            if entry.ignored && root.is_valid_name(entry.name.as_ref()) {
+                let path = directory.join_name(entry.name.as_ref());
+                ignored.insert(Arc::from(path.as_str()));
+            }
+        }
+    }
+    Cow::Owned(ignored)
+}
+
+/// Whether `path`, or a directory above it short of `root`, is ignored. Everything inside an
+/// ignored directory is ignored too, and git names only the directory.
+fn under_ignored_path(path: &str, root: &str, ignored: &HashSet<Arc<str>>) -> bool {
+    if ignored.is_empty() {
+        return false;
+    }
+    let mut current = path;
+    while current.len() > root.len() {
+        if ignored.contains(current) {
+            return true;
+        }
+        let Some(separator) = current.rfind(['/', '\\']) else {
+            break;
+        };
+        current = &current[..separator];
+    }
+    false
 }
 
 fn sync_projected_load_states(projected: &mut FsNode, source: &FsNode) {
@@ -2634,9 +2833,30 @@ fn build_projected_tree_node(
     let git_status = git_decoration.map(|decoration| decoration.status);
 
     let path_style = ctx.path_styles.get(node.path.as_ref()).copied();
+    // A folded `src/.config` row is as hidden as a `.config` one, so every segment counts.
+    // The cursor row keeps full color; see `highlighted_path`.
+    let recedes = !is_root && ctx.highlighted_path != Some(node.path.as_ref());
+    let is_hidden = recedes && node.name.split('/').any(is_hidden_entry);
+    let is_ignored =
+        recedes && under_ignored_path(node.path.as_ref(), ctx.root_path, ctx.ignored_paths);
+    if is_hidden || is_ignored {
+        ctx.receded_paths.insert(node.path.clone());
+    }
+    let links_to_dir = ctx
+        .symlink_targets
+        .get(node.path.as_ref())
+        .is_some_and(|link| link.is_dir);
 
     if ctx.props.show_icons {
-        let mut icon_span = node.kind.icon(&node.name, is_expanded, ctx.props);
+        let mut icon_span = node
+            .kind
+            .icon(&node.name, is_expanded || links_to_dir, ctx.props);
+        if is_hidden {
+            icon_span.style = icon_span.style.patch(ctx.props.hidden_style);
+        }
+        if is_ignored {
+            icon_span.style = icon_span.style.patch(ctx.props.ignored_style);
+        }
         if let Some(style) = path_style.and_then(|style| style.icon) {
             icon_span.style = icon_span.style.patch(style);
         }
@@ -2656,11 +2876,20 @@ fn build_projected_tree_node(
         node.name.as_ref().to_string()
     };
 
-    let kind_label_style = match node.kind {
+    // A link takes the label of what it stands for; the icon and the target suffix already say it
+    // is a link.
+    let mut kind_label_style = match node.kind {
         FileKind::Directory => ctx.props.directory_label_style,
-        FileKind::File => ctx.props.file_label_style,
-        FileKind::Symlink | FileKind::Other => Style::default(),
+        FileKind::Symlink if links_to_dir => ctx.props.directory_label_style,
+        FileKind::File | FileKind::Symlink => ctx.props.file_label_style,
+        FileKind::Other => Style::default(),
     };
+    if is_hidden {
+        kind_label_style = kind_label_style.patch(ctx.props.hidden_style);
+    }
+    if is_ignored {
+        kind_label_style = kind_label_style.patch(ctx.props.ignored_style);
+    }
 
     let mut label_base_style = if ctx.props.highlight_changed_labels
         && ctx.props.git_status
@@ -2770,7 +2999,11 @@ fn symlink_target_span(
     if !ctx.props.symlink_targets || !matches!(node.kind, FileKind::Symlink) {
         return None;
     }
-    let target = ctx.symlink_targets.get(node.path.as_ref())?;
+    let target = ctx
+        .symlink_targets
+        .get(node.path.as_ref())?
+        .target
+        .as_ref()?;
     Some(
         crate::style::Span::new(format!(" {} {target}", ctx.props.symlink_target_arrow))
             .style(ctx.props.symlink_target_style),
@@ -3415,7 +3648,9 @@ mod tests {
 
     /// For the projection tests that build their own context: a tree with no symlinks in it needs
     /// no targets, and a borrow of an empty map has to outlive the context that holds it.
-    static NO_SYMLINK_TARGETS: LazyLock<HashMap<Arc<str>, Arc<str>>> = LazyLock::new(HashMap::new);
+    static NO_SYMLINK_TARGETS: LazyLock<HashMap<Arc<str>, SymlinkInfo>> =
+        LazyLock::new(HashMap::new);
+    static NO_IGNORED_PATHS: LazyLock<HashSet<Arc<str>>> = LazyLock::new(HashSet::new);
 
     fn test_root() -> FsNode {
         FsNode {
@@ -3473,6 +3708,7 @@ mod tests {
             requested_entry_paths: HashSet::new(),
             uncontrolled_selected_path: Some(Arc::from("/repo")),
             symlink_targets: HashMap::new(),
+            tree_focused: false,
             watch: WatchState::default(),
         }
     }
@@ -5704,6 +5940,10 @@ mod tests {
             explorer_filter: None,
             git_decorations: &decorations,
             symlink_targets: &NO_SYMLINK_TARGETS,
+            ignored_paths: &NO_IGNORED_PATHS,
+            root_path: "/repo",
+            highlighted_path: None,
+            receded_paths: &mut HashSet::new(),
             path_styles: &path_styles,
             lookup: &mut lookup,
         };
@@ -5744,6 +5984,10 @@ mod tests {
             explorer_filter: None,
             git_decorations: &decorations,
             symlink_targets: &NO_SYMLINK_TARGETS,
+            ignored_paths: &NO_IGNORED_PATHS,
+            root_path: "/repo",
+            highlighted_path: None,
+            receded_paths: &mut HashSet::new(),
             path_styles: &path_styles,
             lookup: &mut lookup,
         };
@@ -5772,6 +6016,10 @@ mod tests {
             explorer_filter: None,
             git_decorations: &decorations,
             symlink_targets: &NO_SYMLINK_TARGETS,
+            ignored_paths: &NO_IGNORED_PATHS,
+            root_path: "/repo",
+            highlighted_path: None,
+            receded_paths: &mut HashSet::new(),
             path_styles: &path_styles,
             lookup: &mut lookup,
         };
@@ -5829,6 +6077,10 @@ mod tests {
             explorer_filter: None,
             git_decorations: &decorations,
             symlink_targets: &NO_SYMLINK_TARGETS,
+            ignored_paths: &NO_IGNORED_PATHS,
+            root_path: "/repo",
+            highlighted_path: None,
+            receded_paths: &mut HashSet::new(),
             path_styles: &path_styles,
             lookup: &mut lookup,
         };
@@ -5877,6 +6129,10 @@ mod tests {
             explorer_filter: None,
             git_decorations: &decorations,
             symlink_targets: &NO_SYMLINK_TARGETS,
+            ignored_paths: &NO_IGNORED_PATHS,
+            root_path: "/repo",
+            highlighted_path: None,
+            receded_paths: &mut HashSet::new(),
             path_styles: &path_styles,
             lookup: &mut lookup,
         };
@@ -5906,6 +6162,10 @@ mod tests {
             explorer_filter: None,
             git_decorations: &decorations,
             symlink_targets: &NO_SYMLINK_TARGETS,
+            ignored_paths: &NO_IGNORED_PATHS,
+            root_path: "/repo",
+            highlighted_path: None,
+            receded_paths: &mut HashSet::new(),
             path_styles: &path_styles,
             lookup: &mut lookup,
         };
@@ -5974,6 +6234,10 @@ mod tests {
             explorer_filter: None,
             git_decorations: &decorations,
             symlink_targets: &NO_SYMLINK_TARGETS,
+            ignored_paths: &NO_IGNORED_PATHS,
+            root_path: "/repo",
+            highlighted_path: None,
+            receded_paths: &mut HashSet::new(),
             path_styles: &path_styles,
             lookup: &mut lookup,
         };
@@ -6022,6 +6286,10 @@ mod tests {
             explorer_filter: None,
             git_decorations: &decorations,
             symlink_targets: &NO_SYMLINK_TARGETS,
+            ignored_paths: &NO_IGNORED_PATHS,
+            root_path: "/repo",
+            highlighted_path: None,
+            receded_paths: &mut HashSet::new(),
             path_styles: &path_styles,
             lookup: &mut lookup,
         };
@@ -6076,6 +6344,10 @@ mod tests {
             explorer_filter: None,
             git_decorations: &decorations,
             symlink_targets: &NO_SYMLINK_TARGETS,
+            ignored_paths: &NO_IGNORED_PATHS,
+            root_path: "/repo",
+            highlighted_path: None,
+            receded_paths: &mut HashSet::new(),
             path_styles: &path_styles,
             lookup: &mut lookup,
         };
@@ -6161,6 +6433,10 @@ mod tests {
             explorer_filter: None,
             git_decorations: &decorations,
             symlink_targets: &NO_SYMLINK_TARGETS,
+            ignored_paths: &NO_IGNORED_PATHS,
+            root_path: "/repo",
+            highlighted_path: None,
+            receded_paths: &mut HashSet::new(),
             path_styles: &path_styles,
             lookup: &mut lookup,
         };
@@ -6195,6 +6471,10 @@ mod tests {
             explorer_filter: None,
             git_decorations: &decorations,
             symlink_targets: &NO_SYMLINK_TARGETS,
+            ignored_paths: &NO_IGNORED_PATHS,
+            root_path: "/repo",
+            highlighted_path: None,
+            receded_paths: &mut HashSet::new(),
             path_styles: &path_styles,
             lookup: &mut lookup,
         };
@@ -6246,6 +6526,7 @@ mod tests {
             ],
             kinds: HashMap::new(),
             virtual_changes: false,
+            ignored_paths: HashSet::new(),
         };
 
         let root = build_changed_only_root(&source_root, &snapshot, true);
@@ -6278,12 +6559,448 @@ mod tests {
             changed_paths: vec![Arc::from("/repo/.env"), Arc::from("/repo/src/main.rs")],
             kinds: HashMap::new(),
             virtual_changes: false,
+            ignored_paths: HashSet::new(),
         };
 
         let root = build_changed_only_root(&source_root, &snapshot, false);
 
         assert_eq!(root.children.len(), 1);
         assert_eq!(root.children[0].name.as_ref(), "src");
+    }
+
+    fn changed_only_tree(changed: &[&str]) -> FsNode {
+        let source_root = FsNode {
+            name: Arc::from("repo"),
+            path: Arc::from("/repo"),
+            kind: FileKind::Directory,
+            loaded: true,
+            loading: false,
+            error: None,
+            children: Vec::new(),
+        };
+        let snapshot = GitStatusSnapshot {
+            entries: HashMap::new(),
+            changed_paths: changed.iter().map(|path| Arc::from(*path)).collect(),
+            kinds: HashMap::new(),
+            virtual_changes: false,
+            ignored_paths: HashSet::new(),
+        };
+        build_changed_only_root(&source_root, &snapshot, true)
+    }
+
+    #[test]
+    fn compacting_folds_single_directory_chains_into_the_innermost_path() {
+        let mut root = changed_only_tree(&[
+            "/repo/src/view/sidebar/tree.rs",
+            "/repo/src/view/sidebar/row.rs",
+            "/repo/docs/index.md",
+            "/repo/docs/guide/intro.md",
+        ]);
+
+        compact_directory_chains(&mut root);
+
+        // The root is the heading and never folds, even with a single child of its own.
+        assert_eq!(root.path.as_ref(), "/repo");
+        let names: Vec<&str> = root.children.iter().map(|c| c.name.as_ref()).collect();
+        assert_eq!(names, ["docs", "src/view/sidebar"]);
+        let folded = &root.children[1];
+        assert_eq!(folded.path.as_ref(), "/repo/src/view/sidebar");
+        assert_eq!(folded.kind, FileKind::Directory);
+        assert_eq!(folded.children.len(), 2);
+        // `docs` holds a file beside its directory, so it stays; `guide` holds only a file.
+        let docs = &root.children[0];
+        let names: Vec<&str> = docs.children.iter().map(|c| c.name.as_ref()).collect();
+        assert_eq!(names, ["guide", "index.md"]);
+    }
+
+    #[test]
+    fn a_query_unfolds_compacted_directories() {
+        let props = crate::widgets::file_tree::FileTree::new("/repo")
+            .change_view(crate::widgets::file_tree::FileTreeChangeView::ChangedOnly)
+            .compact_directories(true)
+            .show_icons(false)
+            .props;
+        let mut state = test_state_with_root(FsNode {
+            name: Arc::from("repo"),
+            path: Arc::from("/repo"),
+            kind: FileKind::Directory,
+            loaded: true,
+            loading: false,
+            error: None,
+            children: Vec::new(),
+        });
+        state.git_snapshot.changed_paths = vec![Arc::from("/repo/src/widgets/tree.rs")];
+        state.expanded.insert(Arc::from("/repo"));
+        let label = |projection: &FileTreeProjection| {
+            projection.root.children[0].item.spans[0]
+                .content
+                .as_ref()
+                .to_owned()
+        };
+
+        let folded = build_projection(&props, &state, None);
+        let mut filter = ExplorerFilter::default();
+        filter.visible_paths.insert(Arc::from("/repo/src"));
+        let searching = build_projection(&props, &state, Some(&filter));
+
+        assert_eq!(label(&folded), "src/widgets");
+        assert_eq!(label(&searching), "src");
+    }
+
+    #[test]
+    fn hidden_style_patches_the_icon_and_label_of_dot_entries() {
+        let hidden = Style::new().dim();
+        let props = crate::widgets::file_tree::FileTree::new("/repo")
+            .icon_style(FileIconStyle::NerdFont)
+            .hidden_style(hidden)
+            .props;
+        let expanded = HashSet::new();
+        let decorations = HashMap::new();
+        let mut lookup = HashMap::new();
+        let path_styles = HashMap::new();
+        let mut ctx = ProjectionBuildContext {
+            props: &props,
+            expanded: &expanded,
+            explorer_filter: None,
+            git_decorations: &decorations,
+            symlink_targets: &NO_SYMLINK_TARGETS,
+            ignored_paths: &NO_IGNORED_PATHS,
+            root_path: "/repo",
+            highlighted_path: None,
+            receded_paths: &mut HashSet::new(),
+            path_styles: &path_styles,
+            lookup: &mut lookup,
+        };
+        let directory = |name: &str| FsNode {
+            name: Arc::from(name),
+            path: Arc::from(format!("/repo/{name}")),
+            kind: FileKind::Directory,
+            loaded: true,
+            loading: false,
+            error: None,
+            children: Vec::new(),
+        };
+
+        let dotted = build_projected_tree_node(&directory(".github"), false, vec![0], &mut ctx);
+        let folded = build_projected_tree_node(&directory("src/.cfg"), false, vec![1], &mut ctx);
+        let plain = build_projected_tree_node(&directory("src"), false, vec![2], &mut ctx);
+
+        for tree in [&dotted, &folded] {
+            assert_eq!(tree.item.spans[0].style, hidden, "icon");
+            assert_eq!(tree.item.spans[2].style, hidden, "label");
+        }
+        assert_eq!(plain.item.spans[2].style, Style::default());
+    }
+
+    #[test]
+    fn the_cursor_row_drops_its_receded_style_while_the_highlight_shows() {
+        let hidden = Style::new().dim();
+        let props = crate::widgets::file_tree::FileTree::new("/repo")
+            .show_icons(false)
+            .hidden_style(hidden)
+            .unfocused_selection_style(Style::default())
+            .props;
+        let file = |name: &str| FsNode {
+            name: Arc::from(name),
+            path: Arc::from(format!("/repo/{name}")),
+            kind: FileKind::File,
+            loaded: true,
+            loading: false,
+            error: None,
+            children: Vec::new(),
+        };
+        let mut root = file("repo");
+        root.path = Arc::from("/repo");
+        root.kind = FileKind::Directory;
+        root.children = vec![file(".env"), file(".envrc")];
+        let mut state = test_state_with_root(root);
+        state.expanded.insert(Arc::from("/repo"));
+        state.uncontrolled_selected_path = Some(Arc::from("/repo/.env"));
+        let label_styles = |state: &FileTreeState| {
+            let projection = build_projection(&props, state, None);
+            projection
+                .root
+                .children
+                .iter()
+                .map(|row| row.item.spans[0].style)
+                .collect::<Vec<_>>()
+        };
+
+        // Unfocused, this tree draws no cursor, so the selected row recedes like any other.
+        assert_eq!(label_styles(&state), [hidden, hidden]);
+        state.tree_focused = true;
+        assert_eq!(label_styles(&state), [Style::default(), hidden]);
+    }
+
+    fn dotfile_state() -> FileTreeState {
+        let file = |name: &str| FsNode {
+            name: Arc::from(name),
+            path: Arc::from(format!("/repo/{name}")),
+            kind: FileKind::File,
+            loaded: true,
+            loading: false,
+            error: None,
+            children: Vec::new(),
+        };
+        let mut root = file("repo");
+        root.path = Arc::from("/repo");
+        root.kind = FileKind::Directory;
+        root.children = vec![file(".env"), file(".envrc")];
+        let mut state = test_state_with_root(root);
+        state.expanded.insert(Arc::from("/repo"));
+        state.tree_focused = true;
+        state
+    }
+
+    fn row_label_styles(props: &FileTreeProps, state: &FileTreeState) -> Vec<Style> {
+        build_projection(props, state, None)
+            .root
+            .children
+            .iter()
+            .map(|row| row.item.spans[0].style)
+            .collect()
+    }
+
+    #[test]
+    fn a_selection_by_index_lifts_the_row_it_selects() {
+        let hidden = Style::new().dim();
+        // Row 0 is the root heading, so index 2 is `.envrc`.
+        let props = crate::widgets::file_tree::FileTree::new("/repo")
+            .show_icons(false)
+            .hidden_style(hidden)
+            .selected(2)
+            .props;
+
+        assert_eq!(
+            row_label_styles(&props, &dotfile_state()),
+            [hidden, Style::default()]
+        );
+    }
+
+    #[test]
+    fn a_cleared_selection_lifts_nothing() {
+        let hidden = Style::new().dim();
+        let props = crate::widgets::file_tree::FileTree::new("/repo")
+            .show_icons(false)
+            .hidden_style(hidden)
+            .selected_path(".env")
+            .clear_selection(true)
+            .props;
+
+        assert_eq!(row_label_styles(&props, &dotfile_state()), [hidden, hidden]);
+    }
+
+    #[test]
+    fn ignored_style_loads_git_without_status_markers() {
+        let markers_off = crate::widgets::file_tree::FileTree::new("/repo")
+            .git_status(false)
+            .props;
+        let dim_ignored = crate::widgets::file_tree::FileTree::new("/repo")
+            .git_status(false)
+            .ignored_style(Style::new().dim())
+            .props;
+
+        assert!(!needs_git_snapshot(&markers_off));
+        assert!(needs_git_snapshot(&dim_ignored));
+        assert!(should_load_git_after_props_change(
+            &markers_off,
+            &dim_ignored
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn link_kind_is_learned_with_icons_and_targets_off() {
+        let dir = std::env::temp_dir().join(format!(
+            "tui-lipan-file-tree-link-label-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("real")).expect("create dir");
+        std::os::unix::fs::symlink("real", dir.join("to-dir")).expect("dir link");
+        let link_path: Arc<str> = Arc::from(dir.join("to-dir").to_string_lossy().as_ref());
+        let props = crate::widgets::file_tree::FileTree::new(dir.to_string_lossy().as_ref())
+            .show_icons(false)
+            .symlink_targets(false)
+            .props;
+        let mut root = FsNode {
+            name: Arc::from("root"),
+            path: Arc::from(dir.to_string_lossy().as_ref()),
+            kind: FileKind::Directory,
+            loaded: true,
+            loading: false,
+            error: None,
+            children: Vec::new(),
+        };
+        root.children.push(FsNode {
+            name: Arc::from("to-dir"),
+            path: link_path.clone(),
+            kind: FileKind::Symlink,
+            ..root.clone()
+        });
+        let mut state = test_state_with_root(root);
+
+        sync_symlink_targets(&mut state, &props);
+
+        // The label style reads this, so it is known even with no icon or target suffix drawn.
+        assert!(state.symlink_targets[&link_path].is_dir);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_ignored_directory_covers_everything_beneath_it() {
+        let ignored: HashSet<Arc<str>> = [Arc::from("/repo/target")].into_iter().collect();
+
+        assert!(under_ignored_path("/repo/target", "/repo", &ignored));
+        assert!(under_ignored_path(
+            "/repo/target/debug/rozi",
+            "/repo",
+            &ignored
+        ));
+        assert!(!under_ignored_path(
+            "/repo/target-notes.md",
+            "/repo",
+            &ignored
+        ));
+        assert!(!under_ignored_path("/repo/src/main.rs", "/repo", &ignored));
+        // Nothing at or above the root is looked up, even when the root itself is listed.
+        let root_listed: HashSet<Arc<str>> = [Arc::from("/repo")].into_iter().collect();
+        assert!(!under_ignored_path("/repo/src", "/repo", &root_listed));
+    }
+
+    #[test]
+    fn ignored_style_patches_rows_inside_an_ignored_directory() {
+        let ignored_style = Style::new().fg(Color::DarkGray);
+        let props = crate::widgets::file_tree::FileTree::new("/repo")
+            .icon_style(FileIconStyle::NerdFont)
+            .ignored_style(ignored_style)
+            .props;
+        let ignored: HashSet<Arc<str>> = [Arc::from("/repo/target")].into_iter().collect();
+        let expanded = HashSet::new();
+        let decorations = HashMap::new();
+        let mut lookup = HashMap::new();
+        let path_styles = HashMap::new();
+        let mut ctx = ProjectionBuildContext {
+            props: &props,
+            expanded: &expanded,
+            explorer_filter: None,
+            git_decorations: &decorations,
+            symlink_targets: &NO_SYMLINK_TARGETS,
+            ignored_paths: &ignored,
+            root_path: "/repo",
+            highlighted_path: None,
+            receded_paths: &mut HashSet::new(),
+            path_styles: &path_styles,
+            lookup: &mut lookup,
+        };
+        let file = |path: &str| FsNode {
+            name: Arc::from(path.rsplit('/').next().unwrap_or(path)),
+            path: Arc::from(path),
+            kind: FileKind::File,
+            loaded: true,
+            loading: false,
+            error: None,
+            children: Vec::new(),
+        };
+
+        let built = build_projected_tree_node(&file("/repo/target/rozi"), false, vec![0], &mut ctx);
+        let source =
+            build_projected_tree_node(&file("/repo/src/main.rs"), false, vec![1], &mut ctx);
+
+        assert_eq!(built.item.spans[0].style, ignored_style, "icon");
+        assert_eq!(built.item.spans[2].style, ignored_style, "label");
+        assert_eq!(source.item.spans[2].style, Style::default());
+    }
+
+    #[test]
+    fn a_link_to_a_directory_draws_as_a_linked_directory() {
+        let directory_style = Style::new().fg(Color::Blue);
+        let file_style = Style::new().fg(Color::Green);
+        let props = crate::widgets::file_tree::FileTree::new("/repo")
+            .icon_style(FileIconStyle::NerdFont)
+            .directory_label_style(directory_style)
+            .file_label_style(file_style)
+            .props;
+        let mut links = HashMap::new();
+        links.insert(
+            Arc::from("/repo/docs"),
+            SymlinkInfo {
+                target: None,
+                is_dir: true,
+            },
+        );
+        links.insert(Arc::from("/repo/CLAUDE.md"), SymlinkInfo::default());
+        let expanded = HashSet::new();
+        let decorations = HashMap::new();
+        let mut lookup = HashMap::new();
+        let path_styles = HashMap::new();
+        let mut ctx = ProjectionBuildContext {
+            props: &props,
+            expanded: &expanded,
+            explorer_filter: None,
+            git_decorations: &decorations,
+            symlink_targets: &links,
+            ignored_paths: &NO_IGNORED_PATHS,
+            root_path: "/repo",
+            highlighted_path: None,
+            receded_paths: &mut HashSet::new(),
+            path_styles: &path_styles,
+            lookup: &mut lookup,
+        };
+        let link = |name: &str| FsNode {
+            name: Arc::from(name),
+            path: Arc::from(format!("/repo/{name}")),
+            kind: FileKind::Symlink,
+            loaded: true,
+            loading: false,
+            error: None,
+            children: Vec::new(),
+        };
+
+        let to_dir = build_projected_tree_node(&link("docs"), false, vec![0], &mut ctx);
+        let to_file = build_projected_tree_node(&link("CLAUDE.md"), false, vec![1], &mut ctx);
+
+        assert_eq!(to_dir.item.spans[0].content.as_ref(), "\u{f482}");
+        assert_eq!(to_dir.item.spans[2].style, directory_style);
+        assert!(!to_dir.is_collapsible(), "a link stays a leaf");
+        assert_eq!(to_file.item.spans[0].content.as_ref(), "\u{f481}");
+        assert_eq!(to_file.item.spans[2].style, file_style);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_links_learn_whether_they_resolve_to_a_directory() {
+        let dir = std::env::temp_dir().join(format!(
+            "tui-lipan-file-tree-link-kind-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("real")).expect("create dir");
+        std::fs::write(dir.join("file.txt"), "x").expect("write file");
+        std::os::unix::fs::symlink("real", dir.join("to-dir")).expect("dir link");
+        std::os::unix::fs::symlink("file.txt", dir.join("to-file")).expect("file link");
+        std::os::unix::fs::symlink("missing", dir.join("dangling")).expect("dangling link");
+        let node = |name: &str| FsNode {
+            name: Arc::from(name),
+            path: Arc::from(dir.join(name).to_string_lossy().as_ref()),
+            kind: FileKind::Symlink,
+            loaded: true,
+            loading: false,
+            error: None,
+            children: Vec::new(),
+        };
+        let mut root = node("root");
+        root.kind = FileKind::Directory;
+        root.children = vec![node("to-dir"), node("to-file"), node("dangling")];
+
+        let mut links = HashMap::new();
+        collect_local_symlink_targets(&root, &mut links);
+        let is_dir = |name: &str| links[dir.join(name).to_string_lossy().as_ref()].is_dir;
+
+        assert!(is_dir("to-dir"));
+        assert!(!is_dir("to-file"));
+        assert!(!is_dir("dangling"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -6314,6 +7031,7 @@ mod tests {
                 changed_paths: vec![Arc::from("/repo/src/main.rs")],
                 kinds: HashMap::new(),
                 virtual_changes: false,
+                ignored_paths: HashSet::new(),
             },
             git_snapshot_pending: false,
             git_load_generation: 0,
@@ -6334,6 +7052,7 @@ mod tests {
             requested_entry_paths: HashSet::new(),
             uncontrolled_selected_path: Some(Arc::from("/repo")),
             symlink_targets: HashMap::new(),
+            tree_focused: false,
             watch: WatchState::default(),
         };
 
