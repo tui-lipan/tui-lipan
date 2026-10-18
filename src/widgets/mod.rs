@@ -201,8 +201,8 @@ pub use file_tree::{
     FileIconStyle, FileKind, FileTree, FileTreeChange, FileTreeChangeSource, FileTreeChangeStatus,
     FileTreeChangeView, FileTreeDirectoryListing, FileTreeEntry, FileTreeEntryRequest,
     FileTreeEntrySource, FileTreeEvent, FileTreeExplorerFocusOrigin, FileTreeGitStatusCache,
-    FileTreeGitView, FileTreeItemStyle, FileTreeSuffixPriority, FileTreeToggleEvent,
-    GitChangeState, GitFileStatus, GitIconStyle,
+    FileTreeGitView, FileTreeItemStyle, FileTreeRefreshPolicy, FileTreeSuffixPriority,
+    FileTreeToggleEvent, GitChangeState, GitFileStatus, GitIconStyle,
 };
 pub use flow::Flow;
 pub use flowchart::{

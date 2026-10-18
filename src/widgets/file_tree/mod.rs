@@ -7,6 +7,7 @@ mod fs;
 mod git;
 mod mod_private;
 mod provided_path;
+mod watch;
 
 pub use crate::style::FileIconPalette;
 pub use events::{
@@ -119,6 +120,28 @@ impl FileTreeEntrySource {
     pub fn provided(listings: impl IntoIterator<Item = FileTreeDirectoryListing>) -> Self {
         Self::Provided(listings.into_iter().collect())
     }
+}
+
+/// How a [`FileTree`] with [`FileTreeEntrySource::Local`] entries notices filesystem changes.
+///
+/// Every policy still honours [`FileTree::entry_refresh_token`] and
+/// [`FileTree::git_refresh_token`]. Provided entry sources own their data and ignore the policy.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FileTreeRefreshPolicy {
+    /// Refresh only when the application changes a refresh token.
+    #[default]
+    Manual,
+    /// Reread the root and expanded directories, and Git status, at this interval.
+    Polling(std::time::Duration),
+    /// Watch the root and every expanded directory, one level each, and reread a directory shortly
+    /// after something in it changes. File changes and Git metadata changes also refresh Git
+    /// status.
+    ///
+    /// The whole visible tree is still reread every 30 seconds to repair missed events. While any
+    /// directory cannot be watched, such as one on a filesystem that reports no events, the tree
+    /// is reread every 5 seconds instead. Watching needs the `file-tree-watch` feature; without it
+    /// this policy polls every 5 seconds.
+    Watch,
 }
 
 /// One application-provided child entry in a [`FileTreeDirectoryListing`].
@@ -362,6 +385,7 @@ impl FileTree {
                 root: root.into(),
                 entry_source: FileTreeEntrySource::default(),
                 entry_refresh_token: 0,
+                refresh_policy: FileTreeRefreshPolicy::default(),
                 show_hidden: false,
                 max_entries_per_dir: 2_000,
                 show_icons: true,
@@ -502,6 +526,13 @@ impl FileTree {
     /// remain controlled separately by [`Self::git_refresh_token`].
     pub fn entry_refresh_token(mut self, token: u64) -> Self {
         self.props.entry_refresh_token = token;
+        self
+    }
+
+    /// Choose how local entries notice filesystem changes. The default is
+    /// [`FileTreeRefreshPolicy::Manual`].
+    pub fn refresh_policy(mut self, policy: FileTreeRefreshPolicy) -> Self {
+        self.props.refresh_policy = policy;
         self
     }
 

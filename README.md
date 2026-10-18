@@ -194,6 +194,7 @@ writing any `update()` logic.
 | `image` | `Image` widget: Kitty/iTerm2/Sixel/halfblock rendering with PNG/JPEG/GIF/WebP codecs, including animated GIF/WebP (includes `clipboard-images`) |
 | `image-full-formats` | Restores the broad `image` crate default codec set for image-backed features |
 | `hints-regex` | `regex-lite` scanner for string-configured custom text hints; core hint scanning stays dependency-free |
+| `file-tree-watch` | Filesystem watching for `FileTree` with `FileTreeRefreshPolicy::Watch` |
 | `markdown` | Markdown formatter for `DocumentView` |
 | `qr-code` | `QrCode` widget: scannable QR symbols rendered as terminal cells |
 | `profiling-tracing` | `tracing` spans/events for render loop and `DocumentView` hot paths |

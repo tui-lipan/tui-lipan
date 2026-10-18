@@ -433,13 +433,65 @@ pub(crate) fn discover_git_root(path: &Path) -> Option<PathBuf> {
     None
 }
 
+/// A `git` invocation for reading status in `repo_root`.
+///
+/// Optional locks are off so that reading never rewrites the index: a refresh would otherwise
+/// write a file a watching tree observes, and refresh again in a loop.
+fn git_command(repo_root: &Path) -> ProcessCommand {
+    let mut command = ProcessCommand::new("git");
+    command
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .arg("-C")
+        .arg(repo_root);
+    command
+}
+
+/// The metadata directories whose changes can alter `repo_root`'s status, asked of Git itself.
+///
+/// A linked worktree's `.git` is a file pointing elsewhere, and its branch refs and `packed-refs`
+/// live in the common directory shared with the main checkout, so neither can be derived from
+/// `repo_root/.git`. The result holds the worktree's Git directory (`HEAD`, `index`), the common
+/// directory (`packed-refs`), and the directory holding the checked-out branch's ref, when any.
+pub(crate) fn git_watch_directories(repo_root: &Path) -> Vec<PathBuf> {
+    let Some(output) = git_command(repo_root)
+        .args([
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-dir",
+            "--git-common-dir",
+        ])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+    else {
+        return Vec::new();
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut dirs: Vec<PathBuf> = stdout.lines().map(PathBuf::from).collect();
+
+    if let Some(common_dir) = dirs.get(1).cloned()
+        && let Some(branch_ref) = git_command(repo_root)
+            .args(["symbolic-ref", "-q", "HEAD"])
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+        && let Some(ref_dir) = common_dir
+            .join(String::from_utf8_lossy(&branch_ref.stdout).trim())
+            .parent()
+    {
+        dirs.push(ref_dir.to_path_buf());
+    }
+
+    dirs.sort();
+    dirs.dedup();
+    dirs
+}
+
 pub(crate) fn load_git_snapshot(
     repo_root: &Path,
     include_diff_stats: bool,
 ) -> Option<GitStatusSnapshot> {
-    let output = ProcessCommand::new("git")
-        .arg("-C")
-        .arg(repo_root)
+    let output = git_command(repo_root)
         .arg("status")
         .arg("--porcelain=v1")
         .arg("--untracked-files=normal")
@@ -543,9 +595,7 @@ fn normalize_numstat_path(path: &str) -> String {
 }
 
 fn load_git_diff_stats(repo_root: &Path, entries: &mut HashMap<Arc<str>, GitFileDecorations>) {
-    let Some(output) = ProcessCommand::new("git")
-        .arg("-C")
-        .arg(repo_root)
+    let Some(output) = git_command(repo_root)
         .arg("diff")
         .arg("--numstat")
         .arg("HEAD")

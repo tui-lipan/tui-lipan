@@ -1381,6 +1381,16 @@ Migration: replace `Short` and `Long` with `Branch`, and `ShortRounded` and `Lon
 | `FileTreeEntrySource::Local` | Enumerate the local filesystem **(default)** |
 | `FileTreeEntrySource::Provided(Vec<FileTreeDirectoryListing>)` | Use completed directory listings supplied by the application; absent listings are pending and requested asynchronously |
 
+### `FileTreeRefreshPolicy`
+
+| Variant | Description |
+|---------|-------------|
+| `FileTreeRefreshPolicy::Manual` | Refresh only when `entry_refresh_token` or `git_refresh_token` changes **(default)** |
+| `FileTreeRefreshPolicy::Polling(Duration)` | Reread the root, expanded directories, and Git status at this interval (at least 100 ms) |
+| `FileTreeRefreshPolicy::Watch` | Watch the root and expanded directories and reread a directory shortly after it changes; a 30 s full reread repairs missed events, 5 s while a directory cannot be watched. Needs the `file-tree-watch` feature, otherwise polls every 5 s |
+
+The policy applies to local entries only; provided entry sources ignore it.
+
 `FileTreeDirectoryListing::new(path, entries)` supplies one successful directory result.
 `FileTreeDirectoryListing::error(path, error)` supplies a failed result. Each `FileTreeEntry`
 contains its relative name, directory and symlink flags, an optional symlink target, optional
