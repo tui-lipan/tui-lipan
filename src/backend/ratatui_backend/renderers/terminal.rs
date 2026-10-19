@@ -198,6 +198,36 @@ fn draw_composed_terminal_image(
     let Some(pixels) = placement.image.pixels() else {
         return;
     };
+
+    // Crops of one source, such as a per-cell sender's cells, share one upload of the source.
+    if let Some(source) = placement.source_crop
+        && crate::backend::ratatui_backend::renderers::image::draw_encoded_region(
+            f,
+            area,
+            (left, top),
+            shared_source_stream_hash(
+                placement.image.stream_namespace(),
+                placement.image_id,
+                placement.z,
+            ),
+            placement_source_hash(
+                placement.image.stream_namespace(),
+                placement.image_id,
+                placement.image.source_hash(),
+                full_crop,
+            ),
+            placement.z,
+            render.clone(),
+            crate::backend::ratatui_backend::renderers::image::PlacedRegion {
+                crop: source,
+                cells: (placement.cols, placement.rows),
+            },
+            pixels,
+        )
+        .is_some()
+    {
+        return;
+    }
     let source = placement.source_crop.unwrap_or(TerminalImageCrop {
         x: 0,
         y: 0,
@@ -253,6 +283,22 @@ fn placement_stream_hash(stream_namespace: u64, image_id: u32, crop: TerminalIma
     stream_namespace.hash(&mut hasher);
     image_id.hash(&mut hasher);
     (crop.x, crop.y, crop.width, crop.height).hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Stable identity of a whole source shared by its cropped placements in one z plane.
+///
+/// It is distinct from the source's own whole-image stream, which can be on screen at the same
+/// time at a different size: one host image id cannot hold both encodes.
+#[cfg(feature = "terminal-images")]
+fn shared_source_stream_hash(stream_namespace: u64, image_id: u32, z: i32) -> u64 {
+    use std::hash::{Hash as _, Hasher as _};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    b"shared-crop-source".hash(&mut hasher);
+    stream_namespace.hash(&mut hasher);
+    image_id.hash(&mut hasher);
+    z.hash(&mut hasher);
     hasher.finish()
 }
 

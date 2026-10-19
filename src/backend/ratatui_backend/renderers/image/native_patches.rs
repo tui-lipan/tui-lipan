@@ -256,14 +256,17 @@ pub(crate) fn render_native_terminal_images(
     if defer {
         native_scene::defer_owner();
     }
-    let Some(plan) = plan_for_paint(content, clip, partial) else {
+    let Some(regions) = plan_for_paint(content, clip, partial)
+        .and_then(|plan| plan.regions(placements).map(|regions| (plan, regions)))
+    else {
         // Composition at the damage clip would also replace a complete image with a strip.
         // Keep the previous native scene until a full paint can choose a new presentation path.
+        if defer {
+            native_scene::request_complete_paint();
+        }
         return defer;
     };
-    let Some(regions) = plan.regions(placements) else {
-        return defer;
-    };
+    let (plan, regions) = regions;
     native_scene::stage_plan(plan);
     for (placement, regions) in placements.iter().zip(regions) {
         native_scene::stage(placement, &regions);

@@ -48,6 +48,7 @@ thread_local! {
     static COMMITTED_OWNERS: RefCell<HashSet<NodeId>> = RefCell::new(HashSet::new());
     static ALIVE_OWNERS: RefCell<Option<HashSet<NodeId>>> = const { RefCell::new(None) };
     static OWNER: Cell<NodeId> = const { Cell::new(NodeId::INVALID) };
+    static DEFERRED_PRESENTATION: Cell<bool> = const { Cell::new(false) };
 }
 
 pub(crate) struct NativePlanScope {
@@ -85,6 +86,17 @@ pub(super) fn defer_owner() {
                 .retain(|placement| placement.key.owner != owner);
         }
     });
+}
+
+/// A partial paint kept a terminal's committed scene instead of presenting its current images.
+/// The runner answers with a complete paint, so a pending replacement cannot wait for unrelated
+/// input or a layout change.
+pub(super) fn request_complete_paint() {
+    DEFERRED_PRESENTATION.with(|slot| slot.set(true));
+}
+
+pub(crate) fn take_deferred_presentation() -> bool {
+    DEFERRED_PRESENTATION.with(|slot| slot.replace(false))
 }
 
 pub(super) fn cached_plan() -> Option<native_patches::TerminalGraphicsPlan> {
@@ -1098,6 +1110,10 @@ mod tests {
                     !output.take().contains("\x1b_G"),
                     "{case}: a partial plan must not upload or remove the committed image"
                 );
+                assert!(
+                    take_deferred_presentation(),
+                    "{case}: a deferred replacement must ask the runner for a complete paint"
+                );
             }
             // The new revision stays pending and is presented in full by the next ordinary paint.
             begin_kitty_frame();
@@ -1112,6 +1128,10 @@ mod tests {
             assert!(
                 complete.contains("w=20,h=60"),
                 "{case}: full image must be restored"
+            );
+            assert!(
+                !take_deferred_presentation(),
+                "{case}: a complete paint presents the image without asking again"
             );
         }
     }
@@ -1170,6 +1190,10 @@ mod tests {
         assert!(
             !native(NodeId::new(1, 1), ratatui::layout::Rect::new(0, 1, 8, 1)),
             "partial paint claimed a composed terminal, skipping its composed fallback"
+        );
+        assert!(
+            !take_deferred_presentation(),
+            "a composed terminal draws now and needs no follow-up paint"
         );
     }
 

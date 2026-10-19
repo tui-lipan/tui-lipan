@@ -514,8 +514,10 @@ impl<W: io::Write> HostBackend<W> {
         }
         #[cfg(feature = "terminal-images")]
         {
-            self.composed_scene
+            let unplaced = self
+                .composed_scene
                 .flushed(result.is_ok(), self.output_epoch());
+            self.kitty_uploads.forget(unplaced);
             if result.is_ok() && self.retired_native_epoch.take() == Some(self.output_epoch()) {
                 self.retired_native_ids.clear();
             }

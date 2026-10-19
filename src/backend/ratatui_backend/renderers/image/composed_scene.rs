@@ -1,7 +1,7 @@
 //! Stable ordinary placements for composed image rows and tiles.
 use super::*;
 
-type SpanKey = (u32, (i32, i32), (u16, u16, u16));
+type SpanKey = (u32, (i32, i32), (u16, u16, u16), (u32, u32, u32, u32));
 struct SpanId {
     id: u32,
     upload: std::sync::Weak<KittyUpload>,
@@ -23,11 +23,18 @@ pub(super) fn begin_frame() {
     });
 }
 
-pub(super) fn span_id(image: &CompressedKitty, origin: (i32, i32), span: (u16, u16, u16)) -> u32 {
+/// Two crops of one image can share an anchor, so the crop is part of the identity too.
+pub(super) fn span_id(
+    image: &CompressedKitty,
+    origin: (i32, i32),
+    span: (u16, u16, u16),
+    crop: crate::widgets::TerminalImageCrop,
+) -> u32 {
     SPAN_IDS.with(|slot| {
         let mut ids = slot.borrow_mut();
+        let crop = (crop.x, crop.y, crop.width, crop.height);
         let entry = ids
-            .entry((image.id, origin, span))
+            .entry((image.id, origin, span, crop))
             .or_insert_with(|| SpanId {
                 id: NEXT_KITTY_PLACEMENT.with(|next| {
                     let id = next.get().wrapping_add(1).max(1);
@@ -91,15 +98,31 @@ impl HostComposedScene {
         self.pending = None;
     }
 
-    pub(crate) fn flushed(&mut self, success: bool, epoch: usize) {
+    /// Returns the images that no longer have a confirmed placement. A host may evict such an
+    /// image to stay within its storage limit, so the next placement must upload it again.
+    pub(crate) fn flushed(&mut self, success: bool, epoch: usize) -> Vec<u32> {
         let Some((next, written_epoch, ready)) = self.pending.take() else {
-            return;
+            return Vec::new();
         };
-        if success && ready && epoch == written_epoch {
-            self.confirmed = next;
-            self.attempted.clear();
+        if !(success && ready && epoch == written_epoch) {
+            return Vec::new();
         }
+        let placed = placed_images(&next);
+        let unplaced = placed_images(&self.confirmed)
+            .difference(&placed)
+            .copied()
+            .collect();
+        self.confirmed = next;
+        self.attempted.clear();
+        unplaced
     }
+}
+
+fn placed_images(placements: &Placements) -> HashSet<u32> {
+    placements
+        .values()
+        .filter_map(|placement| placement.upload.cache_key.get().map(|(id, _)| *id))
+        .collect()
 }
 
 fn surviving_placements(draw: &PreparedKittyDraw<'_>, active: &Placements) -> Placements {

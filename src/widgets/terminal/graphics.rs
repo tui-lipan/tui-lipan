@@ -1712,6 +1712,80 @@ impl Placement {
     }
 }
 
+/// Live placements in insertion order, which is also their stacking order within a z plane.
+///
+/// Per-cell senders place thousands of images. The key index lets a new placement find the one it
+/// replaces without scanning them all. Reads go through the slice; changes that add or remove a
+/// placement go through these methods, so the index cannot drift from the list.
+#[derive(Default)]
+struct PlacementList {
+    items: Vec<Placement>,
+    keys: std::collections::HashSet<(u32, u32)>,
+}
+
+impl PlacementList {
+    fn key(placement: &Placement) -> (u32, u32) {
+        (placement.image_id, placement.placement_id)
+    }
+
+    fn push(&mut self, placement: Placement) {
+        self.keys.insert(Self::key(&placement));
+        self.items.push(placement);
+    }
+
+    /// Removes and returns the placement with these ids, if there is one.
+    fn take(&mut self, image_id: u32, placement_id: u32) -> Option<Placement> {
+        if !self.keys.remove(&(image_id, placement_id)) {
+            return None;
+        }
+        let index = self.items.iter().position(|placement| {
+            placement.image_id == image_id && placement.placement_id == placement_id
+        })?;
+        Some(self.items.remove(index))
+    }
+
+    fn remove(&mut self, index: usize) -> Placement {
+        let placement = self.items.remove(index);
+        self.keys.remove(&Self::key(&placement));
+        placement
+    }
+
+    fn clear(&mut self) {
+        self.items.clear();
+        self.keys.clear();
+    }
+
+    fn retain(&mut self, mut keep: impl FnMut(&Placement) -> bool) {
+        self.retain_mut(|placement| keep(placement));
+    }
+
+    fn retain_mut(&mut self, mut keep: impl FnMut(&mut Placement) -> bool) {
+        let keys = &mut self.keys;
+        self.items.retain_mut(|placement| {
+            let kept = keep(placement);
+            if !kept {
+                keys.remove(&Self::key(placement));
+            }
+            kept
+        });
+    }
+}
+
+impl std::ops::Deref for PlacementList {
+    type Target = [Placement];
+
+    fn deref(&self) -> &[Placement] {
+        &self.items
+    }
+}
+
+impl std::ops::DerefMut for PlacementList {
+    // Callers adjust positions in place; ids never change after a placement is made.
+    fn deref_mut(&mut self) -> &mut [Placement] {
+        &mut self.items
+    }
+}
+
 /// A transmission still accumulating `m=1` chunks.
 struct PendingTransmit {
     id: u32,
@@ -1777,7 +1851,7 @@ pub(super) struct TerminalGraphics {
     image_dimensions: HashMap<u32, (u32, u32)>,
     /// `I=` image numbers mapped to the ids they were transmitted under.
     numbers: HashMap<u32, u32>,
-    placements: Vec<Placement>,
+    placements: PlacementList,
     pending: Option<PendingTransmit>,
     /// A chunked run failed part-way. Its remaining chunks carry only `m=`, so they cannot be told
     /// from a new transmission by their keys: everything up to and including the `m=0` that ends
@@ -1812,7 +1886,7 @@ impl Default for TerminalGraphics {
             images: HashMap::new(),
             image_dimensions: HashMap::new(),
             numbers: HashMap::new(),
-            placements: Vec::new(),
+            placements: PlacementList::default(),
             pending: None,
             discarding_run: false,
             next_auto_id: FIRST_AUTO_ID,
@@ -1980,7 +2054,7 @@ impl TerminalGraphics {
         self.placements
             .retain(|placement| placement.line + usize::from(placement.rows) > evicted);
         self.clear_composed_tiles();
-        for placement in &mut self.placements {
+        for placement in self.placements.iter_mut() {
             placement.line = placement.line.saturating_sub(evicted);
         }
         true
@@ -2593,13 +2667,8 @@ impl TerminalGraphics {
             .clamp(1, u32::from(u16::MAX)) as u16;
 
         if self.storage_enabled {
-            let previous = self
-                .placements
-                .iter()
-                .find(|placement| {
-                    placement.image_id == id && placement.placement_id == command.placement
-                })
-                .cloned();
+            // A second placement with the same ids replaces the first, as the protocol specifies.
+            let previous = self.placements.take(id, command.placement);
             let serial = previous
                 .as_ref()
                 .map(|placement| placement.serial)
@@ -2607,10 +2676,6 @@ impl TerminalGraphics {
                     self.next_placement = self.next_placement.saturating_add(1);
                     self.next_placement
                 });
-            // A second placement with the same ids replaces the first, as the protocol specifies.
-            self.placements.retain(|placement| {
-                placement.image_id != id || placement.placement_id != command.placement
-            });
             let placement = Placement {
                 lifetime: previous
                     .as_ref()
@@ -4008,6 +4073,68 @@ mod tests {
         assert!(graphics.placements.iter().any(|p| p.placement_id == 1));
         assert!(!graphics.placements.iter().any(|p| p.placement_id == 11));
         assert!(!graphics.placements.iter().any(|p| p.placement_id == 21));
+    }
+
+    #[test]
+    fn placement_index_follows_replacements_and_deletes() {
+        let mut graphics = TerminalGraphics::default();
+        let ctx = context();
+        graphics.apply(
+            GraphicsCommand {
+                action: GraphicsAction::Transmit,
+                id: 7,
+                quiet: 2,
+                format: 24,
+                width: 1,
+                height: 1,
+                payload: vec![1, 2, 3],
+                ..GraphicsCommand::default()
+            },
+            ctx,
+        );
+        let place = |graphics: &mut TerminalGraphics, placement, col| {
+            graphics.apply(
+                GraphicsCommand {
+                    action: GraphicsAction::Display,
+                    id: 7,
+                    placement,
+                    quiet: 2,
+                    no_cursor_move: true,
+                    ..GraphicsCommand::default()
+                },
+                GraphicsContext {
+                    cursor_col: col,
+                    ..ctx
+                },
+            );
+        };
+        place(&mut graphics, 1, 0);
+        place(&mut graphics, 2, 1);
+        let serial = graphics.placements[0].serial;
+        // Same ids: replaced in place of a second entry, keeping its serial, and moved last.
+        place(&mut graphics, 1, 5);
+        assert_eq!(graphics.placements.len(), 2);
+        assert_eq!(graphics.placements[1].placement_id, 1);
+        assert_eq!(graphics.placements[1].col, 5);
+        assert_eq!(graphics.placements[1].serial, serial);
+        // A delete removes the key too, so placing the same ids again makes a new placement.
+        graphics.apply(
+            GraphicsCommand {
+                action: GraphicsAction::Delete,
+                delete: b'i',
+                id: 7,
+                placement: 1,
+                quiet: 2,
+                ..GraphicsCommand::default()
+            },
+            ctx,
+        );
+        assert_eq!(graphics.placements.len(), 1);
+        assert_eq!(graphics.placements.keys.len(), 1);
+        place(&mut graphics, 1, 3);
+        assert_eq!(graphics.placements.len(), 2);
+        assert_ne!(graphics.placements[1].serial, serial);
+        assert_eq!(graphics.placements.keys.len(), graphics.placements.len());
     }
 
     #[test]
