@@ -35,7 +35,9 @@ The fallback emits individual image cells in overlapping branches; batched place
 ordinary placements cannot cover a later widget
 whose anchor leaves the image anchor intact. Opaque text backgrounds exclude the pixels they cover. Composed image trees use full tree paints when another pane reports damage.
 Native image trees can repaint text rows independently. A source upload restores every visible
-region of that image, including regions outside the text damage. Unchanged composed placements
+region of that image, including regions outside the text damage. Overlay changes recalculate image
+occlusion across its complete visible area. If a partial paint cannot establish that area, the
+existing image remains until a full paint can present the replacement. Unchanged composed placements
 keep their host IDs across paints.
 Each source retains its upload state until the source and pending host output are released,
 independently of render-cache eviction. Large sources that cannot use file or shared-memory transport stay on the

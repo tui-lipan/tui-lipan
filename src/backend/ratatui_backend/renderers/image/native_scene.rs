@@ -58,6 +58,25 @@ impl Drop for NativePlanScope {
     }
 }
 
+pub(super) fn partial_frame() -> bool {
+    DESIRED.with(|slot| slot.borrow().as_ref().is_some_and(|scene| !scene.full))
+}
+
+/// A partial paint may only replace an owner's scene when it can describe all visible regions.
+/// Otherwise leave the committed scene and its source revision intact until a complete paint.
+pub(super) fn defer_owner() {
+    DESIRED.with(|slot| {
+        if let Some(scene) = slot.borrow_mut().as_mut() {
+            let owner = OWNER.get();
+            scene.owners.remove(&owner);
+            scene.plans.remove(&owner);
+            scene
+                .placements
+                .retain(|placement| placement.key.owner != owner);
+        }
+    });
+}
+
 pub(super) fn cached_plan() -> Option<native_patches::TerminalGraphicsPlan> {
     CACHED_PLANS.with(|slot| {
         slot.borrow()
@@ -117,6 +136,7 @@ impl Drop for OwnerScope {
 pub(super) fn stage_plan(plan: native_patches::TerminalGraphicsPlan) {
     DESIRED.with(|slot| {
         if let Some(scene) = slot.borrow_mut().as_mut() {
+            scene.owners.insert(OWNER.get());
             scene.plans.insert(OWNER.get(), plan);
         }
     });
@@ -892,6 +912,192 @@ mod tests {
         );
         draw(&mut host).unwrap();
         assert!(!output.take().contains("\x1b_G"));
+    }
+
+    #[test]
+    fn partial_repaint_upload_with_changed_holes_restores_the_complete_image() {
+        let _host = image_support::test_kitty_host((10, 20), true);
+        let mut screen = crate::widgets::TerminalScreen::new(4, 8, 0);
+        screen.set_cell_size(crate::widgets::TerminalCellSize::new(10, 20));
+        let output = Output::default();
+        let mut host = HostBackend::new(output.clone());
+        let mut frame = ratatui::Terminal::new(ratatui::backend::TestBackend::new(8, 4)).unwrap();
+        let content = Rect {
+            x: 0,
+            y: 0,
+            w: 8,
+            h: 4,
+        };
+        let paint = |screen: &mut crate::widgets::TerminalScreen,
+                     frame: &mut ratatui::Terminal<ratatui::backend::TestBackend>,
+                     clip| {
+            let _owner = owner_scope(NodeId::new(1, 1));
+            frame
+                .draw(|f| {
+                    assert!(render_native_terminal_images(
+                        f,
+                        &screen.render_snapshot().images,
+                        content,
+                        clip
+                    ))
+                })
+                .unwrap();
+        };
+        let upload = |screen: &mut crate::widgets::TerminalScreen, color: u8| {
+            let payload = BASE64.encode([color, 0, 0].repeat(20 * 60));
+            screen.process_bytes(
+                format!("\x1b[H\x1b_Ga=T,i=7,p=9,f=24,s=20,v=60,q=2,C=1;{payload}\x1b\\")
+                    .as_bytes(),
+            );
+        };
+        upload(&mut screen, 1);
+        begin_kitty_frame();
+        paint(
+            &mut screen,
+            &mut frame,
+            ratatui::layout::Rect::new(0, 0, 8, 4),
+        );
+        draw(&mut host).unwrap();
+        let initial = output.take();
+        assert!(initial.contains("w=20,h=60"));
+
+        // A new producer frame is pending when a text-only update repaints one physical row.
+        upload(&mut screen, 2);
+        // An unrelated overlay outside the image changes the occlusion set.
+        crate::backend::ratatui_backend::renderers::image::set_image_occlusions(vec![
+            ratatui::layout::Rect::new(6, 3, 2, 1),
+        ]);
+        begin_partial_native_scene();
+        let _plans = host.native_plan_scope();
+        paint(
+            &mut screen,
+            &mut frame,
+            ratatui::layout::Rect::new(0, 1, 8, 1),
+        );
+        draw(&mut host).unwrap();
+        let update = output.take();
+        assert_eq!(update.matches("a=t,").count(), 1);
+        assert_eq!(update.matches("a=p,").count(), 1);
+        assert!(
+            update.contains("w=20,h=60"),
+            "re-upload deletes the old placement, so the replacement must cover all three rows: {update:?}"
+        );
+
+        // An overlay that intersects the image must update occlusion across its full height.
+        upload(&mut screen, 3);
+        set_image_occlusions(vec![ratatui::layout::Rect::new(0, 1, 1, 1)]);
+        begin_partial_native_scene();
+        paint(
+            &mut screen,
+            &mut frame,
+            ratatui::layout::Rect::new(0, 1, 8, 1),
+        );
+        draw(&mut host).unwrap();
+        let occluded = output.take();
+        assert_eq!(occluded.matches("a=t,").count(), 1);
+        assert_eq!(occluded.matches("a=p,").count(), 3);
+        assert!(occluded.contains("x=0,y=0,w=20,h=20"));
+        assert!(occluded.contains("x=10,y=20,w=10,h=20"));
+        assert!(occluded.contains("x=0,y=40,w=20,h=20"));
+
+        crate::backend::ratatui_backend::renderers::image::clear_image_occlusions();
+    }
+
+    #[test]
+    fn partial_repaint_without_complete_bounds_or_native_support_defers_the_upload() {
+        for case in [
+            "missing plan",
+            "moved content",
+            "unsupported layers",
+            "unmeasured cells",
+            "changed cell size",
+        ] {
+            let _host = image_support::test_kitty_host((10, 20), true);
+            let mut screen = crate::widgets::TerminalScreen::new(4, 8, 0);
+            screen.set_cell_size(crate::widgets::TerminalCellSize::new(10, 20));
+            let output = Output::default();
+            let mut host = HostBackend::new(output.clone());
+            let mut frame =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(8, 4)).unwrap();
+            let content = Rect {
+                x: 0,
+                y: 0,
+                w: 8,
+                h: 4,
+            };
+            let clip = ratatui::layout::Rect::new(0, 0, 8, 4);
+            let paint = |screen: &mut crate::widgets::TerminalScreen,
+                         frame: &mut ratatui::Terminal<ratatui::backend::TestBackend>,
+                         content,
+                         clip| {
+                let _owner = owner_scope(NodeId::new(1, 1));
+                frame
+                    .draw(|f| {
+                        assert!(render_native_terminal_images(
+                            f,
+                            &screen.render_snapshot().images,
+                            content,
+                            clip
+                        ))
+                    })
+                    .unwrap();
+            };
+            let upload = |screen: &mut crate::widgets::TerminalScreen, color: u8| {
+                let payload = BASE64.encode([color, 0, 0].repeat(20 * 60));
+                screen.process_bytes(
+                    format!("\x1b[H\x1b_Ga=T,i=7,p=9,f=24,s=20,v=60,q=2,C=1;{payload}\x1b\\")
+                        .as_bytes(),
+                );
+            };
+            upload(&mut screen, 1);
+            begin_kitty_frame();
+            paint(&mut screen, &mut frame, content, clip);
+            draw(&mut host).unwrap();
+            assert!(output.take().contains("w=20,h=60"));
+
+            upload(&mut screen, 2);
+            begin_partial_native_scene();
+            {
+                let _plans = (case != "missing plan").then(|| host.native_plan_scope());
+                let _layers = native_layer_scope(case != "unsupported layers");
+                let cell = if case == "changed cell size" {
+                    (12, 24)
+                } else {
+                    (10, 20)
+                };
+                let _cell = image_support::test_kitty_host(cell, case != "unmeasured cells");
+                let content = if case == "moved content" {
+                    Rect { x: 1, ..content }
+                } else {
+                    content
+                };
+                paint(
+                    &mut screen,
+                    &mut frame,
+                    content,
+                    ratatui::layout::Rect::new(0, 1, 8, 1),
+                );
+                draw(&mut host).unwrap();
+                assert!(
+                    !output.take().contains("\x1b_G"),
+                    "{case}: a partial plan must not upload or remove the committed image"
+                );
+            }
+            // The new revision stays pending and is presented in full by the next ordinary paint.
+            begin_kitty_frame();
+            paint(&mut screen, &mut frame, content, clip);
+            draw(&mut host).unwrap();
+            let complete = output.take();
+            assert_eq!(
+                complete.matches("a=t,").count(),
+                1,
+                "{case}: upload must remain pending"
+            );
+            assert!(
+                complete.contains("w=20,h=60"),
+                "{case}: full image must be restored"
+            );
+        }
     }
 
     #[test]
