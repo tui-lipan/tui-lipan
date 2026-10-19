@@ -1073,3 +1073,14 @@ deduplicated; key dynamic focusable widgets when stable event identity matters.
 `Tree::on_hover` reports composed-row pointer transitions, including interactive descendants.
 `index` is the visible row index, `path` is the node's index path, and `hovered` indicates entry or
 exit. These fields are available from `tui_lipan::TreeHoverEvent` and the prelude.
+
+### Terminal paste content
+
+`Terminal::on_paste` receives `TerminalPasteEvent` with `content: ClipboardContent`
+and `origin: PasteOrigin`. `Clipboard` origin identifies framework clipboard
+shortcuts and mouse paste; `Terminal` identifies outer-terminal paste events.
+`ClipboardContent` has `Text(String)`, `Image(ImageContent)`, and `Files(Vec<PathBuf>)`
+variants. The callback replaces PTY-byte delivery for that paste. Inspect
+`event.content` for its payload and `event.origin` before interpreting text as a
+file-drop path. See
+[terminal paste content](widgets/terminal.md#receive-paste-content-before-pty-encoding).

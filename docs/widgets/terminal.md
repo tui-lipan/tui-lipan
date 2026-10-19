@@ -121,6 +121,7 @@ same live screen does not repeat the report. Paint-only updates also synchronize
 | `width` | `Length` | Width |
 | `height` | `Length` | Height |
 | `on_input` | `Callback<TerminalInputEvent>` | Keyboard/paste input from user |
+| `on_paste` | `Callback<TerminalPasteEvent>` | Optional text/image/file paste handler before PTY encoding |
 | `paste_shortcut_behavior` | `TerminalPasteShortcutBehavior` | Direct `Ctrl+V` routing (`Forward` by default; `Performable` pastes text and forwards rich/non-text content) |
 | `on_resize` | `Callback<TerminalViewport>` | Viewport size changed; emitted synchronously during reconciliation |
 | `on_scroll_to` | `Callback<usize>` | Scrollback offset changed |
@@ -1209,3 +1210,33 @@ An explicit `Context::request_full_repaint()` or return from terminal handoff al
 resource acknowledgements. The next frame restores retained sources and placements using their
 reserved IDs. Ordinary UI rebuilds keep unchanged native scenes intact. Dropping a backend deletes
 its owned native resources, including resources staged by an interrupted frame.
+
+## Receive paste content before PTY encoding
+
+Set `Terminal::on_paste(Callback<TerminalPasteEvent>)` to handle local clipboard
+attachments, for example when a terminal host must upload them to a remote
+machine. Use `TerminalKeyPolicy::AppCommandsThenTerminal`, `TerminalFirst`, or
+`TerminalOnly` to enable terminal clipboard preflight. With
+`TerminalPasteShortcutBehavior::Performable`, `Ctrl+V` delivers
+`ClipboardContent::Text`, `Image`, or `Files`, preferring file lists and images
+over accompanying text. `Ctrl+Shift+V` also uses this callback. Empty clipboards
+keep forwarding the key to the child.
+
+The callback owns delivery. The same paste does not also reach `on_input`.
+The event carries `content: ClipboardContent` and `origin: PasteOrigin`.
+`PasteOrigin::Clipboard` identifies framework clipboard shortcuts, mouse paste,
+and application clipboard commands. `PasteOrigin::Terminal` identifies text
+received from the outer terminal. An empty terminal paste reads the local
+clipboard while preserving the `Terminal` origin.
+
+Apply file-drop path recognition only to terminal-origin text. A copied literal
+path from a framework clipboard gesture should remain text. Outer terminals
+can emit the same text for both their own paste gestures and file drops, so
+`Terminal` origin alone does not establish a native OS drag event. Terminals
+without `on_paste` retain their existing behavior, including rich-content key
+forwarding.
+
+Use `ctx.clipboard().read_content()` for an explicit application paste command.
+It returns `Option<ClipboardContent>` and enforces `paste_max_image_bytes` for
+images. File-list entries are local paths; opening, limiting, transferring, and
+retaining their files remain the application host's responsibility.

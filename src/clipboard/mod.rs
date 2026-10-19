@@ -15,7 +15,10 @@ pub(crate) use provider::NoOpClipboardProvider;
 pub(crate) use provider::SystemClipboardProvider;
 #[cfg(all(target_arch = "wasm32", feature = "web"))]
 pub(crate) use provider::WebClipboardProvider;
-pub use provider::{ClipboardPasteContent, ClipboardProvider, ImageContent, ImageFormat};
+pub use provider::{
+    ClipboardContent, ClipboardPasteContent, ClipboardProvider, ImageContent, ImageFormat,
+    PasteOrigin,
+};
 pub use service::{
     ClipboardConfig, ClipboardReporter, ClipboardService, CopyOnSelect, PasteShiftInsertBehavior,
     PasteSource, RightClickAction,

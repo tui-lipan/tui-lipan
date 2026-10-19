@@ -39,6 +39,26 @@ pub struct ImageContent {
     pub filename: Option<String>,
 }
 
+/// Content a terminal host can paste or transfer to another machine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClipboardContent {
+    /// Plain text, including paths emitted by an outer terminal's file drop.
+    Text(String),
+    /// Encoded image data from the local desktop clipboard.
+    Image(ImageContent),
+    /// Local file paths from the desktop clipboard. Reading the files is the host's job.
+    Files(Vec<PathBuf>),
+}
+
+/// Where a terminal paste entered the framework.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PasteOrigin {
+    /// A framework clipboard gesture, including shortcuts, mouse paste, or an explicit command.
+    Clipboard,
+    /// Text emitted by the outer terminal. This can be a text paste or a file-drop path.
+    Terminal,
+}
+
 /// Clipboard content classification used by performable terminal paste shortcuts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClipboardPasteContent {
@@ -80,6 +100,26 @@ pub trait ClipboardProvider {
     fn read_clipboard_text(&mut self) -> Result<String, ClipboardError>;
     /// Write text to the system clipboard.
     fn write_clipboard_text(&mut self, text: &str) -> Result<(), ClipboardError>;
+
+    /// Read files, then an image, then text, without using terminal classification.
+    ///
+    /// Optional readers returning `Unsupported` are skipped. Other failures propagate rather
+    /// than silently downgrading rich content to text. Providers with native format-absence
+    /// detection can override this operation to return `None` for an empty clipboard.
+    fn read_clipboard_content(&mut self) -> Result<Option<ClipboardContent>, ClipboardError> {
+        match self.read_clipboard_files() {
+            Ok(files) if !files.is_empty() => return Ok(Some(ClipboardContent::Files(files))),
+            Ok(_) | Err(ClipboardError::Unsupported { .. }) => {}
+            Err(err) => return Err(err),
+        }
+        match self.read_clipboard_image() {
+            Ok(image) => return Ok(Some(ClipboardContent::Image(image))),
+            Err(ClipboardError::Unsupported { .. }) => {}
+            Err(err) => return Err(err),
+        }
+        self.read_clipboard_text()
+            .map(|text| Some(ClipboardContent::Text(text)))
+    }
 
     /// Classify content for a terminal's performable paste shortcut.
     ///
@@ -203,6 +243,59 @@ impl SystemClipboardProvider {
             .as_mut()
             .ok_or_else(|| ClipboardError::provider(operation, "init"))
     }
+    #[cfg(feature = "clipboard-images")]
+    fn read_available_image(&mut self) -> Result<Option<ImageContent>, ClipboardError> {
+        #[cfg(target_os = "linux")]
+        if let Some(content) = read_wayland_png_clipboard()? {
+            return Ok(Some(content));
+        }
+
+        let clipboard = self.ensure_clipboard(ClipboardOperation::ReadImageClipboard)?;
+
+        let image_data = match clipboard.get_image() {
+            Ok(image) => image,
+            Err(arboard::Error::ContentNotAvailable) => return Ok(None),
+            Err(err) => {
+                return Err(ClipboardError::provider(
+                    ClipboardOperation::ReadImageClipboard,
+                    err.to_string(),
+                ));
+            }
+        };
+
+        let width = image_data.width;
+        let height = image_data.height;
+        let rgba_bytes = image_data.bytes.into_owned();
+
+        let mut png_buffer = Cursor::new(Vec::new());
+        {
+            let image_buffer = image::ImageBuffer::<image::Rgba<u8>, Vec<u8>>::from_raw(
+                width as u32,
+                height as u32,
+                rgba_bytes,
+            )
+            .ok_or_else(|| {
+                ClipboardError::provider(
+                    ClipboardOperation::ReadImageClipboard,
+                    "invalid image buffer dimensions",
+                )
+            })?;
+
+            image_buffer
+                .write_to(&mut png_buffer, image::ImageFormat::Png)
+                .map_err(|err| {
+                    ClipboardError::provider(
+                        ClipboardOperation::ReadImageClipboard,
+                        format!("PNG encode error: {}", err),
+                    )
+                })?;
+        }
+
+        Ok(Some(ImageContent::from_bytes(
+            png_buffer.into_inner().as_slice(),
+            ImageFormat::Png,
+        )))
+    }
 }
 
 #[cfg(all(feature = "clipboard", not(target_arch = "wasm32")))]
@@ -226,6 +319,26 @@ impl ClipboardProvider for SystemClipboardProvider {
         clipboard.set_text(text.to_string()).map_err(|err| {
             ClipboardError::provider(ClipboardOperation::WriteClipboard, err.to_string())
         })
+    }
+
+    fn read_clipboard_content(&mut self) -> Result<Option<ClipboardContent>, ClipboardError> {
+        let files = self.read_clipboard_files()?;
+        if !files.is_empty() {
+            return Ok(Some(ClipboardContent::Files(files)));
+        }
+        #[cfg(feature = "clipboard-images")]
+        if let Some(image) = self.read_available_image()? {
+            return Ok(Some(ClipboardContent::Image(image)));
+        }
+        let clipboard = self.ensure_clipboard(ClipboardOperation::ReadClipboard)?;
+        match clipboard.get_text() {
+            Ok(text) => Ok(Some(ClipboardContent::Text(text))),
+            Err(arboard::Error::ContentNotAvailable) => Ok(None),
+            Err(err) => Err(ClipboardError::provider(
+                ClipboardOperation::ReadClipboard,
+                err.to_string(),
+            )),
+        }
     }
 
     fn read_terminal_paste(&mut self) -> Result<ClipboardPasteContent, ClipboardError> {
@@ -360,49 +473,12 @@ impl ClipboardProvider for SystemClipboardProvider {
 
     #[cfg(feature = "clipboard-images")]
     fn read_clipboard_image(&mut self) -> Result<ImageContent, ClipboardError> {
-        #[cfg(target_os = "linux")]
-        if let Some(content) = read_wayland_png_clipboard()? {
-            return Ok(content);
-        }
-
-        let clipboard = self.ensure_clipboard(ClipboardOperation::ReadImageClipboard)?;
-
-        let image_data = clipboard.get_image().map_err(|err| {
-            ClipboardError::provider(ClipboardOperation::ReadImageClipboard, err.to_string())
-        })?;
-
-        let width = image_data.width;
-        let height = image_data.height;
-        let rgba_bytes = image_data.bytes.into_owned();
-
-        let mut png_buffer = Cursor::new(Vec::new());
-        {
-            let image_buffer = image::ImageBuffer::<image::Rgba<u8>, Vec<u8>>::from_raw(
-                width as u32,
-                height as u32,
-                rgba_bytes,
+        self.read_available_image()?.ok_or_else(|| {
+            ClipboardError::provider(
+                ClipboardOperation::ReadImageClipboard,
+                "clipboard has no image",
             )
-            .ok_or_else(|| {
-                ClipboardError::provider(
-                    ClipboardOperation::ReadImageClipboard,
-                    "invalid image buffer dimensions",
-                )
-            })?;
-
-            image_buffer
-                .write_to(&mut png_buffer, image::ImageFormat::Png)
-                .map_err(|err| {
-                    ClipboardError::provider(
-                        ClipboardOperation::ReadImageClipboard,
-                        format!("PNG encode error: {}", err),
-                    )
-                })?;
-        }
-
-        Ok(ImageContent::from_bytes(
-            png_buffer.into_inner().as_slice(),
-            ImageFormat::Png,
-        ))
+        })
     }
 
     #[cfg(feature = "clipboard-images")]

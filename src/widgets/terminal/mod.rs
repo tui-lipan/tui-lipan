@@ -38,7 +38,7 @@ pub use damage::{DamagedRow, GraphicsDamage, TerminalDamage, TerminalMutation};
 pub use copy_mode::{CopyModeAction, CopyModeGrid, TerminalCopyMode};
 pub use events::{
     KittyKeyboardFlags, MouseEncoding, MouseMode, MouseModeState, MouseReportGeometry,
-    TerminalInputEvent, TerminalInputKind, TerminalKeyModes, TerminalLinkEvent,
+    TerminalInputEvent, TerminalInputKind, TerminalKeyModes, TerminalLinkEvent, TerminalPasteEvent,
     TerminalPasteShortcutBehavior, encode_paste, focus_sequences, key_event_to_bytes,
     mouse_event_to_bytes, paste_sequences, terminal_selection_text,
 };
@@ -171,6 +171,7 @@ impl Default for Terminal {
             on_blur: None,
             on_key: None,
             on_input: None,
+            on_paste: None,
         }
     }
 }
@@ -574,6 +575,18 @@ impl Terminal {
     /// Set raw key handler.
     pub fn on_key(mut self, handler: KeyHandler) -> Self {
         self.on_key = Some(handler);
+        self
+    }
+
+    /// Handle paste content and its origin before it becomes PTY bytes.
+    ///
+    /// With `Performable` paste shortcuts, Ctrl+V reads local text, images, and file lists.
+    /// `event.origin` distinguishes outer-terminal paste from framework clipboard gestures.
+    /// Mouse text pastes use `Clipboard` origin. The callback owns delivery;
+    /// `on_input` does not receive the same paste. Without this callback, rich Ctrl+V keeps
+    /// forwarding to the child program. Empty clipboards also keep forwarding.
+    pub fn on_paste(mut self, cb: Callback<crate::widgets::TerminalPasteEvent>) -> Self {
+        self.on_paste = Some(cb);
         self
     }
 

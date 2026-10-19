@@ -173,6 +173,19 @@ impl ClipboardService {
         self.provider.borrow_mut().set_clipboard_text_cache(text);
     }
 
+    /// Read rich content before its text representation, honoring image size limits.
+    #[cfg(feature = "terminal")]
+    pub fn read_content(
+        &self,
+        config: &ClipboardConfig,
+    ) -> Result<Option<crate::ClipboardContent>, ClipboardError> {
+        let content = self.provider.borrow_mut().read_clipboard_content()?;
+        if let Some(crate::ClipboardContent::Image(image)) = &content {
+            validate_image_size(image, config.paste_max_image_bytes)?;
+        }
+        Ok(content)
+    }
+
     pub fn read_primary_selection_text(&self) -> Result<String, ClipboardError> {
         self.provider.borrow_mut().read_primary_selection_text()
     }
@@ -224,6 +237,21 @@ impl ClipboardService {
     }
 }
 
+#[cfg(feature = "terminal")]
+fn validate_image_size(image: &ImageContent, limit: usize) -> Result<(), ClipboardError> {
+    use crate::clipboard::error::ClipboardOperation;
+    let bytes = image.to_bytes().map_err(|err| {
+        ClipboardError::provider(ClipboardOperation::ReadImageClipboard, err.to_string())
+    })?;
+    if limit != 0 && bytes.len() > limit {
+        return Err(ClipboardError::invalid_input(
+            ClipboardOperation::ReadImageClipboard,
+            "clipboard image exceeds paste_max_image_bytes",
+        ));
+    }
+    Ok(())
+}
+
 pub fn default_clipboard_reporter() -> ClipboardReporter {
     Rc::new(|error| {
         let op = error.operation();
@@ -234,4 +262,120 @@ pub fn default_clipboard_reporter() -> ClipboardReporter {
         };
         crate::debug::internal_log!("[tui-lipan] clipboard {:?}: {}", op, message);
     })
+}
+
+#[cfg(all(test, feature = "terminal"))]
+mod typed_read_tests {
+    use super::*;
+    use crate::clipboard::error::ClipboardOperation;
+    use crate::{ClipboardContent, ClipboardHandle, ImageFormat};
+    use std::cell::Cell;
+
+    #[derive(Default)]
+    struct Reads {
+        files: Cell<usize>,
+        images: Cell<usize>,
+        text: Cell<usize>,
+    }
+    struct RichProvider {
+        reads: Rc<Reads>,
+        files: Vec<PathBuf>,
+        image: Option<ImageContent>,
+        fail_image: bool,
+    }
+    // Deliberately leave read_terminal_paste at its text-only default.
+    impl ClipboardProvider for RichProvider {
+        fn read_clipboard_text(&mut self) -> Result<String, ClipboardError> {
+            self.reads.text.set(self.reads.text.get() + 1);
+            Ok("literal text fallback".into())
+        }
+        fn write_clipboard_text(&mut self, _: &str) -> Result<(), ClipboardError> {
+            Ok(())
+        }
+        fn read_clipboard_files(&mut self) -> Result<Vec<PathBuf>, ClipboardError> {
+            self.reads.files.set(self.reads.files.get() + 1);
+            Ok(self.files.clone())
+        }
+        fn read_clipboard_image(&mut self) -> Result<ImageContent, ClipboardError> {
+            self.reads.images.set(self.reads.images.get() + 1);
+            if self.fail_image {
+                return Err(ClipboardError::provider(
+                    ClipboardOperation::ReadImageClipboard,
+                    "image read failed",
+                ));
+            }
+            self.image
+                .clone()
+                .ok_or_else(|| ClipboardError::unsupported(ClipboardOperation::ReadImageClipboard))
+        }
+    }
+    fn handle(
+        files: Vec<PathBuf>,
+        image: Option<ImageContent>,
+        fail_image: bool,
+    ) -> (ClipboardHandle, Rc<Reads>) {
+        let reads = Rc::new(Reads::default());
+        let provider = RichProvider {
+            reads: reads.clone(),
+            files,
+            image,
+            fail_image,
+        };
+        let service = Rc::new(ClipboardService::new(
+            Box::new(provider),
+            default_clipboard_reporter(),
+        ));
+        (
+            ClipboardHandle::new(service, Rc::new(RefCell::new(ClipboardConfig::default()))),
+            reads,
+        )
+    }
+    #[test]
+    fn custom_provider_prefers_files_without_reading_image_or_text() {
+        let files = vec![PathBuf::from("/tmp/photo.png")];
+        let (handle, reads) = handle(
+            files.clone(),
+            Some(ImageContent::from_bytes(b"png", ImageFormat::Png)),
+            false,
+        );
+        assert_eq!(
+            handle.read_content().unwrap(),
+            Some(ClipboardContent::Files(files))
+        );
+        assert_eq!(
+            (reads.files.get(), reads.images.get(), reads.text.get()),
+            (1, 0, 0)
+        );
+    }
+    #[test]
+    fn custom_provider_prefers_image_and_reads_it_only_once() {
+        let image = ImageContent::from_bytes(b"png", ImageFormat::Png);
+        let (handle, reads) = handle(vec![], Some(image.clone()), false);
+        assert_eq!(
+            handle.read_content().unwrap(),
+            Some(ClipboardContent::Image(image))
+        );
+        assert_eq!(
+            (reads.files.get(), reads.images.get(), reads.text.get()),
+            (1, 1, 0)
+        );
+    }
+    #[test]
+    fn custom_provider_falls_back_to_text_only_after_optional_formats() {
+        let (handle, reads) = handle(vec![], None, false);
+        assert_eq!(
+            handle.read_content().unwrap(),
+            Some(ClipboardContent::Text("literal text fallback".into()))
+        );
+        assert_eq!(
+            (reads.files.get(), reads.images.get(), reads.text.get()),
+            (1, 1, 1)
+        );
+    }
+    #[test]
+    fn image_provider_failure_is_not_downgraded_to_text() {
+        let (handle, reads) = handle(vec![], None, true);
+        assert!(handle.read_content().is_err());
+        assert_eq!(reads.text.get(), 0);
+    }
 }

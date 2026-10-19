@@ -77,6 +77,15 @@ impl ClipboardHandle {
         self.service.read_clipboard_text()
     }
 
+    /// Read text, an image, or a file list, preferring rich formats over text fallbacks.
+    /// Returns `None` when the clipboard has no supported content.
+    #[cfg(feature = "terminal")]
+    pub fn read_content(
+        &self,
+    ) -> Result<Option<crate::ClipboardContent>, super::error::ClipboardError> {
+        self.service.read_content(&self.config.borrow())
+    }
+
     /// Copy a list of files to the system clipboard.
     ///
     /// Pasting into a file manager, a file dialog, or a browser upload target
