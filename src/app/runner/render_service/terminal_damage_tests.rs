@@ -1287,6 +1287,66 @@ fn an_unchanged_image_pane_survives_an_unrelated_terminal_update() {
 
 #[cfg(feature = "terminal-images")]
 #[test]
+fn composed_terminal_images_reach_the_host_in_partial_frames() {
+    use base64::Engine as _;
+
+    // Unmeasured host cells select composition even on a Kitty host.
+    let _host = crate::backend::ratatui_backend::image_support::test_kitty_host((10, 20), false);
+    let mut harness = build(PaneCfg::new(), b"\x1b[?25l\x1b[H");
+    harness
+        .screen
+        .borrow_mut()
+        .set_cell_size(crate::widgets::TerminalCellSize::new(10, 20));
+    let upload = |color| {
+        let payload =
+            base64::engine::general_purpose::STANDARD.encode([color, 0, 0].repeat(20 * 60));
+        harness.screen.borrow_mut().process_bytes(
+            format!("\x1b[H\x1b_Ga=T,i=7,p=9,f=24,s=20,v=60,z=-1,q=2,C=1;{payload}\x1b\\")
+                .as_bytes(),
+        );
+    };
+    upload(1u8);
+    harness.runner.core.tree.refresh_live_terminals_detailed();
+    let mut terminal = crate::backend::ratatui_backend::create_test_terminal(COLS, ROWS).unwrap();
+    harness.runner.render_paint_only(&mut terminal).unwrap();
+    let output = terminal.backend().test_output();
+    assert!(String::from_utf8_lossy(&output).contains("a=p,"));
+    let initial = output.len();
+
+    upload(2u8);
+    harness.runner.core.tree.refresh_live_terminals_detailed();
+    let cursor = StdCell::new(None);
+    let _plans = terminal.backend().native_plan_scope();
+    harness.runner.with_render_context(&cursor, |ctx| {
+        terminal
+            .draw(|f| {
+                crate::backend::ratatui_backend::render_regions(
+                    f,
+                    ctx,
+                    &[Rect {
+                        x: 0,
+                        y: 1,
+                        w: COLS,
+                        h: 1,
+                    }],
+                )
+            })
+            .unwrap();
+    });
+    let output = terminal.backend().test_output();
+    let update = String::from_utf8_lossy(&output[initial..]);
+    assert!(
+        update.contains("a=p,"),
+        "composed image row must reach the host: {update:?}"
+    );
+    assert!(
+        update.contains("c="),
+        "replacement must use the composed path: {update:?}"
+    );
+}
+
+#[cfg(feature = "terminal-images")]
+#[test]
 fn ordinary_overlays_cover_image_pixels_without_covering_the_anchor() {
     for mode in 0..=14 {
         for stacked in [false, true] {

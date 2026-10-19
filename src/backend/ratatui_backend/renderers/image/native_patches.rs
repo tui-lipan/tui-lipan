@@ -252,16 +252,17 @@ pub(crate) fn render_native_terminal_images(
     clip: ratatui::layout::Rect,
 ) -> bool {
     let partial = !capturing_images() && native_scene::partial_frame();
-    if partial {
+    let defer = partial && native_scene::committed_owner();
+    if defer {
         native_scene::defer_owner();
     }
     let Some(plan) = plan_for_paint(content, clip, partial) else {
         // Composition at the damage clip would also replace a complete image with a strip.
         // Keep the previous native scene until a full paint can choose a new presentation path.
-        return partial;
+        return defer;
     };
     let Some(regions) = plan.regions(placements) else {
-        return partial;
+        return defer;
     };
     native_scene::stage_plan(plan);
     for (placement, regions) in placements.iter().zip(regions) {

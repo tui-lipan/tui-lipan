@@ -44,18 +44,28 @@ thread_local! {
     // Only frame staging lives here. Committed resources belong to HostBackend.
     static DESIRED: RefCell<Option<DesiredScene>> = const { RefCell::new(None) };
     static CACHED_PLANS: RefCell<Option<HashMap<NodeId, native_patches::TerminalGraphicsPlan>>> = const { RefCell::new(None) };
+    // A scoped snapshot of backend-confirmed owners, independent of cached plan availability.
+    static COMMITTED_OWNERS: RefCell<HashSet<NodeId>> = RefCell::new(HashSet::new());
     static ALIVE_OWNERS: RefCell<Option<HashSet<NodeId>>> = const { RefCell::new(None) };
     static OWNER: Cell<NodeId> = const { Cell::new(NodeId::INVALID) };
 }
 
-pub(crate) struct NativePlanScope(Option<HashMap<NodeId, native_patches::TerminalGraphicsPlan>>);
+pub(crate) struct NativePlanScope {
+    plans: Option<HashMap<NodeId, native_patches::TerminalGraphicsPlan>>,
+    owners: HashSet<NodeId>,
+}
 
 impl Drop for NativePlanScope {
     fn drop(&mut self) {
         CACHED_PLANS.with(|slot| {
-            slot.replace(self.0.take());
+            slot.replace(self.plans.take());
         });
+        COMMITTED_OWNERS.with(|slot| slot.replace(std::mem::take(&mut self.owners)));
     }
+}
+
+pub(super) fn committed_owner() -> bool {
+    COMMITTED_OWNERS.with(|slot| slot.borrow().contains(&OWNER.get()))
 }
 
 pub(super) fn partial_frame() -> bool {
@@ -276,7 +286,10 @@ impl HostGraphicsScene {
     }
 
     pub(crate) fn native_plan_scope(&self) -> NativePlanScope {
-        NativePlanScope(CACHED_PLANS.with(|slot| slot.replace(Some(self.plans.clone()))))
+        NativePlanScope {
+            plans: CACHED_PLANS.with(|slot| slot.replace(Some(self.plans.clone()))),
+            owners: COMMITTED_OWNERS.with(|slot| slot.replace(self.native_plan_owners())),
+        }
     }
 
     pub(crate) fn native_plan_owners(&self) -> HashSet<NodeId> {
@@ -1058,7 +1071,10 @@ mod tests {
             upload(&mut screen, 2);
             begin_partial_native_scene();
             {
-                let _plans = (case != "missing plan").then(|| host.native_plan_scope());
+                let _plans = host.native_plan_scope();
+                if case == "missing plan" {
+                    CACHED_PLANS.with(|slot| slot.borrow_mut().as_mut().unwrap().clear());
+                }
                 let _layers = native_layer_scope(case != "unsupported layers");
                 let cell = if case == "changed cell size" {
                     (12, 24)
@@ -1098,6 +1114,63 @@ mod tests {
                 "{case}: full image must be restored"
             );
         }
+    }
+
+    #[test]
+    fn partial_paint_without_native_support_falls_back_to_composition() {
+        // A terminal whose steady state is composed (native layers unavailable) must keep using
+        // the composed fallback in partial frames, or its image cells are never drawn there.
+        let _host = image_support::test_kitty_host((10, 20), true);
+        let mut screen = crate::widgets::TerminalScreen::new(4, 8, 0);
+        screen.set_cell_size(crate::widgets::TerminalCellSize::new(10, 20));
+        let payload = BASE64.encode([1u8, 0, 0].repeat(20 * 60));
+        screen.process_bytes(
+            format!("\x1b[H\x1b_Ga=T,i=7,p=9,f=24,s=20,v=60,q=2,C=1;{payload}\x1b\\").as_bytes(),
+        );
+        let mut frame = ratatui::Terminal::new(ratatui::backend::TestBackend::new(8, 4)).unwrap();
+        let content = Rect {
+            x: 0,
+            y: 0,
+            w: 8,
+            h: 4,
+        };
+        let mut native = |owner, clip| {
+            let _owner = owner_scope(owner);
+            let mut handled = false;
+            frame
+                .draw(|f| {
+                    handled = render_native_terminal_images(
+                        f,
+                        &screen.render_snapshot().images,
+                        content,
+                        clip,
+                    )
+                })
+                .unwrap();
+            handled
+        };
+        // Another terminal uses native rendering on this backend. Its committed ownership
+        // must not cause this composed terminal to defer.
+        let output = Output::default();
+        let mut host = HostBackend::new(output);
+        begin_kitty_frame();
+        assert!(native(
+            NodeId::new(2, 1),
+            ratatui::layout::Rect::new(0, 0, 8, 4)
+        ));
+        draw(&mut host).unwrap();
+        let _plans = host.native_plan_scope();
+        let _layers = native_layer_scope(false);
+        begin_kitty_frame();
+        assert!(
+            !native(NodeId::new(1, 1), ratatui::layout::Rect::new(0, 0, 8, 4)),
+            "full paint composes"
+        );
+        begin_partial_native_scene();
+        assert!(
+            !native(NodeId::new(1, 1), ratatui::layout::Rect::new(0, 1, 8, 1)),
+            "partial paint claimed a composed terminal, skipping its composed fallback"
+        );
     }
 
     #[test]
