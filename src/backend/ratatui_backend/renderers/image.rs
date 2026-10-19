@@ -1,4 +1,8 @@
 #[cfg(feature = "terminal-images")]
+mod composed_scene;
+#[cfg(feature = "terminal-images")]
+pub(crate) use composed_scene::HostComposedScene;
+#[cfg(feature = "terminal-images")]
 mod native_patches;
 #[cfg(feature = "terminal-images")]
 mod native_scene;
@@ -968,9 +972,11 @@ impl CompressedKitty {
             z_index,
             pixels: (width, height),
             upload: Arc::new(KittyUpload {
+                cache_key: OnceLock::new(),
                 native_lease: OnceLock::new(),
                 transmit: Mutex::new(Some(transmit)),
                 attempted: AtomicBool::new(false),
+                reused: AtomicBool::new(false),
                 shared: Mutex::new(shared),
                 file: Mutex::new(None),
                 placeholder_prefix: format!("\x1b[s\x1b[38;2;{id_r};{id_g};{id_b}m\u{10EEEE}"),
@@ -1003,9 +1009,11 @@ impl CompressedKitty {
             z_index,
             pixels: dimensions,
             upload: Arc::new(KittyUpload {
+                cache_key: OnceLock::new(),
                 native_lease: OnceLock::new(),
                 transmit: Mutex::new(Some(transmit)),
                 attempted: AtomicBool::new(false),
+                reused: AtomicBool::new(false),
                 shared: Mutex::new(None),
                 file: Mutex::new(Some(file)),
                 placeholder_prefix: format!("\x1b[s\x1b[38;2;{id_r};{id_g};{id_b}m\u{10EEEE}"),
@@ -1153,11 +1161,7 @@ impl CompressedKitty {
         if f.buffer_mut().cell_mut((left, y)).is_none() {
             return;
         }
-        let p = NEXT_KITTY_PLACEMENT.with(|next| {
-            let p = next.get().wrapping_add(1).max(1);
-            next.set(p);
-            p
-        });
+        let p = composed_scene::span_id(self, origin, span);
         let x = (i32::from(left) - origin.0) as u32;
         let row = (i32::from(y) - origin.1) as u32;
         let sx = x * self.pixels.0 / u32::from(self.size.width);
@@ -1190,6 +1194,7 @@ impl CompressedKitty {
                 .entry(anchor)
                 .or_default()
                 .push(KittyPlacement {
+                    anchor,
                     command: command.clone(),
                     delete,
                     upload: Arc::clone(&self.upload),
@@ -1247,9 +1252,11 @@ fn compressed_kitty_payload(pixels: &[u8], limit: usize) -> Option<Vec<u8>> {
 /// confirms a flush without failed or discarded output. Offscreen paints cannot consume it.
 #[cfg(feature = "terminal-images")]
 pub(crate) struct KittyUpload {
+    cache_key: OnceLock<(u32, RenderCacheKey)>,
     native_lease: OnceLock<native_patches::NativeImageOwnership>,
     transmit: Mutex<Option<String>>,
     attempted: AtomicBool,
+    reused: AtomicBool,
     placeholder_prefix: String,
     id_extra: char,
     shared: Mutex<Option<SharedFrame>>,
@@ -1257,7 +1264,9 @@ pub(crate) struct KittyUpload {
 }
 
 #[cfg(feature = "terminal-images")]
+#[derive(Clone)]
 struct KittyPlacement {
+    anchor: (u16, u16),
     command: String,
     delete: String,
     upload: Arc<KittyUpload>,
@@ -1326,27 +1335,25 @@ impl KittyUpload {
     }
 
     pub(crate) fn handed_over(&self) {
-        if self
+        let consumed = self
             .transmit
             .lock()
-            .is_ok_and(|mut sequence| sequence.take().is_some())
-        {
-            if let Ok(mut shared) = self.shared.lock()
-                && let Some(frame) = shared.as_mut()
-            {
-                frame.handed_over();
-            }
-            if let Ok(mut file) = self.file.lock()
-                && let Some(file) = file.as_mut()
-            {
-                file.handed_over();
-            }
-            PENDING_KITTY_UPLOADS.with(|pending| {
-                pending
-                    .borrow_mut()
-                    .retain(|upload| !std::ptr::eq(Arc::as_ptr(upload), self));
-            });
+            .is_ok_and(|mut sequence| sequence.take().is_some());
+        if !consumed {
+            return;
         }
+        let reused = self.reused.load(Ordering::Relaxed);
+        finish_upload_resource(&self.shared, reused, SharedFrame::handed_over);
+        finish_upload_resource(
+            &self.file,
+            reused,
+            crate::backend::ratatui_backend::file_frame::HostFile::handed_over,
+        );
+        PENDING_KITTY_UPLOADS.with(|pending| {
+            pending
+                .borrow_mut()
+                .retain(|upload| !std::ptr::eq(Arc::as_ptr(upload), self));
+        });
     }
 
     fn starts_symbol(&self, symbol: &str) -> bool {
@@ -1355,6 +1362,23 @@ impl KittyUpload {
                 .as_ref()
                 .is_some_and(|sequence| symbol.starts_with(sequence))
         })
+    }
+}
+
+#[cfg(feature = "terminal-images")]
+fn finish_upload_resource<T>(
+    slot: &Mutex<Option<T>>,
+    reused: bool,
+    hand_over: impl FnOnce(&mut T),
+) {
+    let Ok(mut resource) = slot.lock() else {
+        return;
+    };
+    if reused {
+        // The host already has these pixels. No reader knows this new resource's name.
+        resource.take();
+    } else if let Some(resource) = resource.as_mut() {
+        hand_over(resource);
     }
 }
 
@@ -1391,6 +1415,7 @@ pub(crate) fn begin_partial_native_scene() {
 pub(crate) fn begin_kitty_frame() {
     if !capturing_images() {
         native_scene::begin(true);
+        composed_scene::begin_frame();
         PENDING_KITTY_UPLOADS.with(|pending| pending.borrow_mut().clear());
         PENDING_KITTY_PLACEMENTS.with(|pending| pending.borrow_mut().clear());
         if let Some(encoder) = ENCODER.get()
@@ -1425,12 +1450,6 @@ fn kitty_upload_in_symbol(symbol: &str) -> Option<Arc<KittyUpload>> {
 }
 
 #[cfg(feature = "terminal-images")]
-pub(crate) fn kitty_draw_pending() -> bool {
-    PENDING_KITTY_UPLOADS.with(|pending| !pending.borrow().is_empty())
-        || PENDING_KITTY_PLACEMENTS.with(|pending| !pending.borrow().is_empty())
-}
-
-#[cfg(feature = "terminal-images")]
 fn kitty_cell_with_upload<'a>(
     cell: &'a ratatui::buffer::Cell,
     upload: &KittyUpload,
@@ -1457,7 +1476,7 @@ fn prepare_placed_cell<'a>(
     anchor: (u16, u16),
     cell: &'a ratatui::buffer::Cell,
     uploads: &mut Vec<Arc<KittyUpload>>,
-    placement_deletes: &mut Vec<String>,
+    placements_out: &mut Vec<KittyPlacement>,
 ) -> std::borrow::Cow<'a, ratatui::buffer::Cell> {
     let mut symbol = cell.symbol().to_owned();
     let commands: HashSet<_> = cell
@@ -1478,7 +1497,7 @@ fn prepare_placed_cell<'a>(
             .iter()
             .filter(|p| commands.contains(p.command.as_str()))
         {
-            placement_deletes.push(placement.delete.clone());
+            placements_out.push(placement.clone());
             let Ok(sequence) = placement.upload.transmit.lock() else {
                 continue;
             };
@@ -1507,10 +1526,16 @@ fn prepare_placed_cell<'a>(
 fn renew_kitty_uploads(
     cells: &mut [(u16, u16, std::borrow::Cow<'_, ratatui::buffer::Cell>)],
     uploads: &[Arc<KittyUpload>],
+    known: &HostKittyUploads,
 ) -> std::io::Result<()> {
     // Cells still carry the encode's original escape. Regenerate one-shot names for every retry,
     // including after draw itself failed, and replace the escape only in this outgoing diff.
     for upload in uploads {
+        if known.contains(upload) {
+            remove_upload_sequence(cells, upload);
+            continue;
+        }
+        upload.reused.store(false, Ordering::Relaxed);
         let Some(sequence) = upload.attempt_sequence()? else {
             continue;
         };
@@ -1533,21 +1558,94 @@ fn renew_kitty_uploads(
     Ok(())
 }
 
+#[cfg(feature = "terminal-images")]
+fn remove_upload_sequence(
+    cells: &mut [(u16, u16, std::borrow::Cow<'_, ratatui::buffer::Cell>)],
+    upload: &KittyUpload,
+) {
+    upload.reused.store(true, Ordering::Relaxed);
+    let sequence = upload
+        .transmit
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(sequence) = sequence.as_ref() else {
+        return;
+    };
+    for (_, _, cell) in cells {
+        if cell.symbol().contains(sequence) {
+            let symbol = cell.symbol().replace(sequence, "");
+            cell.to_mut().set_symbol(&symbol);
+        }
+    }
+}
+
+/// Host acknowledgements survive eviction of an encode from the bounded CPU-side cache.
+#[cfg(feature = "terminal-images")]
+#[derive(Default)]
+pub(crate) struct HostKittyUploads {
+    images: HashMap<u32, RenderCacheKey>,
+}
+
+#[cfg(feature = "terminal-images")]
+impl HostKittyUploads {
+    fn contains(&self, upload: &KittyUpload) -> bool {
+        upload
+            .cache_key
+            .get()
+            .is_some_and(|(id, key)| self.images.get(id) == Some(key))
+    }
+
+    pub(crate) fn acknowledge(&mut self, upload: &KittyUpload) {
+        if let Some(&(id, key)) = upload.cache_key.get() {
+            // Bound acknowledgement metadata independently of encoded-pixel memory.
+            if self.images.len() >= 8192
+                && !self.images.contains_key(&id)
+                && let Some(retired) = self.images.keys().next().copied()
+            {
+                self.images.remove(&retired);
+            }
+            self.images.insert(id, key);
+        }
+    }
+
+    pub(crate) fn invalidate(&mut self) {
+        self.images.clear();
+    }
+
+    pub(crate) fn prepare<'a>(
+        &mut self,
+        content: impl Iterator<Item = (u16, u16, &'a ratatui::buffer::Cell)>,
+    ) -> std::io::Result<PreparedKittyDraw<'a>> {
+        let draw = prepare_kitty_cells(content, self)?;
+        for upload in &draw.uploads {
+            if !self.contains(upload)
+                && let Some((id, _)) = upload.cache_key.get()
+            {
+                // An attempted replacement can destroy the previously acknowledged pixels even
+                // if the rest of the output fails or is discarded before its flush.
+                self.images.remove(id);
+            }
+        }
+        Ok(draw)
+    }
+}
+
 /// Place each upload before its first surviving row in the actual host diff. Effects can remove
 /// the cell where rendering originally put it while leaving other rows visible.
 #[cfg(feature = "terminal-images")]
-pub(crate) fn prepare_kitty_cells<'a>(
+fn prepare_kitty_cells<'a>(
     content: impl Iterator<Item = (u16, u16, &'a ratatui::buffer::Cell)>,
+    known: &HostKittyUploads,
 ) -> std::io::Result<PreparedKittyDraw<'a>> {
     let mut uploads = Vec::new();
-    let mut placement_deletes = Vec::new();
+    let mut placements = Vec::new();
     let mut cells: Vec<_> = content
         .map(|(x, y, cell)| {
             if cell.symbol().contains("\x1b_Ga=p,") {
                 return (
                     x,
                     y,
-                    prepare_placed_cell((x, y), cell, &mut uploads, &mut placement_deletes),
+                    prepare_placed_cell((x, y), cell, &mut uploads, &mut placements),
                 );
             }
             let Some(upload) = kitty_upload_in_symbol(cell.symbol()) else {
@@ -1561,17 +1659,17 @@ pub(crate) fn prepare_kitty_cells<'a>(
             (x, y, cell)
         })
         .collect();
-    renew_kitty_uploads(&mut cells, &uploads)?;
+    renew_kitty_uploads(&mut cells, &uploads, known)?;
     Ok(PreparedKittyDraw {
         cells,
         uploads,
-        placement_deletes,
+        placements,
     })
 }
 
 #[cfg(feature = "terminal-images")]
 pub(crate) struct PreparedKittyDraw<'a> {
-    pub(crate) placement_deletes: Vec<String>,
+    placements: Vec<KittyPlacement>,
     pub(crate) cells: Vec<(u16, u16, std::borrow::Cow<'a, ratatui::buffer::Cell>)>,
     pub(crate) uploads: Vec<Arc<KittyUpload>>,
 }
@@ -2007,7 +2105,13 @@ impl ImageRenderCache {
         estimated_bytes: usize,
         retention: CacheRetention,
     ) {
-        const MAX_ENTRIES: usize = 256;
+        // Per-cell senders can have hundreds of tiny encodes in one visible scene. The byte
+        // budget below still bounds large images; this cap only bounds cache metadata.
+        const MAX_ENTRIES: usize = 4096;
+        #[cfg(feature = "terminal-images")]
+        if let EncodedProtocol::CompressedKitty(image) = &*protocol {
+            let _ = image.upload.cache_key.set((image.id, key));
+        }
         // Keep one already-presented frame behind the newest encode so native protocols can load
         // the replacement without blanking the placement. Its compressed payload is released
         // after transmission and discounted from the live cache budget.
@@ -3536,9 +3640,11 @@ mod tests {
             z_index: 0,
             pixels: (1, 1),
             upload: Arc::new(KittyUpload {
+                cache_key: OnceLock::new(),
                 native_lease: OnceLock::new(),
                 transmit: Mutex::new(None),
                 attempted: AtomicBool::new(false),
+                reused: AtomicBool::new(false),
                 placeholder_prefix: String::new(),
                 id_extra: crate::widgets::kitty_diacritic(0),
                 shared: Mutex::new(None),
@@ -4438,9 +4544,9 @@ mod tests {
             .draw(|frame| encoded.render(frame, frame.area()))
             .unwrap();
         let buffer = terminal.backend().buffer();
-        let PreparedKittyDraw { cells, uploads, .. } =
-            prepare_kitty_cells([(0, 1, &buffer[(0, 1)]), (0, 0, &buffer[(0, 0)])].into_iter())
-                .unwrap();
+        let PreparedKittyDraw { cells, uploads, .. } = HostKittyUploads::default()
+            .prepare([(0, 1, &buffer[(0, 1)]), (0, 0, &buffer[(0, 0)])].into_iter())
+            .unwrap();
         assert_eq!(uploads.len(), 1);
         assert!(cells[0].2.symbol().starts_with("\x1b_G"));
         assert!(!cells[1].2.symbol().contains("\x1b_G"));
@@ -4498,6 +4604,217 @@ mod tests {
     }
 
     #[cfg(feature = "terminal-images")]
+    #[derive(Clone, Default)]
+    struct GraphicsOutput(std::rc::Rc<RefCell<Vec<u8>>>);
+
+    #[cfg(feature = "terminal-images")]
+    impl std::io::Write for GraphicsOutput {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[cfg(feature = "terminal-images")]
+    fn paint_terminal_scene(
+        screen: &mut crate::widgets::TerminalScreen,
+        frame: &mut ratatui::Terminal<ratatui::backend::TestBackend>,
+        host: &mut crate::backend::ratatui_backend::native_terminal::HostBackend<GraphicsOutput>,
+        output: &GraphicsOutput,
+    ) -> String {
+        use ratatui::backend::Backend;
+        use std::hash::{Hash, Hasher};
+        let before = output.0.borrow().len();
+        let area = frame.get_frame().area();
+        let snapshot = screen.render_snapshot();
+        let placements =
+            crate::widgets::composite_terminal_images(&snapshot.images, area.width, area.height);
+        let use_placements = placements
+            .first()
+            .is_some_and(|first| first.z < 0 || placements.iter().any(|p| p.z != first.z));
+        begin_kitty_frame();
+        frame
+            .draw(|f| {
+                for placement in &placements {
+                    let mut stream = std::collections::hash_map::DefaultHasher::new();
+                    (
+                        placement.image.stream_namespace(),
+                        placement.image_id,
+                        placement.source_crop,
+                    )
+                        .hash(&mut stream);
+                    let stream = stream.finish();
+                    let mut source = std::collections::hash_map::DefaultHasher::new();
+                    (stream, placement.image.source_hash()).hash(&mut source);
+                    let crop = placement.source_crop;
+                    assert!(draw_encoded_image(
+                        f,
+                        ratatui::layout::Rect::new(
+                            placement.col as u16,
+                            placement.row as u16,
+                            placement.cols,
+                            placement.rows
+                        ),
+                        stream,
+                        source.finish(),
+                        placement.z,
+                        TerminalImageRender {
+                            alive: placement.image.image_lifetime(),
+                            use_placements
+                        },
+                        || {
+                            let pixels = placement.image.pixels().unwrap();
+                            crop.map_or_else(
+                                || Arc::clone(pixels),
+                                |c| Arc::new(pixels.crop_imm(c.x, c.y, c.width, c.height)),
+                            )
+                        },
+                    ));
+                }
+            })
+            .unwrap();
+        // Send a whole buffer to exercise host suppression even when a text repaint includes an
+        // unchanged image anchor. The real backend, upload acknowledgement and flush still run.
+        let buffer = frame.backend().buffer();
+        host.draw(
+            (area.y..area.bottom())
+                .flat_map(|y| (area.x..area.right()).map(move |x| (x, y, &buffer[(x, y)]))),
+        )
+        .unwrap();
+        Backend::flush(host).unwrap();
+        String::from_utf8(output.0.borrow()[before..].to_vec()).unwrap()
+    }
+
+    #[cfg(feature = "terminal-images")]
+    fn evict_terminal_scene_encodes(screen: &mut crate::widgets::TerminalScreen, size: (u16, u16)) {
+        use std::hash::{Hash, Hasher};
+        let snapshot = screen.render_snapshot();
+        let placements =
+            crate::widgets::composite_terminal_images(&snapshot.images, size.0, size.1);
+        let keys: HashSet<_> = placements
+            .iter()
+            .map(|placement| {
+                let mut stream = std::collections::hash_map::DefaultHasher::new();
+                (
+                    placement.image.stream_namespace(),
+                    placement.image_id,
+                    placement.source_crop,
+                )
+                    .hash(&mut stream);
+                let mut source = std::collections::hash_map::DefaultHasher::new();
+                (stream.finish(), placement.image.source_hash()).hash(&mut source);
+                source.finish()
+            })
+            .collect();
+        let mut inner = async_encoder().inner.lock().unwrap();
+        while let Some(index) = inner
+            .cache
+            .entries
+            .iter()
+            .position(|entry| keys.contains(&entry.key.source_hash))
+        {
+            inner.cache.remove_at(index);
+        }
+    }
+
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn yazi_per_cell_stream_keeps_all_592_cells_and_is_quiet_on_repaint() {
+        use crate::widgets::{TerminalCellSize, TerminalScreen};
+        let _host = image_support::test_kitty_host((14, 32), true);
+        let mut screen = TerminalScreen::new(16, 37, 0);
+        screen.set_cell_size(TerminalCellSize::new(14, 32));
+        let payload = BASE64.encode([100, 150, 200].repeat(512 * 512));
+        screen.process_bytes(
+            format!("\x1b_Ga=t,f=24,s=512,v=512,i=7,q=2;{payload}\x1b\\").as_bytes(),
+        );
+        for row in 0..16 {
+            for col in 0..37 {
+                let x = col * 512 / 37;
+                let end = (col + 1) * 512 / 37;
+                let id = row * 37 + col + 1;
+                screen.process_bytes(format!(
+                    "\x1b[{};{}H\x1b_Ga=p,i=7,p={id},x={x},y={},w={},h=32,c=1,r=1,z=-1,C=1,q=2;\x1b\\",
+                    row + 1, col + 1, row * 32, end - x,
+                ).as_bytes());
+            }
+        }
+        let snapshot = screen.render_snapshot();
+        assert_eq!(
+            snapshot.images.len(),
+            592,
+            "every cell must survive ingestion"
+        );
+        assert!(
+            snapshot
+                .images
+                .iter()
+                .all(|p| p.image.geometry().unwrap().size == (14, 32))
+        );
+        let composed = crate::widgets::composite_terminal_images(&snapshot.images, 37, 16);
+        assert_eq!(
+            composed.len(),
+            592,
+            "aligned crops must bypass tile composition"
+        );
+        let mut frame = ratatui::Terminal::new(ratatui::backend::TestBackend::new(37, 16)).unwrap();
+        let output = GraphicsOutput::default();
+        let mut host =
+            crate::backend::ratatui_backend::native_terminal::HostBackend::new(output.clone());
+        let initial = paint_terminal_scene(&mut screen, &mut frame, &mut host, &output);
+        assert_eq!(initial.matches("a=p,").count(), 592);
+        assert_eq!(initial.matches("a=T,").count(), 592);
+        evict_terminal_scene_encodes(&mut screen, (37, 16));
+        let repaint = paint_terminal_scene(&mut screen, &mut frame, &mut host, &output);
+        assert!(
+            !repaint.contains("\x1b_G"),
+            "static image emitted Kitty traffic: {repaint:?}"
+        );
+    }
+
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn changing_one_source_pixel_only_uploads_its_composed_tile() {
+        use crate::widgets::{TerminalCellSize, TerminalScreen};
+        let _host = image_support::test_kitty_host((2, 2), true);
+        let mut screen = TerminalScreen::new(48, 160, 0);
+        screen.set_cell_size(TerminalCellSize::new(2, 2));
+        let mut pixels = [100, 150, 200, 255].repeat(320 * 96);
+        let upload = |screen: &mut TerminalScreen, pixels: &[u8]| {
+            let payload = BASE64.encode(pixels);
+            screen.process_bytes(
+                format!("\x1b[H\x1b_Ga=T,f=32,s=320,v=96,i=7,p=1,X=1,z=0,C=1,q=2;{payload}\x1b\\")
+                    .as_bytes(),
+            );
+        };
+        let mut frame =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(160, 48)).unwrap();
+        let output = GraphicsOutput::default();
+        let mut host =
+            crate::backend::ratatui_backend::native_terminal::HostBackend::new(output.clone());
+        upload(&mut screen, &pixels);
+        let initial = paint_terminal_scene(&mut screen, &mut frame, &mut host, &output);
+        assert_eq!(initial.matches("a=T,").count(), 60);
+        pixels[0] ^= 0xff;
+        upload(&mut screen, &pixels);
+        let update = paint_terminal_scene(&mut screen, &mut frame, &mut host, &output);
+        assert_eq!(
+            update.matches("a=T,").count(),
+            1,
+            "only one tile changed: {update:?}"
+        );
+        evict_terminal_scene_encodes(&mut screen, (160, 48));
+        let repaint = paint_terminal_scene(&mut screen, &mut frame, &mut host, &output);
+        assert!(
+            !repaint.contains("\x1b_G"),
+            "unchanged tiles emitted Kitty traffic: {repaint:?}"
+        );
+    }
+
+    #[cfg(feature = "terminal-images")]
     #[test]
     fn ordinary_kitty_planes_preserve_text_and_cleanup_on_the_next_frame() {
         use ratatui::backend::Backend;
@@ -4540,6 +4857,7 @@ mod tests {
             assert!(!base.transmission_pending());
             assert!(!patch.transmission_pending());
             // The next frame removed the pane. Every surviving placement must be deleted.
+            begin_kitty_frame();
             Backend::draw(&mut host, std::iter::empty()).unwrap();
             Backend::flush(&mut host).unwrap();
         }
@@ -4550,6 +4868,58 @@ mod tests {
         assert!(output.contains("z=-1073741825"));
         assert!(output.contains("z=1,C=1"));
         assert!(output.find("a=T").unwrap() < output.find("a=p,").unwrap());
+    }
+
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn composed_placements_survive_text_updates_and_retire_overwritten_anchors() {
+        use ratatui::backend::Backend;
+        let image = CompressedKitty::new(
+            &image::DynamicImage::new_rgb8(20, 40),
+            ratatui::layout::Size::new(2, 2),
+            77,
+            -1,
+        )
+        .unwrap();
+        let mut frame = ratatui::Terminal::new(ratatui::backend::TestBackend::new(2, 2)).unwrap();
+        let output = GraphicsOutput::default();
+        let mut host =
+            crate::backend::ratatui_backend::native_terminal::HostBackend::new(output.clone());
+        for text in ["a", "b", "c"] {
+            begin_kitty_frame();
+            frame
+                .draw(|f| {
+                    f.buffer_mut()[(0, 0)].set_symbol(text);
+                    image.render_placed(f, (0, 0), f.area());
+                })
+                .unwrap();
+            let buffer = frame.backend().buffer();
+            host.draw((0..2).map(|y| (0, y, &buffer[(0, y)]))).unwrap();
+            Backend::flush(&mut host).unwrap();
+            let wire = String::from_utf8(std::mem::take(&mut *output.0.borrow_mut())).unwrap();
+            assert!(wire.contains(text));
+            assert_eq!(
+                wire.matches("a=p,").count(),
+                if text == "a" { 2 } else { 0 }
+            );
+            assert!(!wire.contains("a=d,"));
+        }
+        // The bottom row is not repainted. Its placement must remain, while an anchor overwritten
+        // by an ordinary widget retires only the placement that actually disappeared.
+        begin_kitty_frame();
+        frame
+            .draw(|f| {
+                image.render_placed(f, (0, 0), f.area());
+                f.buffer_mut()[(0, 0)].set_symbol("overlay");
+            })
+            .unwrap();
+        let buffer = frame.backend().buffer();
+        host.draw(std::iter::once((0, 0, &buffer[(0, 0)]))).unwrap();
+        Backend::flush(&mut host).unwrap();
+        let wire = String::from_utf8(std::mem::take(&mut *output.0.borrow_mut())).unwrap();
+        assert!(wire.contains("overlay"));
+        assert_eq!(wire.matches("a=d,").count(), 1);
+        assert!(!wire.contains("a=p,"));
     }
 
     #[cfg(feature = "terminal-images")]
@@ -4577,6 +4947,7 @@ mod tests {
         .unwrap();
         Backend::flush(&mut host).unwrap();
         let before = host.test_output().len();
+        begin_kitty_frame();
         Backend::draw(&mut host, std::iter::empty()).unwrap();
         crate::app::job_control::with_released_terminal(&_state, || {
             Backend::flush(&mut host).unwrap()

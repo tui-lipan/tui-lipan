@@ -291,7 +291,9 @@ pub(crate) struct HostBackend<W: io::Write> {
     test_output: Option<std::sync::Arc<std::sync::Mutex<Vec<u8>>>>,
     dropped: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     #[cfg(feature = "terminal-images")]
-    placement_deletes: Vec<String>,
+    composed_scene: super::renderers::image::HostComposedScene,
+    #[cfg(feature = "terminal-images")]
+    kitty_uploads: super::renderers::image::HostKittyUploads,
     #[cfg(feature = "terminal-images")]
     graphics_scene: super::renderers::image::HostGraphicsScene,
     #[cfg(feature = "terminal-images")]
@@ -299,7 +301,7 @@ pub(crate) struct HostBackend<W: io::Write> {
     #[cfg(feature = "terminal-images")]
     retired_native_ids: Vec<u32>,
     #[cfg(feature = "terminal-images")]
-    placement_retirement: Option<(usize, usize)>,
+    retired_native_epoch: Option<usize>,
     #[cfg(feature = "terminal-images")]
     uploads: Vec<(std::sync::Arc<super::renderers::image::KittyUpload>, usize)>,
 }
@@ -320,7 +322,9 @@ impl<W: io::Write> HostBackend<W> {
             #[cfg(feature = "terminal-images")]
             uploads: Vec::new(),
             #[cfg(feature = "terminal-images")]
-            placement_deletes: Vec::new(),
+            composed_scene: Default::default(),
+            #[cfg(feature = "terminal-images")]
+            kitty_uploads: Default::default(),
             #[cfg(feature = "terminal-images")]
             graphics_scene: Default::default(),
             #[cfg(feature = "terminal-images")]
@@ -328,7 +332,7 @@ impl<W: io::Write> HostBackend<W> {
             #[cfg(feature = "terminal-images")]
             retired_native_ids: Vec::new(),
             #[cfg(feature = "terminal-images")]
-            placement_retirement: None,
+            retired_native_epoch: None,
         }
     }
 
@@ -351,6 +355,8 @@ impl<W: io::Write> HostBackend<W> {
     #[cfg(feature = "terminal-images")]
     fn invalidate_graphics_state(&mut self) {
         self.graphics_scene.invalidate();
+        self.composed_scene.invalidate();
+        self.kitty_uploads.invalidate();
         if let Some((_, _, ready)) = &mut self.pending_scene {
             *ready = false;
         }
@@ -507,16 +513,17 @@ impl<W: io::Write> HostBackend<W> {
             self.title = Some(title);
         }
         #[cfg(feature = "terminal-images")]
-        if result.is_ok()
-            && let Some((retired, epoch)) = self.placement_retirement.take()
-            && epoch == self.dropped.load(Ordering::Relaxed)
         {
-            self.placement_deletes.drain(..retired);
-            self.retired_native_ids.clear();
+            self.composed_scene
+                .flushed(result.is_ok(), self.output_epoch());
+            if result.is_ok() && self.retired_native_epoch.take() == Some(self.output_epoch()) {
+                self.retired_native_ids.clear();
+            }
         }
         #[cfg(feature = "terminal-images")]
         for (upload, epoch) in self.uploads.drain(..) {
             if result.is_ok() && epoch == self.dropped.load(Ordering::Relaxed) {
+                self.kitty_uploads.acknowledge(&upload);
                 upload.handed_over();
             }
         }
@@ -605,9 +612,7 @@ impl<W: io::Write> Backend for HostBackend<W> {
     {
         #[cfg(feature = "terminal-images")]
         {
-            use super::renderers::image::{kitty_draw_pending, prepare_kitty_cells};
             let epoch = self.dropped.load(Ordering::Relaxed);
-            self.placement_retirement = None;
             if let Some(desired) = super::renderers::image::take_desired() {
                 let transition = self.prepare_scene(desired)?;
                 self.pending_scene = Some((transition, epoch, false));
@@ -619,28 +624,25 @@ impl<W: io::Write> Backend for HostBackend<W> {
             }
             self.retired_native_ids
                 .extend(super::renderers::image::take_retired_native_ids());
+            self.retired_native_epoch = None;
             for id in &self.retired_native_ids {
                 write!(self.backend, "\x1b_Ga=d,q=2,d=I,i={id};\x1b\\")?;
             }
-            for delete in &self.placement_deletes {
+            self.retired_native_epoch = Some(epoch);
+            let mut prepared = self.kitty_uploads.prepare(content)?;
+            for delete in self
+                .composed_scene
+                .prepare(&mut prepared, epoch, &self.kitty_uploads)
+            {
                 self.backend.write_all(delete.as_bytes())?;
             }
-            self.placement_retirement = Some((self.placement_deletes.len(), epoch));
-            if !kitty_draw_pending() {
-                self.backend.draw(content)?;
-                if let Some((_, _, ready)) = self.pending_scene.as_mut() {
-                    *ready = true;
-                }
-                return Ok(());
-            }
-            let prepared = prepare_kitty_cells(content)?;
-            self.placement_deletes.extend(prepared.placement_deletes);
             self.backend.draw(
                 prepared
                     .cells
                     .iter()
                     .map(|(x, y, cell)| (*x, *y, cell.as_ref())),
             )?;
+            self.composed_scene.drawn();
             // Draw may only fill BufWriter. Acknowledge after flush, provided FrameOutput
             // has not discarded any part of this frame during terminal release.
             self.uploads

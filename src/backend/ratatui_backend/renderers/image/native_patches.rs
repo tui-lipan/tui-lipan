@@ -259,10 +259,13 @@ pub(crate) fn render_native_terminal_images(
     };
     let mut holes = IMAGE_OCCLUSIONS.with(|slot| slot.borrow().clone());
     holes.extend(super::super::image_effects::pending_image_occlusions());
+    // A row repaint must preserve the terminal's complete image plan. Uploading an existing
+    // Kitty image ID removes all its placements, so any source update must replace every visible
+    // region, including those outside the text damage clip.
     let plan = native_scene::cached_plan()
         .filter(|plan| {
             plan.content == content
-                && plan.clip == clip
+                && plan.clip.intersection(clip) == clip
                 && plan.holes == holes
                 && plan.cell == (width, height)
         })

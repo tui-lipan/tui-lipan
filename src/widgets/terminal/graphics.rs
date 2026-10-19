@@ -92,8 +92,8 @@ const MAX_APC_BYTES: usize = 32 * 1024 * 1024;
 /// least-recently-used.
 const DEFAULT_IMAGE_BUDGET_BYTES: usize = 96 * 1024 * 1024;
 
-/// Largest number of live placements retained.
-const MAX_PLACEMENTS: usize = 256;
+/// Keep room for layered senders even on a small grid.
+const MIN_PLACEMENTS: usize = 1024;
 
 /// Guard on decoded dimensions, applied before pixels are allocated.
 const MAX_IMAGE_DIMENSION: u32 = 16384;
@@ -1599,6 +1599,8 @@ pub(super) struct GraphicsContext {
     pub(super) cell: TerminalCellSize,
     /// Viewport width in cells.
     pub(super) cols: u16,
+    /// Viewport height in cells.
+    pub(super) rows: u16,
 }
 
 /// What the screen does after the store handled a command.
@@ -2629,12 +2631,32 @@ impl TerminalGraphics {
                 self.damage.merge(super::damage::GraphicsDamage::Placements);
             }
             self.placements.push(placement);
-            while self.placements.len() > MAX_PLACEMENTS {
-                self.placements.remove(0);
-            }
+            self.trim_placements(ctx);
         }
 
         (!command.no_cursor_move).then_some((rows, cols))
+    }
+
+    fn trim_placements(&mut self, ctx: GraphicsContext) {
+        // Two layers of per-cell placements fit without evicting a visible image as it streams in.
+        let limit = (usize::from(ctx.cols) * usize::from(ctx.rows) * 2).max(MIN_PLACEMENTS);
+        while self.placements.len() > limit {
+            let index = self
+                .placements
+                .iter()
+                .position(|placement| placement.alt_screen != ctx.alt_screen)
+                .or_else(|| {
+                    self.placements.iter().position(|placement| {
+                        placement.line.saturating_add(usize::from(placement.rows))
+                            <= ctx.viewport_top_line
+                            || placement.line
+                                >= ctx.viewport_top_line.saturating_add(usize::from(ctx.rows))
+                            || placement.col >= ctx.cols
+                    })
+                })
+                .unwrap_or(0);
+            self.placements.remove(index);
+        }
     }
 
     fn set_virtual_cells(&mut self, id: u32, command: &GraphicsCommand) {
@@ -3344,22 +3366,27 @@ fn placement_geometry(
         command.pixel_x.min(u32::from(cell.0) - 1),
         command.pixel_y.min(u32::from(cell.1) - 1),
     );
-    let size = if requested_cells == (0, 0) {
-        source
-    } else {
-        let bounds = (
-            if requested_cells.0 == 0 {
-                u32::MAX
-            } else {
-                requested_cells.0 * u32::from(cell.0) - offset.0
-            },
-            if requested_cells.1 == 0 {
-                u32::MAX
-            } else {
-                requested_cells.1 * u32::from(cell.1) - offset.1
-            },
-        );
-        crate::capture::fitted_pixel_size(source, bounds)
+    // Ordinary Kitty placements stretch each explicit axis. With just one axis specified,
+    // derive the other from the source aspect ratio. Offsets are inside the requested box.
+    let width = requested_cells.0 * u32::from(cell.0);
+    let height = requested_cells.1 * u32::from(cell.1);
+    let size = match requested_cells {
+        (0, 0) => source,
+        (_, 0) => {
+            let width = width - offset.0;
+            (
+                width,
+                (u64::from(width) * u64::from(source.1) / u64::from(source.0.max(1))) as u32,
+            )
+        }
+        (0, _) => {
+            let height = height - offset.1;
+            (
+                (u64::from(height) * u64::from(source.0) / u64::from(source.1.max(1))) as u32,
+                height,
+            )
+        }
+        _ => (width - offset.0, height - offset.1),
     };
     ImageGeometry {
         offset,
@@ -3787,6 +3814,7 @@ mod tests {
             alt_screen: false,
             cell: TerminalCellSize::new(10, 20),
             cols: 80,
+            rows: 24,
         }
     }
 
@@ -3895,6 +3923,91 @@ mod tests {
 
         let outcome = graphics.apply(commands[0].clone(), context());
         assert_eq!(outcome.advance, Some((4, 8)));
+    }
+
+    #[test]
+    fn explicit_axes_stretch_crops_and_single_axes_preserve_aspect_ratio() {
+        let ctx = GraphicsContext {
+            cell: TerminalCellSize::new(14, 32),
+            ..context()
+        };
+        let command = GraphicsCommand {
+            cols: 1,
+            rows: 1,
+            ..GraphicsCommand::default()
+        };
+        assert_eq!(placement_geometry(&command, ctx, (13, 32)).size, (14, 32));
+        let command = GraphicsCommand { rows: 0, ..command };
+        assert_eq!(placement_geometry(&command, ctx, (7, 16)).size, (14, 32));
+        let command = GraphicsCommand {
+            cols: 0,
+            rows: 1,
+            ..command
+        };
+        assert_eq!(placement_geometry(&command, ctx, (7, 16)).size, (14, 32));
+    }
+
+    #[test]
+    fn placement_pressure_evicts_stale_screens_then_offscreen_before_visible_cells() {
+        let mut graphics = TerminalGraphics::default();
+        let mut ctx = GraphicsContext {
+            cols: 40,
+            rows: 16,
+            ..context()
+        };
+        graphics.apply(
+            GraphicsCommand {
+                action: GraphicsAction::Transmit,
+                id: 7,
+                quiet: 2,
+                format: 24,
+                width: 1,
+                height: 1,
+                payload: vec![1, 2, 3],
+                ..GraphicsCommand::default()
+            },
+            ctx,
+        );
+        let limit = usize::from(ctx.cols) * usize::from(ctx.rows) * 2;
+        for id in 1..=limit as u32 {
+            graphics.apply(
+                GraphicsCommand {
+                    action: GraphicsAction::Display,
+                    id: 7,
+                    placement: id,
+                    cols: 1,
+                    rows: 1,
+                    quiet: 2,
+                    no_cursor_move: true,
+                    ..GraphicsCommand::default()
+                },
+                ctx,
+            );
+        }
+        // The oldest placement is visible. Later entries on a stale screen and below the viewport
+        // must go first, even though the visible placement would otherwise be FIFO's victim.
+        graphics.placements[10].alt_screen = true;
+        graphics.placements[20].line = 100;
+        for id in limit as u32 + 1..=limit as u32 + 2 {
+            ctx.cursor_col = 1;
+            graphics.apply(
+                GraphicsCommand {
+                    action: GraphicsAction::Display,
+                    id: 7,
+                    placement: id,
+                    cols: 1,
+                    rows: 1,
+                    quiet: 2,
+                    no_cursor_move: true,
+                    ..GraphicsCommand::default()
+                },
+                ctx,
+            );
+        }
+        assert_eq!(graphics.placements.len(), limit);
+        assert!(graphics.placements.iter().any(|p| p.placement_id == 1));
+        assert!(!graphics.placements.iter().any(|p| p.placement_id == 11));
+        assert!(!graphics.placements.iter().any(|p| p.placement_id == 21));
     }
 
     #[test]

@@ -820,6 +820,81 @@ mod tests {
     }
 
     #[test]
+    fn partial_repaint_upload_restores_the_complete_image() {
+        let _host = image_support::test_kitty_host((10, 20), true);
+        let mut screen = crate::widgets::TerminalScreen::new(4, 8, 0);
+        screen.set_cell_size(crate::widgets::TerminalCellSize::new(10, 20));
+        let output = Output::default();
+        let mut host = HostBackend::new(output.clone());
+        let mut frame = ratatui::Terminal::new(ratatui::backend::TestBackend::new(8, 4)).unwrap();
+        let content = Rect {
+            x: 0,
+            y: 0,
+            w: 8,
+            h: 4,
+        };
+        let paint = |screen: &mut crate::widgets::TerminalScreen,
+                     frame: &mut ratatui::Terminal<ratatui::backend::TestBackend>,
+                     clip| {
+            let _owner = owner_scope(NodeId::new(1, 1));
+            frame
+                .draw(|f| {
+                    assert!(render_native_terminal_images(
+                        f,
+                        &screen.render_snapshot().images,
+                        content,
+                        clip
+                    ))
+                })
+                .unwrap();
+        };
+        let upload = |screen: &mut crate::widgets::TerminalScreen, color: u8| {
+            let payload = BASE64.encode([color, 0, 0].repeat(20 * 60));
+            screen.process_bytes(
+                format!("\x1b[H\x1b_Ga=T,i=7,p=9,f=24,s=20,v=60,q=2,C=1;{payload}\x1b\\")
+                    .as_bytes(),
+            );
+        };
+        upload(&mut screen, 1);
+        begin_kitty_frame();
+        paint(
+            &mut screen,
+            &mut frame,
+            ratatui::layout::Rect::new(0, 0, 8, 4),
+        );
+        draw(&mut host).unwrap();
+        let initial = output.take();
+        assert!(initial.contains("w=20,h=60"));
+
+        // A new producer frame is pending when a text-only update repaints one physical row.
+        upload(&mut screen, 2);
+        begin_partial_native_scene();
+        let _plans = host.native_plan_scope();
+        paint(
+            &mut screen,
+            &mut frame,
+            ratatui::layout::Rect::new(0, 1, 8, 1),
+        );
+        draw(&mut host).unwrap();
+        let update = output.take();
+        assert_eq!(update.matches("a=t,").count(), 1);
+        assert_eq!(update.matches("a=p,").count(), 1);
+        assert!(
+            update.contains("w=20,h=60"),
+            "re-upload deletes the old placement, so the replacement must cover all three rows: {update:?}"
+        );
+
+        begin_partial_native_scene();
+        paint(
+            &mut screen,
+            &mut frame,
+            ratatui::layout::Rect::new(0, 2, 8, 1),
+        );
+        draw(&mut host).unwrap();
+        assert!(!output.take().contains("\x1b_G"));
+    }
+
+    #[test]
     fn nested_capture_preserves_live_frame_staging() {
         let mut screen = screen();
         let output = Output::default();

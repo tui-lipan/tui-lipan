@@ -21,7 +21,12 @@ const TILE_ROWS: i32 = 8;
 pub(super) struct CompositionCache {
     namespace: u64,
     pub(super) alive: Arc<std::sync::atomic::AtomicBool>,
-    pub(super) tiles: HashMap<(i32, i32, i32), TerminalImage>,
+    pub(super) tiles: HashMap<(i32, i32, i32), CachedTile>,
+}
+
+pub(super) struct CachedTile {
+    inputs: u64,
+    image: TerminalImage,
 }
 
 impl Default for CompositionCache {
@@ -220,8 +225,9 @@ pub(crate) fn composite_terminal_images(
         let row = ty * TILE_ROWS;
         let width = (i32::from(cols) - col).min(TILE_COLS) as u16;
         let height = (i32::from(rows) - row).min(TILE_ROWS) as u16;
-        let image = compose_tile(&cache, (z, tx, ty), &layers, cell, (width, height));
-        retained.insert((z, tx, ty), image.clone());
+        let tile = compose_tile(&cache, (z, tx, ty), &layers, cell, (width, height));
+        let image = tile.image.clone();
+        retained.insert((z, tx, ty), tile);
         result.push(TerminalImagePlacement {
             image_id: ((ty as u32) << 16) | tx as u32,
             image,
@@ -273,19 +279,18 @@ fn compose_tile(
     layers: &[Layer<'_>],
     cell: (u16, u16),
     cells: (u16, u16),
-) -> TerminalImage {
+) -> CachedTile {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     (cache.namespace, tile, cell, cells).hash(&mut hasher);
     for layer in layers {
         layer.hash(&mut hasher)
     }
-    let source_hash = hasher.finish();
-    if let Some(image) = cache
-        .tiles
-        .get(&tile)
-        .filter(|image| image.source_hash == source_hash)
-    {
-        return image.clone();
+    let inputs = hasher.finish();
+    if let Some(tile) = cache.tiles.get(&tile).filter(|tile| tile.inputs == inputs) {
+        return CachedTile {
+            inputs,
+            image: tile.image.clone(),
+        };
     }
     let width = u32::from(cells.0) * u32::from(cell.0);
     let height = u32::from(cells.1) * u32::from(cell.1);
@@ -297,9 +302,24 @@ fn compose_tile(
     for layer in layers {
         layer.paint(&mut pixels, origin)
     }
+    // A whole-source revision can change while this tile's pixels stay identical. Its host
+    // upload identity describes the resulting pixels, rather than the layers used to compose it.
+    let mut content = std::collections::hash_map::DefaultHasher::new();
+    (cache.namespace, tile, cell, cells, &pixels).hash(&mut content);
+    let source_hash = content.finish();
+    if let Some(previous) = cache
+        .tiles
+        .get(&tile)
+        .filter(|old| old.image.source_hash == source_hash)
+    {
+        return CachedTile {
+            inputs,
+            image: previous.image.clone(),
+        };
+    }
     let mut stream = std::collections::hash_map::DefaultHasher::new();
     (cache.namespace, tile.0).hash(&mut stream);
-    TerminalImage {
+    let image = TerminalImage {
         source_key: super::ImageSourceKey::default(),
         source_lifetime: Arc::default(),
         placement_lifetime: None,
@@ -313,7 +333,8 @@ fn compose_tile(
         stream_namespace: stream.finish(),
         geometry: None,
         composition: None,
-    }
+    };
+    CachedTile { inputs, image }
 }
 
 fn cell_aligned(placement: &TerminalImagePlacement, cell: (u16, u16)) -> bool {
@@ -556,13 +577,14 @@ mod tests {
     }
 
     #[test]
-    fn explicit_cell_bounds_preserve_the_source_aspect_ratio() {
+    fn explicit_cell_bounds_stretch_both_axes_and_single_axis_preserves_aspect_ratio() {
         let mut screen = TerminalScreen::new(16, 32, 0);
         transmit(&mut screen, "i=1,z=0", 320, 320, [0, 0, 255, 255]);
         transmit(&mut screen, "i=2,z=1,c=2,r=2", 10, 10, [255, 0, 0, 255]);
         let (_, pixels) = canvas(&mut screen);
         assert_eq!(pixels.get_pixel(19, 19).0, [255, 0, 0, 255]);
-        assert_eq!(pixels.get_pixel(19, 20).0, [0, 0, 255, 255]);
+        assert_eq!(pixels.get_pixel(19, 39).0, [255, 0, 0, 255]);
+        assert_eq!(pixels.get_pixel(19, 40).0, [0, 0, 255, 255]);
         transmit(&mut screen, "i=2,z=1,c=2", 10, 10, [0, 255, 0, 255]);
         assert_eq!(canvas(&mut screen).1.get_pixel(19, 20).0, [0, 0, 255, 255]);
     }
