@@ -780,8 +780,13 @@ where
             dirty_override: None,
         };
 
-        let handled =
-            keyboard::dispatch_paste(&mut self.core.tree, self.focused, text, &mut key_ctx);
+        let handled = keyboard::dispatch_paste(
+            &mut self.core.tree,
+            self.focused,
+            text,
+            crate::PasteOrigin::Terminal,
+            &mut key_ctx,
+        );
 
         let pump_dirty = self.pump()?;
         if handled && !pump_dirty {
@@ -817,7 +822,13 @@ where
             &clipboard_config,
             &mut self.copy_feedback,
         );
-        keyboard::dispatch_paste(&mut self.core.tree, focused, &text, &mut key_ctx)
+        keyboard::dispatch_paste(
+            &mut self.core.tree,
+            focused,
+            &text,
+            crate::PasteOrigin::Clipboard,
+            &mut key_ctx,
+        )
     }
 
     pub(crate) fn copy_active_selection_for_mouse(

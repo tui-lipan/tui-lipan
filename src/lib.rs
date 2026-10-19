@@ -211,8 +211,8 @@ pub use crate::capture::{
 pub use crate::capture::{PngOptions, PngTextRenderer};
 pub use crate::clipboard::{
     ClipboardConfig, ClipboardContent, ClipboardError, ClipboardHandle, ClipboardPasteContent,
-    ClipboardProvider, CopyOnSelect, ImageContent, ImageFormat, PasteShiftInsertBehavior,
-    PasteSource, RightClickAction,
+    ClipboardProvider, CopyOnSelect, ImageContent, ImageFormat, PasteOrigin,
+    PasteShiftInsertBehavior, PasteSource, RightClickAction,
 };
 pub use crate::core::component::{
     Breakpoint, Command, Component, Context, KeyUpdate, ScrollbarVisibility, TaskPolicy, Update,
@@ -312,7 +312,8 @@ pub use crate::widgets::TerminalPtyHandoff;
 pub use crate::widgets::{
     CopyModeAction, CopyModeGrid, KittyKeyboardFlags, MouseEncoding, MouseMode, MouseModeState,
     TerminalCellSize, TerminalColorPalette, TerminalCopyMode, TerminalDecoration, TerminalKeyModes,
-    TerminalPasteShortcutBehavior, TerminalRenderSnapshot, terminal_selection_text,
+    TerminalPasteEvent, TerminalPasteShortcutBehavior, TerminalRenderSnapshot,
+    terminal_selection_text,
 };
 #[cfg(feature = "terminal-images")]
 pub use crate::widgets::{

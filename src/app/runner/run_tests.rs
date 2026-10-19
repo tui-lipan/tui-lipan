@@ -10897,22 +10897,18 @@ fn notifying_live_terminals_do_not_poll_at_frame_cadence() {
 #[cfg(feature = "terminal")]
 mod terminal_attachment_paste {
     use super::*;
-    use crate::{ClipboardContent, ClipboardPasteContent, ImageContent, ImageFormat};
+    use crate::{ClipboardContent, ImageContent, ImageFormat, PasteOrigin, TerminalPasteEvent};
 
     struct Provider(Option<ClipboardContent>);
     impl ClipboardProvider for Provider {
         fn read_clipboard_text(&mut self) -> Result<String, ClipboardError> {
-            Ok("text fallback".into())
+            Ok(match &self.0 {
+                Some(ClipboardContent::Text(text)) => text.clone(),
+                _ => "text fallback".into(),
+            })
         }
         fn write_clipboard_text(&mut self, _: &str) -> Result<(), ClipboardError> {
             Ok(())
-        }
-        fn read_terminal_paste(&mut self) -> Result<ClipboardPasteContent, ClipboardError> {
-            Ok(match &self.0 {
-                Some(ClipboardContent::Text(s)) => ClipboardPasteContent::Text(s.clone()),
-                Some(_) => ClipboardPasteContent::Rich,
-                None => ClipboardPasteContent::Unavailable,
-            })
         }
         fn read_clipboard_files(&mut self) -> Result<Vec<std::path::PathBuf>, ClipboardError> {
             Ok(match &self.0 {
@@ -10930,7 +10926,7 @@ mod terminal_attachment_paste {
         }
     }
     struct PasteHost {
-        pastes: Rc<RefCell<Vec<ClipboardContent>>>,
+        pastes: Rc<RefCell<Vec<TerminalPasteEvent>>>,
         keys: Rc<Cell<usize>>,
         inputs: Rc<Cell<usize>>,
     }
@@ -10962,7 +10958,7 @@ mod terminal_attachment_paste {
     #[test]
     fn rich_terminal_paste_delivers_content_once_and_preserves_text_pastes() {
         for content in [
-            ClipboardContent::Text("hello".into()),
+            ClipboardContent::Text("/tmp/photo.png".into()),
             ClipboardContent::Files(vec!["/tmp/photo.png".into(), "/tmp/notes.txt".into()]),
             ClipboardContent::Image(ImageContent::from_bytes(b"png bytes", ImageFormat::Png)),
         ] {
@@ -10984,26 +10980,99 @@ mod terminal_attachment_paste {
             let id = node_id_by_key(&backend.core.tree, "attachment-terminal");
             backend.set_focused(id);
             backend.send_key(ctrl_char('v')).expect("clipboard paste");
-            assert_eq!(&*pastes.borrow(), std::slice::from_ref(&content));
+            assert_eq!(
+                pastes.borrow()[0],
+                TerminalPasteEvent {
+                    content: content.clone(),
+                    origin: PasteOrigin::Clipboard
+                }
+            );
             backend
                 .send_key(ctrl_shift_char('v'))
                 .expect("explicit clipboard paste");
             backend.send_paste("").expect("empty host paste");
             assert_eq!(
                 &*pastes.borrow(),
-                &[content.clone(), content.clone(), content]
+                &[
+                    TerminalPasteEvent {
+                        content: content.clone(),
+                        origin: PasteOrigin::Clipboard
+                    },
+                    TerminalPasteEvent {
+                        content: content.clone(),
+                        origin: PasteOrigin::Clipboard
+                    },
+                    TerminalPasteEvent {
+                        content,
+                        origin: PasteOrigin::Terminal
+                    },
+                ]
             );
             backend
-                .send_paste("/tmp/dropped photo.png")
+                .send_paste("/tmp/photo.png")
                 .expect("terminal paste");
             assert_eq!(
                 pastes.borrow()[3],
-                ClipboardContent::Text("/tmp/dropped photo.png".into())
+                TerminalPasteEvent {
+                    content: ClipboardContent::Text("/tmp/photo.png".into()),
+                    origin: PasteOrigin::Terminal
+                }
+            );
+            assert!(backend.paste_from_source_for_mouse(crate::PasteSource::Clipboard));
+            assert_eq!(
+                pastes.borrow()[4],
+                TerminalPasteEvent {
+                    content: ClipboardContent::Text(match &pastes.borrow()[0].content {
+                        ClipboardContent::Text(text) => text.clone(),
+                        _ => "text fallback".into(),
+                    }),
+                    origin: PasteOrigin::Clipboard
+                }
             );
             assert_eq!(keys.get(), 0);
             assert_eq!(inputs.get(), 0);
         }
     }
+    #[test]
+    fn empty_clipboard_forwards_ctrl_v_without_emitting_a_paste() {
+        struct Empty;
+        impl ClipboardProvider for Empty {
+            fn read_clipboard_text(&mut self) -> Result<String, ClipboardError> {
+                Ok(String::new())
+            }
+            fn write_clipboard_text(&mut self, _: &str) -> Result<(), ClipboardError> {
+                Ok(())
+            }
+            fn read_clipboard_content(
+                &mut self,
+            ) -> Result<Option<ClipboardContent>, ClipboardError> {
+                Ok(None)
+            }
+        }
+        let pastes = Rc::new(RefCell::new(vec![]));
+        let keys = Rc::new(Cell::new(0));
+        let inputs = Rc::new(Cell::new(0));
+        let app = App::new()
+            .terminal_key_policy(crate::TerminalKeyPolicy::AppCommandsThenTerminal)
+            .clipboard_provider(Empty);
+        let mut backend = crate::TestBackend::new_with_app(
+            app,
+            PasteHost {
+                pastes: pastes.clone(),
+                keys: keys.clone(),
+                inputs: inputs.clone(),
+            },
+            (),
+        );
+        let id = node_id_by_key(&backend.core.tree, "attachment-terminal");
+        backend.set_focused(id);
+        backend
+            .send_key(ctrl_char('v'))
+            .expect("empty clipboard shortcut");
+        assert!(pastes.borrow().is_empty());
+        assert_eq!((keys.get(), inputs.get()), (1, 1));
+    }
+
     #[test]
     fn image_limit_reports_failure_without_forwarding_to_child() {
         let pastes = Rc::new(RefCell::new(vec![]));

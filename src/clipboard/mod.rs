@@ -17,6 +17,7 @@ pub(crate) use provider::SystemClipboardProvider;
 pub(crate) use provider::WebClipboardProvider;
 pub use provider::{
     ClipboardContent, ClipboardPasteContent, ClipboardProvider, ImageContent, ImageFormat,
+    PasteOrigin,
 };
 pub use service::{
     ClipboardConfig, ClipboardReporter, ClipboardService, CopyOnSelect, PasteShiftInsertBehavior,

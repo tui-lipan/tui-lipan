@@ -99,7 +99,7 @@ pub(crate) struct TerminalNode {
     pub on_focus: Option<Callback<()>>,
     pub on_blur: Option<Callback<()>>,
     pub on_key: Option<KeyHandler>,
-    pub on_paste: Option<Callback<crate::ClipboardContent>>,
+    pub on_paste: Option<Callback<crate::widgets::TerminalPasteEvent>>,
     pub on_input: Option<Callback<TerminalInputEvent>>,
 }
 

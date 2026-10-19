@@ -339,8 +339,15 @@ Image pasting is **opt-in**: only active when `on_images_change` or `on_image_pa
 With the `terminal` feature, `ctx.clipboard().read_content()` returns
 `Result<Option<ClipboardContent>, ClipboardError>`. It prefers native file lists,
 then image data, then text. `None` means no supported content. Images require the
-`clipboard-images` feature and obey `paste_max_image_bytes`. Provider failures
-remain errors, including failures to read a previously advertised rich format.
+`clipboard-images` feature and obey `paste_max_image_bytes`.
+`ClipboardProvider::read_clipboard_content` defines the typed read operation. Its
+default tries `read_clipboard_files`, `read_clipboard_image`, then
+`read_clipboard_text`, even if the provider leaves `read_terminal_paste` at its
+text-only default. Optional readers returning `Unsupported` are skipped; genuine
+provider failures propagate without text fallback. Providers with native format
+availability can override the typed operation and return `None` for an empty
+clipboard. The system provider reads image data once, without a classification
+probe followed by a second payload read.
 
 Use [`Terminal::on_paste`](widgets/terminal.md#receive-paste-content-before-pty-encoding)
 to receive the same content through terminal paste shortcuts. File lists contain

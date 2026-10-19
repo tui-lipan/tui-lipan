@@ -83,6 +83,6 @@ pub struct Terminal {
     pub(crate) on_focus: Option<Callback<()>>,
     pub(crate) on_blur: Option<Callback<()>>,
     pub(crate) on_key: Option<KeyHandler>,
-    pub(crate) on_paste: Option<Callback<crate::ClipboardContent>>,
+    pub(crate) on_paste: Option<Callback<crate::widgets::TerminalPasteEvent>>,
     pub(crate) on_input: Option<Callback<TerminalInputEvent>>,
 }

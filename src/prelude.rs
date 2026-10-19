@@ -138,7 +138,7 @@ pub use crate::input::{KeyBinding, KeyBindings};
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub use crate::clipboard::{
-    ClipboardConfig, ClipboardContent, ClipboardPasteContent, CopyOnSelect,
+    ClipboardConfig, ClipboardContent, ClipboardPasteContent, CopyOnSelect, PasteOrigin,
     PasteShiftInsertBehavior, PasteSource, RightClickAction,
 };
 
@@ -259,9 +259,9 @@ pub use crate::widgets::{
     TerminalBuffer, TerminalCellSize, TerminalClipboardEvent, TerminalClipboardTarget,
     TerminalColorPalette, TerminalCommandPhase, TerminalCopyMode, TerminalDamage,
     TerminalDecoration, TerminalHyperlink, TerminalInputEvent, TerminalInputKind, TerminalKeyModes,
-    TerminalLinkEvent, TerminalLogicalLine, TerminalMutation, TerminalPasteShortcutBehavior,
-    TerminalPos, TerminalPresentationSubscription, TerminalPty, TerminalPtyConfig,
-    TerminalPtyError, TerminalPtyEvent, TerminalReadGate, TerminalReadGateStats,
+    TerminalLinkEvent, TerminalLogicalLine, TerminalMutation, TerminalPasteEvent,
+    TerminalPasteShortcutBehavior, TerminalPos, TerminalPresentationSubscription, TerminalPty,
+    TerminalPtyConfig, TerminalPtyError, TerminalPtyEvent, TerminalReadGate, TerminalReadGateStats,
     TerminalRenderSnapshot, TerminalScreen, TerminalScreenHandle, TerminalSelection,
     TerminalSelectionEvent, TerminalSemanticEvent, TerminalSemanticState, TerminalTextPosition,
     TerminalViewport, TerminalWorkingDirectory, TerminalWorkingDirectorySource, absolute_line,

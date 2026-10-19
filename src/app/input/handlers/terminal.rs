@@ -220,7 +220,12 @@ pub(crate) fn preflight_key(
             && !key.mods.super_key
             && matches!(key.code, KeyCode::Char('V') | KeyCode::Char('v'));
     if is_clipboard_paste && let Some(callback) = node.on_paste.as_ref() {
-        return paste_clipboard_content(callback, clipboard, clipboard_config);
+        return paste_clipboard_content(
+            callback,
+            clipboard,
+            clipboard_config,
+            crate::PasteOrigin::Clipboard,
+        );
     }
 
     if is_plain_ctrl_v && node.paste_shortcut_behavior == TerminalPasteShortcutBehavior::Performable
@@ -306,18 +311,23 @@ pub(crate) fn preflight_key(
 }
 
 fn paste_clipboard_content(
-    callback: &crate::Callback<crate::ClipboardContent>,
+    callback: &crate::Callback<crate::widgets::TerminalPasteEvent>,
     clipboard: &ClipboardService,
     config: &ClipboardConfig,
+    origin: crate::PasteOrigin,
 ) -> TerminalPreflightResult {
-    match clipboard.read_content(config) {
-        Ok(Some(crate::ClipboardContent::Text(text))) => callback.emit(
-            crate::ClipboardContent::Text(truncate_paste(&text, config.paste_max_bytes)),
-        ),
-        Ok(Some(content)) => callback.emit(content),
+    let content = match clipboard.read_content(config) {
+        Ok(Some(crate::ClipboardContent::Text(text))) => {
+            crate::ClipboardContent::Text(truncate_paste(&text, config.paste_max_bytes))
+        }
+        Ok(Some(content)) => content,
         Ok(None) => return TerminalPreflightResult::Forward,
-        Err(err) => clipboard.report_error(err),
-    }
+        Err(err) => {
+            clipboard.report_error(err);
+            return TerminalPreflightResult::Consumed;
+        }
+    };
+    callback.emit(crate::widgets::TerminalPasteEvent { content, origin });
     TerminalPreflightResult::Consumed
 }
 
@@ -393,6 +403,7 @@ pub(crate) fn handle_paste(
     tree: &mut NodeTree,
     id: NodeId,
     text: &str,
+    origin: crate::PasteOrigin,
     ctx: &super::KeyCtx<'_>,
 ) -> bool {
     let node = tree.node(id);
@@ -402,11 +413,14 @@ pub(crate) fn handle_paste(
 
     if let Some(callback) = node.on_paste.as_ref() {
         // Some host terminals signal an image paste with an empty bracketed paste.
-        if text.is_empty() {
-            paste_clipboard_content(callback, ctx.clipboard, ctx.clipboard_config);
+        if text.is_empty() && origin == crate::PasteOrigin::Terminal {
+            paste_clipboard_content(callback, ctx.clipboard, ctx.clipboard_config, origin);
             return true;
         }
-        callback.emit(crate::ClipboardContent::Text(text.to_owned()));
+        callback.emit(crate::widgets::TerminalPasteEvent {
+            content: crate::ClipboardContent::Text(text.to_owned()),
+            origin,
+        });
         return true;
     }
     let Some(on_input) = node.on_input.as_ref() else {

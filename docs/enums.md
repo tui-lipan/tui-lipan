@@ -1643,10 +1643,19 @@ bounded successful frame interval percentiles. See [performance guidance](perf.m
 
 ## ClipboardContent
 
-Content delivered by `Terminal::on_paste` and read by `ClipboardHandle::read_content`:
+Content in `TerminalPasteEvent::content` and read by `ClipboardHandle::read_content`:
 
 | Variant | Payload |
 | --- | --- |
 | `Text` | `String` |
 | `Image` | `ImageContent` |
 | `Files` | `Vec<PathBuf>` |
+
+## PasteOrigin
+
+| Variant | Meaning |
+| --- | --- |
+| `Clipboard` | Framework clipboard shortcut, mouse paste, or application clipboard command |
+| `Terminal` | Outer-terminal paste event, which may contain plain text or a file-drop path |
+
+`TerminalPasteEvent` contains this origin alongside its `ClipboardContent` payload.

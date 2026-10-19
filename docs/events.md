@@ -1076,7 +1076,11 @@ exit. These fields are available from `tui_lipan::TreeHoverEvent` and the prelud
 
 ### Terminal paste content
 
-`Terminal::on_paste` receives `ClipboardContent::Text(String)`,
-`ClipboardContent::Image(ImageContent)`, or `ClipboardContent::Files(Vec<PathBuf>)`.
-It replaces PTY-byte delivery for that paste. See
+`Terminal::on_paste` receives `TerminalPasteEvent` with `content: ClipboardContent`
+and `origin: PasteOrigin`. `Clipboard` origin identifies framework clipboard
+shortcuts and mouse paste; `Terminal` identifies outer-terminal paste events.
+`ClipboardContent` has `Text(String)`, `Image(ImageContent)`, and `Files(Vec<PathBuf>)`
+variants. The callback replaces PTY-byte delivery for that paste. Inspect
+`event.content` for its payload and `event.origin` before interpreting text as a
+file-drop path. See
 [terminal paste content](widgets/terminal.md#receive-paste-content-before-pty-encoding).
