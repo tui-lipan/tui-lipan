@@ -333,3 +333,15 @@ See [`docs/widgets/input.md`](widgets/input.md#textarea) for complete `TextAreaI
 | `TextAreaImageMode::Attachment` | Images appended to separate list; text value unchanged |
 
 Image pasting is **opt-in**: only active when `on_images_change` or `on_image_paste` is set on `TextArea`.
+
+## Read content for a terminal host
+
+With the `terminal` feature, `ctx.clipboard().read_content()` returns
+`Result<Option<ClipboardContent>, ClipboardError>`. It prefers native file lists,
+then image data, then text. `None` means no supported content. Images require the
+`clipboard-images` feature and obey `paste_max_image_bytes`. Provider failures
+remain errors, including failures to read a previously advertised rich format.
+
+Use [`Terminal::on_paste`](widgets/terminal.md#receive-paste-content-before-pty-encoding)
+to receive the same content through terminal paste shortcuts. File lists contain
+local paths and do not transfer file bytes by themselves.

@@ -173,6 +173,44 @@ impl ClipboardService {
         self.provider.borrow_mut().set_clipboard_text_cache(text);
     }
 
+    /// Read rich content before its text representation, honoring image size limits.
+    #[cfg(feature = "terminal")]
+    pub fn read_content(
+        &self,
+        config: &ClipboardConfig,
+    ) -> Result<Option<crate::ClipboardContent>, ClipboardError> {
+        use crate::{ClipboardContent, ClipboardPasteContent};
+        match self.read_terminal_paste()? {
+            ClipboardPasteContent::Text(text) => Ok(Some(ClipboardContent::Text(text))),
+            ClipboardPasteContent::Unavailable => Ok(None),
+            ClipboardPasteContent::Rich => self.read_rich_content(config).map(Some),
+        }
+    }
+
+    #[cfg(feature = "terminal")]
+    fn read_rich_content(
+        &self,
+        config: &ClipboardConfig,
+    ) -> Result<crate::ClipboardContent, ClipboardError> {
+        use crate::clipboard::error::ClipboardOperation;
+        match self.read_clipboard_files() {
+            Ok(files) if !files.is_empty() => return Ok(crate::ClipboardContent::Files(files)),
+            Ok(_) | Err(ClipboardError::Unsupported { .. }) => {}
+            Err(err) => return Err(err),
+        }
+        let image = self.read_clipboard_image()?;
+        let bytes = image.to_bytes().map_err(|err| {
+            ClipboardError::provider(ClipboardOperation::ReadImageClipboard, err.to_string())
+        })?;
+        if config.paste_max_image_bytes != 0 && bytes.len() > config.paste_max_image_bytes {
+            return Err(ClipboardError::invalid_input(
+                ClipboardOperation::ReadImageClipboard,
+                "clipboard image exceeds paste_max_image_bytes",
+            ));
+        }
+        Ok(crate::ClipboardContent::Image(image))
+    }
+
     pub fn read_primary_selection_text(&self) -> Result<String, ClipboardError> {
         self.provider.borrow_mut().read_primary_selection_text()
     }

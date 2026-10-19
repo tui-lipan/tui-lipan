@@ -1640,3 +1640,13 @@ composition or plan invalidation requires terminal paint.
 
 `TerminalGraphicsMetrics` contains cumulative parser, native-scene and host-frame counters plus
 bounded successful frame interval percentiles. See [performance guidance](perf.md#terminal-graphics-aggregates).
+
+## ClipboardContent
+
+Content delivered by `Terminal::on_paste` and read by `ClipboardHandle::read_content`:
+
+| Variant | Payload |
+| --- | --- |
+| `Text` | `String` |
+| `Image` | `ImageContent` |
+| `Files` | `Vec<PathBuf>` |

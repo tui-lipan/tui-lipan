@@ -672,7 +672,7 @@ pub(crate) fn dispatch_paste(
             handlers::text_area::handle_paste(tree, id, text, ctx)
         }
         #[cfg(feature = "terminal")]
-        handlers::InteractiveTag::Terminal => handlers::terminal::handle_paste(tree, id, text),
+        handlers::InteractiveTag::Terminal => handlers::terminal::handle_paste(tree, id, text, ctx),
         _ => false,
     }
 }

@@ -171,6 +171,7 @@ impl Default for Terminal {
             on_blur: None,
             on_key: None,
             on_input: None,
+            on_paste: None,
         }
     }
 }
@@ -574,6 +575,17 @@ impl Terminal {
     /// Set raw key handler.
     pub fn on_key(mut self, handler: KeyHandler) -> Self {
         self.on_key = Some(handler);
+        self
+    }
+
+    /// Handle paste content before it becomes PTY bytes.
+    ///
+    /// With `Performable` paste shortcuts, Ctrl+V reads local text, images, and file lists.
+    /// Terminal-emitted and mouse text pastes also arrive here. The callback owns delivery;
+    /// `on_input` does not receive the same paste. Without this callback, rich Ctrl+V keeps
+    /// forwarding to the child program. Empty clipboards also keep forwarding.
+    pub fn on_paste(mut self, cb: Callback<crate::ClipboardContent>) -> Self {
+        self.on_paste = Some(cb);
         self
     }
 

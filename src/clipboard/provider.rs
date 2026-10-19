@@ -39,6 +39,17 @@ pub struct ImageContent {
     pub filename: Option<String>,
 }
 
+/// Content a terminal host can paste or transfer to another machine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClipboardContent {
+    /// Plain text, including paths emitted by an outer terminal's file drop.
+    Text(String),
+    /// Encoded image data from the local desktop clipboard.
+    Image(ImageContent),
+    /// Local file paths from the desktop clipboard. Reading the files is the host's job.
+    Files(Vec<PathBuf>),
+}
+
 /// Clipboard content classification used by performable terminal paste shortcuts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClipboardPasteContent {
