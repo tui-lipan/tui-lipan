@@ -13,7 +13,8 @@ pub(crate) use native_patches::{
 #[cfg(feature = "terminal-images")]
 pub(crate) use native_scene::{
     DesiredScene, HostGraphicsScene, NativePlanScope, SceneTransition, native_owners_scope,
-    native_source_unavailable, owner_scope as native_scene_owner_scope, take_desired,
+    native_source_unavailable, owner_scope as native_scene_owner_scope, take_deferred_presentation,
+    take_desired,
 };
 
 #[cfg(feature = "terminal-images")]
@@ -1138,6 +1139,30 @@ impl CompressedKitty {
         origin: (i32, i32),
         clip: ratatui::layout::Rect,
     ) {
+        let whole = PlacedRegion {
+            crop: crate::widgets::TerminalImageCrop {
+                x: 0,
+                y: 0,
+                width: self.pixels.0,
+                height: self.pixels.1,
+            },
+            cells: (self.size.width, self.size.height),
+        };
+        self.render_placed_region(f, origin, clip, whole);
+    }
+
+    /// Place one crop of these pixels over `region.cells`, whose top-left cell is `origin`. The host
+    /// stretches each row's crop to its cells, so several crops share this one upload.
+    fn render_placed_region(
+        &self,
+        f: &mut ratatui::Frame<'_>,
+        origin: (i32, i32),
+        clip: ratatui::layout::Rect,
+        region: PlacedRegion,
+    ) {
+        if region.cells.0 == 0 || region.cells.1 == 0 {
+            return;
+        }
         let mut holes = IMAGE_OCCLUSIONS.with(|slot| slot.borrow().clone());
         holes.extend(super::image_effects::pending_image_occlusions());
         let mut transmit = self.pending_transmission();
@@ -1145,7 +1170,7 @@ impl CompressedKitty {
             for (left, right) in
                 terminal_image_cell_spans(uncovered_x_spans(clip.x, clip.right(), y, &holes))
             {
-                self.place_row(f, origin, (left, right, y), &mut transmit);
+                self.place_row(f, origin, (left, right, y), region, &mut transmit);
             }
         }
     }
@@ -1155,6 +1180,7 @@ impl CompressedKitty {
         f: &mut ratatui::Frame<'_>,
         origin: (i32, i32),
         span: (u16, u16, u16),
+        region: PlacedRegion,
         transmit: &mut Option<String>,
     ) {
         let (left, _, y) = span;
@@ -1164,8 +1190,8 @@ impl CompressedKitty {
         let placement = composed_scene::RowGeometry {
             image: self.id,
             origin,
-            pixels: self.pixels,
-            size: self.size,
+            crop: region.crop,
+            cells: region.cells,
             z: self.z_index,
             span,
         }
@@ -1249,6 +1275,14 @@ pub(crate) struct KittyUpload {
     id_extra: char,
     shared: Mutex<Option<SharedFrame>>,
     file: Mutex<Option<crate::backend::ratatui_backend::file_frame::HostFile>>,
+}
+
+/// The part of an encoded image a placement shows, and the cells it is stretched over.
+#[cfg(feature = "terminal-images")]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PlacedRegion {
+    pub(crate) crop: crate::widgets::TerminalImageCrop,
+    pub(crate) cells: (u16, u16),
 }
 
 #[cfg(feature = "terminal-images")]
@@ -1600,6 +1634,22 @@ impl HostKittyUploads {
 
     pub(crate) fn invalidate(&mut self) {
         self.images.clear();
+    }
+
+    /// Treat these images as absent from the host. A cached encode has already handed its pixels
+    /// over, so it is dropped too: the next placement encodes again and carries a transmission.
+    pub(crate) fn forget(&mut self, ids: Vec<u32>) {
+        if ids.is_empty() {
+            return;
+        }
+        for id in &ids {
+            self.images.remove(id);
+        }
+        if let Some(encoder) = ENCODER.get()
+            && let Ok(mut inner) = encoder.inner.lock()
+        {
+            inner.cache.remove_kitty_images(&ids);
+        }
     }
 
     pub(crate) fn prepare<'a>(
@@ -1991,6 +2041,17 @@ impl ImageRenderCache {
                 if let Some(source) = source {
                     source.discard_unattempted();
                 }
+            }
+        }
+    }
+
+    #[cfg(feature = "terminal-images")]
+    fn remove_kitty_images(&mut self, ids: &[u32]) {
+        for index in (0..self.entries.len()).rev() {
+            if matches!(&*self.entries[index].protocol,
+                EncodedProtocol::CompressedKitty(image) if ids.contains(&image.id))
+            {
+                self.remove_at(index);
             }
         }
     }
@@ -3240,6 +3301,99 @@ pub(crate) fn draw_encoded_image(
         }
         ProtocolResolve::Pending | ProtocolResolve::Unavailable => false,
     }
+}
+
+/// Draw one crop of a source through ordinary placements that share the source's single upload.
+///
+/// Per-cell senders such as Yazi place every cell of one image as its own cropped placement.
+/// Encoding each crop separately would upload hundreds of tiny images and could fill the encode
+/// cache. Here the whole source is encoded once, at its natural size, and every crop places the
+/// part it shows with `x`/`y`/`w`/`h`, which the host stretches to the crop's cells. Kitty's and
+/// Ghostty's renderers both stretch an ordinary placement with explicit `c` and `r`; the
+/// aspect-preserving fit in Kitty's protocol text applies to Unicode placeholders, which this path
+/// never uses.
+///
+/// `None` means this path does not apply - a capture, a non-Kitty host, placeholder rendering or a
+/// dimmed backdrop - and the caller draws the crop on its own instead.
+#[cfg(feature = "terminal-images")]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn draw_encoded_region(
+    f: &mut ratatui::Frame<'_>,
+    area: ratatui::layout::Rect,
+    origin: (i32, i32),
+    stream_key: u64,
+    source_hash: u64,
+    z_index: i32,
+    render: TerminalImageRender,
+    region: PlacedRegion,
+    pixels: &Arc<image::DynamicImage>,
+) -> Option<bool> {
+    if !render.use_placements
+        || area.width == 0
+        || area.height == 0
+        || capturing_images()
+        || image_support::image_rendering_suspended()
+    {
+        return None;
+    }
+    let resolved_protocol =
+        protocol_type_to_public(image_support::picker_snapshot().protocol_type());
+    if !matches!(resolved_protocol, ImageProtocol::Kitty) {
+        return None;
+    }
+    let cells = Rect {
+        x: area.x as i16,
+        y: area.y as i16,
+        w: area.width,
+        h: area.height,
+    };
+    // A backdrop dims the pixels under one area; a shared encode would carry it to every crop.
+    if live_backdrop_mask(cells, resolved_protocol).is_some() {
+        return None;
+    }
+    // The encode keeps the source's own pixels: a box at least that large stops any resampling.
+    let font = image_support::picker_snapshot().font_size();
+    let natural = |pixels: u32, cell: u16| {
+        pixels
+            .div_ceil(u32::from(cell.max(1)))
+            .clamp(1, u32::from(u16::MAX)) as u16
+    };
+    let key = RenderCacheKey {
+        source_hash,
+        frame_index: 0,
+        width: natural(pixels.width(), font.width),
+        height: natural(pixels.height(), font.height),
+        crop: None,
+        background_rgb: None,
+        fit: ImageFit::Scale,
+        protocol: ImageProtocol::Auto,
+        resolved_protocol,
+        z_index,
+        backdrop: 0,
+    };
+    let encoder = async_encoder();
+    let protocol = match encoder.cache_get(&key) {
+        Some(protocol) => protocol,
+        None => {
+            let mut request = EncodeRequest::new(
+                stream_key,
+                key,
+                Arc::clone(pixels),
+                CacheRetention::LatestOnly,
+            )
+            .filling_its_box();
+            request.terminal_alive = render.alive;
+            match encoder.resolve_miss(request, true) {
+                ProtocolResolve::Ready(protocol) | ProtocolResolve::Stale(protocol) => protocol,
+                ProtocolResolve::Pending | ProtocolResolve::Unavailable => return Some(false),
+            }
+        }
+    };
+    let EncodedProtocol::CompressedKitty(image) = &*protocol else {
+        return None;
+    };
+    image.render_placed_region(f, origin, area, region);
+    Some(true)
 }
 
 pub(crate) fn render_image(
@@ -4764,6 +4918,48 @@ mod tests {
         assert!(
             !repaint.contains("\x1b_G"),
             "static image emitted Kitty traffic: {repaint:?}"
+        );
+    }
+
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn an_image_placed_again_after_leaving_the_host_scene_uploads_again() {
+        use crate::widgets::{TerminalCellSize, TerminalScreen};
+        let _host = image_support::test_kitty_host((10, 20), true);
+        let mut screen = TerminalScreen::new(4, 8, 0);
+        screen.set_cell_size(TerminalCellSize::new(10, 20));
+        let payload = BASE64.encode([100, 150, 200].repeat(20 * 40));
+        screen
+            .process_bytes(format!("\x1b_Ga=t,f=24,s=20,v=40,i=7,q=2;{payload}\x1b\\").as_bytes());
+        let place = "\x1b[H\x1b_Ga=p,i=7,p=1,z=-1,C=1,q=2;\x1b\\";
+        let mut frame = ratatui::Terminal::new(ratatui::backend::TestBackend::new(8, 4)).unwrap();
+        let output = GraphicsOutput::default();
+        let mut host =
+            crate::backend::ratatui_backend::native_terminal::HostBackend::new(output.clone());
+        screen.process_bytes(place.as_bytes());
+        let initial = paint_terminal_scene(&mut screen, &mut frame, &mut host, &output);
+        assert_eq!(initial.matches("a=T,").count(), 1);
+        // Without a placement the host may evict the image to stay within its storage limit.
+        screen.process_bytes(b"\x1b_Ga=d,d=i,i=7,p=1,q=2;\x1b\\");
+        let removed = paint_terminal_scene(&mut screen, &mut frame, &mut host, &output);
+        assert!(
+            removed.contains("a=d,"),
+            "placement must be deleted: {removed:?}"
+        );
+        // The encode is still cached and has handed its pixels over; placing the image again
+        // must still carry a transmission, since the host copy may be gone.
+        screen.process_bytes(place.as_bytes());
+        let restored = paint_terminal_scene(&mut screen, &mut frame, &mut host, &output);
+        assert_eq!(
+            restored.matches("a=T,").count(),
+            1,
+            "an image placed again after leaving the host scene must be uploaded again: {restored:?}"
+        );
+        assert!(restored.contains("a=p,"));
+        let repaint = paint_terminal_scene(&mut screen, &mut frame, &mut host, &output);
+        assert!(
+            !repaint.contains("\x1b_G"),
+            "the restored image stays quiet: {repaint:?}"
         );
     }
 

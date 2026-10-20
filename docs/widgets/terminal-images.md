@@ -37,13 +37,14 @@ whose anchor leaves the image anchor intact. Opaque text backgrounds exclude the
 Native image trees can repaint text rows independently. A source upload restores every visible
 region of that image, including regions outside the text damage. Overlay changes recalculate image
 occlusion across its complete visible area. If a partial paint cannot establish that area, the
-existing native image remains until a full paint can present the replacement. Terminals already using
+existing native image remains, and the runner schedules a full paint to present the replacement. Terminals already using
 composition continue to draw their damaged image rows through the composed path. Composed placements
 outside the repaint regions remain visible with the same host IDs. A repaint inside a placement
 preserves the untouched parts, and an upload that replaces its host image restores all retained rows.
 Scrolling a UI region containing terminal graphics uses a full paint.
 Each source retains its upload state until the source and pending host output are released,
-independently of render-cache eviction. Large sources that cannot use file or shared-memory transport stay on the
+independently of render-cache eviction. When a complete paint leaves a composed image without
+placements, it is uploaded again the next time it is placed, because the host may have evicted it. Large sources that cannot use file or shared-memory transport stay on the
 asynchronous composed path; only inline uploads up to 128 KiB are prepared directly.
 Other host protocols still use the same encoding path as the
 [`Image`](display.md#image-requires-feature-image) widget: iTerm2, sixel, or half-blocks.
@@ -95,7 +96,10 @@ Images placed at the cursor honor the `X`/`Y` pixel offsets within that cell. Na
 keep their pixel dimensions rather than stretching to fill the final cell. Explicit `c` and `r`
 size an ordinary placement to that cell box, stretching each axis. With only one axis specified,
 the other preserves the source aspect ratio. Per-cell senders such as Yazi can fill each cell
-even when their source crops differ by one pixel. Overlapping images
+even when their source crops differ by one pixel. With ordinary placements on a Kitty host, cropped
+placements of one source share a single upload of that source, and each crop is placed from it. A
+lone crop uses that upload only when the source is at most four times the crop's area; a smaller
+crop of a large image uploads just the crop. Overlapping images
 blend in pixel space within each exact z plane, so a small patch preserves the rest of the cell.
 On Kitty hosts, mixed-z and negative-z images use ordinary placements that leave text cells intact.
 Negative z values remain below text; values below `INT32_MIN/2` also remain below non-default cell

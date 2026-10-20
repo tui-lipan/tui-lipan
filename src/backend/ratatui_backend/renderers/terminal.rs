@@ -105,10 +105,25 @@ fn render_terminal_images(
             .first()
             .is_some_and(|first| first.z < 0 || images.iter().any(|p| p.z != first.z)),
     };
-    for placement in &images {
-        if let Some((origin, area)) = visible_terminal_image(placement, content_rect, effective) {
-            draw_composed_terminal_image(f, placement, origin, area, render.clone());
+    let visible: Vec<_> = images
+        .iter()
+        .filter_map(|placement| {
+            visible_terminal_image(placement, content_rect, effective)
+                .map(|(origin, area)| (placement, origin, area))
+        })
+        .collect();
+    // Cropped placements of one source share its upload only when there are several of them.
+    let mut crops = std::collections::HashMap::<(u64, u32, i32), usize>::new();
+    for (placement, _, _) in &visible {
+        if placement.source_crop.is_some() {
+            *crops.entry(crop_source_key(placement)).or_default() += 1;
         }
+    }
+    for (placement, origin, area) in visible {
+        let shared = crops
+            .get(&crop_source_key(placement))
+            .is_some_and(|count| *count > 1);
+        draw_composed_terminal_image(f, placement, origin, area, render.clone(), shared);
     }
 }
 
@@ -147,6 +162,32 @@ fn visible_terminal_image(
     Some(((left, top), area))
 }
 
+/// Cropped placements with this key can share one upload of their whole source.
+#[cfg(feature = "terminal-images")]
+fn crop_source_key(placement: &crate::widgets::TerminalImagePlacement) -> (u64, u32, i32) {
+    (
+        placement.image.stream_namespace(),
+        placement.image_id,
+        placement.z,
+    )
+}
+
+/// Whether to place a crop from an upload of its whole source rather than encoding the crop.
+///
+/// Several crops of one source share that upload. A lone crop shares it only when the source is
+/// not much larger than the crop; otherwise uploading the whole source is the larger cost.
+#[cfg(feature = "terminal-images")]
+fn share_whole_source(
+    crop: TerminalImageCrop,
+    source: (u32, u32),
+    shared_with_other_crops: bool,
+) -> bool {
+    const MAX_LONE_CROP_OVERHEAD: u64 = 4;
+    shared_with_other_crops
+        || u64::from(source.0) * u64::from(source.1)
+            <= MAX_LONE_CROP_OVERHEAD * u64::from(crop.width) * u64::from(crop.height)
+}
+
 #[cfg(feature = "terminal-images")]
 fn draw_composed_terminal_image(
     f: &mut ratatui::Frame<'_>,
@@ -154,6 +195,7 @@ fn draw_composed_terminal_image(
     (left, top): (i32, i32),
     area: ratatui::layout::Rect,
     render: crate::backend::ratatui_backend::renderers::image::TerminalImageRender,
+    shared_with_other_crops: bool,
 ) {
     use crate::backend::ratatui_backend::renderers::image::draw_encoded_image;
     use crate::widgets::crop_for_visible_cells;
@@ -198,6 +240,41 @@ fn draw_composed_terminal_image(
     let Some(pixels) = placement.image.pixels() else {
         return;
     };
+
+    // Crops of one source, such as a per-cell sender's cells, share one upload of the source.
+    if let Some(source) = placement.source_crop
+        && share_whole_source(
+            source,
+            (pixels.width(), pixels.height()),
+            shared_with_other_crops,
+        )
+        && crate::backend::ratatui_backend::renderers::image::draw_encoded_region(
+            f,
+            area,
+            (left, top),
+            shared_source_stream_hash(
+                placement.image.stream_namespace(),
+                placement.image_id,
+                placement.z,
+            ),
+            placement_source_hash(
+                placement.image.stream_namespace(),
+                placement.image_id,
+                placement.image.source_hash(),
+                full_crop,
+            ),
+            placement.z,
+            render.clone(),
+            crate::backend::ratatui_backend::renderers::image::PlacedRegion {
+                crop: source,
+                cells: (placement.cols, placement.rows),
+            },
+            pixels,
+        )
+        .is_some()
+    {
+        return;
+    }
     let source = placement.source_crop.unwrap_or(TerminalImageCrop {
         x: 0,
         y: 0,
@@ -253,6 +330,22 @@ fn placement_stream_hash(stream_namespace: u64, image_id: u32, crop: TerminalIma
     stream_namespace.hash(&mut hasher);
     image_id.hash(&mut hasher);
     (crop.x, crop.y, crop.width, crop.height).hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Stable identity of a whole source shared by its cropped placements in one z plane.
+///
+/// It is distinct from the source's own whole-image stream, which can be on screen at the same
+/// time at a different size: one host image id cannot hold both encodes.
+#[cfg(feature = "terminal-images")]
+fn shared_source_stream_hash(stream_namespace: u64, image_id: u32, z: i32) -> u64 {
+    use std::hash::{Hash as _, Hasher as _};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    b"shared-crop-source".hash(&mut hasher);
+    stream_namespace.hash(&mut hasher);
+    image_id.hash(&mut hasher);
+    z.hash(&mut hasher);
     hasher.finish()
 }
 

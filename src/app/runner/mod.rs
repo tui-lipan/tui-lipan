@@ -2357,6 +2357,12 @@ impl<C: Component> AppRunner<C> {
                         dirty.mark_full();
                     }
                 }
+                // The last partial paint kept a terminal's previous native image. Present the
+                // pending replacement now rather than when unrelated input next arrives.
+                #[cfg(feature = "terminal-images")]
+                if crate::backend::ratatui_backend::renderers::image::take_deferred_presentation() {
+                    dirty.mark_paint();
+                }
                 #[cfg(feature = "terminal")]
                 if let Some(wake) = &terminal_waker {
                     self.core.tree.set_terminal_mutation_waker(wake.clone());

@@ -1403,6 +1403,143 @@ fn composed_terminal_images_reach_the_host_in_partial_frames() {
 
 #[cfg(feature = "terminal-images")]
 #[test]
+fn per_cell_crops_of_one_source_share_a_single_upload() {
+    use base64::Engine as _;
+
+    // Unmeasured host cells select composition even on a Kitty host.
+    let _host = crate::backend::ratatui_backend::image_support::test_kitty_host((14, 32), false);
+    let mut harness = build(PaneCfg::new(), b"\x1b[?25l\x1b[H");
+    harness
+        .screen
+        .borrow_mut()
+        .set_cell_size(crate::widgets::TerminalCellSize::new(14, 32));
+    // Yazi's per-cell encoding: 137 pixels over 10 cells gives crops of 13 and 14 pixels.
+    let (cols, rows, width, height) = (10u32, 4u32, 137u32, 128u32);
+    let payload = base64::engine::general_purpose::STANDARD
+        .encode([100, 150, 200].repeat((width * height) as usize));
+    let mut stream = format!("\x1b_Ga=t,f=24,s={width},v={height},i=7,q=2;{payload}\x1b\\");
+    for row in 0..rows {
+        for col in 0..cols {
+            let x = col * width / cols;
+            let end = (col + 1) * width / cols;
+            stream.push_str(&format!(
+                "\x1b[{};{}H\x1b_Ga=p,i=7,p={},x={x},y={},w={},h=32,c=1,r=1,z=-1,C=1,q=2;\x1b\\",
+                row + 1,
+                col + 1,
+                row * cols + col + 1,
+                row * 32,
+                end - x,
+            ));
+        }
+    }
+    harness.screen.borrow_mut().process_bytes(stream.as_bytes());
+    harness.runner.core.tree.refresh_live_terminals_detailed();
+    let mut terminal = crate::backend::ratatui_backend::create_test_terminal(COLS, ROWS).unwrap();
+    harness.runner.render_paint_only(&mut terminal).unwrap();
+    let output = terminal.backend().test_output();
+    let initial = String::from_utf8_lossy(&output);
+    let uploads = initial.matches("a=T,").count() + initial.matches(",a=t,").count();
+    assert_eq!(uploads, 1, "every crop must share one upload: {initial:?}");
+    let placements: Vec<_> = initial.match_indices("\x1b_Ga=p,").collect();
+    assert_eq!(placements.len(), (cols * rows) as usize);
+    let ids: std::collections::HashSet<_> = placements
+        .iter()
+        .map(|(start, _)| {
+            initial[*start..]
+                .split("i=")
+                .nth(1)
+                .and_then(|rest| rest.split(',').next())
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(ids.len(), 1, "crops must place the shared image: {ids:?}");
+    assert!(initial.contains("w=13,h=32,c=1,r=1"));
+    assert!(initial.contains("w=14,h=32,c=1,r=1"));
+    let before = output.len();
+
+    harness.runner.render_paint_only(&mut terminal).unwrap();
+    let output = terminal.backend().test_output();
+    assert!(
+        !String::from_utf8_lossy(&output[before..]).contains("\x1b_G"),
+        "an unchanged per-cell image must stay quiet"
+    );
+    let before = output.len();
+
+    // A new producer frame re-sends the source, which removes every placement of it on the host.
+    let payload = base64::engine::general_purpose::STANDARD
+        .encode([30, 60, 90].repeat((width * height) as usize));
+    let frame = stream.replacen(
+        stream.split("\x1b\\").next().unwrap(),
+        &format!("\x1b_Ga=t,f=24,s={width},v={height},i=7,q=2;{payload}"),
+        1,
+    );
+    harness.screen.borrow_mut().process_bytes(frame.as_bytes());
+    harness.runner.core.tree.refresh_live_terminals_detailed();
+    harness.runner.render_paint_only(&mut terminal).unwrap();
+    let output = terminal.backend().test_output();
+    let update = String::from_utf8_lossy(&output[before..]);
+    assert_eq!(
+        update.matches("a=T,").count() + update.matches(",a=t,").count(),
+        1,
+        "one upload per producer frame: {update:?}"
+    );
+    assert_eq!(
+        update.matches("\x1b_Ga=p,").count(),
+        (cols * rows) as usize,
+        "the re-upload removed every crop, so every crop is placed again"
+    );
+}
+
+#[cfg(feature = "terminal-images")]
+#[test]
+fn a_lone_crop_uploads_its_whole_source_only_when_the_source_is_small() {
+    use base64::Engine as _;
+
+    let upload_size = |source: (u32, u32), crop: (u32, u32)| {
+        let _host =
+            crate::backend::ratatui_backend::image_support::test_kitty_host((14, 32), false);
+        let mut harness = build(PaneCfg::new(), b"\x1b[?25l\x1b[H");
+        harness
+            .screen
+            .borrow_mut()
+            .set_cell_size(crate::widgets::TerminalCellSize::new(14, 32));
+        let payload = base64::engine::general_purpose::STANDARD
+            .encode([100, 150, 200].repeat((source.0 * source.1) as usize));
+        harness.screen.borrow_mut().process_bytes(
+            format!(
+                "\x1b_Ga=t,f=24,s={},v={},i=7,q=2;{payload}\x1b\\\x1b[H\x1b_Ga=p,i=7,p=1,x=0,y=0,w={},h={},c=1,r=1,z=-1,C=1,q=2;\x1b\\",
+                source.0, source.1, crop.0, crop.1,
+            )
+            .as_bytes(),
+        );
+        harness.runner.core.tree.refresh_live_terminals_detailed();
+        let mut terminal =
+            crate::backend::ratatui_backend::create_test_terminal(COLS, ROWS).unwrap();
+        harness.runner.render_paint_only(&mut terminal).unwrap();
+        let output = String::from_utf8_lossy(&terminal.backend().test_output()).into_owned();
+        let header = output
+            .split("\x1b_G")
+            .find(|command| command.contains("a=T,") || command.contains(",a=t,"))
+            .unwrap_or_else(|| panic!("no upload: {output:?}"))
+            .to_owned();
+        let key = |name: &str| -> u32 {
+            header
+                .split([',', ';'])
+                .find_map(|pair| pair.strip_prefix(name))
+                .unwrap()
+                .parse()
+                .unwrap()
+        };
+        (key("s="), key("v="))
+    };
+    // A small crop of a large image encodes just the crop.
+    assert_eq!(upload_size((400, 320), (14, 32)), (14, 32));
+    // A crop that is most of its source places from the whole source.
+    assert_eq!(upload_size((28, 32), (14, 32)), (28, 32));
+}
+
+#[cfg(feature = "terminal-images")]
+#[test]
 fn ordinary_overlays_cover_image_pixels_without_covering_the_anchor() {
     for mode in 0..=14 {
         for stacked in [false, true] {

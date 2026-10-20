@@ -1,7 +1,7 @@
 //! Stable ordinary placements for composed image rows and tiles.
 use super::*;
 
-type SpanKey = (u32, (i32, i32), (u16, u16, u16));
+type SpanKey = (u32, (i32, i32), (u16, u16, u16), (u32, u32, u32, u32));
 struct SpanId {
     id: u32,
     upload: std::sync::Weak<KittyUpload>,
@@ -40,23 +40,28 @@ pub(super) fn begin_partial_frame(regions: &[Rect]) {
     });
 }
 
+/// Two crops of one image can share an anchor, so the crop is part of the identity too.
 fn span_id(
     upload: &Arc<KittyUpload>,
     image: u32,
     origin: (i32, i32),
     span: (u16, u16, u16),
+    crop: crate::widgets::TerminalImageCrop,
 ) -> u32 {
     SPAN_IDS.with(|slot| {
         let mut ids = slot.borrow_mut();
-        let entry = ids.entry((image, origin, span)).or_insert_with(|| SpanId {
-            id: NEXT_KITTY_PLACEMENT.with(|next| {
-                let id = next.get().wrapping_add(1).max(1);
-                next.set(id);
-                id
-            }),
-            upload: Arc::downgrade(upload),
-            used: true,
-        });
+        let crop = (crop.x, crop.y, crop.width, crop.height);
+        let entry = ids
+            .entry((image, origin, span, crop))
+            .or_insert_with(|| SpanId {
+                id: NEXT_KITTY_PLACEMENT.with(|next| {
+                    let id = next.get().wrapping_add(1).max(1);
+                    next.set(id);
+                    id
+                }),
+                upload: Arc::downgrade(upload),
+                used: true,
+            });
         entry.used = true;
         entry.upload = Arc::downgrade(upload);
         entry.id
@@ -68,8 +73,9 @@ fn span_id(
 pub(super) struct RowGeometry {
     pub image: u32,
     pub origin: (i32, i32),
-    pub pixels: (u32, u32),
-    pub size: ratatui::layout::Size,
+    /// The source pixels shown, and the cells they are stretched over from `origin`.
+    pub crop: crate::widgets::TerminalImageCrop,
+    pub cells: (u16, u16),
     pub z: i32,
     pub span: (u16, u16, u16),
 }
@@ -77,13 +83,19 @@ pub(super) struct RowGeometry {
 impl RowGeometry {
     pub(super) fn placement(self, upload: Arc<KittyUpload>) -> KittyPlacement {
         let (left, right, y) = self.span;
-        let p = span_id(&upload, self.image, self.origin, self.span);
+        let p = span_id(&upload, self.image, self.origin, self.span, self.crop);
+        let (crop, cols, rows) = (
+            self.crop,
+            u32::from(self.cells.0.max(1)),
+            u32::from(self.cells.1.max(1)),
+        );
         let x = (i32::from(left) - self.origin.0) as u32;
         let row = (i32::from(y) - self.origin.1) as u32;
-        let sx = x * self.pixels.0 / u32::from(self.size.width);
-        let sy = row * self.pixels.1 / u32::from(self.size.height);
-        let ex = (x + u32::from(right - left)) * self.pixels.0 / u32::from(self.size.width);
-        let ey = (row + 1) * self.pixels.1 / u32::from(self.size.height);
+        // Kitty reads a zero width or height as the whole image, so a row keeps at least a pixel.
+        let sx = crop.x + x * crop.width / cols;
+        let sy = crop.y + row * crop.height / rows;
+        let ex = (crop.x + (x + u32::from(right - left)) * crop.width / cols).max(sx + 1);
+        let ey = (crop.y + (row + 1) * crop.height / rows).max(sy + 1);
         KittyPlacement {
             geometry: Some(self),
             anchor: (left, y),
@@ -110,6 +122,9 @@ pub(crate) struct HostComposedScene {
     confirmed: Placements,
     attempted: Placements,
     pending: Option<(Placements, usize, bool)>,
+    /// Whether the pending scene came from a complete paint, which alone can show that an image
+    /// has no placement left. A partial paint never stages the rows it did not repaint.
+    pending_complete: bool,
 }
 
 impl HostComposedScene {
@@ -132,6 +147,7 @@ impl HostComposedScene {
         let mut next = surviving_placements(draw, active);
         PAINT.with(|slot| {
             let paint = slot.borrow();
+            self.pending_complete = !paint.partial;
             if paint.partial {
                 preserve_unpainted(draw, active, &mut next, &paint.regions);
             } else {
@@ -165,15 +181,35 @@ impl HostComposedScene {
         self.pending = None;
     }
 
-    pub(crate) fn flushed(&mut self, success: bool, epoch: usize) {
+    /// Returns the images that no longer have a confirmed placement. A host may evict such an
+    /// image to stay within its storage limit, so the next placement must upload it again.
+    pub(crate) fn flushed(&mut self, success: bool, epoch: usize) -> Vec<u32> {
         let Some((next, written_epoch, ready)) = self.pending.take() else {
-            return;
+            return Vec::new();
         };
-        if success && ready && epoch == written_epoch {
-            self.confirmed = next;
-            self.attempted.clear();
+        if !(success && ready && epoch == written_epoch) {
+            return Vec::new();
         }
+        let placed = placed_images(&next);
+        let unplaced = if self.pending_complete {
+            placed_images(&self.confirmed)
+                .difference(&placed)
+                .copied()
+                .collect()
+        } else {
+            Vec::new()
+        };
+        self.confirmed = next;
+        self.attempted.clear();
+        unplaced
     }
+}
+
+fn placed_images(placements: &Placements) -> HashSet<u32> {
+    placements
+        .values()
+        .filter_map(|placement| placement.upload.cache_key.get().map(|(id, _)| *id))
+        .collect()
 }
 
 fn surviving_placements(draw: &PreparedKittyDraw<'_>, active: &Placements) -> Placements {

@@ -304,7 +304,8 @@ fn compose_tile(
     }
     // A whole-source revision can change while this tile's pixels stay identical. Its host
     // upload identity describes the resulting pixels, rather than the layers used to compose it.
-    let mut content = std::collections::hash_map::DefaultHasher::new();
+    // A rebuilt tile is hashed on every changed frame, so use the faster non-keyed hasher.
+    let mut content = rustc_hash::FxHasher::default();
     (cache.namespace, tile, cell, cells, &pixels).hash(&mut content);
     let source_hash = content.finish();
     if let Some(previous) = cache
