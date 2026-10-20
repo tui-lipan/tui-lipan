@@ -642,6 +642,9 @@ impl<W: io::Write> Backend for HostBackend<W> {
                     .iter()
                     .map(|(x, y, cell)| (*x, *y, cell.as_ref())),
             )?;
+            for command in &prepared.restored_placements {
+                self.backend.write_all(command.as_bytes())?;
+            }
             self.composed_scene.drawn();
             // Draw may only fill BufWriter. Acknowledge after flush, provided FrameOutput
             // has not discarded any part of this frame during terminal release.

@@ -3366,7 +3366,10 @@ fn placement_geometry(
         command.pixel_x.min(u32::from(cell.0) - 1),
         command.pixel_y.min(u32::from(cell.1) - 1),
     );
-    // Ordinary Kitty placements stretch each explicit axis. With just one axis specified,
+    // Match Kitty's ordinary renderer, which stretches both explicit axes despite the protocol
+    // prose describing letterboxing. Virtual Unicode placements use separate aspect-fit geometry.
+    // https://github.com/kovidgoyal/kitty/blob/72ffcb5733b2e69c484840c0868690247eb744d6/kitty/graphics.c#L1554-L1572
+    // With just one axis specified,
     // derive the other from the source aspect ratio. Offsets are inside the requested box.
     let width = requested_cells.0 * u32::from(cell.0);
     let height = requested_cells.1 * u32::from(cell.1);
@@ -3945,6 +3948,30 @@ mod tests {
             ..command
         };
         assert_eq!(placement_geometry(&command, ctx, (7, 16)).size, (14, 32));
+    }
+
+    #[test]
+    fn explicit_axes_match_kitty_ordinary_placement_with_offsets() {
+        // Kitty's test_image_put displays a 3x5 crop in ten 10x20 cells, one row high,
+        // with offsets (3, 1). Its destination bounds are 97x19, rather than aspect-fitted.
+        // https://github.com/kovidgoyal/kitty/blob/72ffcb5733b2e69c484840c0868690247eb744d6/kitty_tests/graphics.py#L901-L914
+        let geometry = placement_geometry(
+            &GraphicsCommand {
+                cols: 10,
+                rows: 1,
+                pixel_x: 3,
+                pixel_y: 1,
+                ..GraphicsCommand::default()
+            },
+            GraphicsContext {
+                cell: TerminalCellSize::new(10, 20),
+                ..context()
+            },
+            (3, 5),
+        );
+        assert_eq!(geometry.size, (97, 19));
+        assert_eq!(geometry.offset, (3, 1));
+        assert_eq!(geometry.requested_cells, (10, 1));
     }
 
     #[test]
