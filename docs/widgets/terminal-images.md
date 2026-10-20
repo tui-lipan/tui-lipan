@@ -261,8 +261,8 @@ Each single `t=f`, `t=t` or `t=s` transmission the screen accepts is then record
 transmission of the bytes it read, with the same keys. Raw pixels are compressed for the trip unless
 the child already compressed them or sent PNG. Receivers on another machine, and several receivers
 of a consumed `t=t` or `t=s` source, all get the image, so the server can keep offering the fast
-media to the child while any receiver needs inline data. A chunked out-of-band run is forwarded as
-sent.
+media to the child while any receiver needs inline data. Relaying works whether or not the server
+stores images itself. A chunked out-of-band run is forwarded as sent.
 
 ### Retain streamed frames in files
 

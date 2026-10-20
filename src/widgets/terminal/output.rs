@@ -1036,6 +1036,21 @@ mod tests {
     }
 
     #[test]
+    fn a_metadata_only_screen_still_relays_a_file_frame() {
+        let pixels: Vec<u8> = (50u8..62).collect();
+        let path = scratch_file("metadata", &pixels);
+        let mut recorder = relaying_recorder();
+        recorder.set_image_storage_enabled(false);
+        recorder.process_bytes(
+            format!("\x1b_Ga=T,f=24,s=2,v=2,t=f,i=7,q=2;{}\x1b\\", named(&path)).as_bytes(),
+        );
+        let relayed = recorder.take_output_transactions().concat_bytes();
+        assert!(!String::from_utf8_lossy(&relayed).contains("t=f"));
+        assert_eq!(received_pixels(&relayed), pixels);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn a_consumed_temp_file_is_read_once_and_still_reaches_the_receiver() {
         let pixels: Vec<u8> = (100u8..112).collect();
         let path = scratch_file("temp", &pixels);

@@ -1141,7 +1141,9 @@ forwards acknowledgements should return `Update::none()`.
 Session transports can call `screen.set_output_transaction_recording(true)` before feeding output,
 then drain `screen.take_output_transactions()` after parsing. Recording is optional and disabled
 by default. Each `TerminalOutputTransaction` contains the exact original bytes and a
-`TerminalOutputClass` established by the same parser that changes the retained scene.
+`TerminalOutputClass` established by the same parser that changes the retained scene. The one
+exception is [inline image relay](terminal-images.md#relay-out-of-band-frames-inline): with it on, a
+single out-of-band image transmission is recorded as the inline transmission it stands for.
 
 `Ordered` segments must retain their order and bytes. `Graphics` segments include the stable source
 key, its revision, and `GraphicsDependency`. Only `Independent` transactions can supersede earlier

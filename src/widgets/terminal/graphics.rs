@@ -2570,13 +2570,7 @@ impl TerminalGraphics {
         ctx: GraphicsContext,
     ) -> GraphicsOutcome {
         if !self.storage_enabled {
-            let declared = if command.medium.is_out_of_band() && !self.media.allows(command.medium)
-            {
-                Err("ENOTSUPP:file transmission")
-            } else {
-                validate_transmit_dimensions(command, &payload)
-            };
-            let dimensions = match declared {
+            let dimensions = match self.metadata_dimensions(command, &payload) {
                 Ok(dimensions) => dimensions,
                 Err(error) => {
                     return GraphicsOutcome {
@@ -2630,6 +2624,37 @@ impl TerminalGraphics {
                 .then(|| self.place(id, command, ctx))
                 .flatten(),
         }
+    }
+
+    /// The size a metadata-only screen records for a transmission it does not store.
+    ///
+    /// It normally goes on what an out-of-band command declared, leaving the source to the reader
+    /// that renders it. A relaying screen is that reader for everyone downstream, so it reads the
+    /// source once, keeps the bytes for the recorded output, and checks them as inline pixels.
+    fn metadata_dimensions(
+        &mut self,
+        command: &GraphicsCommand,
+        payload: &[u8],
+    ) -> Result<(u32, u32), &'static str> {
+        if !command.medium.is_out_of_band() {
+            return validate_transmit_dimensions(command, payload);
+        }
+        if !self.media.allows(command.medium) {
+            return Err("ENOTSUPP:file transmission");
+        }
+        if !self.relay.armed {
+            return validate_transmit_dimensions(command, payload);
+        }
+        let pixels = self.resolve_medium(command, payload.to_vec())?;
+        let inline = GraphicsCommand {
+            medium: GraphicsMedium::Direct,
+            payload: Vec::new(),
+            payload_len: pixels.len(),
+            ..command.clone()
+        };
+        let dimensions = validate_transmit_dimensions(&inline, &pixels)?;
+        self.relay.payload = Some(pixels);
+        Ok(dimensions)
     }
 
     /// Identity of a transmission that named its pixels rather than carrying them.
@@ -3317,7 +3342,7 @@ fn decode_deferred(input: &DeferredDecode) -> Option<DynamicImage> {
 }
 
 /// Keys that only describe where an out-of-band source is, or how a run was chunked.
-const SOURCE_KEYS: [u8; 4] = [b't', b'O', b'S', b'm'];
+const SOURCE_KEYS: [u8; 4] = *b"tOSm";
 
 /// Base64 characters per chunk of a rewritten transmission, as the protocol recommends.
 const RELAY_CHUNK: usize = 4096;

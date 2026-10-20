@@ -2383,7 +2383,9 @@ impl TerminalScreen {
     /// several clients cannot all read a `t=t` or `t=s` source that the first reader consumes. With
     /// relaying on, each single out-of-band transmission this screen accepts under its media
     /// policy is recorded as an inline transmission of the bytes it read, so every receiver gets
-    /// the pixels themselves. Off by default; output recording must be on for it to matter.
+    /// the pixels themselves. This holds with image storage disabled too: the screen still reads
+    /// the source, but keeps only its dimensions. Off by default; output recording must be on for
+    /// it to matter.
     #[cfg(feature = "terminal-images")]
     pub fn set_image_inline_relay(&mut self, enabled: bool) {
         self.graphics.set_inline_relay(enabled);
