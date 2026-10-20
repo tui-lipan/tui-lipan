@@ -1907,6 +1907,10 @@ fn procedural_spinners_animate_even_when_their_fallback_glyphs_are_identical() {
         assert!(!runner.update_spinner_frames());
         runner.animation.spinner_frame = 2;
         assert!(runner.update_spinner_frames(), "{style:?}");
+        // A ~3 s stall jumps 30 frames: equal modulo OpenCode's 30 fallback frames, but not
+        // modulo its 44-phase rendered cycle.
+        runner.animation.spinner_frame = 62;
+        assert!(runner.update_spinner_frames(), "{style:?} after a stall");
     }
 }
 

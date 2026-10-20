@@ -44,10 +44,10 @@ fn advance_spinner_frame(
     let next = spinner_frame_for_speed(tick, speed);
     let frames = style.frames();
     let changed = match style {
-        // These styles animate position and color in a procedural renderer. Their fallback
-        // `frames()` strings are identical, but their rendered frames are not.
+        // These styles animate position and color in a procedural renderer whose cycle is not
+        // the length of their fallback `frames()`, so any frame change is treated as visible.
         crate::widgets::SpinnerStyle::OpenCode | crate::widgets::SpinnerStyle::Lightsaber => {
-            *frame % frames.len() != next % frames.len()
+            *frame != next
         }
         _ => frames[*frame % frames.len()] != frames[next % frames.len()],
     };
