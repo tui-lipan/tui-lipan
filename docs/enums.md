@@ -1640,3 +1640,22 @@ composition or plan invalidation requires terminal paint.
 
 `TerminalGraphicsMetrics` contains cumulative parser, native-scene and host-frame counters plus
 bounded successful frame interval percentiles. See [performance guidance](perf.md#terminal-graphics-aggregates).
+
+## ClipboardContent
+
+Content in `TerminalPasteEvent::content` and read by `ClipboardHandle::read_content`:
+
+| Variant | Payload |
+| --- | --- |
+| `Text` | `String` |
+| `Image` | `ImageContent` |
+| `Files` | `Vec<PathBuf>` |
+
+## PasteOrigin
+
+| Variant | Meaning |
+| --- | --- |
+| `Clipboard` | Framework clipboard shortcut, mouse paste, or application clipboard command |
+| `Terminal` | Outer-terminal paste event, which may contain plain text or a file-drop path |
+
+`TerminalPasteEvent` contains this origin alongside its `ClipboardContent` payload.

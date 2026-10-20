@@ -301,18 +301,19 @@ pub use terminal::TerminalPtyHandoff;
 #[cfg(feature = "terminal")]
 pub use terminal::{
     CopyModeAction, CopyModeGrid, KittyKeyboardFlags, MouseEncoding, MouseMode, MouseModeState,
-    MouseReportGeometry, ProgramStatusEvent, ProgramStatusRecord, ProgramStatusSnapshot,
-    ProgramStatusState, ScrollbackLineage, SemanticMark, SemanticMarkKind, Terminal,
-    TerminalBuffer, TerminalCellSize, TerminalClipboardEvent, TerminalClipboardTarget,
+    MouseReportGeometry, ProgramStatusCause, ProgramStatusEvent, ProgramStatusRecord,
+    ProgramStatusSnapshot, ProgramStatusState, ScrollbackLineage, SemanticMark, SemanticMarkKind,
+    Terminal, TerminalBuffer, TerminalCellSize, TerminalClipboardEvent, TerminalClipboardTarget,
     TerminalColorPalette, TerminalCommandPhase, TerminalCopyMode, TerminalDecoration,
     TerminalHyperlink, TerminalInputEvent, TerminalInputKind, TerminalKeyModes, TerminalLinkEvent,
-    TerminalLogicalLine, TerminalPasteShortcutBehavior, TerminalPos, TerminalPty,
-    TerminalPtyConfig, TerminalPtyError, TerminalPtyEvent, TerminalReadGate, TerminalReadGateStats,
-    TerminalRenderSnapshot, TerminalScreen, TerminalScreenHandle, TerminalSelection,
-    TerminalSelectionEvent, TerminalSemanticEvent, TerminalSemanticState, TerminalTextPosition,
-    TerminalViewport, TerminalWorkingDirectory, TerminalWorkingDirectorySource, absolute_line,
-    encode_paste, focus_sequences, from_viewport, key_event_to_bytes, mouse_event_to_bytes,
-    paste_sequences, terminal_selection_text, to_viewport, viewport_row,
+    TerminalLogicalLine, TerminalPasteEvent, TerminalPasteShortcutBehavior, TerminalPos,
+    TerminalPty, TerminalPtyConfig, TerminalPtyError, TerminalPtyEvent, TerminalReadGate,
+    TerminalReadGateStats, TerminalRenderSnapshot, TerminalScreen, TerminalScreenHandle,
+    TerminalSelection, TerminalSelectionEvent, TerminalSemanticEvent, TerminalSemanticState,
+    TerminalTextPosition, TerminalViewport, TerminalWorkingDirectory,
+    TerminalWorkingDirectorySource, absolute_line, encode_paste, focus_sequences, from_viewport,
+    key_event_to_bytes, mouse_event_to_bytes, paste_sequences, terminal_selection_text,
+    to_viewport, viewport_row,
 };
 #[cfg(feature = "terminal-images")]
 pub use terminal::{

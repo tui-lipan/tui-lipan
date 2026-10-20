@@ -5,6 +5,15 @@ use crate::style::Span;
 use crate::utils::spans::{line_text, line_width, slice_columns};
 use crate::utils::{GridSelection, SelectionEnd};
 
+/// Paste content and its entry path, before terminal input encoding.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerminalPasteEvent {
+    /// Local clipboard content, or text emitted by the outer terminal.
+    pub content: crate::ClipboardContent,
+    /// Distinguishes framework clipboard gestures from terminal-emitted text.
+    pub origin: crate::PasteOrigin,
+}
+
 /// Terminal input event source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TerminalInputKind {

@@ -654,8 +654,11 @@ pub(crate) fn dispatch_paste(
     tree: &mut NodeTree,
     focused: Option<NodeId>,
     text: &str,
+    origin: crate::PasteOrigin,
     ctx: &mut KeyCtx<'_>,
 ) -> bool {
+    #[cfg(not(feature = "terminal"))]
+    let _ = origin;
     let Some(id) = focused else {
         return false;
     };
@@ -672,7 +675,9 @@ pub(crate) fn dispatch_paste(
             handlers::text_area::handle_paste(tree, id, text, ctx)
         }
         #[cfg(feature = "terminal")]
-        handlers::InteractiveTag::Terminal => handlers::terminal::handle_paste(tree, id, text),
+        handlers::InteractiveTag::Terminal => {
+            handlers::terminal::handle_paste(tree, id, text, origin, ctx)
+        }
         _ => false,
     }
 }

@@ -3484,7 +3484,7 @@ impl TerminalScreen {
         // (cwd/command phase/executable) - a child hard-reset (RIS) does not imply the shell's
         // last-known working directory or command lifecycle became invalid.
         self.semantic_parser = SemanticVteParser::new();
-        self.program_status.clear("");
+        self.program_status.reset();
         self.program_status_scanner = Default::default();
         self.mouse_mode = MouseModeState::default();
         self.pixel_mouse = false;

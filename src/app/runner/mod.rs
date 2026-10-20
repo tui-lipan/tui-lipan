@@ -1129,7 +1129,7 @@ impl<C: Component> AppRunner<C> {
         }
     }
 
-    fn dispatch_focused_paste(&mut self, text: &str) -> bool {
+    fn dispatch_focused_paste(&mut self, text: &str, origin: crate::PasteOrigin) -> bool {
         let focused = self.focus.focused;
         let mut key_ctx = crate::app::input::handlers::KeyCtx {
             read_only_selection: Some(&self.widgets.read_only_selection),
@@ -1145,7 +1145,7 @@ impl<C: Component> AppRunner<C> {
             copy_feedback: &mut self.copy_feedback,
             dirty_override: None,
         };
-        keyboard::dispatch_paste(&mut self.core.tree, focused, text, &mut key_ctx)
+        keyboard::dispatch_paste(&mut self.core.tree, focused, text, origin, &mut key_ctx)
     }
 
     pub(crate) fn paste_from_source(&mut self, source: crate::clipboard::PasteSource) -> bool {
@@ -1154,7 +1154,7 @@ impl<C: Component> AppRunner<C> {
         else {
             return false;
         };
-        self.dispatch_focused_paste(&text)
+        self.dispatch_focused_paste(&text, crate::PasteOrigin::Clipboard)
     }
 
     pub(crate) fn copy_active_selection(
@@ -2627,7 +2627,9 @@ impl<C: Component> AppRunner<C> {
                         }
                         CEvent::Paste(text) => {
                             self.animation.reset_blink();
-                            if self.dispatch_focused_paste(text.as_str()) {
+                            if self
+                                .dispatch_focused_paste(text.as_str(), crate::PasteOrigin::Terminal)
+                            {
                                 dirty.mark_layout();
                             }
                         }

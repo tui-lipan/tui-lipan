@@ -121,6 +121,7 @@ same live screen does not repeat the report. Paint-only updates also synchronize
 | `width` | `Length` | Width |
 | `height` | `Length` | Height |
 | `on_input` | `Callback<TerminalInputEvent>` | Keyboard/paste input from user |
+| `on_paste` | `Callback<TerminalPasteEvent>` | Optional text/image/file paste handler before PTY encoding |
 | `paste_shortcut_behavior` | `TerminalPasteShortcutBehavior` | Direct `Ctrl+V` routing (`Forward` by default; `Performable` pastes text and forwards rich/non-text content) |
 | `on_resize` | `Callback<TerminalViewport>` | Viewport size changed; emitted synchronously during reconciliation |
 | `on_scroll_to` | `Callback<usize>` | Scrollback offset changed |
@@ -1052,10 +1053,26 @@ CAN, SUB or ESC interrupts OSC 133. OSC 7501 reports and queries still require
 BEL or a complete ST terminator.
 
 `program_status_snapshot()` returns at most 256 independent records in stable ID
-order, with a revision and report order. `drain_program_status_events()` returns
-ordered effective-store changes. Drain it after each output batch; embedders may
-coalesce presentation updates using the final snapshot. Use `snapshot.app_for(record)`
-to resolve the nearest ancestor's application identifier.
+order, with a revision and report order. Use `snapshot.app_for(record)` to resolve
+the nearest ancestor's application identifier.
+
+`drain_program_status_events()` returns one `ProgramStatusEvent` per record change,
+in the order the terminal applied them. Drain it after each output batch. The final
+snapshot is enough for presentation, but only the events keep every transition a
+batch contains: a program that writes `working` and then `done` in one batch yields
+both. Each event carries:
+
+- `id`, and `app`: the record's application when it changed, inherited from the
+  nearest ancestor that names one.
+- `previous`: the state before the change, or `None` for a new record.
+- `record`: the record after the change, or `None` when it was removed.
+- `cause`: `Report`, `Clear` for an explicit `state=clear`, `Lifecycle` for a prompt
+  or process exit, `Reset` for RIS or `reset()`, or `Evicted` when a full store
+  dropped its least recently updated record.
+
+Changes made by one operation share its revision. A hierarchical clear produces an
+event for each record it removes. A report that evicts a record produces the
+eviction first, then the report. An operation that changes nothing produces no event.
 
 Reports replace the addressed record completely. Hierarchical clear removes that
 record and its descendants. Prompts emitted through OSC 133 A and the explicit
@@ -1209,3 +1226,33 @@ An explicit `Context::request_full_repaint()` or return from terminal handoff al
 resource acknowledgements. The next frame restores retained sources and placements using their
 reserved IDs. Ordinary UI rebuilds keep unchanged native scenes intact. Dropping a backend deletes
 its owned native resources, including resources staged by an interrupted frame.
+
+## Receive paste content before PTY encoding
+
+Set `Terminal::on_paste(Callback<TerminalPasteEvent>)` to handle local clipboard
+attachments, for example when a terminal host must upload them to a remote
+machine. Use `TerminalKeyPolicy::AppCommandsThenTerminal`, `TerminalFirst`, or
+`TerminalOnly` to enable terminal clipboard preflight. With
+`TerminalPasteShortcutBehavior::Performable`, `Ctrl+V` delivers
+`ClipboardContent::Text`, `Image`, or `Files`, preferring file lists and images
+over accompanying text. `Ctrl+Shift+V` also uses this callback. Empty clipboards
+keep forwarding the key to the child.
+
+The callback owns delivery. The same paste does not also reach `on_input`.
+The event carries `content: ClipboardContent` and `origin: PasteOrigin`.
+`PasteOrigin::Clipboard` identifies framework clipboard shortcuts, mouse paste,
+and application clipboard commands. `PasteOrigin::Terminal` identifies text
+received from the outer terminal. An empty terminal paste reads the local
+clipboard while preserving the `Terminal` origin.
+
+Apply file-drop path recognition only to terminal-origin text. A copied literal
+path from a framework clipboard gesture should remain text. Outer terminals
+can emit the same text for both their own paste gestures and file drops, so
+`Terminal` origin alone does not establish a native OS drag event. Terminals
+without `on_paste` retain their existing behavior, including rich-content key
+forwarding.
+
+Use `ctx.clipboard().read_content()` for an explicit application paste command.
+It returns `Option<ClipboardContent>` and enforces `paste_max_image_bytes` for
+images. File-list entries are local paths; opening, limiting, transferring, and
+retaining their files remain the application host's responsibility.

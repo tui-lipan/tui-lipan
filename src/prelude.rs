@@ -138,8 +138,8 @@ pub use crate::input::{KeyBinding, KeyBindings};
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub use crate::clipboard::{
-    ClipboardConfig, ClipboardPasteContent, CopyOnSelect, PasteShiftInsertBehavior, PasteSource,
-    RightClickAction,
+    ClipboardConfig, ClipboardContent, ClipboardPasteContent, CopyOnSelect, PasteOrigin,
+    PasteShiftInsertBehavior, PasteSource, RightClickAction,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -254,14 +254,14 @@ pub use crate::widgets::TerminalPtyHandoff;
 pub use crate::widgets::{
     CopyModeAction, CopyModeGrid, DamagedRow, GraphicsDamage, KittyKeyboardFlags, ManagedTerminal,
     ManagedTerminalProps, ManagedTerminalStatus, MouseEncoding, MouseMode, MouseModeState,
-    PresentedTerminal, ProgramStatusEvent, ProgramStatusRecord, ProgramStatusSnapshot,
-    ProgramStatusState, ScrollbackLineage, SemanticMark, SemanticMarkKind, Terminal,
-    TerminalBuffer, TerminalCellSize, TerminalClipboardEvent, TerminalClipboardTarget,
+    PresentedTerminal, ProgramStatusCause, ProgramStatusEvent, ProgramStatusRecord,
+    ProgramStatusSnapshot, ProgramStatusState, ScrollbackLineage, SemanticMark, SemanticMarkKind,
+    Terminal, TerminalBuffer, TerminalCellSize, TerminalClipboardEvent, TerminalClipboardTarget,
     TerminalColorPalette, TerminalCommandPhase, TerminalCopyMode, TerminalDamage,
     TerminalDecoration, TerminalHyperlink, TerminalInputEvent, TerminalInputKind, TerminalKeyModes,
-    TerminalLinkEvent, TerminalLogicalLine, TerminalMutation, TerminalPasteShortcutBehavior,
-    TerminalPos, TerminalPresentationSubscription, TerminalPty, TerminalPtyConfig,
-    TerminalPtyError, TerminalPtyEvent, TerminalReadGate, TerminalReadGateStats,
+    TerminalLinkEvent, TerminalLogicalLine, TerminalMutation, TerminalPasteEvent,
+    TerminalPasteShortcutBehavior, TerminalPos, TerminalPresentationSubscription, TerminalPty,
+    TerminalPtyConfig, TerminalPtyError, TerminalPtyEvent, TerminalReadGate, TerminalReadGateStats,
     TerminalRenderSnapshot, TerminalScreen, TerminalScreenHandle, TerminalSelection,
     TerminalSelectionEvent, TerminalSemanticEvent, TerminalSemanticState, TerminalTextPosition,
     TerminalViewport, TerminalWorkingDirectory, TerminalWorkingDirectorySource, absolute_line,

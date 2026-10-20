@@ -240,6 +240,7 @@ pub(crate) fn reconcile_terminal(
         on_blur: terminal.on_blur.clone(),
         on_key: terminal.on_key.clone(),
         on_input: terminal.on_input.clone(),
+        on_paste: terminal.on_paste.clone(),
     });
 
     tree.register_scrollbar_zone(id);
