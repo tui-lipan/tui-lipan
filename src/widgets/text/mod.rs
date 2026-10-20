@@ -58,6 +58,7 @@ impl TextSource {
 
     // Binding identity lets the debug paint guard distinguish content updates from replacing
     // the source, which requires reconciliation even when the spans happen to match.
+    #[cfg(debug_assertions)]
     pub(crate) fn identity(&self) -> usize {
         Rc::as_ptr(&self.0) as usize
     }
