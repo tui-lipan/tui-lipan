@@ -1832,6 +1832,173 @@ fn manual_spinner_frame_is_not_overwritten_by_runtime_tick() {
     assert_eq!(frame, 7);
 }
 
+#[test]
+fn spinner_damage_tracks_glyph_changes_not_clock_ticks() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 12,
+    };
+    let mut runner = AppRunner::new(App::new().mouse(false), AutoSpinnerSmoke, ());
+    init_runner(&mut runner, AutoSpinnerSmoke, viewport);
+    for (tick, changed) in [(1, false), (2, true), (3, false), (4, true), (24, false)] {
+        runner.animation.spinner_frame = tick;
+        assert_eq!(runner.update_spinner_frames(), changed, "tick {tick}");
+        assert_eq!(runner.animation.spinner_damage.len(), usize::from(changed));
+        runner.animation.spinner_damage.clear();
+    }
+}
+
+#[test]
+fn spinner_deadlines_follow_speeds_instead_of_unused_fifty_ms_ticks() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 12,
+    };
+    let mut runner = AppRunner::new(App::new().mouse(false), AutoSpinnerSmoke, ());
+    init_runner(&mut runner, AutoSpinnerSmoke, viewport);
+    let id = runner.core.tree.spinner_ids()[0];
+    for (speed, tick, wait_ms) in [
+        (SpinnerSpeed::Fast, 0, 50),
+        (SpinnerSpeed::Normal, 0, 100),
+        (SpinnerSpeed::Slow, 0, 200),
+        (SpinnerSpeed::Custom { frame_ms: 150 }, 0, 150),
+        (SpinnerSpeed::Custom { frame_ms: 75 }, 0, 100),
+        (SpinnerSpeed::Custom { frame_ms: 75 }, 2, 50),
+        (SpinnerSpeed::Custom { frame_ms: 0 }, 0, 50),
+    ] {
+        let NodeKind::Spinner(node) = &mut runner.core.tree.node_mut(id).kind else {
+            panic!("spinner")
+        };
+        node.speed = speed;
+        runner.animation.spinner_frame = tick;
+        runner.update_spinner_frames();
+        assert_eq!(
+            runner.animation.spinner_tick_interval,
+            Duration::from_millis(wait_ms),
+            "{speed:?} at {tick}"
+        );
+    }
+}
+
+#[test]
+fn procedural_spinners_animate_even_when_their_fallback_glyphs_are_identical() {
+    for style in [
+        crate::widgets::SpinnerStyle::OpenCode,
+        crate::widgets::SpinnerStyle::Lightsaber,
+    ] {
+        let viewport = Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 12,
+        };
+        let mut runner = AppRunner::new(App::new().mouse(false), AutoSpinnerSmoke, ());
+        init_runner(&mut runner, AutoSpinnerSmoke, viewport);
+        let id = runner.core.tree.spinner_ids()[0];
+        let NodeKind::Spinner(node) = &mut runner.core.tree.node_mut(id).kind else {
+            panic!("spinner")
+        };
+        node.spinner_style = style;
+        runner.animation.spinner_frame = 1;
+        assert!(!runner.update_spinner_frames());
+        runner.animation.spinner_frame = 2;
+        assert!(runner.update_spinner_frames(), "{style:?}");
+    }
+}
+
+#[derive(Clone)]
+struct RetainedSpinnerSmoke {
+    views: Rc<Cell<usize>>,
+}
+
+impl Component for RetainedSpinnerSmoke {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &()) {}
+
+    fn update(&mut self, _msg: (), _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        self.views.set(self.views.get() + 1);
+        VStack::new()
+            .child(Spinner::new().height(Length::Px(1)))
+            .child(Text::new("unchanged wide 界 content").height(Length::Flex(1)))
+            .into()
+    }
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn spinner_paints_reuse_the_retained_frame_without_rebuilding_or_growing_damage() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 40,
+        h: 12,
+    };
+    let views = Rc::new(Cell::new(0));
+    let component = RetainedSpinnerSmoke {
+        views: views.clone(),
+    };
+    let mut runner = AppRunner::new(App::new().mouse(false), component.clone(), ());
+    init_runner(&mut runner, component, viewport);
+    let mut terminal = crate::backend::ratatui_backend::create_test_terminal(40, 12).unwrap();
+    runner.render_paint_only(&mut terminal).unwrap();
+    let initial = runner.last_frame_snapshot.clone().unwrap();
+    let view_count = views.get();
+    for tick in (2..=80).step_by(2) {
+        runner.animation.spinner_frame = tick;
+        assert!(runner.update_spinner_frames());
+        runner.render_spinner_paint_only(&mut terminal).unwrap();
+        assert_eq!(runner.host_patched_rows, vec![0]);
+        assert!(runner.animation.spinner_damage.is_empty());
+        assert_eq!(views.get(), view_count);
+        let frame = runner.last_frame_snapshot.as_ref().unwrap();
+        for y in 1..12 {
+            for x in 0..40 {
+                assert_eq!(frame[(x, y)], initial[(x, y)], "unchanged cell {x},{y}");
+            }
+        }
+    }
+    // Includes returning to the original glyph, followed by Ratatui's ordinary full diff.
+    let patched = runner.last_frame_snapshot.clone().unwrap();
+    runner.render_paint_only(&mut terminal).unwrap();
+    assert_eq!(runner.last_frame_snapshot.as_ref(), Some(&patched));
+    assert!(runner.host_patched_rows.is_empty());
+}
+
+#[test]
+fn list_description_spinner_skips_unchanged_and_manual_frames() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 40,
+        h: 12,
+    };
+    let mut runner = AppRunner::new(App::new().mouse(false), ListDescriptionSpinnerSmoke, ());
+    init_runner(&mut runner, ListDescriptionSpinnerSmoke, viewport);
+    runner.animation.spinner_frame = 1;
+    assert!(!runner.update_spinner_frames());
+    runner.animation.spinner_frame = 2;
+    assert!(runner.update_spinner_frames());
+    assert_eq!(first_list_description_spinners(&runner), (1, 3));
+    runner.animation.spinner_frame = 3;
+    assert!(!runner.update_spinner_frames());
+    assert_eq!(
+        runner.animation.spinner_damage.len(),
+        1,
+        "paced frames coalesce damage"
+    );
+}
+
 fn drop_target_highlighted<C: Component>(runner: &AppRunner<C>, key: &str) -> bool {
     let id = node_id_by_key(&runner.core.tree, key);
     match &runner.core.tree.node(id).kind {

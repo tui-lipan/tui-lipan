@@ -354,6 +354,20 @@ Prefer built-in spinners, transitions, and effects over an app-owned 16 ms
 command loop. Remove completed effects and lower custom effect cadence where
 possible so an idle app returns to event-driven rendering.
 
+Auto-frame spinners share a 50 ms clock, but schedule their next update at the
+next frame boundary their speed needs (100 ms at normal speed). A tick whose
+rendered frame is unchanged does not request a paint. Manual `.frame(...)`
+spinners are not advanced by the runtime.
+
+On fullscreen surfaces, spinner changes reuse the retained frame and repaint
+only the allocated rows of the affected widgets. Live terminal damage and
+fixed-allocation live labels join the same row repaint, so an animated status
+does not force unrelated panes to be painted in full. Embedded list and tab
+spinners invalidate their containing widget's allocation. Dense damage,
+overlays, inline surfaces, and cases without a valid retained frame use an
+ordinary paint. Generic paint, layout, and full updates still take precedence;
+the spinner optimization never assumes those changes are confined to its rows.
+
 ## Frame rate
 
 Most frames come from something happening: a key, a message, a mouse event. The

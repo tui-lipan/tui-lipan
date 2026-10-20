@@ -758,7 +758,7 @@ pub(crate) fn buffered_test_output() -> (
 }
 
 /// Exercise the production renderer without reading or writing the host terminal.
-#[cfg(all(test, feature = "terminal"))]
+#[cfg(test)]
 pub(crate) fn create_test_terminal(width: u16, height: u16) -> io::Result<Terminal> {
     let output = FrameOutput {
         dropped: Default::default(),

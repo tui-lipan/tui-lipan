@@ -18,58 +18,150 @@ use super::{AppRunner, spinner_frame_for_speed};
 fn advance_list_spinner(
     spinner: Option<&mut crate::widgets::list::ListItemSpinnerSlot>,
     tick: usize,
-) {
+    next_tick: &mut usize,
+) -> bool {
     if let Some(spinner) = spinner.filter(|spinner| spinner.auto_frame) {
-        spinner.frame = spinner_frame_for_speed(tick, spinner.speed);
+        return advance_spinner_frame(
+            &mut spinner.frame,
+            tick,
+            spinner.speed,
+            spinner.spinner_style,
+            next_tick,
+        );
+    }
+    false
+}
+
+/// Compare the glyph, not the unbounded tick counter (including a complete cycle after a stall).
+fn advance_spinner_frame(
+    frame: &mut usize,
+    tick: usize,
+    speed: crate::widgets::SpinnerSpeed,
+    style: crate::widgets::SpinnerStyle,
+    next_tick: &mut usize,
+) -> bool {
+    *next_tick = (*next_tick).min(next_spinner_frame_tick(tick, speed));
+    let next = spinner_frame_for_speed(tick, speed);
+    let frames = style.frames();
+    let changed = match style {
+        // These styles animate position and color in a procedural renderer. Their fallback
+        // `frames()` strings are identical, but their rendered frames are not.
+        crate::widgets::SpinnerStyle::OpenCode | crate::widgets::SpinnerStyle::Lightsaber => {
+            *frame % frames.len() != next % frames.len()
+        }
+        _ => frames[*frame % frames.len()] != frames[next % frames.len()],
+    };
+    *frame = next;
+    changed
+}
+
+/// Quantize the next frame boundary to the shared 50 ms clock, without waking on unused ticks.
+fn next_spinner_frame_tick(tick: usize, speed: crate::widgets::SpinnerSpeed) -> usize {
+    let frame_ms = match speed {
+        crate::widgets::SpinnerSpeed::Fast => 50,
+        crate::widgets::SpinnerSpeed::Normal => 100,
+        crate::widgets::SpinnerSpeed::Slow => 200,
+        crate::widgets::SpinnerSpeed::Custom { frame_ms } => usize::from(frame_ms).max(1),
+    };
+    let next_frame = spinner_frame_for_speed(tick, speed).saturating_add(1);
+    next_frame
+        .saturating_mul(frame_ms)
+        .div_ceil(50)
+        .max(tick.saturating_add(1))
+}
+
+fn advance_tab_spinners(
+    node: &mut crate::widgets::draggable_tab_bar::DraggableTabBarNode,
+    tick: usize,
+    next_tick: &mut usize,
+) -> bool {
+    let mut changed = false;
+    for tab in std::sync::Arc::make_mut(&mut node.tabs) {
+        if let Some(spinner) = tab
+            .leading
+            .as_mut()
+            .and_then(|content| content.spinner_mut())
+            && spinner.auto_frame
+        {
+            let mut frame = spinner.spinner.frame.unwrap_or(0);
+            changed |= advance_spinner_frame(
+                &mut frame,
+                tick,
+                spinner.spinner.speed,
+                spinner.spinner.spinner_style,
+                next_tick,
+            );
+            spinner.spinner.frame = Some(frame);
+        }
+    }
+    changed
+}
+
+fn advance_list_spinners(
+    node: &mut crate::widgets::list::ListNode,
+    tick: usize,
+    next_tick: &mut usize,
+) -> bool {
+    let mut changed = false;
+    for item in std::sync::Arc::make_mut(&mut node.items) {
+        changed |= advance_list_spinner(
+            item.status.as_mut().and_then(|s| s.spinner_mut()),
+            tick,
+            next_tick,
+        );
+        changed |= advance_list_spinner(
+            item.gutter.as_mut().and_then(|g| g.spinner_mut()),
+            tick,
+            next_tick,
+        );
+        changed |= advance_list_spinner(item.description_spinner.as_mut(), tick, next_tick);
+        changed |= advance_list_spinner(item.label_spinner.as_mut(), tick, next_tick);
+        for line in &mut item.extra_lines {
+            changed |= advance_list_spinner(line.description_spinner.as_mut(), tick, next_tick);
+            changed |= advance_list_spinner(line.label_spinner.as_mut(), tick, next_tick);
+        }
+    }
+    changed
+}
+
+fn advance_node_spinners(kind: &mut NodeKind, tick: usize, next_tick: &mut usize) -> bool {
+    match kind {
+        NodeKind::Spinner(node) if node.auto_frame => advance_spinner_frame(
+            &mut node.frame,
+            tick,
+            node.speed,
+            node.spinner_style,
+            next_tick,
+        ),
+        NodeKind::DraggableTabBar(node) => advance_tab_spinners(node, tick, next_tick),
+        NodeKind::List(node) => advance_list_spinners(node, tick, next_tick),
+        _ => false,
     }
 }
 
 impl<C: Component> AppRunner<C> {
-    pub(crate) fn update_spinner_frames(&mut self) {
+    pub(crate) fn update_spinner_frames(&mut self) -> bool {
         let spinner_ids = self.core.tree.spinner_ids().to_vec();
-
+        let mut changed = false;
+        let mut next_tick = usize::MAX;
         for id in spinner_ids {
-            match &mut self.core.tree.node_mut(id).kind {
-                NodeKind::Spinner(node) if node.auto_frame => {
-                    node.frame = spinner_frame_for_speed(self.animation.spinner_frame, node.speed);
+            if advance_node_spinners(
+                &mut self.core.tree.node_mut(id).kind,
+                self.animation.spinner_frame,
+                &mut next_tick,
+            ) {
+                changed = true;
+                if !self.animation.spinner_damage.contains(&id) {
+                    self.animation.spinner_damage.push(id);
                 }
-                NodeKind::DraggableTabBar(node) => {
-                    for tab in std::sync::Arc::make_mut(&mut node.tabs) {
-                        if let Some(spinner) = tab
-                            .leading
-                            .as_mut()
-                            .and_then(|content| content.spinner_mut())
-                            && spinner.auto_frame
-                        {
-                            spinner.spinner.frame = Some(spinner_frame_for_speed(
-                                self.animation.spinner_frame,
-                                spinner.spinner.speed,
-                            ));
-                        }
-                    }
-                }
-                NodeKind::List(node) => {
-                    let tick = self.animation.spinner_frame;
-                    for item in std::sync::Arc::make_mut(&mut node.items) {
-                        advance_list_spinner(
-                            item.status.as_mut().and_then(|s| s.spinner_mut()),
-                            tick,
-                        );
-                        advance_list_spinner(
-                            item.gutter.as_mut().and_then(|g| g.spinner_mut()),
-                            tick,
-                        );
-                        advance_list_spinner(item.description_spinner.as_mut(), tick);
-                        advance_list_spinner(item.label_spinner.as_mut(), tick);
-                        for line in &mut item.extra_lines {
-                            advance_list_spinner(line.description_spinner.as_mut(), tick);
-                            advance_list_spinner(line.label_spinner.as_mut(), tick);
-                        }
-                    }
-                }
-                _ => {}
             }
         }
+        let ticks = next_tick
+            .saturating_sub(self.animation.spinner_frame)
+            .max(1);
+        self.animation.spinner_tick_interval =
+            std::time::Duration::from_millis((ticks as u64).saturating_mul(50));
+        changed
     }
 
     #[cfg(test)]
