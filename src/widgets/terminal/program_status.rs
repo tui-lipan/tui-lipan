@@ -102,11 +102,43 @@ impl ProgramStatusSnapshot {
     }
 }
 
-/// An ordered effective-store change. Embedders can drain after each output batch.
+/// Why a record changed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ProgramStatusCause {
+    /// A report created or replaced the record.
+    Report,
+    /// An explicit `state=clear` removed the record, alone or with an ancestor.
+    Clear,
+    /// A shell prompt or process exit removed the record because it was working or blocked.
+    Lifecycle,
+    /// A full reset removed every record.
+    Reset,
+    /// The store was full and this was its least recently updated record.
+    Evicted,
+}
+
+/// One record's change, in the order the terminal applied it.
+///
+/// Drain these after each output batch. Unlike the final snapshot, they keep every transition a
+/// batch contains: a program that reports `working` and then `done` in one write yields both.
+/// Changes applied by one operation, such as a hierarchical clear or a report that evicts another
+/// record, share its revision.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ProgramStatusEvent {
-    /// Monotonic effective-store revision.
+    /// Monotonic effective-store revision after the change.
     pub revision: u64,
+    /// Why the record changed.
+    pub cause: ProgramStatusCause,
+    /// The record's ID; empty for the root.
+    pub id: Arc<str>,
+    /// The record's application when it changed: its own, or the nearest ancestor's.
+    pub app: Option<Arc<str>>,
+    /// The record's state before the change, or `None` when it did not exist.
+    pub previous: Option<ProgramStatusState>,
+    /// The record after the change, or `None` when it was removed.
+    pub record: Option<ProgramStatusRecord>,
 }
 
 #[derive(Debug, Default)]
@@ -130,27 +162,61 @@ impl ProgramStatusStore {
         std::mem::take(&mut self.events)
     }
 
-    fn changed(&mut self) {
+    /// The record's own application, or the nearest stored ancestor's.
+    fn app_of(&self, record: &ProgramStatusRecord) -> Option<Arc<str>> {
+        if let Some(app) = &record.app {
+            return Some(app.clone());
+        }
+        let mut id = record.id.as_ref();
+        while !id.is_empty() {
+            id = id.rsplit_once('/').map_or("", |(parent, _)| parent);
+            if let Some(app) = self.records.get(id).and_then(|r| r.app.clone()) {
+                return Some(app);
+            }
+        }
+        None
+    }
+
+    /// Remove every record `remove` selects, as one change with one event per record.
+    fn remove(&mut self, cause: ProgramStatusCause, remove: impl Fn(&ProgramStatusRecord) -> bool) {
+        // Applications resolve before anything goes, since an ancestor may leave in the same change.
+        let removed: Vec<_> = self
+            .records
+            .values()
+            .filter(|record| remove(record))
+            .map(|record| (record.id.clone(), self.app_of(record), record.state))
+            .collect();
+        if removed.is_empty() {
+            return;
+        }
+        self.records.retain(|_, record| !remove(record));
         self.revision += 1;
-        self.events.push(ProgramStatusEvent {
-            revision: self.revision,
-        });
+        for (id, app, state) in removed {
+            self.events.push(ProgramStatusEvent {
+                revision: self.revision,
+                cause,
+                id,
+                app,
+                previous: Some(state),
+                record: None,
+            });
+        }
     }
 
     pub fn clear_active(&mut self) {
-        let before = self.records.len();
-        self.records.retain(|_, r| !r.state.active());
-        if before != self.records.len() {
-            self.changed();
-        }
+        self.remove(ProgramStatusCause::Lifecycle, |record| {
+            record.state.active()
+        });
     }
 
     pub fn clear(&mut self, id: &str) {
-        let before = self.records.len();
-        self.records.retain(|key, _| !is_descendant(key, id));
-        if before != self.records.len() {
-            self.changed();
-        }
+        self.remove(ProgramStatusCause::Clear, |record| {
+            is_descendant(&record.id, id)
+        });
+    }
+
+    pub fn reset(&mut self) {
+        self.remove(ProgramStatusCause::Reset, |_| true);
     }
 
     pub fn report(&mut self, body: &[u8]) {
@@ -169,18 +235,36 @@ impl ProgramStatusStore {
         self.order += 1;
         // Every valid report refreshes eviction order, including otherwise identical reports.
         record.updated = self.order;
+        self.revision += 1;
         if self.records.len() == 256 && !self.records.contains_key(&record.id) {
             let oldest = self
                 .records
                 .values()
                 .min_by_key(|r| r.updated)
-                .map(|r| r.id.clone());
-            if let Some(oldest) = oldest {
-                self.records.remove(&oldest);
+                .map(|r| (r.id.clone(), self.app_of(r), r.state));
+            if let Some((id, app, state)) = oldest {
+                self.records.remove(&id);
+                self.events.push(ProgramStatusEvent {
+                    revision: self.revision,
+                    cause: ProgramStatusCause::Evicted,
+                    id,
+                    app,
+                    previous: Some(state),
+                    record: None,
+                });
             }
         }
+        let previous = self.records.get(&record.id).map(|r| r.state);
+        let app = self.app_of(&record);
+        self.events.push(ProgramStatusEvent {
+            revision: self.revision,
+            cause: ProgramStatusCause::Report,
+            id: record.id.clone(),
+            app,
+            previous,
+            record: Some(record.clone()),
+        });
         self.records.insert(record.id.clone(), record);
-        self.changed();
     }
 }
 
@@ -490,7 +574,7 @@ impl ProgramStatusScanner {
             b'[' => Csi,
             b'P' | b'_' | b'X' | b'^' => String,
             b'c' => {
-                store.clear("");
+                store.reset();
                 Ground
             }
             0x20..=0x2f => Intermediate,
@@ -535,6 +619,153 @@ mod tests {
 
     fn report(screen: &mut TerminalScreen, body: &str) {
         screen.process_bytes(format!("\x1b]7501;{body}\x1b\\").as_bytes());
+    }
+
+    /// The prompt removed the working root and the blocked child, in one change, and kept `done`.
+    fn assert_lifecycle_removed(screen: &mut TerminalScreen) {
+        let events = screen.drain_program_status_events();
+        let removed: Vec<_> = events
+            .iter()
+            .map(|e| (e.id.as_ref(), e.previous, e.record.is_none(), e.cause))
+            .collect();
+        assert_eq!(
+            removed,
+            [
+                (
+                    "",
+                    Some(ProgramStatusState::Working),
+                    true,
+                    ProgramStatusCause::Lifecycle
+                ),
+                (
+                    "child",
+                    Some(ProgramStatusState::Blocked),
+                    true,
+                    ProgramStatusCause::Lifecycle
+                ),
+            ]
+        );
+        assert_eq!(events[0].revision, events[1].revision);
+    }
+
+    /// `(id, app, previous, current, cause)` for one drained event.
+    type Transition = (
+        String,
+        Option<String>,
+        Option<ProgramStatusState>,
+        Option<ProgramStatusState>,
+        ProgramStatusCause,
+    );
+
+    fn transitions(screen: &mut TerminalScreen) -> Vec<Transition> {
+        screen
+            .drain_program_status_events()
+            .into_iter()
+            .map(|e| {
+                (
+                    e.id.to_string(),
+                    e.app.as_deref().map(str::to_string),
+                    e.previous,
+                    e.record.map(|r| r.state),
+                    e.cause,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn program_status_events_keep_every_transition_of_a_batch() {
+        use ProgramStatusCause::Report;
+        use ProgramStatusState::{Blocked, Done, Working};
+        let mut s = screen();
+        // One write, as an agent finishing a short turn produces: the snapshot shows only `done`.
+        s.process_bytes(
+            b"\x1b]7501;state=working:app=codex\x07\x1b]7501;state=blocked:app=codex:kind=permission\x07\x1b]7501;state=working:app=codex\x07\x1b]7501;state=done:app=codex\x07",
+        );
+        assert_eq!(s.program_status_snapshot().records[0].state, Done);
+        let codex = Some("codex".to_string());
+        assert_eq!(
+            transitions(&mut s),
+            [
+                (String::new(), codex.clone(), None, Some(Working), Report),
+                (
+                    String::new(),
+                    codex.clone(),
+                    Some(Working),
+                    Some(Blocked),
+                    Report
+                ),
+                (
+                    String::new(),
+                    codex.clone(),
+                    Some(Blocked),
+                    Some(Working),
+                    Report
+                ),
+                (String::new(), codex, Some(Working), Some(Done), Report),
+            ]
+        );
+    }
+
+    #[test]
+    fn program_status_events_name_the_inherited_app_and_why_records_left() {
+        use ProgramStatusCause::{Clear, Report, Reset};
+        use ProgramStatusState::{Blocked, Done, Working};
+        let mut s = screen();
+        report(&mut s, "state=working:app=claude-code");
+        report(&mut s, "state=blocked:id=tool");
+        report(&mut s, "state=done:id=other:app=cargo");
+        let claude = Some("claude-code".to_string());
+        let cargo = Some("cargo".to_string());
+        assert_eq!(
+            transitions(&mut s),
+            [
+                (String::new(), claude.clone(), None, Some(Working), Report),
+                ("tool".into(), claude.clone(), None, Some(Blocked), Report),
+                ("other".into(), cargo.clone(), None, Some(Done), Report),
+            ]
+        );
+        // Clearing an ancestor removes its children too, each still named for the app it inherited.
+        report(&mut s, "state=clear");
+        let cleared = transitions(&mut s);
+        assert_eq!(
+            cleared,
+            [
+                (String::new(), claude.clone(), Some(Working), None, Clear),
+                ("other".into(), cargo, Some(Done), None, Clear),
+                ("tool".into(), claude, Some(Blocked), None, Clear),
+            ]
+        );
+        report(&mut s, "state=done");
+        s.drain_program_status_events();
+        s.process_bytes(b"\x1bc");
+        assert_eq!(
+            transitions(&mut s),
+            [(String::new(), None, Some(Done), None, Reset)]
+        );
+        // Nothing left to remove is no change at all.
+        s.process_bytes(b"\x1bc");
+        s.program_status_process_exited();
+        assert!(s.drain_program_status_events().is_empty());
+    }
+
+    #[test]
+    fn program_status_eviction_precedes_the_report_that_caused_it() {
+        let mut s = screen();
+        for i in 0..256 {
+            report(&mut s, &format!("state=done:id=r{i}"));
+        }
+        s.drain_program_status_events();
+        report(&mut s, "state=working:id=new");
+        let events = s.drain_program_status_events();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].cause, ProgramStatusCause::Evicted);
+        assert_eq!(events[0].id.as_ref(), "r0");
+        assert!(events[0].record.is_none());
+        assert_eq!(events[1].cause, ProgramStatusCause::Report);
+        assert_eq!(events[1].id.as_ref(), "new");
+        assert_eq!(events[0].revision, events[1].revision);
+        assert_eq!(s.program_status_snapshot().revision, events[1].revision);
     }
 
     #[test]
@@ -714,7 +945,7 @@ mod tests {
                     assert_eq!(snapshot.records.len(), 1);
                     assert_eq!(snapshot.records[0].state, ProgramStatusState::Done);
                 }
-                assert_eq!(s.drain_program_status_events().len(), 1);
+                assert_lifecycle_removed(&mut s);
                 s.set_program_status_enabled(true);
                 report(&mut s, "state=idle");
                 assert_eq!(s.program_status_snapshot().records.len(), 2);
@@ -763,7 +994,7 @@ mod tests {
                 let snapshot = s.program_status_snapshot();
                 assert_eq!(snapshot.records.len(), 1);
                 assert_eq!(snapshot.records[0].state, ProgramStatusState::Done);
-                assert_eq!(s.drain_program_status_events().len(), 1);
+                assert_lifecycle_removed(&mut s);
             }
         }
     }
