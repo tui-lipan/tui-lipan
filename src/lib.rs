@@ -503,7 +503,8 @@ fn inline_surface_internal_wrap_policy_is_opaque() {
 
 #[cfg(feature = "terminal")]
 pub use crate::widgets::{
-    ProgramStatusEvent, ProgramStatusRecord, ProgramStatusSnapshot, ProgramStatusState,
+    ProgramStatusCause, ProgramStatusEvent, ProgramStatusRecord, ProgramStatusSnapshot,
+    ProgramStatusState,
 };
 
 #[cfg(feature = "terminal")]

@@ -19,7 +19,8 @@ mod output;
 pub use output::{GraphicsDependency, TerminalOutputClass, TerminalOutputTransaction};
 mod program_status;
 pub use program_status::{
-    ProgramStatusEvent, ProgramStatusRecord, ProgramStatusSnapshot, ProgramStatusState,
+    ProgramStatusCause, ProgramStatusEvent, ProgramStatusRecord, ProgramStatusSnapshot,
+    ProgramStatusState,
 };
 pub(crate) mod presentation;
 pub use presentation::{PresentedTerminal, TerminalPresentationSubscription};

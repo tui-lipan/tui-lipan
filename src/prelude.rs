@@ -254,9 +254,9 @@ pub use crate::widgets::TerminalPtyHandoff;
 pub use crate::widgets::{
     CopyModeAction, CopyModeGrid, DamagedRow, GraphicsDamage, KittyKeyboardFlags, ManagedTerminal,
     ManagedTerminalProps, ManagedTerminalStatus, MouseEncoding, MouseMode, MouseModeState,
-    PresentedTerminal, ProgramStatusEvent, ProgramStatusRecord, ProgramStatusSnapshot,
-    ProgramStatusState, ScrollbackLineage, SemanticMark, SemanticMarkKind, Terminal,
-    TerminalBuffer, TerminalCellSize, TerminalClipboardEvent, TerminalClipboardTarget,
+    PresentedTerminal, ProgramStatusCause, ProgramStatusEvent, ProgramStatusRecord,
+    ProgramStatusSnapshot, ProgramStatusState, ScrollbackLineage, SemanticMark, SemanticMarkKind,
+    Terminal, TerminalBuffer, TerminalCellSize, TerminalClipboardEvent, TerminalClipboardTarget,
     TerminalColorPalette, TerminalCommandPhase, TerminalCopyMode, TerminalDamage,
     TerminalDecoration, TerminalHyperlink, TerminalInputEvent, TerminalInputKind, TerminalKeyModes,
     TerminalLinkEvent, TerminalLogicalLine, TerminalMutation, TerminalPasteEvent,

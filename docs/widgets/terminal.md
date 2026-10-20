@@ -1053,10 +1053,26 @@ CAN, SUB or ESC interrupts OSC 133. OSC 7501 reports and queries still require
 BEL or a complete ST terminator.
 
 `program_status_snapshot()` returns at most 256 independent records in stable ID
-order, with a revision and report order. `drain_program_status_events()` returns
-ordered effective-store changes. Drain it after each output batch; embedders may
-coalesce presentation updates using the final snapshot. Use `snapshot.app_for(record)`
-to resolve the nearest ancestor's application identifier.
+order, with a revision and report order. Use `snapshot.app_for(record)` to resolve
+the nearest ancestor's application identifier.
+
+`drain_program_status_events()` returns one `ProgramStatusEvent` per record change,
+in the order the terminal applied them. Drain it after each output batch. The final
+snapshot is enough for presentation, but only the events keep every transition a
+batch contains: a program that writes `working` and then `done` in one batch yields
+both. Each event carries:
+
+- `id`, and `app`: the record's application when it changed, inherited from the
+  nearest ancestor that names one.
+- `previous`: the state before the change, or `None` for a new record.
+- `record`: the record after the change, or `None` when it was removed.
+- `cause`: `Report`, `Clear` for an explicit `state=clear`, `Lifecycle` for a prompt
+  or process exit, `Reset` for RIS or `reset()`, or `Evicted` when a full store
+  dropped its least recently updated record.
+
+Changes made by one operation share its revision. A hierarchical clear produces an
+event for each record it removes. A report that evicts a record produces the
+eviction first, then the report. An operation that changes nothing produces no event.
 
 Reports replace the addressed record completely. Hierarchical clear removes that
 record and its descendants. Prompts emitted through OSC 133 A and the explicit
