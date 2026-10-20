@@ -1492,6 +1492,54 @@ fn per_cell_crops_of_one_source_share_a_single_upload() {
 
 #[cfg(feature = "terminal-images")]
 #[test]
+fn a_lone_crop_uploads_its_whole_source_only_when_the_source_is_small() {
+    use base64::Engine as _;
+
+    let upload_size = |source: (u32, u32), crop: (u32, u32)| {
+        let _host =
+            crate::backend::ratatui_backend::image_support::test_kitty_host((14, 32), false);
+        let mut harness = build(PaneCfg::new(), b"\x1b[?25l\x1b[H");
+        harness
+            .screen
+            .borrow_mut()
+            .set_cell_size(crate::widgets::TerminalCellSize::new(14, 32));
+        let payload = base64::engine::general_purpose::STANDARD
+            .encode([100, 150, 200].repeat((source.0 * source.1) as usize));
+        harness.screen.borrow_mut().process_bytes(
+            format!(
+                "\x1b_Ga=t,f=24,s={},v={},i=7,q=2;{payload}\x1b\\\x1b[H\x1b_Ga=p,i=7,p=1,x=0,y=0,w={},h={},c=1,r=1,z=-1,C=1,q=2;\x1b\\",
+                source.0, source.1, crop.0, crop.1,
+            )
+            .as_bytes(),
+        );
+        harness.runner.core.tree.refresh_live_terminals_detailed();
+        let mut terminal =
+            crate::backend::ratatui_backend::create_test_terminal(COLS, ROWS).unwrap();
+        harness.runner.render_paint_only(&mut terminal).unwrap();
+        let output = String::from_utf8_lossy(&terminal.backend().test_output()).into_owned();
+        let header = output
+            .split("\x1b_G")
+            .find(|command| command.contains("a=T,") || command.contains(",a=t,"))
+            .unwrap_or_else(|| panic!("no upload: {output:?}"))
+            .to_owned();
+        let key = |name: &str| -> u32 {
+            header
+                .split([',', ';'])
+                .find_map(|pair| pair.strip_prefix(name))
+                .unwrap()
+                .parse()
+                .unwrap()
+        };
+        (key("s="), key("v="))
+    };
+    // A small crop of a large image encodes just the crop.
+    assert_eq!(upload_size((400, 320), (14, 32)), (14, 32));
+    // A crop that is most of its source places from the whole source.
+    assert_eq!(upload_size((28, 32), (14, 32)), (28, 32));
+}
+
+#[cfg(feature = "terminal-images")]
+#[test]
 fn ordinary_overlays_cover_image_pixels_without_covering_the_anchor() {
     for mode in 0..=14 {
         for stacked in [false, true] {

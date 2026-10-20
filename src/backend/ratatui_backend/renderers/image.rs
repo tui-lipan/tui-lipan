@@ -1636,9 +1636,19 @@ impl HostKittyUploads {
         self.images.clear();
     }
 
-    pub(crate) fn forget(&mut self, ids: impl IntoIterator<Item = u32>) {
-        for id in ids {
-            self.images.remove(&id);
+    /// Treat these images as absent from the host. A cached encode has already handed its pixels
+    /// over, so it is dropped too: the next placement encodes again and carries a transmission.
+    pub(crate) fn forget(&mut self, ids: Vec<u32>) {
+        if ids.is_empty() {
+            return;
+        }
+        for id in &ids {
+            self.images.remove(id);
+        }
+        if let Some(encoder) = ENCODER.get()
+            && let Ok(mut inner) = encoder.inner.lock()
+        {
+            inner.cache.remove_kitty_images(&ids);
         }
     }
 
@@ -2031,6 +2041,17 @@ impl ImageRenderCache {
                 if let Some(source) = source {
                     source.discard_unattempted();
                 }
+            }
+        }
+    }
+
+    #[cfg(feature = "terminal-images")]
+    fn remove_kitty_images(&mut self, ids: &[u32]) {
+        for index in (0..self.entries.len()).rev() {
+            if matches!(&*self.entries[index].protocol,
+                EncodedProtocol::CompressedKitty(image) if ids.contains(&image.id))
+            {
+                self.remove_at(index);
             }
         }
     }
@@ -3287,7 +3308,10 @@ pub(crate) fn draw_encoded_image(
 /// Per-cell senders such as Yazi place every cell of one image as its own cropped placement.
 /// Encoding each crop separately would upload hundreds of tiny images and could fill the encode
 /// cache. Here the whole source is encoded once, at its natural size, and every crop places the
-/// part it shows with `x`/`y`/`w`/`h`, which the host stretches to the crop's cells.
+/// part it shows with `x`/`y`/`w`/`h`, which the host stretches to the crop's cells. Kitty's and
+/// Ghostty's renderers both stretch an ordinary placement with explicit `c` and `r`; the
+/// aspect-preserving fit in Kitty's protocol text applies to Unicode placeholders, which this path
+/// never uses.
 ///
 /// `None` means this path does not apply - a capture, a non-Kitty host, placeholder rendering or a
 /// dimmed backdrop - and the caller draws the crop on its own instead.
@@ -4922,14 +4946,20 @@ mod tests {
             removed.contains("a=d,"),
             "placement must be deleted: {removed:?}"
         );
-        evict_terminal_scene_encodes(&mut screen, (8, 4));
+        // The encode is still cached and has handed its pixels over; placing the image again
+        // must still carry a transmission, since the host copy may be gone.
         screen.process_bytes(place.as_bytes());
-        evict_terminal_scene_encodes(&mut screen, (8, 4));
         let restored = paint_terminal_scene(&mut screen, &mut frame, &mut host, &output);
         assert_eq!(
             restored.matches("a=T,").count(),
             1,
-            "a re-encoded image without a confirmed placement must be uploaded again: {restored:?}"
+            "an image placed again after leaving the host scene must be uploaded again: {restored:?}"
+        );
+        assert!(restored.contains("a=p,"));
+        let repaint = paint_terminal_scene(&mut screen, &mut frame, &mut host, &output);
+        assert!(
+            !repaint.contains("\x1b_G"),
+            "the restored image stays quiet: {repaint:?}"
         );
     }
 

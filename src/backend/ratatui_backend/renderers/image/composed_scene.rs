@@ -51,15 +51,17 @@ fn span_id(
     SPAN_IDS.with(|slot| {
         let mut ids = slot.borrow_mut();
         let crop = (crop.x, crop.y, crop.width, crop.height);
-        let entry = ids.entry((image, origin, span, crop)).or_insert_with(|| SpanId {
-            id: NEXT_KITTY_PLACEMENT.with(|next| {
-                let id = next.get().wrapping_add(1).max(1);
-                next.set(id);
-                id
-            }),
-            upload: Arc::downgrade(upload),
-            used: true,
-        });
+        let entry = ids
+            .entry((image, origin, span, crop))
+            .or_insert_with(|| SpanId {
+                id: NEXT_KITTY_PLACEMENT.with(|next| {
+                    let id = next.get().wrapping_add(1).max(1);
+                    next.set(id);
+                    id
+                }),
+                upload: Arc::downgrade(upload),
+                used: true,
+            });
         entry.used = true;
         entry.upload = Arc::downgrade(upload);
         entry.id
@@ -120,6 +122,9 @@ pub(crate) struct HostComposedScene {
     confirmed: Placements,
     attempted: Placements,
     pending: Option<(Placements, usize, bool)>,
+    /// Whether the pending scene came from a complete paint, which alone can show that an image
+    /// has no placement left. A partial paint never stages the rows it did not repaint.
+    pending_complete: bool,
 }
 
 impl HostComposedScene {
@@ -142,6 +147,7 @@ impl HostComposedScene {
         let mut next = surviving_placements(draw, active);
         PAINT.with(|slot| {
             let paint = slot.borrow();
+            self.pending_complete = !paint.partial;
             if paint.partial {
                 preserve_unpainted(draw, active, &mut next, &paint.regions);
             } else {
@@ -185,10 +191,14 @@ impl HostComposedScene {
             return Vec::new();
         }
         let placed = placed_images(&next);
-        let unplaced = placed_images(&self.confirmed)
-            .difference(&placed)
-            .copied()
-            .collect();
+        let unplaced = if self.pending_complete {
+            placed_images(&self.confirmed)
+                .difference(&placed)
+                .copied()
+                .collect()
+        } else {
+            Vec::new()
+        };
         self.confirmed = next;
         self.attempted.clear();
         unplaced
