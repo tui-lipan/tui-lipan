@@ -1714,9 +1714,10 @@ impl Placement {
 
 /// Live placements in insertion order, which is also their stacking order within a z plane.
 ///
-/// Per-cell senders place thousands of images. The key index lets a new placement find the one it
-/// replaces without scanning them all. Reads go through the slice; changes that add or remove a
-/// placement go through these methods, so the index cannot drift from the list.
+/// Per-cell senders place thousands of images, nearly all under new ids. The key index lets such a
+/// placement skip the scan for one it would replace; an actual replacement still searches the list.
+/// Reads go through the slice; changes that add or remove a placement go through these methods, so
+/// the index cannot drift from the list.
 #[derive(Default)]
 struct PlacementList {
     items: Vec<Placement>,
