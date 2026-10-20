@@ -1183,54 +1183,36 @@ impl CompressedKitty {
         region: PlacedRegion,
         transmit: &mut Option<String>,
     ) {
-        let (left, right, y) = span;
+        let (left, _, y) = span;
         if f.buffer_mut().cell_mut((left, y)).is_none() {
             return;
         }
-        let p = composed_scene::span_id(self, origin, span, region.crop);
-        let (crop, cols, rows) = (
-            region.crop,
-            u32::from(region.cells.0),
-            u32::from(region.cells.1),
-        );
-        let x = (i32::from(left) - origin.0) as u32;
-        let row = (i32::from(y) - origin.1) as u32;
-        // Kitty reads a zero width or height as the whole image, so a row keeps at least a pixel.
-        let sx = crop.x + x * crop.width / cols;
-        let sy = crop.y + row * crop.height / rows;
-        let ex = (crop.x + (x + u32::from(right - left)) * crop.width / cols).max(sx + 1);
-        let ey = (crop.y + (row + 1) * crop.height / rows).max(sy + 1);
-        let command = format!(
-            "\x1b_Ga=p,q=2,i={},p={p},x={sx},y={sy},w={},h={},c={},r=1,z={},C=1;\x1b\\",
-            self.id,
-            ex - sx,
-            ey - sy,
-            right - left,
-            self.z_index
-        );
-        self.stage_placement(f, (left, y), command, p, transmit);
+        let placement = composed_scene::RowGeometry {
+            image: self.id,
+            origin,
+            crop: region.crop,
+            cells: region.cells,
+            z: self.z_index,
+            span,
+        }
+        .placement(Arc::clone(&self.upload));
+        self.stage_placement(f, placement, transmit);
     }
 
     fn stage_placement(
         &self,
         f: &mut ratatui::Frame<'_>,
-        anchor: (u16, u16),
-        command: String,
-        p: u32,
+        placement: KittyPlacement,
         transmit: &mut Option<String>,
     ) {
-        let delete = format!("\x1b_Ga=d,q=2,d=i,i={},p={p};\x1b\\", self.id);
+        let anchor = placement.anchor;
+        let command = placement.command.clone();
         PENDING_KITTY_PLACEMENTS.with(|pending| {
             pending
                 .borrow_mut()
                 .entry(anchor)
                 .or_default()
-                .push(KittyPlacement {
-                    anchor,
-                    command: command.clone(),
-                    delete,
-                    upload: Arc::clone(&self.upload),
-                })
+                .push(placement);
         });
         let Some(cell) = f.buffer_mut().cell_mut(anchor) else {
             return;
@@ -1306,6 +1288,7 @@ pub(crate) struct PlacedRegion {
 #[cfg(feature = "terminal-images")]
 #[derive(Clone)]
 struct KittyPlacement {
+    geometry: Option<composed_scene::RowGeometry>,
     anchor: (u16, u16),
     command: String,
     delete: String,
@@ -1443,9 +1426,10 @@ impl Drop for KittyUpload {
 }
 
 #[cfg(feature = "terminal-images")]
-pub(crate) fn begin_partial_native_scene() {
+pub(crate) fn begin_partial_image_scene(regions: &[Rect]) {
     if !capturing_images() {
         native_scene::begin(false);
+        composed_scene::begin_partial_frame(regions);
     }
 }
 
@@ -1710,11 +1694,13 @@ fn prepare_kitty_cells<'a>(
         cells,
         uploads,
         placements,
+        restored_placements: Vec::new(),
     })
 }
 
 #[cfg(feature = "terminal-images")]
 pub(crate) struct PreparedKittyDraw<'a> {
+    pub(crate) restored_placements: Vec<String>,
     placements: Vec<KittyPlacement>,
     pub(crate) cells: Vec<(u16, u16, std::borrow::Cow<'a, ratatui::buffer::Cell>)>,
     pub(crate) uploads: Vec<Arc<KittyUpload>>,
@@ -5092,6 +5078,186 @@ mod tests {
         assert!(wire.contains("overlay"));
         assert_eq!(wire.matches("a=d,").count(), 1);
         assert!(!wire.contains("a=p,"));
+    }
+
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn composed_partial_repaints_preserve_untouched_rows_and_span_ids() {
+        use ratatui::backend::Backend;
+        let image = CompressedKitty::new(
+            &image::DynamicImage::new_rgb8(20, 60),
+            ratatui::layout::Size::new(2, 3),
+            77,
+            -1,
+        )
+        .unwrap();
+        let mut frame = ratatui::Terminal::new(ratatui::backend::TestBackend::new(2, 3)).unwrap();
+        let output = GraphicsOutput::default();
+        let mut host =
+            crate::backend::ratatui_backend::native_terminal::HostBackend::new(output.clone());
+        begin_kitty_frame();
+        frame
+            .draw(|f| image.render_placed(f, (0, 0), f.area()))
+            .unwrap();
+        let buffer = frame.backend().buffer();
+        host.draw((0..3).map(|y| (0, y, &buffer[(0, y)]))).unwrap();
+        Backend::flush(&mut host).unwrap();
+        let initial = String::from_utf8(std::mem::take(&mut *output.0.borrow_mut())).unwrap();
+        assert_eq!(initial.matches("a=p,").count(), 3);
+        for row in [1, 1, 0, 2] {
+            begin_kitty_frame();
+            begin_partial_image_scene(&[]);
+            frame
+                .draw(|f| image.render_placed(f, (0, 0), ratatui::layout::Rect::new(0, row, 2, 1)))
+                .unwrap();
+            let buffer = frame.backend().buffer();
+            host.draw(std::iter::once((0, row, &buffer[(0, row)])))
+                .unwrap();
+            Backend::flush(&mut host).unwrap();
+            let wire = String::from_utf8(std::mem::take(&mut *output.0.borrow_mut())).unwrap();
+            assert!(
+                !wire.contains("a=d,"),
+                "partial row {row} deleted a retained placement: {wire:?}"
+            );
+            assert!(
+                !wire.contains("a=p,"),
+                "partial paints must preserve unchanged span IDs: {wire:?}"
+            );
+        }
+        begin_kitty_frame();
+        host.draw(std::iter::empty()).unwrap();
+        Backend::flush(&mut host).unwrap();
+        let cleanup = String::from_utf8(std::mem::take(&mut *output.0.borrow_mut())).unwrap();
+        assert_eq!(
+            cleanup.matches("a=d,").count(),
+            3,
+            "full paint must still retire absent rows"
+        );
+    }
+
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn composed_partial_repaint_splits_only_the_damaged_span() {
+        use ratatui::backend::Backend;
+        let image = CompressedKitty::new(
+            &image::DynamicImage::new_rgb8(30, 40),
+            ratatui::layout::Size::new(3, 2),
+            77,
+            -1,
+        )
+        .unwrap();
+        let mut frame = ratatui::Terminal::new(ratatui::backend::TestBackend::new(3, 2)).unwrap();
+        let output = GraphicsOutput::default();
+        let mut host =
+            crate::backend::ratatui_backend::native_terminal::HostBackend::new(output.clone());
+        begin_kitty_frame();
+        frame
+            .draw(|f| image.render_placed(f, (0, 0), f.area()))
+            .unwrap();
+        let buffer = frame.backend().buffer();
+        host.draw((0..2).map(|y| (0, y, &buffer[(0, y)]))).unwrap();
+        Backend::flush(&mut host).unwrap();
+        output.0.borrow_mut().clear();
+
+        begin_kitty_frame();
+        begin_partial_image_scene(&[Rect {
+            x: 1,
+            y: 0,
+            w: 1,
+            h: 1,
+        }]);
+        let text = ratatui::buffer::Cell::new("X");
+        host.draw(std::iter::once((1, 0, &text))).unwrap();
+        Backend::flush(&mut host).unwrap();
+        let wire = String::from_utf8(std::mem::take(&mut *output.0.borrow_mut())).unwrap();
+        assert_eq!(
+            wire.matches("a=d,").count(),
+            1,
+            "only the intersecting row is retired: {wire:?}"
+        );
+        assert_eq!(
+            wire.matches("a=p,").count(),
+            2,
+            "both untouched fragments survive: {wire:?}"
+        );
+        assert!(wire.contains("x=0,y=0,w=10,h=20,c=1,r=1"));
+        assert!(wire.contains("x=20,y=0,w=10,h=20,c=1,r=1"));
+        assert!(wire.contains("\x1b[1;1H\x1b_Ga=p,"));
+        assert!(wire.contains("\x1b[1;3H\x1b_Ga=p,"));
+        assert!(!wire.contains("a=T"));
+
+        begin_kitty_frame();
+        begin_partial_image_scene(&[Rect {
+            x: 1,
+            y: 0,
+            w: 1,
+            h: 1,
+        }]);
+        host.draw(std::iter::once((1, 0, &text))).unwrap();
+        Backend::flush(&mut host).unwrap();
+        let wire = String::from_utf8(std::mem::take(&mut *output.0.borrow_mut())).unwrap();
+        assert!(
+            !wire.contains("\x1b_G"),
+            "unchanged fragments must remain stable: {wire:?}"
+        );
+    }
+
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn composed_partial_upload_restores_unpainted_rows_after_replacing_the_image_id() {
+        use ratatui::backend::Backend;
+        let mut frame = ratatui::Terminal::new(ratatui::backend::TestBackend::new(2, 3)).unwrap();
+        let output = GraphicsOutput::default();
+        let mut host =
+            crate::backend::ratatui_backend::native_terminal::HostBackend::new(output.clone());
+        let image = CompressedKitty::new(
+            &image::DynamicImage::new_rgb8(20, 60),
+            ratatui::layout::Size::new(2, 3),
+            77,
+            -1,
+        )
+        .unwrap();
+        begin_kitty_frame();
+        frame
+            .draw(|f| image.render_placed(f, (0, 0), f.area()))
+            .unwrap();
+        let buffer = frame.backend().buffer();
+        host.draw((0..3).map(|y| (0, y, &buffer[(0, y)]))).unwrap();
+        Backend::flush(&mut host).unwrap();
+        output.0.borrow_mut().clear();
+
+        let replacement = CompressedKitty::new(
+            &image::DynamicImage::new_rgb8(20, 60),
+            ratatui::layout::Size::new(2, 3),
+            77,
+            -1,
+        )
+        .unwrap();
+        begin_kitty_frame();
+        begin_partial_image_scene(&[Rect {
+            x: 0,
+            y: 1,
+            w: 2,
+            h: 1,
+        }]);
+        frame
+            .draw(|f| replacement.render_placed(f, (0, 0), ratatui::layout::Rect::new(0, 1, 2, 1)))
+            .unwrap();
+        let buffer = frame.backend().buffer();
+        host.draw(std::iter::once((0, 1, &buffer[(0, 1)]))).unwrap();
+        Backend::flush(&mut host).unwrap();
+        let wire = String::from_utf8(std::mem::take(&mut *output.0.borrow_mut())).unwrap();
+        assert_eq!(wire.matches("a=T").count(), 1);
+        assert_eq!(
+            wire.matches("a=p,").count(),
+            3,
+            "the upload destroys all old placements: {wire:?}"
+        );
+        assert!(!wire.contains("a=d,"));
+        assert!(wire.find("a=T").unwrap() < wire.find("a=p,").unwrap());
+        for y in [0, 20, 40] {
+            assert!(wire.contains(&format!("x=0,y={y},w=20,h=20,c=2,r=1")));
+        }
     }
 
     #[cfg(feature = "terminal-images")]

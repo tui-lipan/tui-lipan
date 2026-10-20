@@ -38,8 +38,10 @@ Native image trees can repaint text rows independently. A source upload restores
 region of that image, including regions outside the text damage. Overlay changes recalculate image
 occlusion across its complete visible area. If a partial paint cannot establish that area, the
 existing native image remains, and the runner schedules a full paint to present the replacement. Terminals already using
-composition continue to draw their damaged image rows through the composed path. Unchanged composed placements
-keep their host IDs across paints.
+composition continue to draw their damaged image rows through the composed path. Composed placements
+outside the repaint regions remain visible with the same host IDs. A repaint inside a placement
+preserves the untouched parts, and an upload that replaces its host image restores all retained rows.
+Scrolling a UI region containing terminal graphics uses a full paint.
 Each source retains its upload state until the source and pending host output are released,
 independently of render-cache eviction. A composed image whose placements all leave the host scene
 is uploaded again when it next needs a new encoding, because the host may have evicted it. Large sources that cannot use file or shared-memory transport stay on the

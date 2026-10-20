@@ -555,7 +555,17 @@ fn render_native_regions(
             next.set(p);
             p
         });
-        image.stage_placement(f, region.anchor, region.command(image, p), p, &mut transmit);
+        image.stage_placement(
+            f,
+            KittyPlacement {
+                geometry: None,
+                anchor: region.anchor,
+                command: region.command(image, p),
+                delete: format!("\x1b_Ga=d,q=2,d=i,i={},p={p};\x1b\\", image.id),
+                upload: Arc::clone(&image.upload),
+            },
+            &mut transmit,
+        );
     }
 }
 

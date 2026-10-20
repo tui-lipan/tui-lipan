@@ -1287,6 +1287,48 @@ fn an_unchanged_image_pane_survives_an_unrelated_terminal_update() {
 
 #[cfg(feature = "terminal-images")]
 #[test]
+fn incremental_host_scroll_with_terminal_images_requires_a_full_paint() {
+    let mut harness = build(PaneCfg::new(), SETUP);
+    let previous = crate::app::runner::ScrollFrameSnapshot {
+        node_id: harness.runner.core.tree.root,
+        scroll_offset: 0,
+        content_height: 30,
+        content_hash: Some(7),
+        viewport_height: ROWS,
+        scroll_rows: 0..ROWS,
+        scrollbar_rect: None,
+        show_scroll_indicators: false,
+    };
+    let current = crate::app::runner::ScrollFrameSnapshot {
+        scroll_offset: 1,
+        ..previous.clone()
+    };
+    harness.runner.last_scroll_frames = vec![previous];
+    harness.runner.last_frame_snapshot = Some(Buffer::empty(frame_area()));
+    let plan = |harness: &Harness| {
+        harness.runner.prepare_incremental_scroll_plan(
+            super::DrawMode::LayoutOnly,
+            frame_area(),
+            std::slice::from_ref(&current),
+        )
+    };
+    assert!(
+        plan(&harness).is_some(),
+        "text-only scrolls retain the fast path"
+    );
+    harness
+        .screen
+        .borrow_mut()
+        .process_bytes(b"\x1b_Ga=T,f=32,s=1,v=1,i=919;/////w==\x1b\\");
+    harness.runner.core.tree.refresh_live_terminals_detailed();
+    assert!(
+        plan(&harness).is_none(),
+        "host scroll must not move retained image placements behind the scene reconciler"
+    );
+}
+
+#[cfg(feature = "terminal-images")]
+#[test]
 fn composed_terminal_images_reach_the_host_in_partial_frames() {
     use base64::Engine as _;
 
@@ -1312,29 +1354,43 @@ fn composed_terminal_images_reach_the_host_in_partial_frames() {
     let output = terminal.backend().test_output();
     assert!(String::from_utf8_lossy(&output).contains("a=p,"));
     let initial = output.len();
+    let initial_commands = String::from_utf8_lossy(&output);
+    let placements: Vec<_> = initial_commands
+        .split("\x1b_Ga=p,")
+        .skip(1)
+        .map(|command| {
+            let header = command.split(';').next().unwrap();
+            let field = |key: &str| {
+                header
+                    .split(',')
+                    .find_map(|field| field.strip_prefix(key))
+                    .unwrap()
+                    .to_owned()
+            };
+            (field("i="), field("p="), field("y="))
+        })
+        .collect();
+    assert_eq!(placements.len(), 3);
 
     upload(2u8);
     harness.runner.core.tree.refresh_live_terminals_detailed();
     let cursor = StdCell::new(None);
     let _plans = terminal.backend().native_plan_scope();
+    let mut snapshot = harness.runner.last_frame_snapshot.clone().unwrap();
     harness.runner.with_render_context(&cursor, |ctx| {
-        terminal
-            .draw(|f| {
-                crate::backend::ratatui_backend::render_regions(
-                    f,
-                    ctx,
-                    &[Rect {
-                        x: 0,
-                        y: 1,
-                        w: COLS,
-                        h: 1,
-                    }],
-                )
-            })
-            .unwrap();
+        patch_row(&mut terminal, ctx, &mut snapshot, frame_area(), 1).unwrap();
     });
+    Backend::flush(terminal.backend_mut()).unwrap();
     let output = terminal.backend().test_output();
     let update = String::from_utf8_lossy(&output[initial..]);
+    for (image, placement, y) in &placements {
+        if y != "20" {
+            assert!(
+                !update.contains(&format!("d=i,i={image},p={placement};")),
+                "partial repaint deleted an untouched image row: {update:?}"
+            );
+        }
+    }
     assert!(
         update.contains("a=p,"),
         "composed image row must reach the host: {update:?}"

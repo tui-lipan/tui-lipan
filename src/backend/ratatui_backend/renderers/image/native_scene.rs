@@ -913,7 +913,7 @@ mod tests {
 
         // A new producer frame is pending when a text-only update repaints one physical row.
         upload(&mut screen, 2);
-        begin_partial_native_scene();
+        begin_partial_image_scene(&[]);
         let _plans = host.native_plan_scope();
         paint(
             &mut screen,
@@ -929,7 +929,7 @@ mod tests {
             "re-upload deletes the old placement, so the replacement must cover all three rows: {update:?}"
         );
 
-        begin_partial_native_scene();
+        begin_partial_image_scene(&[]);
         paint(
             &mut screen,
             &mut frame,
@@ -992,7 +992,7 @@ mod tests {
         crate::backend::ratatui_backend::renderers::image::set_image_occlusions(vec![
             ratatui::layout::Rect::new(6, 3, 2, 1),
         ]);
-        begin_partial_native_scene();
+        begin_partial_image_scene(&[]);
         let _plans = host.native_plan_scope();
         paint(
             &mut screen,
@@ -1011,7 +1011,7 @@ mod tests {
         // An overlay that intersects the image must update occlusion across its full height.
         upload(&mut screen, 3);
         set_image_occlusions(vec![ratatui::layout::Rect::new(0, 1, 1, 1)]);
-        begin_partial_native_scene();
+        begin_partial_image_scene(&[]);
         paint(
             &mut screen,
             &mut frame,
@@ -1081,7 +1081,7 @@ mod tests {
             assert!(output.take().contains("w=20,h=60"));
 
             upload(&mut screen, 2);
-            begin_partial_native_scene();
+            begin_partial_image_scene(&[]);
             {
                 let _plans = host.native_plan_scope();
                 if case == "missing plan" {
@@ -1186,7 +1186,7 @@ mod tests {
             !native(NodeId::new(1, 1), ratatui::layout::Rect::new(0, 0, 8, 4)),
             "full paint composes"
         );
-        begin_partial_native_scene();
+        begin_partial_image_scene(&[]);
         assert!(
             !native(NodeId::new(1, 1), ratatui::layout::Rect::new(0, 1, 8, 1)),
             "partial paint claimed a composed terminal, skipping its composed fallback"
@@ -1205,7 +1205,7 @@ mod tests {
         stage_frame(&mut screen);
         let _ = record_capture_images(|| {
             begin_kitty_frame();
-            begin_partial_native_scene();
+            begin_partial_image_scene(&[]);
             let _owner = owner_scope(NodeId::new(2, 1));
         });
         draw(&mut host).unwrap();
