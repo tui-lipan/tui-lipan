@@ -38,5 +38,5 @@ pub(crate) fn assert_inline_surface_internal_wrap_policy_is_opaque() {
     native_terminal::assert_inline_surface_internal_wrap_policy_is_opaque();
 }
 
-#[cfg(all(test, feature = "terminal", not(target_arch = "wasm32")))]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) use native_terminal::create_test_terminal;

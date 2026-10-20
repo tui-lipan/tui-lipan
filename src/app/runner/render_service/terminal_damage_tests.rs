@@ -27,7 +27,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect as RatatuiRect};
 
 use super::AppRunner;
-use super::terminal_damage::{DamageRejection, TerminalDamagePlan, patch_row, place_caret};
+use super::row_damage::{DamageRejection, RowDamagePlan, patch_row, place_caret};
 use crate::app::App;
 use crate::app::context::SurfaceMode;
 use crate::backend::ratatui_backend::render;
@@ -175,6 +175,7 @@ struct PaneCfg {
     image_overlay: u8,
     transparent_modal: bool,
     terminal_portal: bool,
+    spinner: bool,
 }
 
 impl PaneCfg {
@@ -242,13 +243,19 @@ impl Component for Pane {
     }
 
     fn view(&self, _ctx: &Context<Self>) -> Element {
-        let body: Element = match &self.second {
+        let mut body: Element = match &self.second {
             Some(second) => VStack::new()
                 .child(self.terminal(&self.screen))
                 .child(self.terminal(second))
                 .into(),
             None => self.terminal(&self.screen).into(),
         };
+        if self.cfg.spinner {
+            body = VStack::new()
+                .child(crate::widgets::Spinner::new().height(crate::style::Length::Px(1)))
+                .child(body)
+                .into();
+        }
         if matches!(self.cfg.image_overlay, 19 | 20) {
             use crate::core::element::ElementKind;
             use crate::overlay::{
@@ -603,9 +610,12 @@ fn assert_same(actual: &Buffer, expected: &Buffer, what: &str) {
     }
 }
 
-fn plan_for(harness: &mut Harness) -> Result<TerminalDamagePlan, DamageRejection> {
+fn plan_for(harness: &mut Harness) -> Result<RowDamagePlan, DamageRejection> {
     let refresh = harness.runner.core.tree.refresh_live_terminals_detailed();
-    harness.runner.plan_terminal_damage(&refresh, frame_area())
+    let nodes = std::mem::take(&mut harness.runner.animation.spinner_damage);
+    harness
+        .runner
+        .plan_live_damage(&refresh, &nodes, frame_area())
 }
 
 /// Apply `mutation`, patch the damaged rows, and hold the result to a full paint.
@@ -664,9 +674,54 @@ fn assert_harness_patch_matches_full_paint(harness: &mut Harness) {
             "the host caret is not where the patch asked for it"
         );
     }
+    harness.retained = patched;
+    harness.runner.last_frame_snapshot = Some(harness.retained.clone());
 }
 
 const SETUP: &[u8] = b"first line here\r\nsecond line here\r\nthird line here\r\n";
+
+#[test]
+fn spinner_rows_and_two_terminals_share_a_damage_frame_and_match_full_paints() {
+    let cfg = PaneCfg {
+        spinner: true,
+        second_terminal: true,
+        focused: true,
+        ..PaneCfg::new()
+    };
+    let mut harness = build(cfg, SETUP);
+    for tick in (2..=24).step_by(2) {
+        harness.runner.animation.spinner_frame = tick;
+        assert!(harness.runner.update_spinner_frames());
+        let mutation = format!("\x1b[2;1H\x1b[3{}mframe {tick}", tick % 7);
+        harness
+            .screen
+            .borrow_mut()
+            .process_bytes(mutation.as_bytes());
+        harness
+            .second
+            .as_ref()
+            .unwrap()
+            .borrow_mut()
+            .process_bytes(format!("\x1b[1;1H界 {tick}").as_bytes());
+        assert_harness_patch_matches_full_paint(&mut harness);
+    }
+}
+
+#[test]
+fn spinner_only_damage_matches_full_paints_without_terminal_output() {
+    let mut harness = build(
+        PaneCfg {
+            spinner: true,
+            ..PaneCfg::new()
+        },
+        SETUP,
+    );
+    for tick in (2..=24).step_by(2) {
+        harness.runner.animation.spinner_frame = tick;
+        assert!(harness.runner.update_spinner_frames());
+        assert_harness_patch_matches_full_paint(&mut harness);
+    }
+}
 
 #[test]
 fn one_changed_row_matches_a_full_paint() {
@@ -917,7 +972,7 @@ fn a_scrolled_back_terminal_is_rejected() {
         node.scrollback_offset = 3;
     }
     assert_eq!(
-        harness.runner.plan_terminal_damage(&refresh, frame_area()),
+        harness.runner.plan_live_damage(&refresh, &[], frame_area()),
         Err(DamageRejection::ScrolledBack)
     );
 }
@@ -966,7 +1021,7 @@ fn shared_screen_updates_fall_back_and_match_a_full_paint() {
             .any(|(_, damage)| matches!(damage, crate::widgets::internal::TerminalDamage::None))
     );
     assert_eq!(
-        harness.runner.plan_terminal_damage(&refresh, frame_area()),
+        harness.runner.plan_live_damage(&refresh, &[], frame_area()),
         Err(DamageRejection::MissingDamage)
     );
 
@@ -1120,7 +1175,7 @@ fn a_patched_row_survives_the_next_ordinary_draw() {
                 .buffer
                 .clone()
         });
-        super::terminal_damage::resync_host_patched_rows(
+        super::row_damage::resync_host_patched_rows(
             term,
             &host_rows,
             &drawn,
@@ -1191,7 +1246,7 @@ fn the_resync_puts_the_caret_back_after_re_sending_a_row() {
                 .buffer
                 .clone()
         });
-        super::terminal_damage::resync_host_patched_rows(
+        super::row_damage::resync_host_patched_rows(
             term,
             &host_rows,
             &drawn,
@@ -1222,8 +1277,8 @@ fn planning_the_same_refresh_twice_agrees() {
     let mut harness = build(PaneCfg::new(), SETUP);
     harness.screen.borrow_mut().process_bytes(b"\rX");
     let refresh = harness.runner.core.tree.refresh_live_terminals_detailed();
-    let first = harness.runner.plan_terminal_damage(&refresh, frame_area());
-    let second = harness.runner.plan_terminal_damage(&refresh, frame_area());
+    let first = harness.runner.plan_live_damage(&refresh, &[], frame_area());
+    let second = harness.runner.plan_live_damage(&refresh, &[], frame_area());
     assert_eq!(
         first.map(|plan| plan.rows),
         second.map(|plan| plan.rows),
@@ -1260,12 +1315,9 @@ fn an_unchanged_image_pane_survives_an_unrelated_terminal_update() {
         .borrow_mut()
         .process_bytes(b"\rX");
     let refresh = harness.runner.core.tree.refresh_live_terminals_detailed();
-    let plan = harness.runner.plan_terminal_damage(&refresh, frame_area());
+    let plan = harness.runner.plan_live_damage(&refresh, &[], frame_area());
     match &plan {
-        Ok(plan) => harness
-            .runner
-            .draw_terminal_damage(&mut terminal, plan)
-            .unwrap(),
+        Ok(plan) => harness.runner.draw_row_damage(&mut terminal, plan).unwrap(),
         Err(_) => {
             harness
                 .runner

@@ -36,6 +36,9 @@ pub(crate) enum DirtyLevel {
     /// to [`PaintOnly`](Self::PaintOnly).
     #[cfg(feature = "terminal")]
     TerminalPaintOnly,
+    /// Only runtime-owned spinner frames and live content changed. Their allocated rows can
+    /// share the retained-frame damage path; any generic paint invalidates this proof.
+    SpinnerPaintOnly,
     /// Draw-only update (cursor blink, spinner frame, image frame).
     PaintOnly,
     /// Reconcile/layout update without broader side effects.
@@ -59,9 +62,10 @@ impl DirtyLevel {
             Self::TerminalGraphicsOnly => 1,
             #[cfg(feature = "terminal")]
             Self::TerminalPaintOnly => 2,
-            Self::PaintOnly => 3,
-            Self::LayoutOnly => 4,
-            Self::Full => 5,
+            Self::SpinnerPaintOnly => 3,
+            Self::PaintOnly => 4,
+            Self::LayoutOnly => 5,
+            Self::Full => 6,
         }
     }
 
@@ -105,6 +109,10 @@ pub(crate) struct DirtyTracker {
 }
 
 impl DirtyTracker {
+    pub fn mark_spinner_paint(&mut self) {
+        self.level.merge(DirtyLevel::SpinnerPaintOnly);
+    }
+
     #[inline]
     pub fn mark_full(&mut self) {
         self.immediate_layout = true;
@@ -303,6 +311,10 @@ pub(crate) struct AnimationState {
     pub blink_visible: bool,
     pub last_spinner_tick: Instant,
     pub spinner_frame: usize,
+    pub spinner_tick_interval: std::time::Duration,
+    /// Nodes whose spinner glyphs changed since the last completed paint. Kept across paced
+    /// frames, and discarded when a broader paint supersedes them.
+    pub spinner_damage: Vec<crate::core::node::NodeId>,
     pub last_animated_tick: Instant,
     pub last_effect_tick: Instant,
     #[cfg(feature = "image")]
@@ -333,6 +345,8 @@ impl AnimationState {
             blink_visible: true,
             last_spinner_tick: now,
             spinner_frame: 0,
+            spinner_tick_interval: std::time::Duration::from_millis(50),
+            spinner_damage: Vec::new(),
             last_animated_tick: now,
             last_effect_tick: now,
             command_chord_revealed: false,
@@ -553,18 +567,20 @@ mod tests {
     use super::*;
 
     #[cfg(not(feature = "terminal"))]
-    const ALL_LEVELS: [DirtyLevel; 4] = [
+    const ALL_LEVELS: [DirtyLevel; 5] = [
         DirtyLevel::None,
+        DirtyLevel::SpinnerPaintOnly,
         DirtyLevel::PaintOnly,
         DirtyLevel::LayoutOnly,
         DirtyLevel::Full,
     ];
 
     #[cfg(feature = "terminal")]
-    const ALL_LEVELS: [DirtyLevel; 6] = [
+    const ALL_LEVELS: [DirtyLevel; 7] = [
         DirtyLevel::None,
         DirtyLevel::TerminalGraphicsOnly,
         DirtyLevel::TerminalPaintOnly,
+        DirtyLevel::SpinnerPaintOnly,
         DirtyLevel::PaintOnly,
         DirtyLevel::LayoutOnly,
         DirtyLevel::Full,
@@ -581,6 +597,32 @@ mod tests {
     fn dirty_level_merge_identity_with_none() {
         for level in ALL_LEVELS {
             assert_eq!(merged(level, DirtyLevel::None), level);
+        }
+    }
+
+    #[test]
+    fn spinner_damage_loses_its_proof_to_any_broader_paint_in_either_order() {
+        for broader in [
+            DirtyLevel::PaintOnly,
+            DirtyLevel::LayoutOnly,
+            DirtyLevel::Full,
+        ] {
+            assert_eq!(merged(DirtyLevel::SpinnerPaintOnly, broader), broader);
+            assert_eq!(merged(broader, DirtyLevel::SpinnerPaintOnly), broader);
+        }
+        #[cfg(feature = "terminal")]
+        for narrower in [
+            DirtyLevel::TerminalPaintOnly,
+            DirtyLevel::TerminalGraphicsOnly,
+        ] {
+            assert_eq!(
+                merged(DirtyLevel::SpinnerPaintOnly, narrower),
+                DirtyLevel::SpinnerPaintOnly
+            );
+            assert_eq!(
+                merged(narrower, DirtyLevel::SpinnerPaintOnly),
+                DirtyLevel::SpinnerPaintOnly
+            );
         }
     }
 
@@ -609,9 +651,10 @@ mod tests {
                 DirtyLevel::TerminalGraphicsOnly => 1,
                 #[cfg(feature = "terminal")]
                 DirtyLevel::TerminalPaintOnly => 2,
-                DirtyLevel::PaintOnly => 3,
-                DirtyLevel::LayoutOnly => 4,
-                DirtyLevel::Full => 5,
+                DirtyLevel::SpinnerPaintOnly => 3,
+                DirtyLevel::PaintOnly => 4,
+                DirtyLevel::LayoutOnly => 5,
+                DirtyLevel::Full => 6,
             }
         }
 

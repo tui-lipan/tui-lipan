@@ -137,7 +137,8 @@ impl<C: Component> AppRunner<C> {
 
         if self.core.tree.has_spinners() {
             poll_timeout = poll_timeout.min(
-                Duration::from_millis(50)
+                self.animation
+                    .spinner_tick_interval
                     .saturating_sub(self.clock_elapsed(self.animation.last_spinner_tick)),
             );
         }
@@ -258,15 +259,22 @@ impl<C: Component> AppRunner<C> {
             dirty.mark_paint();
         }
 
-        // Spinner tick every 50ms - only if spinners exist.
+        // Advance the shared 50 ms clock directly to the next frame any spinner needs.
         if self.core.tree.has_spinners()
-            && self.clock_elapsed(self.animation.last_spinner_tick) >= Duration::from_millis(50)
+            && self.clock_elapsed(self.animation.last_spinner_tick)
+                >= self.animation.spinner_tick_interval
         {
-            self.animation.spinner_frame = self.animation.spinner_frame.wrapping_add(1);
-            self.animation.last_spinner_tick = self.clock_now();
-            self.update_spinner_frames();
-            crate::debug::internal_log!("[tui-lipan] dirty: spinner tick");
-            dirty.mark_paint();
+            let ticks = (self
+                .clock_elapsed(self.animation.last_spinner_tick)
+                .as_millis()
+                / 50) as u64;
+            self.animation.spinner_frame =
+                self.animation.spinner_frame.wrapping_add(ticks as usize);
+            self.animation.last_spinner_tick += Duration::from_millis(ticks * 50);
+            if self.update_spinner_frames() {
+                crate::debug::internal_log!("[tui-lipan] dirty: spinner glyph changed");
+                dirty.mark_spinner_paint();
+            }
         }
 
         if let Some(interval) = animation_interval

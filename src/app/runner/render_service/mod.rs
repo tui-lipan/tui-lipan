@@ -34,8 +34,7 @@ use super::{
     scroll_optimize::{capture_scroll_frames, replace_buffer_snapshot},
 };
 
-#[cfg(feature = "terminal")]
-mod terminal_damage;
+mod row_damage;
 #[cfg(all(test, feature = "terminal"))]
 mod terminal_damage_tests;
 
@@ -657,7 +656,9 @@ impl<C: Component> AppRunner<C> {
                         self.dirty_component_scopes.clear();
                         self.dirty_scope_set.clear();
                     }
-                    DirtyLevel::PaintOnly | DirtyLevel::None => return Ok(false),
+                    DirtyLevel::PaintOnly | DirtyLevel::SpinnerPaintOnly | DirtyLevel::None => {
+                        return Ok(false);
+                    }
                     #[cfg(feature = "terminal")]
                     DirtyLevel::TerminalPaintOnly | DirtyLevel::TerminalGraphicsOnly => {
                         return Ok(false);
@@ -979,7 +980,7 @@ impl<C: Component> AppRunner<C> {
                     metrics.graphics_widened_terminal += 1
                 });
             }
-            self.draw_terminal_damage(terminal, &plan)?;
+            self.draw_row_damage(terminal, &plan)?;
             #[cfg(feature = "devtools")]
             self.record_devtools_frame_metrics(
                 DrawMode::PaintOnly,
@@ -1004,6 +1005,53 @@ impl<C: Component> AppRunner<C> {
         );
         #[cfg(not(feature = "devtools"))]
         let _ = draw_duration;
+        Ok(())
+    }
+
+    /// Spinner updates carry positive provenance: only these allocated nodes and live content
+    /// changed. A generic paint in the same frame widens the dirty level and never enters here.
+    pub(super) fn render_spinner_paint_only(
+        &mut self,
+        terminal: &mut crate::backend::ratatui_backend::Terminal,
+    ) -> Result<()> {
+        #[cfg(feature = "profiling-tracing")]
+        let _render_span = trace_span!("app.render_spinner_paint_only").entered();
+        if self.surface.is_inline() {
+            return self.render_paint_only(terminal);
+        }
+        #[cfg(feature = "devtools")]
+        let total_start = Instant::now();
+        terminal.autoresize()?;
+        let nodes = std::mem::take(&mut self.animation.spinner_damage);
+        let frame_area = terminal.get_frame().area();
+        #[cfg(feature = "terminal")]
+        let plan = {
+            let refresh = self.core.tree.refresh_live_terminals_detailed();
+            self.emit_terminal_focus_change();
+            self.plan_live_damage(&refresh, &nodes, frame_area)
+        };
+        #[cfg(not(feature = "terminal"))]
+        let plan = {
+            let mut nodes = nodes;
+            nodes.extend(self.core.tree.refresh_live_texts());
+            self.plan_node_damage(&nodes, frame_area)
+        };
+        match plan {
+            Ok(plan) => self.draw_row_damage(terminal, &plan),
+            Err(row_damage::DamageRejection::NothingVisible) => Ok(()),
+            Err(reason) => {
+                crate::debug::internal_log!("[tui-lipan] spinner damage fallback: {reason:?}");
+                self.draw_current_tree_after_live_refresh(terminal, DrawMode::PaintOnly)?;
+                Ok(())
+            }
+        }?;
+        #[cfg(feature = "devtools")]
+        self.record_devtools_frame_metrics(
+            DrawMode::PaintOnly,
+            total_start.elapsed(),
+            std::time::Duration::ZERO,
+            total_start.elapsed(),
+        );
         Ok(())
     }
 
@@ -1095,6 +1143,7 @@ impl<C: Component> AppRunner<C> {
         terminal: &mut crate::backend::ratatui_backend::Terminal,
         draw_mode: DrawMode,
     ) -> Result<std::time::Duration> {
+        self.animation.spinner_damage.clear();
         #[cfg(feature = "profiling-tracing")]
         let _draw_span = trace_span!("app.draw_current_tree").entered();
 
@@ -1168,11 +1217,8 @@ impl<C: Component> AppRunner<C> {
         let mut diff_snapshot = self.scroll_diff_snapshot.take();
         // Rows a terminal-damage repaint wrote straight to the host, as the host holds them. The
         // ordinary draw below diffs against Ratatui's previous buffer, which never saw them.
-        #[cfg(feature = "terminal")]
-        let host_patched_rows = terminal_damage::take_host_patched_rows(
-            &mut self.host_patched_rows,
-            last_snapshot.as_ref(),
-        );
+        let host_patched_rows =
+            row_damage::take_host_patched_rows(&mut self.host_patched_rows, last_snapshot.as_ref());
         let draw_result = self.with_render_context(&cursor_position, |ctx| {
             if let Some(plan) = scroll_plan.as_ref() {
                 let previous_snapshot = last_snapshot.as_ref().expect("snapshot exists");
@@ -1209,12 +1255,11 @@ impl<C: Component> AppRunner<C> {
                         Err(error) => return Err(error.into()),
                     }
                 }
-                #[cfg(feature = "terminal")]
                 if let Some(frame) = last_snapshot.as_ref() {
                     // The draw above has already placed the caret, and the resync sends cells,
                     // which moves it. It puts the caret back, from the same sink the renderers
                     // filled while that frame was painted.
-                    terminal_damage::resync_host_patched_rows(
+                    row_damage::resync_host_patched_rows(
                         terminal,
                         &host_patched_rows,
                         frame,

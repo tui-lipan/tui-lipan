@@ -57,6 +57,11 @@ ProgressBar::new(0.67)
 
 ## Spinner
 
+Auto-frame spinners animate without application-owned timers. Their speed
+determines frame deadlines on a shared 50 ms clock; unchanged frames do not
+request a repaint. Fullscreen rendering reuses the retained screen outside
+affected widget rows when partial painting is safe. See [Performance](../perf.md).
+
 Animated loading indicator.
 
 | Prop | Type | Description |

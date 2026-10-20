@@ -300,10 +300,13 @@ fn paced_pointer_frame_due(
     #[cfg(feature = "terminal")]
     let paint_only = matches!(
         level,
-        DirtyLevel::PaintOnly | DirtyLevel::TerminalPaintOnly | DirtyLevel::TerminalGraphicsOnly
+        DirtyLevel::PaintOnly
+            | DirtyLevel::SpinnerPaintOnly
+            | DirtyLevel::TerminalPaintOnly
+            | DirtyLevel::TerminalGraphicsOnly
     );
     #[cfg(not(feature = "terminal"))]
-    let paint_only = matches!(level, DirtyLevel::PaintOnly);
+    let paint_only = matches!(level, DirtyLevel::PaintOnly | DirtyLevel::SpinnerPaintOnly);
     if !pointer_motion_only || !paint_only {
         return None;
     }
@@ -315,6 +318,7 @@ fn apply_dirty_level(dirty: &mut DirtyTracker, level: DirtyLevel) {
     match level {
         DirtyLevel::None => {}
         DirtyLevel::PaintOnly => dirty.mark_paint(),
+        DirtyLevel::SpinnerPaintOnly => dirty.mark_spinner_paint(),
         #[cfg(feature = "terminal")]
         DirtyLevel::TerminalGraphicsOnly => dirty.mark_terminal_graphics(),
         #[cfg(feature = "terminal")]
@@ -658,7 +662,6 @@ pub struct AppRunner<C: Component> {
     /// what the last full draw put there. The next ordinary draw diffs against that stale record
     /// and would skip a cell whose new content happens to match it, leaving the patch on screen.
     /// The rows are replayed against the retained frame once, on that draw, and forgotten.
-    #[cfg(feature = "terminal")]
     pub(crate) host_patched_rows: Vec<u16>,
     /// Reusable scratch terminal for inline transcript element commits.
     pub(crate) inline_commit_scratch:
@@ -958,7 +961,6 @@ impl<C: Component> AppRunner<C> {
             #[cfg(feature = "terminal-images")]
             native_terminal_plans: Default::default(),
             scroll_diff_snapshot: None,
-            #[cfg(feature = "terminal")]
             host_patched_rows: Vec::new(),
             inline_commit_scratch: None,
             last_scroll_frames: Vec::new(),
@@ -3213,6 +3215,9 @@ impl<C: Component> AppRunner<C> {
                     DirtyLevel::LayoutOnly => self.render_layout_only(&mut terminal)?,
                     DirtyLevel::PaintOnly => {
                         self.render_paint_only(&mut terminal)?;
+                    }
+                    DirtyLevel::SpinnerPaintOnly => {
+                        self.render_spinner_paint_only(&mut terminal)?;
                     }
                     #[cfg(feature = "terminal")]
                     DirtyLevel::TerminalGraphicsOnly => {
