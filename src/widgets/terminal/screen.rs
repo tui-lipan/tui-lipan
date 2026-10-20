@@ -2031,6 +2031,7 @@ impl TerminalScreen {
             alt_screen: self.term.mode().contains(TermMode::ALT_SCREEN),
             cell: self.cell_size,
             cols: self.cols,
+            rows: self.rows,
         };
         let outcome = self.graphics.apply(command, ctx);
         if let Some(response) = outcome.response {

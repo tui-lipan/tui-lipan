@@ -137,6 +137,16 @@ impl<C: Component> AppRunner<C> {
             w: frame_area.width,
             h: visible_rows,
         };
+        // Host scrolling moves pixel placements independently of the retained cell buffer.
+        // Use an ordinary full paint when this band contains terminal graphics, so source crops
+        // and committed placement coordinates are reconciled together.
+        #[cfg(feature = "terminal-images")]
+        if self.core.tree.iter().any(|node| {
+            matches!(&node.kind, crate::core::node::NodeKind::Terminal(terminal)
+                if !terminal.images.is_empty() && !node.rect.intersection(&scroll_band).is_empty())
+        }) {
+            return None;
+        }
         repaint_regions.extend(collect_scroll_repaint_regions(
             &self.core.tree,
             current.node_id,

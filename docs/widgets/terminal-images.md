@@ -33,8 +33,15 @@ so translations above a portal do not move its separately rendered content. Elig
 in paint order; an eligible terminal inside a portal can still forward native patches.
 The fallback emits individual image cells in overlapping branches; batched placeholder rows and
 ordinary placements cannot cover a later widget
-whose anchor leaves the image anchor intact. Opaque text backgrounds exclude the pixels they cover. Image-bearing trees use full tree paints even
-when only another pane reports damage, because each host draw replaces ordinary placements.
+whose anchor leaves the image anchor intact. Opaque text backgrounds exclude the pixels they cover. Composed image trees use full tree paints when another pane reports damage.
+Native image trees can repaint text rows independently. A source upload restores every visible
+region of that image, including regions outside the text damage. Overlay changes recalculate image
+occlusion across its complete visible area. If a partial paint cannot establish that area, the
+existing native image remains until a full paint can present the replacement. Terminals already using
+composition continue to draw their damaged image rows through the composed path. Composed placements
+outside the repaint regions remain visible with the same host IDs. A repaint inside a placement
+preserves the untouched parts, and an upload that replaces its host image restores all retained rows.
+Scrolling a UI region containing terminal graphics uses a full paint.
 Each source retains its upload state until the source and pending host output are released,
 independently of render-cache eviction. Large sources that cannot use file or shared-memory transport stay on the
 asynchronous composed path; only inline uploads up to 128 KiB are prepared directly.
@@ -85,14 +92,20 @@ Pass the cell size to later resizes too, with `TerminalPty::resize_with_cell_siz
 keeps the last one it was given.
 
 Images placed at the cursor honor the `X`/`Y` pixel offsets within that cell. Natural-size images
-keep their pixel dimensions rather than stretching to fill the final cell. Overlapping images
+keep their pixel dimensions rather than stretching to fill the final cell. Explicit `c` and `r`
+size an ordinary placement to that cell box, stretching each axis. With only one axis specified,
+the other preserves the source aspect ratio. Per-cell senders such as Yazi can fill each cell
+even when their source crops differ by one pixel. Overlapping images
 blend in pixel space within each exact z plane, so a small patch preserves the rest of the cell.
 On Kitty hosts, mixed-z and negative-z images use ordinary placements that leave text cells intact.
 Negative z values remain below text; values below `INT32_MIN/2` also remain below non-default cell
-backgrounds. The backend deletes these placements before drawing the next frame, including when
-the pane disappears. Composed single-plane images at non-negative z use Unicode placeholders. Native patches use
+backgrounds. The backend keeps unchanged placements and deletes regions that disappear,
+including when the pane closes. Composed single-plane images at non-negative z use Unicode placeholders. Native patches use
 ordinary pixel-cropped placements at every z.
-Unchanged regions reuse cached pixels and encodings. Natural-size RGB and RGBA patches
+Unchanged regions reuse cached pixels and encodings. Composed tiles retain their upload identity
+when their resulting pixels stay the same, even if another part of the source image changes.
+Cursor placement capacity scales with the terminal grid; stale-screen and off-screen placements
+are evicted before visible ones. Natural-size RGB and RGBA patches
 copy contiguous pixel rows; opaque RGBA rows use a bulk copy, while transparent rows retain
 source-over blending. Scaled images use the resampling path.
 

@@ -251,29 +251,18 @@ pub(crate) fn render_native_terminal_images(
     content: Rect,
     clip: ratatui::layout::Rect,
 ) -> bool {
-    if !native_scene_supported(clip) {
-        return false;
+    let partial = !capturing_images() && native_scene::partial_frame();
+    let defer = partial && native_scene::committed_owner();
+    if defer {
+        native_scene::defer_owner();
     }
-    let Some((width, height)) = image_support::measured_host_cell_size() else {
-        return false;
+    let Some(plan) = plan_for_paint(content, clip, partial) else {
+        // Composition at the damage clip would also replace a complete image with a strip.
+        // Keep the previous native scene until a full paint can choose a new presentation path.
+        return defer;
     };
-    let mut holes = IMAGE_OCCLUSIONS.with(|slot| slot.borrow().clone());
-    holes.extend(super::super::image_effects::pending_image_occlusions());
-    let plan = native_scene::cached_plan()
-        .filter(|plan| {
-            plan.content == content
-                && plan.clip == clip
-                && plan.holes == holes
-                && plan.cell == (width, height)
-        })
-        .unwrap_or(TerminalGraphicsPlan {
-            content,
-            clip,
-            holes,
-            cell: (width, height),
-        });
     let Some(regions) = plan.regions(placements) else {
-        return false;
+        return defer;
     };
     native_scene::stage_plan(plan);
     for (placement, regions) in placements.iter().zip(regions) {
@@ -282,6 +271,36 @@ pub(crate) fn render_native_terminal_images(
     let _ = f;
 
     true
+}
+
+fn plan_for_paint(
+    content: Rect,
+    damage_clip: ratatui::layout::Rect,
+    partial: bool,
+) -> Option<TerminalGraphicsPlan> {
+    if !native_scene_supported(damage_clip) {
+        return None;
+    }
+    let cell = image_support::measured_host_cell_size()?;
+    let clip = if partial {
+        // The cached bounds came from a complete paint. Changed holes or cell dimensions need a
+        // new region calculation within those bounds, never within the text damage rectangle.
+        let previous = native_scene::cached_plan()?;
+        if previous.content != content || previous.clip.intersection(damage_clip) != damage_clip {
+            return None;
+        }
+        previous.clip
+    } else {
+        damage_clip
+    };
+    let mut holes = IMAGE_OCCLUSIONS.with(|slot| slot.borrow().clone());
+    holes.extend(super::super::image_effects::pending_image_occlusions());
+    Some(TerminalGraphicsPlan {
+        content,
+        clip,
+        holes,
+        cell,
+    })
 }
 
 /// Geometry and occlusion captured by a successful ordinary render.
@@ -533,7 +552,17 @@ fn render_native_regions(
             next.set(p);
             p
         });
-        image.stage_placement(f, region.anchor, region.command(image, p), p, &mut transmit);
+        image.stage_placement(
+            f,
+            KittyPlacement {
+                geometry: None,
+                anchor: region.anchor,
+                command: region.command(image, p),
+                delete: format!("\x1b_Ga=d,q=2,d=i,i={},p={p};\x1b\\", image.id),
+                upload: Arc::clone(&image.upload),
+            },
+            &mut transmit,
+        );
     }
 }
 
