@@ -43,7 +43,9 @@ pub enum TerminalOutputClass {
 pub struct TerminalOutputTransaction {
     /// Parser-established semantics; defaults to ordered when equivalence is uncertain.
     pub class: TerminalOutputClass,
-    /// Original bytes, unchanged and in producer order.
+    /// Original bytes, unchanged and in producer order, except that a screen relaying out-of-band
+    /// images inline records each relayed transmission as the inline one it stands for. See
+    /// [`TerminalScreen::set_image_inline_relay`](crate::widgets::TerminalScreen::set_image_inline_relay).
     pub bytes: Vec<u8>,
 }
 
@@ -300,7 +302,9 @@ fn classify_escape(escape: &[u8]) -> Escape {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::widgets::TerminalScreen;
+    use crate::widgets::{GraphicsMediaPolicy, TerminalScreen};
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD as BASE64;
 
     const SEED: &[u8] = b"\x1b_Ga=T,i=7,p=9,f=24,s=1,v=1,C=1,q=2;YWJj\x1b\\";
     const FRAME: &[u8] = b"\x1b_Ga=T,i=7,p=9,f=24,s=1,v=1,C=1,q=2;ZGVm\x1b\\";
@@ -966,6 +970,130 @@ mod tests {
             coalesced > 50,
             "only {coalesced} streams coalesced anything"
         );
+    }
+
+    /// A server-side screen that reads out-of-band sources and relays them inline.
+    fn relaying_recorder() -> TerminalScreen {
+        let mut recorder = TerminalScreen::new(4, 8, 0);
+        recorder.set_image_media_policy(GraphicsMediaPolicy::default());
+        recorder.set_image_inline_relay(true);
+        recorder.set_output_transaction_recording(true);
+        recorder
+    }
+
+    /// The pixels a parser that refuses every out-of-band medium stores from `bytes`.
+    fn received_pixels(bytes: &[u8]) -> Vec<u8> {
+        let mut receiver = TerminalScreen::new(4, 8, 0);
+        receiver.set_image_media_policy(GraphicsMediaPolicy::NONE);
+        receiver.process_bytes(bytes);
+        let snapshot = receiver.render_snapshot();
+        let image = snapshot.images.first().expect("receiver stored no image");
+        image
+            .image
+            .pixels()
+            .expect("receiver could not decode")
+            .to_rgb8()
+            .into_raw()
+    }
+
+    fn scratch_file(name: &str, contents: &[u8]) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "tty-graphics-protocol-relay-{}-{name}",
+            std::process::id()
+        ));
+        std::fs::write(&path, contents).unwrap();
+        path
+    }
+
+    fn named(path: &std::path::Path) -> String {
+        BASE64.encode(path.as_os_str().as_encoded_bytes())
+    }
+
+    #[test]
+    fn a_relayed_file_frame_reaches_a_receiver_that_cannot_read_files() {
+        let pixels: Vec<u8> = (0u8..12).collect();
+        let path = scratch_file("file", &pixels);
+        let mut recorder = relaying_recorder();
+        recorder.process_bytes(
+            format!(
+                "\x1b_Ga=T,f=24,s=2,v=2,t=f,i=5,p=1,C=1,q=2;{}\x1b\\",
+                named(&path)
+            )
+            .as_bytes(),
+        );
+        let relayed = recorder.take_output_transactions().concat_bytes();
+        let text = String::from_utf8_lossy(&relayed);
+        assert!(
+            !text.contains("t=f"),
+            "the source's name was forwarded: {text}"
+        );
+        assert!(text.contains("a=T") && text.contains("i=5") && text.contains("p=1"));
+        assert!(text.contains("o=z"), "raw pixels travel compressed: {text}");
+        assert_eq!(received_pixels(&relayed), pixels);
+        // The file is left for its owner, as `t=f` requires.
+        assert!(path.exists());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_consumed_temp_file_is_read_once_and_still_reaches_the_receiver() {
+        let pixels: Vec<u8> = (100u8..112).collect();
+        let path = scratch_file("temp", &pixels);
+        let mut recorder = relaying_recorder();
+        recorder.process_bytes(
+            format!("\x1b_Ga=T,f=24,s=2,v=2,t=t,i=6,q=2;{}\x1b\\", named(&path)).as_bytes(),
+        );
+        assert!(
+            !path.exists(),
+            "the server claims a temporary file by reading it"
+        );
+        let relayed = recorder.take_output_transactions().concat_bytes();
+        assert!(!String::from_utf8_lossy(&relayed).contains("t=t"));
+        assert_eq!(received_pixels(&relayed), pixels);
+    }
+
+    #[test]
+    fn a_large_relayed_frame_is_split_into_protocol_chunks() {
+        // Noise does not compress, so the inline payload spans many 4096-byte chunks.
+        let mut state = 0x2545_f491_4f6c_dd1du64;
+        let pixels: Vec<u8> = (0..64 * 64 * 3)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                state as u8
+            })
+            .collect();
+        let path = scratch_file("large", &pixels);
+        let mut recorder = relaying_recorder();
+        recorder.process_bytes(
+            format!(
+                "\x1b_Ga=T,f=24,s=64,v=64,t=f,i=7,q=2;{}\x1b\\",
+                named(&path)
+            )
+            .as_bytes(),
+        );
+        let relayed = recorder.take_output_transactions().concat_bytes();
+        let text = String::from_utf8_lossy(&relayed);
+        assert!(text.matches("m=1").count() > 2, "expected several chunks");
+        assert_eq!(text.matches("m=0").count(), 1);
+        assert_eq!(received_pixels(&relayed), pixels);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn without_relaying_the_original_escape_is_forwarded() {
+        let path = scratch_file("plain", &(0u8..12).collect::<Vec<_>>());
+        let wire = format!("\x1b_Ga=T,f=24,s=2,v=2,t=f,i=8,q=2;{}\x1b\\", named(&path));
+        let mut recorder = TerminalScreen::new(4, 8, 0);
+        recorder.set_image_media_policy(GraphicsMediaPolicy::default());
+        recorder.set_output_transaction_recording(true);
+        recorder.process_bytes(wire.as_bytes());
+        assert_eq!(
+            recorder.take_output_transactions().concat_bytes(),
+            wire.as_bytes()
+        );
+        let _ = std::fs::remove_file(path);
     }
 
     trait ConcatBytes {

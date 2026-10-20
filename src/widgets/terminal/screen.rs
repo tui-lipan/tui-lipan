@@ -1892,7 +1892,7 @@ impl TerminalScreen {
     ) -> (usize, usize) {
         use super::graphics::FrameOp;
         use super::output::{Footprint, GraphicsDependency, TerminalOutputClass};
-        let Some(wire) = command.take_wire() else {
+        let Some(mut wire) = command.take_wire() else {
             self.release_output_frame();
             return self.apply_graphics(command, unsettled);
         };
@@ -1905,6 +1905,9 @@ impl TerminalScreen {
             && !self.processor.sync_timeout().pending_timeout()
             && self.processor.sync_bytes_count() == 0;
         let result = self.apply_graphics(command, unsettled);
+        if let Some(data) = self.graphics.take_relayed_payload() {
+            wire = super::graphics::inline_transmission(&wire, &data);
+        }
         let current = source_id.and_then(|id| self.graphics.replacement_observation(id));
         let class = match current {
             Some(current)
@@ -2371,6 +2374,19 @@ impl TerminalScreen {
     #[cfg(feature = "terminal-images")]
     pub fn set_image_media_policy(&mut self, media: super::graphics_media::GraphicsMediaPolicy) {
         self.graphics.set_media_policy(media);
+    }
+
+    /// Forward out-of-band images as inline ones in recorded output.
+    ///
+    /// For an embedder that forwards this screen's output to other parsers, such as a multiplexer
+    /// server and its clients. A client on another machine cannot open a file this screen can, and
+    /// several clients cannot all read a `t=t` or `t=s` source that the first reader consumes. With
+    /// relaying on, each single out-of-band transmission this screen accepts under its media
+    /// policy is recorded as an inline transmission of the bytes it read, so every receiver gets
+    /// the pixels themselves. Off by default; output recording must be on for it to matter.
+    #[cfg(feature = "terminal-images")]
+    pub fn set_image_inline_relay(&mut self, enabled: bool) {
+        self.graphics.set_inline_relay(enabled);
     }
 
     /// Whether this screen currently retains any Kitty graphics.

@@ -246,6 +246,24 @@ A path only means something on the machine that wrote it, so a pane attached fro
 decline: a remote client reading `/tmp/...` from its own filesystem is the one failure mode here that
 is not a clean error.
 
+### Relay out-of-band frames inline
+
+A server that records a screen's output for other parsers can read out-of-band sources itself and
+hand those parsers the pixels instead of the source's name:
+
+```rust
+screen.set_image_media_policy(GraphicsMediaPolicy::default());
+screen.set_image_inline_relay(true);
+screen.set_output_transaction_recording(true);
+```
+
+Each single `t=f`, `t=t` or `t=s` transmission the screen accepts is then recorded as an inline
+transmission of the bytes it read, with the same keys. Raw pixels are compressed for the trip unless
+the child already compressed them or sent PNG. Receivers on another machine, and several receivers
+of a consumed `t=t` or `t=s` source, all get the image, so the server can keep offering the fast
+media to the child while any receiver needs inline data. A chunked out-of-band run is forwarded as
+sent.
+
 ### Retain streamed frames in files
 
 `screen.set_image_file_storage_enabled(true)` opts into immutable file snapshots for quiet raw

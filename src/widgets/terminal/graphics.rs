@@ -1875,6 +1875,22 @@ pub(super) struct TerminalGraphics {
     /// Images dropped to stay within budget. Which ones go depends on everything stored, so a
     /// frame that evicted anything cannot claim its effect is independent of earlier output.
     evictions: u64,
+    relay: InlineRelay,
+}
+
+/// Out-of-band pixels this screen read on behalf of readers that cannot reach the source.
+///
+/// A multiplexer server reads `t=f`, `t=t` and `t=s` sources itself, but the parsers it forwards
+/// output to may be on another machine, or may lose a race to a consumed source. With relaying on,
+/// a single out-of-band transmission keeps the bytes it loaded until the screen records them in
+/// place of the source's name. See [`inline_transmission`].
+#[derive(Default)]
+struct InlineRelay {
+    enabled: bool,
+    /// Set while a single, unchunked transmission is being stored. A chunked out-of-band run has
+    /// already been forwarded chunk by chunk, so it cannot be rewritten as a whole.
+    armed: bool,
+    payload: Option<Vec<u8>>,
 }
 
 impl Default for TerminalGraphics {
@@ -1907,6 +1923,7 @@ impl Default for TerminalGraphics {
             next_placement: 0,
             composition: Arc::default(),
             evictions: 0,
+            relay: InlineRelay::default(),
         }
     }
 }
@@ -1970,6 +1987,18 @@ impl TerminalGraphics {
 
     pub(super) fn set_media_policy(&mut self, media: GraphicsMediaPolicy) {
         self.media = media;
+    }
+
+    pub(super) fn set_inline_relay(&mut self, enabled: bool) {
+        self.relay.enabled = enabled;
+        if !enabled {
+            self.relay.payload = None;
+        }
+    }
+
+    /// The out-of-band bytes the last command loaded for relaying, if it loaded any.
+    pub(super) fn take_relayed_payload(&mut self) -> Option<Vec<u8>> {
+        self.relay.payload.take()
     }
 
     fn replace_file_pool(&mut self) {
@@ -2254,6 +2283,7 @@ impl TerminalGraphics {
         ctx: GraphicsContext,
     ) -> GraphicsOutcome {
         self.clock = self.clock.wrapping_add(1);
+        self.relay.payload = None;
         if self.discarding_run && command.action.transmits() {
             self.discarding_run = command.more;
             return GraphicsOutcome::default();
@@ -2346,7 +2376,10 @@ impl TerminalGraphics {
         }
         let id = self.resolve_id(command.id, command.number);
         let payload = command.payload.clone();
-        self.finish_transmit(id, &command, payload, ctx)
+        self.relay.armed = self.relay.enabled;
+        let outcome = self.finish_transmit(id, &command, payload, ctx);
+        self.relay.armed = false;
+        outcome
     }
 
     /// Accumulate a `m=1` run.
@@ -2398,12 +2431,18 @@ impl TerminalGraphics {
     }
 
     fn retain_image(
-        &self,
+        &mut self,
         command: &GraphicsCommand,
         payload: Vec<u8>,
         source_hash: u64,
     ) -> Result<(TerminalImage, usize), &'static str> {
-        let file = self.snapshot_file(command, &payload);
+        // A relayed source needs its bytes now, so it skips the on-demand file snapshot.
+        let relaying = self.relay.armed && command.medium.is_out_of_band();
+        let file = if relaying {
+            None
+        } else {
+            self.snapshot_file(command, &payload)
+        };
         let (image, bytes) = if let Some((input, bytes)) = file {
             (
                 TerminalImage {
@@ -2428,6 +2467,9 @@ impl TerminalGraphics {
             )
         } else {
             let payload = self.resolve_medium(command, payload)?;
+            if relaying {
+                self.relay.payload = Some(payload.clone());
+            }
             let (image, bytes) = match deferrable(command) {
                 // Nothing is waiting to hear whether this decodes and the size is already known, so the
                 // work waits until something asks to draw it. A frame superseded before then - the
@@ -3272,6 +3314,83 @@ fn decode_deferred(input: &DeferredDecode) -> Option<DynamicImage> {
         payload,
     )
     .ok()
+}
+
+/// Keys that only describe where an out-of-band source is, or how a run was chunked.
+const SOURCE_KEYS: [u8; 4] = [b't', b'O', b'S', b'm'];
+
+/// Base64 characters per chunk of a rewritten transmission, as the protocol recommends.
+const RELAY_CHUNK: usize = 4096;
+
+/// Rewrite one out-of-band transmission as the inline transmission it stands for.
+///
+/// `wire` is the original escape, which named a file or shared-memory object; `data` is what this
+/// screen read from it. Every other key is kept, so the receiver stores, places and answers exactly
+/// as it would have. Raw pixels are compressed for the trip unless the sender already compressed
+/// them or sent PNG, and the result is split into the chunks the protocol expects.
+pub(super) fn inline_transmission(wire: &[u8], data: &[u8]) -> Vec<u8> {
+    let body = wire
+        .strip_prefix(b"\x1b_G")
+        .map(|rest| rest.strip_suffix(b"\x1b\\").unwrap_or(rest))
+        .unwrap_or(wire);
+    let control = &body[..body
+        .iter()
+        .position(|byte| *byte == b';')
+        .unwrap_or(body.len())];
+    let mut keys: Vec<&[u8]> = control
+        .split(|byte| *byte == b',')
+        .filter(|pair| !pair.is_empty())
+        .filter(|pair| !matches!(pair, [key, b'=', ..] if SOURCE_KEYS.contains(key)))
+        .collect();
+    let key = |name: u8| {
+        keys.iter()
+            .find_map(|pair| pair.strip_prefix(&[name, b'='][..]))
+    };
+    let quiet = key(b'q').map(<[u8]>::to_vec);
+    let compressed = key(b'o') == Some(&b"z"[..]);
+    let png = key(b'f') == Some(&b"100"[..]);
+    let compressed_data;
+    let data = if compressed || png {
+        data
+    } else {
+        use std::io::Write as _;
+        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+        compressed_data = encoder.write_all(data).and_then(|()| encoder.finish()).ok();
+        match &compressed_data {
+            Some(bytes) => {
+                keys.push(b"o=z");
+                bytes
+            }
+            None => data,
+        }
+    };
+    let encoded = BASE64.encode(data);
+    let chunks: Vec<&[u8]> = if encoded.is_empty() {
+        vec![&[][..]]
+    } else {
+        encoded.as_bytes().chunks(RELAY_CHUNK).collect()
+    };
+    let mut out = Vec::with_capacity(encoded.len() + chunks.len() * 16 + control.len());
+    for (index, chunk) in chunks.iter().enumerate() {
+        let more = index + 1 < chunks.len();
+        out.extend_from_slice(b"\x1b_G");
+        if index == 0 {
+            out.extend_from_slice(&keys.join(&b","[..]));
+            if chunks.len() > 1 {
+                out.extend_from_slice(if keys.is_empty() { b"m=1" } else { b",m=1" });
+            }
+        } else {
+            out.extend_from_slice(if more { b"m=1" } else { b"m=0" });
+            if let Some(quiet) = &quiet {
+                out.extend_from_slice(b",q=");
+                out.extend_from_slice(quiet);
+            }
+        }
+        out.push(b';');
+        out.extend_from_slice(chunk);
+        out.extend_from_slice(b"\x1b\\");
+    }
+    out
 }
 
 fn decode_payload(
