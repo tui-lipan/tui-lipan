@@ -470,9 +470,11 @@ mod tests {
             active.contains("attps://github.com/tui-lipan/tui-lipan"),
             "label should cover the first cell of the URL hint"
         );
-        // The second and third hints get the next home-row keys, over "." and "9".
-        assert!(active.contains("s/examples/terminal_hints.rs:42"));
-        assert!(active.contains("dfceb02d4a1e8f0c7b12abcdeffed1234567890a"));
+        // Later hints get the next home-row keys: the OSC 8 link over its "f", then the path
+        // over "." and the commit over "9".
+        assert!(active.contains("sramework docs"));
+        assert!(active.contains("d/examples/terminal_hints.rs:42"));
+        assert!(active.contains("ffceb02d4a1e8f0c7b12abcdeffed1234567890a"));
         assert!(!active.contains("[a]"), "labels are painted, not bracketed");
 
         assert!(
