@@ -65,7 +65,11 @@ impl Component for Host {
     fn view(&self, ctx: &Context<Self>) -> Element {
         let row = ctx.state.background.to_string().repeat(40);
         let background = Text::new(format!("{row}\n").repeat(12))
-            .style(Style::new().bg(Color::Rgb(20, 180, 20)).fg(Color::Black))
+            .style(
+                Style::new()
+                    .bg(Color::Rgb(20, 180, 20))
+                    .fg(Color::Rgb(0, 0, 0)),
+            )
             .height(Length::Flex(1));
         let mut root = ZStack::new().child(background);
         if ctx.state.open {
@@ -230,16 +234,56 @@ fn default_fade_composites_the_complete_frame_on_entry_and_exit() {
     );
     let hidden = backend.capture_frame();
     assert_eq!(hidden.cell(10, 3).symbol, "b");
-    backend.advance(Duration::from_millis(100));
+    backend.advance(Duration::from_millis(150));
     let entering = backend.capture_frame();
-    backend.advance(Duration::from_millis(100));
+    backend.advance(Duration::from_millis(50));
     let visible = backend.capture_frame();
     assert_ne!(entering.cell(10, 3).bg, hidden.cell(10, 3).bg);
     assert_ne!(entering.cell(10, 3).bg, visible.cell(10, 3).bg);
     backend.dispatch(Msg::Close).expect("close");
-    backend.advance(Duration::from_millis(100));
+    backend.advance(Duration::from_millis(50));
     let exiting = backend.capture_frame();
     assert_eq!(exiting.cell(10, 3).bg, entering.cell(10, 3).bg);
-    backend.advance(Duration::from_millis(100));
+    backend.advance(Duration::from_millis(150));
     assert_eq!(backend.capture_frame().cell(10, 3).symbol, "b");
+}
+
+#[test]
+fn default_fade_passes_through_the_backdrop_without_mixing_glyphs() {
+    let mut backend = modal_backend(
+        VisibilityAnimation::new()
+            .enter(timing(0))
+            .exit(timing(200)),
+    );
+    let modal = |x: u16, y: u16| (10..30).contains(&x) && (3..9).contains(&y);
+    let cells = || (0..40_u16).flat_map(|x| (0..12_u16).map(move |y| (x, y)));
+    let visible = backend.capture_frame();
+    backend.dispatch(Msg::Close).expect("close");
+    backend.advance(Duration::from_millis(50));
+    let early = backend.capture_frame();
+    for (x, y) in cells().filter(|&(x, y)| modal(x, y)) {
+        assert_eq!(
+            early.cell(x, y).symbol,
+            visible.cell(x, y).symbol,
+            "the first half shows only the modal's glyphs, at ({x}, {y})"
+        );
+    }
+    backend.advance(Duration::from_millis(100));
+    let late = backend.capture_frame();
+    backend.advance(Duration::from_millis(50));
+    let closed = backend.capture_frame();
+    for (x, y) in cells() {
+        let (late, closed) = (late.cell(x, y), closed.cell(x, y));
+        assert_eq!(
+            late.symbol, closed.symbol,
+            "the second half shows only the backdrop's glyphs, at ({x}, {y})"
+        );
+        assert_eq!(
+            late.bg, closed.bg,
+            "the modal's fill is gone before the backdrop's text returns, at ({x}, {y})"
+        );
+        if modal(x, y) {
+            assert_ne!(late, closed, "the backdrop's text fades in, at ({x}, {y})");
+        }
+    }
 }

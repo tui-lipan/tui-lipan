@@ -1,4 +1,4 @@
-use ratatui::buffer::Cell as BufferCell;
+use ratatui::buffer::{Cell as BufferCell, CellDiffOption};
 use ratatui::style::Color as RColor;
 use ratatui::widgets::Block;
 
@@ -189,6 +189,13 @@ pub(crate) fn is_clear_equivalent(cell: &BufferCell) -> bool {
         && cell.modifier.is_empty()
 }
 
+/// Composite an overlay at `opacity` over the cells it covers, which `underlay` holds.
+///
+/// A cell shows one glyph, so colors blend but text cannot, and a layer's text read a cell at a
+/// time is garbled. The fade passes through the background instead: above half opacity every cell
+/// shows the overlay, its text and fill fading into the underlay's background; below half every
+/// cell shows the underlay, its text fading in from that background. No frame mixes the layers'
+/// glyphs, and the overlay's fill is gone before the underlay's text returns.
 pub(crate) fn composite_overlay_opacity(
     f: &mut ratatui::Frame<'_>,
     rect: ratatui::layout::Rect,
@@ -197,6 +204,9 @@ pub(crate) fn composite_overlay_opacity(
     opacity: f32,
 ) {
     let opacity = opacity.clamp(0.0, 1.0);
+    let show_underlay = opacity < 0.5;
+    // How strongly the layer this frame shows stands out from the background it fades through.
+    let strength = (opacity * 2.0 - 1.0).abs();
     let buf = f.buffer_mut();
     for dy in 0..rect.height {
         for dx in 0..rect.width {
@@ -216,10 +226,19 @@ pub(crate) fn composite_overlay_opacity(
                 continue;
             }
 
-            let source_fallback = non_reset(saved.bg).or(terminal_bg);
-            let (bg, bg_dim) =
-                blend_ratatui_toward(cell.bg, saved.bg, source_fallback, terminal_bg, opacity);
-            cell.bg = bg;
+            let mut dim = false;
+            if show_underlay {
+                *cell = saved.clone();
+                if !recolorable(cell) {
+                    continue;
+                }
+            } else {
+                let source_fallback = non_reset(saved.bg).or(terminal_bg);
+                let (bg, bg_dim) =
+                    blend_ratatui_toward(cell.bg, saved.bg, source_fallback, terminal_bg, strength);
+                cell.bg = bg;
+                dim |= bg_dim;
+            }
 
             let fg_target = non_reset(cell.bg)
                 .or_else(|| non_reset(saved.bg))
@@ -229,14 +248,29 @@ pub(crate) fn composite_overlay_opacity(
                 fg_target.unwrap_or(RColor::Reset),
                 None,
                 terminal_bg,
-                opacity,
+                strength,
             );
             cell.fg = fg;
-            if bg_dim || fg_dim {
+            // The terminal owns the color behind a Reset foreground, so faint text can only DIM.
+            dim |= fg_dim || (fg == RColor::Reset && strength < 0.5);
+            if dim {
                 cell.set_style(cell.style().add_modifier(ratatui::style::Modifier::DIM));
             }
         }
     }
+}
+
+/// Whether a fade may recolor this underlay cell. Image cells, Kitty placeholders (U+10EEEE,
+/// whose foreground names the image), capture marks (U+FFFF), and symbols carrying escape
+/// sequences return exactly as they were drawn.
+fn recolorable(cell: &BufferCell) -> bool {
+    !matches!(
+        cell.diff_option,
+        CellDiffOption::Skip | CellDiffOption::ForcedWidth(_)
+    ) && !cell
+        .symbol()
+        .chars()
+        .any(|c| c.is_control() || c == '\u{FFFF}' || c == '\u{10EEEE}')
 }
 
 fn cells_match(cell: &BufferCell, saved: &BufferCell) -> bool {

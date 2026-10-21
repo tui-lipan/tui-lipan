@@ -2444,7 +2444,8 @@ fn toast_transition_blends_against_the_rendered_underlay() {
         ratatui::style::Color::Rgb(20, 40, 60)
     );
 
-    overlays[0].opacity = 0.5;
+    // The overlay's fill is gone by half opacity, so three quarters blends it halfway.
+    overlays[0].opacity = 0.75;
     runtime.tree.set_overlay_roots(overlays);
 
     let backend = TestBackend::new(viewport.w, viewport.h);

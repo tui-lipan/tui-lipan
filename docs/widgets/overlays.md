@@ -117,6 +117,10 @@ let root: Element = ZStack::new().child(picker.key("commands")).into();
 `.exit(TransitionConfig)` for independent durations and easing. A zero duration snaps to its target.
 The active recipe is held for the current transition; view rebuilds do not restart it.
 
+The content fade passes through the background beneath the overlay. Above half visibility the frame
+shows, its text and fill fading into that background; below half the cells beneath show, their text
+fading in from it. No frame mixes the overlay's glyphs with those beneath it.
+
 Use `.effect(|context| VisualEffect::Custom(...))` to replace the content fade with an application
 pattern such as a portal, scan, or dissolve. `context.progress` is visibility from zero to one;
 enter runs toward one and exit toward zero. `context.phase` distinguishes entry and exit when an
