@@ -225,7 +225,8 @@ impl HintScan {
         if !self.scanners.iter().any(|(kind, _)| *kind == HintKind::Url) {
             return output;
         }
-        let links = hyperlink_hints(&snapshot.hyperlinks, &snapshot.wrapped_rows);
+        let rows: Vec<&str> = snapshot.text.split('\n').collect();
+        let links = hyperlink_hints(&snapshot.hyperlinks, &rows, &snapshot.wrapped_rows);
         output.retain(|matched| !links.iter().any(|link| hints_overlap(link, matched)));
         output.extend(links);
         output.sort_by_key(|matched| (matched.row(), matched.start_col(), matched.end_col()));
@@ -234,9 +235,12 @@ impl HintScan {
 }
 
 /// One URL hint per hyperlink, joining the row-local spans a link is reported as.
+///
+/// `rows` are the snapshot's text rows, which the terminal pads to its full width.
 #[cfg(feature = "terminal")]
 fn hyperlink_hints(
     links: &[crate::widgets::TerminalHyperlink],
+    rows: &[&str],
     wrapped_rows: &[bool],
 ) -> Vec<HintMatch> {
     let mut sorted: Vec<_> = links.iter().collect();
@@ -253,7 +257,7 @@ fn hyperlink_hints(
         };
         if let Some((uri, previous)) = output.last_mut()
             && *uri == &*link.uri
-            && continues_link(previous, span, wrapped_rows)
+            && continues_link(previous, span, rows, wrapped_rows)
         {
             previous.spans.push(span);
             continue;
@@ -271,8 +275,16 @@ fn hyperlink_hints(
 }
 
 /// Whether `next` carries on the link `previous` ends, on its row or past a soft wrap.
+///
+/// Across a wrap, `previous` must reach the right edge of its row: two links to the same place
+/// with ordinary text between them stay two hints even when the second lands at column 0.
 #[cfg(feature = "terminal")]
-fn continues_link(previous: &HintMatch, next: HintSpan, wrapped_rows: &[bool]) -> bool {
+fn continues_link(
+    previous: &HintMatch,
+    next: HintSpan,
+    rows: &[&str],
+    wrapped_rows: &[bool],
+) -> bool {
     let last = previous.spans.last().copied().unwrap_or(next);
     if last.row == next.row {
         return last.end_col == next.start_col;
@@ -280,6 +292,9 @@ fn continues_link(previous: &HintMatch, next: HintSpan, wrapped_rows: &[bool]) -
     next.row == last.row + 1
         && next.start_col == 0
         && wrapped_rows.get(last.row).copied().unwrap_or(false)
+        && rows
+            .get(last.row)
+            .is_some_and(|row| last.end_col == display_column(row, row.len()))
 }
 
 #[cfg(feature = "terminal")]
@@ -1057,6 +1072,35 @@ mod tests {
                     start_col: 0,
                     end_col: 7
                 },
+            ]
+        );
+
+        // The same destination twice with ordinary text between is two hints, even when the
+        // second link wraps to column 0.
+        let mut screen = crate::widgets::TerminalScreen::new(3, 8, 0);
+        screen.process_bytes(
+            b"\x1b]8;;https://a.test\x1b\\one\x1b]8;;\x1b\\plain\
+              \x1b]8;;https://a.test\x1b\\two\x1b]8;;\x1b\\",
+        );
+        let snapshot = screen.render_snapshot();
+        assert_eq!(snapshot.wrapped_rows.first(), Some(&true));
+        let separate = HintScan::new().scan_snapshot(&snapshot);
+        assert_eq!(
+            separate
+                .iter()
+                .map(|matched| matched.spans.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                vec![HintSpan {
+                    row: 0,
+                    start_col: 0,
+                    end_col: 3
+                }],
+                vec![HintSpan {
+                    row: 1,
+                    start_col: 0,
+                    end_col: 3
+                }],
             ]
         );
 
