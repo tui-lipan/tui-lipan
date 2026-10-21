@@ -501,8 +501,11 @@ TreeNode::new("agents")
 
 **Migration:** replace `TreeNode::show_disclosure(false)` with `show_arrow(false)`.
 
-Composed rows use the tree's scroll view and keyboard navigation. Their guides and arrows gain
-hover foreground overrides and contrast adjustment while the pointer is over the row.
+Composed rows use the tree's scroll view and keyboard navigation. Item hover styles and effects
+apply only to selectable or collapsible rows. Non-selectable headings and other inert rows keep
+their normal appearance. Hover callbacks still report entry and exit for every composed row.
+On interactive rows, guides and arrows gain hover foreground overrides and contrast adjustment
+while the pointer is over the row.
 Selection and active-row backgrounds alone preserve the authored guide and arrow colors. Their child controls handle their
 own clicks; a button click does not activate the surrounding row. `toggle_on_activate(false)`
 separates row activation from expansion. Composed-row arrows still toggle independently,

@@ -388,7 +388,9 @@ fn row(
             },
         ));
     }
-    if let Some(effect) = &ctx.props.item_hover_effect {
+    if row_interactive(entry)
+        && let Some(effect) = &ctx.props.item_hover_effect
+    {
         region = region.hover_effect(effect.clone());
     }
     region.into()
@@ -403,7 +405,7 @@ fn composed_content(
     style: crate::style::Style,
 ) -> Element {
     let height = row_height(entry.node);
-    let hovered = ctx.state.hovered == Some(index);
+    let hovered = row_hovered(ctx, entry, index);
     let prefix = prefix(entry, &ctx.props, max_depth);
     let width = prefix.width();
     let blank = |cells: u16| {
@@ -509,7 +511,7 @@ fn row_style(
     selected: Option<usize>,
 ) -> crate::style::Style {
     let mut style = entry.node.item.style;
-    if ctx.state.hovered == Some(index) {
+    if row_hovered(ctx, entry, index) {
         style = style.patch(crate::style::resolve_slot(
             &ctx.theme(),
             crate::style::ThemeRole::ItemHover,
@@ -525,4 +527,12 @@ fn row_style(
         ));
     }
     style
+}
+
+fn row_interactive(entry: &TreeEntry<'_>) -> bool {
+    entry.node.item.is_selectable() || entry.node.is_collapsible()
+}
+
+fn row_hovered(ctx: &Context<TreeComponent>, entry: &TreeEntry<'_>, index: usize) -> bool {
+    ctx.state.hovered == Some(index) && row_interactive(entry)
 }

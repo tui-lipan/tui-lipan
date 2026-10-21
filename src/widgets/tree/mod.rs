@@ -111,7 +111,8 @@ impl Tree {
         self
     }
 
-    /// A paint effect over a composed row while hovered, including interactive descendants.
+    /// A paint effect over a selectable or collapsible composed row while hovered,
+    /// including interactive descendants.
     pub fn item_hover_effect(mut self, effect: Option<crate::style::VisualEffect>) -> Self {
         self.props.item_hover_effect = effect;
         self
@@ -303,7 +304,7 @@ impl Tree {
         self
     }
 
-    /// Set item hover style.
+    /// Set item hover style. Inert composed rows do not receive hover styling.
     pub fn item_hover_style(mut self, style: Style) -> Self {
         self.props.item_hover_style = StyleSlot::Replace(style);
         self
