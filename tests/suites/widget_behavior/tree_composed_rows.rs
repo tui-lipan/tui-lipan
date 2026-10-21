@@ -12,6 +12,8 @@ struct State {
     button: usize,
     reverse: bool,
     header: bool,
+    collapsible_header: bool,
+    hover_effect: bool,
     child_header: bool,
     header_only: bool,
     reject_toggle: bool,
@@ -97,8 +99,14 @@ impl Component for ComposedTree {
             roots.insert(
                 0,
                 TreeNode::new(ListItem::header("section"))
+                    .row_style(Style::new().bg(Color::rgb(20, 20, 20)))
                     .content(Text::new("section"))
-                    .show_arrow(false),
+                    .show_arrow(ctx.state.collapsible_header)
+                    .expansion_mode(if ctx.state.collapsible_header {
+                        TreeExpansionMode::Collapsible
+                    } else {
+                        TreeExpansionMode::AlwaysOpen
+                    }),
             );
         }
         let mut tree = Tree::forest(roots)
@@ -119,6 +127,13 @@ impl Component for ComposedTree {
                 ctx.link()
                     .callback(|e: TreeToggleEvent| Msg::Toggle(e.expanded)),
             );
+        tree = tree.item_hover_style(Style::new().bg(Color::rgb(0, 0, 255)));
+        if ctx.state.hover_effect {
+            tree = tree.item_hover_effect(Some(VisualEffect::transform_bg(ColorTransform::tint(
+                Color::rgb(255, 0, 0),
+                1.0,
+            ))));
+        }
         if let Some(index) = ctx.state.selected {
             tree = tree.selected(index);
         }
@@ -520,5 +535,68 @@ fn composed_guides_only_adjust_contrast_while_hovered() {
         backend.render();
         let after = backend.capture_frame().cell(0, 1).clone();
         assert_eq!((after.fg, after.bg), (before.fg, before.bg));
+    }
+}
+
+#[test]
+fn composed_headers_only_highlight_when_collapsible() {
+    for effect in [false, true] {
+        for collapsible in [false, true] {
+            let mut backend = backend();
+            backend.state_mut().header = true;
+            backend.state_mut().collapsible_header = collapsible;
+            backend.state_mut().hover_effect = effect;
+            backend.render();
+            let before = backend.capture_frame().cell(4, 0).bg;
+            backend
+                .send_mouse(MouseEvent {
+                    x: 4,
+                    y: 0,
+                    kind: MouseKind::Moved,
+                    mods: KeyMods::NONE,
+                })
+                .unwrap();
+            backend.render();
+            let after = backend.capture_frame().cell(4, 0).bg;
+            #[cfg(feature = "ui-snapshot-png")]
+            backend
+                .baseline("tests/ui-baselines")
+                .name(format!(
+                    "tree-header-hover-effect-{effect}-collapsible-{collapsible}"
+                ))
+                .assert_baseline()
+                .unwrap();
+            assert_eq!(
+                after != before,
+                collapsible,
+                "effect={effect}, collapsible={collapsible}"
+            );
+            if collapsible && effect {
+                assert_eq!(after, Color::rgb(255, 0, 0), "hover effect paints the row");
+            }
+            assert!(
+                backend.state().hovered.contains(&(0, true)),
+                "inert rows still deliver hover events"
+            );
+            if collapsible {
+                click(&mut backend, 0, 0);
+                assert_eq!(backend.state().toggled, [true]);
+            }
+            backend
+                .send_mouse(MouseEvent {
+                    x: 4,
+                    y: 1,
+                    kind: MouseKind::Moved,
+                    mods: KeyMods::NONE,
+                })
+                .unwrap();
+            backend.render();
+            assert_eq!(backend.capture_frame().cell(4, 0).bg, before);
+            assert_ne!(
+                backend.capture_frame().cell(4, 1).bg,
+                before,
+                "selectable rows retain hover styling"
+            );
+        }
     }
 }

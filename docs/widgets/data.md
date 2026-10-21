@@ -373,7 +373,7 @@ Hierarchical tree view with expand/collapse.
 | `root` | `TreeNode` | **Constructor** - root node; use `Tree::forest(roots)` for multiple roots |
 | `controlled_expansion` | `bool` | Node `expanded` flags are authoritative; defaults to `false` |
 | `toggle_on_activate` | `bool` | Activation also toggles expandable nodes; defaults to `true` |
-| `item_hover_effect` | `Option<VisualEffect>` | Paint effect over composed rows and their interactive descendants |
+| `item_hover_effect` | `Option<VisualEffect>` | Paint effect over hovered selectable or collapsible composed rows, including their interactive descendants |
 | `on_hover` | `Callback<TreeHoverEvent>` | Composed-row pointer entry and exit |
 | `on_pointer_move` | `Callback<TreeEvent>` | Pointer movement over composed rows |
 | `on_viewport_change` | `Callback<ScrollViewportEvent>` | Composed-row viewport metadata |
@@ -501,8 +501,11 @@ TreeNode::new("agents")
 
 **Migration:** replace `TreeNode::show_disclosure(false)` with `show_arrow(false)`.
 
-Composed rows use the tree's scroll view and keyboard navigation. Their guides and arrows gain
-hover foreground overrides and contrast adjustment while the pointer is over the row.
+Composed rows use the tree's scroll view and keyboard navigation. Item hover styles and effects
+apply only to selectable or collapsible rows. Non-selectable headings and other inert rows keep
+their normal appearance. Hover callbacks still report entry and exit for every composed row.
+On interactive rows, guides and arrows gain hover foreground overrides and contrast adjustment
+while the pointer is over the row.
 Selection and active-row backgrounds alone preserve the authored guide and arrow colors. Their child controls handle their
 own clicks; a button click does not activate the surrounding row. `toggle_on_activate(false)`
 separates row activation from expansion. Composed-row arrows still toggle independently,
@@ -518,8 +521,8 @@ update. Store expansion under application data IDs and map `on_toggle` paths bac
 This preserves the intended state when producers reorder nodes or supply lazy children.
 
 `on_hover`, `on_pointer_move`, and `on_viewport_change` describe composed rows. `item_hover_effect`
-can apply a paint effect over a hovered row, including interactive descendants. Text-only trees
-retain their List rendering. Selection symbols and List-specific column layout apply to text rows;
+applies a paint effect over hovered selectable or collapsible composed rows, including their
+interactive descendants. Text-only trees retain their List rendering. Selection symbols and List-specific column layout apply to text rows;
 composed rows supply those decorations through their content or leading column.
 
 Run `cargo run --example tree_rows` to try multiple roots, detail rows, and independent buttons.
