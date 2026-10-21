@@ -302,7 +302,7 @@ demonstrate the extended grammar set.
 | `terminal_filetree_devtools` | `FileTree` + `ManagedTerminal` devtools split |
 | `terminal_search_highlight` | Display-column search highlighting through snapshot decorations |
 | `terminal_copy_mode` | Vim-style copy-mode navigation, selection copying, and copy feedback |
-| `terminal_hints` | URL/path/Git/custom hint mode with end labels, immediate lowercase-copy/uppercase-open activation, and copy flash |
+| `terminal_hints` | URL/OSC 8 link/path/Git/custom hint mode with end labels, immediate lowercase-copy/uppercase-open activation, and copy flash |
 
 ```bash
 cargo run --example terminal_filetree_devtools --features terminal
