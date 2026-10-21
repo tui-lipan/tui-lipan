@@ -533,15 +533,35 @@ Plain-text URL activation still works from `text`.
 line of output: a program that printed something longer than the terminal is wide occupies several
 of them, and only this flag says which breaks were the terminal's rather than the program's.
 Anything scanning `text` for something that can outrun the width - a URL, a path - has to rejoin
-those rows first, which is what `HintScan::scan_wrapped` does:
+those rows first. `HintScan::scan_snapshot` does that and also hints the snapshot's OSC 8
+hyperlinks:
 
 ```rust
 let snapshot = screen.render_snapshot();
-let hints = HintScan::new().scan_wrapped(&snapshot.text, &snapshot.wrapped_rows);
+let hints = HintScan::new().scan_snapshot(&snapshot);
 ```
 
-The built-in path scanner accepts slash and backslash separators. Windows drive-relative, rooted,
-UNC, and verbatim paths are recognized, and quoting allows a path to contain spaces.
+A hyperlink becomes a `HintKind::Url` hint whose text is its destination, not its visible label, so
+`PR #200` linked to a pull request copies the pull request URL. Links with a scheme `open_url`
+refuses are skipped, and a link replaces any text hint it overlaps. With the URL scanner disabled,
+hyperlinks are not hinted either. `HintScan::scan_wrapped(text, wrapped_rows)` scans text alone.
+
+The built-in scanners find:
+
+- **URLs** with a scheme `open_url` allows. A URL ends at whitespace, `<`, `>`, `"`, or a backtick,
+  and at an apostrophe when one opened it. Trailing sentence punctuation and closing brackets are
+  dropped.
+- **Paths** starting with `./`, `../`, `~/`, or a drive letter; rooted paths with a second separator
+  or a file extension, such as `/etc/hosts` or `/README.md`; and bare relative paths whose last
+  component has a file extension, such as `src/main.rs`. A `:line` suffix is kept. A lone `/status`
+  and a bare `and/or` or `feature/branch` are not paths. Slash and backslash separators are both
+  accepted: Windows drive-relative, rooted, UNC, and verbatim paths are recognized, and quoting
+  allows a path to contain spaces.
+- **Git SHAs** of 7 to 40 hex digits containing both a digit and a letter, so decimal numbers and
+  hex-spelled words such as `defaced` are skipped.
+
+A URL or path containing an ellipsis (`…`) is skipped: it is what remains after a program shortened
+the text, and copying it would give neither the real URL nor the real path.
 
 A hint crossing a wrap is one `HintMatch` carrying one `HintSpan` per row it covers, in row order;
 `row()` / `start_col()` and `end_row()` / `end_col()` read the first and last of them. `HintScan::scan`

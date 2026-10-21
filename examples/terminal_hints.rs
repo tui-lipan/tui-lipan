@@ -55,7 +55,7 @@ impl Component for TerminalHints {
         let snapshot = screen.render_snapshot();
         let matches = HintScan::new()
             .custom(IPV4_HINT_ID, ipv4_ranges)
-            .scan_wrapped(&snapshot.text, &snapshot.wrapped_rows);
+            .scan_snapshot(&snapshot);
         let labels = assign_labels(matches.len(), HOME_ROW_HINT_KEYS);
 
         Self::State {

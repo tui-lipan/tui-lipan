@@ -208,6 +208,90 @@ impl HintScan {
     }
 }
 
+#[cfg(feature = "terminal")]
+impl HintScan {
+    /// Scan a terminal snapshot: its text rejoined across soft wraps, and its OSC 8 hyperlinks.
+    ///
+    /// A hyperlink's label is often not its destination - `PR #200` linking to a pull request -
+    /// so scanning the text never finds it. While the URL scanner is enabled, each link whose
+    /// scheme is allowed becomes one [`HintKind::Url`] hint carrying its URI, joined across the
+    /// row breaks of a soft wrap. It replaces every text hint it overlaps: the URI the program
+    /// supplied is what the visible label stands for.
+    pub fn scan_snapshot(
+        &self,
+        snapshot: &crate::widgets::TerminalRenderSnapshot,
+    ) -> Vec<HintMatch> {
+        let mut output = self.scan_wrapped(&snapshot.text, &snapshot.wrapped_rows);
+        if !self.scanners.iter().any(|(kind, _)| *kind == HintKind::Url) {
+            return output;
+        }
+        let links = hyperlink_hints(&snapshot.hyperlinks, &snapshot.wrapped_rows);
+        output.retain(|matched| !links.iter().any(|link| hints_overlap(link, matched)));
+        output.extend(links);
+        output.sort_by_key(|matched| (matched.row(), matched.start_col(), matched.end_col()));
+        output
+    }
+}
+
+/// One URL hint per hyperlink, joining the row-local spans a link is reported as.
+#[cfg(feature = "terminal")]
+fn hyperlink_hints(
+    links: &[crate::widgets::TerminalHyperlink],
+    wrapped_rows: &[bool],
+) -> Vec<HintMatch> {
+    let mut sorted: Vec<_> = links.iter().collect();
+    sorted.sort_by_key(|link| (link.row, link.start_col));
+    let mut output: Vec<(&str, HintMatch)> = Vec::new();
+    for link in sorted {
+        if parse_scheme(&link.uri).is_none_or(|scheme| !is_allowed_scheme(scheme)) {
+            continue;
+        }
+        let span = HintSpan {
+            row: link.row,
+            start_col: link.start_col,
+            end_col: link.end_col,
+        };
+        if let Some((uri, previous)) = output.last_mut()
+            && *uri == &*link.uri
+            && continues_link(previous, span, wrapped_rows)
+        {
+            previous.spans.push(span);
+            continue;
+        }
+        output.push((
+            &link.uri,
+            HintMatch {
+                spans: vec![span],
+                text: link.uri.to_string(),
+                kind: HintKind::Url,
+            },
+        ));
+    }
+    output.into_iter().map(|(_, matched)| matched).collect()
+}
+
+/// Whether `next` carries on the link `previous` ends, on its row or past a soft wrap.
+#[cfg(feature = "terminal")]
+fn continues_link(previous: &HintMatch, next: HintSpan, wrapped_rows: &[bool]) -> bool {
+    let last = previous.spans.last().copied().unwrap_or(next);
+    if last.row == next.row {
+        return last.end_col == next.start_col;
+    }
+    next.row == last.row + 1
+        && next.start_col == 0
+        && wrapped_rows.get(last.row).copied().unwrap_or(false)
+}
+
+#[cfg(feature = "terminal")]
+fn hints_overlap(left: &HintMatch, right: &HintMatch) -> bool {
+    left.spans.iter().any(|a| {
+        right
+            .spans
+            .iter()
+            .any(|b| a.row == b.row && a.start_col < b.end_col && b.start_col < a.end_col)
+    })
+}
+
 impl Default for HintScan {
     fn default() -> Self {
         Self::new()
@@ -292,8 +376,7 @@ fn push_range(
     if start >= end || !line.is_char_boundary(start) || !line.is_char_boundary(end) {
         return;
     }
-    let raw = &line[start..end];
-    let trimmed = raw.trim_end_matches(['.', ',', ';', ':', '!', '?', ')', ']', '}']);
+    let trimmed = trim_display_punctuation(&line[start..end]);
     if trimmed.is_empty() {
         return;
     }
@@ -305,6 +388,11 @@ fn push_range(
         return;
     }
     output.push((start..end, kind));
+}
+
+/// Drop the sentence punctuation and closing brackets that end the prose around a hint.
+fn trim_display_punctuation(text: &str) -> &str {
+    text.trim_end_matches(['.', ',', ';', ':', '!', '?', ')', ']', '}'])
 }
 
 /// Cut a logical-line byte range into one span per row it covers.
@@ -378,17 +466,37 @@ fn url_ranges(line: &str) -> Vec<Range<usize>> {
             cursor = colon + 1;
             continue;
         }
-        let end = line[colon + 1..]
-            .char_indices()
-            .find(|(_, ch)| ch.is_whitespace() || matches!(ch, '<' | '>'))
-            .map(|(offset, _)| colon + 1 + offset)
-            .unwrap_or(line.len());
-        if end > colon + 1 {
+        let end = url_end(line, start, colon);
+        if end > colon + 1 && !is_elided(&line[start..end]) {
             ranges.push(start..end);
         }
         cursor = end.max(colon + 1);
     }
     ranges
+}
+
+/// Where a URL whose scheme separator sits at `colon` stops.
+///
+/// Whitespace and angle brackets end it, and so do `"` and `` ` ``, which a URL never carries
+/// unescaped: without that, `"url":"https://example.com"` copies the closing quote. An apostrophe
+/// is legal inside a URL, so it ends one only when one opened it.
+fn url_end(line: &str, start: usize, colon: usize) -> usize {
+    let opened_by_apostrophe = line[..start].ends_with('\'');
+    line[colon + 1..]
+        .char_indices()
+        .find(|(_, ch)| {
+            ch.is_whitespace()
+                || matches!(ch, '<' | '>' | '"' | '`')
+                || (opened_by_apostrophe && *ch == '\'')
+        })
+        .map_or(line.len(), |(offset, _)| colon + 1 + offset)
+}
+
+/// Whether a candidate carries the ellipsis a program prints where it cut text short.
+///
+/// What is left is a fragment of the real URL or path, and copying it gives neither.
+fn is_elided(candidate: &str) -> bool {
+    candidate.contains('\u{2026}')
 }
 
 fn append_url_ranges(line: &str, out: &mut Vec<Range<usize>>) {
@@ -415,22 +523,68 @@ fn has_drive_prefix(bytes: &[u8], start: usize) -> bool {
     bytes.get(start).is_some_and(u8::is_ascii_alphabetic) && bytes.get(start + 1) == Some(&b':')
 }
 
-fn path_start(line: &str, separator: usize) -> Option<usize> {
+/// How a path candidate begins, which decides how much evidence it needs to count as a path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PathForm {
+    /// `./`, `../`, `~/`, or a drive letter: unmistakably a path.
+    Anchored,
+    /// A leading separator, as in `/etc/hosts`.
+    Rooted,
+    /// A bare relative path, as in `src/main.rs`.
+    Bare,
+}
+
+fn path_start(line: &str, separator: usize) -> Option<(usize, PathForm)> {
     let bytes = line.as_bytes();
     if separator > 0 && bytes[separator - 1] == bytes[separator] {
         return None;
     }
     if separator >= 2 && bytes[separator - 2..separator] == *b".." {
-        return Some(separator - 2);
+        return Some((separator - 2, PathForm::Anchored));
     }
     if separator >= 1 && matches!(bytes[separator - 1], b'.' | b'~') {
-        return Some(separator - 1);
+        return Some((separator - 1, PathForm::Anchored));
     }
     let token_start = path_token_start(line, separator);
     if has_drive_prefix(bytes, token_start) {
-        return Some(token_start);
+        return Some((token_start, PathForm::Anchored));
     }
-    Some(separator)
+    if token_start == separator {
+        return Some((separator, PathForm::Rooted));
+    }
+    // Only the first separator of a bare token starts a candidate; a later one would judge the
+    // same token again from its middle.
+    line[token_start..separator]
+        .bytes()
+        .all(is_bare_path_head_byte)
+        .then_some((token_start, PathForm::Bare))
+}
+
+fn is_bare_path_head_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'+' | b'@')
+}
+
+/// Whether a candidate has enough shape to be a path rather than prose.
+///
+/// A bare `word/word` is far more often `and/or` or a branch name than a file, and a lone `/word`
+/// is as often a slash command as a directory, so both need a file extension; a rooted path may
+/// show a second separator instead. `name` is the candidate without its `:line` suffix or
+/// trailing punctuation.
+fn has_path_shape(name: &str, form: PathForm) -> bool {
+    match form {
+        PathForm::Anchored => true,
+        PathForm::Rooted => name[1..].bytes().any(is_path_separator) || has_file_extension(name),
+        PathForm::Bare => has_file_extension(name),
+    }
+}
+
+fn has_file_extension(name: &str) -> bool {
+    let file = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    file.rsplit_once('.').is_some_and(|(_, extension)| {
+        !extension.is_empty()
+            && extension.bytes().all(|byte| byte.is_ascii_alphanumeric())
+            && extension.bytes().any(|byte| byte.is_ascii_alphabetic())
+    })
 }
 
 fn path_quote(line: &str, start: usize) -> Option<char> {
@@ -491,7 +645,7 @@ fn path_ranges(line: &str) -> Vec<Range<usize>> {
     let mut cursor = 0usize;
     while let Some(relative) = line[cursor..].bytes().position(is_path_separator) {
         let separator = cursor + relative;
-        let Some(start) = path_start(line, separator) else {
+        let Some((start, form)) = path_start(line, separator) else {
             cursor = separator + 1;
             continue;
         };
@@ -505,11 +659,16 @@ fn path_ranges(line: &str) -> Vec<Range<usize>> {
             continue;
         }
         let quote = path_quote(line, start);
-        let mut end = path_end(line, separator, quote);
-        if quote.is_none() {
-            end = extend_line_number(line, end);
-        }
-        if has_path_body(line.as_bytes(), start, separator, end) {
+        let name_end = path_end(line, separator, quote);
+        let end = if quote.is_none() {
+            extend_line_number(line, name_end)
+        } else {
+            name_end
+        };
+        if has_path_body(line.as_bytes(), start, separator, end)
+            && has_path_shape(trim_display_punctuation(&line[start..name_end]), form)
+            && !is_elided(&line[start..end])
+        {
             ranges.push(start..end);
         }
         cursor = end.max(separator + 1);
@@ -543,15 +702,22 @@ fn sha_ranges(line: &str) -> Vec<Range<usize>> {
             .unwrap_or(line.len());
         if (7..=40).contains(&(end - start))
             && (end == line.len() || !is_word_byte(line.as_bytes()[end]))
-            && line[start..end]
-                .bytes()
-                .any(|byte| byte.is_ascii_alphabetic())
+            && is_mixed_hex(&line[start..end])
         {
             ranges.push(start..end);
         }
         cursor = end.max(start + 1);
     }
     ranges
+}
+
+/// Whether a hex run holds both a digit and a letter.
+///
+/// An abbreviated object name almost always does, while a decimal number has no letter and an
+/// English word spelled from `a`-`f`, such as `defaced`, has no digit.
+fn is_mixed_hex(run: &str) -> bool {
+    run.bytes().any(|byte| byte.is_ascii_digit())
+        && run.bytes().any(|byte| byte.is_ascii_alphabetic())
 }
 
 fn append_sha_ranges(line: &str, out: &mut Vec<Range<usize>>) {
@@ -615,7 +781,7 @@ mod tests {
     #[test]
     fn builtins_scan_allowed_urls_paths_and_shas_in_display_columns() {
         let found = HintScan::new()
-            .scan("你 mailto:user@example.test https://example.com/a). ./src/main.rs:12 deadbeef");
+            .scan("你 mailto:user@example.test https://example.com/a). ./src/main.rs:12 9983d705");
         assert_eq!(
             found
                 .iter()
@@ -625,7 +791,7 @@ mod tests {
                 "mailto:user@example.test",
                 "https://example.com/a",
                 "./src/main.rs:12",
-                "deadbeef"
+                "9983d705"
             ]
         );
         assert_eq!(found[0].kind, HintKind::Url);
@@ -788,6 +954,116 @@ mod tests {
                 .scan(r"word\wrap escaped\n xC:\embedded")
                 .is_empty()
         );
+    }
+
+    fn texts(found: &[HintMatch]) -> Vec<&str> {
+        found.iter().map(|matched| matched.text.as_str()).collect()
+    }
+
+    #[test]
+    fn urls_stop_at_the_quote_that_delimits_them() {
+        let found = HintScan::new().scan(
+            r#"{"url":"https://a.test/pull/200"} url='https://b.test/it's' `https://c.test/x`"#,
+        );
+        assert_eq!(
+            texts(&found),
+            vec![
+                "https://a.test/pull/200",
+                "https://b.test/it",
+                "https://c.test/x"
+            ]
+        );
+        // An apostrophe nobody opened is part of the URL.
+        let found = HintScan::new().scan("see https://d.test/it's here");
+        assert_eq!(texts(&found), vec!["https://d.test/it's"]);
+    }
+
+    #[test]
+    fn text_a_program_elided_is_not_a_hint() {
+        let found = HintScan::new()
+            .scan("tail -2 /home/me/projects/rozi-review/pr\u{2026} https://a.test/pu\u{2026}");
+        assert!(texts(&found).is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn bare_relative_paths_need_a_file_extension() {
+        let found = HintScan::new().scan(
+            "git diff -- src/ops/session/remotes.rs .agents/ui.md:12, a/b/c.rs and/or 3/4 fix/projects-navigation-ux v1.2/x",
+        );
+        assert_eq!(
+            texts(&found),
+            vec!["src/ops/session/remotes.rs", ".agents/ui.md:12", "a/b/c.rs"]
+        );
+        assert!(found.iter().all(|matched| matched.kind == HintKind::Path));
+    }
+
+    #[test]
+    fn a_lone_rooted_word_is_not_a_path() {
+        let found =
+            HintScan::new().scan("Run /status for a breakdown, see /etc/hosts /tmp/ /README.md");
+        assert_eq!(texts(&found), vec!["/etc/hosts", "/tmp/", "/README.md"]);
+    }
+
+    #[test]
+    fn hex_words_without_digits_are_not_shas() {
+        let found = HintScan::new().scan("the defaced and effaced deadbeef 9983d705 1234567");
+        assert_eq!(texts(&found), vec!["9983d705"]);
+    }
+
+    #[cfg(feature = "terminal")]
+    #[test]
+    fn snapshot_scan_hints_hyperlinks_by_their_destination() {
+        let mut screen = crate::widgets::TerminalScreen::new(3, 20, 0);
+        screen.process_bytes(
+            b"\x1b]8;;https://a.test/pull/200\x1b\\PR #200\x1b]8;;\x1b\\ 9983d705\r\n\
+              \x1b]8;;https://b.test/x\x1b\\https://b.test/x\x1b]8;;\x1b\\ \
+              \x1b]8;;javascript:alert(1)\x1b\\bad\x1b]8;;\x1b\\",
+        );
+        let found = HintScan::new().scan_snapshot(&screen.render_snapshot());
+        assert_eq!(
+            found
+                .iter()
+                .map(|matched| (matched.text.as_str(), matched.kind))
+                .collect::<Vec<_>>(),
+            vec![
+                ("https://a.test/pull/200", HintKind::Url),
+                ("9983d705", HintKind::GitSha),
+                // The link replaces the identical text hint under it rather than doubling it.
+                ("https://b.test/x", HintKind::Url),
+            ]
+        );
+        assert_eq!(found[0].start_col(), 0);
+        assert_eq!(found[0].end_col(), 7);
+    }
+
+    #[cfg(feature = "terminal")]
+    #[test]
+    fn snapshot_scan_joins_a_hyperlink_across_a_soft_wrap() {
+        let mut screen = crate::widgets::TerminalScreen::new(3, 8, 0);
+        screen.process_bytes(b"ab \x1b]8;;https://a.test\x1b\\linked label\x1b]8;;\x1b\\");
+        let found = HintScan::new().scan_snapshot(&screen.render_snapshot());
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].text, "https://a.test");
+        assert_eq!(
+            found[0].spans,
+            vec![
+                HintSpan {
+                    row: 0,
+                    start_col: 3,
+                    end_col: 8
+                },
+                HintSpan {
+                    row: 1,
+                    start_col: 0,
+                    end_col: 7
+                },
+            ]
+        );
+
+        let no_urls = HintScan::new()
+            .urls(false)
+            .scan_snapshot(&screen.render_snapshot());
+        assert!(no_urls.is_empty(), "{no_urls:?}");
     }
 
     #[cfg(feature = "hints-regex")]
