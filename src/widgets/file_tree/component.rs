@@ -121,6 +121,8 @@ pub(crate) enum FileTreeMsg {
     },
     /// A file holding ignore rules changed, so the explorer's walk no longer matches them.
     ExplorerIgnoreRulesChanged,
+    /// How an active query filters changed, while what it searches did not.
+    RerunExplorerSearch,
     RequestEntryRefresh(u64),
     EntryRefreshLoaded(LocalEntryRefreshResult),
     RequestGitRefresh(u64),
@@ -648,6 +650,11 @@ impl Component for FileTreeComponent {
         }
         // Controlled `expanded_paths` can reopen a directory here, not only through a toggle.
         sync_watches(ctx, was_degraded);
+        // A new root already dropped the query. Otherwise the cached walk still holds, and only
+        // the filter over it changes.
+        if !root_mode_changed && old_props.explorer_max_matches != ctx.props.explorer_max_matches {
+            ctx.link().send(FileTreeMsg::RerunExplorerSearch);
+        }
 
         if dirty {
             Update::with_command(command)
@@ -747,6 +754,10 @@ fn update_file_tree(msg: FileTreeMsg, ctx: &mut Context<FileTreeComponent>) -> U
         }
         FileTreeMsg::ExplorerIgnoreRulesChanged => {
             forget_explorer_index(&mut ctx.state);
+            let link = ctx.link().clone();
+            Update::with_command(restart_explorer_search(&ctx.props, &mut ctx.state, link))
+        }
+        FileTreeMsg::RerunExplorerSearch => {
             let link = ctx.link().clone();
             Update::with_command(restart_explorer_search(&ctx.props, &mut ctx.state, link))
         }
@@ -5204,6 +5215,57 @@ mod tests {
         assert!(!Arc::ptr_eq(&walked, &runtime.ctx.state.explorer_index));
         let command = restart.command.expect("an active query searches again");
         assert_eq!(search(&mut runtime, command), 0);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn changing_the_match_limit_reruns_an_active_search_over_the_same_walk() {
+        let dir = unique_component_test_dir("explorer-match-limit");
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["note_a.rs", "note_b.rs", "note_c.rs"] {
+            std::fs::write(dir.join(name), "").unwrap();
+        }
+        let props = |limit: usize| {
+            crate::widgets::file_tree::FileTree::new(dir.to_string_lossy().into_owned())
+                .explorer(true)
+                .explorer_max_matches(limit)
+                .props
+        };
+        let mut runtime = file_tree_runtime(props(3));
+        let ready = |runtime: &mut RuntimeCore<FileTreeComponent>, command: Command| {
+            let ready = run_command_until(runtime, command, |message| {
+                matches!(message, FileTreeMsg::ExplorerResultsReady { .. })
+            })
+            .pop()
+            .unwrap();
+            runtime.component.update(ready, &mut runtime.ctx);
+            let filter = &runtime.ctx.state.explorer_filter;
+            (filter.shown_count, filter.match_count)
+        };
+
+        let typed = runtime.component.update(
+            FileTreeMsg::ExplorerQueryChanged(InputEvent {
+                value: Arc::from("note"),
+                cursor: 4,
+                anchor: None,
+            }),
+            &mut runtime.ctx,
+        );
+        assert_eq!(ready(&mut runtime, typed.command.unwrap()), (3, 3));
+        let walked = Arc::clone(&runtime.ctx.state.explorer_index);
+
+        for (limit, shown) in [(1, 1), (3, 3)] {
+            replace_file_tree_props(&mut runtime, props(limit));
+            let rerun = collect_messages_until(&mut runtime, |message| {
+                matches!(message, FileTreeMsg::RerunExplorerSearch)
+            })
+            .pop()
+            .unwrap();
+            let rerun = runtime.component.update(rerun, &mut runtime.ctx);
+            assert_eq!(ready(&mut runtime, rerun.command.unwrap()), (shown, 3));
+            assert!(Arc::ptr_eq(&walked, &runtime.ctx.state.explorer_index));
+        }
 
         let _ = std::fs::remove_dir_all(dir);
     }
