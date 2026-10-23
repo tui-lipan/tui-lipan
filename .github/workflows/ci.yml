@@ -40,6 +40,9 @@ jobs:
       - name: Check generated NodeKind delegation
         run: python3 scripts/generate-node-kind-delegate-arms.py
 
+      - name: Check generated widget defaults
+        run: python3 scripts/generate-widget-defaults.py --check
+
       - name: Check widget style slots
         run: python3 scripts/check-widget-style-slots.py
 

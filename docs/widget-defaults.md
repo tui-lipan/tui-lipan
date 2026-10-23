@@ -1028,13 +1028,14 @@ Source: `src/widgets/document_view/mod.rs:333` (`DocumentView`).
 
 ## FileTree
 
-Source: `src/widgets/file_tree/mod.rs:362` (`FileTree`).
+Source: `src/widgets/file_tree/mod.rs:383` (`FileTree`).
 
 | Field | Default initializer |
 |---|---|
 | `root` | `constructor/local value (not a default)` |
 | `entry_source` | `FileTreeEntrySource::default()` |
 | `entry_refresh_token` | `0` |
+| `refresh_policy` | `FileTreeRefreshPolicy::default()` |
 | `show_hidden` | `false` |
 | `max_entries_per_dir` | `2_000` |
 | `show_icons` | `true` |
@@ -1132,12 +1133,12 @@ Source: `src/widgets/file_tree/mod.rs:362` (`FileTree`).
 | `git_marker_renamed` | `"R".into()` |
 | `git_marker_untracked` | `"?".into()` |
 | `git_marker_conflicted` | `"!".into()` |
-| `git_style_modified` | `default_git_style_modified()` |
-| `git_style_added` | `default_git_style_added()` |
-| `git_style_deleted` | `default_git_style_deleted()` |
-| `git_style_renamed` | `default_git_style_renamed()` |
-| `git_style_untracked` | `default_git_style_untracked()` |
-| `git_style_conflicted` | `default_git_style_conflicted()` |
+| `git_style_modified` | `None` |
+| `git_style_added` | `None` |
+| `git_style_deleted` | `None` |
+| `git_style_renamed` | `None` |
+| `git_style_untracked` | `None` |
+| `git_style_conflicted` | `None` |
 | `change_suffix_style` | `Style::default()` |
 | `change_suffix_priority` | `FileTreeSuffixPriority::default()` |
 | `symlink_targets` | `true` |
@@ -1303,7 +1304,7 @@ Source: `src/widgets/tree/mod.rs:29` (`Tree`).
 
 ## Terminal
 
-Source: `src/widgets/terminal/mod.rs:115` (`Terminal`).
+Source: `src/widgets/terminal/mod.rs:117` (`Terminal`).
 
 | Field | Default initializer |
 |---|---|
@@ -1364,6 +1365,7 @@ Source: `src/widgets/terminal/mod.rs:115` (`Terminal`).
 | `on_blur` | `None` |
 | `on_key` | `None` |
 | `on_input` | `None` |
+| `on_paste` | `None` |
 
 ## DiffView
 
