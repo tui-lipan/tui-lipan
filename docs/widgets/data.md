@@ -634,7 +634,7 @@ entries and git-backed or application-provided change projections.
 | `entry_refresh_token` | `u64` | Re-read local root and currently expanded directories when the token changes; ignored for provided entries |
 | `refresh_policy` | `FileTreeRefreshPolicy` | How local entries notice filesystem changes: `Manual` (default, tokens only), `Polling(Duration)`, or `Watch` |
 | `show_hidden` | `bool` | Show hidden files (`.` prefix) |
-| `max_entries_per_dir` | `usize` | Cap entries per directory |
+| `max_entries_per_dir` | `usize` | Cap entries per directory, keeping the first in display order |
 | `show_icons` | `bool` | Show file and directory icons independently of arrows (default: true) |
 | `show_arrows` | `bool` | Show directory expansion arrows independently of icons (default: true) |
 | `expanded_arrow` | `impl Into<Arc<str>>` | Expanded-directory arrow (default: `▼`) |
@@ -686,6 +686,7 @@ entries and git-backed or application-provided change projections.
 | `symlink_icon` | `String` | Symlink icon |
 | `other_icon` | `String` | Other entry icon |
 | `explorer` | `bool` | Show fuzzy search input |
+| `explorer_max_matches` | `usize` | Matches a query shows, best-scoring first (default 1000) |
 | `tree_focus_key` | `String` | Key used for direct focus of the inner tree |
 | `explorer_focus_key` | `String` | Key used for direct focus of the explorer input |
 | `explorer_placeholder` | `String` | Search input placeholder |
@@ -785,6 +786,19 @@ Plus all `Tree` styling/scrolling props, including `indent_style` and `scrollbar
   Font glyphs that need room to render at full size. The default is 0, and rows with only diff
   statistics receive no trailing padding.
 - Filesystem fuzzy matching respects `.gitignore`/`.ignore` rules.
+- Explorer search runs in a background command. The first keystroke walks the root once; later
+  keystrokes filter that walk, so typing stays fast in large trees. The walk is taken again, and an
+  active query reruns, when a watched directory's entries change or a watched `.gitignore`,
+  `.ignore`, or `info/exclude` changes. An entry refresh and each new search also walk again. A
+  change the tree does not watch, including any change under `FileTreeRefreshPolicy::Manual`,
+  shows up in the next search.
+- Search offers only entries the tree can show: in a directory over `max_entries_per_dir`, it
+  matches the same entries the tree lists, ignored ones counting toward the cap.
+- A query matches entry names, and paths below the root unless it contains a `.` without a path
+  separator. The root's own path never takes part, so a query that spells part of it does not
+  match every entry. A name match ranks above a match that needs the directories above it.
+- The tree shows the `explorer_max_matches` best-scoring matches. The input's counter reads
+  `shown/total` when some matches are left out.
 - In changed-only mode, fuzzy matching is scoped to the changed-path projection instead of the whole filesystem.
 - Auto-expands ancestor directories to reveal search matches.
 - Clicking the explorer input focuses it. Enter commits the query and focuses the tree; Escape

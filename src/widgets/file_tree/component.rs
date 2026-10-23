@@ -4,7 +4,7 @@ use std::hash::{Hash, Hasher};
 use std::path::{Component as PathComponent, Path, PathBuf};
 use std::sync::Arc;
 
-use crate::core::component::{Command, Component, Context, Update};
+use crate::core::component::{Command, Component, Context, TaskPolicy, Update};
 use crate::core::element::{Element, IntoElement};
 use crate::style::{Style, StyleSlot};
 use crate::text::input::TextInput;
@@ -13,8 +13,10 @@ use crate::widgets::{Divider, Input, InputEvent, ListItem, MouseRegion, Tree, Tr
 use super::events::{
     FileTreeEntryRequest, FileTreeEvent, FileTreeExplorerFocusOrigin, FileTreeToggleEvent,
 };
-use super::explorer::{ExplorerCandidate, ExplorerFilter, search_filesystem};
-use super::fs::{FileKind, FsNode, read_directory, root_node};
+use super::explorer::{
+    ExplorerCandidate, ExplorerFilter, ExplorerIndex, ExplorerIndexCache, ExplorerIndexKey,
+};
+use super::fs::{DirectoryLoadResult, FileKind, FsNode, read_directory, root_node};
 use super::git::{
     GitFileDecorations, GitStatusCacheKey, GitStatusCacheRequest, GitStatusSnapshot,
     discover_git_root, insert_provided_decoration_path_and_parents, load_git_snapshot,
@@ -52,6 +54,11 @@ pub(crate) struct FileTreeState {
     pub(crate) explorer_input: TextInput,
     pub(crate) explorer_query_id: u64,
     pub(crate) explorer_filter: ExplorerFilter,
+    /// The explorer's last walk, which later keystrokes filter instead of walking again.
+    pub(crate) explorer_index: Arc<ExplorerIndexCache>,
+    /// Names this tree's search task, so a keystroke replaces the queued search instead of
+    /// queueing another one behind it.
+    pub(crate) explorer_task_key: Arc<str>,
     pub(crate) explorer_entered_from_tree: bool,
     pub(crate) explorer_focused: bool,
     pub(crate) search_expanded_snapshot: Option<HashSet<Arc<str>>>,
@@ -109,7 +116,13 @@ pub(crate) enum FileTreeMsg {
     ExplorerResultsReady {
         query_id: u64,
         filter: ExplorerFilter,
+        /// Listings of the directories the matches open, read on the search's worker.
+        listings: Vec<(Arc<str>, DirectoryLoadResult)>,
     },
+    /// A file holding ignore rules changed, so the explorer's walk no longer matches them.
+    ExplorerIgnoreRulesChanged,
+    /// How an active query filters changed, while what it searches did not.
+    RerunExplorerSearch,
     RequestEntryRefresh(u64),
     EntryRefreshLoaded(LocalEntryRefreshResult),
     RequestGitRefresh(u64),
@@ -253,6 +266,8 @@ impl Component for FileTreeComponent {
             explorer_input: TextInput::new(""),
             explorer_query_id: 0,
             explorer_filter: ExplorerFilter::default(),
+            explorer_index: Arc::default(),
+            explorer_task_key: next_explorer_task_key(),
             explorer_entered_from_tree: false,
             explorer_focused: false,
             search_expanded_snapshot: None,
@@ -465,7 +480,7 @@ impl Component for FileTreeComponent {
             .anchor(ctx.state.explorer_input.anchor())
             .placeholder(ctx.props.explorer_placeholder.as_ref())
             .prefix(ctx.props.explorer_prefix.clone())
-            .suffix(format!("{}", ctx.state.explorer_filter.match_count))
+            .suffix(explorer_match_count_label(&ctx.state.explorer_filter))
             .suffix_style(Style::default())
             .focus_suffix_style(Style::default())
             .border(ctx.props.explorer_input_border)
@@ -635,6 +650,11 @@ impl Component for FileTreeComponent {
         }
         // Controlled `expanded_paths` can reopen a directory here, not only through a toggle.
         sync_watches(ctx, was_degraded);
+        // A new root already dropped the query. Otherwise the cached walk still holds, and only
+        // the filter over it changes.
+        if !root_mode_changed && old_props.explorer_max_matches != ctx.props.explorer_max_matches {
+            ctx.link().send(FileTreeMsg::RerunExplorerSearch);
+        }
 
         if dirty {
             Update::with_command(command)
@@ -677,6 +697,7 @@ fn update_file_tree(msg: FileTreeMsg, ctx: &mut Context<FileTreeComponent>) -> U
                 }
 
                 ctx.state.search_found_dir = None;
+                forget_explorer_index(&mut ctx.state);
 
                 let expanded = ctx.state.expanded.clone();
                 load_expanded_directories(&mut ctx.state, &ctx.props, expanded);
@@ -688,24 +709,14 @@ fn update_file_tree(msg: FileTreeMsg, ctx: &mut Context<FileTreeComponent>) -> U
                 ctx.state.search_found_dir = None;
             }
 
-            let query_id = ctx.state.explorer_query_id.saturating_add(1);
-            ctx.state.explorer_query_id = query_id;
-            let search_root = if ctx.props.change_view == FileTreeChangeView::ChangedOnly {
-                ctx.state.root.path.clone()
-            } else {
-                ctx.props.root.clone()
-            };
-            Update::with_command(spawn_explorer_search(
-                ctx.link().clone(),
-                query_id,
-                query,
-                search_root,
-                ctx.props.show_hidden,
-                ctx.props.max_entries_per_dir,
-                explorer_search_candidates(&ctx.props, &ctx.state),
-            ))
+            let link = ctx.link().clone();
+            Update::with_command(start_explorer_search(&ctx.props, &mut ctx.state, link))
         }
-        FileTreeMsg::ExplorerResultsReady { query_id, filter } => {
+        FileTreeMsg::ExplorerResultsReady {
+            query_id,
+            filter,
+            listings,
+        } => {
             if query_id != ctx.state.explorer_query_id {
                 return Update::none();
             }
@@ -721,14 +732,34 @@ fn update_file_tree(msg: FileTreeMsg, ctx: &mut Context<FileTreeComponent>) -> U
                     ctx.state.explorer_filter.primary_match_directory.clone();
             }
 
+            // Open what this query matched on top of the tree the search started from. Adding to
+            // the previous query's expansion instead would keep every directory any keystroke
+            // matched open, and loaded, for the rest of the search.
+            if let Some(snapshot) = ctx.state.search_expanded_snapshot.as_ref() {
+                ctx.state.expanded = snapshot.clone();
+            }
             for path in &ctx.state.explorer_filter.expanded_paths {
                 ctx.state.expanded.insert(path.clone());
             }
 
             let expanded = ctx.state.expanded.clone();
+            apply_search_listings(
+                &mut ctx.state.root,
+                &mut listings.into_iter().collect(),
+                &expanded,
+            );
             load_expanded_directories(&mut ctx.state, &ctx.props, expanded);
             normalize_uncontrolled_selection(&ctx.props, &mut ctx.state);
             Update::full()
+        }
+        FileTreeMsg::ExplorerIgnoreRulesChanged => {
+            forget_explorer_index(&mut ctx.state);
+            let link = ctx.link().clone();
+            Update::with_command(restart_explorer_search(&ctx.props, &mut ctx.state, link))
+        }
+        FileTreeMsg::RerunExplorerSearch => {
+            let link = ctx.link().clone();
+            Update::with_command(restart_explorer_search(&ctx.props, &mut ctx.state, link))
         }
         FileTreeMsg::RequestEntryRefresh(token) => {
             let options = entry_refresh_options(&ctx.props);
@@ -777,8 +808,7 @@ fn update_file_tree(msg: FileTreeMsg, ctx: &mut Context<FileTreeComponent>) -> U
                     generation: ctx.state.watch.generation,
                 });
             }
-            let command =
-                restart_explorer_search_after_entry_refresh(&ctx.props, &mut ctx.state, link);
+            let command = restart_explorer_search(&ctx.props, &mut ctx.state, link);
             Update::with_command(command)
         }
         FileTreeMsg::TreeFocusChanged(focused) => {
@@ -1240,6 +1270,7 @@ fn rebuild_root_for_props(state: &mut FileTreeState, props: &FileTreeProps) {
     state.changed_only_auto_expand_signature = 0;
     state.explorer_query_id = state.explorer_query_id.saturating_add(1);
     state.explorer_filter = ExplorerFilter::default();
+    forget_explorer_index(state);
     state.search_expanded_snapshot = None;
     state.search_found_dir = None;
     state.requested_entry_paths.clear();
@@ -1396,8 +1427,9 @@ fn provided_directory_load(
         }
     };
 
-    let mut loaded = Vec::new();
-    let mut omitted = 0usize;
+    // The same cap as a local listing: the first entries in display order, whatever order the
+    // application supplied them in.
+    let mut selection = super::fs::DisplaySelection::new(props.max_entries_per_dir);
     let directory = ProvidedPath::from_path(directory);
     for entry in entries.iter() {
         if (!props.show_hidden && is_hidden_entry(entry.name.as_ref()))
@@ -1405,27 +1437,15 @@ fn provided_directory_load(
         {
             continue;
         }
-        if loaded.len() >= props.max_entries_per_dir {
-            omitted = omitted.saturating_add(1);
-            continue;
-        }
 
         let kind = provided_entry_kind(entry);
-        let path = directory.join_name(entry.name.as_ref());
-        loaded.push(super::fs::LoadedEntry {
+        selection.offer(kind, entry.name.as_ref(), || super::fs::LoadedEntry {
             name: entry.name.clone(),
-            path: Arc::from(path.as_str()),
+            path: Arc::from(directory.join_name(entry.name.as_ref()).as_str()),
             kind,
         });
     }
-    loaded.sort_by(|left, right| {
-        let left_dir = left.kind == FileKind::Directory;
-        let right_dir = right.kind == FileKind::Directory;
-        right_dir
-            .cmp(&left_dir)
-            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
-            .then_with(|| left.name.cmp(&right.name))
-    });
+    let (loaded, omitted) = selection.finish();
 
     super::fs::DirectoryLoadResult {
         entries: loaded,
@@ -1993,6 +2013,9 @@ fn watch_flush(ctx: &mut Context<FileTreeComponent>, generation: u64) -> Update 
         ctx.link()
             .send(FileTreeMsg::RepositoryWatchResolve { generation });
     }
+    if plan.ignore_rules_changed {
+        ctx.link().send(FileTreeMsg::ExplorerIgnoreRulesChanged);
+    }
     if plan.rescan {
         ctx.state.watch.dirty.extend(entry_dirs);
     } else {
@@ -2059,12 +2082,19 @@ fn apply_watch_reload(
         return start_watch_reload(ctx).map_or_else(Update::none, Update::command_only);
     }
 
+    let mut listings_changed = false;
     for (dir, result) in results {
         if let Some(node) = node_by_path_mut(&mut ctx.state.root, &dir)
             && node.is_dir()
         {
+            listings_changed |= listing_differs(node, &result);
             merge_directory_load(node, result);
         }
+    }
+    // A reread that found nothing new, such as the one that follows a search opening directories,
+    // leaves the explorer's walk valid.
+    if listings_changed {
+        forget_explorer_index(&mut ctx.state);
     }
 
     // A directory that reappeared expanded, such as one renamed back, has no listing yet.
@@ -2087,6 +2117,19 @@ fn apply_watch_reload(
         normalize_uncontrolled_selection(&ctx.props, &mut ctx.state);
     }
     Update::full()
+}
+
+/// Whether rereading a directory found different entries than the tree holds for it.
+fn listing_differs(node: &FsNode, result: &DirectoryLoadResult) -> bool {
+    let truncated = usize::from(result.omitted > 0);
+    !node.loaded
+        || node.error != result.error
+        || node.children.len() != result.entries.len() + truncated
+        || node
+            .children
+            .iter()
+            .zip(&result.entries)
+            .any(|(child, entry)| child.path != entry.path || child.kind != entry.kind)
 }
 
 /// Replace a directory's listing, keeping the loaded subtree of every child directory that is
@@ -2124,51 +2167,16 @@ fn prepare_git_cache(
     (cached, Some(request))
 }
 
-fn spawn_explorer_search(
-    link: crate::callback::Link<FileTreeMsg>,
-    query_id: u64,
-    query: Arc<str>,
-    root: Arc<str>,
-    show_hidden: bool,
-    max_entries_per_dir: usize,
-    candidates: Option<ExplorerSearchCandidates>,
-) -> Command {
-    link.command(move |link| {
-        let filter = if let Some(candidates) = candidates {
-            super::explorer::search_candidates_with_path_flavor(
-                &root,
-                candidates.entries,
-                query.as_ref(),
-                candidates.provided_paths,
-            )
-        } else {
-            search_filesystem(
-                root.as_ref(),
-                query.as_ref(),
-                show_hidden,
-                max_entries_per_dir,
-            )
-        };
-        link.send(FileTreeMsg::ExplorerResultsReady { query_id, filter });
-    })
-}
-
-fn invalidate_explorer_query_for_entry_refresh(props: &FileTreeProps, state: &mut FileTreeState) {
-    if props.explorer && !state.explorer_input.text().trim().is_empty() {
-        state.explorer_query_id = state.explorer_query_id.saturating_add(1);
-        state.explorer_filter = ExplorerFilter::default();
-    }
-}
-
-fn restart_explorer_search_after_entry_refresh(
+/// Search for the current query on a worker, superseding any search still waiting to run.
+///
+/// Each tree runs one search task at a time. A keystroke replaces the queued search rather than
+/// queueing another walk behind it, and a walk already running finishes and fills the index cache,
+/// which the replacing search then only filters.
+fn start_explorer_search(
     props: &FileTreeProps,
     state: &mut FileTreeState,
     link: crate::callback::Link<FileTreeMsg>,
-) -> Option<Command> {
-    if !props.explorer || state.explorer_input.text().trim().is_empty() {
-        return None;
-    }
-
+) -> Command {
     let query_id = state.explorer_query_id.saturating_add(1);
     state.explorer_query_id = query_id;
     let query: Arc<str> = Arc::from(state.explorer_input.text().to_owned());
@@ -2177,15 +2185,146 @@ fn restart_explorer_search_after_entry_refresh(
     } else {
         props.root.clone()
     };
-    Some(spawn_explorer_search(
-        link,
-        query_id,
-        query,
-        search_root,
-        props.show_hidden,
-        props.max_entries_per_dir,
-        explorer_search_candidates(props, state),
-    ))
+    let source = match explorer_search_candidates(props, state) {
+        Some(candidates) => ExplorerSearchSource::Candidates {
+            root: search_root,
+            candidates,
+        },
+        None => ExplorerSearchSource::Filesystem {
+            cache: Arc::clone(&state.explorer_index),
+            key: ExplorerIndexKey {
+                root: search_root,
+                show_hidden: props.show_hidden,
+                max_entries_per_dir: props.max_entries_per_dir,
+            },
+        },
+    };
+    // The same directories `load_expanded_directories` would otherwise read on the UI thread.
+    let listing_options =
+        (!uses_provided_entries(props)).then_some((props.show_hidden, props.max_entries_per_dir));
+    let max_matches = props.explorer_max_matches;
+    link.command_keyed(
+        Arc::clone(&state.explorer_task_key),
+        TaskPolicy::LatestOnly,
+        move |link| {
+            let index = match source {
+                ExplorerSearchSource::Filesystem { cache, key } => cache.get_or_walk(key),
+                ExplorerSearchSource::Candidates { root, candidates } => {
+                    Arc::new(ExplorerIndex::from_candidates(
+                        &root,
+                        candidates.entries,
+                        candidates.provided_paths,
+                    ))
+                }
+            };
+            if link.is_cancelled() {
+                return;
+            }
+            let filter = index.search(query.as_ref(), max_matches);
+            let listings = listing_options
+                .map(|(show_hidden, max_entries)| {
+                    read_search_listings(&filter, show_hidden, max_entries)
+                })
+                .unwrap_or_default();
+            link.send(FileTreeMsg::ExplorerResultsReady {
+                query_id,
+                filter,
+                listings,
+            });
+        },
+    )
+}
+
+/// Where a search's entries come from.
+enum ExplorerSearchSource {
+    /// Walk the filesystem, or reuse the cached walk.
+    Filesystem {
+        cache: Arc<ExplorerIndexCache>,
+        key: ExplorerIndexKey,
+    },
+    /// Entries the tree already holds.
+    Candidates {
+        root: Arc<str>,
+        candidates: ExplorerSearchCandidates,
+    },
+}
+
+fn next_explorer_task_key() -> Arc<str> {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    Arc::from(format!("tui-lipan.file-tree.explorer.{id}"))
+}
+
+/// Read the directories a search's matches open, in path order so each parent precedes its
+/// children.
+fn read_search_listings(
+    filter: &ExplorerFilter,
+    show_hidden: bool,
+    max_entries_per_dir: usize,
+) -> Vec<(Arc<str>, DirectoryLoadResult)> {
+    let mut directories: Vec<&Arc<str>> = filter.expanded_paths.iter().collect();
+    directories.sort();
+    directories
+        .into_iter()
+        .map(|directory| {
+            let listing = read_directory(directory.as_ref(), show_hidden, max_entries_per_dir);
+            (directory.clone(), listing)
+        })
+        .collect()
+}
+
+/// Install the listings a search read into the expanded directories the tree has not loaded, in
+/// one pass down the tree. A directory already loaded keeps its own listing, which the watcher
+/// keeps current.
+fn apply_search_listings(
+    node: &mut FsNode,
+    listings: &mut HashMap<Arc<str>, DirectoryLoadResult>,
+    expanded: &HashSet<Arc<str>>,
+) {
+    if listings.is_empty() || !node.is_dir() || !expanded.contains(&node.path) {
+        return;
+    }
+    if !node.loaded
+        && let Some(listing) = listings.remove(&node.path)
+    {
+        apply_directory_load(node, listing);
+    }
+    for child in &mut node.children {
+        apply_search_listings(child, listings, expanded);
+    }
+}
+
+/// Drop the explorer's last walk, because what it walked may have changed.
+fn forget_explorer_index(state: &mut FileTreeState) {
+    state.explorer_index = Arc::default();
+}
+
+fn explorer_match_count_label(filter: &ExplorerFilter) -> String {
+    if filter.shown_count < filter.match_count {
+        format!("{}/{}", filter.shown_count, filter.match_count)
+    } else {
+        filter.match_count.to_string()
+    }
+}
+
+fn invalidate_explorer_query_for_entry_refresh(props: &FileTreeProps, state: &mut FileTreeState) {
+    forget_explorer_index(state);
+    if props.explorer && !state.explorer_input.text().trim().is_empty() {
+        state.explorer_query_id = state.explorer_query_id.saturating_add(1);
+        state.explorer_filter = ExplorerFilter::default();
+    }
+}
+
+fn restart_explorer_search(
+    props: &FileTreeProps,
+    state: &mut FileTreeState,
+    link: crate::callback::Link<FileTreeMsg>,
+) -> Option<Command> {
+    if !props.explorer || state.explorer_input.text().trim().is_empty() {
+        return None;
+    }
+
+    Some(start_explorer_search(props, state, link))
 }
 
 /// Learn where the tree's symlinks point, for the `link → target` suffix, and whether they resolve
@@ -3710,6 +3849,8 @@ mod tests {
             explorer_input: TextInput::new(""),
             explorer_query_id: 0,
             explorer_filter: ExplorerFilter::default(),
+            explorer_index: Arc::default(),
+            explorer_task_key: next_explorer_task_key(),
             explorer_entered_from_tree: false,
             explorer_focused: false,
             search_expanded_snapshot: None,
@@ -4949,6 +5090,277 @@ mod tests {
     }
 
     #[test]
+    fn explorer_results_install_worker_listings_and_replace_the_previous_expansion() {
+        let dir = unique_component_test_dir("explorer-results-listings");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::create_dir_all(dir.join("other")).unwrap();
+        std::fs::write(dir.join("src").join("on_disk.rs"), "").unwrap();
+        let root = dir.to_string_lossy().into_owned();
+        let mut runtime = file_tree_runtime(
+            crate::widgets::file_tree::FileTree::new(root.clone())
+                .explorer(true)
+                .props,
+        );
+        let root_path = runtime.ctx.state.root.path.clone();
+        let src: Arc<str> = Arc::from(format!("{root_path}/src"));
+        let other: Arc<str> = Arc::from(format!("{root_path}/other"));
+        let listed: Arc<str> = Arc::from(format!("{src}/only_in_listing.rs"));
+        runtime.ctx.state.explorer_input.set_text("listing");
+        runtime.ctx.state.search_expanded_snapshot = Some(runtime.ctx.state.expanded.clone());
+        runtime.ctx.state.explorer_query_id = 1;
+
+        // A listing the disk does not have shows the tree took the worker's copy instead of
+        // reading the directory itself.
+        let root_listing = read_directory(root_path.as_ref(), false, 2_000);
+        let src_listing = DirectoryLoadResult {
+            entries: vec![super::super::fs::LoadedEntry {
+                name: Arc::from("only_in_listing.rs"),
+                path: listed.clone(),
+                kind: FileKind::File,
+            }],
+            omitted: 0,
+            error: None,
+        };
+        runtime.component.update(
+            FileTreeMsg::ExplorerResultsReady {
+                query_id: 1,
+                filter: ExplorerFilter {
+                    visible_paths: [root_path.clone(), src.clone(), listed.clone()]
+                        .into_iter()
+                        .collect(),
+                    expanded_paths: [root_path.clone(), src.clone()].into_iter().collect(),
+                    match_count: 1,
+                    shown_count: 1,
+                    ..ExplorerFilter::default()
+                },
+                listings: vec![
+                    (root_path.clone(), root_listing),
+                    (src.clone(), src_listing),
+                ],
+            },
+            &mut runtime.ctx,
+        );
+        let src_node = node_by_path_mut(&mut runtime.ctx.state.root, &src).unwrap();
+        let names: Vec<&str> = src_node.children.iter().map(|c| c.name.as_ref()).collect();
+        assert_eq!(names, ["only_in_listing.rs"]);
+        assert!(runtime.ctx.state.expanded.contains(&src));
+
+        runtime.ctx.state.explorer_query_id = 2;
+        runtime.component.update(
+            FileTreeMsg::ExplorerResultsReady {
+                query_id: 2,
+                filter: ExplorerFilter {
+                    visible_paths: [root_path.clone(), other.clone()].into_iter().collect(),
+                    expanded_paths: [root_path.clone(), other.clone()].into_iter().collect(),
+                    match_count: 1,
+                    shown_count: 1,
+                    ..ExplorerFilter::default()
+                },
+                listings: Vec::new(),
+            },
+            &mut runtime.ctx,
+        );
+        assert!(!runtime.ctx.state.expanded.contains(&src));
+        assert!(runtime.ctx.state.expanded.contains(&other));
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn changed_ignore_rules_rerun_the_search_against_a_new_walk() {
+        let dir = unique_component_test_dir("explorer-ignore-rules");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("build.log"), "").unwrap();
+        let mut runtime = file_tree_runtime(
+            crate::widgets::file_tree::FileTree::new(dir.to_string_lossy().into_owned())
+                .explorer(true)
+                .props,
+        );
+        let search = |runtime: &mut RuntimeCore<FileTreeComponent>, command: Command| {
+            let ready = run_command_until(runtime, command, |message| {
+                matches!(message, FileTreeMsg::ExplorerResultsReady { .. })
+            })
+            .pop()
+            .unwrap();
+            runtime.component.update(ready, &mut runtime.ctx);
+            runtime.ctx.state.explorer_filter.match_count
+        };
+        let type_query = |runtime: &mut RuntimeCore<FileTreeComponent>, query: &str| {
+            runtime
+                .component
+                .update(
+                    FileTreeMsg::ExplorerQueryChanged(InputEvent {
+                        value: Arc::from(query),
+                        cursor: query.len(),
+                        anchor: None,
+                    }),
+                    &mut runtime.ctx,
+                )
+                .command
+                .expect("a query starts a search")
+        };
+
+        let command = type_query(&mut runtime, "build");
+        assert_eq!(search(&mut runtime, command), 1);
+
+        // Until the watcher reports the edit, later keystrokes filter the walk already taken.
+        std::fs::write(dir.join(".gitignore"), "*.log\n").unwrap();
+        let command = type_query(&mut runtime, "build.");
+        assert_eq!(search(&mut runtime, command), 1);
+
+        let walked = Arc::clone(&runtime.ctx.state.explorer_index);
+        let restart = runtime
+            .component
+            .update(FileTreeMsg::ExplorerIgnoreRulesChanged, &mut runtime.ctx);
+        assert!(!Arc::ptr_eq(&walked, &runtime.ctx.state.explorer_index));
+        let command = restart.command.expect("an active query searches again");
+        assert_eq!(search(&mut runtime, command), 0);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn changing_the_match_limit_reruns_an_active_search_over_the_same_walk() {
+        let dir = unique_component_test_dir("explorer-match-limit");
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["note_a.rs", "note_b.rs", "note_c.rs"] {
+            std::fs::write(dir.join(name), "").unwrap();
+        }
+        let props = |limit: usize| {
+            crate::widgets::file_tree::FileTree::new(dir.to_string_lossy().into_owned())
+                .explorer(true)
+                .explorer_max_matches(limit)
+                .props
+        };
+        let mut runtime = file_tree_runtime(props(3));
+        let ready = |runtime: &mut RuntimeCore<FileTreeComponent>, command: Command| {
+            let ready = run_command_until(runtime, command, |message| {
+                matches!(message, FileTreeMsg::ExplorerResultsReady { .. })
+            })
+            .pop()
+            .unwrap();
+            runtime.component.update(ready, &mut runtime.ctx);
+            let filter = &runtime.ctx.state.explorer_filter;
+            (filter.shown_count, filter.match_count)
+        };
+
+        let typed = runtime.component.update(
+            FileTreeMsg::ExplorerQueryChanged(InputEvent {
+                value: Arc::from("note"),
+                cursor: 4,
+                anchor: None,
+            }),
+            &mut runtime.ctx,
+        );
+        assert_eq!(ready(&mut runtime, typed.command.unwrap()), (3, 3));
+        let walked = Arc::clone(&runtime.ctx.state.explorer_index);
+
+        for (limit, shown) in [(1, 1), (3, 3)] {
+            replace_file_tree_props(&mut runtime, props(limit));
+            let rerun = collect_messages_until(&mut runtime, |message| {
+                matches!(message, FileTreeMsg::RerunExplorerSearch)
+            })
+            .pop()
+            .unwrap();
+            let rerun = runtime.component.update(rerun, &mut runtime.ctx);
+            assert_eq!(ready(&mut runtime, rerun.command.unwrap()), (shown, 3));
+            assert!(Arc::ptr_eq(&walked, &runtime.ctx.state.explorer_index));
+        }
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_reread_that_finds_nothing_new_keeps_the_explorer_walk() {
+        let dir = unique_component_test_dir("explorer-index-watch-reread");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("before.rs"), "").unwrap();
+        let mut runtime = file_tree_runtime(
+            crate::widgets::file_tree::FileTree::new(dir.to_string_lossy().into_owned())
+                .explorer(true)
+                .props,
+        );
+        let expanded = runtime.ctx.state.expanded.clone();
+        load_expanded_directories(&mut runtime.ctx.state, &runtime.ctx.props, expanded);
+        let reread = |runtime: &mut RuntimeCore<FileTreeComponent>| {
+            let root = runtime.ctx.state.root.path.clone();
+            let options = entry_refresh_options(&runtime.ctx.props);
+            let listing = read_directory(root.as_ref(), options.0, options.1);
+            let message = FileTreeMsg::WatchDirectoriesLoaded {
+                generation: runtime.ctx.state.watch.generation,
+                entry_generation: runtime.ctx.state.entry_refresh_generation,
+                root: root.clone(),
+                options,
+                results: vec![(root, listing)],
+            };
+            runtime.component.update(message, &mut runtime.ctx);
+        };
+
+        let walked = Arc::clone(&runtime.ctx.state.explorer_index);
+        reread(&mut runtime);
+        assert!(Arc::ptr_eq(&walked, &runtime.ctx.state.explorer_index));
+
+        std::fs::write(dir.join("after.rs"), "").unwrap();
+        reread(&mut runtime);
+        assert!(!Arc::ptr_eq(&walked, &runtime.ctx.state.explorer_index));
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn typing_a_query_searches_on_a_worker_and_shows_the_match() {
+        let dir = unique_component_test_dir("explorer-query-worker");
+        std::fs::create_dir_all(dir.join("src").join("nested")).unwrap();
+        std::fs::write(dir.join("src").join("nested").join("needle.rs"), "").unwrap();
+        std::fs::write(dir.join("other.rs"), "").unwrap();
+        let mut runtime = file_tree_runtime(
+            crate::widgets::file_tree::FileTree::new(dir.to_string_lossy().into_owned())
+                .explorer(true)
+                .props,
+        );
+        let root_path = runtime.ctx.state.root.path.clone();
+        let nested: Arc<str> = Arc::from(format!("{root_path}/src/nested"));
+
+        let typed = runtime.component.update(
+            FileTreeMsg::ExplorerQueryChanged(InputEvent {
+                value: Arc::from("needle"),
+                cursor: 6,
+                anchor: None,
+            }),
+            &mut runtime.ctx,
+        );
+        let ready = run_command_until(
+            &mut runtime,
+            typed.command.expect("a query starts a search"),
+            |message| matches!(message, FileTreeMsg::ExplorerResultsReady { .. }),
+        )
+        .pop()
+        .unwrap();
+        runtime.component.update(ready, &mut runtime.ctx);
+
+        assert_eq!(runtime.ctx.state.explorer_filter.match_count, 1);
+        assert!(runtime.ctx.state.expanded.contains(&nested));
+        let nested_node = node_by_path_mut(&mut runtime.ctx.state.root, &nested).unwrap();
+        assert!(nested_node.loaded);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn explorer_match_counter_shows_the_cap_only_when_it_applies() {
+        let filter = |match_count, shown_count| ExplorerFilter {
+            match_count,
+            shown_count,
+            ..ExplorerFilter::default()
+        };
+        assert_eq!(explorer_match_count_label(&filter(12, 12)), "12");
+        assert_eq!(
+            explorer_match_count_label(&filter(5_000, 1_000)),
+            "1000/5000"
+        );
+    }
+
+    #[test]
     fn active_explorer_refresh_preserves_then_remaps_selection() {
         let dir = unique_component_test_dir("entry-refresh-explorer-selection");
         std::fs::create_dir_all(&dir).unwrap();
@@ -4990,6 +5402,7 @@ mod tests {
             FileTreeMsg::ExplorerResultsReady {
                 query_id: 10,
                 filter: ExplorerFilter::default(),
+                listings: Vec::new(),
             },
             &mut runtime.ctx,
         );
@@ -5024,6 +5437,7 @@ mod tests {
                     .collect(),
                     ..ExplorerFilter::default()
                 },
+                listings: Vec::new(),
             },
             &mut runtime.ctx,
         );
@@ -5063,6 +5477,7 @@ mod tests {
                     visible_paths: [runtime.ctx.state.root.path.clone()].into_iter().collect(),
                     ..ExplorerFilter::default()
                 },
+                listings: Vec::new(),
             },
             &mut runtime.ctx,
         );
@@ -5490,6 +5905,32 @@ mod tests {
         let candidates = explorer_search_candidates(&hidden_props, &hidden_state).unwrap();
         assert_eq!(candidates.entries.len(), 1);
         assert_eq!(candidates.entries[0].label.as_ref(), "one.rs");
+    }
+
+    #[test]
+    fn a_capped_provided_listing_keeps_the_first_entries_in_display_order() {
+        let props = crate::widgets::file_tree::FileTree::new("/remote/repo")
+            .entry_source(FileTreeEntrySource::provided([
+                FileTreeDirectoryListing::new(
+                    ".",
+                    [
+                        super::super::FileTreeEntry::file("z.rs"),
+                        super::super::FileTreeEntry::file("a.rs"),
+                        super::super::FileTreeEntry::directory("src"),
+                    ],
+                ),
+            ]))
+            .max_entries_per_dir(2)
+            .props;
+
+        let (root, _) = initial_root(&props);
+        let names: Vec<&str> = root
+            .children
+            .iter()
+            .map(|child| child.name.as_ref())
+            .collect();
+
+        assert_eq!(names, ["src", "a.rs", "... 1 more entries"]);
     }
 
     /// The seed is expansion the tree adopts as its own, so it survives into the projection, loads
@@ -7102,6 +7543,8 @@ mod tests {
             explorer_input: TextInput::new(""),
             explorer_query_id: 0,
             explorer_filter: ExplorerFilter::default(),
+            explorer_index: Arc::default(),
+            explorer_task_key: next_explorer_task_key(),
             explorer_entered_from_tree: false,
             explorer_focused: false,
             search_expanded_snapshot: None,

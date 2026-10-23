@@ -100,6 +100,7 @@ pub(crate) struct FileTreeProps {
     pub(crate) empty_text_style: Style,
     pub(crate) empty_text_padding: Padding,
     pub(crate) explorer: bool,
+    pub(crate) explorer_max_matches: usize,
     pub(crate) tree_focus_key: Arc<str>,
     pub(crate) explorer_focus_key: Arc<str>,
     pub(crate) explorer_placeholder: Arc<str>,

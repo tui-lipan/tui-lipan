@@ -1,3 +1,5 @@
+use std::cmp::Ordering;
+use std::collections::BinaryHeap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -294,16 +296,15 @@ pub(crate) fn read_directory(
     show_hidden: bool,
     max_entries_per_dir: usize,
 ) -> DirectoryLoadResult {
-    let mut entries = Vec::new();
-    let mut omitted = 0usize;
+    let mut selection = DisplaySelection::new(max_entries_per_dir);
     let root = PathBuf::from(path);
 
     let read_dir = match fs::read_dir(&root) {
         Ok(read_dir) => read_dir,
         Err(err) => {
             return DirectoryLoadResult {
-                entries,
-                omitted,
+                entries: Vec::new(),
+                omitted: 0,
                 error: Some(err.to_string().into()),
             };
         }
@@ -325,11 +326,6 @@ pub(crate) fn read_directory(
             continue;
         };
 
-        if entries.len() >= max_entries_per_dir {
-            omitted = omitted.saturating_add(1);
-            continue;
-        }
-
         let kind = FileKind::from_file_type(&file_type);
         // The parent path is already canonical, so a child is built from it directly rather than
         // paying an `fs::canonicalize` syscall per entry.
@@ -340,30 +336,111 @@ pub(crate) fn read_directory(
         // one identity: a repository where `CLAUDE.md` links to `AGENTS.md` gets two rows claiming
         // to be `AGENTS.md`, so selecting one lands on the other. Git says the same thing: it
         // reports the link's own path, never the target's.
-        let child_path = Arc::<str>::from(root.join(name_str).to_string_lossy().as_ref());
-
-        entries.push(LoadedEntry {
+        selection.offer(kind, name_str, || LoadedEntry {
             name: Arc::from(name_str),
-            path: child_path,
+            path: Arc::<str>::from(root.join(name_str).to_string_lossy().as_ref()),
             kind,
         });
     }
 
-    entries.sort_by(|left, right| {
-        let left_dir = matches!(left.kind, FileKind::Directory);
-        let right_dir = matches!(right.kind, FileKind::Directory);
-        right_dir
-            .cmp(&left_dir)
-            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
-            .then_with(|| left.name.cmp(&right.name))
-    });
-
+    let (entries, omitted) = selection.finish();
     DirectoryLoadResult {
         entries,
         omitted,
         error: None,
     }
 }
+
+/// The order a directory's entries display in: directories first, then by name ignoring case,
+/// then by exact name.
+pub(crate) fn display_order(
+    left_kind: FileKind,
+    left_name: &str,
+    right_kind: FileKind,
+    right_name: &str,
+) -> Ordering {
+    let left_dir = left_kind == FileKind::Directory;
+    let right_dir = right_kind == FileKind::Directory;
+    right_dir
+        .cmp(&left_dir)
+        .then_with(|| {
+            let left = left_name.chars().flat_map(char::to_lowercase);
+            left.cmp(right_name.chars().flat_map(char::to_lowercase))
+        })
+        .then_with(|| left_name.cmp(right_name))
+}
+
+/// The first `cap` entries of a directory in display order, picked while scanning it.
+///
+/// A capped directory keeps its first entries in display order rather than whichever the source
+/// enumerated first, and explorer search relies on that to offer the same ones. Only the kept
+/// entries are held, so a huge directory costs memory for the cap alone, and an entry that cannot
+/// make the cut is never built.
+pub(crate) struct DisplaySelection {
+    cap: usize,
+    /// A max-heap, so the entry that would be dropped next is on top.
+    kept: BinaryHeap<Ranked>,
+    omitted: usize,
+}
+
+impl DisplaySelection {
+    pub(crate) fn new(cap: usize) -> Self {
+        Self {
+            cap,
+            kept: BinaryHeap::with_capacity(cap.min(1024)),
+            omitted: 0,
+        }
+    }
+
+    /// Consider one entry; `make` builds it only if it is kept.
+    pub(crate) fn offer(&mut self, kind: FileKind, name: &str, make: impl FnOnce() -> LoadedEntry) {
+        if self.kept.len() < self.cap {
+            self.kept.push(Ranked(make()));
+            return;
+        }
+        self.omitted = self.omitted.saturating_add(1);
+        let displaces_last = self
+            .kept
+            .peek()
+            .is_some_and(|last| display_order(kind, name, last.0.kind, &last.0.name).is_lt());
+        if displaces_last {
+            self.kept.pop();
+            self.kept.push(Ranked(make()));
+        }
+    }
+
+    /// The kept entries in display order, and how many were left out.
+    pub(crate) fn finish(self) -> (Vec<LoadedEntry>, usize) {
+        let entries = self
+            .kept
+            .into_sorted_vec()
+            .into_iter()
+            .map(|ranked| ranked.0);
+        (entries.collect(), self.omitted)
+    }
+}
+
+struct Ranked(LoadedEntry);
+
+impl Ord for Ranked {
+    fn cmp(&self, other: &Self) -> Ordering {
+        display_order(self.0.kind, &self.0.name, other.0.kind, &other.0.name)
+    }
+}
+
+impl PartialOrd for Ranked {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for Ranked {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other).is_eq()
+    }
+}
+
+impl Eq for Ranked {}
 
 pub(crate) fn normalize_path(path: &Path) -> Arc<str> {
     if let Ok(canonical) = canonicalize_plain(path) {
@@ -423,6 +500,87 @@ mod tests {
     /// CI that runs these. `SEPARATORS` itself is per-platform; this is the shape it takes there.
     const WINDOWS: &[char] = &['\\', '/'];
     const POSIX: &[char] = &['/'];
+
+    #[test]
+    fn a_bounded_selection_matches_sorting_everything_then_capping() {
+        use super::{DisplaySelection, FileKind, LoadedEntry, display_order};
+        use std::sync::Arc;
+
+        // A fixed scramble, so every order of arrival is exercised without a random source.
+        let names: Vec<(FileKind, String)> = (0..200u32)
+            .map(|i| (i * 73) % 200)
+            .map(|i| {
+                let kind = if i % 7 == 0 {
+                    FileKind::Directory
+                } else {
+                    FileKind::File
+                };
+                let name = if i % 3 == 0 {
+                    format!("Name{i:03}")
+                } else {
+                    format!("name{i:03}")
+                };
+                (kind, name)
+            })
+            .collect();
+        let mut reference = names.clone();
+        reference.sort_by(|(lk, ln), (rk, rn)| display_order(*lk, ln, *rk, rn));
+
+        for cap in [0, 1, 7, 199, 200, 500] {
+            let mut selection = DisplaySelection::new(cap);
+            let mut built = 0;
+            for (kind, name) in &names {
+                selection.offer(*kind, name, || {
+                    built += 1;
+                    LoadedEntry {
+                        name: Arc::from(name.as_str()),
+                        path: Arc::from(format!("/dir/{name}")),
+                        kind: *kind,
+                    }
+                });
+            }
+            let (kept, omitted) = selection.finish();
+            let kept: Vec<&str> = kept.iter().map(|entry| entry.name.as_ref()).collect();
+            let expected: Vec<&str> = reference
+                .iter()
+                .take(cap)
+                .map(|(_, name)| name.as_str())
+                .collect();
+            assert_eq!(kept, expected, "cap {cap}");
+            assert_eq!(omitted, names.len().saturating_sub(cap), "cap {cap}");
+            assert!(built <= names.len());
+        }
+    }
+
+    /// The cap keeps the first entries in display order, whatever order the filesystem lists them
+    /// in, so explorer search can offer exactly the entries the tree shows.
+    #[cfg(unix)]
+    #[test]
+    fn a_capped_listing_keeps_the_first_entries_in_display_order() {
+        let dir = std::env::temp_dir().join(format!(
+            "tui-lipan-file-tree-cap-order-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(dir.join("mm")).expect("temp dir");
+        for name in ["zz.rs", "Bb.rs", "aa.rs"] {
+            fs::write(dir.join(name), "").expect("file");
+        }
+
+        let listing = read_directory(&dir.to_string_lossy(), true, 2);
+        let names: Vec<&str> = listing
+            .entries
+            .iter()
+            .map(|entry| entry.name.as_ref())
+            .collect();
+
+        assert_eq!(names, ["mm", "aa.rs"]);
+        assert_eq!(listing.omitted, 2);
+        let _ = fs::remove_dir_all(dir);
+    }
 
     /// A symlink is a row of its own. Storing its target's path instead gave a repository where
     /// `CLAUDE.md` links to `AGENTS.md` two rows with one identity, and everything keyed by path -

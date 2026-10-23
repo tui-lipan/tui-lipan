@@ -444,6 +444,7 @@ impl FileTree {
                 empty_text_style: Style::default(),
                 empty_text_padding: Padding::default(),
                 explorer: false,
+                explorer_max_matches: explorer::DEFAULT_MAX_MATCHES,
                 tree_focus_key: TREE_INPUT_KEY.into(),
                 explorer_focus_key: EXPLORER_INPUT_KEY.into(),
                 explorer_placeholder: "Find files...".into(),
@@ -549,6 +550,9 @@ impl FileTree {
     }
 
     /// Set max number of children loaded per directory.
+    ///
+    /// A directory over the cap keeps its first entries in display order: directories first, then
+    /// by name.
     pub fn max_entries_per_dir(mut self, max_entries: usize) -> Self {
         self.props.max_entries_per_dir = max_entries.max(1);
         self
@@ -1025,6 +1029,16 @@ impl FileTree {
     /// Toggle explorer filter input above the tree.
     pub fn explorer(mut self, explorer: bool) -> Self {
         self.props.explorer = explorer;
+        self
+    }
+
+    /// Set how many matches an explorer query shows. Defaults to 1000.
+    ///
+    /// A query keeps its best-scoring matches, so a short one in a large tree still answers
+    /// quickly and lists the closest names. The input's counter reads `shown/total` when some
+    /// matches are left out. Values below 1 are treated as 1.
+    pub fn explorer_max_matches(mut self, max_matches: usize) -> Self {
+        self.props.explorer_max_matches = max_matches;
         self
     }
 

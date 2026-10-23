@@ -94,6 +94,8 @@ pub(crate) struct ChangeBatch {
     /// The repository metadata changed, or an entry appeared or vanished in the working tree, so
     /// the set of directories the repository watch must cover may have too.
     pub(crate) repository_changed: bool,
+    /// A file that decides what explorer search skips changed, such as a `.gitignore`.
+    pub(crate) ignore_rules_changed: bool,
 }
 
 pub(crate) type SharedPending = Arc<Mutex<PendingChanges>>;
@@ -134,6 +136,12 @@ impl PendingChanges {
         self.wake()
     }
 
+    /// Record that a file holding ignore rules changed.
+    pub(crate) fn record_ignore_rules(&mut self) -> bool {
+        self.batch.ignore_rules_changed = true;
+        self.wake()
+    }
+
     /// Take the batch and rearm the wake-up for the next change.
     pub(crate) fn take(&mut self) -> ChangeBatch {
         self.notified = false;
@@ -156,6 +164,8 @@ pub(crate) struct FlushPlan {
     pub(crate) rescan: bool,
     /// Whether the repository watch must re-resolve the directories it covers.
     pub(crate) repository_changed: bool,
+    /// Whether explorer search must walk again, because ignore rules changed or events were lost.
+    pub(crate) ignore_rules_changed: bool,
 }
 
 /// Sort a batch into listing rereads and a Git refresh.
@@ -168,6 +178,7 @@ pub(crate) fn plan_flush(batch: ChangeBatch, entry_dirs: &HashSet<Arc<str>>) -> 
         rescan: batch.rescan,
         git: batch.git || batch.rescan,
         repository_changed: batch.repository_changed,
+        ignore_rules_changed: batch.ignore_rules_changed || batch.rescan,
         ..FlushPlan::default()
     };
     for (dir, mask) in batch.dirs {
@@ -347,7 +358,17 @@ mod backend {
                             let Some(mask) = classify(&event.kind) else {
                                 return;
                             };
-                            pending.record(changed_directories(&event.paths, mask))
+                            let needs_wake =
+                                pending.record(changed_directories(&event.paths, mask));
+                            if event
+                                .paths
+                                .iter()
+                                .any(|path| holds_search_ignore_rules(path))
+                            {
+                                pending.record_ignore_rules() || needs_wake
+                            } else {
+                                needs_wake
+                            }
                         }
                         Err(_) => pending.record_rescan(),
                     };
@@ -426,10 +447,20 @@ mod backend {
                         }
                         Err(_) => true,
                     };
+                    let ignore_rules = match &result {
+                        Ok(event) => event
+                            .paths
+                            .iter()
+                            .any(|path| holds_search_ignore_rules(path)),
+                        Err(_) => false,
+                    };
                     let Ok(mut pending) = pending.lock() else {
                         return;
                     };
-                    let needs_wake = pending.record_git(repository_changed);
+                    let mut needs_wake = pending.record_git(repository_changed);
+                    if ignore_rules {
+                        needs_wake |= pending.record_ignore_rules();
+                    }
                     drop(pending);
                     if needs_wake {
                         wake();
@@ -505,6 +536,19 @@ mod backend {
     /// `info/exclude` needs no check here: its directory is a metadata directory.
     fn is_ignore_file(path: &Path) -> bool {
         path.file_name().is_some_and(|name| name == ".gitignore")
+    }
+
+    /// Whether `path` holds rules that explorer search reads to skip entries: a `.gitignore` or
+    /// `.ignore` file, or the repository's `info/exclude`.
+    fn holds_search_ignore_rules(path: &Path) -> bool {
+        match path.file_name().and_then(|name| name.to_str()) {
+            Some(".gitignore" | ".ignore") => true,
+            Some("exclude") => path
+                .parent()
+                .and_then(Path::file_name)
+                .is_some_and(|name| name == "info"),
+            _ => false,
+        }
     }
 
     /// The directories an event touches: each path's parent, and the path itself in case it is a
@@ -629,6 +673,44 @@ mod backend {
             let _ = std::fs::remove_dir_all(dir);
         }
 
+        #[test]
+        fn editing_ignore_rules_in_a_watched_directory_is_flagged() {
+            let dir = unique_dir("ignore-rules");
+            std::fs::write(dir.join(".ignore"), "").unwrap();
+            let dir_key: Arc<str> = Arc::from(dir.to_string_lossy().as_ref());
+            let pending = SharedPending::default();
+            let (tx, rx) = std::sync::mpsc::channel();
+            let session = WatchSession::start(pending.clone(), move || {
+                let _ = tx.send(());
+            })
+            .unwrap();
+            assert!(session.watch(&dir_key));
+
+            std::fs::write(dir.join("plain.rs"), "").unwrap();
+            wait_for_batch(&pending, &rx, |batch| {
+                !batch.ignore_rules_changed && batch.dirs.contains_key(&dir_key)
+            });
+
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            pending.lock().unwrap().take();
+            std::fs::write(dir.join(".ignore"), "*.log\n").unwrap();
+            wait_for_batch(&pending, &rx, |batch| batch.ignore_rules_changed);
+
+            drop(session);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[test]
+        fn ignore_rule_files_are_recognized() {
+            assert!(holds_search_ignore_rules(Path::new("/repo/.gitignore")));
+            assert!(holds_search_ignore_rules(Path::new("/repo/src/.ignore")));
+            assert!(holds_search_ignore_rules(Path::new(
+                "/repo/.git/info/exclude"
+            )));
+            assert!(!holds_search_ignore_rules(Path::new("/repo/exclude")));
+            assert!(!holds_search_ignore_rules(Path::new("/repo/src/main.rs")));
+        }
+
         #[cfg(unix)]
         #[test]
         fn making_a_file_executable_is_reported_as_a_change() {
@@ -679,7 +761,10 @@ mod backend {
 
             std::fs::write(collapsed.join("main.rs"), "fn main() {}\n").unwrap();
             wait_for_batch(&pending, &rx, |batch| {
-                batch.git && !batch.repository_changed && batch.dirs.is_empty()
+                batch.git
+                    && !batch.repository_changed
+                    && !batch.ignore_rules_changed
+                    && batch.dirs.is_empty()
             });
 
             std::fs::write(metadata.join("index"), "").unwrap();
@@ -694,7 +779,9 @@ mod backend {
             std::thread::sleep(std::time::Duration::from_millis(200));
             pending.lock().unwrap().take();
             std::fs::write(dir.join(".gitignore"), "").unwrap();
-            wait_for_batch(&pending, &rx, |batch| batch.git && batch.repository_changed);
+            wait_for_batch(&pending, &rx, |batch| {
+                batch.git && batch.repository_changed && batch.ignore_rules_changed
+            });
 
             drop(repository);
             let _ = std::fs::remove_dir_all(dir);
@@ -813,8 +900,24 @@ mod tests {
                 git: true,
                 rescan: false,
                 repository_changed: false,
+                ignore_rules_changed: false,
             }
         );
+    }
+
+    #[test]
+    fn lost_events_or_new_ignore_rules_make_explorer_search_walk_again() {
+        let rules = ChangeBatch {
+            ignore_rules_changed: true,
+            ..ChangeBatch::default()
+        };
+        assert!(plan_flush(rules, &set(&["/repo"])).ignore_rules_changed);
+        let lost = ChangeBatch {
+            rescan: true,
+            ..ChangeBatch::default()
+        };
+        assert!(plan_flush(lost, &set(&["/repo"])).ignore_rules_changed);
+        assert!(!plan_flush(ChangeBatch::default(), &set(&["/repo"])).ignore_rules_changed);
     }
 
     #[test]
