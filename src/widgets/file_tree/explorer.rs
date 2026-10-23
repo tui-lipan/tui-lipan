@@ -9,6 +9,8 @@ use nucleo::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo::{Config, Matcher, Utf32String};
 
 use super::fs::normalize_path;
+#[cfg(not(target_arch = "wasm32"))]
+use super::fs::read_directory;
 use super::provided_path::ProvidedPath;
 
 /// How many matches an explorer query shows unless the application sets
@@ -304,14 +306,22 @@ fn collect_entries(
     walker.follow_links(false);
     walker.threads(walk_threads());
 
-    let found = Mutex::new(Vec::new());
+    let walked = Mutex::new(Walked::default());
     walker.build_parallel().visit(&mut CollectorBuilder {
         root,
-        found: &found,
+        max_entries_per_dir,
+        walked: &walked,
     });
-    let mut entries = found.into_inner().unwrap_or_default();
+    let walked = walked.into_inner().unwrap_or_default();
+    let mut entries = walked.entries;
     entries.sort_by(|left: &ExplorerCandidate, right| left.path.cmp(&right.path));
-    cap_entries_per_dir(entries, root, max_entries_per_dir)
+    keep_loadable_entries(
+        entries,
+        walked.oversized,
+        root,
+        show_hidden,
+        max_entries_per_dir,
+    )
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -321,10 +331,20 @@ fn walk_threads() -> usize {
         .unwrap_or(2)
 }
 
+/// What the walker threads found.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct Walked {
+    entries: Vec<ExplorerCandidate>,
+    /// Directories holding more entries than the cap, ignored ones included.
+    oversized: Vec<PathBuf>,
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 struct CollectorBuilder<'a> {
     root: &'a Path,
-    found: &'a Mutex<Vec<ExplorerCandidate>>,
+    max_entries_per_dir: usize,
+    walked: &'a Mutex<Walked>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -332,18 +352,20 @@ impl<'a> ParallelVisitorBuilder<'a> for CollectorBuilder<'a> {
     fn build(&mut self) -> Box<dyn ParallelVisitor + 'a> {
         Box::new(Collector {
             root: self.root,
-            found: self.found,
-            entries: Vec::new(),
+            max_entries_per_dir: self.max_entries_per_dir,
+            walked: self.walked,
+            local: Walked::default(),
         })
     }
 }
 
-/// One walker thread's entries, handed over once when the thread finishes.
+/// One walker thread's findings, handed over once when the thread finishes.
 #[cfg(not(target_arch = "wasm32"))]
 struct Collector<'a> {
     root: &'a Path,
-    found: &'a Mutex<Vec<ExplorerCandidate>>,
-    entries: Vec<ExplorerCandidate>,
+    max_entries_per_dir: usize,
+    walked: &'a Mutex<Walked>,
+    local: Walked,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -353,16 +375,28 @@ impl ParallelVisitor for Collector<'_> {
             return WalkState::Continue;
         };
         let path = entry.path();
+        let Some(file_type) = entry.file_type() else {
+            return WalkState::Continue;
+        };
+        // The walker never yields ignored entries, but the tree lists them and they count toward
+        // its cap, so a directory is measured on disk. Only a count past the cap matters.
+        if file_type.is_dir()
+            && std::fs::read_dir(path).is_ok_and(|children| {
+                children
+                    .take(self.max_entries_per_dir.saturating_add(1))
+                    .count()
+                    > self.max_entries_per_dir
+            })
+        {
+            self.local.oversized.push(path.to_path_buf());
+        }
         if path == self.root {
             return WalkState::Continue;
         }
-        let (Some(file_type), Some(name)) = (
-            entry.file_type(),
-            path.file_name().and_then(|name| name.to_str()),
-        ) else {
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
             return WalkState::Continue;
         };
-        self.entries.push(ExplorerCandidate {
+        self.local.entries.push(ExplorerCandidate {
             path: Arc::from(path.to_string_lossy().as_ref()),
             label: Arc::from(name),
             is_dir: file_type.is_dir(),
@@ -374,43 +408,60 @@ impl ParallelVisitor for Collector<'_> {
 #[cfg(not(target_arch = "wasm32"))]
 impl Drop for Collector<'_> {
     fn drop(&mut self) {
-        if let Ok(mut found) = self.found.lock() {
-            found.append(&mut self.entries);
+        if let Ok(mut walked) = self.walked.lock() {
+            walked.entries.append(&mut self.local.entries);
+            walked.oversized.append(&mut self.local.oversized);
         }
     }
 }
 
-/// Keep the first `max_entries_per_dir` children of each directory, by name, and drop everything
-/// beneath a directory that did not make the cut. `entries` must be in path order, which puts each
-/// directory before its descendants.
+/// Keep only entries the tree can show. In a directory over the cap, that is what the tree's own
+/// listing keeps, and nothing beneath a directory it leaves out. `entries` must be in path order,
+/// which puts each directory before its descendants.
 #[cfg(not(target_arch = "wasm32"))]
-fn cap_entries_per_dir(
+fn keep_loadable_entries(
     entries: Vec<ExplorerCandidate>,
+    oversized: Vec<PathBuf>,
     root: &Path,
+    show_hidden: bool,
     max_entries_per_dir: usize,
 ) -> Vec<ExplorerCandidate> {
-    let mut per_dir: HashMap<PathBuf, usize> = HashMap::new();
-    let mut capped_dirs: HashSet<PathBuf> = HashSet::new();
-    let mut kept = Vec::with_capacity(entries.len());
-    for entry in entries {
-        let path = Path::new(entry.path.as_ref());
-        if !capped_dirs.is_empty() && is_under_capped_directory(path, &capped_dirs, root) {
-            continue;
-        }
-        let Some(parent) = path.parent() else {
-            continue;
-        };
-        let count = per_dir.entry(parent.to_path_buf()).or_insert(0);
-        if *count >= max_entries_per_dir {
-            if entry.is_dir {
-                capped_dirs.insert(path.to_path_buf());
-            }
-            continue;
-        }
-        *count += 1;
-        kept.push(entry);
+    let listed: HashMap<PathBuf, HashSet<Arc<str>>> = oversized
+        .into_iter()
+        .filter_map(|dir| {
+            let listing = read_directory(&dir.to_string_lossy(), show_hidden, max_entries_per_dir);
+            (listing.omitted > 0).then(|| {
+                let kept = listing
+                    .entries
+                    .into_iter()
+                    .map(|entry| entry.path)
+                    .collect();
+                (dir, kept)
+            })
+        })
+        .collect();
+    if listed.is_empty() {
+        return entries;
     }
-    kept
+
+    let mut left_out: HashSet<PathBuf> = HashSet::new();
+    entries
+        .into_iter()
+        .filter(|entry| {
+            let path = Path::new(entry.path.as_ref());
+            if !left_out.is_empty() && is_under_capped_directory(path, &left_out, root) {
+                return false;
+            }
+            let kept = path
+                .parent()
+                .and_then(|parent| listed.get(parent))
+                .is_none_or(|kept| kept.contains(&entry.path));
+            if !kept && entry.is_dir {
+                left_out.insert(path.to_path_buf());
+            }
+            kept
+        })
+        .collect()
 }
 
 fn entry_directory_path(
@@ -735,8 +786,8 @@ mod tests {
     }
 
     #[test]
-    fn walk_caps_each_directory_by_name_and_skips_what_it_left_out() {
-        let root = unique_test_dir("walk_caps_each_directory_by_name");
+    fn walk_keeps_what_the_tree_lists_in_a_capped_directory() {
+        let root = unique_test_dir("walk_keeps_what_the_tree_lists");
         fs::create_dir_all(root.join("b_dir")).expect("create b_dir");
         fs::write(root.join("b_dir").join("inner.rs"), "").expect("write inner");
         fs::write(root.join("a.rs"), "").expect("write a");
@@ -746,9 +797,58 @@ mod tests {
         let entries = collect_entries(Path::new(canonical.as_ref()), true, 1);
         let paths: Vec<&str> = entries.iter().map(|entry| entry.path.as_ref()).collect();
 
-        assert_eq!(paths, [format!("{canonical}/a.rs").as_str()]);
+        // The tree lists directories first, so with room for one entry it shows `b_dir`.
+        assert_eq!(
+            paths,
+            [
+                format!("{canonical}/b_dir").as_str(),
+                format!("{canonical}/b_dir/inner.rs").as_str()
+            ]
+        );
+        assert_searchable_entries_are_loadable(&entries, true, 1);
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn ignored_entries_take_the_tree_slots_they_fill() {
+        let root = unique_test_dir("ignored_entries_take_tree_slots");
+        fs::create_dir_all(&root).expect("create root");
+        fs::write(root.join(".gitignore"), "*.log\n").expect("write gitignore");
+        fs::write(root.join("a.log"), "").expect("write a.log");
+        fs::write(root.join("b.log"), "").expect("write b.log");
+        fs::write(root.join("z.rs"), "").expect("write z.rs");
+
+        let canonical = normalize_path(&root);
+        // The tree shows the two ignored logs and leaves `z.rs` out, so search cannot offer it.
+        let entries = collect_entries(Path::new(canonical.as_ref()), false, 2);
+        assert!(entries.is_empty(), "{entries:?}");
+
+        let entries = collect_entries(Path::new(canonical.as_ref()), false, 3);
+        assert_eq!(entries.len(), 1);
+        assert_searchable_entries_are_loadable(&entries, false, 3);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    fn assert_searchable_entries_are_loadable(
+        entries: &[ExplorerCandidate],
+        show_hidden: bool,
+        max_entries_per_dir: usize,
+    ) {
+        for entry in entries {
+            let parent = Path::new(entry.path.as_ref()).parent().expect("parent");
+            let listing =
+                read_directory(&parent.to_string_lossy(), show_hidden, max_entries_per_dir);
+            assert!(
+                listing
+                    .entries
+                    .iter()
+                    .any(|listed| listed.path == entry.path),
+                "{} is searchable but the tree cannot list it",
+                entry.path
+            );
+        }
     }
 
     #[cfg(unix)]

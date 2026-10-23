@@ -119,6 +119,8 @@ pub(crate) enum FileTreeMsg {
         /// Listings of the directories the matches open, read on the search's worker.
         listings: Vec<(Arc<str>, DirectoryLoadResult)>,
     },
+    /// A file holding ignore rules changed, so the explorer's walk no longer matches them.
+    ExplorerIgnoreRulesChanged,
     RequestEntryRefresh(u64),
     EntryRefreshLoaded(LocalEntryRefreshResult),
     RequestGitRefresh(u64),
@@ -743,6 +745,11 @@ fn update_file_tree(msg: FileTreeMsg, ctx: &mut Context<FileTreeComponent>) -> U
             normalize_uncontrolled_selection(&ctx.props, &mut ctx.state);
             Update::full()
         }
+        FileTreeMsg::ExplorerIgnoreRulesChanged => {
+            forget_explorer_index(&mut ctx.state);
+            let link = ctx.link().clone();
+            Update::with_command(restart_explorer_search(&ctx.props, &mut ctx.state, link))
+        }
         FileTreeMsg::RequestEntryRefresh(token) => {
             let options = entry_refresh_options(&ctx.props);
             if !uses_local_entries(&ctx.props) || token != ctx.props.entry_refresh_token {
@@ -790,8 +797,7 @@ fn update_file_tree(msg: FileTreeMsg, ctx: &mut Context<FileTreeComponent>) -> U
                     generation: ctx.state.watch.generation,
                 });
             }
-            let command =
-                restart_explorer_search_after_entry_refresh(&ctx.props, &mut ctx.state, link);
+            let command = restart_explorer_search(&ctx.props, &mut ctx.state, link);
             Update::with_command(command)
         }
         FileTreeMsg::TreeFocusChanged(focused) => {
@@ -2007,6 +2013,9 @@ fn watch_flush(ctx: &mut Context<FileTreeComponent>, generation: u64) -> Update 
         ctx.link()
             .send(FileTreeMsg::RepositoryWatchResolve { generation });
     }
+    if plan.ignore_rules_changed {
+        ctx.link().send(FileTreeMsg::ExplorerIgnoreRulesChanged);
+    }
     if plan.rescan {
         ctx.state.watch.dirty.extend(entry_dirs);
     } else {
@@ -2306,7 +2315,7 @@ fn invalidate_explorer_query_for_entry_refresh(props: &FileTreeProps, state: &mu
     }
 }
 
-fn restart_explorer_search_after_entry_refresh(
+fn restart_explorer_search(
     props: &FileTreeProps,
     state: &mut FileTreeState,
     link: crate::callback::Link<FileTreeMsg>,
@@ -5153,6 +5162,59 @@ mod tests {
         );
         assert!(!runtime.ctx.state.expanded.contains(&src));
         assert!(runtime.ctx.state.expanded.contains(&other));
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn changed_ignore_rules_rerun_the_search_against_a_new_walk() {
+        let dir = unique_component_test_dir("explorer-ignore-rules");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("build.log"), "").unwrap();
+        let mut runtime = file_tree_runtime(
+            crate::widgets::file_tree::FileTree::new(dir.to_string_lossy().into_owned())
+                .explorer(true)
+                .props,
+        );
+        let search = |runtime: &mut RuntimeCore<FileTreeComponent>, command: Command| {
+            let ready = run_command_until(runtime, command, |message| {
+                matches!(message, FileTreeMsg::ExplorerResultsReady { .. })
+            })
+            .pop()
+            .unwrap();
+            runtime.component.update(ready, &mut runtime.ctx);
+            runtime.ctx.state.explorer_filter.match_count
+        };
+        let type_query = |runtime: &mut RuntimeCore<FileTreeComponent>, query: &str| {
+            runtime
+                .component
+                .update(
+                    FileTreeMsg::ExplorerQueryChanged(InputEvent {
+                        value: Arc::from(query),
+                        cursor: query.len(),
+                        anchor: None,
+                    }),
+                    &mut runtime.ctx,
+                )
+                .command
+                .expect("a query starts a search")
+        };
+
+        let command = type_query(&mut runtime, "build");
+        assert_eq!(search(&mut runtime, command), 1);
+
+        // Until the watcher reports the edit, later keystrokes filter the walk already taken.
+        std::fs::write(dir.join(".gitignore"), "*.log\n").unwrap();
+        let command = type_query(&mut runtime, "build.");
+        assert_eq!(search(&mut runtime, command), 1);
+
+        let walked = Arc::clone(&runtime.ctx.state.explorer_index);
+        let restart = runtime
+            .component
+            .update(FileTreeMsg::ExplorerIgnoreRulesChanged, &mut runtime.ctx);
+        assert!(!Arc::ptr_eq(&walked, &runtime.ctx.state.explorer_index));
+        let command = restart.command.expect("an active query searches again");
+        assert_eq!(search(&mut runtime, command), 0);
 
         let _ = std::fs::remove_dir_all(dir);
     }

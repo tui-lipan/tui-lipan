@@ -550,6 +550,9 @@ impl FileTree {
     }
 
     /// Set max number of children loaded per directory.
+    ///
+    /// A directory over the cap keeps its first entries in display order: directories first, then
+    /// by name.
     pub fn max_entries_per_dir(mut self, max_entries: usize) -> Self {
         self.props.max_entries_per_dir = max_entries.max(1);
         self

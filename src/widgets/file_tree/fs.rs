@@ -295,7 +295,6 @@ pub(crate) fn read_directory(
     max_entries_per_dir: usize,
 ) -> DirectoryLoadResult {
     let mut entries = Vec::new();
-    let mut omitted = 0usize;
     let root = PathBuf::from(path);
 
     let read_dir = match fs::read_dir(&root) {
@@ -303,7 +302,7 @@ pub(crate) fn read_directory(
         Err(err) => {
             return DirectoryLoadResult {
                 entries,
-                omitted,
+                omitted: 0,
                 error: Some(err.to_string().into()),
             };
         }
@@ -324,11 +323,6 @@ pub(crate) fn read_directory(
         let Ok(file_type) = child.file_type() else {
             continue;
         };
-
-        if entries.len() >= max_entries_per_dir {
-            omitted = omitted.saturating_add(1);
-            continue;
-        }
 
         let kind = FileKind::from_file_type(&file_type);
         // The parent path is already canonical, so a child is built from it directly rather than
@@ -357,6 +351,10 @@ pub(crate) fn read_directory(
             .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
             .then_with(|| left.name.cmp(&right.name))
     });
+    // Capped after sorting, so the kept entries are the first in display order rather than
+    // whichever the filesystem enumerated first. Explorer search keeps the same ones.
+    let omitted = entries.len().saturating_sub(max_entries_per_dir);
+    entries.truncate(max_entries_per_dir);
 
     DirectoryLoadResult {
         entries,
@@ -423,6 +421,36 @@ mod tests {
     /// CI that runs these. `SEPARATORS` itself is per-platform; this is the shape it takes there.
     const WINDOWS: &[char] = &['\\', '/'];
     const POSIX: &[char] = &['/'];
+
+    /// The cap keeps the first entries in display order, whatever order the filesystem lists them
+    /// in, so explorer search can offer exactly the entries the tree shows.
+    #[cfg(unix)]
+    #[test]
+    fn a_capped_listing_keeps_the_first_entries_in_display_order() {
+        let dir = std::env::temp_dir().join(format!(
+            "tui-lipan-file-tree-cap-order-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(dir.join("mm")).expect("temp dir");
+        for name in ["zz.rs", "Bb.rs", "aa.rs"] {
+            fs::write(dir.join(name), "").expect("file");
+        }
+
+        let listing = read_directory(&dir.to_string_lossy(), true, 2);
+        let names: Vec<&str> = listing
+            .entries
+            .iter()
+            .map(|entry| entry.name.as_ref())
+            .collect();
+
+        assert_eq!(names, ["mm", "aa.rs"]);
+        assert_eq!(listing.omitted, 2);
+        let _ = fs::remove_dir_all(dir);
+    }
 
     /// A symlink is a row of its own. Storing its target's path instead gave a repository where
     /// `CLAUDE.md` links to `AGENTS.md` two rows with one identity, and everything keyed by path -

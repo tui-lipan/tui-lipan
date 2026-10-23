@@ -634,7 +634,7 @@ entries and git-backed or application-provided change projections.
 | `entry_refresh_token` | `u64` | Re-read local root and currently expanded directories when the token changes; ignored for provided entries |
 | `refresh_policy` | `FileTreeRefreshPolicy` | How local entries notice filesystem changes: `Manual` (default, tokens only), `Polling(Duration)`, or `Watch` |
 | `show_hidden` | `bool` | Show hidden files (`.` prefix) |
-| `max_entries_per_dir` | `usize` | Cap entries per directory |
+| `max_entries_per_dir` | `usize` | Cap entries per directory, keeping the first in display order |
 | `show_icons` | `bool` | Show file and directory icons independently of arrows (default: true) |
 | `show_arrows` | `bool` | Show directory expansion arrows independently of icons (default: true) |
 | `expanded_arrow` | `impl Into<Arc<str>>` | Expanded-directory arrow (default: `▼`) |
@@ -787,9 +787,13 @@ Plus all `Tree` styling/scrolling props, including `indent_style` and `scrollbar
   statistics receive no trailing padding.
 - Filesystem fuzzy matching respects `.gitignore`/`.ignore` rules.
 - Explorer search runs in a background command. The first keystroke walks the root once; later
-  keystrokes filter that walk, so typing stays fast in large trees. The walk is taken again when a
-  watched directory's entries change, on an entry refresh, and for each new search. A change in a
-  directory the tree is not watching shows up in the next search.
+  keystrokes filter that walk, so typing stays fast in large trees. The walk is taken again, and an
+  active query reruns, when a watched directory's entries change or a watched `.gitignore`,
+  `.ignore`, or `info/exclude` changes. An entry refresh and each new search also walk again. A
+  change the tree does not watch, including any change under `FileTreeRefreshPolicy::Manual`,
+  shows up in the next search.
+- Search offers only entries the tree can show: in a directory over `max_entries_per_dir`, it
+  matches the same entries the tree lists, ignored ones counting toward the cap.
 - A query matches entry names, and paths below the root unless it contains a `.` without a path
   separator. The root's own path never takes part, so a query that spells part of it does not
   match every entry. A name match ranks above a match that needs the directories above it.
