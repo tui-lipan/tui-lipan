@@ -23,6 +23,7 @@ An update's refresh level determines how much of the UI pipeline runs:
 | `Update::none()` | Only non-visual metadata changed, or a widget already updated its runtime-owned visual state |
 | `Update::terminal_paint()` | A live `Terminal` screen is the only thing that looks different |
 | `Update::paint()` | The realized tree only needs repainting; no `view()` output or layout changed |
+| `Update::paint_with_command(cmd)` | Repaint the existing tree and start work without rebuilding view or layout |
 | `Update::layout()` | The emitting component's subtree changed |
 | `Update::layout_with_command(cmd)` | The local subtree changed and background work must start |
 | `Update::full()` | Root composition or another component scope depends on the change |

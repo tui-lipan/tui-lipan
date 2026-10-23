@@ -310,10 +310,10 @@ pub use crate::widgets::{QrCode, QrEcc, QrRender};
 pub use crate::widgets::TerminalPtyHandoff;
 #[cfg(feature = "terminal")]
 pub use crate::widgets::{
-    CopyModeAction, CopyModeGrid, KittyKeyboardFlags, MouseEncoding, MouseMode, MouseModeState,
-    TerminalCellSize, TerminalColorPalette, TerminalCopyMode, TerminalDecoration, TerminalKeyModes,
-    TerminalPasteEvent, TerminalPasteShortcutBehavior, TerminalRenderSnapshot,
-    terminal_selection_text,
+    CopyModeAction, CopyModeGrid, ForwardedMouseEvent, KittyKeyboardFlags, MouseEncoding,
+    MouseMode, MouseModeState, TerminalCellSize, TerminalColorPalette, TerminalCopyMode,
+    TerminalDecoration, TerminalKeyModes, TerminalPasteEvent, TerminalPasteShortcutBehavior,
+    TerminalRenderSnapshot, terminal_selection_text,
 };
 #[cfg(feature = "terminal-images")]
 pub use crate::widgets::{

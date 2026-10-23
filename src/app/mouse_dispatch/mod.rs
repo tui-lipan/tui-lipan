@@ -983,7 +983,7 @@ impl<C: Component> MouseDispatchCtx<C> for TestBackend<C> {
                 emit_bubbling_mouse_down(&self.core.tree, plan.hit, mouse);
                 return true;
             }
-            plan.callback.emit(plan.bytes);
+            plan.emit(1);
             true
         }
         #[cfg(not(feature = "terminal"))]

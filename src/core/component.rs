@@ -167,6 +167,7 @@ impl Command {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct CommandRuntime {
     pub(crate) scope: ScopeId,
     pub(crate) tx: CommandTx,
@@ -180,6 +181,15 @@ pub(crate) struct CommandRuntime {
     pub(crate) clock: crate::core::runtime_env::SessionClock,
     /// Per-runtime accounting for background work.
     pub(crate) activity: Arc<crate::core::runtime_env::RuntimeActivity>,
+}
+
+struct MergedCommands(Command, Command);
+
+impl CommandAction for MergedCommands {
+    fn run(self: Box<Self>, runtime: CommandRuntime) {
+        self.0.run(runtime.clone());
+        self.1.run(runtime);
+    }
 }
 
 /// Identity of one runtime within the process.
@@ -385,7 +395,7 @@ impl<Msg: 'static> Link<Msg> {
 /// difference between [`Paint`](Self::Paint) and [`Full`](Self::Full) on a message that fires per
 /// keystroke or per chunk of streamed output is the difference between a repaint and rebuilding the
 /// whole window.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub enum UpdateLevel {
     /// Nothing changed; no frame.
     #[default]
@@ -457,6 +467,46 @@ impl Update {
             dirty: true,
             level: UpdateLevel::Paint,
             command: None,
+        }
+    }
+
+    /// Repaint the existing tree and optionally run a command, without rebuilding the view.
+    /// Commands that change view or layout inputs must send a message requesting that work.
+    pub fn paint_with_command(command: impl Into<Option<Command>>) -> Self {
+        Self {
+            command: command.into(),
+            ..Self::paint()
+        }
+    }
+
+    /// Combine updates, keeping the strongest refresh and every command.
+    /// Commands are submitted in left-to-right order, in the same component scope.
+    /// Background tasks may complete in any order.
+    ///
+    /// A command widens terminal-only refreshes to `Paint`: arbitrary command effects cannot
+    /// promise that only terminal damage changed. No view or layout work is implied.
+    pub fn merge(self, other: Self) -> Self {
+        let level = self.level.max(other.level);
+        let command = match (self.command, other.command) {
+            (Some(left), Some(right)) => Some(Command {
+                action: Box::new(MergedCommands(left, right)),
+            }),
+            (left, right) => left.or(right),
+        };
+        #[cfg(feature = "terminal")]
+        let level = if command.is_some()
+            && matches!(
+                level,
+                UpdateLevel::TerminalGraphics | UpdateLevel::TerminalPaint
+            ) {
+            UpdateLevel::Paint
+        } else {
+            level
+        };
+        Self {
+            dirty: self.dirty || other.dirty,
+            level,
+            command,
         }
     }
 
@@ -1653,6 +1703,49 @@ impl<C: Component> Context<C> {
         let key = self.animation_key(key);
         self.env.note_memo_dependency(MemoDependency::Transition);
         self.env.animations.transition(key, target, config)
+    }
+
+    /// Restart timing from the current value toward `target`, even when the target is unchanged.
+    /// Call once for a lifecycle event, then use the ordinary transition/animated methods to read.
+    /// This does not turn a render-resolved animation into a view-resolved one.
+    /// Panics if this key already holds a different value type.
+    pub fn restart_transition<T: crate::animation::Lerp + PartialEq + 'static>(
+        &self,
+        key: impl Into<Key>,
+        target: T,
+        config: crate::animation::TransitionConfig,
+    ) {
+        self.env
+            .animations
+            .restart_transition(self.animation_key(key), None, target, config);
+    }
+
+    /// Seed the current value and restart timing toward `target`, including for a new key.
+    /// Call once at a handoff, rather than on every view. Existing render handles remain valid.
+    /// Panics if this key already holds a different value type.
+    pub fn restart_transition_from<T: crate::animation::Lerp + PartialEq + 'static>(
+        &self,
+        key: impl Into<Key>,
+        from: T,
+        target: T,
+        config: crate::animation::TransitionConfig,
+    ) {
+        self.env
+            .animations
+            .restart_transition(self.animation_key(key), Some(from), target, config);
+    }
+
+    /// Set both current value and target immediately, cancelling any transition or pulse.
+    /// Unlike an ordinary zero-duration request, this also snaps an unchanged target.
+    /// Panics if this key already holds a different value type.
+    pub fn snap_transition<T: crate::animation::Lerp + PartialEq + 'static>(
+        &self,
+        key: impl Into<Key>,
+        value: T,
+    ) {
+        self.env
+            .animations
+            .snap_transition(self.animation_key(key), value);
     }
 
     /// Transition a colour that only ever feeds a style, as a [`Paint`] the renderer resolves.

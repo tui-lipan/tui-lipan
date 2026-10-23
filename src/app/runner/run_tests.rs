@@ -11278,3 +11278,167 @@ mod terminal_attachment_paste {
         assert_eq!(errors.borrow().len(), 1);
     }
 }
+
+#[cfg(feature = "terminal")]
+mod structured_mouse_contract_tests {
+    use super::*;
+    use crate::{ForwardedMouseEvent, MouseEncoding, MouseMode, MouseModeState};
+
+    #[derive(Clone)]
+    struct Probe {
+        mode: MouseModeState,
+        forwarded: Rc<RefCell<Vec<ForwardedMouseEvent>>>,
+    }
+
+    impl Component for Probe {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+        fn create_state(&self, _: &()) {}
+        fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+        fn view(&self, _: &Context<Self>) -> Element {
+            let forwarded = self.forwarded.clone();
+            Terminal::new()
+                .snapshot(crate::TerminalRenderSnapshot {
+                    mouse_mode: self.mode,
+                    ..Default::default()
+                })
+                .on_mouse_forward_event(Callback::new(move |event| {
+                    forwarded.borrow_mut().push(event);
+                }))
+                .into()
+        }
+    }
+
+    fn runner(mode: MouseModeState) -> AppRunner<Probe> {
+        let probe = Probe {
+            mode,
+            forwarded: Default::default(),
+        };
+        let mut runner = AppRunner::new(App::new().mouse(false), probe.clone(), ());
+        init_runner(
+            &mut runner,
+            probe,
+            Rect {
+                x: 4,
+                y: 6,
+                w: 20,
+                h: 5,
+            },
+        );
+        runner
+    }
+
+    #[test]
+    fn forwarding_modes_filter_semantics_before_the_structured_callback() {
+        let kinds = [
+            MouseKind::Down(MouseButton::Middle),
+            MouseKind::Up(MouseButton::Middle),
+            MouseKind::Drag(MouseButton::Left),
+            MouseKind::Moved,
+            MouseKind::ScrollUp,
+            MouseKind::ScrollDown,
+        ];
+        for encoding in [
+            MouseEncoding::X10,
+            MouseEncoding::Utf8,
+            MouseEncoding::Sgr,
+            MouseEncoding::SgrPixels,
+        ] {
+            for mode in [
+                MouseMode::None,
+                MouseMode::X10,
+                MouseMode::Normal,
+                MouseMode::AnyEvent,
+            ] {
+                let state = MouseModeState {
+                    mode,
+                    encoding,
+                    focus_events_enabled: false,
+                };
+                let runner = runner(state);
+                for kind in kinds {
+                    for mods in [KeyMods::NONE, KeyMods::ALT, KeyMods::CTRL, KeyMods::SHIFT] {
+                        let event = MouseEvent {
+                            kind,
+                            x: 5,
+                            y: 7,
+                            mods,
+                        };
+                        let plan = crate::app::runner::events::terminal_mouse_forward_plan(
+                            &runner.core.tree,
+                            event,
+                            Some((1, 2)),
+                        );
+                        let mode_accepts = match mode {
+                            MouseMode::None => false,
+                            MouseMode::X10 => matches!(kind, MouseKind::Down(_)),
+                            MouseMode::Normal => !matches!(kind, MouseKind::Moved),
+                            MouseMode::AnyEvent => true,
+                        };
+                        let expected = mode_accepts && !mods.shift;
+                        assert_eq!(plan.is_some(), expected, "{state:?} {kind:?} {mods:?}");
+                        if let Some(plan) = plan {
+                            assert_eq!(plan.event.kind, kind);
+                            assert_eq!(plan.event.mods, mods);
+                            assert_eq!(plan.event.cell, (1, 1));
+                            assert!(plan.event.pixel.is_some());
+                            assert_eq!(plan.event.mouse_mode, state);
+                            plan.emit(1);
+                            assert_eq!(
+                                runner
+                                    .core
+                                    .component
+                                    .forwarded
+                                    .borrow()
+                                    .last()
+                                    .unwrap()
+                                    .kind,
+                                kind
+                            );
+                        }
+                    }
+                }
+                let outside = MouseEvent {
+                    kind: MouseKind::ScrollUp,
+                    x: 0,
+                    y: 0,
+                    mods: KeyMods::NONE,
+                };
+                assert!(
+                    crate::app::runner::events::terminal_mouse_forward_plan(
+                        &runner.core.tree,
+                        outside,
+                        None
+                    )
+                    .is_none()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn runner_delivers_one_structured_wheel_event_with_all_raw_ticks() {
+        let mode = MouseModeState {
+            mode: MouseMode::Normal,
+            encoding: MouseEncoding::Sgr,
+            focus_events_enabled: false,
+        };
+        let mut runner = runner(mode);
+        let event = MouseEvent {
+            kind: MouseKind::ScrollDown,
+            x: 5,
+            y: 7,
+            mods: KeyMods::CTRL,
+        };
+        assert!(runner.forward_terminal_mouse_ticks(event, 3));
+        let forwarded = runner.core.component.forwarded.borrow();
+        assert_eq!(forwarded.len(), 1);
+        assert_eq!(forwarded[0].repeat_count, 3);
+        assert_eq!(forwarded[0].bytes, b"\x1b[<81;2;2M".repeat(3));
+        assert_eq!(forwarded[0].kind, MouseKind::ScrollDown);
+        assert_eq!(forwarded[0].pixel, None);
+    }
+}

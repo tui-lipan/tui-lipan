@@ -73,11 +73,21 @@ User Action → Event → Message → update() → State Change → Re-render
 | `Update::none()` | State changed only to mirror widget-owned runtime state, or nothing visual changed |
 | `Update::terminal_paint()` | Repaint only the rows a live `Terminal` screen changed; nothing else on screen moved |
 | `Update::paint()` | Repaint the existing realized tree without rerunning component views or layout |
+| `Update::paint_with_command(cmd)` | Repaint the existing tree and start work without rebuilding view or layout |
 | `Update::layout()` | Rerun the emitting component scope's `view()`, then reconcile and lay out that subtree |
 | `Update::layout_with_command(cmd)` | Same component-scoped refresh while also starting background work |
 | `Update::full()` | Rebuild from the root because state affects other scopes or global composition |
 | `Update::with_command(cmd)` | Same root-wide refresh while also starting background work |
 | `Update::command_only(cmd)` | Start background work without marking a component dirty |
+
+`paint_with_command`, `layout_with_command`, and `with_command` accept either a `Command`
+or `Option<Command>`. The requested level stays the same when the command is absent.
+`left.merge(right)` keeps the strongest refresh level and submits both commands in that
+order, in the emitting component's scope. Background tasks can complete in any order.
+A command combined with `TerminalPaint` or `TerminalGraphics` widens the result to `Paint`.
+There is no terminal-paint-with-command constructor: arbitrary commands cannot guarantee
+that terminal damage is the only visible change. Commands that change view or layout
+inputs must send a follow-up message requesting the appropriate refresh.
 
 High-frequency widget callbacks such as `ScrollView::on_viewport_change`,
 `on_scroll`, drag updates, and cursor/selection sync should usually return
@@ -590,3 +600,36 @@ processing output. Unlike painted-frame captures, this observer performs no soft
 The runtime widens it when the native presentation plan cannot reproduce the scene correctly.
 Adding `UpdateLevel::TerminalGraphics` is a breaking enum change: exhaustive matches must handle
 it below `TerminalPaint` and above `None`.
+
+## Restarting and snapping keyed transitions
+
+Ordinary `ctx.transition`, `ctx.animated_color`, and `ctx.animated_amount` calls keep their
+current timing when the target is unchanged, even if a new configuration has zero duration.
+Use an explicit control once at a lifecycle boundary to restart or hand off an animation:
+
+```rust,ignore
+// Restart from the current value, including when the target is already 1.0.
+ctx.restart_transition("reveal", 1.0f32, config);
+// Hand off from a known value, including when this key has not been seen before.
+ctx.restart_transition_from("reveal", captured_progress, 1.0f32, config);
+// Cancel motion and set both current value and target immediately.
+ctx.snap_transition("reveal", 1.0f32);
+```
+
+When calling a control from `update`, return an update requesting the repaint or view/layout
+work that the change needs. Then read the key through the ordinary method on subsequent views.
+Calling a restart on every view resets its timing on every view. A new key restarted without
+a seed starts at its target; use `restart_transition_from` when it must start elsewhere.
+
+These operations address Context's keyed registry. An `Animated` wrapper owns separate
+per-node transitions; a registry key does not identify those internal transitions.
+
+Controls return no interpolated value, so an existing `animated_color` or `animated_amount`
+remains paint-only. A key read through `transition` continues to require view updates.
+Existing render handles remain valid, and the key retains its selected repaint cadence.
+Keys remain scoped to the component, follow the usual lifetime rules, and reject a change
+of value type. A restart with zero duration snaps to the requested target.
+
+An explicit control replaces a pulse on that key. Ordinary pulse reads keep their phase,
+including across changes to their amplitude; unrelated and suspended pulses keep their
+own timelines. Reading a controlled key as a pulse again starts a new pulse cycle.

@@ -12,7 +12,7 @@ use crate::style::ThemeRole;
 #[cfg(feature = "terminal")]
 use crate::widgets::internal::{apply_terminal_selection_input, terminal_mouse_content_rect};
 #[cfg(feature = "terminal")]
-use crate::widgets::{MouseMode, mouse_event_to_bytes};
+use crate::widgets::{ForwardedMouseEvent, MouseMode};
 use std::sync::Arc;
 
 use super::AppRunner;
@@ -805,13 +805,7 @@ impl<C: Component> AppRunner<C> {
             mouse_dispatch::emit_bubbling_mouse_down(&self.core.tree, plan.hit, mouse);
             return true;
         }
-        // One callback carrying the repeated sequence rather than one callback per tick: the bytes
-        // reaching the child are identical either way, and the consumer sees a single write.
-        let bytes = match ticks {
-            0 | 1 => plan.bytes,
-            n => plan.bytes.repeat(usize::from(n)),
-        };
-        plan.callback.emit(bytes);
+        plan.emit(ticks);
         true
     }
 
@@ -1280,11 +1274,25 @@ fn host_cell_size() -> crate::widgets::TerminalCellSize {
 #[cfg(feature = "terminal")]
 pub(crate) struct TerminalMouseForward {
     pub(crate) hit: crate::core::node::NodeId,
-    pub(crate) bytes: Vec<u8>,
-    pub(crate) callback: crate::callback::Callback<Vec<u8>>,
+    pub(crate) event: ForwardedMouseEvent,
+    pub(crate) callback: crate::callback::Callback<ForwardedMouseEvent>,
     /// Clicks, drags, and scrolls focus the terminal they act on; plain motion must not, or
     /// hovering an any-event pane would steal focus.
     pub(crate) focus: bool,
+}
+
+#[cfg(feature = "terminal")]
+impl TerminalMouseForward {
+    pub(crate) fn emit(mut self, ticks: u16) {
+        self.event.repeat_count = ticks.max(1);
+        if self.event.repeat_count > 1 {
+            self.event.bytes = self
+                .event
+                .bytes
+                .repeat(usize::from(self.event.repeat_count));
+        }
+        self.callback.emit(self.event);
+    }
 }
 
 /// Consume the rest of a left-button gesture whose press only focused a tracking terminal.
@@ -1367,7 +1375,6 @@ pub(crate) fn terminal_mouse_forward_plan(
     }
 
     let callback = term.on_mouse_forward.clone()?;
-    let encoding = mouse_mode.encoding;
     let geometry = crate::widgets::MouseReportGeometry {
         content_origin: (content_rect.x.max(0) as u16, content_rect.y.max(0) as u16),
         sub_cell,
@@ -1378,10 +1385,10 @@ pub(crate) fn terminal_mouse_forward_plan(
             .as_ref()
             .map_or_else(host_cell_size, |screen| screen.cell_size()),
     };
-    let bytes = mouse_event_to_bytes(mouse, encoding, geometry)?;
+    let event = ForwardedMouseEvent::from_mouse(mouse, mouse_mode, geometry)?;
     Some(TerminalMouseForward {
         hit,
-        bytes,
+        event,
         callback,
         focus: !matches!(mouse.kind, MouseKind::Moved),
     })

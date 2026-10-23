@@ -6,7 +6,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use super::fs::FileKind;
-use super::mod_private::FileTreeProps;
+use super::mod_private::GitStyles;
 use super::provided_path::ProvidedPath;
 use super::{FileTreeChange, FileTreeChangeStatus};
 use crate::style::Style;
@@ -242,14 +242,14 @@ impl GitChangeState {
         }
     }
 
-    pub(crate) fn style(self, props: &FileTreeProps) -> Style {
+    pub(super) fn style(self, styles: &GitStyles) -> Style {
         match self {
-            Self::Modified => props.git_style_modified,
-            Self::Added => props.git_style_added,
-            Self::Deleted => props.git_style_deleted,
-            Self::Renamed => props.git_style_renamed,
-            Self::Untracked => props.git_style_untracked,
-            Self::Conflicted => props.git_style_conflicted,
+            Self::Modified => styles.modified,
+            Self::Added => styles.added,
+            Self::Deleted => styles.deleted,
+            Self::Renamed => styles.renamed,
+            Self::Untracked => styles.untracked,
+            Self::Conflicted => styles.conflicted,
         }
     }
 
@@ -275,6 +275,40 @@ pub struct GitFileStatus {
 }
 
 impl GitFileStatus {
+    /// Decode the two status columns of Git porcelain v1 or v2, without reading paths or
+    /// running Git. `X` describes the index and `Y` the worktree.
+    ///
+    /// All seven unmerged pairs become one staged `Conflicted` state, since those columns
+    /// describe merge sides rather than index/worktree changes. `??` is unstaged `Untracked`;
+    /// `!!`, a clean pair, and invalid columns return `None`.
+    /// A space or porcelain v2 dot denotes an unchanged column.
+    /// Copies share the `Renamed` presentation category; type changes are `Modified`.
+    /// Ordinary pairs retain both columns. [`Self::primary_state`] prefers staged changes.
+    pub fn from_porcelain_xy(x: char, y: char) -> Option<Self> {
+        if matches!(
+            (x, y),
+            ('D', 'D')
+                | ('A', 'U')
+                | ('U', 'D')
+                | ('U', 'A')
+                | ('D', 'U')
+                | ('A', 'A')
+                | ('U', 'U')
+        ) {
+            return Some(Self::new(Some(GitChangeState::Conflicted), None));
+        }
+        if (x, y) == ('?', '?') {
+            return Some(Self::new(None, Some(GitChangeState::Untracked)));
+        }
+        let valid = |c| matches!(c, ' ' | '.' | 'M' | 'T' | 'A' | 'D' | 'R' | 'C');
+        if !valid(x) || !valid(y) {
+            return None;
+        }
+        let staged = char_to_change_state(x);
+        let unstaged = char_to_change_state(y);
+        (staged.is_some() || unstaged.is_some()).then(|| Self::new(staged, unstaged))
+    }
+
     /// Create a new status entry from staged and unstaged states.
     pub fn new(staged: Option<GitChangeState>, unstaged: Option<GitChangeState>) -> Self {
         Self { staged, unstaged }
@@ -286,13 +320,16 @@ impl GitFileStatus {
     }
 
     /// Get style for the primary state.
-    /// Prioritizes staged changes (rendered as green).
-    pub(crate) fn style(self, props: &FileTreeProps) -> Style {
+    /// Staged non-conflicts use the added role; conflicts keep their own role.
+    pub(super) fn style(self, styles: &GitStyles) -> Style {
+        if self.primary_state() == Some(GitChangeState::Conflicted) {
+            return styles.conflicted;
+        }
         if self.staged.is_some() {
-            return props.git_style_added;
+            return styles.added;
         }
         match self.unstaged {
-            Some(state) => state.style(props),
+            Some(state) => state.style(styles),
             None => Style::default(),
         }
     }
@@ -663,11 +700,10 @@ fn snapshot_from_status(stdout: &str, repo_root: &Path) -> GitStatusSnapshot {
 
 /// The status a porcelain `XY` code describes, or `None` for one that is not a change (`!!`).
 pub(crate) fn status_from_code(code: &str) -> Option<GitFileStatus> {
-    if code == "??" {
-        return Some(GitFileStatus::new(None, Some(GitChangeState::Untracked)));
-    }
-    let mut chars = code.chars();
-    git_status_from_xy(chars.next()?, chars.next()?)
+    let [x, y] = *code.as_bytes() else {
+        return None;
+    };
+    GitFileStatus::from_porcelain_xy(char::from(x), char::from(y))
 }
 
 pub(crate) fn parse_git_numstat_line(line: &str) -> Option<(String, GitDiffStat)> {
@@ -736,25 +772,13 @@ fn load_git_diff_stats(repo_root: &Path, entries: &mut HashMap<Arc<str>, GitFile
 
 fn char_to_change_state(c: char) -> Option<GitChangeState> {
     match c {
-        'M' | 'C' => Some(GitChangeState::Modified),
+        'M' | 'T' => Some(GitChangeState::Modified),
         'A' => Some(GitChangeState::Added),
         'D' => Some(GitChangeState::Deleted),
-        'R' => Some(GitChangeState::Renamed),
+        'R' | 'C' => Some(GitChangeState::Renamed),
         'U' => Some(GitChangeState::Conflicted),
         _ => None,
     }
-}
-
-fn git_status_from_xy(x: char, y: char) -> Option<GitFileStatus> {
-    let staged = char_to_change_state(x);
-    let unstaged = char_to_change_state(y);
-
-    // If both are None, there's no status
-    if staged.is_none() && unstaged.is_none() {
-        return None;
-    }
-
-    Some(GitFileStatus::new(staged, unstaged))
 }
 
 fn insert_decoration_path_and_parents(
@@ -1085,5 +1109,122 @@ mod cache_tests {
         }
 
         assert_eq!(cache.inner.borrow().pending.len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod porcelain_contract_tests {
+    use super::*;
+    use GitChangeState::{
+        Added as A, Conflicted, Deleted as D, Modified as M, Renamed as R, Untracked,
+    };
+
+    #[test]
+    fn porcelain_xy_matrix_preserves_columns_and_staged_precedence() {
+        // Meaningful ordinary pairs from git-status's short-format table.
+        let cases = [
+            (" M", None, Some(M)),
+            (" A", None, Some(A)),
+            (" D", None, Some(D)),
+            (" T", None, Some(M)),
+            (" R", None, Some(R)),
+            (" C", None, Some(R)),
+            ("M ", Some(M), None),
+            ("MM", Some(M), Some(M)),
+            ("MT", Some(M), Some(M)),
+            ("MD", Some(M), Some(D)),
+            ("T ", Some(M), None),
+            ("TM", Some(M), Some(M)),
+            ("TT", Some(M), Some(M)),
+            ("TD", Some(M), Some(D)),
+            ("A ", Some(A), None),
+            ("AM", Some(A), Some(M)),
+            ("AT", Some(A), Some(M)),
+            ("AD", Some(A), Some(D)),
+            ("D ", Some(D), None),
+            ("R ", Some(R), None),
+            ("RM", Some(R), Some(M)),
+            ("RT", Some(R), Some(M)),
+            ("RD", Some(R), Some(D)),
+            ("C ", Some(R), None),
+            ("CM", Some(R), Some(M)),
+            ("CT", Some(R), Some(M)),
+            ("CD", Some(R), Some(D)),
+            ("??", None, Some(Untracked)),
+        ];
+        for (code, staged, unstaged) in cases {
+            let bytes = code.as_bytes();
+            let expected = GitFileStatus::new(staged, unstaged);
+            assert_eq!(
+                GitFileStatus::from_porcelain_xy(bytes[0] as char, bytes[1] as char),
+                Some(expected),
+                "{code:?}"
+            );
+            assert_eq!(expected.primary_state(), staged.or(unstaged), "{code:?}");
+            // Porcelain v2 spells an unchanged column with a dot.
+            let v2 = code.replace(' ', ".");
+            let bytes = v2.as_bytes();
+            assert_eq!(
+                GitFileStatus::from_porcelain_xy(bytes[0] as char, bytes[1] as char),
+                Some(expected),
+                "{v2:?}"
+            );
+            assert_eq!(status_from_code(code), Some(expected), "FileTree: {code:?}");
+        }
+    }
+
+    #[test]
+    fn all_unmerged_pairs_are_conflicts_rather_than_independent_changes() {
+        let styles = crate::FileTree::new("/repo")
+            .props
+            .git_styles(&crate::Theme::default());
+        for code in ["UU", "AA", "DD", "AU", "UA", "DU", "UD"] {
+            let bytes = code.as_bytes();
+            let status =
+                GitFileStatus::from_porcelain_xy(bytes[0] as char, bytes[1] as char).unwrap();
+            assert_eq!(status, GitFileStatus::new(Some(Conflicted), None), "{code}");
+            assert_eq!(status.primary_state(), Some(Conflicted), "{code}");
+            assert_eq!(status.style(&styles), styles.conflicted, "{code}");
+            assert_eq!(status_from_code(code), Some(status));
+        }
+    }
+
+    #[test]
+    fn ignored_clean_and_invalid_codes_are_not_changes() {
+        for (x, y) in [
+            ('!', '!'),
+            (' ', ' '),
+            ('.', '.'),
+            ('?', 'M'),
+            ('U', ' '),
+            ('M', 'U'),
+            ('X', 'M'),
+            ('é', 'M'),
+        ] {
+            assert_eq!(GitFileStatus::from_porcelain_xy(x, y), None, "{x}{y}");
+        }
+        for invalid in ["", "M", "MMextra", "éM"] {
+            assert_eq!(status_from_code(invalid), None, "{invalid}");
+        }
+    }
+
+    #[test]
+    fn filetree_parser_uses_the_decoder_and_consumes_copy_and_rename_sources() {
+        let snapshot = snapshot_from_status(
+            "AA conflict\0C  copy\0source\0R  rename\0old\0 M next\0",
+            Path::new("/repo"),
+        );
+        assert_eq!(snapshot.changed_paths.len(), 4);
+        let conflict = &snapshot.entries["/repo/conflict"];
+        assert_eq!(conflict.status.primary_state(), Some(Conflicted));
+        for name in ["copy", "rename"] {
+            assert_eq!(
+                snapshot.entries[&Arc::<str>::from(format!("/repo/{name}"))]
+                    .status
+                    .staged,
+                Some(R)
+            );
+        }
+        assert!(!snapshot.entries.contains_key("/repo/source"));
     }
 }

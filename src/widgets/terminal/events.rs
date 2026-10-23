@@ -493,14 +493,71 @@ impl MouseReportGeometry {
     }
 }
 
-/// Encode a MouseEvent to bytes for PTY (SGR 1006 format).
-pub fn mouse_event_to_bytes(
-    event: MouseEvent,
-    encoding: MouseEncoding,
-    geometry: MouseReportGeometry,
-) -> Option<Vec<u8>> {
-    let viewport_offset = geometry.content_origin;
-    let (button_code, is_release) = match event.kind {
+/// A mouse report forwarded to a child terminal, with semantics retained before wire encoding.
+/// Coordinates are zero-based and relative to the terminal's content area.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ForwardedMouseEvent {
+    /// Press, release, drag, motion, or wheel direction, including the button when applicable.
+    pub kind: MouseKind,
+    /// Modifiers received from the host. Shift normally selects locally instead of forwarding.
+    pub mods: crate::core::event::KeyMods,
+    /// Cell position inside the terminal content area.
+    pub cell: (u16, u16),
+    /// Pixel position when the host supplied sub-cell precision, clamped to the reported cell.
+    pub pixel: Option<(u16, u16)>,
+    /// Tracking mode and encoding requested by the child at the time of forwarding.
+    pub mouse_mode: MouseModeState,
+    /// Number of reports represented by this callback. Coalesced wheel ticks retain their count.
+    pub repeat_count: u16,
+    /// Authoritative encoded reports, including repetitions. Forward these bytes unchanged.
+    pub bytes: Vec<u8>,
+}
+
+impl ForwardedMouseEvent {
+    pub(crate) fn from_mouse(
+        event: MouseEvent,
+        mouse_mode: MouseModeState,
+        geometry: MouseReportGeometry,
+    ) -> Option<Self> {
+        let cell = (
+            event.x.saturating_sub(geometry.content_origin.0),
+            event.y.saturating_sub(geometry.content_origin.1),
+        );
+        let pixel = geometry.sub_cell.map(|_| {
+            let (x, y) = mouse_pixel_position(cell, geometry);
+            (x.saturating_sub(1), y.saturating_sub(1))
+        });
+        let mut forwarded = Self {
+            kind: event.kind,
+            mods: event.mods,
+            cell,
+            pixel,
+            mouse_mode,
+            repeat_count: 1,
+            bytes: Vec::new(),
+        };
+        forwarded.bytes = mouse_event_to_bytes(event, mouse_mode.encoding, geometry)?;
+        Some(forwarded)
+    }
+}
+
+/// One-based pixel coordinates used by SGR-pixels, including its saturation rules.
+fn mouse_pixel_position(cell: (u16, u16), geometry: MouseReportGeometry) -> (u16, u16) {
+    let (sub_x, sub_y) = geometry.sub_cell.unwrap_or((0, 0));
+    let coordinate = |cell: u16, size: u16, sub: u16| {
+        cell.saturating_mul(size)
+            .saturating_add(sub.min(size.saturating_sub(1)))
+            .saturating_add(1)
+    };
+    (
+        coordinate(cell.0, geometry.cell.width, sub_x),
+        coordinate(cell.1, geometry.cell.height, sub_y),
+    )
+}
+
+fn mouse_kind_code(kind: MouseKind) -> (u8, bool) {
+    match kind {
         MouseKind::Down(btn) => (button_to_code(btn), false),
         MouseKind::Up(btn) => (button_to_code(btn), true),
         MouseKind::Drag(btn) => (button_to_code(btn).saturating_add(32), false),
@@ -509,9 +566,16 @@ pub fn mouse_event_to_bytes(
         // Motion without a pressed button: code 3 ("no button") + 32 (motion
         // flag). Callers gate this on any-event tracking (1003) being active.
         MouseKind::Moved => (35, false),
-    };
+    }
+}
 
-    let mut cb = button_code;
+fn mouse_report_code(event: MouseEvent, encoding: MouseEncoding) -> (u8, bool) {
+    let (button_code, is_release) = mouse_kind_code(event.kind);
+    let mut cb = if is_release && matches!(encoding, MouseEncoding::X10 | MouseEncoding::Utf8) {
+        3 // Legacy releases identify no button, unlike SGR which retains the released button.
+    } else {
+        button_code
+    };
     if event.mods.shift {
         cb = cb.saturating_add(4);
     }
@@ -522,6 +586,18 @@ pub fn mouse_event_to_bytes(
         cb = cb.saturating_add(16);
     }
 
+    (cb, is_release)
+}
+
+/// Encode a mouse event using the child terminal's selected wire protocol.
+pub fn mouse_event_to_bytes(
+    event: MouseEvent,
+    encoding: MouseEncoding,
+    geometry: MouseReportGeometry,
+) -> Option<Vec<u8>> {
+    let viewport_offset = geometry.content_origin;
+    let (cb, is_release) = mouse_report_code(event, encoding);
+
     let cx = event.x.saturating_sub(viewport_offset.0).saturating_add(1);
     let cy = event.y.saturating_sub(viewport_offset.1).saturating_add(1);
 
@@ -531,26 +607,8 @@ pub fn mouse_event_to_bytes(
             Some(format!("\x1b[<{};{};{}{}", cb, cx, cy, suffix).into_bytes())
         }
         MouseEncoding::SgrPixels => {
-            // Clamped into the cell: the host measures its own font, the child was told this
-            // screen's, and a report has to land in the cell the pane actually hit-tested.
-            let (sub_x, sub_y) = geometry.sub_cell.map_or((0, 0), |(x, y)| {
-                (
-                    x.min(geometry.cell.width.saturating_sub(1)),
-                    y.min(geometry.cell.height.saturating_sub(1)),
-                )
-            });
-            // Both coordinate systems are one-based, so the cell's own pixel origin is
-            // `(cx - 1) * cell`, and the report is one past the pixel the pointer is on.
-            let px = cx
-                .saturating_sub(1)
-                .saturating_mul(geometry.cell.width)
-                .saturating_add(sub_x)
-                .saturating_add(1);
-            let py = cy
-                .saturating_sub(1)
-                .saturating_mul(geometry.cell.height)
-                .saturating_add(sub_y)
-                .saturating_add(1);
+            let (px, py) =
+                mouse_pixel_position((cx.saturating_sub(1), cy.saturating_sub(1)), geometry);
             let suffix = if is_release { 'm' } else { 'M' };
             Some(format!("\x1b[<{};{};{}{}", cb, px, py, suffix).into_bytes())
         }
@@ -663,5 +721,153 @@ mod selection_tests {
         let mut emoji = GridSelection::new(GridPos { row: 0, col: 3 });
         emoji.extend_to(GridPos { row: 0, col: 5 });
         assert_eq!(terminal_selection_text(&lines, &emoji), "🙂");
+    }
+}
+
+#[cfg(test)]
+mod forwarded_mouse_tests {
+    use super::*;
+    use crate::core::event::KeyMods;
+
+    #[test]
+    fn structured_reports_retain_semantics_and_exact_protocol_bytes() {
+        let cases = [
+            (MouseKind::Down(MouseButton::Left), 0, false),
+            (MouseKind::Down(MouseButton::Middle), 1, false),
+            (MouseKind::Down(MouseButton::Right), 2, false),
+            (MouseKind::Up(MouseButton::Left), 0, true),
+            (MouseKind::Up(MouseButton::Middle), 1, true),
+            (MouseKind::Up(MouseButton::Right), 2, true),
+            (MouseKind::Drag(MouseButton::Left), 32, false),
+            (MouseKind::Drag(MouseButton::Middle), 33, false),
+            (MouseKind::Drag(MouseButton::Right), 34, false),
+            (MouseKind::Moved, 35, false),
+            (MouseKind::ScrollUp, 64, false),
+            (MouseKind::ScrollDown, 65, false),
+        ];
+        for encoding in [
+            MouseEncoding::Sgr,
+            MouseEncoding::SgrPixels,
+            MouseEncoding::X10,
+            MouseEncoding::Utf8,
+        ] {
+            for (kind, base, release) in cases {
+                for bits in 0..16 {
+                    let mods = KeyMods {
+                        shift: bits & 1 != 0,
+                        alt: bits & 2 != 0,
+                        ctrl: bits & 4 != 0,
+                        super_key: bits & 8 != 0,
+                        ..KeyMods::default()
+                    };
+                    let geometry = MouseReportGeometry {
+                        content_origin: (10, 20),
+                        sub_cell: Some((3, 5)),
+                        cell: super::super::TerminalCellSize {
+                            width: 8,
+                            height: 16,
+                        },
+                    };
+                    let mode = MouseModeState {
+                        mode: MouseMode::AnyEvent,
+                        encoding,
+                        focus_events_enabled: true,
+                    };
+                    let event = MouseEvent {
+                        kind,
+                        x: 12,
+                        y: 24,
+                        mods,
+                    };
+                    let forwarded = ForwardedMouseEvent::from_mouse(event, mode, geometry).unwrap();
+                    assert_eq!(forwarded.kind, kind);
+                    assert_eq!(forwarded.mods, mods);
+                    assert_eq!(forwarded.cell, (2, 4));
+                    assert_eq!(forwarded.pixel, Some((19, 69)));
+                    assert_eq!(forwarded.mouse_mode, mode);
+                    assert_eq!(forwarded.repeat_count, 1);
+                    let modifier_code =
+                        (bits & 1) * 4 + ((bits >> 1) & 1) * 8 + ((bits >> 2) & 1) * 16;
+                    let legacy = matches!(encoding, MouseEncoding::X10 | MouseEncoding::Utf8);
+                    let code = if release && legacy { 3 } else { base } + modifier_code;
+                    let suffix = if release { 'm' } else { 'M' };
+                    let expected = match encoding {
+                        MouseEncoding::Sgr => format!("\x1b[<{code};3;5{suffix}").into_bytes(),
+                        MouseEncoding::SgrPixels => {
+                            format!("\x1b[<{code};20;70{suffix}").into_bytes()
+                        }
+                        MouseEncoding::X10 | MouseEncoding::Utf8 => {
+                            vec![27, b'[', b'M', code + 32, 35, 37]
+                        }
+                    };
+                    assert_eq!(forwarded.bytes, expected, "{kind:?} {encoding:?} {mods:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pixel_precision_is_optional_and_clamped_before_encoding() {
+        let event = MouseEvent {
+            kind: MouseKind::Moved,
+            x: 12,
+            y: 24,
+            mods: KeyMods::default(),
+        };
+        let mode = MouseModeState {
+            mode: MouseMode::AnyEvent,
+            encoding: MouseEncoding::SgrPixels,
+            ..MouseModeState::default()
+        };
+        let geometry = MouseReportGeometry {
+            content_origin: (10, 20),
+            sub_cell: None,
+            cell: super::super::TerminalCellSize {
+                width: 8,
+                height: 16,
+            },
+        };
+        let coarse = ForwardedMouseEvent::from_mouse(event, mode, geometry).unwrap();
+        assert_eq!(coarse.pixel, None);
+        assert_eq!(coarse.bytes, b"\x1b[<35;17;65M");
+        let precise = ForwardedMouseEvent::from_mouse(
+            event,
+            mode,
+            MouseReportGeometry {
+                sub_cell: Some((500, 500)),
+                ..geometry
+            },
+        )
+        .unwrap();
+        assert_eq!(precise.pixel, Some((23, 79)));
+        assert_eq!(precise.bytes, b"\x1b[<35;24;80M");
+    }
+
+    #[test]
+    fn protocol_coordinate_limits_do_not_invent_forwarded_events() {
+        let event = MouseEvent {
+            kind: MouseKind::Down(MouseButton::Left),
+            x: 300,
+            y: 2,
+            mods: KeyMods::default(),
+        };
+        let mode = MouseModeState {
+            mode: MouseMode::Normal,
+            encoding: MouseEncoding::X10,
+            ..MouseModeState::default()
+        };
+        let geometry = MouseReportGeometry::at((0, 0));
+        assert!(ForwardedMouseEvent::from_mouse(event, mode, geometry).is_none());
+        let utf8 = ForwardedMouseEvent::from_mouse(
+            event,
+            MouseModeState {
+                encoding: MouseEncoding::Utf8,
+                ..mode
+            },
+            geometry,
+        )
+        .unwrap();
+        assert_eq!(utf8.cell, (300, 2));
+        assert_eq!(utf8.bytes, "\x1b[M ō#".as_bytes());
     }
 }

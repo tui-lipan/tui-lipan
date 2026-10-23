@@ -7,7 +7,7 @@ use crate::widgets::ScrollEvent;
 use std::sync::Arc;
 
 use super::events::{
-    MouseModeState, TerminalInputEvent, TerminalKeyModes, TerminalLinkEvent,
+    ForwardedMouseEvent, MouseModeState, TerminalInputEvent, TerminalKeyModes, TerminalLinkEvent,
     TerminalPasteShortcutBehavior,
 };
 #[cfg(feature = "terminal-images")]
@@ -52,7 +52,7 @@ pub struct Terminal {
     pub(crate) selection_style: StyleSlot,
     pub(crate) on_selection: Option<Callback<TerminalSelectionEvent>>,
     pub(crate) on_resize: Option<Callback<TerminalViewport>>,
-    pub(crate) on_mouse_forward: Option<Callback<Vec<u8>>>,
+    pub(crate) on_mouse_forward: Option<Callback<ForwardedMouseEvent>>,
     pub(crate) link_activation_mods: KeyMods,
     pub(crate) link_hover_style: StyleSlot,
     pub(crate) on_link_activate: Option<Callback<TerminalLinkEvent>>,

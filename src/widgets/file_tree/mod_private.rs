@@ -12,33 +12,6 @@ use crate::widgets::TreeKeymap;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-// Default git status styles - used both for initialization and comparison in apply_theme.
-// Actual colors come from the theme; these are intentionally Style::default() so the
-// theme system detects them as "not user-customized" and applies themed colors.
-pub(super) fn default_git_style_modified() -> Style {
-    Style::default()
-}
-
-pub(super) fn default_git_style_added() -> Style {
-    Style::default()
-}
-
-pub(super) fn default_git_style_deleted() -> Style {
-    Style::default()
-}
-
-pub(super) fn default_git_style_renamed() -> Style {
-    Style::default()
-}
-
-pub(super) fn default_git_style_untracked() -> Style {
-    Style::default()
-}
-
-pub(super) fn default_git_style_conflicted() -> Style {
-    Style::default()
-}
-
 #[derive(Clone, PartialEq)]
 pub(crate) struct FileTreeProps {
     pub(crate) root: Arc<str>,
@@ -143,12 +116,12 @@ pub(crate) struct FileTreeProps {
     pub(crate) git_marker_renamed: Arc<str>,
     pub(crate) git_marker_untracked: Arc<str>,
     pub(crate) git_marker_conflicted: Arc<str>,
-    pub(crate) git_style_modified: Style,
-    pub(crate) git_style_added: Style,
-    pub(crate) git_style_deleted: Style,
-    pub(crate) git_style_renamed: Style,
-    pub(crate) git_style_untracked: Style,
-    pub(crate) git_style_conflicted: Style,
+    pub(crate) git_style_modified: Option<Style>,
+    pub(crate) git_style_added: Option<Style>,
+    pub(crate) git_style_deleted: Option<Style>,
+    pub(crate) git_style_renamed: Option<Style>,
+    pub(crate) git_style_untracked: Option<Style>,
+    pub(crate) git_style_conflicted: Option<Style>,
     pub(crate) change_suffix_style: Style,
     pub(crate) change_suffix_priority: FileTreeSuffixPriority,
     pub(crate) symlink_targets: bool,
@@ -160,4 +133,215 @@ pub(crate) struct FileTreeProps {
     pub(crate) on_ctrl_activate: Option<Callback<FileTreeEvent>>,
     pub(crate) on_toggle: Option<Callback<FileTreeToggleEvent>>,
     pub(crate) on_entry_request: Option<Callback<super::events::FileTreeEntryRequest>>,
+}
+
+/// Resolved Git styles for a single view, without cloning filesystem props or provided entries.
+#[derive(Clone, Copy)]
+pub(super) struct GitStyles {
+    pub(super) modified: Style,
+    pub(super) added: Style,
+    pub(super) deleted: Style,
+    pub(super) renamed: Style,
+    pub(super) untracked: Style,
+    pub(super) conflicted: Style,
+}
+
+impl FileTreeProps {
+    pub(super) fn git_styles(&self, theme: &crate::style::Theme) -> GitStyles {
+        GitStyles {
+            modified: self
+                .git_style_modified
+                .unwrap_or_else(|| Style::new().fg(theme.git_status.modified)),
+            added: self
+                .git_style_added
+                .unwrap_or_else(|| Style::new().fg(theme.git_status.added)),
+            deleted: self
+                .git_style_deleted
+                .unwrap_or_else(|| Style::new().fg(theme.git_status.deleted)),
+            renamed: self
+                .git_style_renamed
+                .unwrap_or_else(|| Style::new().fg(theme.git_status.renamed)),
+            untracked: self
+                .git_style_untracked
+                .unwrap_or_else(|| Style::new().fg(theme.git_status.untracked)),
+            conflicted: self
+                .git_style_conflicted
+                .unwrap_or_else(|| Style::new().fg(theme.git_status.conflicted)),
+        }
+    }
+}
+
+#[cfg(test)]
+mod consumer_contract_tests {
+    use super::*;
+    use crate::style::{Color, Theme};
+    use crate::widgets::FileTree;
+
+    fn styles(styles: GitStyles) -> [Style; 6] {
+        [
+            styles.modified,
+            styles.added,
+            styles.deleted,
+            styles.renamed,
+            styles.untracked,
+            styles.conflicted,
+        ]
+    }
+
+    fn colors(theme: &Theme) -> [Style; 6] {
+        let p = theme.git_status;
+        [
+            p.modified,
+            p.added,
+            p.deleted,
+            p.renamed,
+            p.untracked,
+            p.conflicted,
+        ]
+        .map(|color| Style::new().fg(color))
+    }
+
+    #[test]
+    fn git_defaults_follow_each_active_theme_without_mutating_overrides() {
+        let props = FileTree::new("/repo").props;
+        let first = Theme::default();
+        let mut second = first.clone();
+        second.git_status = crate::style::GitStatusPalette {
+            modified: Color::Red,
+            added: Color::Blue,
+            deleted: Color::Green,
+            renamed: Color::Yellow,
+            untracked: Color::Cyan,
+            conflicted: Color::Magenta,
+        };
+        assert_eq!(styles(props.git_styles(&first)), colors(&first));
+        assert_eq!(styles(props.git_styles(&second)), colors(&second));
+        assert_eq!(styles(props.git_styles(&first)), colors(&first));
+        assert!(props.git_style_modified.is_none());
+    }
+
+    #[test]
+    fn every_explicit_git_style_including_empty_replaces_the_theme() {
+        let explicit = Style::new().bold();
+        let props = FileTree::new("/repo")
+            .git_style_modified(explicit)
+            .git_style_added(explicit)
+            .git_style_deleted(explicit)
+            .git_style_renamed(explicit)
+            .git_style_untracked(explicit)
+            .git_style_conflicted(Style::default())
+            .props;
+        let theme = Theme::default();
+        assert_eq!(
+            styles(props.git_styles(&theme)),
+            [
+                explicit,
+                explicit,
+                explicit,
+                explicit,
+                explicit,
+                Style::default()
+            ]
+        );
+    }
+
+    #[test]
+    fn partial_git_overrides_survive_theme_switches() {
+        let explicit = Style::new().fg(Color::White).italic();
+        let props = FileTree::new("/repo").git_style_modified(explicit).props;
+        let mut theme = Theme::default();
+        for color in [Color::Red, Color::Blue] {
+            theme.git_status.added = color;
+            let resolved = props.git_styles(&theme);
+            assert_eq!(resolved.modified, explicit);
+            assert_eq!(resolved.added, Style::new().fg(color));
+            assert_eq!(
+                resolved.conflicted,
+                Style::new().fg(theme.git_status.conflicted)
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod theme_runtime_tests {
+    use crate::core::component::{Component, Context, Update};
+    use crate::core::element::Element;
+    use crate::core::node::NodeKind;
+    use crate::style::{Color, Style, Theme};
+    use crate::test_backend::TestBackend;
+    use crate::widgets::{
+        FileTree, FileTreeChange, FileTreeChangeSource, FileTreeChangeStatus, FileTreeEntrySource,
+        FileTreeRefreshPolicy, GitIconStyle, ThemeProvider,
+    };
+
+    struct Probe;
+    impl Component for Probe {
+        type Message = Color;
+        type Properties = ();
+        type State = Color;
+        fn create_state(&self, _: &()) -> Color {
+            Color::Red
+        }
+        fn update(&mut self, color: Color, ctx: &mut Context<Self>) -> Update {
+            ctx.state = color;
+            Update::full()
+        }
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            let mut theme = Theme::default();
+            theme.git_status.modified = ctx.state;
+            ThemeProvider::new(theme)
+                .child(
+                    FileTree::new("/provided")
+                        .entry_source(FileTreeEntrySource::provided([
+                            crate::FileTreeDirectoryListing::new(
+                                "/provided",
+                                [
+                                    crate::FileTreeEntry::file("modified"),
+                                    crate::FileTreeEntry::file("added"),
+                                ],
+                            ),
+                        ]))
+                        .refresh_policy(FileTreeRefreshPolicy::Manual)
+                        .change_source(FileTreeChangeSource::provided([
+                            FileTreeChange::new("modified", FileTreeChangeStatus::Modified),
+                            FileTreeChange::new("added", FileTreeChangeStatus::Added),
+                        ]))
+                        .change_view(crate::FileTreeChangeView::ChangedOnly)
+                        .git_status(true)
+                        .git_icon_style(GitIconStyle::Text)
+                        .git_style_added(Style::default())
+                        .expanded_paths(["/provided"]),
+                )
+                .into()
+        }
+    }
+
+    fn marker_style(backend: &TestBackend<Probe>, marker: &str) -> Style {
+        backend
+            .core
+            .tree
+            .iter()
+            .find_map(|node| {
+                let NodeKind::List(list) = &node.kind else {
+                    return None;
+                };
+                list.items
+                    .iter()
+                    .flat_map(|item| &item.description_spans)
+                    .find(|span| span.content.as_ref() == marker)
+                    .map(|span| span.style)
+            })
+            .unwrap_or_else(|| panic!("missing marker {marker}"))
+    }
+
+    #[test]
+    fn a_mounted_filetree_tracks_scoped_theme_changes_and_keeps_empty_overrides() {
+        let mut backend = TestBackend::new(Probe);
+        assert_eq!(marker_style(&backend, "M"), Style::new().fg(Color::Red));
+        assert_eq!(marker_style(&backend, "A"), Style::default());
+        backend.dispatch(Color::Blue).unwrap();
+        assert_eq!(marker_style(&backend, "M"), Style::new().fg(Color::Blue));
+        assert_eq!(marker_style(&backend, "A"), Style::default());
+    }
 }

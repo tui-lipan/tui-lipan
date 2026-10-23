@@ -108,6 +108,59 @@ struct TypedEntry<T: Lerp + PartialEq + 'static> {
     state: EntryState,
 }
 
+/// Explicit controls are distinct from ordinary sticky-target requests.
+enum TransitionRequest<T> {
+    Target(T),
+    Restart { from: Option<T>, target: T },
+    Snap(T),
+}
+
+impl<T> TransitionRequest<T> {
+    fn target(&self) -> &T {
+        match self {
+            Self::Target(target) | Self::Snap(target) | Self::Restart { target, .. } => target,
+        }
+    }
+}
+
+impl<T: Lerp + PartialEq + 'static> TypedEntry<T> {
+    fn request_transition(&mut self, request: TransitionRequest<T>, config: TransitionConfig) {
+        let target = request.target().clone();
+        // A pulsing key asked for a target instead settles from wherever the pulse is. A finite
+        // transition always runs to its end, so it is never suspended.
+        let was_pulsing = matches!(self.animation, Some(RenderAnimation::Pulse(_)));
+        self.state.suspended.set(false);
+        if let TransitionRequest::Snap(value) = request {
+            self.current = value.clone();
+            self.target = value;
+            self.animation = None;
+            return;
+        }
+        let restart = matches!(request, TransitionRequest::Restart { .. });
+        if let TransitionRequest::Restart {
+            from: Some(from), ..
+        } = request
+        {
+            self.current = from;
+        }
+        if self.target != target || was_pulsing || restart {
+            let from = self.current.clone();
+            self.target = target.clone();
+            if config.duration.is_zero() {
+                self.current = target.clone();
+                self.animation = None;
+            } else {
+                self.animation = Some(RenderAnimation::Transition(Transition::new(
+                    from,
+                    target.clone(),
+                    config.duration,
+                    config.easing,
+                )));
+            }
+        }
+    }
+}
+
 /// What moves an entry's value between frames.
 enum RenderAnimation<T: Lerp> {
     /// Toward the entry's target, then done.
@@ -359,7 +412,37 @@ impl AnimationRegistry {
         target: T,
         config: TransitionConfig,
     ) -> T {
-        self.advance(key, target, config, false, None)
+        self.advance(key, TransitionRequest::Target(target), config, false, None)
+    }
+
+    pub(crate) fn restart_transition<T: Lerp + PartialEq + 'static>(
+        &self,
+        key: AnimationKey,
+        from: Option<T>,
+        target: T,
+        config: TransitionConfig,
+    ) {
+        self.advance(
+            key,
+            TransitionRequest::Restart { from, target },
+            config,
+            true,
+            None,
+        );
+    }
+
+    pub(crate) fn snap_transition<T: Lerp + PartialEq + 'static>(
+        &self,
+        key: AnimationKey,
+        value: T,
+    ) {
+        self.advance(
+            key,
+            TransitionRequest::Snap(value),
+            TransitionConfig::default(),
+            true,
+            None,
+        );
     }
 
     /// Like [`transition`](Self::transition), but hands back a [`Paint`] that names the entry instead
@@ -376,7 +459,13 @@ impl AnimationRegistry {
         config: TransitionConfig,
         frame_interval: Option<Duration>,
     ) -> Paint {
-        let current = self.advance(key.clone(), target, config, true, frame_interval);
+        let current = self.advance(
+            key.clone(),
+            TransitionRequest::Target(target),
+            config,
+            true,
+            frame_interval,
+        );
         match self.handle_or_forget(key) {
             Some(handle) => Paint::Animated {
                 handle,
@@ -395,7 +484,13 @@ impl AnimationRegistry {
         config: TransitionConfig,
         frame_interval: Option<Duration>,
     ) -> EffectAmount {
-        let current = self.advance(key.clone(), target, config, true, frame_interval);
+        let current = self.advance(
+            key.clone(),
+            TransitionRequest::Target(target),
+            config,
+            true,
+            frame_interval,
+        );
         match self.handle_or_forget(key) {
             Some(handle) => EffectAmount::animated(handle, target),
             None => EffectAmount::fixed(current),
@@ -518,11 +613,12 @@ impl AnimationRegistry {
     fn advance<T: Lerp + PartialEq + 'static>(
         &self,
         key: AnimationKey,
-        target: T,
+        request: TransitionRequest<T>,
         config: TransitionConfig,
         render_resolved: bool,
         render_interval: Option<Duration>,
     ) -> T {
+        let target = request.target().clone();
         let requested_epoch = self.view_epoch(key.scope);
         let mut entries = self.entries.borrow_mut();
         let entry = entries.entry(key).or_insert_with(|| {
@@ -556,27 +652,14 @@ impl AnimationRegistry {
         if !render_resolved {
             typed.state.render_resolved.set(false);
         }
-        typed.state.render_interval.set(render_interval);
-
-        // A pulsing key asked for a target instead settles from wherever the pulse is. A finite
-        // transition always runs to its end, so it is never suspended.
-        let was_pulsing = matches!(typed.animation, Some(RenderAnimation::Pulse(_)));
-        typed.state.suspended.set(false);
-        if typed.target != target || was_pulsing {
-            let from = typed.current.clone();
-            typed.target = target.clone();
-            if config.duration.is_zero() {
-                typed.current = target.clone();
-                typed.animation = None;
-            } else {
-                typed.animation = Some(RenderAnimation::Transition(Transition::new(
-                    from,
-                    target.clone(),
-                    config.duration,
-                    config.easing,
-                )));
-            }
+        if matches!(request, TransitionRequest::Target(_)) {
+            typed.state.render_interval.set(render_interval);
         }
+
+        if !matches!(request, TransitionRequest::Target(_)) && !typed.state.render_resolved.get() {
+            self.generation.set(self.generation.get().wrapping_add(1));
+        }
+        typed.request_transition(request, config);
 
         typed.current.clone()
     }
@@ -1474,5 +1557,182 @@ mod tests {
         let reg = AnimationRegistry::default();
         let _ = reg.transition::<Color>("k".into(), Color::Red, cfg(100));
         let _ = reg.transition::<f32>("k".into(), 0.0, cfg(100));
+    }
+}
+
+#[cfg(test)]
+mod transition_control_tests {
+    use super::*;
+    use crate::animation::Easing;
+
+    fn key(name: &str) -> AnimationKey {
+        AnimationKey::new(ScopeId(0), name.to_owned())
+    }
+    fn ms(n: u64) -> Duration {
+        Duration::from_millis(n)
+    }
+    fn cfg(n: u64) -> TransitionConfig {
+        TransitionConfig {
+            duration: ms(n),
+            easing: Easing::Linear,
+        }
+    }
+    fn handle(amount: EffectAmount) -> AnimationHandle {
+        amount.handle().unwrap()
+    }
+
+    #[test]
+    fn ordinary_same_target_stays_sticky_but_restart_resets_timing() {
+        let reg = AnimationRegistry::default();
+        reg.transition(key("k"), 0.0f32, cfg(100));
+        reg.transition(key("k"), 1.0f32, cfg(100));
+        reg.tick(ms(50), ms(50));
+        assert_eq!(reg.transition(key("k"), 1.0f32, cfg(1000)), 0.5);
+        reg.tick(ms(25), ms(75));
+        assert_eq!(reg.transition(key("k"), 1.0f32, cfg(100)), 0.75);
+        reg.restart_transition(key("k"), None, 1.0f32, cfg(100));
+        reg.tick(ms(50), ms(125));
+        assert_eq!(reg.transition(key("k"), 1.0f32, cfg(100)), 0.875);
+        reg.tick(ms(50), ms(175));
+        assert_eq!(reg.transition(key("k"), 1.0f32, cfg(100)), 1.0);
+        assert!(!reg.has_active());
+    }
+
+    #[test]
+    fn same_target_with_zero_duration_remains_sticky_until_explicitly_snapped() {
+        let reg = AnimationRegistry::default();
+        reg.transition(key("k"), 0.0f32, cfg(100));
+        reg.transition(key("k"), 1.0f32, cfg(100));
+        reg.tick(ms(50), ms(50));
+        assert_eq!(reg.transition(key("k"), 1.0f32, cfg(0)), 0.5);
+        assert!(reg.has_active_view_transition());
+        reg.snap_transition(key("k"), 1.0f32);
+        assert_eq!(reg.transition(key("k"), 1.0f32, cfg(100)), 1.0);
+        assert!(!reg.has_active());
+    }
+
+    #[test]
+    fn render_resolved_colors_keep_their_handle_across_reseed_restart_and_snap() {
+        let reg = AnimationRegistry::default();
+        let Paint::Animated { handle, .. } =
+            reg.animated_paint(key("color"), Color::Blue, cfg(100), None)
+        else {
+            panic!("expected handle");
+        };
+        reg.restart_transition(key("color"), Some(Color::Red), Color::Blue, cfg(100));
+        assert_eq!(reg.resolve_paint(handle), Some(Color::Red));
+        let tick = reg.tick(ms(50), ms(50));
+        assert!(tick.render_changed);
+        assert!(!tick.view_changed);
+        let midway = reg.resolve_paint(handle).unwrap();
+        assert_ne!(midway, Color::Red);
+        assert_ne!(midway, Color::Blue);
+        reg.restart_transition(key("color"), None, Color::Blue, cfg(100));
+        assert_eq!(reg.resolve_paint(handle), Some(midway));
+        reg.tick(ms(100), ms(150));
+        assert_eq!(reg.resolve_paint(handle), Some(Color::Blue));
+        reg.snap_transition(key("color"), Color::Green);
+        assert_eq!(reg.resolve_paint(handle), Some(Color::Green));
+        assert!(!reg.has_active());
+    }
+
+    #[test]
+    fn reseed_and_snap_work_on_new_and_running_keys_and_invalidate_view_memos() {
+        let reg = AnimationRegistry::default();
+        reg.restart_transition(key("k"), Some(0.2f32), 1.0, cfg(100));
+        assert_eq!(reg.transition(key("k"), 1.0f32, cfg(100)), 0.2);
+        reg.tick(ms(50), ms(50));
+        let generation = reg.generation();
+        reg.restart_transition(key("k"), Some(0.0f32), 1.0, cfg(100));
+        assert!(reg.generation() > generation);
+        assert_eq!(reg.transition(key("k"), 1.0f32, cfg(100)), 0.0);
+        reg.tick(ms(100), ms(150));
+        assert_eq!(reg.transition(key("k"), 1.0f32, cfg(100)), 1.0);
+        reg.restart_transition(key("k"), Some(0.0f32), 1.0, cfg(100));
+        let generation = reg.generation();
+        reg.snap_transition(key("k"), 1.0f32);
+        assert!(reg.generation() > generation);
+        assert_eq!(reg.transition(key("k"), 1.0f32, cfg(100)), 1.0);
+        assert!(!reg.has_active());
+        reg.snap_transition(key("new"), 0.3f32);
+        assert_eq!(reg.transition(key("new"), 0.3f32, cfg(100)), 0.3);
+    }
+
+    #[test]
+    fn controls_preserve_render_handles_and_cadence_without_forcing_views() {
+        let reg = AnimationRegistry::default();
+        let slot = handle(reg.animated_amount(key("k"), 1.0, cfg(100), Some(ms(80))));
+        let generation = reg.generation();
+        reg.restart_transition(key("k"), Some(0.0f32), 1.0, cfg(100));
+        assert_eq!(reg.resolve_scalar(slot), Some(0.0));
+        assert_eq!(reg.active_render_transition_interval(ms(20)), Some(ms(80)));
+        let tick = reg.tick(ms(50), ms(50));
+        assert!(tick.render_changed);
+        assert!(!tick.view_changed);
+        assert_eq!(reg.generation(), generation);
+        assert_eq!(reg.resolve_scalar(slot), Some(0.5));
+        reg.snap_transition(key("k"), 1.0f32);
+        assert_eq!(reg.resolve_scalar(slot), Some(1.0));
+        assert!(!reg.has_active());
+        reg.restart_transition(key("k"), Some(0.0f32), 1.0, cfg(100));
+        reg.tick(ms(100), ms(150));
+        assert_eq!(reg.resolve_scalar(slot), Some(1.0));
+        assert_eq!(
+            handle(reg.animated_amount(key("k"), 1.0, cfg(100), None)),
+            slot
+        );
+    }
+
+    #[test]
+    fn pulse_handoffs_wake_only_the_controlled_key_and_keep_handle_generations_safe() {
+        let reg = AnimationRegistry::default();
+        let pulse = EffectPulse::new(0.0, 1.0)
+            .period(ms(1000))
+            .easing(Easing::Linear)
+            .frame_rate(10);
+        let slot = handle(reg.pulsing_amount(key("pulse"), pulse, ms(0)));
+        let hidden = handle(reg.pulsing_amount(key("hidden"), pulse, ms(0)));
+        reg.begin_paint();
+        reg.finish_paint();
+        assert!(!reg.has_active_render_transition());
+        reg.restart_transition(key("pulse"), Some(0.4f32), 1.0, cfg(100));
+        assert!(reg.has_active_render_transition());
+        reg.tick(ms(50), ms(50));
+        assert!((reg.resolve_scalar(slot).unwrap() - 0.7).abs() < 1e-6);
+        // Unrelated suspended pulse has not advanced.
+        assert_eq!(reg.current_scalar(&key("hidden")), Some(0.0));
+        reg.tick(ms(50), ms(100));
+        assert_eq!(reg.resolve_scalar(slot), Some(1.0));
+        assert_eq!(
+            handle(reg.pulsing_amount(key("pulse"), pulse, ms(100))),
+            slot
+        );
+        reg.tick(ms(100), ms(200));
+        assert_eq!(reg.resolve_scalar(slot), Some(0.2));
+        reg.snap_transition(key("pulse"), 0.8f32);
+        assert_eq!(reg.resolve_scalar(slot), Some(0.8));
+        reg.note_view(ScopeId(0));
+        reg.end_frame_gc(|_| true);
+        assert_eq!(reg.resolve_scalar(slot), None);
+        assert_eq!(reg.resolve_scalar(hidden), None);
+        let new = handle(reg.animated_amount(key("pulse"), 0.0, cfg(100), None));
+        assert_ne!(new, slot);
+        assert_eq!(reg.resolve_scalar(slot), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "different value type")]
+    fn restarting_a_key_with_the_wrong_type_panics() {
+        let reg = AnimationRegistry::default();
+        reg.snap_transition(key("k"), Color::Red);
+        reg.restart_transition(key("k"), Some(0.0f32), 1.0, cfg(100));
+    }
+
+    #[test]
+    #[should_panic(expected = "different value type")]
+    fn snapping_a_key_with_the_wrong_type_panics() {
+        let reg = AnimationRegistry::default();
+        reg.transition(key("k"), Color::Red, cfg(100));
+        reg.snap_transition(key("k"), 0.0f32);
     }
 }

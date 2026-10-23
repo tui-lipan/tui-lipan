@@ -126,6 +126,7 @@ same live screen does not repeat the report. Paint-only updates also synchronize
 | `on_resize` | `Callback<TerminalViewport>` | Viewport size changed; emitted synchronously during reconciliation |
 | `on_scroll_to` | `Callback<usize>` | Scrollback offset changed |
 | `on_mouse_forward` | `Callback<Vec<u8>>` | Mouse event bytes for PTY |
+| `on_mouse_forward_event` | `Callback<ForwardedMouseEvent>` | Structured mouse report with terminal-local coordinates, modes, and encoded bytes |
 | `link_activation_mods` | `KeyMods` | Modifiers required for link activation (default: `KeyMods::CTRL`; extras allowed) |
 | `link_hover_style` | `StyleSlot` | Style for the link under a modified pointer (default: underline) |
 | `on_link_activate` | `Callback<TerminalLinkEvent>` | Modified click on an OSC 8 link or detected URL |
@@ -930,6 +931,32 @@ the user asked for.
 
 Forwarding is a passthrough: the app-level `scroll_wheel_multiplier` scales local scrolling only and
 is never applied to reports sent to a child, which applies its own scroll step.
+
+### Structured mouse forwarding
+
+Use `on_mouse_forward_event` when forwarding policy needs the mouse event's meaning:
+
+```rust,ignore
+Terminal::new().on_mouse_forward_event(Callback::new(|event: ForwardedMouseEvent| {
+    inspect(event.kind, event.cell, event.mods);
+    write_to_child(event.bytes);
+}))
+```
+
+`ForwardedMouseEvent` carries `kind` with its button or wheel direction, `mods`, zero-based
+terminal-local `cell` coordinates, optional zero-based `pixel` coordinates, and the child's
+`mouse_mode` including tracking and wire encoding. `pixel` is present when the host supplied
+sub-cell precision and uses the child terminal's cell geometry. `repeat_count` records raw
+wheel ticks coalesced into one callback. `bytes` contains the authoritative encoding with
+all repetitions already applied; forward it unchanged rather than encoding it again.
+Legacy X10 and UTF-8 release reports use the no-button release code; SGR reports identify
+the released button.
+
+`on_mouse_forward` remains available for byte-only consumers. Both setters select the same
+callback; the last setter wins. They share tracking-mode filtering, Shift selection, focus-only
+press consumption, and protocol coordinate limits. Semantic consumers can switch the setter
+to `on_mouse_forward_event`, inspect the fields, and forward `event.bytes` to their existing
+PTY writer. No terminal-byte decoder is needed.
 
 ### Pixel-precise reports
 
