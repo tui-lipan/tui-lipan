@@ -877,6 +877,30 @@ FileTree::new("/home/user/projects")
     .on_select(ctx.link().callback(|e: FileTreeEvent| Msg::FileSelected(e.path)))
 ```
 
+### Git styles and porcelain semantics
+
+Unset `git_style_modified`, `git_style_added`, `git_style_deleted`, `git_style_renamed`,
+`git_style_untracked`, and `git_style_conflicted` use the matching `theme.git_status` color.
+They follow the active scoped theme when it changes. Each setter replaces that role's
+style completely, including an explicitly empty `Style::default()`. Setting only some
+roles leaves the rest theme-derived. Staged non-conflict markers and staged label
+highlights use the added role; conflicts use the conflicted role. Numeric additions and
+deletions use the added and deleted roles.
+
+`GitFileStatus::from_porcelain_xy(x, y)` decodes semantic status columns without running
+Git or reading paths. Applications can execute Git remotely, impose their own timeouts
+and output limits, and convert the result into their own transport types. FileTree's
+local status reader uses the same decoder.
+
+The decoder keeps index and worktree changes in `staged` and `unstaged`; `primary_state()`
+prefers staged changes. `??` is unstaged `Untracked`, while ignored `!!`, clean pairs, and
+invalid columns return `None`. A space or porcelain v2 dot denotes an unchanged column.
+All seven unmerged pairs, `UU`, `AA`, `DD`, `AU`, `UA`, `DU`, and `UD`, yield a single
+`Conflicted` entry in `staged`, with no `unstaged` entry. These columns describe merge sides
+rather than index and worktree changes. Copies share the `Renamed` presentation category,
+and type changes use `Modified`. Callers needing copy identity or the precise conflict
+subtype should retain the original columns alongside the decoded presentation status.
+
 ### Events
 
 ```rust

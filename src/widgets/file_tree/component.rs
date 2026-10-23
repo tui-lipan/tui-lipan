@@ -20,7 +20,7 @@ use super::git::{
     discover_git_root, insert_provided_decoration_path_and_parents, load_git_snapshot,
     provided_change_snapshot,
 };
-use super::mod_private::FileTreeProps;
+use super::mod_private::{FileTreeProps, GitStyles};
 use super::provided_path::ProvidedPath;
 use super::watch::{
     self, RepositoryWatch, WatchSession, WatchState, plan_flush, visible_directories,
@@ -207,6 +207,7 @@ struct FileTreeProjection {
 
 struct ProjectionBuildContext<'a> {
     props: &'a FileTreeProps,
+    git_styles: GitStyles,
     expanded: &'a HashSet<Arc<str>>,
     explorer_filter: Option<&'a ExplorerFilter>,
     git_decorations: &'a HashMap<Arc<str>, GitFileDecorations>,
@@ -335,7 +336,12 @@ impl Component for FileTreeComponent {
 
         let active_filter = active_explorer_filter(&ctx.props, &ctx.state);
 
-        let projection = build_projection(&ctx.props, &ctx.state, active_filter);
+        let projection = build_projection_with_styles(
+            &ctx.props,
+            &ctx.state,
+            active_filter,
+            ctx.props.git_styles(&ctx.theme()),
+        );
         let empty_changed_only =
             changed_only_projection_is_empty(&ctx.props, &ctx.state, &projection);
         let selected_by_path = selected_visible_index_by_path(&ctx.props, &ctx.state, &projection);
@@ -2547,7 +2553,21 @@ fn build_projection(
     state: &FileTreeState,
     explorer_filter: Option<&ExplorerFilter>,
 ) -> FileTreeProjection {
-    let projection = build_projection_lifting(props, state, explorer_filter, None);
+    build_projection_with_styles(
+        props,
+        state,
+        explorer_filter,
+        props.git_styles(&crate::style::Theme::default()),
+    )
+}
+
+fn build_projection_with_styles(
+    props: &FileTreeProps,
+    state: &FileTreeState,
+    explorer_filter: Option<&ExplorerFilter>,
+    git_styles: GitStyles,
+) -> FileTreeProjection {
+    let projection = build_projection_lifting(props, state, explorer_filter, None, git_styles);
     // The cursor row is only known once the rows are: a selection by index names a row, not a path.
     // Rebuilding is rare, since it takes a cursor resting on a hidden or ignored row.
     if cursor_highlight_shown(props, state)
@@ -2558,7 +2578,7 @@ fn build_projection(
             .find_map(|(path, &row)| (row == index).then(|| path.clone()))
         && projection.receded_paths.contains(&path)
     {
-        return build_projection_lifting(props, state, explorer_filter, Some(&path));
+        return build_projection_lifting(props, state, explorer_filter, Some(&path), git_styles);
     }
     projection
 }
@@ -2569,6 +2589,7 @@ fn build_projection_lifting(
     state: &FileTreeState,
     explorer_filter: Option<&ExplorerFilter>,
     lifted: Option<&str>,
+    git_styles: GitStyles,
 ) -> FileTreeProjection {
     let snapshot = effective_change_snapshot(state);
     let root = if props.change_view == FileTreeChangeView::ChangedOnly {
@@ -2611,6 +2632,7 @@ fn build_projection_lifting(
     let mut receded_paths = HashSet::new();
     let mut build_ctx = ProjectionBuildContext {
         props,
+        git_styles,
         expanded: expanded.as_ref(),
         explorer_filter,
         git_decorations: &snapshot.entries,
@@ -2905,7 +2927,7 @@ fn build_projected_tree_node(
         && let Some(status) = git_status
         && !is_root
     {
-        kind_label_style.patch(status.style(ctx.props))
+        kind_label_style.patch(status.style(&ctx.git_styles))
     } else {
         kind_label_style
     };
@@ -2930,8 +2952,13 @@ fn build_projected_tree_node(
         spans.push(target);
     }
 
-    let mut description_spans =
-        git_description_spans(git_decoration, ctx.props, node.is_dir(), is_expanded);
+    let mut description_spans = git_description_spans(
+        git_decoration,
+        ctx.props,
+        &ctx.git_styles,
+        node.is_dir(),
+        is_expanded,
+    );
     apply_suffix_style(
         &mut description_spans,
         ctx.props.change_suffix_style,
@@ -3098,6 +3125,7 @@ fn lexical_normalize_path(path: &Path) -> PathBuf {
 fn git_description_spans(
     decoration: Option<GitFileDecorations>,
     props: &FileTreeProps,
+    styles: &GitStyles,
     is_dir: bool,
     is_expanded: bool,
 ) -> Vec<crate::style::Span> {
@@ -3119,18 +3147,18 @@ fn git_description_spans(
     {
         spans.push(Span::new(" "));
         if diff_stat.added > 0 {
-            spans.push(Span::new(format!("+{}", diff_stat.added)).style(props.git_style_added));
+            spans.push(Span::new(format!("+{}", diff_stat.added)).style(styles.added));
         }
         if diff_stat.removed > 0 {
             if diff_stat.added > 0 {
                 spans.push(Span::new(" "));
             }
-            spans.push(Span::new(format!("-{}", diff_stat.removed)).style(props.git_style_deleted));
+            spans.push(Span::new(format!("-{}", diff_stat.removed)).style(styles.deleted));
         }
     }
 
     if props.git_status {
-        push_git_status_spans(&mut spans, decoration.status, props);
+        push_git_status_spans(&mut spans, decoration.status, props, styles);
     }
 
     spans
@@ -3140,6 +3168,7 @@ fn push_git_status_spans(
     spans: &mut Vec<crate::style::Span>,
     status: super::git::GitFileStatus,
     props: &FileTreeProps,
+    styles: &GitStyles,
 ) {
     use crate::style::Span;
 
@@ -3149,14 +3178,17 @@ fn push_git_status_spans(
 
     spans.push(Span::new(" "));
     if let Some(staged) = status.staged {
-        spans.push(Span::new(git_marker(staged, props, true)).style(props.git_style_added));
+        spans.push(
+            Span::new(git_marker(staged, props, true))
+                .style(super::git::GitFileStatus::new(Some(staged), None).style(styles)),
+        );
     }
 
     if let Some(unstaged) = status.unstaged {
         if status.staged.is_some() {
             spans.push(Span::new(" "));
         }
-        spans.push(Span::new(git_marker(unstaged, props, false)).style(unstaged.style(props)));
+        spans.push(Span::new(git_marker(unstaged, props, false)).style(unstaged.style(styles)));
     }
     if props.git_status_padding_right > 0 {
         spans.push(Span::new(
@@ -5861,10 +5893,16 @@ mod tests {
                 diff_stat,
                 direct: true,
             };
-            let actual = git_description_spans(Some(decoration), &props, false, false)
-                .iter()
-                .map(|span| span.content.as_ref())
-                .collect::<String>();
+            let actual = git_description_spans(
+                Some(decoration),
+                &props,
+                &props.git_styles(&crate::style::Theme::default()),
+                false,
+                false,
+            )
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
             assert_eq!(actual, expected, "{decoration:?}, show_stats={show_stats}");
         }
     }
@@ -5882,7 +5920,13 @@ mod tests {
             true,
         );
 
-        let spans = git_description_spans(Some(decoration), &props, false, false);
+        let spans = git_description_spans(
+            Some(decoration),
+            &props,
+            &props.git_styles(&crate::style::Theme::default()),
+            false,
+            false,
+        );
         let content: Vec<&str> = spans.iter().map(|span| span.content.as_ref()).collect();
 
         assert_eq!(content, vec![" ", "M"]);
@@ -5899,7 +5943,13 @@ mod tests {
             true,
         );
 
-        let spans = git_description_spans(Some(decoration), &props, false, false);
+        let spans = git_description_spans(
+            Some(decoration),
+            &props,
+            &props.git_styles(&crate::style::Theme::default()),
+            false,
+            false,
+        );
         let content: Vec<&str> = spans.iter().map(|span| span.content.as_ref()).collect();
 
         assert_eq!(content, vec![" ", "+2", " ", "-1"]);
@@ -5920,7 +5970,13 @@ mod tests {
             direct: true,
         };
 
-        let spans = git_description_spans(Some(decoration), &props, false, false);
+        let spans = git_description_spans(
+            Some(decoration),
+            &props,
+            &props.git_styles(&crate::style::Theme::default()),
+            false,
+            false,
+        );
         let content: Vec<&str> = spans.iter().map(|span| span.content.as_ref()).collect();
 
         assert_eq!(content, vec![" ", "+2", " ", "-1", " ", "M"]);
@@ -5939,7 +5995,13 @@ mod tests {
             false,
         );
 
-        let spans = git_description_spans(Some(decoration), &props, true, false);
+        let spans = git_description_spans(
+            Some(decoration),
+            &props,
+            &props.git_styles(&crate::style::Theme::default()),
+            true,
+            false,
+        );
         let content: Vec<&str> = spans.iter().map(|span| span.content.as_ref()).collect();
 
         assert_eq!(content, vec![" ", "M"]);
@@ -5958,7 +6020,13 @@ mod tests {
             false,
         );
 
-        let spans = git_description_spans(Some(decoration), &props, true, true);
+        let spans = git_description_spans(
+            Some(decoration),
+            &props,
+            &props.git_styles(&crate::style::Theme::default()),
+            true,
+            true,
+        );
 
         assert!(spans.is_empty());
     }
@@ -5993,6 +6061,7 @@ mod tests {
         let path_styles = HashMap::new();
         let mut ctx = ProjectionBuildContext {
             props: &props,
+            git_styles: props.git_styles(&crate::style::Theme::default()),
             expanded: &expanded,
             explorer_filter: None,
             git_decorations: &decorations,
@@ -6011,7 +6080,7 @@ mod tests {
         assert_eq!(tree.item.spans[0].style, Style::default());
         assert_eq!(
             tree.item.description_spans[1].style,
-            props.git_style_modified
+            props.git_styles(&crate::style::Theme::default()).modified
         );
     }
 
@@ -6037,6 +6106,7 @@ mod tests {
         let path_styles = HashMap::new();
         let mut ctx = ProjectionBuildContext {
             props: &props,
+            git_styles: props.git_styles(&crate::style::Theme::default()),
             expanded: &expanded,
             explorer_filter: None,
             git_decorations: &decorations,
@@ -6069,6 +6139,7 @@ mod tests {
         let path_styles = HashMap::new();
         let mut ctx = ProjectionBuildContext {
             props: &props,
+            git_styles: props.git_styles(&crate::style::Theme::default()),
             expanded: &expanded,
             explorer_filter: None,
             git_decorations: &decorations,
@@ -6130,6 +6201,7 @@ mod tests {
         let path_styles = HashMap::new();
         let mut ctx = ProjectionBuildContext {
             props: &props,
+            git_styles: props.git_styles(&crate::style::Theme::default()),
             expanded: &expanded,
             explorer_filter: None,
             git_decorations: &decorations,
@@ -6182,6 +6254,7 @@ mod tests {
         let path_styles = HashMap::new();
         let mut ctx = ProjectionBuildContext {
             props: &props,
+            git_styles: props.git_styles(&crate::style::Theme::default()),
             expanded: &expanded,
             explorer_filter: None,
             git_decorations: &decorations,
@@ -6197,7 +6270,10 @@ mod tests {
         let tree = build_projected_tree_node(&node, false, Vec::new(), &mut ctx);
 
         assert_eq!(tree.item.spans[0].content.as_ref(), "main.rs");
-        assert_eq!(tree.item.spans[0].style, props.git_style_modified);
+        assert_eq!(
+            tree.item.spans[0].style,
+            props.git_styles(&crate::style::Theme::default()).modified
+        );
     }
 
     #[test]
@@ -6215,6 +6291,7 @@ mod tests {
         let path_styles = HashMap::new();
         let mut ctx = ProjectionBuildContext {
             props: &props,
+            git_styles: props.git_styles(&crate::style::Theme::default()),
             expanded: &expanded,
             explorer_filter: None,
             git_decorations: &decorations,
@@ -6287,6 +6364,7 @@ mod tests {
         let path_styles = HashMap::new();
         let mut ctx = ProjectionBuildContext {
             props: &props,
+            git_styles: props.git_styles(&crate::style::Theme::default()),
             expanded: &expanded,
             explorer_filter: None,
             git_decorations: &decorations,
@@ -6303,7 +6381,7 @@ mod tests {
 
         assert_eq!(
             tree.item.spans[0].style,
-            file_style.patch(props.git_style_modified)
+            file_style.patch(props.git_styles(&crate::style::Theme::default()).modified)
         );
     }
 
@@ -6339,6 +6417,7 @@ mod tests {
         let mut lookup = HashMap::new();
         let mut ctx = ProjectionBuildContext {
             props: &props,
+            git_styles: props.git_styles(&crate::style::Theme::default()),
             expanded: &expanded,
             explorer_filter: None,
             git_decorations: &decorations,
@@ -6359,7 +6438,7 @@ mod tests {
         assert_eq!(tree.item.spans[2].style, label_style);
         assert_eq!(
             tree.item.description_spans[1].style,
-            props.git_style_modified
+            props.git_styles(&crate::style::Theme::default()).modified
         );
     }
 
@@ -6397,6 +6476,7 @@ mod tests {
         let mut lookup = HashMap::new();
         let mut ctx = ProjectionBuildContext {
             props: &props,
+            git_styles: props.git_styles(&crate::style::Theme::default()),
             expanded: &expanded,
             explorer_filter: None,
             git_decorations: &decorations,
@@ -6421,15 +6501,18 @@ mod tests {
         );
         assert_eq!(
             tree.item.description_spans[5].style.fg,
-            props.git_style_modified.fg
+            props
+                .git_styles(&crate::style::Theme::default())
+                .modified
+                .fg
         );
         assert_eq!(
             tree.item.description_spans[1].style.fg,
-            props.git_style_added.fg
+            props.git_styles(&crate::style::Theme::default()).added.fg
         );
         assert_eq!(
             tree.item.description_spans[3].style.fg,
-            props.git_style_deleted.fg
+            props.git_styles(&crate::style::Theme::default()).deleted.fg
         );
     }
 
@@ -6449,7 +6532,13 @@ mod tests {
             diff_stat: Some(crate::widgets::file_tree::git::GitDiffStat::new(30, 21)),
             direct: true,
         };
-        let mut spans = git_description_spans(Some(decoration), &props, false, false);
+        let mut spans = git_description_spans(
+            Some(decoration),
+            &props,
+            &props.git_styles(&crate::style::Theme::default()),
+            false,
+            false,
+        );
 
         apply_suffix_style(&mut spans, props.change_suffix_style, None);
 
@@ -6461,9 +6550,21 @@ mod tests {
             vec![" ", "+30", " ", "-21", " ", "M"]
         );
         assert!(spans.iter().all(|span| span.style.dim == Some(true)));
-        assert_eq!(spans[5].style.fg, props.git_style_modified.fg);
-        assert_eq!(spans[1].style.fg, props.git_style_added.fg);
-        assert_eq!(spans[3].style.fg, props.git_style_deleted.fg);
+        assert_eq!(
+            spans[5].style.fg,
+            props
+                .git_styles(&crate::style::Theme::default())
+                .modified
+                .fg
+        );
+        assert_eq!(
+            spans[1].style.fg,
+            props.git_styles(&crate::style::Theme::default()).added.fg
+        );
+        assert_eq!(
+            spans[3].style.fg,
+            props.git_styles(&crate::style::Theme::default()).deleted.fg
+        );
     }
 
     #[test]
@@ -6486,6 +6587,7 @@ mod tests {
         let mut lookup = HashMap::new();
         let mut ctx = ProjectionBuildContext {
             props: &props,
+            git_styles: props.git_styles(&crate::style::Theme::default()),
             expanded: &expanded,
             explorer_filter: None,
             git_decorations: &decorations,
@@ -6524,6 +6626,7 @@ mod tests {
         let mut lookup = HashMap::new();
         let mut ctx = ProjectionBuildContext {
             props: &props,
+            git_styles: props.git_styles(&crate::style::Theme::default()),
             expanded: &expanded,
             explorer_filter: None,
             git_decorations: &decorations,
@@ -6717,6 +6820,7 @@ mod tests {
         let path_styles = HashMap::new();
         let mut ctx = ProjectionBuildContext {
             props: &props,
+            git_styles: props.git_styles(&crate::style::Theme::default()),
             expanded: &expanded,
             explorer_filter: None,
             git_decorations: &decorations,
@@ -6939,6 +7043,7 @@ mod tests {
         let path_styles = HashMap::new();
         let mut ctx = ProjectionBuildContext {
             props: &props,
+            git_styles: props.git_styles(&crate::style::Theme::default()),
             expanded: &expanded,
             explorer_filter: None,
             git_decorations: &decorations,
@@ -6993,6 +7098,7 @@ mod tests {
         let path_styles = HashMap::new();
         let mut ctx = ProjectionBuildContext {
             props: &props,
+            git_styles: props.git_styles(&crate::style::Theme::default()),
             expanded: &expanded,
             explorer_filter: None,
             git_decorations: &decorations,

@@ -19,10 +19,6 @@ pub(crate) use mod_private::FileTreeProps;
 
 pub(crate) const EXPLORER_INPUT_KEY: &str = "__ft_input";
 pub(crate) const TREE_INPUT_KEY: &str = "__ft_tree";
-use mod_private::{
-    default_git_style_added, default_git_style_conflicted, default_git_style_deleted,
-    default_git_style_modified, default_git_style_renamed, default_git_style_untracked,
-};
 
 use crate::callback::Callback;
 use crate::core::element::Element;
@@ -491,14 +487,13 @@ impl FileTree {
                 git_marker_renamed: "R".into(),
                 git_marker_untracked: "?".into(),
                 git_marker_conflicted: "!".into(),
-                // Git status colors - these are defaults that work standalone
-                // ThemeProvider will override these if they match the defaults
-                git_style_modified: default_git_style_modified(),
-                git_style_added: default_git_style_added(),
-                git_style_deleted: default_git_style_deleted(),
-                git_style_renamed: default_git_style_renamed(),
-                git_style_untracked: default_git_style_untracked(),
-                git_style_conflicted: default_git_style_conflicted(),
+                // Resolve unset Git styles from the active theme during view construction.
+                git_style_modified: None,
+                git_style_added: None,
+                git_style_deleted: None,
+                git_style_renamed: None,
+                git_style_untracked: None,
+                git_style_conflicted: None,
                 change_suffix_style: Style::default(),
                 change_suffix_priority: FileTreeSuffixPriority::default(),
                 symlink_targets: true,
@@ -1362,39 +1357,45 @@ impl FileTree {
         self
     }
 
-    /// Set style for `Modified` git status marker.
+    /// Replace the `Modified` Git style. Unset styles follow the active theme.
+    /// An explicitly empty style also replaces the theme role.
     pub fn git_style_modified(mut self, style: Style) -> Self {
-        self.props.git_style_modified = style;
+        self.props.git_style_modified = Some(style);
         self
     }
 
-    /// Set style for `Added` git status marker.
+    /// Replace the `Added` Git style. Unset styles follow the active theme.
+    /// An explicitly empty style also replaces the theme role.
     pub fn git_style_added(mut self, style: Style) -> Self {
-        self.props.git_style_added = style;
+        self.props.git_style_added = Some(style);
         self
     }
 
-    /// Set style for `Deleted` git status marker.
+    /// Replace the `Deleted` Git style. Unset styles follow the active theme.
+    /// An explicitly empty style also replaces the theme role.
     pub fn git_style_deleted(mut self, style: Style) -> Self {
-        self.props.git_style_deleted = style;
+        self.props.git_style_deleted = Some(style);
         self
     }
 
-    /// Set style for `Renamed` git status marker.
+    /// Replace the `Renamed` Git style. Unset styles follow the active theme.
+    /// An explicitly empty style also replaces the theme role.
     pub fn git_style_renamed(mut self, style: Style) -> Self {
-        self.props.git_style_renamed = style;
+        self.props.git_style_renamed = Some(style);
         self
     }
 
-    /// Set style for `Untracked` git status marker.
+    /// Replace the `Untracked` Git style. Unset styles follow the active theme.
+    /// An explicitly empty style also replaces the theme role.
     pub fn git_style_untracked(mut self, style: Style) -> Self {
-        self.props.git_style_untracked = style;
+        self.props.git_style_untracked = Some(style);
         self
     }
 
-    /// Set style for `Conflicted` git status marker.
+    /// Replace the `Conflicted` Git style. Unset styles follow the active theme.
+    /// An explicitly empty style also replaces the theme role.
     pub fn git_style_conflicted(mut self, style: Style) -> Self {
-        self.props.git_style_conflicted = style;
+        self.props.git_style_conflicted = Some(style);
         self
     }
 

@@ -1074,3 +1074,115 @@ fn after_fires_in_due_order_regardless_of_submission_order() {
         "late"
     );
 }
+
+#[test]
+fn paint_with_command_preserves_paint_and_accepts_none() {
+    for command in [None, Some(Command::new(|| {}))] {
+        let owns_command = command.is_some();
+        let update = Update::paint_with_command(command);
+        assert!(update.dirty);
+        assert_eq!(update.level(), super::UpdateLevel::Paint);
+        assert_eq!(update.command.is_some(), owns_command);
+    }
+}
+
+#[test]
+fn merging_updates_preserves_the_strongest_level_and_each_command_owner() {
+    let constructors: [fn() -> Update; 4] =
+        [Update::none, Update::paint, Update::layout, Update::full];
+    for left in constructors {
+        for right in constructors {
+            for command_owner in 0..=2 {
+                let mut a = left();
+                let mut b = right();
+                if command_owner == 1 {
+                    a.command = Some(Command::new(|| {}));
+                }
+                if command_owner == 2 {
+                    b.command = Some(Command::new(|| {}));
+                }
+                let expected = a.level().max(b.level());
+                let update = a.merge(b);
+                assert_eq!(update.level(), expected);
+                assert_eq!(update.dirty, expected != super::UpdateLevel::None);
+                assert_eq!(update.command.is_some(), command_owner != 0);
+            }
+        }
+    }
+}
+
+#[test]
+fn merged_commands_execute_in_order_without_being_dropped() {
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let make = |n| {
+        let seen = seen.clone();
+        Command::new(move || seen.borrow_mut().push(n))
+    };
+    let update = Update::command_only(make(1))
+        .merge(Update::paint_with_command(make(2)))
+        .merge(Update::layout_with_command(make(3)));
+    assert_eq!(update.level(), super::UpdateLevel::Layout);
+    let (tx, _rx, _wake) = super::CommandTx::channel();
+    update.command.unwrap().run(CommandRuntime {
+        scope: ScopeId(1),
+        tx,
+        runtime_id: super::RuntimeId::next(),
+        now: web_time::Instant::now(),
+        clock_mode: crate::automation::ClockMode::Controlled,
+        clock: crate::core::runtime_env::SessionClock::new(
+            crate::automation::ClockMode::Controlled,
+        ),
+        activity: Arc::new(crate::core::runtime_env::RuntimeActivity::default()),
+    });
+    assert_eq!(*seen.borrow(), [1, 2, 3]);
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn commands_widen_terminal_damage_updates_to_paint_in_both_merge_orders() {
+    for terminal in [Update::terminal_paint, Update::terminal_graphics] {
+        let level = terminal().level();
+        assert_eq!(terminal().merge(Update::none()).level(), level);
+        assert_eq!(Update::none().merge(terminal()).level(), level);
+        assert_eq!(
+            terminal().merge(Update::paint()).level(),
+            super::UpdateLevel::Paint
+        );
+        assert_eq!(
+            terminal().merge(Update::layout()).level(),
+            super::UpdateLevel::Layout
+        );
+        for reverse in [false, true] {
+            let command = Update::command_only(Command::new(|| {}));
+            let update = if reverse {
+                command.merge(terminal())
+            } else {
+                terminal().merge(command)
+            };
+            assert_eq!(update.level(), super::UpdateLevel::Paint);
+            assert!(update.command.is_some());
+        }
+    }
+}
+
+#[test]
+fn runtime_executes_paint_commands_without_promoting_the_update() {
+    struct Probe(Rc<Cell<usize>>);
+    impl Component for Probe {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+        fn create_state(&self, _: &()) {}
+        fn view(&self, _: &Context<Self>) -> Element {
+            Text::new("retained").into()
+        }
+        fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+            let count = self.0.clone();
+            Update::paint_with_command(Command::new(move || count.set(count.get() + 1)))
+        }
+    }
+    let count = Rc::new(Cell::new(0));
+    let mut backend = TestBackend::new(Probe(count.clone()));
+    assert_eq!(backend.update_level(()).unwrap(), super::UpdateLevel::Paint);
+    assert_eq!(count.get(), 1);
+}

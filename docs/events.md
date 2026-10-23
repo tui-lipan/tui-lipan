@@ -1084,3 +1084,22 @@ variants. The callback replaces PTY-byte delivery for that paste. Inspect
 `event.content` for its payload and `event.origin` before interpreting text as a
 file-drop path. See
 [terminal paste content](widgets/terminal.md#receive-paste-content-before-pty-encoding).
+
+## ForwardedMouseEvent
+
+A framework-produced terminal mouse report delivered by `Terminal::on_mouse_forward_event`.
+The type is available from the crate root, `widgets`, `widgets::terminal`, and the prelude
+with the `terminal` feature.
+
+| Field | Meaning |
+|-------|---------|
+| `kind` | `MouseKind`: press, release, drag with button, motion, or wheel direction |
+| `mods` | Host `KeyMods`, retained independently of protocol encoding |
+| `cell` | Zero-based terminal-content-relative cell position |
+| `pixel` | Optional zero-based terminal-relative pixel position with sub-cell precision |
+| `mouse_mode` | Child `MouseModeState`, including tracking mode and encoding |
+| `repeat_count` | Number of raw reports represented, at least one |
+| `bytes` | Exact encoded reports, including repetitions, ready for the child PTY |
+
+See [structured mouse forwarding](widgets/terminal.md#structured-mouse-forwarding) for
+callback selection and forwarding rules.
