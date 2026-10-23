@@ -1091,6 +1091,7 @@ Source: `src/widgets/file_tree/mod.rs:383` (`FileTree`).
 | `empty_text_style` | `Style::default()` |
 | `empty_text_padding` | `Padding::default()` |
 | `explorer` | `false` |
+| `explorer_max_matches` | `explorer::DEFAULT_MAX_MATCHES` |
 | `tree_focus_key` | `TREE_INPUT_KEY.into()` |
 | `explorer_focus_key` | `EXPLORER_INPUT_KEY.into()` |
 | `explorer_placeholder` | `"Find files...".into()` |
