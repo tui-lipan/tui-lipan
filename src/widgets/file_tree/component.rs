@@ -1416,8 +1416,9 @@ fn provided_directory_load(
         }
     };
 
-    let mut loaded = Vec::new();
-    let mut omitted = 0usize;
+    // The same cap as a local listing: the first entries in display order, whatever order the
+    // application supplied them in.
+    let mut selection = super::fs::DisplaySelection::new(props.max_entries_per_dir);
     let directory = ProvidedPath::from_path(directory);
     for entry in entries.iter() {
         if (!props.show_hidden && is_hidden_entry(entry.name.as_ref()))
@@ -1425,27 +1426,15 @@ fn provided_directory_load(
         {
             continue;
         }
-        if loaded.len() >= props.max_entries_per_dir {
-            omitted = omitted.saturating_add(1);
-            continue;
-        }
 
         let kind = provided_entry_kind(entry);
-        let path = directory.join_name(entry.name.as_ref());
-        loaded.push(super::fs::LoadedEntry {
+        selection.offer(kind, entry.name.as_ref(), || super::fs::LoadedEntry {
             name: entry.name.clone(),
-            path: Arc::from(path.as_str()),
+            path: Arc::from(directory.join_name(entry.name.as_ref()).as_str()),
             kind,
         });
     }
-    loaded.sort_by(|left, right| {
-        let left_dir = left.kind == FileKind::Directory;
-        let right_dir = right.kind == FileKind::Directory;
-        right_dir
-            .cmp(&left_dir)
-            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
-            .then_with(|| left.name.cmp(&right.name))
-    });
+    let (loaded, omitted) = selection.finish();
 
     super::fs::DirectoryLoadResult {
         entries: loaded,
@@ -5854,6 +5843,32 @@ mod tests {
         let candidates = explorer_search_candidates(&hidden_props, &hidden_state).unwrap();
         assert_eq!(candidates.entries.len(), 1);
         assert_eq!(candidates.entries[0].label.as_ref(), "one.rs");
+    }
+
+    #[test]
+    fn a_capped_provided_listing_keeps_the_first_entries_in_display_order() {
+        let props = crate::widgets::file_tree::FileTree::new("/remote/repo")
+            .entry_source(FileTreeEntrySource::provided([
+                FileTreeDirectoryListing::new(
+                    ".",
+                    [
+                        super::super::FileTreeEntry::file("z.rs"),
+                        super::super::FileTreeEntry::file("a.rs"),
+                        super::super::FileTreeEntry::directory("src"),
+                    ],
+                ),
+            ]))
+            .max_entries_per_dir(2)
+            .props;
+
+        let (root, _) = initial_root(&props);
+        let names: Vec<&str> = root
+            .children
+            .iter()
+            .map(|child| child.name.as_ref())
+            .collect();
+
+        assert_eq!(names, ["src", "a.rs", "... 1 more entries"]);
     }
 
     /// The seed is expansion the tree adopts as its own, so it survives into the projection, loads
