@@ -1,14 +1,19 @@
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 #[cfg(not(target_arch = "wasm32"))]
-use ignore::WalkBuilder;
+use ignore::{DirEntry, ParallelVisitor, ParallelVisitorBuilder, WalkBuilder, WalkState};
 use nucleo::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo::{Config, Matcher, Utf32String};
 
 use super::fs::normalize_path;
 use super::provided_path::ProvidedPath;
+
+/// How many matches an explorer query shows unless the application sets
+/// `FileTree::explorer_max_matches`.
+pub(crate) const DEFAULT_MAX_MATCHES: usize = 1_000;
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ExplorerFilter {
@@ -16,7 +21,10 @@ pub(crate) struct ExplorerFilter {
     pub(crate) expanded_paths: HashSet<Arc<str>>,
     pub(crate) label_hits: HashMap<Arc<str>, Vec<u32>>,
     pub(crate) primary_match_directory: Option<Arc<str>>,
+    /// Every entry the query matched.
     pub(crate) match_count: usize,
+    /// The best-scoring matches the tree shows, at most the match limit.
+    pub(crate) shown_count: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -26,105 +34,239 @@ pub(crate) struct ExplorerCandidate {
     pub(crate) is_dir: bool,
 }
 
-pub(crate) fn search_filesystem(
-    root_path: &str,
-    query: &str,
-    show_hidden: bool,
-    max_entries_per_dir: usize,
-) -> ExplorerFilter {
-    let query = query.trim();
-    if query.is_empty() {
-        return ExplorerFilter::default();
-    }
-
-    let root = PathBuf::from(root_path);
-    let root_path = normalize_path(&root);
-    let entries = collect_entries(&root, show_hidden, max_entries_per_dir);
-
-    search_candidates(&root_path, entries, query)
+/// What a walk depends on. A cached index answers a query only while all of it still holds.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ExplorerIndexKey {
+    pub(crate) root: Arc<str>,
+    pub(crate) show_hidden: bool,
+    pub(crate) max_entries_per_dir: usize,
 }
 
-pub(crate) fn search_candidates(
-    root_path: &Arc<str>,
-    candidates: impl IntoIterator<Item = ExplorerCandidate>,
-    query: &str,
-) -> ExplorerFilter {
-    search_candidates_with_path_flavor(root_path, candidates, query, false)
+/// One searchable entry, with the strings the matcher reads prepared once rather than per query.
+#[derive(Debug)]
+struct IndexedCandidate {
+    path: Arc<str>,
+    is_dir: bool,
+    label: Utf32String,
+    /// The path below the root. Matching the absolute path would let the root's own spelling
+    /// match: under `/home/user/project`, a query of `proj` would match every entry.
+    relative: Utf32String,
 }
 
-pub(crate) fn search_candidates_with_path_flavor(
-    root_path: &Arc<str>,
-    candidates: impl IntoIterator<Item = ExplorerCandidate>,
-    query: &str,
+/// Every entry an explorer query can match, in path order.
+#[derive(Debug)]
+pub(crate) struct ExplorerIndex {
+    key: Option<ExplorerIndexKey>,
+    root_path: Arc<str>,
     provided_paths: bool,
-) -> ExplorerFilter {
-    let query = query.trim();
-    if query.is_empty() {
-        return ExplorerFilter::default();
+    candidates: Vec<IndexedCandidate>,
+}
+
+impl ExplorerIndex {
+    /// Index entries the tree already holds, such as provided listings or a changed-only view.
+    pub(crate) fn from_candidates(
+        root_path: &Arc<str>,
+        candidates: impl IntoIterator<Item = ExplorerCandidate>,
+        provided_paths: bool,
+    ) -> Self {
+        let candidates = candidates
+            .into_iter()
+            .map(|candidate| index_candidate(candidate, root_path, provided_paths))
+            .collect();
+        Self {
+            key: None,
+            root_path: root_path.clone(),
+            provided_paths,
+            candidates,
+        }
     }
 
-    let mut matcher = Matcher::new(Config::DEFAULT);
-    let pattern = Pattern::parse(query, CaseMatching::Smart, Normalization::Smart);
-    let allow_path_fuzzy_match = should_fuzzy_match_full_path(query);
+    /// Walk the filesystem under `key.root`, honoring ignore files.
+    pub(crate) fn walk(key: ExplorerIndexKey) -> Self {
+        let root = PathBuf::from(key.root.as_ref());
+        let root_path = normalize_path(&root);
+        let entries = collect_entries(
+            Path::new(root_path.as_ref()),
+            key.show_hidden,
+            key.max_entries_per_dir,
+        );
+        let mut index = Self::from_candidates(&root_path, entries, false);
+        index.key = Some(key);
+        index
+    }
 
-    let mut filter = ExplorerFilter::default();
-    for entry in candidates {
-        let mut label_hits = Vec::new();
-        let label_utf32 = Utf32String::from(entry.label.as_ref());
-        let label_match = pattern
-            .indices(label_utf32.slice(..), &mut matcher, &mut label_hits)
-            .is_some();
-
-        let path_match = if allow_path_fuzzy_match {
-            let path_utf32 = Utf32String::from(entry.path.as_ref());
-            pattern
-                .indices(path_utf32.slice(..), &mut matcher, &mut Vec::new())
-                .is_some()
-        } else {
-            false
-        };
-
-        if !(label_match || path_match) {
-            continue;
+    /// Match `query` and keep the `max_matches` best-scoring entries.
+    ///
+    /// A filename match outranks a match that needs the directories above it, so `comp` lists
+    /// `component.rs` before `src/compat/mod.rs`. Ties keep path order.
+    pub(crate) fn search(&self, query: &str, max_matches: usize) -> ExplorerFilter {
+        let query = query.trim();
+        if query.is_empty() {
+            return ExplorerFilter::default();
         }
 
-        filter.match_count = filter.match_count.saturating_add(1);
-        include_path_with_ancestors(
-            &mut filter.visible_paths,
-            &entry.path,
-            root_path,
-            provided_paths,
-        );
+        let mut label_matcher = Matcher::new(Config::DEFAULT);
+        let mut path_matcher = Matcher::new(Config::DEFAULT.match_paths());
+        let pattern = Pattern::parse(query, CaseMatching::Smart, Normalization::Smart);
+        let allow_path_fuzzy_match = should_fuzzy_match_full_path(query);
 
-        if label_match {
-            label_hits.sort_unstable();
-            label_hits.dedup();
-            if !label_hits.is_empty() {
-                filter.label_hits.insert(entry.path.clone(), label_hits);
+        let mut hits: Vec<SearchHit> = Vec::new();
+        for (index, candidate) in self.candidates.iter().enumerate() {
+            let label_score = pattern.score(candidate.label.slice(..), &mut label_matcher);
+            let rank = match label_score {
+                Some(score) => (true, score),
+                None if allow_path_fuzzy_match => {
+                    match pattern.score(candidate.relative.slice(..), &mut path_matcher) {
+                        Some(score) => (false, score),
+                        None => continue,
+                    }
+                }
+                None => continue,
+            };
+            hits.push(SearchHit { rank, index });
+        }
+
+        let match_count = hits.len();
+        let max_matches = max_matches.max(1);
+        if hits.len() > max_matches {
+            hits.select_nth_unstable_by(max_matches, SearchHit::best_first);
+            hits.truncate(max_matches);
+        }
+        hits.sort_unstable_by(SearchHit::best_first);
+
+        let mut filter = ExplorerFilter {
+            match_count,
+            shown_count: hits.len(),
+            ..ExplorerFilter::default()
+        };
+        for hit in &hits {
+            let candidate = &self.candidates[hit.index];
+            include_path_with_ancestors(
+                &mut filter.visible_paths,
+                &candidate.path,
+                &self.root_path,
+                self.provided_paths,
+            );
+
+            let (label_matched, _) = hit.rank;
+            if label_matched {
+                let mut label_hits = Vec::new();
+                pattern.indices(
+                    candidate.label.slice(..),
+                    &mut label_matcher,
+                    &mut label_hits,
+                );
+                label_hits.sort_unstable();
+                label_hits.dedup();
+                if !label_hits.is_empty() {
+                    filter.label_hits.insert(candidate.path.clone(), label_hits);
+                }
+            }
+
+            let entry_dir = entry_directory_path(
+                &candidate.path,
+                candidate.is_dir,
+                &self.root_path,
+                self.provided_paths,
+            );
+            include_path_with_ancestors(
+                &mut filter.expanded_paths,
+                &entry_dir,
+                &self.root_path,
+                self.provided_paths,
+            );
+            if filter.primary_match_directory.is_none() {
+                filter.primary_match_directory = Some(entry_dir);
             }
         }
 
-        let entry_dir = entry_directory_path(&entry, root_path, provided_paths);
-        include_path_with_ancestors(
-            &mut filter.expanded_paths,
-            &entry_dir,
-            root_path,
-            provided_paths,
-        );
-        if filter.primary_match_directory.is_none() {
-            filter.primary_match_directory = Some(entry_dir);
+        if !filter.visible_paths.is_empty() {
+            filter.visible_paths.insert(self.root_path.clone());
         }
+
+        if !filter.expanded_paths.is_empty() {
+            filter.expanded_paths.insert(self.root_path.clone());
+        }
+
+        filter
+    }
+}
+
+#[derive(Clone, Copy)]
+struct SearchHit {
+    /// Whether the filename matched, then the matcher's score.
+    rank: (bool, u32),
+    index: usize,
+}
+
+impl SearchHit {
+    fn best_first(left: &Self, right: &Self) -> Ordering {
+        right
+            .rank
+            .cmp(&left.rank)
+            .then_with(|| left.index.cmp(&right.index))
+    }
+}
+
+/// The last walk a tree's explorer made, so the next keystroke filters it instead of walking again.
+///
+/// A search fills the slot from its worker. The tree replaces the whole cache, rather than
+/// emptying it, when what it walked may have changed: a walk still running then fills a cache
+/// nothing reads anymore.
+#[derive(Debug, Default)]
+pub(crate) struct ExplorerIndexCache {
+    index: Mutex<Option<Arc<ExplorerIndex>>>,
+}
+
+impl ExplorerIndexCache {
+    /// The cached index for `key`, walking first when there is none or it walked something else.
+    pub(crate) fn get_or_walk(&self, key: ExplorerIndexKey) -> Arc<ExplorerIndex> {
+        if let Some(index) = self.cached(&key) {
+            return index;
+        }
+        let index = Arc::new(ExplorerIndex::walk(key));
+        if let Ok(mut slot) = self.index.lock() {
+            *slot = Some(Arc::clone(&index));
+        }
+        index
     }
 
-    if !filter.visible_paths.is_empty() {
-        filter.visible_paths.insert(root_path.clone());
+    fn cached(&self, key: &ExplorerIndexKey) -> Option<Arc<ExplorerIndex>> {
+        let slot = self.index.lock().ok()?;
+        slot.as_ref()
+            .filter(|index| index.key.as_ref() == Some(key))
+            .cloned()
     }
+}
 
-    if !filter.expanded_paths.is_empty() {
-        filter.expanded_paths.insert(root_path.clone());
+fn index_candidate(
+    candidate: ExplorerCandidate,
+    root_path: &Arc<str>,
+    provided_paths: bool,
+) -> IndexedCandidate {
+    let relative = relative_path(&candidate.path, root_path, provided_paths);
+    IndexedCandidate {
+        label: Utf32String::from(candidate.label.as_ref()),
+        relative: Utf32String::from(relative.as_str()),
+        path: candidate.path,
+        is_dir: candidate.is_dir,
     }
+}
 
-    filter
+fn relative_path(path: &str, root_path: &str, provided_paths: bool) -> String {
+    if provided_paths {
+        let root = ProvidedPath::from_path(root_path);
+        return ProvidedPath::from_path(path)
+            .strip_prefix(&root)
+            .map_or_else(
+                || path.to_string(),
+                |relative| relative.as_str().to_string(),
+            );
+    }
+    Path::new(path).strip_prefix(root_path).map_or_else(
+        |_| path.to_string(),
+        |relative| relative.to_string_lossy().into_owned(),
+    )
 }
 
 fn should_fuzzy_match_full_path(query: &str) -> bool {
@@ -140,17 +282,17 @@ fn collect_entries(
     Vec::new()
 }
 
+/// Walk `root`, which must already be canonical, in parallel.
+///
+/// Entries are spelled from the root down, never canonicalized one by one: that would cost a
+/// syscall per entry, and it would spell a symlink as its target, which is not the row the tree
+/// shows for it.
 #[cfg(not(target_arch = "wasm32"))]
 fn collect_entries(
     root: &Path,
     show_hidden: bool,
     max_entries_per_dir: usize,
 ) -> Vec<ExplorerCandidate> {
-    let mut entries = Vec::new();
-
-    let mut per_dir_scanned: HashMap<PathBuf, usize> = HashMap::new();
-    let mut capped_dirs: HashSet<PathBuf> = HashSet::new();
-
     let mut walker = WalkBuilder::new(root);
     walker.hidden(!show_hidden);
     walker.git_ignore(true);
@@ -160,68 +302,134 @@ fn collect_entries(
     walker.parents(true);
     walker.require_git(false);
     walker.follow_links(false);
+    walker.threads(walk_threads());
 
-    for child in walker.build() {
-        let Ok(child) = child else {
-            continue;
+    let found = Mutex::new(Vec::new());
+    walker.build_parallel().visit(&mut CollectorBuilder {
+        root,
+        found: &found,
+    });
+    let mut entries = found.into_inner().unwrap_or_default();
+    entries.sort_by(|left: &ExplorerCandidate, right| left.path.cmp(&right.path));
+    cap_entries_per_dir(entries, root, max_entries_per_dir)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn walk_threads() -> usize {
+    std::thread::available_parallelism()
+        .map(|threads| threads.get().min(8))
+        .unwrap_or(2)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct CollectorBuilder<'a> {
+    root: &'a Path,
+    found: &'a Mutex<Vec<ExplorerCandidate>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<'a> ParallelVisitorBuilder<'a> for CollectorBuilder<'a> {
+    fn build(&mut self) -> Box<dyn ParallelVisitor + 'a> {
+        Box::new(Collector {
+            root: self.root,
+            found: self.found,
+            entries: Vec::new(),
+        })
+    }
+}
+
+/// One walker thread's entries, handed over once when the thread finishes.
+#[cfg(not(target_arch = "wasm32"))]
+struct Collector<'a> {
+    root: &'a Path,
+    found: &'a Mutex<Vec<ExplorerCandidate>>,
+    entries: Vec<ExplorerCandidate>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ParallelVisitor for Collector<'_> {
+    fn visit(&mut self, entry: Result<DirEntry, ignore::Error>) -> WalkState {
+        let Ok(entry) = entry else {
+            return WalkState::Continue;
         };
+        let path = entry.path();
+        if path == self.root {
+            return WalkState::Continue;
+        }
+        let (Some(file_type), Some(name)) = (
+            entry.file_type(),
+            path.file_name().and_then(|name| name.to_str()),
+        ) else {
+            return WalkState::Continue;
+        };
+        self.entries.push(ExplorerCandidate {
+            path: Arc::from(path.to_string_lossy().as_ref()),
+            label: Arc::from(name),
+            is_dir: file_type.is_dir(),
+        });
+        WalkState::Continue
+    }
+}
 
-        let child_path = child.path();
-        if child_path == root {
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for Collector<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut found) = self.found.lock() {
+            found.append(&mut self.entries);
+        }
+    }
+}
+
+/// Keep the first `max_entries_per_dir` children of each directory, by name, and drop everything
+/// beneath a directory that did not make the cut. `entries` must be in path order, which puts each
+/// directory before its descendants.
+#[cfg(not(target_arch = "wasm32"))]
+fn cap_entries_per_dir(
+    entries: Vec<ExplorerCandidate>,
+    root: &Path,
+    max_entries_per_dir: usize,
+) -> Vec<ExplorerCandidate> {
+    let mut per_dir: HashMap<PathBuf, usize> = HashMap::new();
+    let mut capped_dirs: HashSet<PathBuf> = HashSet::new();
+    let mut kept = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let path = Path::new(entry.path.as_ref());
+        if !capped_dirs.is_empty() && is_under_capped_directory(path, &capped_dirs, root) {
             continue;
         }
-
-        if is_under_capped_directory(child_path, &capped_dirs, root) {
-            continue;
-        }
-
-        let Some(file_type) = child.file_type() else {
+        let Some(parent) = path.parent() else {
             continue;
         };
-        let Some(parent) = child_path.parent() else {
-            continue;
-        };
-        let Some(name) = child_path.file_name().and_then(|n| n.to_str()) else {
-            continue;
-        };
-
-        let scanned = per_dir_scanned.entry(parent.to_path_buf()).or_insert(0);
-        if *scanned >= max_entries_per_dir {
-            if file_type.is_dir() {
-                capped_dirs.insert(child_path.to_path_buf());
+        let count = per_dir.entry(parent.to_path_buf()).or_insert(0);
+        if *count >= max_entries_per_dir {
+            if entry.is_dir {
+                capped_dirs.insert(path.to_path_buf());
             }
             continue;
         }
-
-        *scanned = scanned.saturating_add(1);
-
-        entries.push(ExplorerCandidate {
-            path: normalize_path(child_path),
-            label: Arc::from(name.to_string()),
-            is_dir: file_type.is_dir(),
-        });
+        *count += 1;
+        kept.push(entry);
     }
-
-    entries.sort_by(|left, right| left.path.cmp(&right.path));
-    entries
+    kept
 }
 
 fn entry_directory_path(
-    entry: &ExplorerCandidate,
+    path: &Arc<str>,
+    is_dir: bool,
     root_path: &Arc<str>,
     provided_paths: bool,
 ) -> Arc<str> {
-    if entry.is_dir {
-        return entry.path.clone();
+    if is_dir {
+        return path.clone();
     }
 
     if provided_paths {
-        ProvidedPath::from_path(entry.path.as_ref())
+        ProvidedPath::from_path(path.as_ref())
             .parent()
             .map(|parent| Arc::<str>::from(parent.as_str()))
             .unwrap_or_else(|| root_path.clone())
     } else {
-        Path::new(entry.path.as_ref())
+        Path::new(path.as_ref())
             .parent()
             .map(|parent| Arc::<str>::from(parent.to_string_lossy().as_ref()))
             .unwrap_or_else(|| root_path.clone())
@@ -305,7 +513,7 @@ mod tests {
         fs::write(root.join("ignored").join("secret.txt"), "nope").expect("write ignored file");
         fs::write(root.join("note.tmp"), "nope").expect("write ignored tmp file");
 
-        let entries = collect_entries(&root, true, 10_000);
+        let entries = collect_entries(Path::new(normalize_path(&root).as_ref()), true, 10_000);
         let visible_path = normalize_path(&root.join("kept").join("visible.txt"));
         let ignored_path = normalize_path(&root.join("ignored").join("secret.txt"));
         let ignored_tmp_path = normalize_path(&root.join("note.tmp"));
@@ -327,7 +535,7 @@ mod tests {
         fs::write(root.join("ignored").join("secret.txt"), "nope").expect("write ignored file");
         fs::write(root.join("note.tmp"), "nope").expect("write ignored tmp file");
 
-        let entries = collect_entries(&root, false, 10_000);
+        let entries = collect_entries(Path::new(normalize_path(&root).as_ref()), false, 10_000);
         let visible_path = normalize_path(&root.join("kept").join("visible.txt"));
         let ignored_path = normalize_path(&root.join("ignored").join("secret.txt"));
         let ignored_tmp_path = normalize_path(&root.join("note.tmp"));
@@ -428,15 +636,16 @@ mod tests {
         let included_path = normalize_path(&root.join("src").join("target.rs"));
         let omitted_path = normalize_path(&root.join("other").join("target.rs"));
 
-        let filter = search_candidates(
+        let filter = ExplorerIndex::from_candidates(
             &root_path,
             [ExplorerCandidate {
                 path: included_path.clone(),
                 label: Arc::from("target.rs"),
                 is_dir: false,
             }],
-            "target",
-        );
+            false,
+        )
+        .search("target", usize::MAX);
 
         assert_eq!(filter.match_count, 1);
         assert!(filter.visible_paths.contains(included_path.as_ref()));
@@ -454,7 +663,8 @@ mod tests {
             is_dir: false,
         };
 
-        let filter = search_candidates_with_path_flavor(&root, [candidate], "target", true);
+        let filter =
+            ExplorerIndex::from_candidates(&root, [candidate], true).search("target", usize::MAX);
 
         assert!(filter.visible_paths.contains(r"C:\remote\repo"));
         assert!(filter.visible_paths.contains(r"C:\remote\repo\src"));
@@ -467,6 +677,137 @@ mod tests {
             filter.primary_match_directory.as_deref(),
             Some(r"C:\remote\repo\src")
         );
+    }
+
+    #[test]
+    fn matching_ignores_the_root_path() {
+        let root = unique_test_dir("matching_ignores_the_root_path_projxyz");
+        fs::create_dir_all(root.join("src")).expect("create src");
+        fs::write(root.join("src").join("main.rs"), "").expect("write main.rs");
+        fs::write(root.join("README.md"), "").expect("write readme");
+
+        let root_str = root.to_string_lossy().to_string();
+        let filter = search_filesystem(&root_str, "projxyz", true, 10_000);
+
+        assert_eq!(filter.match_count, 0);
+        assert!(filter.visible_paths.is_empty());
+
+        let filter = search_filesystem(&root_str, "src/main", true, 10_000);
+        assert_eq!(filter.match_count, 1);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn search_keeps_the_best_matches_and_counts_them_all() {
+        let root: Arc<str> = Arc::from("/repo");
+        let candidate = |path: &str, is_dir: bool| ExplorerCandidate {
+            path: Arc::from(format!("/repo/{path}")),
+            label: Arc::from(path.rsplit('/').next().unwrap_or(path)),
+            is_dir,
+        };
+        let index = ExplorerIndex::from_candidates(
+            &root,
+            [
+                candidate("compat", true),
+                candidate("compat/mod.rs", false),
+                candidate("src", true),
+                candidate("src/component.rs", false),
+            ],
+            false,
+        );
+
+        let all = index.search("comp", usize::MAX);
+        assert_eq!(all.match_count, 3);
+        assert_eq!(all.shown_count, 3);
+
+        let best = index.search("component", 1);
+        assert_eq!(best.match_count, 1);
+        assert!(best.visible_paths.contains("/repo/src/component.rs"));
+
+        let capped = index.search("comp", 1);
+        assert_eq!(capped.match_count, 3);
+        assert_eq!(capped.shown_count, 1);
+        // `compat/mod.rs` matches only through its directory, so the two filename matches
+        // outrank it, and the first of those in path order wins the tie for the one slot.
+        assert!(!capped.visible_paths.contains("/repo/compat/mod.rs"));
+        assert_eq!(capped.visible_paths.len(), 2);
+    }
+
+    #[test]
+    fn walk_caps_each_directory_by_name_and_skips_what_it_left_out() {
+        let root = unique_test_dir("walk_caps_each_directory_by_name");
+        fs::create_dir_all(root.join("b_dir")).expect("create b_dir");
+        fs::write(root.join("b_dir").join("inner.rs"), "").expect("write inner");
+        fs::write(root.join("a.rs"), "").expect("write a");
+        fs::write(root.join("c.rs"), "").expect("write c");
+
+        let canonical = normalize_path(&root);
+        let entries = collect_entries(Path::new(canonical.as_ref()), true, 1);
+        let paths: Vec<&str> = entries.iter().map(|entry| entry.path.as_ref()).collect();
+
+        assert_eq!(paths, [format!("{canonical}/a.rs").as_str()]);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn walk_spells_a_symlink_by_its_own_name() {
+        let root = unique_test_dir("walk_spells_a_symlink_by_its_own_name");
+        fs::create_dir_all(&root).expect("create root");
+        fs::write(root.join("AGENTS.md"), "").expect("write target");
+        std::os::unix::fs::symlink("AGENTS.md", root.join("CLAUDE.md")).expect("symlink");
+
+        let root_str = root.to_string_lossy().to_string();
+        let filter = search_filesystem(&root_str, "claude", true, 10_000);
+        let link = normalize_path(&root).to_string() + "/CLAUDE.md";
+
+        assert_eq!(filter.match_count, 1);
+        assert!(filter.visible_paths.contains(link.as_str()));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn index_cache_reuses_its_walk_until_the_key_changes() {
+        let root = unique_test_dir("index_cache_reuses_its_walk");
+        fs::create_dir_all(&root).expect("create root");
+        fs::write(root.join("first.rs"), "").expect("write first");
+        let key = ExplorerIndexKey {
+            root: Arc::from(root.to_string_lossy().as_ref()),
+            show_hidden: true,
+            max_entries_per_dir: 10_000,
+        };
+        let cache = ExplorerIndexCache::default();
+
+        let walked = cache.get_or_walk(key.clone());
+        fs::write(root.join("second.rs"), "").expect("write second");
+        let reused = cache.get_or_walk(key.clone());
+        assert!(Arc::ptr_eq(&walked, &reused));
+        assert_eq!(reused.search("second", usize::MAX).match_count, 0);
+
+        let rewalked = cache.get_or_walk(ExplorerIndexKey {
+            show_hidden: false,
+            ..key
+        });
+        assert_eq!(rewalked.search("second", usize::MAX).match_count, 1);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    fn search_filesystem(
+        root: &str,
+        query: &str,
+        show_hidden: bool,
+        max_entries_per_dir: usize,
+    ) -> ExplorerFilter {
+        ExplorerIndex::walk(ExplorerIndexKey {
+            root: Arc::from(root),
+            show_hidden,
+            max_entries_per_dir,
+        })
+        .search(query, usize::MAX)
     }
 
     fn unique_test_dir(name: &str) -> PathBuf {
