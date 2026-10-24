@@ -2505,15 +2505,14 @@ impl TerminalGraphics {
         )
     }
 
-    fn transmit(&mut self, mut command: GraphicsCommand, ctx: GraphicsContext) -> GraphicsOutcome {
+    fn transmit(&mut self, command: GraphicsCommand, ctx: GraphicsContext) -> GraphicsOutcome {
         if command.more || self.pending.is_some() {
             return self.transmit_chunked(command, ctx);
         }
         let id = self.resolve_id(command.id, command.number);
-        let payload = match command.prepared.as_mut() {
-            Some(prepared) => std::mem::take(&mut prepared.payload),
-            None => command.payload.clone(),
-        };
+        // Prepared media already carries its decoded pixels, so the payload stays the short name
+        // the child sent and identity hashes that, not the acquired bytes.
+        let payload = command.payload.clone();
         self.finish_transmit(id, &command, payload, ctx)
     }
 
@@ -4777,6 +4776,43 @@ mod tests {
         let outcome = graphics.apply(commands[1].clone(), context());
         assert_eq!(outcome.advance, Some((2, 3)));
         assert_eq!(graphics.visible(0, 0, 24, false).len(), 1);
+    }
+
+    #[test]
+    fn prepared_named_media_hashes_the_name_not_the_acquired_bytes() {
+        use std::io::Write as _;
+
+        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+        encoder.write_all(&[1, 2, 3, 255].repeat(64)).unwrap();
+        let mut source = tempfile::NamedTempFile::new().unwrap();
+        source.write_all(&encoder.finish().unwrap()).unwrap();
+        let name = source.path().to_str().unwrap().as_bytes().to_vec();
+        let mut command = GraphicsCommand {
+            medium: GraphicsMedium::File,
+            quiet: 2,
+            format: 32,
+            compressed: true,
+            width: 8,
+            height: 8,
+            id: 7,
+            payload: name.clone(),
+            ..GraphicsCommand::default()
+        };
+        command.prepare_media(
+            GraphicsMediaPolicy::SHARED,
+            graphics_media::GraphicsRelayPolicy::None,
+            false,
+        );
+
+        let mut graphics = TerminalGraphics::default();
+        graphics.set_media_policy(GraphicsMediaPolicy::SHARED);
+        graphics.apply(command, context());
+        let expected = TerminalGraphics::default().named_source_identity(32, &name);
+        assert_eq!(graphics.images[&7].image.source_hash, expected);
+        assert_eq!(
+            graphics.images[&7].image.pixels().unwrap().as_bytes(),
+            &[1, 2, 3, 255].repeat(64)
+        );
     }
 
     #[test]

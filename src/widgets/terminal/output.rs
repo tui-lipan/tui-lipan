@@ -462,6 +462,17 @@ mod tests {
     }
 
     #[test]
+    fn idle_boundary_records_no_transaction() {
+        let mut screen = screen();
+        screen.flush_output_transaction_boundary();
+        assert!(screen.take_output_transactions().is_empty());
+        screen.process_bytes(FRAME);
+        screen.take_output_transactions();
+        screen.flush_output_transaction_boundary();
+        assert!(screen.take_output_transactions().is_empty());
+    }
+
+    #[test]
     fn external_boundaries_flush_exact_pending_bytes_and_prevent_replacement() {
         for split in [1, 2, 8, FRAME.len() - 2, FRAME.len() - 1] {
             let mut screen = screen();

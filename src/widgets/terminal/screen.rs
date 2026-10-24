@@ -1495,7 +1495,10 @@ impl TerminalScreen {
     pub fn flush_output_transaction_boundary(&mut self) {
         self.release_output_frame();
         let bytes = self.graphics_scanner.flush_pending_wire();
-        self.record_owned_output(bytes, super::output::TerminalOutputClass::Ordered);
+        // An empty transaction is a failed relay's receipt; an idle boundary has nothing to order.
+        if !bytes.is_empty() {
+            self.record_owned_output(bytes, super::output::TerminalOutputClass::Ordered);
+        }
         self.replacement_run.clear();
     }
 
