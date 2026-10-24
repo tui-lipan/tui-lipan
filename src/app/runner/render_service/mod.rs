@@ -1195,6 +1195,9 @@ impl<C: Component> AppRunner<C> {
         let presentations = crate::widgets::presentation::PresentationScope::begin();
         let output_frame = terminal.backend().begin_output_frame()?;
         let output_epoch = terminal.backend().output_epoch();
+        // `init()` and render-time updates run after the event loop's own drain; adopt their
+        // request here so this frame carries it instead of the next.
+        self.apply_pending_title_request();
         if let Some(title) = &self.title {
             terminal.backend_mut().set_title(title)?;
         }
@@ -2741,6 +2744,82 @@ mod tests {
         runner.core.ctx.toggle_devtools();
         assert!(runner.apply_pending_devtools_request());
         assert!(runner.core.ctx.devtools_visible());
+    }
+
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn first_host_frame_carries_titles_set_during_init() {
+        use crate::prelude::*;
+
+        struct TitledChild;
+
+        impl Component for TitledChild {
+            type Message = ();
+            type Properties = ();
+            type State = ();
+
+            fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+            fn init(&mut self, ctx: &mut Context<Self>) -> Option<Command> {
+                ctx.set_title("child");
+                None
+            }
+
+            fn update(&mut self, _msg: (), _ctx: &mut Context<Self>) -> Update {
+                Update::none()
+            }
+
+            fn view(&self, _ctx: &Context<Self>) -> Element {
+                Text::new("child").into()
+            }
+        }
+
+        struct TitledRoot {
+            child: bool,
+        }
+
+        impl Component for TitledRoot {
+            type Message = ();
+            type Properties = ();
+            type State = ();
+
+            fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+            fn init(&mut self, ctx: &mut Context<Self>) -> Option<Command> {
+                ctx.set_title("root");
+                None
+            }
+
+            fn update(&mut self, _msg: (), _ctx: &mut Context<Self>) -> Update {
+                Update::none()
+            }
+
+            fn view(&self, _ctx: &Context<Self>) -> Element {
+                if self.child {
+                    crate::child(|| TitledChild, ())
+                } else {
+                    Text::new("root").into()
+                }
+            }
+        }
+
+        for (child, expected) in [(false, "root"), (true, "child")] {
+            let mut runner = AppRunner::new(
+                App::new().mouse(false).title("start"),
+                TitledRoot { child },
+                (),
+            );
+            let mut terminal =
+                crate::backend::ratatui_backend::create_test_terminal(20, 4).unwrap();
+            runner.core.init();
+            runner.render(&mut terminal).unwrap();
+            let output = String::from_utf8_lossy(&terminal.backend().test_output()).into_owned();
+            assert!(
+                output.contains(&format!("\x1b]2;{expected}\x07")),
+                "first frame must carry {expected:?}: {output:?}"
+            );
+            assert!(!output.contains("\x1b]2;start"), "{output:?}");
+        }
     }
 
     #[test]
