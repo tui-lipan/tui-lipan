@@ -95,6 +95,7 @@ pub struct TestBackend<C: Component> {
     key_dispatch_config: RuntimeKeyDispatchConfig,
     key_dispatch_state: RuntimeKeyDispatchState,
     framework_effects: Vec<FrameworkSideEffect>,
+    host_title: Option<String>,
 }
 
 impl<C> TestBackend<C>
@@ -279,6 +280,7 @@ where
             key_dispatch_config,
             key_dispatch_state,
             framework_effects: Vec::new(),
+            host_title: app.title.clone(),
         };
 
         backend.core.init();
@@ -300,6 +302,14 @@ where
             crate::automation::ClockMode::Controlled,
             DEFAULT_VIEWPORT,
         )
+    }
+
+    /// The host terminal window title the runner would write with the last rendered frame: the
+    /// latest [`Context::set_title`](crate::Context::set_title) taken by a render, else
+    /// [`App::title`], else `None`. The mount's own first render counts, so a title set from
+    /// `init()` is already here when construction returns.
+    pub fn host_title(&self) -> Option<&str> {
+        self.host_title.as_deref()
     }
 
     /// Returns the current viewport used for layout.
@@ -1146,6 +1156,9 @@ where
             self.mouse.hovered,
         );
         self.core.tree.refresh_live_texts();
+        if let Some(title) = self.core.ctx.take_title_request() {
+            self.host_title = Some(title);
+        }
         self.sync_clipboard_config();
         focus_service::restore_focus_after_closed_overlays(&self.core.tree, &mut focus_refs!(self));
         if let Some(request) = self.core.ctx.take_focus_request() {
@@ -10495,5 +10508,63 @@ mod tests {
     #[cfg(feature = "diff-view")]
     fn captured_bg(frame: &crate::CapturedFrame, x: u16, y: u16) -> Color {
         frame.cells[usize::from(y) * usize::from(frame.width) + usize::from(x)].bg
+    }
+
+    #[test]
+    fn host_title_follows_app_title_then_set_title_from_init_and_update() {
+        struct Titled;
+
+        impl Component for Titled {
+            type Message = String;
+            type Properties = ();
+            type State = ();
+
+            fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+            fn init(&mut self, ctx: &mut Context<Self>) -> Option<crate::Command> {
+                ctx.set_title("from init");
+                None
+            }
+
+            fn update(&mut self, msg: String, ctx: &mut Context<Self>) -> Update {
+                ctx.set_title(msg);
+                Update::none()
+            }
+
+            fn view(&self, _ctx: &Context<Self>) -> Element {
+                Text::new("titled").into()
+            }
+        }
+
+        struct Untitled;
+
+        impl Component for Untitled {
+            type Message = ();
+            type Properties = ();
+            type State = ();
+
+            fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+            fn update(&mut self, _msg: (), _ctx: &mut Context<Self>) -> Update {
+                Update::none()
+            }
+
+            fn view(&self, _ctx: &Context<Self>) -> Element {
+                Text::new("untitled").into()
+            }
+        }
+
+        let app = || crate::App::new().title("start");
+        assert_eq!(
+            TestBackend::new_with_app(app(), Untitled, ()).host_title(),
+            Some("start")
+        );
+        assert_eq!(TestBackend::new(Untitled).host_title(), None);
+
+        let mut backend = TestBackend::new_with_app(app(), Titled, ());
+        assert_eq!(backend.host_title(), Some("from init"));
+        backend.dispatch("later".to_string()).unwrap();
+        backend.render();
+        assert_eq!(backend.host_title(), Some("later"));
     }
 }
