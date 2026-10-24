@@ -9,6 +9,10 @@ mod events;
 mod graphics;
 #[cfg(feature = "terminal-images")]
 mod graphics_media;
+#[cfg(feature = "terminal-images")]
+mod media_work;
+#[cfg(feature = "terminal-images")]
+pub use media_work::{TerminalMediaWork, TerminalPreparedInput};
 mod layout;
 mod mod_private;
 mod node;
@@ -55,7 +59,7 @@ pub(crate) use graphics::{
     diacritic as kitty_diacritic, image_cell_has_pixels, image_cell_is_opaque, image_covers_cell,
 };
 #[cfg(feature = "terminal-images")]
-pub use graphics_media::GraphicsMediaPolicy;
+pub use graphics_media::{GraphicsMediaPolicy, GraphicsRelayPolicy};
 pub use mod_private::Terminal;
 pub use osc::{
     TerminalCommandPhase, TerminalSemanticEvent, TerminalSemanticState, TerminalWorkingDirectory,

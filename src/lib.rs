@@ -317,8 +317,9 @@ pub use crate::widgets::{
 };
 #[cfg(feature = "terminal-images")]
 pub use crate::widgets::{
-    GraphicsMediaPolicy, ImagePlacementIdentity, ImagePlacementKey, ImageSourceKey,
-    ImageSourceRevision, TerminalImage, TerminalImageCrop, TerminalImagePlacement,
+    GraphicsMediaPolicy, GraphicsRelayPolicy, ImagePlacementIdentity, ImagePlacementKey,
+    ImageSourceKey, ImageSourceRevision, TerminalImage, TerminalImageCrop, TerminalImagePlacement,
+    TerminalMediaWork, TerminalPreparedInput,
 };
 
 #[cfg(feature = "diff-view")]

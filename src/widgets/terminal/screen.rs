@@ -557,6 +557,10 @@ pub struct TerminalScreen {
     damage: DamageAccumulator,
     mutation: TerminalMutation,
     stable_terminal_id: u64,
+    #[cfg(feature = "terminal-images")]
+    input_revision: u64,
+    #[cfg(feature = "terminal-images")]
+    prepared_media_commands: VecDeque<GraphicsCommand>,
     presentation_token: Option<u64>,
     mutation_generation: u64,
     cell_generation: u64,
@@ -1313,6 +1317,10 @@ impl TerminalScreen {
             #[cfg(feature = "terminal-images")]
             graphics_scanner: GraphicsScanner::default(),
             #[cfg(feature = "terminal-images")]
+            input_revision: 0,
+            #[cfg(feature = "terminal-images")]
+            prepared_media_commands: VecDeque::new(),
+            #[cfg(feature = "terminal-images")]
             graphics: TerminalGraphics::default(),
             evicted_lines: 0,
             history_epoch: 0,
@@ -1352,6 +1360,10 @@ impl TerminalScreen {
     /// Feed terminal bytes.
     ///
     pub fn process_bytes(&mut self, bytes: &[u8]) -> TerminalMutation {
+        #[cfg(feature = "terminal-images")]
+        {
+            self.input_revision = self.input_revision.wrapping_add(1);
+        }
         self.grid_mutated = false;
         let before = self.mutation_baseline();
         let response_boundaries = self.response_boundaries(bytes);
@@ -1483,7 +1495,10 @@ impl TerminalScreen {
     pub fn flush_output_transaction_boundary(&mut self) {
         self.release_output_frame();
         let bytes = self.graphics_scanner.flush_pending_wire();
-        self.record_owned_output(bytes, super::output::TerminalOutputClass::Ordered);
+        // An empty transaction is a failed relay's receipt; an idle boundary has nothing to order.
+        if !bytes.is_empty() {
+            self.record_owned_output(bytes, super::output::TerminalOutputClass::Ordered);
+        }
         self.replacement_run.clear();
     }
 
@@ -1599,7 +1614,15 @@ impl TerminalScreen {
             self.record_output(&bytes, TerminalOutputClass::Ordered);
             return;
         }
-        if self.output_transactions.is_none() || bytes.is_empty() {
+        if self.output_transactions.is_none() {
+            return;
+        }
+        if bytes.is_empty() {
+            // This command was deliberately suppressed after a relayed acquisition failed.
+            // Preserve a receipt so an embedder cannot mistake no transactions for recording
+            // being disabled and fall back to forwarding the original consuming reference.
+            self.release_output_frame();
+            self.push_output(bytes, TerminalOutputClass::Ordered, None);
             return;
         }
         match self.output_frame.as_mut() {
@@ -1846,7 +1869,10 @@ impl TerminalScreen {
                     self.release_output_frame();
                     self.record_owned_output(bytes, super::output::TerminalOutputClass::Ordered)
                 }
-                GraphicsSegment::Command(command) => {
+                GraphicsSegment::Command(mut command) => {
+                    if let Some(prepared) = self.prepared_media_commands.pop_front() {
+                        command.adopt_preparation(prepared);
+                    }
                     let (before, after) = self.apply_graphics_with_output(*command, unsettled);
                     evicted += before;
                     unsettled = after;
@@ -1892,7 +1918,12 @@ impl TerminalScreen {
     ) -> (usize, usize) {
         use super::graphics::FrameOp;
         use super::output::{Footprint, GraphicsDependency, TerminalOutputClass};
-        let Some(mut wire) = command.take_wire() else {
+        let (media, relay) = self.graphics.media_options();
+        if relay.relays(command.medium()) && self.output_transactions.is_some() {
+            command.prepare_media(media, relay, true);
+        }
+        let original_wire = command.take_wire();
+        let Some(wire) = command.take_prepared_wire().or(original_wire) else {
             self.release_output_frame();
             return self.apply_graphics(command, unsettled);
         };
@@ -1905,9 +1936,6 @@ impl TerminalScreen {
             && !self.processor.sync_timeout().pending_timeout()
             && self.processor.sync_bytes_count() == 0;
         let result = self.apply_graphics(command, unsettled);
-        if let Some(data) = self.graphics.take_relayed_payload() {
-            wire = super::graphics::inline_transmission(&wire, &data);
-        }
         let current = source_id.and_then(|id| self.graphics.replacement_observation(id));
         let class = match current {
             Some(current)
@@ -2367,28 +2395,77 @@ impl TerminalScreen {
     ///
     /// These let a child leave a frame in a file or a shared-memory object and name it in a
     /// hundred-byte escape, instead of compressing and base64-ing megabytes of pixels through the
-    /// PTY every frame. `t=t` and `t=s` are claimed by being read, so anything that fans one
-    /// terminal stream out to several readers wants
-    /// [`GraphicsMediaPolicy::SHARED`](crate::widgets::GraphicsMediaPolicy::SHARED), which keeps only
-    /// the re-readable `t=f`.
+    /// PTY every frame. `t=t` and `t=s` are claimed by one reader. A canonical server may accept
+    /// them and use [`super::GraphicsRelayPolicy::Consuming`] before fanout. Readers of an
+    /// unrelayed stream use [`GraphicsMediaPolicy::SHARED`](crate::widgets::GraphicsMediaPolicy::SHARED),
+    /// accepting only re-readable `t=f`.
     #[cfg(feature = "terminal-images")]
     pub fn set_image_media_policy(&mut self, media: super::graphics_media::GraphicsMediaPolicy) {
         self.graphics.set_media_policy(media);
     }
 
-    /// Forward out-of-band images as inline ones in recorded output.
+    /// Choose which named sources recorded output replaces with inline pixels.
     ///
-    /// For an embedder that forwards this screen's output to other parsers, such as a multiplexer
-    /// server and its clients. A client on another machine cannot open a file this screen can, and
-    /// several clients cannot all read a `t=t` or `t=s` source that the first reader consumes. With
-    /// relaying on, each single out-of-band transmission this screen accepts under its media
-    /// policy is recorded as an inline transmission of the bytes it read, so every receiver gets
-    /// the pixels themselves. This holds with image storage disabled too: the screen still reads
-    /// the source, but keeps only its dimensions. Off by default; output recording must be on for
-    /// it to matter.
+    /// Multiplexer servers use `Consuming` for local attachments and `All` while any attachment
+    /// cannot open their files. This applies to queries too; failed relayed acquisitions emit no
+    /// source reference. Recording must be enabled. The default is `None`.
     #[cfg(feature = "terminal-images")]
-    pub fn set_image_inline_relay(&mut self, enabled: bool) {
-        self.graphics.set_inline_relay(enabled);
+    pub fn set_image_relay_policy(&mut self, policy: super::GraphicsRelayPolicy) {
+        self.graphics.set_relay_policy(policy);
+    }
+
+    /// Prepare a named-media input batch for a bounded background worker.
+    ///
+    /// Returns `None` when ordinary synchronous processing is sufficient. A returned work item
+    /// must run and be applied before later input or stream barriers. The scanner clone performs
+    /// no I/O and never claims a source. The owner retains ingress/backpressure responsibility.
+    #[cfg(feature = "terminal-images")]
+    pub fn prepare_media_input(&self, bytes: Arc<[u8]>) -> Option<super::TerminalMediaWork> {
+        if self.graphics_scanner.is_plain(&bytes) {
+            return None;
+        }
+        let mut scanner = self.graphics_scanner.clone();
+        let (segments, length) = scanner.scan_media_prefix(&bytes);
+        let commands: Vec<_> = segments
+            .into_iter()
+            .filter_map(|segment| match segment {
+                GraphicsSegment::Command(command) => Some(*command),
+                _ => None,
+            })
+            .collect();
+        if !commands.iter().any(GraphicsCommand::needs_media) {
+            return None;
+        }
+        let (media, relay) = self.graphics.media_options();
+        Some(super::TerminalMediaWork {
+            bytes,
+            length,
+            screen_id: self.stable_terminal_id,
+            input_revision: self.input_revision,
+            commands,
+            media,
+            relay,
+            recording: self.output_transactions.is_some(),
+        })
+    }
+
+    /// Commit a worker result through the ordinary parser, retaining output order/classification.
+    ///
+    /// Returns the unapplied result if it belongs to another screen or later bytes were fed first.
+    /// The embedder must serialize resize/reset/policy barriers with this operation as well.
+    #[cfg(feature = "terminal-images")]
+    pub fn process_prepared_media_input(
+        &mut self,
+        input: super::TerminalPreparedInput,
+    ) -> Result<TerminalMutation, super::TerminalPreparedInput> {
+        if input.screen_id != self.stable_terminal_id || input.input_revision != self.input_revision
+        {
+            return Err(input);
+        }
+        self.prepared_media_commands = input.commands;
+        let mutation = self.process_bytes(&input.bytes[..input.length]);
+        debug_assert!(self.prepared_media_commands.is_empty());
+        Ok(mutation)
     }
 
     /// Whether this screen currently retains any Kitty graphics.
@@ -2586,6 +2663,10 @@ impl TerminalScreen {
     /// Resize screen dimensions.
     ///
     pub fn resize(&mut self, rows: u16, cols: u16) {
+        #[cfg(feature = "terminal-images")]
+        {
+            self.input_revision = self.input_revision.wrapping_add(1);
+        }
         let rows = rows.max(1);
         let cols = cols.max(1);
         if rows == self.rows && cols == self.cols {
@@ -3483,6 +3564,10 @@ impl TerminalScreen {
 
     /// Clear parser state and screen.
     pub fn reset(&mut self) {
+        #[cfg(feature = "terminal-images")]
+        {
+            self.input_revision = self.input_revision.wrapping_add(1);
+        }
         let dimensions = TermDimensions {
             rows: self.rows as usize,
             cols: self.cols as usize,
