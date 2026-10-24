@@ -2212,6 +2212,7 @@ mod tests {
                 mouse_capture_generation: Rc::new(Cell::new(1)),
                 memo_dependency_recorder: Rc::new(RefCell::new(None)),
                 full_repaint: Rc::new(Cell::new(false)),
+                title_request: Default::default(),
                 devtools_request: Rc::new(RefCell::new(None)),
                 #[cfg(feature = "devtools")]
                 devtools_metrics: Rc::new(crate::core::runtime_env::DevToolsMetrics::default()),
@@ -2491,6 +2492,7 @@ mod tests {
                 mouse_capture_generation: Rc::new(Cell::new(1)),
                 memo_dependency_recorder: Rc::new(RefCell::new(None)),
                 full_repaint: Rc::new(Cell::new(false)),
+                title_request: Default::default(),
                 devtools_request: Rc::new(RefCell::new(None)),
                 #[cfg(feature = "devtools")]
                 devtools_metrics: Rc::new(crate::core::runtime_env::DevToolsMetrics::default()),
@@ -2711,6 +2713,7 @@ mod tests {
                 mouse_capture_generation: Rc::new(Cell::new(1)),
                 memo_dependency_recorder: Rc::new(RefCell::new(None)),
                 full_repaint: Rc::new(Cell::new(false)),
+                title_request: Default::default(),
                 devtools_request: Rc::new(RefCell::new(None)),
                 #[cfg(feature = "devtools")]
                 devtools_metrics: Rc::new(crate::core::runtime_env::DevToolsMetrics::default()),

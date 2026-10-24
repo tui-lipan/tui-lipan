@@ -257,6 +257,7 @@ where
             memo_dependency_recorder,
             full_repaint,
             devtools_request,
+            title_request: Rc::default(),
             #[cfg(feature = "devtools")]
             devtools_metrics,
             pending_ui_snapshot,

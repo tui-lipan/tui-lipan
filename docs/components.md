@@ -143,6 +143,7 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
 | `ctx.toast()` | Show toast notifications |
 | `ctx.clipboard()` | Programmatic clipboard access (copy/read) |
 | `ctx.quit()` | Exit the application |
+| `ctx.set_title(title)` | Replace the host terminal window title set by `App::title`; written with the next frame, and only when it changed |
 | `ctx.is_inline()` | Whether running in inline mode |
 | `ctx.command_chord_pending()` | Whether an app command chord is currently pending completion (e.g., after a leader prefix key). Entering or leaving pending always dirties a frame so chrome like a PREFIX badge updates even when the completing/mismatch key is forwarded to a focused terminal with no paint of its own. |
 | `ctx.command_chord_pending_since()` | When the pending chord started, or `None` when none is pending |
