@@ -228,13 +228,15 @@ a hundred bytes on the wire and a compress/encode/decode/inflate round trip per 
 lets a program in a pane animate at the host's own frame rate.
 
 The last two are consumed by reading - the file is deleted, the object unlinked - so exactly one
-reader may ever claim them. Anything that fans one PTY stream out to several readers (a multiplexer
-with several attached clients, a server-side mirror) must therefore decline them and keep only `t=f`,
-which stays readable:
+reader may claim them. Readers of an unrelayed stream shared by several clients decline consuming
+media and keep only re-readable `t=f`:
 
 ```rust
 screen.set_image_media_policy(GraphicsMediaPolicy::SHARED);
 ```
+
+A canonical server can instead accept consuming media and relay inline pixels to every client,
+as described below.
 
 `GraphicsMediaPolicy::NONE` declines all three, so every picture arrives inline. Refusals are the
 protocol's own `EBADF`/`ENOTSUPP` reports, which is what makes a child fall back to `t=d` rather than
@@ -253,16 +255,35 @@ hand those parsers the pixels instead of the source's name:
 
 ```rust
 screen.set_image_media_policy(GraphicsMediaPolicy::default());
-screen.set_image_inline_relay(true);
+screen.set_image_relay_policy(GraphicsRelayPolicy::Consuming);
 screen.set_output_transaction_recording(true);
 ```
 
-Each single `t=f`, `t=t` or `t=s` transmission the screen accepts is then recorded as an inline
-transmission of the bytes it read, with the same keys. Raw pixels are compressed for the trip unless
-the child already compressed them or sent PNG. Receivers on another machine, and several receivers
-of a consumed `t=t` or `t=s` source, all get the image, so the server can keep offering the fast
-media to the child while any receiver needs inline data. Relaying works whether or not the server
-stores images itself. A chunked out-of-band run is forwarded as sent.
+`GraphicsRelayPolicy::Consuming` replaces `t=t` and `t=s` with inline pixels, including capability
+queries. Choose `All` while an attachment cannot open the server's files; this also replaces `t=f`.
+`None` preserves source references. Use one policy for every reader of a shared output stream.
+Raw pixels are compressed unless already compressed or sent as PNG. Failed relayed acquisitions
+emit no source reference; the authoritative screen answers the child. Chunked out-of-band
+transmissions are rejected. Direct `t=d` chunking remains supported.
+
+For large images, call `screen.prepare_media_input(bytes)` before ordinary processing. It returns
+`None` for input that needs no media work. Otherwise, send the returned `TerminalMediaWork` to a
+bounded worker queue and call its `run()` there. This acquires and validates the source, decodes
+when required, and builds the compressed, encoded relay chunks. The work item stops after one
+named image even when the input contains a burst of references.
+
+On completion, read `prepared.consumed_bytes()`, then pass the result to
+`screen.process_prepared_media_input(prepared)`. Feed the original input's remaining tail afterward,
+using the same preparation path. Keep that stream's input budget charged while work is pending.
+Do not feed later bytes, resize or reset that screen until its result is committed. Other screens
+can continue. A result for another screen or one superseded by later input or a resize/reset is
+returned unapplied. The owning screen uses its ordinary parser and output classifier, so text,
+cursor queries, synchronized frames and replacement dependencies stay in order.
+
+If attachments change during preparation, compare `prepared.relay_policy()` to the desired policy.
+Run `prepared.with_relay_policy(policy)` on the worker before committing. It reuses acquired pixels
+and never opens a consumed source again. Apply the matching relay policy to the screen before
+committing the result.
 
 ### Retain streamed frames in files
 

@@ -96,6 +96,28 @@ impl GraphicsMediaPolicy {
     }
 }
 
+/// Which named sources recorded output replaces with inline pixels.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GraphicsRelayPolicy {
+    /// Keep source references in recorded output.
+    #[default]
+    None,
+    /// Replace consuming `t=t` and `t=s` references, including probes and failures.
+    Consuming,
+    /// Replace all named sources, including re-readable `t=f` files.
+    All,
+}
+
+impl GraphicsRelayPolicy {
+    pub(super) fn relays(self, medium: GraphicsMedium) -> bool {
+        match self {
+            Self::None => false,
+            Self::Consuming => medium.consumes_source(),
+            Self::All => medium.is_out_of_band(),
+        }
+    }
+}
+
 /// A `t=t` file is deleted once read, so a sender must not be able to aim that at an arbitrary
 /// path. This is the reference implementation's rule: the file lives somewhere temporary, or says
 /// in its own name what it is for.
