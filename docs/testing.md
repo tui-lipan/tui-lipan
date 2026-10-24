@@ -59,6 +59,13 @@ Background commands remain asynchronous; call `pump()`
 later to process messages they produce. `window_focused()` exposes the current simulated value.
 This is independent of widget focus and `focused_key()`.
 
+### Host window title
+
+`host_title() -> Option<&str>` is the window title the runner would write with the last rendered
+frame: the latest `Context::set_title` a render picked up, else `App::title`, else `None`. The
+mount's own first render counts, so a title set from `init()` is visible as soon as construction
+returns. A title set from a message handler shows up after the next `render()`.
+
 ### Per-cell style assertions
 
 ```rust
