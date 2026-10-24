@@ -184,8 +184,8 @@ fn read_file_contents(
 
 /// Take the requested window out of an already-open source.
 ///
-/// Shared memory reaches this through a descriptor rather than a path, so the size, offset and
-/// budget arithmetic that decides what a sender is allowed to hand over lives here once.
+/// Shared memory uses a mapping instead, since Darwin does not support reading or seeking a
+/// POSIX shared-memory descriptor. Both paths share the window budget arithmetic.
 fn read_source(
     mut file: fs::File,
     offset: u64,
@@ -236,8 +236,8 @@ mod shared_memory {
 
     /// Read and unlink a POSIX shared-memory object.
     ///
-    /// `shm_open` hands back an ordinary descriptor, so the object is drained through the same
-    /// size and budget arithmetic as a file; only opening and unlinking it need the C calls.
+    /// Darwin shared-memory descriptors support `fstat` and `mmap`, but not `read` or `lseek`.
+    /// Map from zero so protocol offsets need not be aligned to a VM page.
     pub(super) fn read(
         name: &[u8],
         offset: u64,
@@ -260,10 +260,61 @@ mod shared_memory {
         // SAFETY: `shm_open` just produced this descriptor and nothing else holds a copy, so the
         // `File` is its sole owner and closes it on every path out of here.
         let file = unsafe { std::fs::File::from_raw_fd(descriptor) };
-        // Claimed by being read, exactly like `t=t`: the sender handed the object over, and the
-        // open descriptor keeps it alive until the read below finishes with it.
+        let result = acquire(&file, offset, limit, budget);
+        // Unlink only after acquisition finishes. Kitty consumes an opened object even when its
+        // contents are unusable; do the same on stat, budget, allocation or mapping failure so a
+        // sender that has handed it over does not leak one object per failed frame. Failed opens
+        // and invalid names never claim ownership. This is the sole unlink for a claimed object.
+        // In particular, successful acquisition copies before unlink: pooled senders may reuse
+        // the backing storage as soon as they observe that the name is gone.
         unsafe { libc::shm_unlink(name.as_ptr()) };
-        super::read_source(file, offset, limit, budget)
+        result
+    }
+
+    fn acquire(
+        file: &std::fs::File,
+        offset: u64,
+        limit: usize,
+        budget: usize,
+    ) -> Result<Vec<u8>, &'static str> {
+        use std::os::fd::AsRawFd as _;
+
+        // File::metadata uses fstat on this descriptor, including on Darwin.
+        let length = file
+            .metadata()
+            .map_err(|_| "EBADF:cannot stat source")?
+            .len();
+        let wanted = super::usable_length(length.saturating_sub(offset), limit, budget)?;
+        let start = usize::try_from(offset).map_err(|_| "EINVAL:bad offset")?;
+        let mapped_len = start
+            .checked_add(wanted)
+            .filter(|length| *length <= isize::MAX as usize)
+            .ok_or("EINVAL:bad offset")?;
+        let mut data = Vec::new();
+        data.try_reserve_exact(wanted)
+            .map_err(|_| "ENOMEM:cannot hold payload")?;
+        // SAFETY: fstat bounded this nonempty range within the object. The sender must not
+        // truncate or modify an offered object until consumption, as required by the protocol.
+        let mapping = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                mapped_len,
+                libc::PROT_READ,
+                libc::MAP_SHARED,
+                file.as_raw_fd(),
+                0,
+            )
+        };
+        if mapping == libc::MAP_FAILED {
+            return Err("EIO:cannot map shared memory");
+        }
+        // SAFETY: mmap succeeded, and the requested window lies within mapped_len. Capacity was
+        // reserved before mapping, so copying neither reallocates nor outlives the mapping.
+        let pixels = unsafe { std::slice::from_raw_parts(mapping.cast::<u8>().add(start), wanted) };
+        data.extend_from_slice(pixels);
+        // SAFETY: this is the mapping returned above, with its original length.
+        unsafe { libc::munmap(mapping, mapped_len) };
+        Ok(data)
     }
 }
 
@@ -369,7 +420,7 @@ mod tests {
 
     #[test]
     fn shared_memory_names_outside_the_namespace_are_refused() {
-        for name in [&b"tui-lipan"[..], &b"/a/b"[..], &b"/"[..]] {
+        for name in [&b"tui-lipan"[..], &b"/a/b"[..], &b"/"[..], &b"/a\0b"[..]] {
             let error = load(GraphicsMedium::SharedMemory, name, 0, 0, 1024).unwrap_err();
             assert!(error.starts_with("EINVAL") || error.starts_with("ENOTSUPP"));
         }
@@ -408,6 +459,121 @@ mod tests {
         drop(frame);
 
         assert!(load(GraphicsMedium::SharedMemory, name.as_bytes(), 0, 0, 1024).is_err());
+    }
+
+    /// Exercises the Darwin path in macOS CI too, without the terminal-images feature.
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    mod posix_shm {
+        #![allow(unsafe_code)]
+
+        use super::*;
+        use std::ffi::CString;
+        use std::os::fd::{AsRawFd, FromRawFd};
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+
+        struct Object(CString);
+
+        impl Object {
+            fn new(contents: &[u8]) -> Self {
+                let name = CString::new(format!(
+                    "/tl-{}-{}",
+                    std::process::id(),
+                    NEXT.fetch_add(1, Ordering::Relaxed)
+                ))
+                .unwrap();
+                // SAFETY: unique name, valid flags, owned descriptor, and checked mapping.
+                unsafe {
+                    let fd = libc::shm_open(
+                        name.as_ptr(),
+                        libc::O_CREAT | libc::O_EXCL | libc::O_RDWR,
+                        0o600,
+                    );
+                    assert!(fd >= 0, "{}", std::io::Error::last_os_error());
+                    let file = fs::File::from_raw_fd(fd);
+                    assert_eq!(
+                        libc::ftruncate(file.as_raw_fd(), contents.len() as libc::off_t),
+                        0
+                    );
+                    if !contents.is_empty() {
+                        let map = libc::mmap(
+                            std::ptr::null_mut(),
+                            contents.len(),
+                            libc::PROT_WRITE,
+                            libc::MAP_SHARED,
+                            file.as_raw_fd(),
+                            0,
+                        );
+                        assert_ne!(map, libc::MAP_FAILED);
+                        std::ptr::copy_nonoverlapping(
+                            contents.as_ptr(),
+                            map.cast(),
+                            contents.len(),
+                        );
+                        assert_eq!(libc::munmap(map, contents.len()), 0);
+                    }
+                }
+                Self(name)
+            }
+
+            fn read(
+                &self,
+                offset: u64,
+                size: usize,
+                budget: usize,
+            ) -> Result<Vec<u8>, &'static str> {
+                load(
+                    GraphicsMedium::SharedMemory,
+                    self.0.as_bytes(),
+                    offset,
+                    size,
+                    budget,
+                )
+            }
+
+            fn assert_consumed(&self) {
+                assert_eq!(
+                    self.read(0, 0, 1024),
+                    Err("EBADF:cannot open shared memory")
+                );
+            }
+        }
+
+        impl Drop for Object {
+            fn drop(&mut self) {
+                // Cleanup only if a failed assertion left the object unclaimed.
+                unsafe {
+                    let fd = libc::shm_open(self.0.as_ptr(), libc::O_RDONLY, 0);
+                    if fd >= 0 {
+                        drop(fs::File::from_raw_fd(fd));
+                        libc::shm_unlink(self.0.as_ptr());
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn unaligned_window_and_tail_are_acquired_before_consumption() {
+            for (offset, size, expected) in [(3, 4, &b"3456"[..]), (8, 0, &b"89"[..])] {
+                let object = Object::new(b"0123456789");
+                assert_eq!(object.read(offset, size, 4).unwrap(), expected);
+                object.assert_consumed();
+            }
+        }
+
+        #[test]
+        fn failed_acquisition_still_cleans_up_the_offered_object() {
+            for (contents, offset, budget, error) in [
+                (&b""[..], 0, 1024, "EINVAL:empty payload"),
+                (&b"pixels"[..], 0, 2, "EFBIG:payload too large"),
+                (&b"pixels"[..], u64::MAX, 1024, "EINVAL:empty payload"),
+            ] {
+                let object = Object::new(contents);
+                assert_eq!(object.read(offset, 0, budget), Err(error));
+                object.assert_consumed();
+            }
+        }
     }
 
     #[test]
