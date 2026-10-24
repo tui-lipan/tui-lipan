@@ -191,7 +191,7 @@ jobs:
       # Darwin POSIX shm descriptors cannot be read or sought. Exercise the actual mmap
       # acquisition and cleanup here; Linux cannot detect a regression to descriptor reads.
       - name: Run out-of-band media tests
-        run: cargo test --all-features --lib widgets::terminal::graphics_media
+        run: cargo test --all-features --lib widgets::terminal::graphics_media::tests::posix_shm
 
   # Windows-only behavior - path spelling, and anything else written behind `cfg(windows)` - is
   # invisible to every job above, so a claim about it was previously verified by nothing at all.

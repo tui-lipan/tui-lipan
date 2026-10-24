@@ -555,11 +555,21 @@ mod tests {
 
         #[test]
         fn unaligned_window_and_tail_are_acquired_before_consumption() {
-            for (offset, size, expected) in [(3, 4, &b"3456"[..]), (8, 0, &b"89"[..])] {
+            for (offset, size, expected) in [(3, 4, &b"3456"[..]), (8, 2, &b"89"[..])] {
                 let object = Object::new(b"0123456789");
                 assert_eq!(object.read(offset, size, 4).unwrap(), expected);
                 object.assert_consumed();
             }
+        }
+
+        #[test]
+        fn an_unlimited_read_uses_the_stat_size() {
+            // Darwin rounds shm lengths to VM pages. Use a page-sized payload rather than
+            // assuming ftruncate preserves a sub-page logical length as Linux does.
+            let pixels = vec![42; 64 * 1024];
+            let object = Object::new(&pixels);
+            assert_eq!(object.read(0, 0, pixels.len()).unwrap(), pixels);
+            object.assert_consumed();
         }
 
         #[test]
