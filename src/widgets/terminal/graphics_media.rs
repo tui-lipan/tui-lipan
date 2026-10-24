@@ -184,8 +184,8 @@ fn read_file_contents(
 
 /// Take the requested window out of an already-open source.
 ///
-/// Shared memory uses a mapping instead, since Darwin does not support reading or seeking a
-/// POSIX shared-memory descriptor. Both paths share the window budget arithmetic.
+/// Shared memory reaches this through a descriptor rather than a path everywhere but Apple
+/// platforms, so the size, offset and budget arithmetic lives here once.
 fn read_source(
     mut file: fs::File,
     offset: u64,
@@ -197,12 +197,12 @@ fn read_source(
         .map_err(|_| "EBADF:cannot stat source")?
         .len()
         .saturating_sub(offset);
+    let wanted = usable_length(length, limit, budget)?;
     if offset > 0 {
         use std::io::Seek as _;
         file.seek(std::io::SeekFrom::Start(offset))
             .map_err(|_| "EINVAL:bad offset")?;
     }
-    let wanted = usable_length(length, limit, budget)?;
     let mut data = Vec::new();
     data.try_reserve_exact(wanted)
         .map_err(|_| "ENOMEM:cannot hold payload")?;
@@ -236,8 +236,8 @@ mod shared_memory {
 
     /// Read and unlink a POSIX shared-memory object.
     ///
-    /// Darwin shared-memory descriptors support `fstat` and `mmap`, but not `read` or `lseek`.
-    /// Map from zero so protocol offsets need not be aligned to a VM page.
+    /// `shm_open` hands back an ordinary descriptor, so outside Apple platforms the object is
+    /// drained through the same size and budget arithmetic as a file.
     pub(super) fn read(
         name: &[u8],
         offset: u64,
@@ -247,9 +247,11 @@ mod shared_memory {
         use std::ffi::CString;
         use std::os::fd::FromRawFd as _;
 
-        // POSIX wants one leading slash and no other, which is also what keeps a name inside the
-        // shared-memory namespace instead of reaching into the filesystem.
-        if name.len() < 2 || name.first() != Some(&b'/') || name[1..].contains(&b'/') {
+        // The name goes to `shm_open` unchanged, which owns the namespace rules. Kitty accepts
+        // names without a leading slash because sandboxed macOS applications can only create
+        // `group-id/name` objects; libc implementations that back objects with files refuse
+        // names that would leave their directory.
+        if name.is_empty() {
             return Err("EINVAL:bad shared memory name");
         }
         let name = CString::new(name).map_err(|_| "EINVAL:bad shared memory name")?;
@@ -260,7 +262,7 @@ mod shared_memory {
         // SAFETY: `shm_open` just produced this descriptor and nothing else holds a copy, so the
         // `File` is its sole owner and closes it on every path out of here.
         let file = unsafe { std::fs::File::from_raw_fd(descriptor) };
-        let result = acquire(&file, offset, limit, budget);
+        let result = acquire(file, offset, limit, budget);
         // Unlink only after acquisition finishes. Kitty consumes an opened object even when its
         // contents are unusable; do the same on stat, budget, allocation or mapping failure so a
         // sender that has handed it over does not leak one object per failed frame. Failed opens
@@ -271,8 +273,24 @@ mod shared_memory {
         result
     }
 
+    /// Copy through `read`, never a mapping: Linux lets the sender shrink the object while it is
+    /// being copied, and touching a mapped page past the new end raises `SIGBUS` in the terminal.
+    /// A descriptor read just comes up short.
+    #[cfg(not(target_vendor = "apple"))]
     fn acquire(
-        file: &std::fs::File,
+        file: std::fs::File,
+        offset: u64,
+        limit: usize,
+        budget: usize,
+    ) -> Result<Vec<u8>, &'static str> {
+        super::read_source(file, offset, limit, budget)
+    }
+
+    /// Darwin shared-memory descriptors support `fstat` and `mmap`, but not `read` or `lseek`.
+    /// Mapping is safe there because Darwin cannot resize an object once its size is set.
+    #[cfg(target_vendor = "apple")]
+    fn acquire(
+        file: std::fs::File,
         offset: u64,
         limit: usize,
         budget: usize,
@@ -285,16 +303,23 @@ mod shared_memory {
             .map_err(|_| "EBADF:cannot stat source")?
             .len();
         let wanted = super::usable_length(length.saturating_sub(offset), limit, budget)?;
-        let start = usize::try_from(offset).map_err(|_| "EINVAL:bad offset")?;
-        let mapped_len = start
+        // mmap offsets must be page aligned; protocol offsets need not be.
+        let page = u64::try_from(unsafe { libc::sysconf(libc::_SC_PAGESIZE) })
+            .ok()
+            .filter(|page| *page > 0)
+            .ok_or("EIO:cannot map shared memory")?;
+        let page_start = offset - offset % page;
+        let delta = (offset - page_start) as usize;
+        let map_offset = libc::off_t::try_from(page_start).map_err(|_| "EINVAL:bad offset")?;
+        let mapped_len = delta
             .checked_add(wanted)
             .filter(|length| *length <= isize::MAX as usize)
             .ok_or("EINVAL:bad offset")?;
         let mut data = Vec::new();
         data.try_reserve_exact(wanted)
             .map_err(|_| "ENOMEM:cannot hold payload")?;
-        // SAFETY: fstat bounded this nonempty range within the object. The sender must not
-        // truncate or modify an offered object until consumption, as required by the protocol.
+        // SAFETY: fstat bounded this nonempty range within the object, and Darwin objects cannot
+        // shrink afterwards.
         let mapping = unsafe {
             libc::mmap(
                 std::ptr::null_mut(),
@@ -302,7 +327,7 @@ mod shared_memory {
                 libc::PROT_READ,
                 libc::MAP_SHARED,
                 file.as_raw_fd(),
-                0,
+                map_offset,
             )
         };
         if mapping == libc::MAP_FAILED {
@@ -310,7 +335,7 @@ mod shared_memory {
         }
         // SAFETY: mmap succeeded, and the requested window lies within mapped_len. Capacity was
         // reserved before mapping, so copying neither reallocates nor outlives the mapping.
-        let pixels = unsafe { std::slice::from_raw_parts(mapping.cast::<u8>().add(start), wanted) };
+        let pixels = unsafe { std::slice::from_raw_parts(mapping.cast::<u8>().add(delta), wanted) };
         data.extend_from_slice(pixels);
         // SAFETY: this is the mapping returned above, with its original length.
         unsafe { libc::munmap(mapping, mapped_len) };
@@ -419,10 +444,18 @@ mod tests {
     }
 
     #[test]
-    fn shared_memory_names_outside_the_namespace_are_refused() {
-        for name in [&b"tui-lipan"[..], &b"/a/b"[..], &b"/"[..], &b"/a\0b"[..]] {
+    fn shared_memory_names_that_cannot_reach_shm_open_are_refused() {
+        for name in [&b""[..], &b"/a\0b"[..]] {
             let error = load(GraphicsMedium::SharedMemory, name, 0, 0, 1024).unwrap_err();
             assert!(error.starts_with("EINVAL") || error.starts_with("ENOTSUPP"));
+        }
+    }
+
+    /// `shm_open` decides what a name means, and none of these names an object it can open.
+    #[test]
+    fn shared_memory_names_outside_the_namespace_are_not_opened() {
+        for name in [&b"/a/b"[..], &b"/"[..], &b"../etc/passwd"[..]] {
+            assert!(load(GraphicsMedium::SharedMemory, name, 0, 0, 1024).is_err());
         }
     }
 
@@ -477,8 +510,12 @@ mod tests {
 
         impl Object {
             fn new(contents: &[u8]) -> Self {
+                Self::with_prefix("/", contents)
+            }
+
+            fn with_prefix(prefix: &str, contents: &[u8]) -> Self {
                 let name = CString::new(format!(
-                    "/tl-{}-{}",
+                    "{prefix}tl-{}-{}",
                     std::process::id(),
                     NEXT.fetch_add(1, Ordering::Relaxed)
                 ))
@@ -560,6 +597,24 @@ mod tests {
                 assert_eq!(object.read(offset, size, 4).unwrap(), expected);
                 object.assert_consumed();
             }
+        }
+
+        #[test]
+        fn an_offset_past_the_first_page_is_acquired() {
+            let mut pixels = vec![0; 64 * 1024];
+            pixels[40_000..40_004].copy_from_slice(b"tail");
+            let object = Object::new(&pixels);
+            assert_eq!(object.read(40_000, 4, 4).unwrap(), b"tail");
+            object.assert_consumed();
+        }
+
+        /// Sandboxed macOS senders can only create `group-id/name` objects, so a name without a
+        /// leading slash is passed to `shm_open` as written.
+        #[test]
+        fn a_name_without_a_leading_slash_is_acquired() {
+            let object = Object::with_prefix("", b"pixels");
+            assert_eq!(object.read(0, 6, 1024).unwrap(), b"pixels");
+            object.assert_consumed();
         }
 
         #[test]
