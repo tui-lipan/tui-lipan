@@ -2812,7 +2812,16 @@ mod tests {
             let mut terminal =
                 crate::backend::ratatui_backend::create_test_terminal(20, 4).unwrap();
             runner.core.init();
-            runner.render(&mut terminal).unwrap();
+            // `render` would ask the host for its size, which CI's tty-less runners cannot answer;
+            // reconcile at fixed bounds and draw, the same two steps it takes.
+            let bounds = Rect {
+                x: 0,
+                y: 0,
+                w: 20,
+                h: 4,
+            };
+            runner.core.render_element(bounds, None, None, None);
+            runner.render_paint_only(&mut terminal).unwrap();
             let output = String::from_utf8_lossy(&terminal.backend().test_output()).into_owned();
             assert!(
                 output.contains(&format!("\x1b]2;{expected}\x07")),
