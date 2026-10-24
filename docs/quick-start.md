@@ -324,7 +324,7 @@ fn view(&self, ctx: &Context<Self>) -> Element {
 
 ```rust
 App::new()
-    .title("My App")           // Optional outer chrome frame
+    .title("My App")           // Optional host terminal window title (see ctx.set_title)
     .theme(Theme::one_dark())  // Optional theme override
     .system_theme()            // Optional: derive theme from host terminal colors
     .inline_ephemeral(8)       // Optional: inline mode (8 terminal rows)

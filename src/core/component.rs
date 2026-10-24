@@ -2092,6 +2092,19 @@ impl<C: Component> Context<C> {
         self.env.full_repaint.set(true);
     }
 
+    /// Set the host terminal window title (via OSC 2), replacing the one from
+    /// [`App::title`](crate::App::title).
+    ///
+    /// The title is written with the next frame, which this schedules. Setting the title the host
+    /// already shows writes nothing, so calling this on every update is cheap. The latest call
+    /// before a frame wins. Control characters are dropped, so text taken from a child program
+    /// cannot end the escape sequence early.
+    pub fn set_title(&self, title: impl Into<String>) {
+        let mut title = title.into();
+        title.retain(|ch| !ch.is_control());
+        *self.env.title_request.borrow_mut() = Some(title);
+    }
+
     /// Flash the active copy-feedback style on [`NodeId`] `node_id`.
     ///
     /// The flash uses the duration and style from [`ClipboardConfig`](crate::ClipboardConfig).
@@ -2203,6 +2216,10 @@ impl<C: Component> Context<C> {
 
     pub(crate) fn take_devtools_request(&self) -> Option<DevToolsRequest> {
         self.env.devtools_request.borrow_mut().take()
+    }
+
+    pub(crate) fn take_title_request(&self) -> Option<String> {
+        self.env.title_request.borrow_mut().take()
     }
 
     /// Queue a UI snapshot write to `path` after the next render.

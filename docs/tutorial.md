@@ -363,7 +363,7 @@ fn view(&self, ctx: &Context<Self>) -> Element {
 ```rust
 fn main() -> tui_lipan::Result<()> {
     tui_lipan::App::new()
-        .title("My App")                        // Chrome frame title
+        .title("My App")                        // Host terminal window title
         .theme(Theme::one_dark())               // Theme preset
         .mouse(true)                            // Mouse capture (default: true)
         .toast_placement(ToastPlacement::BottomEnd)

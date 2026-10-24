@@ -1319,6 +1319,18 @@ impl<C: Component> AppRunner<C> {
         self.apply_root_update(dirty, update);
     }
 
+    /// Adopt a title requested through [`crate::Context::set_title`], returning whether it
+    /// differs from the current one and so needs a frame to reach the host.
+    fn apply_pending_title_request(&mut self) -> bool {
+        match self.core.ctx.take_title_request() {
+            Some(title) if self.title.as_deref() != Some(title.as_str()) => {
+                self.title = Some(title);
+                true
+            }
+            _ => false,
+        }
+    }
+
     #[cfg(feature = "devtools")]
     fn apply_pending_devtools_request(&mut self) -> bool {
         match self.core.ctx.take_devtools_request() {
@@ -3126,6 +3138,10 @@ impl<C: Component> AppRunner<C> {
 
                 if self.core.ctx.env().focus_request.borrow().is_some() {
                     dirty.mark_full();
+                }
+
+                if self.apply_pending_title_request() {
+                    dirty.mark_paint();
                 }
 
                 if self.sync_mouse_capture_preference(&mut terminal)? {

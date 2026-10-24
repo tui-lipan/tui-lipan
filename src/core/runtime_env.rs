@@ -372,6 +372,8 @@ pub(crate) struct RuntimeEnv {
     pub full_repaint: Rc<Cell<bool>>,
     /// Pending request to change devtools visibility on the UI thread.
     pub devtools_request: Rc<RefCell<Option<DevToolsRequest>>>,
+    /// Pending host terminal window title set through [`crate::Context::set_title`].
+    pub title_request: Rc<RefCell<Option<String>>>,
     /// Host-application metric rows shown by the DevTools App tab.
     #[cfg(feature = "devtools")]
     pub devtools_metrics: Rc<DevToolsMetrics>,

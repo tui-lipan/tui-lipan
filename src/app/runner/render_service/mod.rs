@@ -2743,6 +2743,26 @@ mod tests {
         assert!(runner.core.ctx.devtools_visible());
     }
 
+    #[test]
+    fn context_set_title_replaces_the_app_title_only_when_it_changes() {
+        let mut runner =
+            AppRunner::new(App::new().mouse(false).title("start"), ScrollWithInput, ());
+        assert!(!runner.apply_pending_title_request());
+
+        runner.core.ctx.set_title("start");
+        assert!(!runner.apply_pending_title_request());
+
+        runner.core.ctx.set_title("first");
+        runner.core.ctx.set_title("second");
+        assert!(runner.apply_pending_title_request());
+        assert_eq!(runner.title.as_deref(), Some("second"));
+        assert!(!runner.apply_pending_title_request());
+
+        runner.core.ctx.set_title("a\x07b\x1b]2;c\u{9c}");
+        assert!(runner.apply_pending_title_request());
+        assert_eq!(runner.title.as_deref(), Some("ab]2;c"));
+    }
+
     #[cfg(feature = "devtools")]
     #[test]
     fn disabled_metrics_config_skips_frame_history_even_when_visible() {
