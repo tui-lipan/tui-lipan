@@ -44,8 +44,10 @@ pub struct TerminalOutputTransaction {
     /// Parser-established semantics; defaults to ordered when equivalence is uncertain.
     pub class: TerminalOutputClass,
     /// Original bytes, unchanged and in producer order, except that a screen relaying out-of-band
-    /// images inline records each relayed transmission as the inline one it stands for. See
-    /// [`TerminalScreen::set_image_inline_relay`](crate::widgets::TerminalScreen::set_image_inline_relay).
+    /// images inline records each relayed transmission as the inline one it stands for. A failed
+    /// relayed acquisition produces an empty ordered receipt; do not substitute original bytes.
+    /// See
+    /// [`TerminalScreen::set_image_relay_policy`](crate::widgets::TerminalScreen::set_image_relay_policy).
     pub bytes: Vec<u8>,
 }
 
@@ -457,6 +459,17 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn idle_boundary_records_no_transaction() {
+        let mut screen = screen();
+        screen.flush_output_transaction_boundary();
+        assert!(screen.take_output_transactions().is_empty());
+        screen.process_bytes(FRAME);
+        screen.take_output_transactions();
+        screen.flush_output_transaction_boundary();
+        assert!(screen.take_output_transactions().is_empty());
     }
 
     #[test]
@@ -976,7 +989,7 @@ mod tests {
     fn relaying_recorder() -> TerminalScreen {
         let mut recorder = TerminalScreen::new(4, 8, 0);
         recorder.set_image_media_policy(GraphicsMediaPolicy::default());
-        recorder.set_image_inline_relay(true);
+        recorder.set_image_relay_policy(crate::GraphicsRelayPolicy::All);
         recorder.set_output_transaction_recording(true);
         recorder
     }

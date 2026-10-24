@@ -1631,6 +1631,14 @@ Placeholder identities describe the virtual placement origin in absolute retaine
 `Unassigned` denotes an image placement without parser identity. These logical identities do not
 expose the host terminal's image or placement IDs.
 
+### Named-image media
+
+With `terminal-images`, `GraphicsMediaPolicy` selects accepted file and consuming media.
+`GraphicsRelayPolicy` selects recorded output: `None` preserves names, `Consuming` inlines
+`t=t`/`t=s`, and `All` also inlines `t=f`. `TerminalMediaWork` runs acquisition, decoding and
+relay construction on a worker. `TerminalPreparedInput` returns one prepared input prefix for
+commit through its owning screen. See [terminal images](widgets/terminal-images.md).
+
 ### Terminal presentation
 
 With `terminal`, `PresentedTerminal` contains `stable_terminal_id: u64` and `token: u64`.

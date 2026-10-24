@@ -473,7 +473,7 @@ enum ScanState {
 /// Every `APC` sequence is swallowed, not just the graphics ones: the VT parser discards `APC`
 /// bodies wholesale, so removing them from its input cannot change the grid, and it saves this
 /// scanner from having to reproduce `vte`'s string-state rules byte for byte.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(super) struct GraphicsScanner {
     state: ScanState,
     /// Body of the `APC` being accumulated, without the `ESC _` introducer.
@@ -569,82 +569,114 @@ impl GraphicsScanner {
     /// Ranges in [`GraphicsSegment::Text`] index `bytes`; whatever is needed to finish a command
     /// straddling the chunk boundary stays in `self`.
     pub(super) fn scan(&mut self, bytes: &[u8]) -> Vec<GraphicsSegment> {
-        let mut out = Vec::new();
-        // Start of the run of plain VT bytes not yet emitted.
-        let mut text_start = 0usize;
-        let mut idx = 0usize;
+        self.scan_prefix(bytes, false).0
+    }
 
+    pub(super) fn scan_media_prefix(&mut self, bytes: &[u8]) -> (Vec<GraphicsSegment>, usize) {
+        self.scan_prefix(bytes, true)
+    }
+
+    fn scan_prefix(&mut self, bytes: &[u8], stop_at_media: bool) -> (Vec<GraphicsSegment>, usize) {
+        let mut out = Vec::new();
+        let mut text_start = 0;
+        let mut idx = 0;
         while idx < bytes.len() {
             let byte = bytes[idx];
             match self.state {
-                ScanState::Ground => {
-                    if byte == 0x1b {
-                        // Hold the ESC back: it rejoins the text if this is not an APC, and is
-                        // dropped with the rest of the sequence if it is.
-                        if text_start < idx {
-                            out.push(GraphicsSegment::Text(text_start..idx));
-                        }
-                        text_start = idx;
-                        self.state = ScanState::Escape;
-                    }
-                    idx += 1;
-                }
-                ScanState::Escape => {
-                    if byte == b'_' {
-                        self.state = ScanState::Apc;
-                        self.apc.clear();
-                        self.overflowed = false;
-                        self.wire_ordered = self.held_escape_forwarded;
-                        if self.record_output {
-                            self.wire = if self.held_escape_forwarded {
-                                b"_".to_vec()
-                            } else {
-                                b"\x1b_".to_vec()
-                            };
-                        }
-                        self.held_escape_forwarded = false;
-                        idx += 1;
-                        text_start = idx;
-                    } else {
-                        self.state = ScanState::Ground;
-                        if text_start == idx && !self.held_escape_forwarded {
-                            // The ESC was the last byte of an earlier chunk.
-                            out.push(GraphicsSegment::HeldEscape);
-                        }
-                        self.held_escape_forwarded = false;
-                        // Re-read this byte in `Ground`, so `ESC ESC` starts a fresh sequence.
-                    }
-                }
+                ScanState::Ground => self.scan_ground(byte, &mut idx, &mut text_start, &mut out),
+                ScanState::Escape => self.scan_escape(byte, &mut idx, &mut text_start, &mut out),
                 ScanState::Apc => {
                     self.scan_apc_byte(byte, &mut out);
                     idx += 1;
                     text_start = idx;
                 }
                 ScanState::ApcEscape => {
-                    if byte == b'\\' {
-                        self.record_wire(byte, &mut out);
-                        self.finish_apc(&mut out);
-                        self.state = ScanState::Ground;
-                        idx += 1;
-                        text_start = idx;
-                    } else {
-                        self.finish_ordered_wire(&mut out);
-                        // Unterminated: the VT parser would discard this body too, so drop it and
-                        // re-read the byte as the start of whatever follows.
-                        self.apc.clear();
-                        self.overflowed = false;
-                        self.state = ScanState::Ground;
-                        text_start = idx;
+                    if self.scan_apc_escape(byte, &mut idx, &mut text_start, &mut out)
+                        && stop_at_media
+                    {
+                        return (out, idx);
                     }
                 }
             }
         }
-
         if self.state == ScanState::Ground && text_start < bytes.len() {
             out.push(GraphicsSegment::Text(text_start..bytes.len()));
         }
+        (out, bytes.len())
+    }
 
-        out
+    fn scan_ground(
+        &mut self,
+        byte: u8,
+        idx: &mut usize,
+        text_start: &mut usize,
+        out: &mut Vec<GraphicsSegment>,
+    ) {
+        if byte == 0x1b {
+            // Hold ESC until the next byte distinguishes ordinary VT from APC.
+            if *text_start < *idx {
+                out.push(GraphicsSegment::Text(*text_start..*idx));
+            }
+            *text_start = *idx;
+            self.state = ScanState::Escape;
+        }
+        *idx += 1;
+    }
+
+    fn scan_escape(
+        &mut self,
+        byte: u8,
+        idx: &mut usize,
+        text_start: &mut usize,
+        out: &mut Vec<GraphicsSegment>,
+    ) {
+        if byte == b'_' {
+            self.state = ScanState::Apc;
+            self.apc.clear();
+            self.overflowed = false;
+            self.wire_ordered = self.held_escape_forwarded;
+            if self.record_output {
+                self.wire = if self.held_escape_forwarded {
+                    b"_".to_vec()
+                } else {
+                    b"\x1b_".to_vec()
+                };
+            }
+            self.held_escape_forwarded = false;
+            *idx += 1;
+            *text_start = *idx;
+        } else {
+            self.state = ScanState::Ground;
+            if *text_start == *idx && !self.held_escape_forwarded {
+                out.push(GraphicsSegment::HeldEscape);
+            }
+            self.held_escape_forwarded = false;
+            // Re-read in Ground, so ESC ESC begins a fresh sequence.
+        }
+    }
+
+    fn scan_apc_escape(
+        &mut self,
+        byte: u8,
+        idx: &mut usize,
+        text_start: &mut usize,
+        out: &mut Vec<GraphicsSegment>,
+    ) -> bool {
+        if byte == b'\\' {
+            self.record_wire(byte, out);
+            self.finish_apc(out);
+            self.state = ScanState::Ground;
+            *idx += 1;
+            *text_start = *idx;
+            matches!(out.last(), Some(GraphicsSegment::Command(command)) if command.needs_media())
+        } else {
+            self.finish_ordered_wire(out);
+            self.apc.clear();
+            self.overflowed = false;
+            self.state = ScanState::Ground;
+            *text_start = *idx;
+            false
+        }
     }
 
     fn scan_apc_byte(&mut self, byte: u8, out: &mut Vec<GraphicsSegment>) {
@@ -819,8 +851,116 @@ pub(super) struct GraphicsCommand {
     malformed: bool,
     wire: Option<Vec<u8>>,
     coalescing_safe: bool,
+    prepared: Option<Box<PreparedGraphicsMedia>>,
     /// Every key is one a by-id delete inside a synchronized frame may carry, each at most once.
     delete_safe: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(super) struct PreparedGraphicsMedia {
+    payload: Vec<u8>,
+    decoded: Option<Arc<DynamicImage>>,
+    error: Option<&'static str>,
+    wire: Option<Vec<u8>>,
+}
+
+impl PreparedGraphicsMedia {
+    fn relay_bytes(&self) -> &[u8] {
+        if self.payload.is_empty() {
+            self.decoded.as_ref().map_or(&[], |image| image.as_bytes())
+        } else {
+            &self.payload
+        }
+    }
+}
+
+impl GraphicsCommand {
+    pub(super) fn medium(&self) -> GraphicsMedium {
+        self.medium
+    }
+
+    pub(super) fn needs_media(&self) -> bool {
+        self.medium.is_out_of_band()
+            && (self.action.transmits() || self.action == GraphicsAction::Query)
+    }
+
+    pub(super) fn prepare_media(
+        &mut self,
+        policy: GraphicsMediaPolicy,
+        relay: super::graphics_media::GraphicsRelayPolicy,
+        recording: bool,
+    ) {
+        if !self.needs_media() {
+            return;
+        }
+        let mut prepared = match self.prepared.take() {
+            Some(prepared) => *prepared,
+            None => match self.prepare_media_contents(policy) {
+                Ok(prepared) => prepared,
+                Err(error) => PreparedGraphicsMedia {
+                    error: Some(error),
+                    ..Default::default()
+                },
+            },
+        };
+        if recording && relay.relays(self.medium) {
+            // Never hand a downstream reader a consuming name, including failed probes or reads.
+            // The authoritative screen still sends errors to the child.
+            if prepared.wire.is_none() {
+                prepared.wire = Some(match (prepared.error, self.wire.as_deref()) {
+                    (None, Some(wire)) => inline_transmission(wire, prepared.relay_bytes()),
+                    _ => Vec::new(),
+                });
+            }
+        } else {
+            prepared.wire = None;
+        }
+        self.prepared = Some(Box::new(prepared));
+    }
+
+    fn prepare_media_contents(
+        &self,
+        policy: GraphicsMediaPolicy,
+    ) -> Result<PreparedGraphicsMedia, &'static str> {
+        if self.malformed {
+            return Err("EINVAL:payload is not base64");
+        }
+        if self.more {
+            return Err("EINVAL:chunked out-of-band transmission");
+        }
+        if !policy.allows(self.medium) {
+            return Err("ENOTSUPP:file transmission");
+        }
+        let payload = graphics_media::load(
+            self.medium,
+            &self.payload,
+            self.source_offset,
+            self.source_size,
+            MAX_TRANSMIT_BYTES,
+        )?;
+        // Raw pixels become the decoded image without a second pixel allocation. Keeping the
+        // owned image here also prevents a later replay/attach from decoding on the caller thread.
+        // Encoded PNG/zlib bytes stay available for relay-policy changes without reopening sources.
+        let (payload, decoded) = if matches!(self.format, 24 | 32) && !self.compressed {
+            (Vec::new(), Arc::new(decode_payload(self, payload)?))
+        } else {
+            let decoded = Arc::new(decode_payload(self, payload.clone())?);
+            (payload, decoded)
+        };
+        Ok(PreparedGraphicsMedia {
+            payload,
+            decoded: Some(decoded),
+            ..Default::default()
+        })
+    }
+
+    pub(super) fn adopt_preparation(&mut self, other: Self) {
+        self.prepared = other.prepared;
+    }
+
+    pub(super) fn take_prepared_wire(&mut self) -> Option<Vec<u8>> {
+        self.prepared.as_mut()?.wire.take()
+    }
 }
 
 impl Default for GraphicsCommand {
@@ -856,6 +996,7 @@ impl Default for GraphicsCommand {
             malformed: false,
             wire: None,
             coalescing_safe: true,
+            prepared: None,
             delete_safe: true,
         }
     }
@@ -1875,22 +2016,7 @@ pub(super) struct TerminalGraphics {
     /// Images dropped to stay within budget. Which ones go depends on everything stored, so a
     /// frame that evicted anything cannot claim its effect is independent of earlier output.
     evictions: u64,
-    relay: InlineRelay,
-}
-
-/// Out-of-band pixels this screen read on behalf of readers that cannot reach the source.
-///
-/// A multiplexer server reads `t=f`, `t=t` and `t=s` sources itself, but the parsers it forwards
-/// output to may be on another machine, or may lose a race to a consumed source. With relaying on,
-/// a single out-of-band transmission keeps the bytes it loaded until the screen records them in
-/// place of the source's name. See [`inline_transmission`].
-#[derive(Default)]
-struct InlineRelay {
-    enabled: bool,
-    /// Set while a single, unchunked transmission is being stored. A chunked out-of-band run has
-    /// already been forwarded chunk by chunk, so it cannot be rewritten as a whole.
-    armed: bool,
-    payload: Option<Vec<u8>>,
+    relay: super::graphics_media::GraphicsRelayPolicy,
 }
 
 impl Default for TerminalGraphics {
@@ -1923,7 +2049,7 @@ impl Default for TerminalGraphics {
             next_placement: 0,
             composition: Arc::default(),
             evictions: 0,
-            relay: InlineRelay::default(),
+            relay: super::graphics_media::GraphicsRelayPolicy::default(),
         }
     }
 }
@@ -1989,16 +2115,17 @@ impl TerminalGraphics {
         self.media = media;
     }
 
-    pub(super) fn set_inline_relay(&mut self, enabled: bool) {
-        self.relay.enabled = enabled;
-        if !enabled {
-            self.relay.payload = None;
-        }
+    pub(super) fn set_relay_policy(&mut self, policy: super::graphics_media::GraphicsRelayPolicy) {
+        self.relay = policy;
     }
 
-    /// The out-of-band bytes the last command loaded for relaying, if it loaded any.
-    pub(super) fn take_relayed_payload(&mut self) -> Option<Vec<u8>> {
-        self.relay.payload.take()
+    pub(super) fn media_options(
+        &self,
+    ) -> (
+        GraphicsMediaPolicy,
+        super::graphics_media::GraphicsRelayPolicy,
+    ) {
+        (self.media, self.relay)
     }
 
     fn replace_file_pool(&mut self) {
@@ -2283,7 +2410,6 @@ impl TerminalGraphics {
         ctx: GraphicsContext,
     ) -> GraphicsOutcome {
         self.clock = self.clock.wrapping_add(1);
-        self.relay.payload = None;
         if self.discarding_run && command.action.transmits() {
             self.discarding_run = command.more;
             return GraphicsOutcome::default();
@@ -2339,6 +2465,12 @@ impl TerminalGraphics {
     /// A probe carries a real (tiny) payload, so it is validated exactly like a transmission: the
     /// client learns from the answer whether this terminal understands the format it wants to use.
     fn query(&mut self, command: &GraphicsCommand) -> GraphicsOutcome {
+        if let Some(prepared) = &command.prepared {
+            return GraphicsOutcome {
+                response: report(command, command.id, prepared.error.map_or(Ok(()), Err)),
+                advance: None,
+            };
+        }
         let result = self
             .resolve_medium(command, command.payload.clone())
             .and_then(|payload| decode_payload(command, payload).map(|_| ()));
@@ -2355,6 +2487,9 @@ impl TerminalGraphics {
         command: &GraphicsCommand,
         payload: Vec<u8>,
     ) -> Result<Vec<u8>, &'static str> {
+        if let Some(prepared) = &command.prepared {
+            return prepared.error.map_or(Ok(payload), Err);
+        }
         if !command.medium.is_out_of_band() {
             return Ok(payload);
         }
@@ -2375,11 +2510,10 @@ impl TerminalGraphics {
             return self.transmit_chunked(command, ctx);
         }
         let id = self.resolve_id(command.id, command.number);
+        // Prepared media already carries its decoded pixels, so the payload stays the short name
+        // the child sent and identity hashes that, not the acquired bytes.
         let payload = command.payload.clone();
-        self.relay.armed = self.relay.enabled;
-        let outcome = self.finish_transmit(id, &command, payload, ctx);
-        self.relay.armed = false;
-        outcome
+        self.finish_transmit(id, &command, payload, ctx)
     }
 
     /// Accumulate a `m=1` run.
@@ -2436,9 +2570,13 @@ impl TerminalGraphics {
         payload: Vec<u8>,
         source_hash: u64,
     ) -> Result<(TerminalImage, usize), &'static str> {
-        // A relayed source needs its bytes now, so it skips the on-demand file snapshot.
-        let relaying = self.relay.armed && command.medium.is_out_of_band();
-        let file = if relaying {
+        if let Some(prepared) = &command.prepared
+            && let Some(decoded) = &prepared.decoded
+        {
+            let bytes = decoded_bytes(decoded);
+            return Ok((self.decoded_image(source_hash, Arc::clone(decoded)), bytes));
+        }
+        let file = if command.prepared.is_some() {
             None
         } else {
             self.snapshot_file(command, &payload)
@@ -2467,9 +2605,6 @@ impl TerminalGraphics {
             )
         } else {
             let payload = self.resolve_medium(command, payload)?;
-            if relaying {
-                self.relay.payload = Some(payload.clone());
-            }
             let (image, bytes) = match deferrable(command) {
                 // Nothing is waiting to hear whether this decodes and the size is already known, so the
                 // work waits until something asks to draw it. A frame superseded before then - the
@@ -2508,21 +2643,7 @@ impl TerminalGraphics {
                 None => {
                     let decoded = decode_payload(command, payload)?;
                     let bytes = decoded_bytes(&decoded);
-                    let image = TerminalImage {
-                        source_key: ImageSourceKey::default(),
-                        source_lifetime: Arc::default(),
-                        placement_lifetime: None,
-                        placement_identity: ImagePlacementIdentity::default(),
-                        source_revision: ImageSourceRevision::default(),
-                        native: Arc::default(),
-                        width: decoded.width(),
-                        height: decoded.height(),
-                        source: ImageSource::Decoded(Arc::new(decoded)),
-                        source_hash,
-                        stream_namespace: self.stream_namespace,
-                        geometry: None,
-                        composition: Some(Arc::clone(&self.composition)),
-                    };
+                    let image = self.decoded_image(source_hash, Arc::new(decoded));
                     (image, bytes)
                 }
             };
@@ -2626,35 +2747,42 @@ impl TerminalGraphics {
         }
     }
 
-    /// The size a metadata-only screen records for a transmission it does not store.
-    ///
-    /// It normally goes on what an out-of-band command declared, leaving the source to the reader
-    /// that renders it. A relaying screen is that reader for everyone downstream, so it reads the
-    /// source once, keeps the bytes for the recorded output, and checks them as inline pixels.
+    /// Prepared input already owns its pixels, including on a metadata-only screen.
     fn metadata_dimensions(
         &mut self,
         command: &GraphicsCommand,
         payload: &[u8],
     ) -> Result<(u32, u32), &'static str> {
-        if !command.medium.is_out_of_band() {
-            return validate_transmit_dimensions(command, payload);
+        if let Some(prepared) = &command.prepared {
+            if let Some(error) = prepared.error {
+                return Err(error);
+            }
+            if let Some(decoded) = &prepared.decoded {
+                return Ok((decoded.width(), decoded.height()));
+            }
         }
         if !self.media.allows(command.medium) {
             return Err("ENOTSUPP:file transmission");
         }
-        if !self.relay.armed {
-            return validate_transmit_dimensions(command, payload);
+        validate_transmit_dimensions(command, payload)
+    }
+
+    fn decoded_image(&self, source_hash: u64, decoded: Arc<DynamicImage>) -> TerminalImage {
+        TerminalImage {
+            source_key: ImageSourceKey::default(),
+            source_lifetime: Arc::default(),
+            placement_lifetime: None,
+            placement_identity: ImagePlacementIdentity::default(),
+            source_revision: ImageSourceRevision::default(),
+            native: Arc::default(),
+            width: decoded.width(),
+            height: decoded.height(),
+            source: ImageSource::Decoded(decoded),
+            source_hash,
+            stream_namespace: self.stream_namespace,
+            geometry: None,
+            composition: Some(Arc::clone(&self.composition)),
         }
-        let pixels = self.resolve_medium(command, payload.to_vec())?;
-        let inline = GraphicsCommand {
-            medium: GraphicsMedium::Direct,
-            payload: Vec::new(),
-            payload_len: pixels.len(),
-            ..command.clone()
-        };
-        let dimensions = validate_transmit_dimensions(&inline, &pixels)?;
-        self.relay.payload = Some(pixels);
-        Ok(dimensions)
     }
 
     /// Identity of a transmission that named its pixels rather than carrying them.
@@ -4648,6 +4776,43 @@ mod tests {
         let outcome = graphics.apply(commands[1].clone(), context());
         assert_eq!(outcome.advance, Some((2, 3)));
         assert_eq!(graphics.visible(0, 0, 24, false).len(), 1);
+    }
+
+    #[test]
+    fn prepared_named_media_hashes_the_name_not_the_acquired_bytes() {
+        use std::io::Write as _;
+
+        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+        encoder.write_all(&[1, 2, 3, 255].repeat(64)).unwrap();
+        let mut source = tempfile::NamedTempFile::new().unwrap();
+        source.write_all(&encoder.finish().unwrap()).unwrap();
+        let name = source.path().to_str().unwrap().as_bytes().to_vec();
+        let mut command = GraphicsCommand {
+            medium: GraphicsMedium::File,
+            quiet: 2,
+            format: 32,
+            compressed: true,
+            width: 8,
+            height: 8,
+            id: 7,
+            payload: name.clone(),
+            ..GraphicsCommand::default()
+        };
+        command.prepare_media(
+            GraphicsMediaPolicy::SHARED,
+            graphics_media::GraphicsRelayPolicy::None,
+            false,
+        );
+
+        let mut graphics = TerminalGraphics::default();
+        graphics.set_media_policy(GraphicsMediaPolicy::SHARED);
+        graphics.apply(command, context());
+        let expected = TerminalGraphics::default().named_source_identity(32, &name);
+        assert_eq!(graphics.images[&7].image.source_hash, expected);
+        assert_eq!(
+            graphics.images[&7].image.pixels().unwrap().as_bytes(),
+            &[1, 2, 3, 255].repeat(64)
+        );
     }
 
     #[test]

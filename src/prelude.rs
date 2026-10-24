@@ -271,8 +271,9 @@ pub use crate::widgets::{
 };
 #[cfg(feature = "terminal-images")]
 pub use crate::widgets::{
-    GraphicsMediaPolicy, ImagePlacementIdentity, ImagePlacementKey, ImageSourceKey,
-    ImageSourceRevision, TerminalImage, TerminalImageCrop, TerminalImagePlacement,
+    GraphicsMediaPolicy, GraphicsRelayPolicy, ImagePlacementIdentity, ImagePlacementKey,
+    ImageSourceKey, ImageSourceRevision, TerminalImage, TerminalImageCrop, TerminalImagePlacement,
+    TerminalMediaWork, TerminalPreparedInput,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use crate::{PixelPointerStatus, pixel_pointer_status};

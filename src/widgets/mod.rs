@@ -317,8 +317,9 @@ pub use terminal::{
 };
 #[cfg(feature = "terminal-images")]
 pub use terminal::{
-    GraphicsMediaPolicy, ImagePlacementIdentity, ImagePlacementKey, ImageSourceKey,
-    ImageSourceRevision, TerminalImage, TerminalImageCrop, TerminalImagePlacement,
+    GraphicsMediaPolicy, GraphicsRelayPolicy, ImagePlacementIdentity, ImagePlacementKey,
+    ImageSourceKey, ImageSourceRevision, TerminalImage, TerminalImageCrop, TerminalImagePlacement,
+    TerminalMediaWork, TerminalPreparedInput,
 };
 pub use text::{Overflow, Text, TextSource};
 pub use text_area::{
