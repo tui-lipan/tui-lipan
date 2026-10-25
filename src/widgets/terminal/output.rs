@@ -109,6 +109,11 @@ pub enum GraphicsDependency {
     Independent,
     /// Its effects require preceding output; preserve byte order and every transaction.
     DependsOnPrevious,
+    /// The producer replaced its source whole, and relay sent only what changed since the
+    /// previous revision. Preserve order and every transaction as for
+    /// [`DependsOnPrevious`](Self::DependsOnPrevious). A run of these is still a stream of whole
+    /// frames, so a consumer may pace the producer by them as it would by independent ones.
+    EditsPrevious,
 }
 
 /// Semantic classification of original producer bytes.

@@ -21,6 +21,10 @@ mod osc;
 mod output;
 mod pointer;
 #[cfg(feature = "terminal-images")]
+mod relay_edit;
+#[cfg(feature = "terminal-images")]
+mod zlib_bands;
+#[cfg(feature = "terminal-images")]
 pub use output::{
     GraphicsDependency, TerminalImmutableFile, TerminalOutputClass, TerminalOutputMedia,
     TerminalOutputTransaction,

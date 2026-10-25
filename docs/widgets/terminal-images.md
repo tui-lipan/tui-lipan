@@ -294,16 +294,31 @@ carry its transaction handles through the transport until acquisition is acknowl
 `GraphicsRelayPolicy::Consuming` replaces `t=t` and `t=s` with inline pixels, including capability
 queries. Choose `All` while an attachment cannot open the server's files; this also replaces `t=f`
 with inline pixels. `None` preserves source references. Use one policy for every reader of a shared
-output stream. Inline raw pixels are compressed unless already compressed or sent as PNG. Failed
-relayed acquisitions emit no source reference; the authoritative screen answers the child. Chunked
-out-of-band transmissions are rejected. Direct `t=d` chunking remains supported.
+output stream. Inline raw pixels are compressed unless already compressed or sent as PNG; large
+frames are compressed on several threads into one ordinary zlib stream. Failed relayed acquisitions
+emit no source reference; the authoritative screen answers the child. Chunked out-of-band
+transmissions are rejected. Direct `t=d` chunking remains supported.
+
+When `prepare_media_input` relays a whole replacement inline and readers already hold that image at
+the same size and pixel format, only what changed is sent. The output is a root-frame edit
+(`a=f,r=1`) for each changed rectangle, followed by `a=d,d=i` and, for `a=T`, an `a=p` with the
+original placement keys. Readers end in the state the whole transmission would have left. A frame
+that changed almost everywhere is still sent whole. Readers must be `TerminalScreen`s, or other
+parsers that implement root-frame edits. These transactions are classified
+`GraphicsDependency::EditsPrevious`: keep every one, in order, as for `DependsOnPrevious`. A consumer
+can still pace the producer by them, because the producer is streaming whole frames.
 
 For large images, call `screen.prepare_media_input(bytes)` before ordinary processing. It returns
 `None` for input that needs no media work. Otherwise, send the returned `TerminalMediaWork` to a
 bounded worker queue and call its `run()` there. This acquires and validates the source, keeps raw
 pixels in a file snapshot when the screen stores images as files and decodes otherwise, and
 builds the relayed output. The work item stops after one named image even when the input contains
-a burst of references.
+a burst of references, with one exception. When the input already holds later quiet (`q=2`)
+replacements of the same image, with only text or other images' replacements between them, the work
+item covers them all and only the newest readable one is acquired. Earlier sources are claimed
+without being read, and the parser skips those commands, which leaves the state that applying each
+in turn would. A producer that outpaces its reader then costs one acquisition per batch, not one
+per frame.
 
 On completion, read `prepared.consumed_bytes()`, then pass the result to
 `screen.process_prepared_media_input(prepared)`. Feed the original input's remaining tail afterward,
@@ -412,6 +427,7 @@ Windows has no POSIX shared-memory namespace, so frames there are always inline.
 | Key | Support |
 | --- | --- |
 | `a=t`, `a=T`, `a=p`, `a=d`, `a=q` | Transmit, transmit-and-display, display, delete, query |
+| `a=f` with `r=1` | Edit an image's pixels in place: `x`, `y` place an `s`x`v` rectangle, `X=1` overwrites and `X=0` blends. Placements stay. Direct data only |
 | `t=d` | Direct transmission, chunked with `m=1` |
 | Payload | Base64, with or without `=` padding (Kitty's `icat` sends it unpadded) |
 | `t=f`, `t=t`, `t=s` | Out-of-band transmission: a file left in place, a temporary file, a POSIX shared-memory object |
@@ -430,7 +446,8 @@ Windows has no POSIX shared-memory namespace, so frames there are always inline.
 Not supported, and answered with the protocol's own `ENOTSUPP` report so a child that probes first
 gets a clean answer rather than silence:
 
-- **The protocol's animation frames** (`a=a`, `a=f`, `a=c`). A sender that animates by
+- **The protocol's animation frames** (`a=a`, `a=c`, and `a=f` for any frame but the first, or
+  with a background frame `c`). A sender that animates by
   re-transmitting under the same image id — which is what `ratatui-image` does for GIFs — works
   regardless: the new pixels replace the old and the placeholders keep pointing at them.
 - **Relative placements** (parent references).

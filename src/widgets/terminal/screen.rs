@@ -1678,7 +1678,9 @@ impl TerminalScreen {
             _ => false,
         };
         if !admitted {
-            if let TerminalOutputClass::Graphics { dependency, .. } = &mut class {
+            if let TerminalOutputClass::Graphics { dependency, .. } = &mut class
+                && *dependency == GraphicsDependency::Independent
+            {
                 *dependency = GraphicsDependency::DependsOnPrevious;
             }
             self.replacement_run.clear();
@@ -1901,6 +1903,9 @@ impl TerminalScreen {
                     if let Some(prepared) = self.prepared_media_commands.pop_front() {
                         command.adopt_preparation(prepared);
                     }
+                    if command.is_superseded() {
+                        continue;
+                    }
                     let (before, after) = self.apply_graphics_with_output(*command, unsettled);
                     evicted += before;
                     unsettled = after;
@@ -1948,18 +1953,25 @@ impl TerminalScreen {
         use super::output::{Footprint, GraphicsDependency, TerminalOutputClass};
         let (media, relay) = self.graphics.media_options();
         if relay.relays(command.medium()) && self.output_transactions.is_some() {
-            command.prepare_media(media, relay, true, self.graphics.media_files().as_ref());
+            command.prepare_media(
+                media,
+                relay,
+                true,
+                self.graphics.media_files().as_ref(),
+                None,
+            );
         }
         let original_wire = command.take_wire();
         let Some(wire) = command.take_prepared_wire().or(original_wire) else {
             self.release_output_frame();
             return self.apply_graphics(command, unsettled);
         };
-        let op = command.frame_op();
+        let op = command.frame_op(relay);
         let source_id = command.transmitted_id();
         let previous = source_id.and_then(|id| self.graphics.replacement_observation(id));
         let evictions = self.graphics.evictions();
-        let candidate = command.independent_candidate()
+        let edit = command.relays_edit();
+        let candidate = command.streams_whole_frames(relay)
             && !self.graphics.has_pending_transmission()
             && !self.processor.sync_timeout().pending_timeout()
             && self.processor.sync_bytes_count() == 0;
@@ -1980,7 +1992,7 @@ impl TerminalScreen {
                     .is_none_or(|old| old.revision != current.revision) =>
             {
                 // Dropping a replacement that evicted would bring the evicted image back.
-                let independent = candidate
+                let replaces = candidate
                     && self.graphics.evictions() == evictions
                     && previous
                         .as_ref()
@@ -1988,10 +2000,10 @@ impl TerminalScreen {
                 TerminalOutputClass::Graphics {
                     source: current.source,
                     revision: current.revision,
-                    dependency: if independent {
-                        GraphicsDependency::Independent
-                    } else {
-                        GraphicsDependency::DependsOnPrevious
+                    dependency: match (replaces, edit) {
+                        (true, false) => GraphicsDependency::Independent,
+                        (true, true) => GraphicsDependency::EditsPrevious,
+                        (false, _) => GraphicsDependency::DependsOnPrevious,
                     },
                 }
             }
@@ -2466,8 +2478,8 @@ impl TerminalScreen {
             return None;
         }
         let mut scanner = self.graphics_scanner.clone();
-        let (segments, length) = scanner.scan_media_prefix(&bytes);
-        let commands: Vec<_> = segments
+        let (segments, mut length) = scanner.scan_media_prefix(&bytes);
+        let mut commands: Vec<_> = segments
             .into_iter()
             .filter_map(|segment| match segment {
                 GraphicsSegment::Command(command) => Some(*command),
@@ -2477,8 +2489,20 @@ impl TerminalScreen {
         if !commands.iter().any(GraphicsCommand::needs_media) {
             return None;
         }
+        let replacements = super::media_work::extend_replacements(
+            &mut scanner,
+            &bytes,
+            &mut commands,
+            &mut length,
+        );
         let (media, relay) = self.graphics.media_options();
+        let recording = self.output_transactions.is_some();
+        let base = recording
+            .then(|| super::media_work::batch_relay_base(&self.graphics, &commands, &replacements))
+            .flatten();
         Some(super::TerminalMediaWork {
+            base,
+            replacements,
             bytes,
             length,
             screen_id: self.stable_terminal_id,
@@ -2486,7 +2510,7 @@ impl TerminalScreen {
             commands,
             media,
             relay,
-            recording: self.output_transactions.is_some(),
+            recording,
             files: self.graphics.media_files(),
         })
     }
@@ -2529,6 +2553,8 @@ impl TerminalScreen {
             relay,
             recording: self.output_transactions.is_some(),
             files: self.graphics.media_files(),
+            replacements: Box::default(),
+            base: None,
         })
     }
 

@@ -58,7 +58,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::engine::general_purpose::{GeneralPurpose, GeneralPurposeConfig};
 use image::{DynamicImage, GenericImageView};
 
-use super::graphics_media::{self, GraphicsMediaPolicy, GraphicsMedium};
+use super::graphics_media::{self, GraphicsMediaPolicy, GraphicsMedium, GraphicsRelayPolicy};
 use super::screen::TerminalCellSize;
 
 /// Decoder for the payloads a child sends.
@@ -586,8 +586,16 @@ impl GraphicsScanner {
                 ScanState::Ground => self.scan_ground(byte, &mut idx, &mut text_start, &mut out),
                 ScanState::Escape => self.scan_escape(byte, &mut idx, &mut text_start, &mut out),
                 ScanState::Apc => {
-                    self.scan_apc_byte(byte, &mut out);
-                    idx += 1;
+                    // A transmission body is megabytes of base64 with no byte the state machine
+                    // reacts to; take each such run whole.
+                    let run = apc_run(&bytes[idx..]);
+                    if run > 0 {
+                        self.extend_apc(&bytes[idx..idx + run], &mut out);
+                        idx += run;
+                    } else {
+                        self.scan_apc_byte(byte, &mut out);
+                        idx += 1;
+                    }
                     text_start = idx;
                 }
                 ScanState::ApcEscape => {
@@ -712,6 +720,32 @@ impl GraphicsScanner {
         self.apc.push(byte);
     }
 
+    /// [`Self::scan_apc_byte`] for a run of ordinary body bytes, with the same body limit and
+    /// wire chunking.
+    fn extend_apc(&mut self, run: &[u8], out: &mut Vec<GraphicsSegment>) {
+        if self.record_output {
+            let mut rest = run;
+            while !rest.is_empty() {
+                let room = (1024 * 1024 - self.wire.len()).min(rest.len());
+                self.wire.extend_from_slice(&rest[..room]);
+                rest = &rest[room..];
+                if self.wire.len() >= 1024 * 1024 {
+                    self.wire_ordered = true;
+                    out.push(GraphicsSegment::Wire(std::mem::take(&mut self.wire)));
+                }
+            }
+        }
+        if self.overflowed {
+            return;
+        }
+        if self.apc.len() + run.len() > MAX_APC_BYTES {
+            self.apc.clear();
+            self.overflowed = true;
+            return;
+        }
+        self.apc.extend_from_slice(run);
+    }
+
     fn finish_apc(&mut self, out: &mut Vec<GraphicsSegment>) {
         let body = std::mem::take(&mut self.apc);
         let overflowed = std::mem::take(&mut self.overflowed);
@@ -756,6 +790,13 @@ impl GraphicsScanner {
     }
 }
 
+/// Length of the prefix of an `APC` body holding none of the bytes [`GraphicsScanner`] acts on
+/// there: `ESC`, `BEL`, `CAN` and `SUB`.
+fn apc_run(bytes: &[u8]) -> usize {
+    let end = memchr::memchr3(0x1b, 0x07, 0x18, bytes).unwrap_or(bytes.len());
+    memchr::memchr(0x1a, &bytes[..end]).unwrap_or(end)
+}
+
 // ─── Command model ───────────────────────────────────────────────────────────
 
 /// What a command asks for (`a=`).
@@ -772,14 +813,22 @@ enum GraphicsAction {
     Delete,
     /// `a=q` - capability probe.
     Query,
-    /// `a=a`, `a=f`, `a=c` - animation, which this implementation does not do.
+    /// `a=f` - frame data. Only editing the root frame (`r=1`) is supported: that rewrites part of
+    /// an image's pixels in place, which is what a relay sends instead of a whole frame.
+    Frame,
+    /// `a=a`, `a=c` - animation, which this implementation does not do.
     Animate,
 }
 
 impl GraphicsAction {
-    /// Whether this carries image data, and so can be one chunk of an `m=1` run.
+    /// Whether this stores an image.
     fn transmits(self) -> bool {
         matches!(self, Self::Transmit | Self::TransmitAndDisplay)
+    }
+
+    /// Whether this carries image data, and so can be one chunk of an `m=1` run.
+    fn carries_data(self) -> bool {
+        self.transmits() || self == Self::Frame
     }
 }
 
@@ -858,6 +907,50 @@ pub(super) struct GraphicsCommand {
 
 type FilePixels = crate::backend::ratatui_backend::file_frame::FilePixels;
 
+/// The pixels downstream readers hold for one image, so a relay can send only what a replacement
+/// changes. Cheap to take: it shares the stored image's buffers.
+#[derive(Clone)]
+pub(super) struct RelayBase {
+    id: u32,
+    format: u32,
+    width: u32,
+    height: u32,
+    source: ImageSource,
+}
+
+impl std::fmt::Debug for RelayBase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RelayBase")
+            .field("id", &self.id)
+            .field("format", &self.format)
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .finish_non_exhaustive()
+    }
+}
+
+impl RelayBase {
+    /// The raw pixels, in the layout `format` names.
+    fn pixels(&self) -> Option<Cow<'_, [u8]>> {
+        let decoded = match &self.source {
+            ImageSource::File { input, decoded } => match decoded.get() {
+                Some(decoded) => decoded.as_ref(),
+                None => return input.read().ok().map(Cow::Owned),
+            },
+            ImageSource::Decoded(decoded) => Some(decoded),
+            ImageSource::Deferred { input, decoded } => decoded
+                .get_or_init(|| decode_deferred(input).map(Arc::new))
+                .as_ref(),
+        }?;
+        match (self.format, decoded.as_ref()) {
+            (32, DynamicImage::ImageRgba8(_)) | (24, DynamicImage::ImageRgb8(_)) => {
+                Some(Cow::Borrowed(decoded.as_bytes()))
+            }
+            _ => None,
+        }
+    }
+}
+
 /// Where a screen keeps raw pixels as immutable files rather than heap buffers, handed to
 /// preparation off the screen's thread.
 #[derive(Clone, Debug)]
@@ -876,6 +969,11 @@ pub(super) struct PreparedGraphicsMedia {
     wire: Option<Vec<u8>>,
     /// The relay policy `wire` was built for.
     wire_relay: Option<super::graphics_media::GraphicsRelayPolicy>,
+    /// A later replacement in the same input took this command's place. See
+    /// [`GraphicsCommand::supersede`].
+    superseded: bool,
+    /// `wire` edits the image readers already hold. See [`GraphicsCommand::relays_edit`].
+    edit: bool,
 }
 
 impl PreparedGraphicsMedia {
@@ -938,14 +1036,17 @@ impl GraphicsCommand {
             && (self.action.transmits() || self.action == GraphicsAction::Query)
     }
 
+    /// Acquire this command's source and build what readers receive in its place. `base` is what
+    /// they hold for the image this replaces, when they may be sent only the change.
     pub(super) fn prepare_media(
         &mut self,
         policy: GraphicsMediaPolicy,
         relay: super::graphics_media::GraphicsRelayPolicy,
         recording: bool,
         files: Option<&MediaFiles>,
+        base: Option<&RelayBase>,
     ) {
-        if !self.needs_media() {
+        if !self.needs_media() || self.is_superseded() {
             return;
         }
         let mut prepared = match self.prepared.take() {
@@ -962,42 +1063,79 @@ impl GraphicsCommand {
             // Never hand a downstream reader a consuming name, including failed probes or reads.
             // The authoritative screen still sends errors to the child.
             if prepared.wire.is_none() || prepared.wire_relay != Some(relay) {
-                prepared.wire = Some(self.relay_wire(&prepared, relay));
+                let (wire, edit) = self.relay_wire(&prepared, relay, base);
+                prepared.wire = Some(wire);
                 prepared.wire_relay = Some(relay);
+                prepared.edit = edit;
             }
         } else {
             prepared.wire = None;
             prepared.wire_relay = None;
+            prepared.edit = false;
         }
         self.prepared = Some(Box::new(prepared));
     }
 
+    /// Whether this command's relayed output edits the image readers already hold instead of
+    /// replacing it, so it depends on everything before it.
+    pub(super) fn relays_edit(&self) -> bool {
+        self.prepared.as_ref().is_some_and(|prepared| prepared.edit)
+    }
+
     /// What downstream readers receive in place of this command's source reference.
+    /// Returns the bytes, and whether they are an edit of `base` rather than a whole image.
     fn relay_wire(
         &self,
         prepared: &PreparedGraphicsMedia,
-        relay: super::graphics_media::GraphicsRelayPolicy,
-    ) -> Vec<u8> {
+        relay: GraphicsRelayPolicy,
+        base: Option<&RelayBase>,
+    ) -> (Vec<u8>, bool) {
         // Local re-readable sources without an eligible raw snapshot keep the producer's
         // representation. Consuming references must always be rewritten, including failures.
-        if relay == super::graphics_media::GraphicsRelayPolicy::NamedAsFiles
+        if relay == GraphicsRelayPolicy::NamedAsFiles
             && self.medium == GraphicsMedium::File
             && prepared.file.is_none()
         {
-            return self.wire.clone().unwrap_or_default();
+            return (self.wire.clone().unwrap_or_default(), false);
         }
         let (None, Some(wire)) = (prepared.error, self.wire.as_deref()) else {
-            return Vec::new();
+            return (Vec::new(), false);
         };
-        if relay == super::graphics_media::GraphicsRelayPolicy::NamedAsFiles
+        if relay == GraphicsRelayPolicy::NamedAsFiles
             && let Some(file) = &prepared.file
         {
             file.expose();
-            return file_transmission(wire, file.path());
+            return (file_transmission(wire, file.path()), false);
         }
-        prepared
-            .relay_bytes()
-            .map_or_else(|_| Vec::new(), |data| inline_transmission(wire, &data))
+        let Ok(data) = prepared.relay_bytes() else {
+            return (Vec::new(), false);
+        };
+        if let Some(base) = base.filter(|base| self.may_relay_as_edit_of(base))
+            && let Some(old) = base.pixels()
+            && let Some(edit) = super::relay_edit::edit_transmission(
+                wire,
+                self.action == GraphicsAction::TransmitAndDisplay,
+                base.id,
+                base.format,
+                base.width,
+                &old,
+                &data,
+            )
+        {
+            return (edit, true);
+        }
+        (inline_transmission(wire, &data), false)
+    }
+
+    /// Whether readers holding `base` reach the same state from edits of it as from this
+    /// transmission: a whole replacement of that image with pixels of the same size and layout.
+    fn may_relay_as_edit_of(&self, base: &RelayBase) -> bool {
+        self.replaces_whole_image()
+            && self.id == base.id
+            && self.format == base.format
+            && matches!(self.format, 24 | 32)
+            && !self.compressed
+            && (self.width, self.height) == (base.width, base.height)
     }
 
     /// Byte length of this command's raw pixels, when they can be kept as an immutable file.
@@ -1215,7 +1353,7 @@ impl GraphicsCommand {
     fn safe_pair(key: u8, value: &[u8]) -> bool {
         match key {
             b'a' => matches!(value, b"t" | b"T"),
-            b't' => matches!(value, b"d" | b"f"),
+            b't' => matches!(value, b"d" | b"f" | b"t" | b"s"),
             b'o' => value == b"z",
             b'z' => std::str::from_utf8(value).is_ok_and(|value| value.parse::<i32>().is_ok()),
             b'f' => matches!(value, b"24" | b"32" | b"100"),
@@ -1244,8 +1382,8 @@ impl GraphicsCommand {
 
     /// What this command does to the state a synchronized frame owns, when that is provable from
     /// its keys alone. `None` means it reads or changes state the frame cannot account for.
-    pub(super) fn frame_op(&self) -> Option<FrameOp> {
-        if self.independent_candidate() {
+    pub(super) fn frame_op(&self, relay: GraphicsRelayPolicy) -> Option<FrameOp> {
+        if self.independent_candidate(relay) {
             return Some(FrameOp::Replace {
                 id: self.id,
                 places: self.action == GraphicsAction::TransmitAndDisplay,
@@ -1271,7 +1409,23 @@ impl GraphicsCommand {
         (self.action.transmits() && self.id != 0).then_some(self.id)
     }
 
-    pub(super) fn independent_candidate(&self) -> bool {
+    /// Whether recorded output of this command may be dropped for a later replacement of the same
+    /// image. A consuming reference may be dropped only once relay has rewritten it, because a
+    /// reader skipping the original would leave the source unclaimed.
+    pub(super) fn independent_candidate(&self, relay: GraphicsRelayPolicy) -> bool {
+        self.streams_whole_frames(relay) && !self.relays_edit()
+    }
+
+    /// Whether this replaces its image whole as far as the producer is concerned, whatever
+    /// relay records for it. See [`super::output::GraphicsDependency::EditsPrevious`].
+    pub(super) fn streams_whole_frames(&self, relay: GraphicsRelayPolicy) -> bool {
+        self.replaces_whole_image() && (!self.medium.consumes_source() || relay.relays(self.medium))
+    }
+
+    /// A complete, silent transmission under an explicit id that neither moves the cursor nor
+    /// depends on the image's past: afterwards the image's whole state comes from this command,
+    /// provided it succeeds. See [`FrameOp::Replace`].
+    pub(super) fn replaces_whole_image(&self) -> bool {
         self.coalescing_safe
             && !self.malformed
             && !self.more
@@ -1281,7 +1435,33 @@ impl GraphicsCommand {
             && !self.virtual_placement
             && self.action.transmits()
             && (self.action == GraphicsAction::Transmit || self.no_cursor_move)
-            && matches!(self.medium, GraphicsMedium::Direct | GraphicsMedium::File)
+    }
+
+    /// Whether a later replacement in the same input made this command's effect unobservable,
+    /// so the parser skips it. Its source has been claimed without being read.
+    pub(super) fn is_superseded(&self) -> bool {
+        self.prepared
+            .as_ref()
+            .is_some_and(|prepared| prepared.superseded)
+    }
+
+    /// Claim this command's source without reading it, for a replacement that succeeded later in
+    /// the same input. Only call this for a command that [`Self::replaces_whole_image`].
+    pub(super) fn supersede(&mut self, policy: GraphicsMediaPolicy) {
+        if policy.allows(self.medium) && !self.malformed {
+            graphics_media::discard(self.medium, &self.payload);
+        }
+        self.prepared = Some(Box::new(PreparedGraphicsMedia {
+            superseded: true,
+            ..Default::default()
+        }));
+    }
+
+    /// Whether preparation acquired this command's pixels.
+    pub(super) fn prepared_successfully(&self) -> bool {
+        self.prepared
+            .as_ref()
+            .is_some_and(|prepared| prepared.error.is_none() && !prepared.superseded)
     }
 
     pub(super) fn wire_bytes(&self) -> Option<&[u8]> {
@@ -1302,7 +1482,8 @@ impl GraphicsCommand {
                     b'p' => GraphicsAction::Display,
                     b'd' => GraphicsAction::Delete,
                     b'q' => GraphicsAction::Query,
-                    b'a' | b'f' | b'c' => GraphicsAction::Animate,
+                    b'f' => GraphicsAction::Frame,
+                    b'a' | b'c' => GraphicsAction::Animate,
                     _ => GraphicsAction::Transmit,
                 }
             }
@@ -2235,6 +2416,35 @@ impl TerminalGraphics {
         })
     }
 
+    /// What readers of the recorded output hold for image `id`, when a replacement of it may be
+    /// relayed as an edit. A virtual placement is excluded because an edit keeps it while a
+    /// retransmission would end it.
+    pub(super) fn relay_base(&self, id: u32) -> Option<RelayBase> {
+        if !self.storage_enabled || self.pending.is_some() {
+            return None;
+        }
+        let stored = self
+            .images
+            .get(&id)
+            .filter(|stored| !stored.virtual_placement)?;
+        let format = match &stored.image.source {
+            ImageSource::File { input, .. } => input.format,
+            ImageSource::Decoded(decoded) => match decoded.as_ref() {
+                DynamicImage::ImageRgba8(_) => 32,
+                DynamicImage::ImageRgb8(_) => 24,
+                _ => return None,
+            },
+            ImageSource::Deferred { input, .. } => input.format,
+        };
+        Some(RelayBase {
+            id,
+            format,
+            width: stored.image.width,
+            height: stored.image.height,
+            source: stored.image.source.clone(),
+        })
+    }
+
     pub(super) fn evictions(&self) -> u64 {
         self.evictions
     }
@@ -2582,7 +2792,7 @@ impl TerminalGraphics {
         ctx: GraphicsContext,
     ) -> GraphicsOutcome {
         self.clock = self.clock.wrapping_add(1);
-        if self.discarding_run && command.action.transmits() {
+        if self.discarding_run && command.action.carries_data() {
             self.discarding_run = command.more;
             return GraphicsOutcome::default();
         }
@@ -2599,6 +2809,13 @@ impl TerminalGraphics {
             GraphicsAction::Transmit | GraphicsAction::TransmitAndDisplay => {
                 self.transmit(command, ctx)
             }
+            GraphicsAction::Frame if command.more || self.pending.is_some() => {
+                self.transmit_chunked(command, ctx)
+            }
+            GraphicsAction::Frame => {
+                let payload = command.payload.clone();
+                self.finish_frame(command.id, &command, payload)
+            }
             GraphicsAction::Animate => GraphicsOutcome {
                 response: report(&command, command.id, Err("ENOTSUPP:animation")),
                 advance: None,
@@ -2612,7 +2829,7 @@ impl TerminalGraphics {
     /// error goes out under that run's id and quietness, since a later chunk carries only `m=`.
     fn reject_malformed(&mut self, command: &GraphicsCommand) -> GraphicsOutcome {
         const ERROR: &str = "EINVAL:payload is not base64";
-        if !command.action.transmits() {
+        if !command.action.carries_data() {
             return GraphicsOutcome {
                 response: report(command, command.id, Err(ERROR)),
                 advance: None,
@@ -2707,7 +2924,12 @@ impl TerminalGraphics {
             data: Vec::new(),
         });
         if pending.id == 0 {
-            pending.id = self.resolve_id(pending.header.id, pending.header.number);
+            // A frame edits an image that already exists; it never allocates an id.
+            pending.id = if pending.header.action == GraphicsAction::Frame {
+                pending.header.id
+            } else {
+                self.resolve_id(pending.header.id, pending.header.number)
+            };
         }
         pending.adopt_quiet(&command);
 
@@ -2733,7 +2955,78 @@ impl TerminalGraphics {
             self.pending = Some(pending);
             return GraphicsOutcome::default();
         }
+        if pending.header.action == GraphicsAction::Frame {
+            return self.finish_frame(pending.id, &pending.header, pending.data);
+        }
         self.finish_transmit(pending.id, &pending.header, pending.data, ctx)
+    }
+
+    /// Apply a complete `a=f` command.
+    fn finish_frame(
+        &mut self,
+        id: u32,
+        command: &GraphicsCommand,
+        payload: Vec<u8>,
+    ) -> GraphicsOutcome {
+        let result = self.edit_root_frame(id, command, payload);
+        GraphicsOutcome {
+            response: report(command, id, result),
+            advance: None,
+        }
+    }
+
+    /// Overwrite (`X=1`) or alpha-blend (`X=0`) a rectangle of an image's pixels at `x`/`y`.
+    ///
+    /// The protocol's `r` names the frame to edit and `c` a background frame; only the root frame
+    /// exists here, so anything else is animation. The image keeps its placements and gets a new
+    /// revision, so every placement redraws with the new pixels.
+    fn edit_root_frame(
+        &mut self,
+        id: u32,
+        command: &GraphicsCommand,
+        payload: Vec<u8>,
+    ) -> Result<(), &'static str> {
+        // For `a=f` these keys are the frame number, the background frame and the composition mode.
+        let (frame, background, overwrite) = (command.rows, command.cols, command.pixel_x == 1);
+        if frame != 1 || background != 0 {
+            return Err("ENOTSUPP:animation");
+        }
+        if command.medium != GraphicsMedium::Direct {
+            return Err("ENOTSUPP:out-of-band frame data");
+        }
+        let (width, height) = *self
+            .image_dimensions
+            .get(&id)
+            .ok_or("ENOENT:no such image")?;
+        let fits = |offset: u32, extent: u32, limit: u32| {
+            extent > 0 && offset.checked_add(extent).is_some_and(|end| end <= limit)
+        };
+        if !self.storage_enabled {
+            return (command.format == 100
+                || fits(command.src_x, command.width, width)
+                    && fits(command.src_y, command.height, height))
+            .then_some(())
+            .ok_or("EINVAL:frame rectangle outside image");
+        }
+        let patch = decode_payload(command, payload)?;
+        if !fits(command.src_x, patch.width(), width)
+            || !fits(command.src_y, patch.height(), height)
+        {
+            return Err("EINVAL:frame rectangle outside image");
+        }
+        let stored = self.images.get(&id).ok_or("ENOENT:no such image")?;
+        let base = stored
+            .image
+            .pixels()
+            .ok_or("EINVAL:image does not decode")?;
+        let mut pixels = DynamicImage::clone(base);
+        paste(&mut pixels, &patch, command.src_x, command.src_y, overwrite);
+        let source_hash = stored.image.source_hash.rotate_left(29)
+            ^ hash_payload(command.format, patch.as_bytes());
+        let bytes = decoded_bytes(&pixels);
+        let image = self.decoded_image(source_hash, Arc::new(pixels));
+        self.replace_pixels(id, image, bytes);
+        Ok(())
     }
 
     fn retain_image(
@@ -3263,6 +3556,28 @@ impl TerminalGraphics {
         self.enforce_budget();
     }
 
+    /// Give a stored image edited pixels of the same size: a new revision of the same source that,
+    /// unlike a retransmission, keeps every placement.
+    fn replace_pixels(&mut self, id: u32, mut image: TerminalImage, bytes: usize) {
+        let Some(stored) = self.images.get_mut(&id) else {
+            return;
+        };
+        self.damage.merge(super::damage::GraphicsDamage::Sources);
+        image.source_key = stored.image.source_key;
+        image.source_lifetime = Arc::clone(&stored.image.source_lifetime);
+        image.source_revision =
+            ImageSourceRevision(stored.image.source_revision.0.saturating_add(1));
+        image.native = Arc::new(stored.image.native.next_revision());
+        self.used_bytes = self
+            .used_bytes
+            .saturating_sub(stored.bytes)
+            .saturating_add(bytes);
+        stored.image = image;
+        stored.bytes = bytes;
+        stored.used = self.clock;
+        self.enforce_budget();
+    }
+
     fn remove_image(&mut self, id: u32) {
         if self.image_dimensions.contains_key(&id) {
             self.damage.merge(super::damage::GraphicsDamage::Sources);
@@ -3685,9 +4000,7 @@ pub(super) fn inline_transmission(wire: &[u8], data: &[u8]) -> Vec<u8> {
     let data = if compressed || png {
         data
     } else {
-        use std::io::Write as _;
-        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
-        compressed_data = encoder.write_all(data).and_then(|()| encoder.finish()).ok();
+        compressed_data = super::zlib_bands::compress(data);
         match &compressed_data {
             Some(bytes) => {
                 keys.push(b"o=z");
@@ -3696,13 +4009,21 @@ pub(super) fn inline_transmission(wire: &[u8], data: &[u8]) -> Vec<u8> {
             None => data,
         }
     };
+    let mut out = Vec::with_capacity(data.len() * 4 / 3 + control.len() + 64);
+    write_chunked(&mut out, &keys, quiet.as_deref(), data);
+    out
+}
+
+/// Append one command carrying `data` under `keys`, base64-encoded and split into protocol
+/// chunks. Continuation chunks repeat `quiet`, since they carry no other keys.
+pub(super) fn write_chunked(out: &mut Vec<u8>, keys: &[&[u8]], quiet: Option<&[u8]>, data: &[u8]) {
     let encoded = BASE64.encode(data);
     let chunks: Vec<&[u8]> = if encoded.is_empty() {
         vec![&[][..]]
     } else {
         encoded.as_bytes().chunks(RELAY_CHUNK).collect()
     };
-    let mut out = Vec::with_capacity(encoded.len() + chunks.len() * 16 + control.len());
+    out.reserve(encoded.len() + chunks.len() * 16);
     for (index, chunk) in chunks.iter().enumerate() {
         let more = index + 1 < chunks.len();
         out.extend_from_slice(b"\x1b_G");
@@ -3713,7 +4034,7 @@ pub(super) fn inline_transmission(wire: &[u8], data: &[u8]) -> Vec<u8> {
             }
         } else {
             out.extend_from_slice(if more { b"m=1" } else { b"m=0" });
-            if let Some(quiet) = &quiet {
+            if let Some(quiet) = quiet {
                 out.extend_from_slice(b",q=");
                 out.extend_from_slice(quiet);
             }
@@ -3722,11 +4043,10 @@ pub(super) fn inline_transmission(wire: &[u8], data: &[u8]) -> Vec<u8> {
         out.extend_from_slice(chunk);
         out.extend_from_slice(b"\x1b\\");
     }
-    out
 }
 
 /// The control data of a transmission, and its keys other than [`SOURCE_KEYS`].
-fn transmission_keys(wire: &[u8]) -> (&[u8], Vec<&[u8]>) {
+pub(super) fn transmission_keys(wire: &[u8]) -> (&[u8], Vec<&[u8]>) {
     let body = wire
         .strip_prefix(b"\x1b_G")
         .map(|rest| rest.strip_suffix(b"\x1b\\").unwrap_or(rest))
@@ -3818,6 +4138,44 @@ fn decompress(payload: &[u8]) -> Option<Vec<u8>> {
         .read_to_end(&mut out)
         .ok()?;
     Some(out)
+}
+
+/// Put `patch` into `base` with its top-left corner at `x`/`y`, which the caller has checked
+/// keeps it inside. Overwriting copies rows; blending composites `patch` over what is there.
+fn paste(base: &mut DynamicImage, patch: &DynamicImage, x: u32, y: u32, overwrite: bool) {
+    let (x, y) = (i64::from(x), i64::from(y));
+    match base {
+        DynamicImage::ImageRgba8(base) if overwrite => copy_rows(base, &patch.to_rgba8(), x, y),
+        DynamicImage::ImageRgba8(base) => image::imageops::overlay(base, &patch.to_rgba8(), x, y),
+        DynamicImage::ImageRgb8(base) if overwrite || !patch.color().has_alpha() => {
+            copy_rows(base, &patch.to_rgb8(), x, y);
+        }
+        _ => {
+            let mut rgba = base.to_rgba8();
+            image::imageops::overlay(&mut rgba, &patch.to_rgba8(), x, y);
+            *base = DynamicImage::ImageRgba8(rgba);
+        }
+    }
+}
+
+/// Copy every row of `patch` into `base`.
+fn copy_rows<P: image::Pixel<Subpixel = u8>>(
+    base: &mut image::ImageBuffer<P, Vec<u8>>,
+    patch: &image::ImageBuffer<P, Vec<u8>>,
+    x: i64,
+    y: i64,
+) {
+    let channels = usize::from(P::CHANNEL_COUNT);
+    let (width, x, y) = (base.width() as usize, x as usize, y as usize);
+    let row = patch.width() as usize * channels;
+    if row == 0 {
+        return;
+    }
+    let base: &mut [u8] = base;
+    for (index, source) in patch.as_raw().chunks_exact(row).enumerate() {
+        let start = ((y + index) * width + x) * channels;
+        base[start..start + row].copy_from_slice(source);
+    }
 }
 
 fn decoded_bytes(image: &DynamicImage) -> usize {
@@ -4431,6 +4789,68 @@ mod tests {
         }
     }
 
+    /// What a scan produced, with text merged so chunking alone cannot change it.
+    fn scan_record(scanner: &mut GraphicsScanner, chunks: &[&[u8]]) -> Vec<(u8, Vec<u8>)> {
+        let mut record: Vec<(u8, Vec<u8>)> = Vec::new();
+        let mut push = |kind: u8, bytes: &[u8]| match record.last_mut() {
+            Some((0, text)) if kind == 0 => text.extend_from_slice(bytes),
+            _ => record.push((kind, bytes.to_vec())),
+        };
+        for chunk in chunks {
+            for segment in scanner.scan(chunk) {
+                match segment {
+                    GraphicsSegment::Text(range) => push(0, &chunk[range]),
+                    GraphicsSegment::HeldEscape => push(0, b"\x1b"),
+                    GraphicsSegment::Wire(bytes) => push(1, &bytes),
+                    GraphicsSegment::Command(command) => {
+                        let mut description = command.payload.clone();
+                        description.extend(command.wire.unwrap_or_default());
+                        description.push(command.malformed as u8);
+                        push(2, &description);
+                    }
+                }
+            }
+        }
+        record
+    }
+
+    #[test]
+    fn bulk_body_scanning_matches_byte_at_a_time_scanning() {
+        let mut stream = b"text".to_vec();
+        stream.extend(rgb_command("a=T", 2, 2));
+        stream.extend(b"\x1b_Ga=q,f=24,s=1,v=1;AAAA\x07bell-ended");
+        stream.extend(b"\x1b_Ga=T,f=24;AAAA\x18cancelled\x1b_Ga=T;AA\x1aAA\x1b\\");
+        stream.extend(b"\x1b_Xnot graphics\x1b\\\x1b[0mtail\x1b");
+        for record_output in [false, true] {
+            let mut whole = GraphicsScanner::default();
+            whole.set_record_output(record_output);
+            let mut bytewise = whole.clone();
+            let expected = scan_record(&mut whole, &[&stream]);
+            let single: Vec<&[u8]> = stream.chunks(1).collect();
+            assert_eq!(scan_record(&mut bytewise, &single), expected);
+        }
+    }
+
+    #[test]
+    fn bulk_body_scanning_keeps_the_body_limit_exact() {
+        for extra in [0, 1] {
+            let mut stream = b"\x1b_Ga=q;".to_vec();
+            stream.resize(2 + MAX_APC_BYTES + extra, b'A');
+            stream.extend(b"\x1b\\after");
+            let mut whole = GraphicsScanner::default();
+            let mut chunked = whole.clone();
+            let expected = scan_record(&mut whole, &[&stream]);
+            let chunks: Vec<&[u8]> = stream.chunks(1024 * 1024 + 7).collect();
+            assert_eq!(scan_record(&mut chunked, &chunks), expected);
+            let commands = expected.iter().filter(|(kind, _)| *kind == 2).count();
+            assert_eq!(
+                commands,
+                1 - extra,
+                "a body of the limit is kept, one over is not"
+            );
+        }
+    }
+
     #[test]
     fn escape_that_is_not_a_command_reaches_the_grid() {
         let mut scanner = GraphicsScanner::default();
@@ -5014,6 +5434,7 @@ mod tests {
             GraphicsMediaPolicy::SHARED,
             graphics_media::GraphicsRelayPolicy::None,
             false,
+            None,
             None,
         );
 
