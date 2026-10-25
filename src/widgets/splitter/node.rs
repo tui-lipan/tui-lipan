@@ -50,6 +50,19 @@ impl SplitterNode {
 }
 
 impl WidgetNode for SplitterNode {
+    fn interactive_pointer_shape_at(
+        &self,
+        x: i16,
+        y: i16,
+        _rect: Rect,
+    ) -> Option<crate::PointerShape> {
+        self.handle_at(x, y)?;
+        Some(match self.orientation {
+            Orientation::Horizontal => crate::PointerShape::EwResize,
+            Orientation::Vertical => crate::PointerShape::NsResize,
+        })
+    }
+
     fn has_pointer_shape(&self) -> bool {
         self.handle_pointer_shape.is_some() || self.handle_active_pointer_shape.is_some()
     }

@@ -98,8 +98,8 @@ pub use crate::style::{
     Align, BorderEdges, BorderStyle, CaretPalette, CaretShape, CellEffect, Color, ColorTransform,
     Edge, EffectAlignment, EffectAmount, EffectCell, EffectChannels, EffectContext, EffectOrigin,
     EffectPrepareContext, EffectPulse, FloatRect, HostTerminalColors, Justify, LayoutConstraints,
-    Length, Padding, Paint, PointerShape, PreparedCellEffect, Rect, RetroPreset, RichText,
-    RippleRadius, ScrollbarConfig, ScrollbarVariant, ShrinkPriority, Size, Span, Style,
+    Length, Padding, Paint, PointerMode, PointerShape, PreparedCellEffect, Rect, RetroPreset,
+    RichText, RippleRadius, ScrollbarConfig, ScrollbarVariant, ShrinkPriority, Size, Span, Style,
     TerminalColor, TerminalCursorStyle, VisualEffect,
 };
 

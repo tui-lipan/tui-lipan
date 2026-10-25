@@ -82,6 +82,16 @@ pub(crate) trait WidgetNode {
     fn pointer_shape_at(&self, _x: i16, _y: i16, _rect: Rect) -> Option<crate::PointerShape> {
         None
     }
+    /// Semantic pointer feedback when the application opts into Interactive mode.
+    fn interactive_pointer_shape_at(
+        &self,
+        _x: i16,
+        _y: i16,
+        _rect: Rect,
+    ) -> Option<crate::PointerShape> {
+        None
+    }
+
     /// Pointer retained by a captured drag, independent of the current hover target.
     fn drag_pointer_shape(&self) -> Option<crate::PointerShape> {
         None
@@ -389,6 +399,14 @@ impl WidgetNode for NodeKind {
     }
     fn pointer_shape_at(&self, x: i16, y: i16, rect: Rect) -> Option<crate::PointerShape> {
         node_kind_delegate_match!(self, pointer_shape_at(x, y, rect))
+    }
+    fn interactive_pointer_shape_at(
+        &self,
+        x: i16,
+        y: i16,
+        rect: Rect,
+    ) -> Option<crate::PointerShape> {
+        node_kind_delegate_match!(self, interactive_pointer_shape_at(x, y, rect))
     }
     fn drag_pointer_shape(&self) -> Option<crate::PointerShape> {
         node_kind_delegate_match!(self, drag_pointer_shape())

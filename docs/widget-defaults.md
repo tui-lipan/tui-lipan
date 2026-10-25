@@ -260,7 +260,7 @@ Source: `src/widgets/text_area/mod.rs:458` (`TextArea`).
 
 ## List
 
-Source: `src/widgets/list/mod.rs:1626` (`List`).
+Source: `src/widgets/list/mod.rs:1637` (`List`).
 
 | Field | Default initializer |
 |---|---|

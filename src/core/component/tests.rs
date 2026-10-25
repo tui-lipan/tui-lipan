@@ -44,6 +44,7 @@ fn new_registry() -> ComponentRegistry {
             overlay_manager,
             focus_request: Rc::new(RefCell::new(None)),
             mouse_capture: Rc::new(Cell::new(true)),
+            pointer_mode: Rc::default(),
             modifier_key_reporting: Rc::new(Cell::new(false)),
             modifier_key_reporting_keeps_shift: Rc::new(Cell::new(true)),
             surface_mode: SurfaceMode::Fullscreen,

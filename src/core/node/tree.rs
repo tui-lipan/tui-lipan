@@ -1167,6 +1167,10 @@ impl NodeTree {
             .or_else(|| crate::app::pointer::automatic_pointer(self, hit, x, y))
     }
 
+    pub(crate) fn pointer_target_at(&self, x: i16, y: i16) -> Option<NodeId> {
+        self.do_test(x, y, TestKind::Pointer)
+    }
+
     /// Closest explicit override on a live node or its ancestors.
     pub(crate) fn pointer_override(&self, start: NodeId) -> Option<crate::PointerShape> {
         let mut current = Some(start);

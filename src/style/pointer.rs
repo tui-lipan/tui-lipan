@@ -115,3 +115,17 @@ impl PointerShape {
             .find_map(|&(shape, value)| (name == value).then_some(shape))
     }
 }
+
+/// Runtime policy for mouse pointer feedback. This does not disable mouse input.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum PointerMode {
+    /// Keep the host's default pointer throughout the application.
+    Disabled,
+    /// Honor pane application requests only, without UI pointers or terminal fallback shapes.
+    Terminal,
+    /// Honor explicit overrides and intrinsic text/terminal pointers. Controls opt in individually.
+    #[default]
+    Explicit,
+    /// Also infer pointers for actionable controls and captured drags.
+    Interactive,
+}

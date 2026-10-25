@@ -903,4 +903,5 @@ so this also checks updates that arrive without a layout or cell repaint.
 
 `TestBackend::pointer_shape()` resolves the current mouse pointer with active drag capture,
 window focus, and mouse-capture preferences included. Use `send_mouse` to exercise a real gesture;
-`pointer_shape_at(x, y)` remains a hover-only query without changing input state.
+`pointer_shape_at(x, y)` remains a hover-only query without changing input state. Both queries respect
+the runtime policy set with `Context::set_pointer_mode`; Disabled returns `None`.

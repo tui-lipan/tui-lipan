@@ -4,6 +4,12 @@
 
 Selectable list of items with optional headers, spacers, prefixes, left gutters, and scrollbar.
 
+In `PointerMode::Interactive`, actionable list and table rows use a pointing hand. List-backed
+`Tree`, `FileTree`, and `SearchPalette` rows share that behavior. `ListItem::pointer_shape(shape)`
+overrides one row's semantic pointer without changing keyboard selection. For example,
+`.pointer_shape(PointerShape::Default)` leaves an unavailable but selectable row as an arrow.
+
+
 State-style setters use [StyleSlot semantics](../styling.md#state-style-slots):
 `selection_style` / `active_style` replace theme roles, while
 `extend_selection_style` / `extend_active_style` patch over them and

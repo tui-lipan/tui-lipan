@@ -832,3 +832,10 @@ this policy from the captured source rather than the current hover target, so cr
 widget cannot replace an active drag cursor. Explicit element overrides take precedence over a
 widget's intrinsic policy. Use `TestBackend::pointer_shape_at` to test region boundaries and
 `TestBackend::pointer_shape()` with real mouse events to test capture, release, and cancellation.
+
+
+For semantic control feedback, implement
+`WidgetNode::interactive_pointer_shape_at(x, y, rect)`. The runtime consults this hook only in
+`PointerMode::Interactive`, after explicit overrides and intrinsic pointers. Reuse the widget's
+click hit-testing and exclude disabled targets, headings, separators, and unused space. Widgets
+that already provide explicit pointer policies keep those policies in `Explicit` mode.

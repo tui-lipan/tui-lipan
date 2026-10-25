@@ -1447,6 +1447,16 @@ impl<C: Component> Context<C> {
         }
     }
 
+    /// Choose mouse pointer feedback without changing mouse input or widget actions.
+    pub fn set_pointer_mode(&self, mode: crate::PointerMode) {
+        self.env.pointer_mode.set(mode);
+    }
+
+    /// Current mouse pointer feedback policy.
+    pub fn pointer_mode(&self) -> crate::PointerMode {
+        self.env.pointer_mode.get()
+    }
+
     /// Toggle terminal mouse capture at runtime and return the new state.
     pub fn toggle_mouse_capture(&self) -> bool {
         let next = !self.env.mouse_capture.get();

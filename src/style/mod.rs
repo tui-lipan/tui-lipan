@@ -19,7 +19,7 @@ pub mod layout;
 /// Color palette.
 pub mod palette;
 mod pointer;
-pub use pointer::PointerShape;
+pub use pointer::{PointerMode, PointerShape};
 /// Built-in theme presets.
 pub mod presets;
 /// Theme loading and hot-reload support.

@@ -116,8 +116,12 @@ impl<C: Component> AppRunner<C> {
         if !self.mouse_enabled || !self.focus.window_focused {
             return self.terminal.pointer.update(backend, None);
         }
-        let desired =
-            crate::app::pointer::interaction_pointer(&self.core.tree, &self.mouse, &self.drag);
+        let desired = crate::app::pointer::interaction_pointer(
+            &self.core.tree,
+            &self.mouse,
+            &self.drag,
+            self.core.ctx.pointer_mode(),
+        );
         self.terminal.pointer.update(backend, desired)
     }
 

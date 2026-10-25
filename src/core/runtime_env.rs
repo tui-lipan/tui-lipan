@@ -345,6 +345,7 @@ pub(crate) struct RuntimeEnv {
     pub overlay_manager: Rc<RefCell<crate::overlay::OverlayManager>>,
     pub focus_request: Rc<RefCell<Option<FocusRequest>>>,
     pub mouse_capture: Rc<Cell<bool>>,
+    pub pointer_mode: Rc<Cell<crate::PointerMode>>,
     pub modifier_key_reporting: Rc<Cell<bool>>,
     pub modifier_key_reporting_keeps_shift: Rc<Cell<bool>>,
     pub surface_mode: SurfaceMode,

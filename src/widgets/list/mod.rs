@@ -552,6 +552,7 @@ pub enum ListTruncation {
 /// A list item.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ListItem {
+    pub(crate) pointer_shape: Option<crate::PointerShape>,
     pub(crate) spans: Vec<Span>,
     /// Width of tree chrome prepended to the label, before its spinner.
     pub(crate) label_prefix_width: u16,
@@ -818,9 +819,17 @@ impl ListItemLine {
 }
 
 impl ListItem {
+    /// Override Interactive-mode feedback for this row without changing selection behavior.
+    /// Use `PointerShape::Default` for a row that is selectable but cannot activate.
+    pub fn pointer_shape(mut self, shape: crate::PointerShape) -> Self {
+        self.pointer_shape = Some(shape);
+        self
+    }
+
     /// Create a new list item.
     pub fn new(content: impl Into<Arc<str>>) -> Self {
         Self {
+            pointer_shape: None,
             spans: vec![Span::new(content)],
             label_prefix_width: 0,
             description_spans: Vec::new(),
@@ -883,6 +892,7 @@ impl ListItem {
     /// Create a non-selectable blank spacer row.
     pub fn spacer() -> Self {
         Self {
+            pointer_shape: None,
             spans: vec![Span::new("")],
             label_prefix_width: 0,
             description_spans: Vec::new(),
@@ -921,6 +931,7 @@ impl ListItem {
     /// Create from multiple spans.
     pub fn from_spans(spans: impl IntoIterator<Item = Span>) -> Self {
         Self {
+            pointer_shape: None,
             spans: spans.into_iter().collect(),
             label_prefix_width: 0,
             description_spans: Vec::new(),

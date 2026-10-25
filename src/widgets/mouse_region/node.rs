@@ -35,6 +35,16 @@ pub struct MouseRegionNode {
 }
 
 impl WidgetNode for MouseRegionNode {
+    fn interactive_pointer_shape_at(
+        &self,
+        x: i16,
+        y: i16,
+        rect: crate::Rect,
+    ) -> Option<crate::PointerShape> {
+        let _ = (x, y, rect);
+        (self.enabled && self.on_click.is_some()).then_some(crate::PointerShape::Pointer)
+    }
+
     fn has_on_click(&self) -> bool {
         self.enabled
             && (self.on_click.is_some()

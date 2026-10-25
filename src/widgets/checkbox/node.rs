@@ -33,6 +33,16 @@ pub struct CheckboxNode {
 }
 
 impl WidgetNode for CheckboxNode {
+    fn interactive_pointer_shape_at(
+        &self,
+        x: i16,
+        y: i16,
+        rect: crate::Rect,
+    ) -> Option<crate::PointerShape> {
+        let _ = (x, y, rect);
+        self.has_on_click().then_some(crate::PointerShape::Pointer)
+    }
+
     fn is_disabled(&self) -> bool {
         self.disabled
     }
