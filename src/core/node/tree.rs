@@ -1163,7 +1163,13 @@ impl NodeTree {
     /// Resolve a mouse pointer at a cell, respecting clipping and overlay capture.
     pub fn pointer_shape_at(&self, x: i16, y: i16) -> Option<crate::style::PointerShape> {
         let hit = self.do_test(x, y, TestKind::Pointer)?;
-        let mut current = Some(hit);
+        self.pointer_override(hit)
+            .or_else(|| crate::app::pointer::automatic_pointer(self, hit, x, y))
+    }
+
+    /// Closest explicit override on a live node or its ancestors.
+    pub(crate) fn pointer_override(&self, start: NodeId) -> Option<crate::PointerShape> {
+        let mut current = Some(start);
         while let Some(id) = current {
             let node = self.node(id);
             if let Some(shape) = node.pointer_shape {
@@ -1171,7 +1177,7 @@ impl NodeTree {
             }
             current = node.parent;
         }
-        crate::app::pointer::automatic_pointer(self, hit, x, y)
+        None
     }
 
     /// Return the deepest hoverable node at `(x, y)`, respecting overlay layering.

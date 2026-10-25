@@ -866,6 +866,8 @@ Resizable container with draggable handles between panes.
 | `handle_style` | `Style` | Handle idle style |
 | `handle_hover_style` | `Style` | Handle hover style |
 | `handle_active_style` | `Style` | Handle drag style |
+| `handle_pointer_shape` | `PointerShape` | Opt-in handle cursor, retained during a drag; excludes child content |
+| `handle_active_pointer_shape` | `PointerShape` | Override the cursor during a captured handle drag; defaults to the hover shape |
 | `handle_mode` | `SplitterHandleMode` | `Gutter` (default) or `Border` (ride the pane border seam) |
 | `width` | `Length` | Width |
 | `height` | `Length` | Height |
@@ -877,6 +879,24 @@ Splitter::vertical()   // Left/Right split
     .child(sidebar)
     .child(main_content)
 ```
+
+**Handle pointers** are opt-in and independent of the pane contents. Use `EwResize` for a vertical
+handle and `NsResize` for a horizontal handle. The chosen shape remains active while dragging,
+even when the pointer moves over another child. Set an active shape when the drag should look
+different from the hover:
+
+```rust
+Splitter::vertical()
+    .handle_pointer_shape(PointerShape::EwResize)
+    .handle_active_pointer_shape(PointerShape::Grabbing)
+    .child(sidebar)
+    .child(main_content)
+```
+
+Without either setting, the splitter leaves the pointer unchanged. An active-only setting changes
+the cursor only while dragging. Release, cancellation, and removing the splitter return pointer
+control to the hovered content. `Element::pointer_shape(...)` remains a separate, explicit override
+for the entire subtree.
 
 **Pane limits**: `min_size` is one floor shared by every pane. A pane with bounds of its own -
 a sidebar that stops widening at 80 columns, a preview that must never swallow the window -

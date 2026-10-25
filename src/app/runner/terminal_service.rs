@@ -116,18 +116,9 @@ impl<C: Component> AppRunner<C> {
         if !self.mouse_enabled || !self.focus.window_focused {
             return self.terminal.pointer.update(backend, None);
         }
-        let captured = self
-            .mouse
-            .mouse_region_drag
-            .as_ref()
-            .filter(|drag| drag.started && self.core.tree.is_valid(drag.node_id))
-            .and_then(|drag| self.core.tree.node(drag.node_id).pointer_shape);
-        let desired = self
-            .mouse
-            .last_mouse
-            .get()
-            .and_then(|(x, y)| self.core.tree.pointer_shape_at(x as i16, y as i16));
-        self.terminal.pointer.update(backend, captured.or(desired))
+        let desired =
+            crate::app::pointer::interaction_pointer(&self.core.tree, &self.mouse, &self.drag);
+        self.terminal.pointer.update(backend, desired)
     }
 
     pub(super) fn needs_mouse_motion(&self) -> bool {

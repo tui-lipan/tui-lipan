@@ -24,6 +24,8 @@ pub struct SplitterNode {
     pub handle_style: Style,
     pub handle_hover_style: Style,
     pub handle_active_style: Style,
+    pub handle_pointer_shape: Option<crate::PointerShape>,
+    pub handle_active_pointer_shape: Option<crate::PointerShape>,
     pub handle_rects: Vec<Rect>,
     pub pane_sizes: Vec<u16>,
     pub active_handle: Option<usize>,
@@ -48,6 +50,24 @@ impl SplitterNode {
 }
 
 impl WidgetNode for SplitterNode {
+    fn has_pointer_shape(&self) -> bool {
+        self.handle_pointer_shape.is_some() || self.handle_active_pointer_shape.is_some()
+    }
+
+    fn pointer_shape_at(&self, x: i16, y: i16, _rect: Rect) -> Option<crate::PointerShape> {
+        let handle = self.handle_at(x, y)?;
+        if self.active_handle == Some(handle) {
+            self.drag_pointer_shape()
+        } else {
+            self.handle_pointer_shape
+        }
+    }
+
+    fn drag_pointer_shape(&self) -> Option<crate::PointerShape> {
+        self.handle_active_pointer_shape
+            .or(self.handle_pointer_shape)
+    }
+
     fn has_on_click(&self) -> bool {
         !self.handle_rects.is_empty()
     }
@@ -78,6 +98,8 @@ impl From<Splitter> for SplitterNode {
             handle_style: value.handle_style,
             handle_hover_style: value.handle_hover_style,
             handle_active_style: value.handle_active_style,
+            handle_pointer_shape: value.handle_pointer_shape,
+            handle_active_pointer_shape: value.handle_active_pointer_shape,
             handle_rects: Vec::new(),
             pane_sizes: Vec::new(),
             active_handle: None,

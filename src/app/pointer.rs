@@ -1,18 +1,54 @@
 //! Pointer policy shared by the real runtime and headless tests.
-use crate::core::node::{Node, NodeId, NodeKind, NodeTree};
+use crate::core::node::{Node, NodeId, NodeKind, NodeTree, WidgetNode};
 use crate::style::PointerShape;
 
 pub(crate) fn has_pointer_target(node: &Node) -> bool {
-    if node.pointer_shape.is_some() || node.is_interactive() || node.is_hoverable() {
+    if node.pointer_shape.is_some()
+        || node.kind.has_pointer_shape()
+        || node.is_interactive()
+        || node.is_hoverable()
+    {
         return true;
     }
     match node.kind {
         NodeKind::Input(_) | NodeKind::TextArea(_) => true,
-        NodeKind::Tabs(ref tabs) => tabs.tabs.iter().any(|tab| tab.pointer_shape.is_some()),
         #[cfg(feature = "terminal")]
         NodeKind::Terminal(_) => true,
         _ => false,
     }
+}
+
+/// Apply capture before hover. Both native output and TestBackend use this policy.
+pub(crate) fn interaction_pointer(
+    tree: &NodeTree,
+    mouse: &crate::app::interaction_state::MouseTrackingState,
+    drag: &crate::app::interaction_state::DragState,
+) -> Option<PointerShape> {
+    let owner = match &drag.active {
+        crate::app::interaction_state::ActiveDrag::Splitter(drag) => Some(drag.id),
+        _ => mouse
+            .mouse_region_drag
+            .as_ref()
+            .filter(|drag| drag.started)
+            .map(|drag| drag.node_id),
+    };
+    owner.and_then(|id| captured_pointer(tree, id)).or_else(|| {
+        let (x, y) = mouse.last_mouse.get()?;
+        tree.pointer_shape_at(x as i16, y as i16)
+    })
+}
+
+/// Resolve a captured drag owner's explicit or widget-defined pointer.
+pub(crate) fn captured_pointer(tree: &NodeTree, owner: NodeId) -> Option<PointerShape> {
+    if !tree.is_valid(owner) {
+        return None;
+    }
+    let node = tree.node(owner);
+    if node.inert || node.portal_suppressed {
+        return None;
+    }
+    tree.pointer_override(owner)
+        .or_else(|| node.kind.drag_pointer_shape())
 }
 
 pub(crate) fn automatic_pointer(
@@ -32,8 +68,8 @@ pub(crate) fn automatic_pointer(
                 .filter(|rect| rect.contains(x, y))
                 .and_then(|_| terminal_pointer(terminal));
         }
-        if let NodeKind::Tabs(tabs) = &node.kind {
-            return tab_pointer(node.rect, tabs, x, y);
+        if node.kind.has_pointer_shape() {
+            return node.kind.pointer_shape_at(x, y, node.rect);
         }
         if let Some(shape) = widget_pointer(node) {
             return Some(shape);
@@ -47,30 +83,8 @@ fn widget_pointer(node: &Node) -> Option<PointerShape> {
     match &node.kind {
         NodeKind::Input(input) if !input.disabled => Some(PointerShape::Text),
         NodeKind::TextArea(textarea) if !textarea.disabled => Some(PointerShape::Text),
-
         _ => None,
     }
-}
-
-fn tab_pointer(
-    rect: crate::Rect,
-    tabs: &crate::widgets::internal::TabsNode,
-    x: i16,
-    y: i16,
-) -> Option<PointerShape> {
-    let inner = rect.inner(tabs.border, tabs.padding);
-    if tabs.disabled || y != inner.y || !inner.contains(x, y) {
-        return None;
-    }
-    let col = (i32::from(x) - i32::from(inner.x)) as usize;
-    let index = crate::widgets::Tabs::index_at_col(
-        &tabs.tabs,
-        tabs.divider,
-        tabs.overflow,
-        usize::from(inner.w),
-        col,
-    )?;
-    tabs.tabs.get(index)?.pointer_shape
 }
 
 #[cfg(feature = "terminal")]
@@ -119,6 +133,30 @@ mod tests {
             None,
         );
         tree
+    }
+
+    #[test]
+    fn captured_widget_pointer_respects_ancestor_overrides_and_inert_sources() {
+        use crate::widgets::{Splitter, VStack};
+        let mut tree = tree(
+            VStack::new()
+                .child(
+                    Splitter::vertical()
+                        .handle_pointer_shape(PointerShape::EwResize)
+                        .handle_active_pointer_shape(PointerShape::Grabbing)
+                        .child(Text::new("left"))
+                        .child(Text::new("right")),
+                )
+                .pointer_shape(PointerShape::Help),
+        );
+        let owner = tree
+            .iter()
+            .find(|node| matches!(node.kind, NodeKind::Splitter(_)))
+            .unwrap()
+            .id;
+        assert_eq!(captured_pointer(&tree, owner), Some(PointerShape::Help));
+        tree.node_mut(owner).inert = true;
+        assert_eq!(captured_pointer(&tree, owner), None);
     }
 
     #[test]

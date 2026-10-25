@@ -900,3 +900,7 @@ check that unrelated subtree size does not add registration-discovery work to ea
 `TestBackend::pointer_shape_at(x, y)` resolves a mouse pointer without sending input or changing
 focus. Render after a view change before querying it. Live terminal requests are read directly,
 so this also checks updates that arrive without a layout or cell repaint.
+
+`TestBackend::pointer_shape()` resolves the current mouse pointer with active drag capture,
+window focus, and mouse-capture preferences included. Use `send_mouse` to exercise a real gesture;
+`pointer_shape_at(x, y)` remains a hover-only query without changing input state.

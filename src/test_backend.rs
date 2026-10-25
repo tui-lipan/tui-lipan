@@ -1398,6 +1398,15 @@ where
         self.core.tree.pointer_shape_at(x as i16, y as i16)
     }
 
+    /// Resolve the pointer for the current mouse position, including a captured drag.
+    /// Returns `None` when the window is unfocused or mouse capture is disabled.
+    pub fn pointer_shape(&self) -> Option<crate::PointerShape> {
+        if !self.window_focused || !self.core.ctx.env().mouse_capture.get() {
+            return None;
+        }
+        crate::app::pointer::interaction_pointer(&self.core.tree, &self.mouse, &self.drag)
+    }
+
     /// Capture a UI snapshot with custom describe options.
     pub fn capture_ui_snapshot_with_options(
         &self,

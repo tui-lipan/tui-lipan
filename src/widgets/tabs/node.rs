@@ -34,6 +34,26 @@ pub struct TabsNode {
 }
 
 impl WidgetNode for TabsNode {
+    fn has_pointer_shape(&self) -> bool {
+        self.tabs.iter().any(|tab| tab.pointer_shape.is_some())
+    }
+
+    fn pointer_shape_at(&self, x: i16, y: i16, rect: crate::Rect) -> Option<crate::PointerShape> {
+        let inner = rect.inner(self.border, self.padding);
+        if self.disabled || y != inner.y || !inner.contains(x, y) {
+            return None;
+        }
+        let col = (i32::from(x) - i32::from(inner.x)) as usize;
+        let index = Tabs::index_at_col(
+            &self.tabs,
+            self.divider,
+            self.overflow,
+            usize::from(inner.w),
+            col,
+        )?;
+        self.tabs.get(index)?.pointer_shape
+    }
+
     fn is_disabled(&self) -> bool {
         self.disabled
     }

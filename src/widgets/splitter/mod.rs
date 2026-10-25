@@ -112,6 +112,8 @@ pub struct Splitter {
     pub(crate) handle_style: Style,
     pub(crate) handle_hover_style: Style,
     pub(crate) handle_active_style: Style,
+    pub(crate) handle_pointer_shape: Option<crate::PointerShape>,
+    pub(crate) handle_active_pointer_shape: Option<crate::PointerShape>,
     pub(crate) width: Length,
     pub(crate) height: Length,
 }
@@ -143,6 +145,8 @@ impl Splitter {
             handle_style: Style::default(),
             handle_hover_style: Style::default(),
             handle_active_style: Style::default(),
+            handle_pointer_shape: None,
+            handle_active_pointer_shape: None,
             width: Length::Flex(1),
             height: Length::Flex(1),
         }
@@ -166,6 +170,8 @@ impl Splitter {
             handle_style: Style::default(),
             handle_hover_style: Style::default(),
             handle_active_style: Style::default(),
+            handle_pointer_shape: None,
+            handle_active_pointer_shape: None,
             width: Length::Flex(1),
             height: Length::Flex(1),
         }
@@ -294,6 +300,20 @@ impl Splitter {
     /// Set handle hover style.
     pub fn handle_hover_style(mut self, style: Style) -> Self {
         self.handle_hover_style = style;
+        self
+    }
+
+    /// Opt into a mouse pointer over resize handles, excluding child pane content.
+    /// The shape is retained during a drag unless `handle_active_pointer_shape` overrides it.
+    pub fn handle_pointer_shape(mut self, shape: crate::PointerShape) -> Self {
+        self.handle_pointer_shape = Some(shape);
+        self
+    }
+
+    /// Override the captured handle's pointer during a drag. Other handles keep the hover shape.
+    /// By default, dragging uses the shape from `handle_pointer_shape`.
+    pub fn handle_active_pointer_shape(mut self, shape: crate::PointerShape) -> Self {
+        self.handle_active_pointer_shape = Some(shape);
         self
     }
 
