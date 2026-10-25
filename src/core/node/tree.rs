@@ -1171,7 +1171,7 @@ impl NodeTree {
             }
             current = node.parent;
         }
-        crate::app::pointer::automatic_pointer(self, hit)
+        crate::app::pointer::automatic_pointer(self, hit, x, y)
     }
 
     /// Return the deepest hoverable node at `(x, y)`, respecting overlay layering.

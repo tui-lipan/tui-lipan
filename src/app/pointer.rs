@@ -14,10 +14,23 @@ pub(crate) fn has_pointer_target(node: &Node) -> bool {
     }
 }
 
-pub(crate) fn automatic_pointer(tree: &NodeTree, hit: NodeId) -> Option<PointerShape> {
+pub(crate) fn automatic_pointer(
+    tree: &NodeTree,
+    hit: NodeId,
+    x: i16,
+    y: i16,
+) -> Option<PointerShape> {
+    #[cfg(not(feature = "terminal"))]
+    let _ = (x, y);
     let mut current = Some(hit);
     while let Some(id) = current {
         let node = tree.node(id);
+        #[cfg(feature = "terminal")]
+        if let NodeKind::Terminal(terminal) = &node.kind {
+            return crate::widgets::internal::terminal_mouse_content_rect(tree, id)
+                .filter(|rect| rect.contains(x, y))
+                .and_then(|_| terminal_pointer(terminal));
+        }
         if let Some(shape) = widget_pointer(node) {
             return Some(shape);
         }
@@ -32,11 +45,18 @@ fn widget_pointer(node: &Node) -> Option<PointerShape> {
         NodeKind::Input(input) if !input.disabled => Some(PointerShape::Text),
         NodeKind::TextArea(textarea) if !textarea.disabled => Some(PointerShape::Text),
         NodeKind::Button(button) if !button.disabled => Some(PointerShape::Pointer),
-        #[cfg(feature = "terminal")]
-        NodeKind::Terminal(terminal) => terminal_pointer(terminal),
+        NodeKind::MouseRegion(region) => mouse_region_pointer(region),
         _ if node.kind.has_on_click() => Some(PointerShape::Pointer),
         _ => None,
     }
+}
+
+fn mouse_region_pointer(
+    region: &crate::widgets::internal::MouseRegionNode,
+) -> Option<PointerShape> {
+    // Focus acquisition and drag capture are not activation controls.
+    (region.enabled && (region.on_click.is_some() || region.on_mouse_up.is_some()))
+        .then_some(PointerShape::Pointer)
 }
 
 #[cfg(feature = "terminal")]
@@ -112,6 +132,36 @@ mod tests {
             tree.pointer_shape_at(button.rect.x, button.rect.y),
             Some(PointerShape::Help)
         );
+    }
+
+    #[test]
+    fn focus_and_drag_regions_do_not_advertise_a_click_action() {
+        let region = MouseRegion::new()
+            .on_mouse_down(crate::Callback::new(|_| {}))
+            .on_drag(crate::Callback::new(|_| {}))
+            .child(Text::new("chrome"));
+        assert_eq!(tree(region).pointer_shape_at(0, 0), None);
+        let button = MouseRegion::new()
+            .on_click(crate::Callback::new(|_| {}))
+            .child(Text::new("open"));
+        assert_eq!(
+            tree(button).pointer_shape_at(0, 0),
+            Some(PointerShape::Pointer)
+        );
+    }
+
+    #[cfg(feature = "terminal")]
+    #[test]
+    fn child_pointer_is_limited_to_terminal_content() {
+        use crate::widgets::{Terminal, TerminalScreen};
+        use std::{cell::RefCell, rc::Rc};
+        let screen = Rc::new(RefCell::new(TerminalScreen::new(4, 20, 0)));
+        screen.borrow_mut().process_bytes(b"\x1b]22;grab\x07");
+        let tree = tree(Terminal::new().screen(screen).border(true).padding(1));
+        assert_eq!(tree.pointer_shape_at(0, 0), None);
+        assert_eq!(tree.pointer_shape_at(1, 1), None);
+        assert_eq!(tree.pointer_shape_at(2, 2), Some(PointerShape::Grab));
+        assert_eq!(tree.pointer_shape_at(39, 7), None);
     }
 
     #[test]
