@@ -1574,7 +1574,8 @@ impl TerminalScreen {
             revision: observation.revision,
             dependency: GraphicsDependency::Independent,
         };
-        self.push_output(frame.into_bytes(), class, Some(footprint));
+        let (bytes, media) = frame.into_output();
+        self.push_output(bytes, class, Some(footprint), media);
     }
 
     /// Stream a held update's transactions unchanged, as if it had never been held.
@@ -1584,7 +1585,12 @@ impl TerminalScreen {
             return;
         };
         for transaction in frame.into_transactions() {
-            self.push_output(transaction.bytes, transaction.class, None);
+            self.push_output(
+                transaction.bytes,
+                transaction.class,
+                None,
+                transaction.media,
+            );
         }
     }
 
@@ -1599,7 +1605,7 @@ impl TerminalScreen {
 
     #[cfg(feature = "terminal-images")]
     fn record_owned_output(&mut self, bytes: Vec<u8>, class: super::output::TerminalOutputClass) {
-        self.record_graphics_output(bytes, class, None);
+        self.record_graphics_output(bytes, class, None, Vec::new());
     }
 
     #[cfg(feature = "terminal-images")]
@@ -1608,9 +1614,10 @@ impl TerminalScreen {
         bytes: Vec<u8>,
         class: super::output::TerminalOutputClass,
         footprint: Option<super::output::Footprint>,
+        media: Vec<super::output::TerminalOutputMedia>,
     ) {
         use super::output::TerminalOutputClass;
-        if bytes.len() > 1024 * 1024 {
+        if bytes.len() > 1024 * 1024 && media.is_empty() {
             self.record_output(&bytes, TerminalOutputClass::Ordered);
             return;
         }
@@ -1622,17 +1629,17 @@ impl TerminalScreen {
             // Preserve a receipt so an embedder cannot mistake no transactions for recording
             // being disabled and fall back to forwarding the original consuming reference.
             self.release_output_frame();
-            self.push_output(bytes, TerminalOutputClass::Ordered, None);
+            self.push_output(bytes, TerminalOutputClass::Ordered, None, media);
             return;
         }
         match self.output_frame.as_mut() {
             Some(frame) => {
-                frame.push(bytes, class);
+                frame.push(bytes, class, media);
                 if !frame.proven() {
                     self.release_output_frame();
                 }
             }
-            None => self.push_output(bytes, class, footprint),
+            None => self.push_output(bytes, class, footprint, media),
         }
     }
 
@@ -1644,6 +1651,7 @@ impl TerminalScreen {
         bytes: Vec<u8>,
         mut class: super::output::TerminalOutputClass,
         footprint: Option<super::output::Footprint>,
+        media: Vec<super::output::TerminalOutputMedia>,
     ) {
         use super::output::{GraphicsDependency, TerminalOutputClass, TerminalOutputTransaction};
         let admitted = match (&class, footprint) {
@@ -1671,9 +1679,14 @@ impl TerminalScreen {
             && previous.class == TerminalOutputClass::Ordered
             && previous.bytes.len().saturating_add(bytes.len()) <= 1024 * 1024
         {
+            super::output::append_media(&mut previous.media, media, previous.bytes.len());
             previous.bytes.extend_from_slice(&bytes);
         } else {
-            transactions.push(TerminalOutputTransaction { bytes, class });
+            transactions.push(TerminalOutputTransaction {
+                bytes,
+                class,
+                media,
+            });
         }
     }
 
@@ -1920,7 +1933,7 @@ impl TerminalScreen {
         use super::output::{Footprint, GraphicsDependency, TerminalOutputClass};
         let (media, relay) = self.graphics.media_options();
         if relay.relays(command.medium()) && self.output_transactions.is_some() {
-            command.prepare_media(media, relay, true);
+            command.prepare_media(media, relay, true, self.graphics.media_files().as_ref());
         }
         let original_wire = command.take_wire();
         let Some(wire) = command.take_prepared_wire().or(original_wire) else {
@@ -1935,6 +1948,14 @@ impl TerminalScreen {
             && !self.graphics.has_pending_transmission()
             && !self.processor.sync_timeout().pending_timeout()
             && self.processor.sync_bytes_count() == 0;
+        let media = command
+            .output_file()
+            .map(|file| super::output::TerminalOutputMedia {
+                command_range: 0..wire.len(),
+                file,
+            })
+            .into_iter()
+            .collect();
         let result = self.apply_graphics(command, unsettled);
         let current = source_id.and_then(|id| self.graphics.replacement_observation(id));
         let class = match current {
@@ -1976,7 +1997,7 @@ impl TerminalScreen {
             Some(FrameOp::Replace { id, places }) => Some(Footprint::transmission(id, places)),
             _ => None,
         };
-        self.record_graphics_output(wire, class, footprint);
+        self.record_graphics_output(wire, class, footprint, media);
         result
     }
 
@@ -2378,7 +2399,8 @@ impl TerminalScreen {
         self.snapshot_damage.mark_full();
     }
 
-    /// Retain quiet raw file transmissions as private immutable file snapshots instead of heap
+    /// Retain quiet raw file transmissions, and raw out-of-band transmissions prepared with
+    /// [`Self::prepare_media_input`], as private immutable file snapshots instead of heap
     /// pixel buffers. Capture, replay and composition read their pixels on demand. A local Kitty
     /// host can load a cell-aligned frame directly, without decoding it in the application.
     ///
@@ -2396,7 +2418,8 @@ impl TerminalScreen {
     /// These let a child leave a frame in a file or a shared-memory object and name it in a
     /// hundred-byte escape, instead of compressing and base64-ing megabytes of pixels through the
     /// PTY every frame. `t=t` and `t=s` are claimed by one reader. A canonical server may accept
-    /// them and use [`super::GraphicsRelayPolicy::Consuming`] before fanout. Readers of an
+    /// them and use [`super::GraphicsRelayPolicy::NamedAsFiles`] or
+    /// [`super::GraphicsRelayPolicy::Consuming`] before fanout. Readers of an
     /// unrelayed stream use [`GraphicsMediaPolicy::SHARED`](crate::widgets::GraphicsMediaPolicy::SHARED),
     /// accepting only re-readable `t=f`.
     #[cfg(feature = "terminal-images")]
@@ -2404,11 +2427,14 @@ impl TerminalScreen {
         self.graphics.set_media_policy(media);
     }
 
-    /// Choose which named sources recorded output replaces with inline pixels.
+    /// Choose which named sources recorded output replaces, and with what.
     ///
-    /// Multiplexer servers use `Consuming` for local attachments and `All` while any attachment
-    /// cannot open their files. This applies to queries too; failed relayed acquisitions emit no
-    /// source reference. Recording must be enabled. The default is `None`.
+    /// Multiplexer servers use `NamedAsFiles`, with file storage enabled, while every
+    /// attachment shares their filesystem, and `All` while any attachment cannot open their files.
+    /// This applies to queries too; failed relayed acquisitions emit no source reference.
+    /// Recording must be enabled. The default is `None`. With `NamedAsFiles`, retain the owning
+    /// media handles returned by [`Self::take_output_transactions`] until all readers acquire or
+    /// discard them. Raw bytes alone have no lifetime guarantee for rewritten file names.
     #[cfg(feature = "terminal-images")]
     pub fn set_image_relay_policy(&mut self, policy: super::GraphicsRelayPolicy) {
         self.graphics.set_relay_policy(policy);
@@ -2446,7 +2472,83 @@ impl TerminalScreen {
             media,
             relay,
             recording: self.output_transactions.is_some(),
+            files: self.graphics.media_files(),
         })
+    }
+
+    /// Bind already acquired immutable resources to exact complete commands in `bytes`.
+    /// Only trusted transport metadata may authorize imports. Unbound input follows ordinary
+    /// parsing and copying. The result uses the same screen/revision fence as worker preparation.
+    #[cfg(feature = "terminal-images")]
+    pub fn prepare_immutable_media_input(
+        &self,
+        bytes: Arc<[u8]>,
+        bindings: Vec<super::output::TerminalOutputMedia>,
+    ) -> std::io::Result<super::TerminalPreparedInput> {
+        let mut commands = VecDeque::new();
+        let mut end = 0;
+        for binding in bindings {
+            let range = binding.command_range;
+            if range.start < end || range.end > bytes.len() || range.start >= range.end {
+                return Err(std::io::Error::other("invalid immutable command range"));
+            }
+            // Parse preceding commands too, so preparation cannot slide onto another command.
+            let mut parsed = self.immutable_command_prefix(&bytes, range.clone(), binding.file)?;
+            // Preserve previously imported commands, including those without bindings.
+            parsed.drain(..commands.len());
+            commands.extend(parsed);
+            end = range.end;
+        }
+        // Add any commands after the last binding to preserve parser alignment.
+        let mut parsed = self.recorded_media_commands(&bytes);
+        parsed.drain(..commands.len());
+        commands.extend(parsed);
+        let (media, relay) = self.graphics.media_options();
+        Ok(super::TerminalPreparedInput {
+            length: bytes.len(),
+            bytes,
+            screen_id: self.stable_terminal_id,
+            input_revision: self.input_revision,
+            commands,
+            media,
+            relay,
+            recording: self.output_transactions.is_some(),
+            files: self.graphics.media_files(),
+        })
+    }
+
+    #[cfg(feature = "terminal-images")]
+    fn recorded_media_commands(&self, bytes: &[u8]) -> Vec<GraphicsCommand> {
+        let mut scanner = self.graphics_scanner.clone();
+        scanner.set_record_output(true);
+        scanner
+            .scan(bytes)
+            .into_iter()
+            .filter_map(|segment| match segment {
+                GraphicsSegment::Command(command) => Some(*command),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[cfg(feature = "terminal-images")]
+    fn immutable_command_prefix(
+        &self,
+        bytes: &[u8],
+        range: std::ops::Range<usize>,
+        file: super::output::TerminalImmutableFile,
+    ) -> std::io::Result<Vec<GraphicsCommand>> {
+        let mut parsed = self.recorded_media_commands(&bytes[..range.end]);
+        let Some(command) = parsed.last_mut() else {
+            return Err(std::io::Error::other("immutable binding has no command"));
+        };
+        if command.wire_bytes() != Some(&bytes[range]) {
+            return Err(std::io::Error::other(
+                "immutable binding is not an exact command",
+            ));
+        }
+        command.import_file(file)?;
+        Ok(parsed)
     }
 
     /// Commit a worker result through the ordinary parser, retaining output order/classification.

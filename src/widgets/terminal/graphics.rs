@@ -856,25 +856,79 @@ pub(super) struct GraphicsCommand {
     delete_safe: bool,
 }
 
+type FilePixels = crate::backend::ratatui_backend::file_frame::FilePixels;
+
+/// Where a screen keeps raw pixels as immutable files rather than heap buffers, handed to
+/// preparation off the screen's thread.
+#[derive(Clone, Debug)]
+pub(super) struct MediaFiles {
+    pool: Arc<crate::backend::ratatui_backend::file_frame::SnapshotPool>,
+    budget: usize,
+}
+
 #[derive(Clone, Debug, Default)]
 pub(super) struct PreparedGraphicsMedia {
     payload: Vec<u8>,
     decoded: Option<Arc<DynamicImage>>,
+    /// Raw pixels kept in an immutable snapshot instead of `decoded`.
+    file: Option<Arc<FilePixels>>,
     error: Option<&'static str>,
     wire: Option<Vec<u8>>,
+    /// The relay policy `wire` was built for.
+    wire_relay: Option<super::graphics_media::GraphicsRelayPolicy>,
 }
 
 impl PreparedGraphicsMedia {
-    fn relay_bytes(&self) -> &[u8] {
-        if self.payload.is_empty() {
-            self.decoded.as_ref().map_or(&[], |image| image.as_bytes())
-        } else {
-            &self.payload
+    fn relay_bytes(&self) -> io::Result<Cow<'_, [u8]>> {
+        if !self.payload.is_empty() {
+            return Ok(Cow::Borrowed(&self.payload));
         }
+        if let Some(file) = &self.file {
+            return file.read().map(Cow::Owned);
+        }
+        Ok(Cow::Borrowed(
+            self.decoded.as_ref().map_or(&[], |image| image.as_bytes()),
+        ))
+    }
+
+    /// The snapshot a recorded `t=f` reference names, which must outlive that output's readers.
+    fn relayed_file(&self) -> Option<&Arc<FilePixels>> {
+        (self.wire_relay == Some(super::graphics_media::GraphicsRelayPolicy::NamedAsFiles))
+            .then_some(self.file.as_ref())
+            .flatten()
     }
 }
 
 impl GraphicsCommand {
+    pub(super) fn output_file(&self) -> Option<super::output::TerminalImmutableFile> {
+        self.prepared
+            .as_ref()?
+            .relayed_file()
+            .map(|file| super::output::TerminalImmutableFile::export(Arc::clone(file)))
+    }
+
+    pub(super) fn import_file(
+        &mut self,
+        file: super::output::TerminalImmutableFile,
+    ) -> io::Result<()> {
+        if self.medium != GraphicsMedium::File
+            || self.raw_file_len(usize::MAX) != Some(file.byte_len())
+            || self.source_offset != 0
+            || self.format != file.format()
+            || self.malformed
+            || self.more
+        {
+            return Err(io::Error::other(
+                "immutable resource does not match its command",
+            ));
+        }
+        self.prepared = Some(Box::new(PreparedGraphicsMedia {
+            file: Some(file.0),
+            ..Default::default()
+        }));
+        Ok(())
+    }
+
     pub(super) fn medium(&self) -> GraphicsMedium {
         self.medium
     }
@@ -889,13 +943,14 @@ impl GraphicsCommand {
         policy: GraphicsMediaPolicy,
         relay: super::graphics_media::GraphicsRelayPolicy,
         recording: bool,
+        files: Option<&MediaFiles>,
     ) {
         if !self.needs_media() {
             return;
         }
         let mut prepared = match self.prepared.take() {
             Some(prepared) => *prepared,
-            None => match self.prepare_media_contents(policy) {
+            None => match self.prepare_media_contents(policy, files) {
                 Ok(prepared) => prepared,
                 Err(error) => PreparedGraphicsMedia {
                     error: Some(error),
@@ -906,21 +961,75 @@ impl GraphicsCommand {
         if recording && relay.relays(self.medium) {
             // Never hand a downstream reader a consuming name, including failed probes or reads.
             // The authoritative screen still sends errors to the child.
-            if prepared.wire.is_none() {
-                prepared.wire = Some(match (prepared.error, self.wire.as_deref()) {
-                    (None, Some(wire)) => inline_transmission(wire, prepared.relay_bytes()),
-                    _ => Vec::new(),
-                });
+            if prepared.wire.is_none() || prepared.wire_relay != Some(relay) {
+                prepared.wire = Some(self.relay_wire(&prepared, relay));
+                prepared.wire_relay = Some(relay);
             }
         } else {
             prepared.wire = None;
+            prepared.wire_relay = None;
         }
         self.prepared = Some(Box::new(prepared));
+    }
+
+    /// What downstream readers receive in place of this command's source reference.
+    fn relay_wire(
+        &self,
+        prepared: &PreparedGraphicsMedia,
+        relay: super::graphics_media::GraphicsRelayPolicy,
+    ) -> Vec<u8> {
+        // Local re-readable sources without an eligible raw snapshot keep the producer's
+        // representation. Consuming references must always be rewritten, including failures.
+        if relay == super::graphics_media::GraphicsRelayPolicy::NamedAsFiles
+            && self.medium == GraphicsMedium::File
+            && prepared.file.is_none()
+        {
+            return self.wire.clone().unwrap_or_default();
+        }
+        let (None, Some(wire)) = (prepared.error, self.wire.as_deref()) else {
+            return Vec::new();
+        };
+        if relay == super::graphics_media::GraphicsRelayPolicy::NamedAsFiles
+            && let Some(file) = &prepared.file
+        {
+            file.expose();
+            return file_transmission(wire, file.path());
+        }
+        prepared
+            .relay_bytes()
+            .map_or_else(|_| Vec::new(), |data| inline_transmission(wire, &data))
+    }
+
+    /// Byte length of this command's raw pixels, when they can be kept as an immutable file.
+    /// The exact length is checked on acquisition, so such pixels always decode.
+    fn raw_file_len(&self, budget: usize) -> Option<usize> {
+        let channels = match self.format {
+            24 => 3usize,
+            32 => 4usize,
+            _ => return None,
+        };
+        if !self.action.transmits()
+            || self.compressed
+            || self.width == 0
+            || self.height == 0
+            || self.width > MAX_IMAGE_DIMENSION
+            || self.height > MAX_IMAGE_DIMENSION
+        {
+            return None;
+        }
+        let bytes = (self.width as usize)
+            .checked_mul(self.height as usize)?
+            .checked_mul(channels)?;
+        (bytes <= MAX_TRANSMIT_BYTES
+            && bytes <= budget
+            && (self.source_size == 0 || self.source_size == bytes))
+            .then_some(bytes)
     }
 
     fn prepare_media_contents(
         &self,
         policy: GraphicsMediaPolicy,
+        files: Option<&MediaFiles>,
     ) -> Result<PreparedGraphicsMedia, &'static str> {
         if self.malformed {
             return Err("EINVAL:payload is not base64");
@@ -931,13 +1040,64 @@ impl GraphicsCommand {
         if !policy.allows(self.medium) {
             return Err("ENOTSUPP:file transmission");
         }
-        let payload = graphics_media::load(
+        let file_len = files.and_then(|files| Some((files, self.raw_file_len(files.budget)?)));
+        // A re-readable file is copied straight into a snapshot. Any failure, including a length
+        // mismatch, takes the ordinary path below so the sender gets the ordinary answer.
+        if let Some((files, bytes)) = file_len
+            && self.medium == GraphicsMedium::File
+            && self.source_offset == 0
+            && let Ok(path) = graphics_media::decode_path(&self.payload)
+            && let Ok(file) = files.pool.snapshot(&path, bytes, self.format)
+        {
+            return Ok(PreparedGraphicsMedia {
+                file: Some(Arc::new(file)),
+                ..Default::default()
+            });
+        }
+        // A consumed source cannot be read twice, so its snapshot is reserved before it is opened
+        // and filled straight from it. A window of another length is read into memory instead,
+        // which reports the mismatch exactly as before.
+        let writer = file_len.and_then(|(files, bytes)| files.pool.writer(bytes).ok());
+        let acquired = graphics_media::acquire(
             self.medium,
             &self.payload,
             self.source_offset,
             self.source_size,
             MAX_TRANSMIT_BYTES,
+            |window| {
+                let expected = file_len.map(|(_, bytes)| bytes);
+                match (window, writer) {
+                    (graphics_media::Window::Stream(mut reader, len), Some(mut writer))
+                        if Some(len) == expected =>
+                    {
+                        writer
+                            .copy_from(&mut reader)
+                            .map_err(|_| "EIO:cannot read source")?;
+                        Ok(Ok(writer.finish(self.format)))
+                    }
+                    (window, writer) => {
+                        let data = window.into_bytes()?;
+                        // Darwin shared memory is already copied out; keep it in the file too.
+                        if let Some(mut writer) = writer
+                            && Some(data.len()) == expected
+                            && writer.copy_from(&mut &data[..]).is_ok()
+                        {
+                            return Ok(Ok(writer.finish(self.format)));
+                        }
+                        Ok(Err(data))
+                    }
+                }
+            },
         )?;
+        let payload = match acquired {
+            Ok(file) => {
+                return Ok(PreparedGraphicsMedia {
+                    file: Some(Arc::new(file)),
+                    ..Default::default()
+                });
+            }
+            Err(payload) => payload,
+        };
         // Raw pixels become the decoded image without a second pixel allocation. Keeping the
         // owned image here also prevents a later replay/attach from decoding on the caller thread.
         // Encoded PNG/zlib bytes stay available for relay-policy changes without reopening sources.
@@ -1122,6 +1282,10 @@ impl GraphicsCommand {
             && self.action.transmits()
             && (self.action == GraphicsAction::Transmit || self.no_cursor_move)
             && matches!(self.medium, GraphicsMedium::Direct | GraphicsMedium::File)
+    }
+
+    pub(super) fn wire_bytes(&self) -> Option<&[u8]> {
+        self.wire.as_deref()
     }
 
     pub(super) fn take_wire(&mut self) -> Option<Vec<u8>> {
@@ -2128,6 +2292,14 @@ impl TerminalGraphics {
         (self.media, self.relay)
     }
 
+    /// File storage for preparation, matching what [`Self::snapshot_file`] would retain.
+    pub(super) fn media_files(&self) -> Option<MediaFiles> {
+        (self.storage_enabled && self.file_storage_enabled).then(|| MediaFiles {
+            pool: Arc::clone(&self.file_pool),
+            budget: self.budget,
+        })
+    }
+
     fn replace_file_pool(&mut self) {
         self.file_pool =
             Arc::new(crate::backend::ratatui_backend::file_frame::SnapshotPool::new(self.budget));
@@ -2570,11 +2742,18 @@ impl TerminalGraphics {
         payload: Vec<u8>,
         source_hash: u64,
     ) -> Result<(TerminalImage, usize), &'static str> {
-        if let Some(prepared) = &command.prepared
-            && let Some(decoded) = &prepared.decoded
-        {
-            let bytes = decoded_bytes(decoded);
-            return Ok((self.decoded_image(source_hash, Arc::clone(decoded)), bytes));
+        if let Some(prepared) = &command.prepared {
+            if let Some(file) = &prepared.file {
+                let bytes = file.len();
+                return Ok((
+                    self.file_image(command, source_hash, Arc::clone(file)),
+                    bytes,
+                ));
+            }
+            if let Some(decoded) = &prepared.decoded {
+                let bytes = decoded_bytes(decoded);
+                return Ok((self.decoded_image(source_hash, Arc::clone(decoded)), bytes));
+            }
         }
         let file = if command.prepared.is_some() {
             None
@@ -2583,24 +2762,7 @@ impl TerminalGraphics {
         };
         let (image, bytes) = if let Some((input, bytes)) = file {
             (
-                TerminalImage {
-                    source_key: ImageSourceKey::default(),
-                    source_lifetime: Arc::default(),
-                    placement_lifetime: None,
-                    placement_identity: ImagePlacementIdentity::default(),
-                    source_revision: ImageSourceRevision::default(),
-                    native: Arc::default(),
-                    source: ImageSource::File {
-                        input: Arc::new(input),
-                        decoded: Arc::default(),
-                    },
-                    width: command.width,
-                    height: command.height,
-                    source_hash,
-                    stream_namespace: self.stream_namespace,
-                    geometry: None,
-                    composition: Some(Arc::clone(&self.composition)),
-                },
+                self.file_image(command, source_hash, Arc::new(input)),
                 bytes,
             )
         } else {
@@ -2760,11 +2922,40 @@ impl TerminalGraphics {
             if let Some(decoded) = &prepared.decoded {
                 return Ok((decoded.width(), decoded.height()));
             }
+            if prepared.file.is_some() {
+                return Ok((command.width, command.height));
+            }
         }
         if !self.media.allows(command.medium) {
             return Err("ENOTSUPP:file transmission");
         }
         validate_transmit_dimensions(command, payload)
+    }
+
+    fn file_image(
+        &self,
+        command: &GraphicsCommand,
+        source_hash: u64,
+        input: Arc<FilePixels>,
+    ) -> TerminalImage {
+        TerminalImage {
+            source_key: ImageSourceKey::default(),
+            source_lifetime: Arc::default(),
+            placement_lifetime: None,
+            placement_identity: ImagePlacementIdentity::default(),
+            source_revision: ImageSourceRevision::default(),
+            native: Arc::default(),
+            source: ImageSource::File {
+                input,
+                decoded: Arc::default(),
+            },
+            width: command.width,
+            height: command.height,
+            source_hash,
+            stream_namespace: self.stream_namespace,
+            geometry: None,
+            composition: Some(Arc::clone(&self.composition)),
+        }
     }
 
     fn decoded_image(&self, source_hash: u64, decoded: Arc<DynamicImage>) -> TerminalImage {
@@ -3482,19 +3673,7 @@ const RELAY_CHUNK: usize = 4096;
 /// as it would have. Raw pixels are compressed for the trip unless the sender already compressed
 /// them or sent PNG, and the result is split into the chunks the protocol expects.
 pub(super) fn inline_transmission(wire: &[u8], data: &[u8]) -> Vec<u8> {
-    let body = wire
-        .strip_prefix(b"\x1b_G")
-        .map(|rest| rest.strip_suffix(b"\x1b\\").unwrap_or(rest))
-        .unwrap_or(wire);
-    let control = &body[..body
-        .iter()
-        .position(|byte| *byte == b';')
-        .unwrap_or(body.len())];
-    let mut keys: Vec<&[u8]> = control
-        .split(|byte| *byte == b',')
-        .filter(|pair| !pair.is_empty())
-        .filter(|pair| !matches!(pair, [key, b'=', ..] if SOURCE_KEYS.contains(key)))
-        .collect();
+    let (control, mut keys) = transmission_keys(wire);
     let key = |name: u8| {
         keys.iter()
             .find_map(|pair| pair.strip_prefix(&[name, b'='][..]))
@@ -3543,6 +3722,39 @@ pub(super) fn inline_transmission(wire: &[u8], data: &[u8]) -> Vec<u8> {
         out.extend_from_slice(chunk);
         out.extend_from_slice(b"\x1b\\");
     }
+    out
+}
+
+/// The control data of a transmission, and its keys other than [`SOURCE_KEYS`].
+fn transmission_keys(wire: &[u8]) -> (&[u8], Vec<&[u8]>) {
+    let body = wire
+        .strip_prefix(b"\x1b_G")
+        .map(|rest| rest.strip_suffix(b"\x1b\\").unwrap_or(rest))
+        .unwrap_or(wire);
+    let control = &body[..body
+        .iter()
+        .position(|byte| *byte == b';')
+        .unwrap_or(body.len())];
+    let keys = control
+        .split(|byte| *byte == b',')
+        .filter(|pair| !pair.is_empty())
+        .filter(|pair| !matches!(pair, [key, b'=', ..] if SOURCE_KEYS.contains(key)))
+        .collect();
+    (control, keys)
+}
+
+/// Rewrite one out-of-band transmission as a re-readable `t=f` reference to `path`, which holds
+/// exactly the pixels the original named. Every other key is kept.
+fn file_transmission(wire: &[u8], path: &std::path::Path) -> Vec<u8> {
+    let (_, mut keys) = transmission_keys(wire);
+    keys.push(b"t=f");
+    let name = BASE64.encode(path.as_os_str().as_encoded_bytes());
+    let mut out = Vec::with_capacity(name.len() + 64);
+    out.extend_from_slice(b"\x1b_G");
+    out.extend_from_slice(&keys.join(&b","[..]));
+    out.push(b';');
+    out.extend_from_slice(name.as_bytes());
+    out.extend_from_slice(b"\x1b\\");
     out
 }
 
@@ -4802,6 +5014,7 @@ mod tests {
             GraphicsMediaPolicy::SHARED,
             graphics_media::GraphicsRelayPolicy::None,
             false,
+            None,
         );
 
         let mut graphics = TerminalGraphics::default();

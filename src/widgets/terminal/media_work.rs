@@ -2,7 +2,7 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use super::graphics::GraphicsCommand;
+use super::graphics::{GraphicsCommand, MediaFiles};
 use super::{GraphicsMediaPolicy, GraphicsRelayPolicy};
 
 /// An input prefix ending at one named-media command, ready for an embedder's bounded worker queue.
@@ -22,13 +22,16 @@ pub struct TerminalMediaWork {
     pub(super) media: GraphicsMediaPolicy,
     pub(super) relay: GraphicsRelayPolicy,
     pub(super) recording: bool,
+    pub(super) files: Option<MediaFiles>,
 }
 
 impl TerminalMediaWork {
-    /// Acquire, validate/decode, compress, encode and chunk named media without touching a screen.
+    /// Acquire and validate named media without touching a screen. Raw pixels go to an immutable
+    /// file snapshot when the screen stores images as files; otherwise they are decoded. Output
+    /// that relays a source is rewritten too: compressed, encoded and chunked when inline.
     pub fn run(mut self) -> TerminalPreparedInput {
         for command in &mut self.commands {
-            command.prepare_media(self.media, self.relay, self.recording);
+            command.prepare_media(self.media, self.relay, self.recording, self.files.as_ref());
         }
         TerminalPreparedInput {
             bytes: self.bytes,
@@ -36,6 +39,7 @@ impl TerminalMediaWork {
             media: self.media,
             relay: self.relay,
             recording: self.recording,
+            files: self.files,
             screen_id: self.screen_id,
             input_revision: self.input_revision,
             commands: self.commands.into(),
@@ -52,6 +56,7 @@ pub struct TerminalPreparedInput {
     pub(super) media: GraphicsMediaPolicy,
     pub(super) relay: GraphicsRelayPolicy,
     pub(super) recording: bool,
+    pub(super) files: Option<MediaFiles>,
     pub(super) bytes: Arc<[u8]>,
     pub(super) length: usize,
     pub(super) screen_id: u64,
@@ -82,6 +87,7 @@ impl TerminalPreparedInput {
             media: self.media,
             relay,
             recording: self.recording,
+            files: self.files,
         }
     }
 }
@@ -289,5 +295,364 @@ mod tests {
             assert!(!wire.windows(3).any(|key| key == b"t=t"));
             assert!(!screen.has_images(), "a query must not retain an image");
         }
+    }
+
+    fn file_screen(policy: GraphicsRelayPolicy) -> TerminalScreen {
+        let mut screen = screen(policy);
+        screen.set_image_file_storage_enabled(true);
+        screen
+    }
+
+    fn commit(screen: &mut TerminalScreen, bytes: Vec<u8>) -> Vec<u8> {
+        let work = screen.prepare_media_input(bytes.into()).unwrap();
+        let prepared = std::thread::spawn(move || work.run()).join().unwrap();
+        screen.process_prepared_media_input(prepared).unwrap();
+        output(screen)
+            .into_iter()
+            .flat_map(|(_, bytes)| bytes)
+            .collect()
+    }
+
+    /// The path a relayed `t=f` transmission names.
+    fn relayed_path(wire: &[u8]) -> std::path::PathBuf {
+        let text = std::str::from_utf8(wire).unwrap();
+        assert!(text.contains("t=f"), "{text}");
+        let name = &text[text.find(';').unwrap() + 1..text.len() - 2];
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(name)
+            .unwrap();
+        std::path::PathBuf::from(String::from_utf8(bytes).unwrap())
+    }
+
+    fn shown_pixel(screen: &mut TerminalScreen) -> Vec<u8> {
+        screen.capture_frame().images[0].rgba[..4].to_vec()
+    }
+
+    #[test]
+    fn local_relay_names_an_immutable_snapshot_instead_of_inline_pixels() {
+        let source = Source::new(&[255, 0, 0, 255]);
+        let mut screen = file_screen(GraphicsRelayPolicy::NamedAsFiles);
+        let wire = commit(&mut screen, source.command('t'));
+        assert!(!source.0.exists(), "the screen claims the source once");
+        let snapshot = relayed_path(&wire);
+        assert_ne!(snapshot, source.0);
+        assert!(
+            screen.render_snapshot().images[0]
+                .image
+                .file_pixels()
+                .is_some(),
+            "the owner keeps the pixels in the same file, not on the heap"
+        );
+        for _ in 0..2 {
+            let mut reader = TerminalScreen::new(5, 20, 100);
+            reader.set_image_media_policy(GraphicsMediaPolicy::SHARED);
+            reader.process_bytes(&wire);
+            assert_eq!(shown_pixel(&mut reader), [255, 0, 0, 255]);
+        }
+        // Late readers replay inline pixels, never the snapshot path or the consumed source.
+        std::fs::write(&source.0, [0, 255, 0, 255]).unwrap();
+        let replay = screen.export_replay_bytes();
+        assert!(!replay.windows(3).any(|key| key == b"t=f" || key == b"t=t"));
+        let mut late = TerminalScreen::new(5, 20, 100);
+        late.set_image_media_policy(GraphicsMediaPolicy::NONE);
+        late.process_bytes(&replay);
+        assert_eq!(shown_pixel(&mut late), [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn replaced_relay_snapshots_stay_readable_and_are_never_rewritten() {
+        let mut screen = file_screen(GraphicsRelayPolicy::NamedAsFiles);
+        let mut relayed = Vec::new();
+        let mut retained = Vec::new();
+        for frame in 0..8u8 {
+            let source = Source::new(&[frame, frame, frame, 255]);
+            let work = screen
+                .prepare_media_input(source.command('t').into())
+                .unwrap();
+            screen.process_prepared_media_input(work.run()).unwrap();
+            let transactions = screen.take_output_transactions();
+            let wire: Vec<_> = transactions
+                .iter()
+                .flat_map(|t| t.bytes.iter().copied())
+                .collect();
+            let path = relayed_path(&wire);
+            retained.extend(transactions);
+            assert!(!relayed.contains(&path), "a named snapshot is never reused");
+            relayed.push(path);
+            // A reader still catching up on earlier output finds each frame it was promised.
+            for (earlier, path) in relayed.iter().enumerate() {
+                let value = earlier as u8;
+                assert_eq!(std::fs::read(path).unwrap(), [value, value, value, 255]);
+            }
+        }
+        screen.reset();
+        assert!(relayed.iter().all(|path| path.exists()));
+        drop(retained);
+        assert!(relayed.iter().all(|path| !path.exists()));
+    }
+
+    #[test]
+    fn local_relay_without_file_storage_falls_back_to_inline_pixels() {
+        let source = Source::new(&[255, 0, 0, 255]);
+        let mut screen = screen(GraphicsRelayPolicy::NamedAsFiles);
+        let wire = commit(&mut screen, source.command('t'));
+        assert!(!wire.windows(3).any(|key| key == b"t=f" || key == b"t=t"));
+        let mut reader = TerminalScreen::new(5, 20, 100);
+        reader.set_image_media_policy(GraphicsMediaPolicy::NONE);
+        reader.process_bytes(&wire);
+        assert_eq!(shown_pixel(&mut reader), [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn a_remote_reader_arriving_mid_preparation_gets_inline_pixels() {
+        let source = Source::new(&[255, 0, 0, 255]);
+        let mut screen = file_screen(GraphicsRelayPolicy::NamedAsFiles);
+        let prepared = screen
+            .prepare_media_input(source.command('t').into())
+            .unwrap()
+            .run();
+        let prepared = prepared.with_relay_policy(GraphicsRelayPolicy::All).run();
+        screen.set_image_relay_policy(GraphicsRelayPolicy::All);
+        screen.process_prepared_media_input(prepared).unwrap();
+        let wire: Vec<_> = output(&mut screen)
+            .into_iter()
+            .flat_map(|(_, bytes)| bytes)
+            .collect();
+        assert!(!wire.windows(2).any(|key| key == b"t="));
+        let mut reader = TerminalScreen::new(5, 20, 100);
+        reader.set_image_media_policy(GraphicsMediaPolicy::NONE);
+        reader.process_bytes(&wire);
+        assert_eq!(shown_pixel(&mut reader), [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn prepared_reusable_files_keep_file_storage() {
+        let source = Source::new(&[255, 0, 0, 255]);
+        let mut screen = file_screen(GraphicsRelayPolicy::None);
+        let wire = commit(&mut screen, source.command('f'));
+        assert_eq!(
+            wire,
+            source.command('f'),
+            "local readers reopen the original file"
+        );
+        assert!(
+            screen.render_snapshot().images[0]
+                .image
+                .file_pixels()
+                .is_some()
+        );
+        std::fs::write(&source.0, [0, 255, 0, 255]).unwrap();
+        assert_eq!(shown_pixel(&mut screen), [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn file_backed_preparation_answers_every_source_length_like_memory() {
+        for contents in [
+            &[1, 2, 3, 255][..],
+            &[1, 2, 3, 255, 9][..],
+            &[1, 2][..],
+            &[][..],
+        ] {
+            let mut results = Vec::new();
+            for files in [false, true] {
+                let source = Source::new(contents);
+                let command = String::from_utf8(source.command('t'))
+                    .unwrap()
+                    .replace("q=2", "q=0")
+                    .into_bytes();
+                let mut screen = screen(GraphicsRelayPolicy::NamedAsFiles);
+                screen.set_image_file_storage_enabled(files);
+                let work = screen.prepare_media_input(command.into()).unwrap();
+                screen.process_prepared_media_input(work.run()).unwrap();
+                assert!(!source.0.exists());
+                let image = screen
+                    .capture_frame()
+                    .images
+                    .first()
+                    .map(|image| image.rgba.clone());
+                results.push((image, screen.drain_responses()));
+            }
+            assert_eq!(results[0], results[1], "{contents:?}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod immutable_tests {
+    use super::super::*;
+    use base64::Engine as _;
+
+    fn output(sync: bool) -> (TerminalScreen, TerminalOutputTransaction) {
+        let source = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(source.path(), [1, 2, 3, 255]).unwrap();
+        let name = base64::engine::general_purpose::STANDARD
+            .encode(source.path().to_string_lossy().as_bytes());
+        let command = format!("\x1b_Ga=T,t=f,f=32,s=1,v=1,i=9,C=1,q=2;{name}\x1b\\");
+        let bytes = if sync {
+            format!("\x1b[?2026h\x1b[1;1H{command}\x1b[?2026l")
+        } else {
+            format!("text{command}")
+        };
+        let mut screen = TerminalScreen::new(5, 20, 100);
+        screen.set_image_file_storage_enabled(true);
+        screen.set_output_transaction_recording(true);
+        screen.set_image_relay_policy(GraphicsRelayPolicy::NamedAsFiles);
+        screen.process_bytes(bytes.as_bytes());
+        let mut transactions = screen.take_output_transactions();
+        let at = transactions
+            .iter()
+            .position(|t| !t.media.is_empty())
+            .expect("resource-bearing output");
+        (screen, transactions.remove(at))
+    }
+
+    #[test]
+    fn immutable_binding_rebases_through_synchronized_output() {
+        let (screen, transaction) = output(true);
+        assert!(transaction.bytes.starts_with(b"\x1b[?2026h\x1b[1;1H"));
+        assert_eq!(transaction.media.len(), 1);
+        let binding = &transaction.media[0];
+        assert_eq!(
+            &transaction.bytes[binding.command_range.start..binding.command_range.start + 3],
+            b"\x1b_G"
+        );
+        assert_eq!(
+            &transaction.bytes[binding.command_range.end - 2..binding.command_range.end],
+            b"\x1b\\"
+        );
+        let path = binding.file.path().to_owned();
+        drop(screen);
+        assert_eq!(std::fs::read(&path).unwrap(), [1, 2, 3, 255]);
+        drop(transaction);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn imported_binding_survives_server_drop_and_uses_revision_fence() {
+        let (server, transaction) = output(false);
+        let source = &transaction.media[0];
+        let imported = TerminalImmutableFile::acquire(source.file.path(), 4, 32).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            assert_eq!(
+                std::fs::metadata(source.file.path()).unwrap().ino(),
+                std::fs::metadata(imported.path()).unwrap().ino()
+            );
+        }
+        let imported_path = imported.path().to_owned();
+        let mut client = TerminalScreen::new(5, 20, 100);
+        client.set_image_file_storage_enabled(true);
+        let bytes = std::sync::Arc::from(transaction.bytes.clone());
+        let binding = TerminalOutputMedia {
+            command_range: source.command_range.clone(),
+            file: imported,
+        };
+        let prepared = client
+            .prepare_immutable_media_input(bytes, vec![binding])
+            .unwrap();
+        drop(transaction);
+        drop(server);
+        client.process_prepared_media_input(prepared).unwrap();
+        assert!(client.has_images());
+        let snapshot = client.render_snapshot();
+        let pixels = snapshot.images[0].image.file_pixels().unwrap();
+        assert_eq!(
+            pixels.path(),
+            imported_path,
+            "native handoff uses the acquired handle"
+        );
+        let host = pixels.host_link().unwrap();
+        assert_eq!(std::fs::read(host.path()).unwrap(), [1, 2, 3, 255]);
+    }
+
+    #[test]
+    fn imported_input_rebuilds_relay_after_attachments_change_without_reopening_source() {
+        let (server, transaction) = output(false);
+        let source = &transaction.media[0];
+        let original_path = source.file.path().to_owned();
+        let imported = TerminalImmutableFile::acquire(&original_path, 4, 32).unwrap();
+        let binding = TerminalOutputMedia {
+            command_range: source.command_range.clone(),
+            file: imported,
+        };
+        let mut client = TerminalScreen::new(5, 20, 100);
+        client.set_image_file_storage_enabled(true);
+        client.set_output_transaction_recording(true);
+        client.set_image_relay_policy(GraphicsRelayPolicy::NamedAsFiles);
+        let prepared = client
+            .prepare_immutable_media_input(
+                std::sync::Arc::from(transaction.bytes.clone()),
+                vec![binding],
+            )
+            .unwrap();
+        drop(transaction);
+        drop(server);
+        assert!(!original_path.exists());
+        let prepared = prepared.with_relay_policy(GraphicsRelayPolicy::All).run();
+        client.set_image_relay_policy(GraphicsRelayPolicy::All);
+        client.process_prepared_media_input(prepared).unwrap();
+        let wire: Vec<_> = client
+            .take_output_transactions()
+            .into_iter()
+            .flat_map(|t| t.bytes)
+            .collect();
+        assert!(!wire.is_empty(), "relay must not suppress acquired media");
+        assert!(!wire.windows(3).any(|key| key == b"t=f"));
+        let mut reader = TerminalScreen::new(5, 20, 100);
+        reader.set_image_media_policy(GraphicsMediaPolicy::NONE);
+        reader.process_bytes(&wire);
+        assert!(reader.has_images(), "rebuilt relay must carry pixels");
+        assert_eq!(&reader.capture_frame().images[0].rgba[..4], &[1, 2, 3, 255]);
+    }
+
+    #[test]
+    fn ordinary_bytes_copy_server_paths_without_adopting_them() {
+        let (_server, transaction) = output(false);
+        let mut client = TerminalScreen::new(5, 20, 100);
+        client.set_image_file_storage_enabled(true);
+        client.process_bytes(&transaction.bytes);
+        let snapshot = client.render_snapshot();
+        let pixels = snapshot.images[0].image.file_pixels().unwrap();
+        assert_ne!(pixels.path(), transaction.media[0].file.path());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            assert_ne!(
+                std::fs::metadata(pixels.path()).unwrap().ino(),
+                std::fs::metadata(transaction.media[0].file.path())
+                    .unwrap()
+                    .ino()
+            );
+        }
+    }
+
+    #[test]
+    fn immutable_import_rejects_wrong_length_format_and_command_binding() {
+        let (_server, transaction) = output(false);
+        let binding = &transaction.media[0];
+        assert!(TerminalImmutableFile::acquire(binding.file.path(), 8, 32).is_err());
+        assert!(TerminalImmutableFile::acquire(binding.file.path(), 4, 100).is_err());
+        let client = TerminalScreen::new(5, 20, 100);
+        let mut invalid = binding.clone();
+        invalid.command_range.start += 1;
+        assert!(
+            client
+                .prepare_immutable_media_input(
+                    std::sync::Arc::from(transaction.bytes.clone()),
+                    vec![invalid]
+                )
+                .is_err()
+        );
+        let prepared = client
+            .prepare_immutable_media_input(
+                std::sync::Arc::from(transaction.bytes.clone()),
+                transaction.media.clone(),
+            )
+            .unwrap();
+        let mut client = client;
+        client.process_bytes(b"later");
+        assert!(client.process_prepared_media_input(prepared).is_err());
+        assert!(!client.has_images());
     }
 }

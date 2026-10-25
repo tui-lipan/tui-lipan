@@ -96,15 +96,22 @@ impl GraphicsMediaPolicy {
     }
 }
 
-/// Which named sources recorded output replaces with inline pixels.
+/// Which named sources recorded output replaces, and with what.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum GraphicsRelayPolicy {
     /// Keep source references in recorded output.
     #[default]
     None,
-    /// Replace consuming `t=t` and `t=s` references, including probes and failures.
+    /// Replace raw named `t=f`, `t=t` and `t=s` references with a re-readable `t=f` reference to an
+    /// immutable snapshot this screen owns, for readers that share its filesystem. Requires image
+    /// file storage and owning output transactions retained until readers acquire or discard them.
+    /// Other consuming payloads and queries relay inline. Local re-readable sources without an
+    /// eligible snapshot preserve their producer representation.
+    NamedAsFiles,
+    /// Replace consuming `t=t` and `t=s` references with inline pixels, including probes and
+    /// failures.
     Consuming,
-    /// Replace all named sources, including re-readable `t=f` files.
+    /// Replace all named sources with inline pixels, including re-readable `t=f` files.
     All,
 }
 
@@ -113,6 +120,7 @@ impl GraphicsRelayPolicy {
         match self {
             Self::None => false,
             Self::Consuming => medium.consumes_source(),
+            Self::NamedAsFiles => medium.is_out_of_band(),
             Self::All => medium.is_out_of_band(),
         }
     }
@@ -134,17 +142,57 @@ pub(super) fn load(
     limit: usize,
     budget: usize,
 ) -> Result<Vec<u8>, &'static str> {
+    acquire(medium, name, offset, limit, budget, Window::into_bytes)
+}
+
+/// The requested part of an open source.
+pub(super) enum Window {
+    /// Positioned at the window, limited to its length.
+    Stream(std::io::Take<fs::File>, usize),
+    /// Already copied: Darwin shared memory cannot be read as a stream.
+    #[cfg(target_vendor = "apple")]
+    Bytes(Vec<u8>),
+}
+
+impl Window {
+    pub(super) fn into_bytes(self) -> Result<Vec<u8>, &'static str> {
+        let (mut reader, wanted) = match self {
+            #[cfg(target_vendor = "apple")]
+            Self::Bytes(data) => return Ok(data),
+            Self::Stream(reader, wanted) => (reader, wanted),
+        };
+        let mut data = Vec::new();
+        data.try_reserve_exact(wanted)
+            .map_err(|_| "ENOMEM:cannot hold payload")?;
+        reader
+            .read_to_end(&mut data)
+            .map_err(|_| "EIO:cannot read source")?;
+        Ok(data)
+    }
+}
+
+/// Like [`load`], but hands the open window to `read` instead of copying it into memory, so it
+/// can be streamed elsewhere. A consuming source is removed after `read` returns, whatever it
+/// returned.
+pub(super) fn acquire<T>(
+    medium: GraphicsMedium,
+    name: &[u8],
+    offset: u64,
+    limit: usize,
+    budget: usize,
+    read: impl FnOnce(Window) -> Result<T, &'static str>,
+) -> Result<T, &'static str> {
     match medium {
         GraphicsMedium::Direct => Err("EINVAL:not an out-of-band medium"),
-        GraphicsMedium::File => read_file(&decode_path(name)?, offset, limit, budget, false),
+        GraphicsMedium::File => read_file(&decode_path(name)?, offset, limit, budget, false, read),
         GraphicsMedium::TempFile => {
             let path = decode_path(name)?;
             if !is_claimable_temp_file(&path) {
                 return Err("EINVAL:temporary file not named correctly");
             }
-            read_file(&path, offset, limit, budget, true)
+            read_file(&path, offset, limit, budget, true, read)
         }
-        GraphicsMedium::SharedMemory => shared_memory::read(name, offset, limit, budget),
+        GraphicsMedium::SharedMemory => shared_memory::read(name, offset, limit, budget, read),
     }
 }
 
@@ -178,30 +226,24 @@ fn is_claimable_temp_file(path: &Path) -> bool {
     path.starts_with(&temp) || path.starts_with("/tmp") || path.starts_with("/dev/shm")
 }
 
-fn read_file(
+fn read_file<T>(
     path: &Path,
     offset: u64,
     limit: usize,
     budget: usize,
     consume: bool,
-) -> Result<Vec<u8>, &'static str> {
-    let result = read_file_contents(path, offset, limit, budget);
+    read: impl FnOnce(Window) -> Result<T, &'static str>,
+) -> Result<T, &'static str> {
+    let result = fs::File::open(path)
+        .map_err(|_| "EBADF:cannot open file")
+        .and_then(|file| read_source(file, offset, limit, budget))
+        .and_then(read);
     // The sender handed the file over, so it is this terminal's to clean up whether or not the
     // contents turned out to be usable; leaving it behind on error would leak one file per frame.
     if consume {
         let _ = fs::remove_file(path);
     }
     result
-}
-
-fn read_file_contents(
-    path: &Path,
-    offset: u64,
-    limit: usize,
-    budget: usize,
-) -> Result<Vec<u8>, &'static str> {
-    let file = fs::File::open(path).map_err(|_| "EBADF:cannot open file")?;
-    read_source(file, offset, limit, budget)
 }
 
 /// Take the requested window out of an already-open source.
@@ -213,7 +255,7 @@ fn read_source(
     offset: u64,
     limit: usize,
     budget: usize,
-) -> Result<Vec<u8>, &'static str> {
+) -> Result<Window, &'static str> {
     let length = file
         .metadata()
         .map_err(|_| "EBADF:cannot stat source")?
@@ -225,13 +267,7 @@ fn read_source(
         file.seek(std::io::SeekFrom::Start(offset))
             .map_err(|_| "EINVAL:bad offset")?;
     }
-    let mut data = Vec::new();
-    data.try_reserve_exact(wanted)
-        .map_err(|_| "ENOMEM:cannot hold payload")?;
-    file.take(wanted as u64)
-        .read_to_end(&mut data)
-        .map_err(|_| "EIO:cannot read source")?;
-    Ok(data)
+    Ok(Window::Stream(file.take(wanted as u64), wanted))
 }
 
 /// How much of a named source to take, given what it holds, what the sender asked for, and what
@@ -260,12 +296,13 @@ mod shared_memory {
     ///
     /// `shm_open` hands back an ordinary descriptor, so outside Apple platforms the object is
     /// drained through the same size and budget arithmetic as a file.
-    pub(super) fn read(
+    pub(super) fn read<T>(
         name: &[u8],
         offset: u64,
         limit: usize,
         budget: usize,
-    ) -> Result<Vec<u8>, &'static str> {
+        read: impl FnOnce(super::Window) -> Result<T, &'static str>,
+    ) -> Result<T, &'static str> {
         use std::ffi::CString;
         use std::os::fd::FromRawFd as _;
 
@@ -284,7 +321,7 @@ mod shared_memory {
         // SAFETY: `shm_open` just produced this descriptor and nothing else holds a copy, so the
         // `File` is its sole owner and closes it on every path out of here.
         let file = unsafe { std::fs::File::from_raw_fd(descriptor) };
-        let result = acquire(file, offset, limit, budget);
+        let result = acquire(file, offset, limit, budget).and_then(read);
         // Unlink only after acquisition finishes. Kitty consumes an opened object even when its
         // contents are unusable; do the same on stat, budget, allocation or mapping failure so a
         // sender that has handed it over does not leak one object per failed frame. Failed opens
@@ -304,7 +341,7 @@ mod shared_memory {
         offset: u64,
         limit: usize,
         budget: usize,
-    ) -> Result<Vec<u8>, &'static str> {
+    ) -> Result<super::Window, &'static str> {
         super::read_source(file, offset, limit, budget)
     }
 
@@ -316,7 +353,7 @@ mod shared_memory {
         offset: u64,
         limit: usize,
         budget: usize,
-    ) -> Result<Vec<u8>, &'static str> {
+    ) -> Result<super::Window, &'static str> {
         use std::os::fd::AsRawFd as _;
 
         // File::metadata uses fstat on this descriptor, including on Darwin.
@@ -361,18 +398,19 @@ mod shared_memory {
         data.extend_from_slice(pixels);
         // SAFETY: this is the mapping returned above, with its original length.
         unsafe { libc::munmap(mapping, mapped_len) };
-        Ok(data)
+        Ok(super::Window::Bytes(data))
     }
 }
 
 #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
 mod shared_memory {
-    pub(super) fn read(
+    pub(super) fn read<T>(
         _name: &[u8],
         _offset: u64,
         _limit: usize,
         _budget: usize,
-    ) -> Result<Vec<u8>, &'static str> {
+        _read: impl FnOnce(super::Window) -> Result<T, &'static str>,
+    ) -> Result<T, &'static str> {
         Err("ENOTSUPP:shared memory transmission")
     }
 }

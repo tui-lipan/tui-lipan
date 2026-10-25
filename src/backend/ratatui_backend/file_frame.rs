@@ -9,6 +9,76 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
+/// Private directories belong to one process; handles keep their directory alive after pool drop.
+/// Stale cleanup never targets a directory whose recorded process might still be alive.
+fn snapshot_directory() -> io::Result<Arc<tempfile::TempDir>> {
+    static DIRECTORY: Mutex<Weak<tempfile::TempDir>> = Mutex::new(Weak::new());
+    static CLEANED: OnceLock<()> = OnceLock::new();
+    CLEANED.get_or_init(clean_stale_directories);
+    let mut directory = DIRECTORY
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(directory) = directory.upgrade() {
+        return Ok(directory);
+    }
+    let created = Arc::new(
+        tempfile::Builder::new()
+            .prefix(&format!(
+                "tty-graphics-protocol-owner-{}-",
+                std::process::id()
+            ))
+            .tempdir()?,
+    );
+    *directory = Arc::downgrade(&created);
+    Ok(created)
+}
+
+#[cfg(unix)]
+fn clean_stale_directories() {
+    let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
+        return;
+    };
+    for entry in entries.flatten().filter(stale_owned_directory) {
+        let _ = std::fs::remove_dir_all(entry.path());
+    }
+}
+
+#[cfg(unix)]
+#[allow(unsafe_code)]
+fn stale_owned_directory(entry: &std::fs::DirEntry) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let name = entry.file_name();
+    let Some(name) = name
+        .to_str()
+        .and_then(|n| n.strip_prefix("tty-graphics-protocol-owner-"))
+    else {
+        return false;
+    };
+    let Some(pid) = name
+        .split('-')
+        .next()
+        .and_then(|pid| pid.parse::<libc::pid_t>().ok())
+        .filter(|pid| *pid > 0)
+    else {
+        return false;
+    };
+    let Ok(metadata) = std::fs::symlink_metadata(entry.path()) else {
+        return false;
+    };
+    // SAFETY: geteuid has no preconditions. kill with signal zero only checks liveness.
+    let dead = unsafe {
+        libc::kill(pid, 0) == -1 && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+    };
+    dead && metadata.is_dir()
+        && metadata.uid() == unsafe { libc::geteuid() }
+        && metadata.mode() & 0o777 == 0o700
+}
+
+#[cfg(not(unix))]
+fn clean_stale_directories() {
+    // Without a conservative cross-process liveness check, preserve possible live readers.
+}
+
 const SNAPSHOT_BUDGET: usize = 256 * 1024 * 1024;
 const HOST_BUDGET: usize = 64 * 1024 * 1024;
 const HOST_LINK_LIMIT: usize = 32;
@@ -117,6 +187,7 @@ const SPARE_BUDGET: usize = 32 * 1024 * 1024;
 #[derive(Debug)]
 struct SnapshotFile {
     file: tempfile::NamedTempFile,
+    _directory: Arc<tempfile::TempDir>,
     reservation: Reservation,
     path: Arc<std::path::Path>,
 }
@@ -188,12 +259,14 @@ impl SnapshotPool {
         }
         drop(spares);
         let reservation = self.snapshot_budget.reserve(len)?;
+        let directory = snapshot_directory()?;
         let file = tempfile::Builder::new()
-            .prefix("tty-graphics-protocol-frame-")
-            .tempfile()?;
+            .prefix("frame-")
+            .tempfile_in(directory.path())?;
         let path = Arc::from(file.path());
         Ok(SnapshotFile {
             file,
+            _directory: directory,
             reservation,
             path,
         })
@@ -227,16 +300,54 @@ impl SnapshotPool {
                 "raw frame file changed length during snapshot",
             ));
         }
-        Ok(FilePixels {
+        Ok(self.pixels(file, len, format))
+    }
+
+    /// Reserve storage for `len` bytes before reading a source that can only be read once.
+    pub(crate) fn writer(self: &Arc<Self>, len: usize) -> io::Result<SnapshotWriter> {
+        Ok(SnapshotWriter {
+            file: self.destination(len)?,
+            pool: Arc::clone(self),
+            len,
+        })
+    }
+
+    fn pixels(self: &Arc<Self>, file: SnapshotFile, len: usize, format: u32) -> FilePixels {
+        FilePixels {
             path: Arc::clone(&file.path),
             len,
             storage: Arc::new(Snapshot {
                 file: Some(file),
                 pool: Arc::downgrade(self),
-                host_exposed: AtomicBool::new(false),
+                exposed: AtomicBool::new(false),
             }),
             format,
-        })
+        }
+    }
+}
+
+/// Reserved snapshot storage being filled. Dropping it unfinished discards the storage.
+pub(crate) struct SnapshotWriter {
+    file: SnapshotFile,
+    pool: Arc<SnapshotPool>,
+    len: usize,
+}
+
+impl SnapshotWriter {
+    /// Copy exactly the reserved length from `source`, failing on a short or long source.
+    pub(crate) fn copy_from(&mut self, source: &mut impl Read) -> io::Result<()> {
+        let copied = io::copy(
+            &mut source.take(self.len as u64 + 1),
+            self.file.file.as_file_mut(),
+        )?;
+        if copied != self.len as u64 {
+            return Err(io::Error::other("raw frame source has the wrong length"));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn finish(self, format: u32) -> FilePixels {
+        self.pool.pixels(self.file, self.len, format)
     }
 }
 
@@ -244,15 +355,16 @@ impl SnapshotPool {
 struct Snapshot {
     file: Option<SnapshotFile>,
     pool: Weak<SnapshotPool>,
-    host_exposed: AtomicBool,
+    /// Another reader was given this path, so the inode is never rewritten for a later frame.
+    exposed: AtomicBool,
 }
 
 impl Drop for Snapshot {
     fn drop(&mut self) {
         // Ghostty can unlink a handoff path while still reading an open descriptor. Neither
         // disappearance of the link nor the handoff timeout proves the inode is safe to rewrite.
-        // Any host-exposed allocation is therefore permanently excluded from reuse.
-        if self.host_exposed.load(Ordering::Acquire) {
+        // Any exposed allocation is therefore permanently excluded from reuse.
+        if self.exposed.load(Ordering::Acquire) {
             return;
         }
         if let Some(pool) = self.pool.upgrade()
@@ -277,12 +389,69 @@ impl FilePixels {
         Arc::new(SnapshotPool::new(SPARE_BUDGET)).snapshot(path, len, format)
     }
 
-    fn path(&self) -> &std::path::Path {
+    pub(crate) fn import(path: &std::path::Path, len: usize, format: u32) -> io::Result<Self> {
+        Self::import_with_link(path, len, format, |source, destination| {
+            std::fs::hard_link(source, destination)
+        })
+    }
+
+    fn import_with_link(
+        path: &std::path::Path,
+        len: usize,
+        format: u32,
+        link: impl FnOnce(&std::path::Path, &std::path::Path) -> io::Result<()>,
+    ) -> io::Result<Self> {
+        if !matches!(format, 24 | 32) || len == 0 || !len.is_multiple_of(format as usize / 8) {
+            return Err(io::Error::other("invalid immutable pixel format or length"));
+        }
+        let pool = Arc::new(SnapshotPool::new(0));
+        let reservation = pool.snapshot_budget.reserve(len)?;
+        let directory = snapshot_directory()?;
+        let name = tempfile::Builder::new()
+            .prefix("import-")
+            .tempfile_in(directory.path())?;
+        let private = name.into_temp_path();
+        std::fs::remove_file(&private)?;
+        if link(path, &private).is_err() {
+            drop(reservation);
+            let pixels = pool.snapshot(path, len, format)?;
+            pixels.expose();
+            return Ok(pixels);
+        }
+        let metadata = std::fs::symlink_metadata(&private)?;
+        if !metadata.is_file() || metadata.len() != len as u64 {
+            return Err(io::Error::other("invalid immutable file type or length"));
+        }
+        let file = File::open(&private)?;
+        let file = tempfile::NamedTempFile::from_parts(file, private);
+        let path = Arc::from(file.path());
+        let pixels = pool.pixels(
+            SnapshotFile {
+                file,
+                _directory: directory,
+                reservation,
+                path,
+            },
+            len,
+            format,
+        );
+        pixels.expose();
+        Ok(pixels)
+    }
+
+    pub(crate) fn path(&self) -> &std::path::Path {
         &self.path
     }
 
-    fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.len
+    }
+
+    /// Name this snapshot to a reader outside the process. Its storage is then deleted with the
+    /// last handle instead of being rewritten for a later frame, so a late reader finds either
+    /// these pixels or no file, never another frame's.
+    pub(crate) fn expose(&self) {
+        self.storage.exposed.store(true, Ordering::Release);
     }
 
     pub(crate) fn read(&self) -> io::Result<Vec<u8>> {
@@ -305,7 +474,7 @@ impl FilePixels {
         let path = name.into_temp_path();
         std::fs::remove_file(&path)?;
         std::fs::hard_link(self.path(), &path)?;
-        self.storage.host_exposed.store(true, Ordering::Release);
+        self.expose();
         let path = path.keep().map_err(|error| error.error)?;
         pending.bytes += self.len();
         pending.links.push(PendingLink {
@@ -418,6 +587,27 @@ impl Drop for HostFile {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn immutable_import_copy_fallback_and_host_descriptor_keep_original_pixels() {
+        let source = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(source.path(), [1; 4]).unwrap();
+        let adopted = FilePixels::import_with_link(source.path(), 4, 32, |_, _| {
+            Err(io::Error::other("forced cross-filesystem link failure"))
+        })
+        .unwrap();
+        std::fs::write(source.path(), [2; 4]).unwrap();
+        let mut host = adopted.host_link().unwrap();
+        let mut reader = File::open(host.path()).unwrap();
+        host.handed_over();
+        std::fs::remove_file(host.path()).unwrap();
+        drop(host);
+        drop(adopted);
+        drop(source);
+        let mut pixels = Vec::new();
+        reader.read_to_end(&mut pixels).unwrap();
+        assert_eq!(pixels, [1; 4]);
+    }
 
     #[test]
     fn snapshot_survives_producer_rewrite_and_removal() {

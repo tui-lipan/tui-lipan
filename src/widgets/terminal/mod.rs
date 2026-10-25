@@ -20,7 +20,10 @@ mod osc;
 #[cfg(feature = "terminal-images")]
 mod output;
 #[cfg(feature = "terminal-images")]
-pub use output::{GraphicsDependency, TerminalOutputClass, TerminalOutputTransaction};
+pub use output::{
+    GraphicsDependency, TerminalImmutableFile, TerminalOutputClass, TerminalOutputMedia,
+    TerminalOutputTransaction,
+};
 mod program_status;
 pub use program_status::{
     ProgramStatusCause, ProgramStatusEvent, ProgramStatusRecord, ProgramStatusSnapshot,
