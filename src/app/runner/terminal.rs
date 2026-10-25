@@ -28,7 +28,9 @@ impl PointerManager {
         if self.last == desired {
             return Ok(());
         }
-        let name = desired.map_or("", crate::style::PointerShape::as_str);
+        // Keep neutral chrome explicit: some OSC 22 hosts accept named shapes but ignore an
+        // empty reset. The UI owns mouse capture here, whose normal pointer is the default arrow.
+        let name = desired.unwrap_or_default().as_str();
         execute!(backend, Print(format!("\x1b]22;{name}\x1b\\")))?;
         self.last = desired;
         Ok(())
@@ -533,7 +535,10 @@ mod pointer_tests {
             .unwrap();
         pointer.update(&mut bytes, None).unwrap();
         pointer.update(&mut bytes, None).unwrap();
-        assert_eq!(bytes, b"\x1b]22;grab\x1b\\\x1b]22;text\x1b\\\x1b]22;\x1b\\");
+        assert_eq!(
+            bytes,
+            b"\x1b]22;grab\x1b\\\x1b]22;text\x1b\\\x1b]22;default\x1b\\"
+        );
     }
 
     #[test]

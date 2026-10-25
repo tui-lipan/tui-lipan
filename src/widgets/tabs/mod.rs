@@ -40,6 +40,7 @@ pub struct Tab {
     pub(crate) label: Arc<str>,
     pub(crate) style: Style,
     pub(crate) capped: bool,
+    pub(crate) pointer_shape: Option<crate::PointerShape>,
 }
 
 impl Tab {
@@ -49,12 +50,22 @@ impl Tab {
             label: label.into(),
             style: Style::default(),
             capped: false,
+            pointer_shape: None,
         }
     }
 
     /// Set style.
     pub fn style(mut self, style: Style) -> Self {
         self.style = style;
+        self
+    }
+
+    /// Request a mouse pointer only over this tab's visible label and padding.
+    ///
+    /// Divider cells and unused strip space retain the surrounding pointer. This is opt-in;
+    /// registering a tab-change callback does not change the pointer.
+    pub fn pointer_shape(mut self, shape: crate::PointerShape) -> Self {
+        self.pointer_shape = Some(shape);
         self
     }
 

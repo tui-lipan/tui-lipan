@@ -329,7 +329,11 @@ impl<W: Write> TerminalTransitionExecutor for CrosstermTransitionExecutor<W> {
             TerminalOp::DisableThemeNotifications => {
                 execute!(self.writer, Print("\x1b[?2031l"))
             }
-            TerminalOp::ResetPointer => execute!(self.writer, Print("\x1b]22;\x1b\\")),
+            // Named fallback handles hosts that ignore empty resets. Supporting hosts then restore
+            // their configured default, and disabling mouse capture restores text on older hosts.
+            TerminalOp::ResetPointer => {
+                execute!(self.writer, Print("\x1b]22;default\x1b\\\x1b]22;\x1b\\"))
+            }
             TerminalOp::DisablePixelMouse => execute!(self.writer, Print("\x1b[?1016l")),
             TerminalOp::Flush => self.writer.flush(),
         }
@@ -454,6 +458,16 @@ mod tests {
         assert_eq!(
             plan.ops().last(),
             Some(&TerminalOp::PushKeyboardEnhancement)
+        );
+    }
+
+    #[test]
+    fn pointer_reset_includes_a_named_default_for_hosts_without_empty_reset() {
+        let mut executor = CrosstermTransitionExecutor::new(Vec::new());
+        executor.execute_op(TerminalOp::ResetPointer).unwrap();
+        assert_eq!(
+            executor.into_inner(),
+            b"\x1b]22;default\x1b\\\x1b]22;\x1b\\"
         );
     }
 

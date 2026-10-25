@@ -8,6 +8,7 @@ pub(crate) fn has_pointer_target(node: &Node) -> bool {
     }
     match node.kind {
         NodeKind::Input(_) | NodeKind::TextArea(_) => true,
+        NodeKind::Tabs(ref tabs) => tabs.tabs.iter().any(|tab| tab.pointer_shape.is_some()),
         #[cfg(feature = "terminal")]
         NodeKind::Terminal(_) => true,
         _ => false,
@@ -31,6 +32,9 @@ pub(crate) fn automatic_pointer(
                 .filter(|rect| rect.contains(x, y))
                 .and_then(|_| terminal_pointer(terminal));
         }
+        if let NodeKind::Tabs(tabs) = &node.kind {
+            return tab_pointer(node.rect, tabs, x, y);
+        }
         if let Some(shape) = widget_pointer(node) {
             return Some(shape);
         }
@@ -40,23 +44,33 @@ pub(crate) fn automatic_pointer(
 }
 
 fn widget_pointer(node: &Node) -> Option<PointerShape> {
-    use crate::core::node::WidgetNode;
     match &node.kind {
         NodeKind::Input(input) if !input.disabled => Some(PointerShape::Text),
         NodeKind::TextArea(textarea) if !textarea.disabled => Some(PointerShape::Text),
-        NodeKind::Button(button) if !button.disabled => Some(PointerShape::Pointer),
-        NodeKind::MouseRegion(region) => mouse_region_pointer(region),
-        _ if node.kind.has_on_click() => Some(PointerShape::Pointer),
+
         _ => None,
     }
 }
 
-fn mouse_region_pointer(
-    region: &crate::widgets::internal::MouseRegionNode,
+fn tab_pointer(
+    rect: crate::Rect,
+    tabs: &crate::widgets::internal::TabsNode,
+    x: i16,
+    y: i16,
 ) -> Option<PointerShape> {
-    // Focus acquisition and drag capture are not activation controls.
-    (region.enabled && (region.on_click.is_some() || region.on_mouse_up.is_some()))
-        .then_some(PointerShape::Pointer)
+    let inner = rect.inner(tabs.border, tabs.padding);
+    if tabs.disabled || y != inner.y || !inner.contains(x, y) {
+        return None;
+    }
+    let col = (i32::from(x) - i32::from(inner.x)) as usize;
+    let index = crate::widgets::Tabs::index_at_col(
+        &tabs.tabs,
+        tabs.divider,
+        tabs.overflow,
+        usize::from(inner.w),
+        col,
+    )?;
+    tabs.tabs.get(index)?.pointer_shape
 }
 
 #[cfg(feature = "terminal")]
@@ -135,6 +149,24 @@ mod tests {
     }
 
     #[test]
+    fn tab_pointer_opt_in_excludes_dividers_and_unused_strip_space() {
+        use crate::widgets::{Tab, Tabs};
+        let tree = tree(
+            Tabs::new()
+                .tabs([
+                    Tab::new("a").pointer_shape(PointerShape::Pointer),
+                    Tab::new("b"),
+                ])
+                .divider('|'),
+        );
+        assert_eq!(tree.pointer_shape_at(1, 0), Some(PointerShape::Pointer));
+        assert_eq!(tree.pointer_shape_at(3, 0), None);
+        assert_eq!(tree.pointer_shape_at(5, 0), None);
+        assert_eq!(tree.pointer_shape_at(20, 0), None);
+        assert_eq!(tree.pointer_shape_at(1, 1), None);
+    }
+
+    #[test]
     fn focus_and_drag_regions_do_not_advertise_a_click_action() {
         let region = MouseRegion::new()
             .on_mouse_down(crate::Callback::new(|_| {}))
@@ -144,8 +176,9 @@ mod tests {
         let button = MouseRegion::new()
             .on_click(crate::Callback::new(|_| {}))
             .child(Text::new("open"));
+        assert_eq!(tree(button.clone()).pointer_shape_at(0, 0), None);
         assert_eq!(
-            tree(button).pointer_shape_at(0, 0),
+            tree(button.pointer_shape(PointerShape::Pointer)).pointer_shape_at(0, 0),
             Some(PointerShape::Pointer)
         );
     }
