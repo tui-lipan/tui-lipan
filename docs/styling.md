@@ -1016,5 +1016,7 @@ cancellation. Explicit element overrides take precedence. `ListItem::pointer_sha
 customize an individual row's Interactive feedback; use `Default` for a selectable row whose
 action is unavailable. Read the policy with `ctx.pointer_mode()`.
 
-Changing policy takes effect without rebuilding widget properties. The terminal emulator controls
+Pointer policies leave ordinary hover effects and mouse-move callbacks enabled; these retain their
+own motion-reporting requirements. Changing policy takes effect without rebuilding widget
+properties. The terminal emulator controls
 which shapes it can display, including whether it supports shape changes during a held drag.

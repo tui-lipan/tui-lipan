@@ -20,6 +20,32 @@ pub(crate) fn has_pointer_target(node: &Node) -> bool {
     }
 }
 
+/// Motion needed by explicit overrides and intrinsic pointers, independently of click targets.
+pub(crate) fn has_explicit_pointer_target(node: &Node) -> bool {
+    if node.pointer_shape.is_some() || node.kind.has_pointer_shape() {
+        return true;
+    }
+    match &node.kind {
+        NodeKind::Input(input) => !input.disabled,
+        NodeKind::TextArea(area) => !area.disabled,
+        #[cfg(feature = "terminal")]
+        NodeKind::Terminal(_) => true,
+        _ => false,
+    }
+}
+
+pub(crate) fn has_terminal_pointer_target(node: &Node) -> bool {
+    #[cfg(feature = "terminal")]
+    {
+        matches!(&node.kind, NodeKind::Terminal(_))
+    }
+    #[cfg(not(feature = "terminal"))]
+    {
+        let _ = node;
+        false
+    }
+}
+
 /// Apply capture before hover. Both native output and TestBackend use this policy.
 pub(crate) fn interaction_pointer(
     tree: &NodeTree,
@@ -92,8 +118,8 @@ fn interactive_capture(tree: &NodeTree, id: NodeId, mode: PointerMode) -> Option
 fn interactive_drag_shape(kind: &NodeKind) -> PointerShape {
     match kind {
         NodeKind::Splitter(splitter) => match splitter.orientation {
-            crate::widgets::Orientation::Horizontal => PointerShape::EwResize,
-            crate::widgets::Orientation::Vertical => PointerShape::NsResize,
+            crate::widgets::Orientation::Horizontal => PointerShape::NsResize,
+            crate::widgets::Orientation::Vertical => PointerShape::EwResize,
         },
         NodeKind::Slider(_) => PointerShape::EwResize,
         _ => PointerShape::Grabbing,

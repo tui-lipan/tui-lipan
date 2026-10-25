@@ -462,3 +462,57 @@ fn splitter_pointer_capture_handles_active_only_focus_loss_and_removal() {
     backend.render();
     assert_eq!(backend.pointer_shape(), Some(PointerShape::Help));
 }
+
+#[test]
+fn interactive_splitter_pointers_follow_the_handle_axis_during_hover_and_drag() {
+    struct InteractiveSplitter(bool);
+    impl Component for InteractiveSplitter {
+        type State = ();
+        type Message = ();
+        type Properties = ();
+        fn create_state(&self, _: &()) {}
+        fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            ctx.set_pointer_mode(PointerMode::Interactive);
+            let splitter = if self.0 {
+                Splitter::horizontal()
+            } else {
+                Splitter::vertical()
+            };
+            splitter
+                .child(Text::new("one"))
+                .child(Text::new("two"))
+                .into()
+        }
+    }
+    for horizontal in [false, true] {
+        let expected = if horizontal {
+            PointerShape::NsResize
+        } else {
+            PointerShape::EwResize
+        };
+        let mut backend = TestBackend::new(InteractiveSplitter(horizontal));
+        backend.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 21,
+            h: 11,
+        });
+        backend.render();
+        backend.send_mouse(mouse(10, 5, MouseKind::Moved)).unwrap();
+        assert_eq!(backend.pointer_shape(), Some(expected));
+        backend
+            .send_mouse(mouse(10, 5, MouseKind::Down(MouseButton::Left)))
+            .unwrap();
+        backend
+            .send_mouse(mouse(1, 1, MouseKind::Drag(MouseButton::Left)))
+            .unwrap();
+        assert_eq!(backend.pointer_shape(), Some(expected));
+        backend
+            .send_mouse(mouse(1, 1, MouseKind::Up(MouseButton::Left)))
+            .unwrap();
+        assert_eq!(backend.pointer_shape(), None);
+    }
+}

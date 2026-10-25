@@ -58,8 +58,8 @@ impl WidgetNode for SplitterNode {
     ) -> Option<crate::PointerShape> {
         self.handle_at(x, y)?;
         Some(match self.orientation {
-            Orientation::Horizontal => crate::PointerShape::EwResize,
-            Orientation::Vertical => crate::PointerShape::NsResize,
+            Orientation::Horizontal => crate::PointerShape::NsResize,
+            Orientation::Vertical => crate::PointerShape::EwResize,
         })
     }
 

@@ -301,6 +301,8 @@ pub(crate) struct NodeTree {
     overlay_roots: Vec<OverlayRoot>,
     has_hoverables: bool,
     has_pointer_targets: bool,
+    has_explicit_pointer_targets: bool,
+    has_terminal_pointer_targets: bool,
     has_mouse_move_handlers: bool,
     has_terminal_any_event: bool,
     /// Terminals without a live screen that forward pixel reports; live ones are read on demand.
@@ -387,6 +389,8 @@ impl NodeTree {
             overlay_roots: Vec::new(),
             has_hoverables: false,
             has_pointer_targets: false,
+            has_explicit_pointer_targets: false,
+            has_terminal_pointer_targets: false,
             has_mouse_move_handlers: false,
             has_terminal_any_event: false,
             has_terminal_pixel_mouse: false,
@@ -495,6 +499,16 @@ impl NodeTree {
 
     pub(crate) fn has_pointer_targets(&self) -> bool {
         self.has_pointer_targets
+    }
+
+    /// Pointer-driven all-motion reporting, separate from hover/callback requirements.
+    pub(crate) fn needs_pointer_motion(&self, mode: crate::PointerMode) -> bool {
+        match mode {
+            crate::PointerMode::Disabled => false,
+            crate::PointerMode::Terminal => self.has_terminal_pointer_targets,
+            crate::PointerMode::Explicit => self.has_explicit_pointer_targets,
+            crate::PointerMode::Interactive => self.has_pointer_targets(),
+        }
     }
 
     /// Returns true if any hoverable nodes exist in the tree.
@@ -1158,6 +1172,7 @@ impl NodeTree {
         let node = self.node_mut(id);
         node.pointer_shape = node.pointer_shape.or(Some(shape));
         self.has_pointer_targets = true;
+        self.has_explicit_pointer_targets = true;
     }
 
     /// Resolve a mouse pointer at a cell, respecting clipping and overlay capture.
@@ -1399,6 +1414,8 @@ impl NodeTree {
             self.tab_drop_bar_ids.push(id);
         }
         self.has_pointer_targets |= crate::app::pointer::has_pointer_target(node);
+        self.has_explicit_pointer_targets |= crate::app::pointer::has_explicit_pointer_target(node);
+        self.has_terminal_pointer_targets |= crate::app::pointer::has_terminal_pointer_target(node);
         if !self.has_hoverables && node.is_hoverable() {
             self.has_hoverables = true;
         }
@@ -1484,6 +1501,8 @@ impl NodeTree {
         self.overlay_roots.clear();
         self.has_hoverables = false;
         self.has_pointer_targets = false;
+        self.has_explicit_pointer_targets = false;
+        self.has_terminal_pointer_targets = false;
         self.has_mouse_move_handlers = false;
         self.has_terminal_any_event = false;
         self.has_terminal_pixel_mouse = false;
@@ -1800,6 +1819,8 @@ impl NodeTree {
 
         let mut full_hoverables = false;
         let mut full_pointer_targets = false;
+        let mut full_explicit_pointer_targets = false;
+        let mut full_terminal_pointer_targets = false;
         let mut full_mouse_move_handlers = false;
         #[cfg(feature = "terminal")]
         let mut full_terminal_any_event = false;
@@ -1829,6 +1850,8 @@ impl NodeTree {
             }
             full_hoverables |= node.is_hoverable();
             full_pointer_targets |= crate::app::pointer::has_pointer_target(node);
+            full_explicit_pointer_targets |= crate::app::pointer::has_explicit_pointer_target(node);
+            full_terminal_pointer_targets |= crate::app::pointer::has_terminal_pointer_target(node);
             full_mouse_move_handlers |= node.has_on_mouse_move();
             #[cfg(feature = "terminal")]
             {
@@ -1877,6 +1900,14 @@ impl NodeTree {
         assert_eq!(
             self.has_pointer_targets, full_pointer_targets,
             "incremental pointer targets must match full scan"
+        );
+        assert_eq!(
+            self.has_explicit_pointer_targets, full_explicit_pointer_targets,
+            "incremental explicit pointer targets must match full scan"
+        );
+        assert_eq!(
+            self.has_terminal_pointer_targets, full_terminal_pointer_targets,
+            "incremental terminal pointer targets must match full scan"
         );
         assert_eq!(
             self.has_hoverables, full_hoverables,

@@ -3762,6 +3762,11 @@ impl TerminalScreen {
 
     fn write_primary_replay<W: Write>(&self, writer: &mut W) -> io::Result<()> {
         writer.write_all(b"\x1bc")?;
+        // RIS clears both pointer stacks. Seed the inactive stack before restoring primary
+        // contents/cursors/modes, so the temporary switch cannot disturb that restored state.
+        writer.write_all(b"\x1b[?1049h")?;
+        self.semantic.pointer.write_stack(writer, true)?;
+        writer.write_all(b"\x1b[?1049l")?;
         #[cfg(feature = "terminal-images")]
         self.graphics.write_replay_transmissions(writer)?;
         self.write_active_grid_repaint(writer, true, Some(false))?;

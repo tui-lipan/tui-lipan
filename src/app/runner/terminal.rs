@@ -28,10 +28,12 @@ impl PointerManager {
         if self.last == desired {
             return Ok(());
         }
-        // Keep neutral chrome explicit: some OSC 22 hosts accept named shapes but ignore an
-        // empty reset. The UI owns mouse capture here, whose normal pointer is the default arrow.
-        let name = desired.unwrap_or_default().as_str();
-        execute!(backend, Print(format!("\x1b]22;{name}\x1b\\")))?;
+        match desired {
+            Some(shape) => execute!(backend, Print(format!("\x1b]22;{}\x1b\\", shape.as_str())))?,
+            // Named fallback handles older hosts; the empty reset then releases ownership on
+            // conforming hosts, which may use a different default after mouse capture ends.
+            None => execute!(backend, Print("\x1b]22;default\x1b\\\x1b]22;\x1b\\"))?,
+        }
         self.last = desired;
         Ok(())
     }
@@ -537,7 +539,7 @@ mod pointer_tests {
         pointer.update(&mut bytes, None).unwrap();
         assert_eq!(
             bytes,
-            b"\x1b]22;grab\x1b\\\x1b]22;text\x1b\\\x1b]22;default\x1b\\"
+            b"\x1b]22;grab\x1b\\\x1b]22;text\x1b\\\x1b]22;default\x1b\\\x1b]22;\x1b\\"
         );
     }
 

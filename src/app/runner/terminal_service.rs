@@ -130,7 +130,9 @@ impl<C: Component> AppRunner<C> {
             return false;
         }
 
-        self.core.tree.has_pointer_targets()
+        self.core
+            .tree
+            .needs_pointer_motion(self.core.ctx.pointer_mode())
             || self.core.tree.has_hoverables()
             || self.core.tree.has_mouse_move_handlers()
             || self.core.tree.has_terminal_any_event()

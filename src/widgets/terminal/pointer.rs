@@ -164,6 +164,26 @@ mod tests {
     }
 
     #[test]
+    fn inactive_alternate_stack_survives_main_screen_replay() {
+        let mut source = TerminalScreen::new(4, 20, 0);
+        source.process_bytes(b"\x1b]22;>text,help\x07\x1b[?1049h\x1b]22;>wait,grab\x07\x1b[?1049l");
+        let bytes = source.export_replay_bytes();
+        let mut target = TerminalScreen::new(4, 20, 0);
+        target.process_bytes(&bytes);
+        assert_eq!(source.pointer_shape(), Some(PointerShape::Help));
+        assert_eq!(target.pointer_shape(), source.pointer_shape());
+        for screen in [&mut source, &mut target] {
+            screen.process_bytes(b"\x1b[?1049h");
+            assert_eq!(screen.pointer_shape(), Some(PointerShape::Grab));
+            screen.process_bytes(b"\x1b]22;<\x07");
+            assert_eq!(screen.pointer_shape(), Some(PointerShape::Wait));
+            screen.process_bytes(b"\x1b[?1049l\x1b]22;<\x07");
+            assert_eq!(screen.pointer_shape(), Some(PointerShape::Text));
+        }
+        assert!(target.drain_responses().is_empty());
+    }
+
+    #[test]
     fn alternate_stacks_survive_replay_and_pop_after_reattaching() {
         let mut source = TerminalScreen::new(4, 20, 0);
         source.process_bytes(b"\x1b]22;>text,grab\x07\x1b[?1049h\x1b]22;>wait,pointer\x07");
