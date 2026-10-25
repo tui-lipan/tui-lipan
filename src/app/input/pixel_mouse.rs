@@ -90,6 +90,19 @@ pub(crate) fn note_window_size(
     }
 }
 
+/// Take the host's answer to a cell-size query (`CSI 16 t`) asked after startup.
+///
+/// A padded window never divides, so on such a host the startup answer is the only divisor there
+/// is, and a font zoom since then makes it wrong: every pixel report lands too far out, and the
+/// cells near the far corner stop receiving the pointer at all. The host's fresh answer is the
+/// direct one, so it replaces whatever was known, however that was learned.
+pub(crate) fn note_cell_size(width: u16, height: u16) {
+    let cell = (width, height);
+    if usable(&cell) {
+        CELL.store(pack(cell), Ordering::Release);
+    }
+}
+
 /// The cell size implied by a window size, when the grid divides it exactly.
 fn divide_window(
     cols: u16,
@@ -272,6 +285,19 @@ mod tests {
         // A font zoom does divide, and the fresh size replaces the old one.
         note_window_size(80, 24, Some(880), Some(480));
         assert_eq!(cell_size(), Some((11, 20)));
+
+        // A zoom on a padded window divides into nothing, so only the host's answer to a fresh
+        // query notices it. That answer wins, and a misreported one is ignored like any other.
+        note_window_size(70, 21, Some(888), Some(486));
+        assert_eq!(cell_size(), Some((11, 20)), "padding teaches nothing");
+        note_cell_size(12, 22);
+        assert_eq!(cell_size(), Some((12, 22)));
+        assert_eq!(
+            resolve(837, 461).map(|position| position.cell),
+            Some((69, 20))
+        );
+        note_cell_size(0, 0);
+        assert_eq!(cell_size(), Some((12, 22)));
 
         reset();
 
