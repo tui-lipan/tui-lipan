@@ -193,6 +193,12 @@ jobs:
       - name: Run out-of-band media tests
         run: cargo test --all-features --lib widgets::terminal::graphics_media::tests::posix_shm
 
+      - name: Run immutable file import and lifetime tests
+        run: cargo test --all-features --lib backend::ratatui_backend::file_frame::tests
+
+      - name: Run prepared media tests
+        run: cargo test --all-features --lib widgets::terminal::media_work::tests
+
   # Windows-only behavior - path spelling, and anything else written behind `cfg(windows)` - is
   # invisible to every job above, so a claim about it was previously verified by nothing at all.
   #

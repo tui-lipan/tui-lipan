@@ -286,6 +286,9 @@ pub use crate::{PixelPointerStatus, pixel_pointer_status};
 pub use crate::{ThemeWatcher, load_theme_from_toml};
 
 #[cfg(feature = "terminal-images")]
-pub use crate::widgets::{GraphicsDependency, TerminalOutputClass, TerminalOutputTransaction};
+pub use crate::widgets::{
+    GraphicsDependency, TerminalImmutableFile, TerminalOutputClass, TerminalOutputMedia,
+    TerminalOutputTransaction,
+};
 
 pub use crate::{TerminalGraphicsMetrics, terminal_graphics_metrics};

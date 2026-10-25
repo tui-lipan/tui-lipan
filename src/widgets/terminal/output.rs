@@ -1,8 +1,99 @@
 //! Lossless output transactions classified by the retained parser.
 use std::collections::BTreeMap;
+use std::ops::Range;
+use std::sync::Arc;
 
 use super::graphics::FrameOp;
 use super::{ImageSourceKey, ImageSourceRevision};
+
+/// An owning handle to immutable raw pixels. Exporting permanently prevents inode reuse.
+#[derive(Clone, Debug)]
+pub struct TerminalImmutableFile(
+    pub(crate) Arc<crate::backend::ratatui_backend::file_frame::FilePixels>,
+);
+
+impl PartialEq for TerminalImmutableFile {
+    fn eq(&self, other: &Self) -> bool {
+        self.path() == other.path()
+    }
+}
+impl Eq for TerminalImmutableFile {}
+
+impl TerminalImmutableFile {
+    /// Acquire pixels supplied by a trusted transport that guarantees source immutability until
+    /// this call returns. Owns a private hard link, or a validated copy on link failure.
+    /// Never call this for a producer-supplied path inferred from terminal bytes.
+    pub fn acquire(path: &std::path::Path, byte_len: usize, format: u32) -> std::io::Result<Self> {
+        Ok(Self(Arc::new(
+            crate::backend::ratatui_backend::file_frame::FilePixels::import(
+                path, byte_len, format,
+            )?,
+        )))
+    }
+    /// Transport path, valid while this handle is retained.
+    pub fn path(&self) -> &std::path::Path {
+        self.0.path()
+    }
+    /// Exact raw pixel byte length.
+    pub fn byte_len(&self) -> usize {
+        self.0.len()
+    }
+    /// Kitty raw format, 24 or 32 bits per pixel.
+    pub fn format(&self) -> u32 {
+        self.0.format
+    }
+    pub(super) fn export(
+        file: Arc<crate::backend::ratatui_backend::file_frame::FilePixels>,
+    ) -> Self {
+        file.expose();
+        Self(file)
+    }
+}
+
+/// Immutable pixels bound to exactly one complete rewritten command in a transaction.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerminalOutputMedia {
+    /// Byte range of the complete command, including APC delimiters.
+    pub command_range: Range<usize>,
+    /// Owns the pixels named by that command.
+    pub file: TerminalImmutableFile,
+}
+
+impl TerminalOutputMedia {
+    /// Validate the exact complete command and its raw dimensions before acknowledging a transport
+    /// acquisition. This performs no I/O and never accepts a consuming reference.
+    pub fn validate_command(&self, bytes: &[u8]) -> std::io::Result<()> {
+        let command_bytes = bytes
+            .get(self.command_range.clone())
+            .ok_or_else(|| std::io::Error::other("invalid immutable command range"))?;
+        let mut scanner = super::graphics::GraphicsScanner::default();
+        scanner.set_record_output(true);
+        let mut commands = scanner.scan(command_bytes).into_iter();
+        let Some(super::graphics::GraphicsSegment::Command(mut command)) = commands.next() else {
+            return Err(std::io::Error::other(
+                "immutable binding is not a complete command",
+            ));
+        };
+        if commands.next().is_some() || command.take_wire().as_deref() != Some(command_bytes) {
+            return Err(std::io::Error::other(
+                "immutable binding is not an exact command",
+            ));
+        }
+        command.import_file(self.file.clone())
+    }
+}
+
+pub(super) fn append_media(
+    target: &mut Vec<TerminalOutputMedia>,
+    media: Vec<TerminalOutputMedia>,
+    offset: usize,
+) {
+    target.extend(media.into_iter().map(|mut binding| {
+        binding.command_range.start += offset;
+        binding.command_range.end += offset;
+        binding
+    }));
+}
 
 /// Whether a completed graphics transaction can supersede earlier ones.
 ///
@@ -43,12 +134,14 @@ pub enum TerminalOutputClass {
 pub struct TerminalOutputTransaction {
     /// Parser-established semantics; defaults to ordered when equivalence is uncertain.
     pub class: TerminalOutputClass,
-    /// Original bytes, unchanged and in producer order, except that a screen relaying out-of-band
-    /// images inline records each relayed transmission as the inline one it stands for. A failed
-    /// relayed acquisition produces an empty ordered receipt; do not substitute original bytes.
+    /// Producer bytes in order, with named transmissions rewritten according to the relay policy.
+    /// `media` owns any immutable files named by rewritten commands. A suppressed acquisition
+    /// produces an empty ordered receipt; do not substitute original bytes.
     /// See
     /// [`TerminalScreen::set_image_relay_policy`](crate::widgets::TerminalScreen::set_image_relay_policy).
     pub bytes: Vec<u8>,
+    /// Resources owned until the receiver acquires or discards the output.
+    pub media: Vec<TerminalOutputMedia>,
 }
 
 /// Begin synchronized update (`DECSET 2026`).
@@ -161,6 +254,7 @@ impl OpenFrame {
             pending: vec![TerminalOutputTransaction {
                 class: TerminalOutputClass::Ordered,
                 bytes: BEGIN_SYNC.to_vec(),
+                media: Vec::new(),
             }],
             bytes: BEGIN_SYNC.len(),
             escape: Vec::new(),
@@ -176,16 +270,25 @@ impl OpenFrame {
     }
 
     /// Hold one recorded transaction, merging ordered text as the screen's own list does.
-    pub(super) fn push(&mut self, bytes: Vec<u8>, class: TerminalOutputClass) {
+    pub(super) fn push(
+        &mut self,
+        bytes: Vec<u8>,
+        class: TerminalOutputClass,
+        media: Vec<TerminalOutputMedia>,
+    ) {
         self.bytes = self.bytes.saturating_add(bytes.len());
         if class == TerminalOutputClass::Ordered
             && let Some(previous) = self.pending.last_mut()
             && previous.class == TerminalOutputClass::Ordered
         {
+            append_media(&mut previous.media, media, previous.bytes.len());
             previous.bytes.extend_from_slice(&bytes);
         } else {
-            self.pending
-                .push(TerminalOutputTransaction { bytes, class });
+            self.pending.push(TerminalOutputTransaction {
+                bytes,
+                class,
+                media,
+            });
         }
     }
 
@@ -213,7 +316,11 @@ impl OpenFrame {
             FrameText::Open => bytes.len(),
             FrameText::Ended(used) | FrameText::Unproven(used) => used,
         };
-        self.push(bytes[..used].to_vec(), TerminalOutputClass::Ordered);
+        self.push(
+            bytes[..used].to_vec(),
+            TerminalOutputClass::Ordered,
+            Vec::new(),
+        );
         outcome
     }
 
@@ -255,12 +362,14 @@ impl OpenFrame {
     }
 
     /// The held bytes, in order, for emitting the frame as one transaction.
-    pub(super) fn into_bytes(self) -> Vec<u8> {
+    pub(super) fn into_output(self) -> (Vec<u8>, Vec<TerminalOutputMedia>) {
         let mut bytes = Vec::with_capacity(self.bytes);
+        let mut media = Vec::new();
         for transaction in self.pending {
+            append_media(&mut media, transaction.media, bytes.len());
             bytes.extend_from_slice(&transaction.bytes);
         }
-        bytes
+        (bytes, media)
     }
 
     /// The held transactions exactly as they would have been recorded without the frame.

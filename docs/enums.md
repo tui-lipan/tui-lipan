@@ -1634,10 +1634,15 @@ expose the host terminal's image or placement IDs.
 ### Named-image media
 
 With `terminal-images`, `GraphicsMediaPolicy` selects accepted file and consuming media.
-`GraphicsRelayPolicy` selects recorded output: `None` preserves names, `Consuming` inlines
-`t=t`/`t=s`, and `All` also inlines `t=f`. `TerminalMediaWork` runs acquisition, decoding and
-relay construction on a worker. `TerminalPreparedInput` returns one prepared input prefix for
-commit through its owning screen. See [terminal images](widgets/terminal-images.md).
+`GraphicsRelayPolicy` selects recorded output: `None` preserves names, `NamedAsFiles` names
+the screen's own immutable snapshots of eligible raw `t=f`/`t=t`/`t=s` pixels with `t=f`, `Consuming` inlines
+`t=t`/`t=s`, and `All` also inlines `t=f`. `TerminalMediaWork` runs acquisition, decoding or
+snapshotting, and relay construction on a worker. `TerminalPreparedInput` returns one prepared input prefix for
+commit through its owning screen. `TerminalOutputTransaction::media` carries owning
+`TerminalOutputMedia` bindings with byte ranges and `TerminalImmutableFile` handles. Trusted local
+readers acquire private links and pass bindings to `prepare_immutable_media_input`; keep the
+sender's handles until acquisition or discard is acknowledged. Literal transactions without files
+must initialize `media: Vec::new()`. See [terminal images](widgets/terminal-images.md).
 
 ### Terminal presentation
 

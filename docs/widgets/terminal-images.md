@@ -235,8 +235,8 @@ media and keep only re-readable `t=f`:
 screen.set_image_media_policy(GraphicsMediaPolicy::SHARED);
 ```
 
-A canonical server can instead accept consuming media and relay inline pixels to every client,
-as described below.
+A canonical server can instead accept consuming media and relay them to every client, as
+described below.
 
 `GraphicsMediaPolicy::NONE` declines all three, so every picture arrives inline. Refusals are the
 protocol's own `EBADF`/`ENOTSUPP` reports, which is what makes a child fall back to `t=d` rather than
@@ -248,29 +248,62 @@ A path only means something on the machine that wrote it, so a pane attached fro
 decline: a remote client reading `/tmp/...` from its own filesystem is the one failure mode here that
 is not a clean error.
 
-### Relay out-of-band frames inline
+### Relay out-of-band frames
 
 A server that records a screen's output for other parsers can read out-of-band sources itself and
-hand those parsers the pixels instead of the source's name:
+hand those parsers something they can read in place of the source's name:
 
 ```rust
 screen.set_image_media_policy(GraphicsMediaPolicy::default());
-screen.set_image_relay_policy(GraphicsRelayPolicy::Consuming);
+screen.set_image_file_storage_enabled(true);
+screen.set_image_relay_policy(GraphicsRelayPolicy::NamedAsFiles);
 screen.set_output_transaction_recording(true);
 ```
 
+`GraphicsRelayPolicy::NamedAsFiles` relays successfully snapshotted raw `t=f`, `t=t` and `t=s`
+transmissions as `t=f` commands naming immutable server files. Enable file storage and transaction
+recording before processing input. Consuming sources are read once by the server. Other consuming
+payloads and queries relay inline; local re-readable sources without an eligible snapshot keep
+their producer representation. Retained replay always carries pixels.
+
+Each `TerminalOutputTransaction` owns its rewritten files in `media`. Every `TerminalOutputMedia`
+binds a `TerminalImmutableFile` to the exact complete `command_range` within `bytes`. Preserve the
+handles through synchronized updates, queue merging and coalescing, and retain them until each
+reader acquires or irrevocably discards that output. Concatenating transactions requires rebasing
+each command range by the preceding byte length. Never split a bound command. Dropping the last
+handle unlinks the file; there is no timed retention window. Reading only `bytes` and dropping its
+transaction does not provide a file-lifetime guarantee.
+
+On a trusted local transport, call `TerminalImmutableFile::acquire(path, byte_len, format)` while
+the sender still owns the file. This takes a private hard link, validates its regular-file type,
+exact length and raw pixel format, and copies into private storage if linking is unavailable.
+Keep every imported handle with its bound bytes, including deferred or orphan output. Call
+`TerminalOutputMedia::validate_command(bytes)` before acknowledging acquisition. The sender may
+then release its handle. Acknowledgements permit deletion, never inode reuse.
+
+To apply acquired resources, call `screen.prepare_immutable_media_input(bytes, bindings)`, then
+`screen.process_prepared_media_input(prepared)`. These use the same screen and input-revision
+checks as worker preparation. Ordinary `process_bytes()` never treats a producer path as an
+immutable shared resource. Remote transports must not open server paths on the local filesystem.
+Acquisition failures require replay or connection termination, rather than skipping an image.
+
+Applications constructing `TerminalOutputTransaction` literals must supply `media: Vec::new()`
+for output without files. Replace the unreleased `ConsumingAsFiles` policy with `NamedAsFiles` and
+carry its transaction handles through the transport until acquisition is acknowledged.
+
 `GraphicsRelayPolicy::Consuming` replaces `t=t` and `t=s` with inline pixels, including capability
-queries. Choose `All` while an attachment cannot open the server's files; this also replaces `t=f`.
-`None` preserves source references. Use one policy for every reader of a shared output stream.
-Raw pixels are compressed unless already compressed or sent as PNG. Failed relayed acquisitions
-emit no source reference; the authoritative screen answers the child. Chunked out-of-band
-transmissions are rejected. Direct `t=d` chunking remains supported.
+queries. Choose `All` while an attachment cannot open the server's files; this also replaces `t=f`
+with inline pixels. `None` preserves source references. Use one policy for every reader of a shared
+output stream. Inline raw pixels are compressed unless already compressed or sent as PNG. Failed
+relayed acquisitions emit no source reference; the authoritative screen answers the child. Chunked
+out-of-band transmissions are rejected. Direct `t=d` chunking remains supported.
 
 For large images, call `screen.prepare_media_input(bytes)` before ordinary processing. It returns
 `None` for input that needs no media work. Otherwise, send the returned `TerminalMediaWork` to a
-bounded worker queue and call its `run()` there. This acquires and validates the source, decodes
-when required, and builds the compressed, encoded relay chunks. The work item stops after one
-named image even when the input contains a burst of references.
+bounded worker queue and call its `run()` there. This acquires and validates the source, keeps raw
+pixels in a file snapshot when the screen stores images as files and decodes otherwise, and
+builds the relayed output. The work item stops after one named image even when the input contains
+a burst of references.
 
 On completion, read `prepared.consumed_bytes()`, then pass the result to
 `screen.process_prepared_media_input(prepared)`. Feed the original input's remaining tail afterward,
@@ -288,8 +321,10 @@ committing the result.
 ### Retain streamed frames in files
 
 `screen.set_image_file_storage_enabled(true)` opts into immutable file snapshots for quiet raw
-`t=f` uploads. Each snapshot copies a validated regular file into an application-owned temporary
-file. Producer rewrites and deletion cannot change a stored frame. Snapshots and replay share the
+`t=f` uploads, and for every raw out-of-band upload prepared with `prepare_media_input`. Each
+snapshot copies a validated regular file, or the consumed temporary file or shared-memory object,
+into an application-owned temporary file. A consuming source is read straight into storage
+reserved before it is opened, without an intermediate pixel buffer. Producer rewrites and deletion cannot change a stored frame. Snapshots and replay share the
 file instead of allocating another pixel buffer; capture and composition read pixels on demand.
 The normal image budget still counts the raw pixel size. Snapshot files also have a process-wide
 256 MiB limit. If a snapshot cannot be made, the ordinary in-memory path remains available.
@@ -298,8 +333,12 @@ allocated pages for equal-sized frames. These spares count against the same 256 
 are released on screen reset, file-storage disable, or screen drop. When the process-wide limit
 blocks a new snapshot, admission evicts idle spares across screens and retries. Only retired
 allocations are eligible; live readers prevent reuse.
-A snapshot handed to a host is never recycled, even after its handoff path is removed: the host
-may still have the file open.
+A snapshot handed to a host or named in relayed output is never recycled, even after its handoff
+path is removed: the host or a reader may still have the file open.
+Snapshot and import names live in private process-owned temporary directories. Handles keep their
+directory alive until its files are released. On Unix, startup cleanup removes only private,
+current-user directories whose owner process is confirmed dead. Other platforms preserve stale
+directories when liveness cannot be established conservatively.
 
 A cell-aligned frame can be uploaded directly to a local Kitty host that passed the shared-memory
 probe. The host receives an immutable temporary hard link with `t=t` and removes it after reading.
