@@ -854,7 +854,7 @@ Source: `src/widgets/table/mod.rs:357` (`Table`).
 
 ## Tabs
 
-Source: `src/widgets/tabs/mod.rs:126` (`Tabs`).
+Source: `src/widgets/tabs/mod.rs:137` (`Tabs`).
 
 | Field | Default initializer |
 |---|---|
@@ -1305,7 +1305,7 @@ Source: `src/widgets/tree/mod.rs:29` (`Tree`).
 
 ## Terminal
 
-Source: `src/widgets/terminal/mod.rs:124` (`Terminal`).
+Source: `src/widgets/terminal/mod.rs:125` (`Terminal`).
 
 | Field | Default initializer |
 |---|---|
@@ -1314,6 +1314,7 @@ Source: `src/widgets/terminal/mod.rs:124` (`Terminal`).
 | `cursor_col` | `0` |
 | `show_cursor` | `true` |
 | `cursor_shape` | `CaretShape::Block` |
+| `pointer_shape` | `None` |
 | `cursor_blinking` | `true` |
 | `cursor_blinking_override` | `None` |
 | `caret_color` | `None` |
