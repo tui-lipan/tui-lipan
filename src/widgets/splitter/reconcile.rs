@@ -96,6 +96,8 @@ pub(crate) fn reconcile_splitter(
         handle_style: splitter.handle_style,
         handle_hover_style: splitter.handle_hover_style,
         handle_active_style: splitter.handle_active_style,
+        handle_pointer_shape: splitter.handle_pointer_shape,
+        handle_active_pointer_shape: splitter.handle_active_pointer_shape,
         handle_rects: layout.handle_rects,
         pane_sizes: layout.pane_sizes,
         active_handle,

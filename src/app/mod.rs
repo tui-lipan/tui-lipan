@@ -9,6 +9,7 @@ pub mod input;
 pub(crate) mod interaction_state;
 pub(crate) mod job_control;
 pub(crate) mod mouse_dispatch;
+pub(crate) mod pointer;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod runner;
 #[cfg(all(target_arch = "wasm32", feature = "web"))]

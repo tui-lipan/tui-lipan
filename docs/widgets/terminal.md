@@ -1305,3 +1305,20 @@ Use `ctx.clipboard().read_content()` for an explicit application paste command.
 It returns `Option<ClipboardContent>` and enforces `paste_max_image_bytes` for
 images. File-list entries are local paths; opening, limiting, transferring, and
 retaining their files remain the application host's responsibility.
+
+### Mouse pointer requests
+
+`TerminalScreen` handles OSC 22 mouse pointer requests, including set, push, pop, and support
+queries. Each main and alternate screen retains a separate stack of up to 16 shapes. Resetting
+the screen clears both stacks. Replay exports preserve them, including entries restored by a later
+pop. Unknown shape names are ignored.
+
+`TerminalScreen::pointer_shape()` and `TerminalScreenHandle::pointer_shape()` read the current
+request without taking a snapshot. `TerminalRenderSnapshot::pointer_shape` carries the request
+for snapshot-based widgets. A live `Terminal` uses the request of the pane under the pointer,
+independently of keyboard focus. An explicit `.pointer_shape(...)` on an element overrides the
+automatic terminal shape. See [mouse pointer shapes](../styling.md#mouse-pointer-shapes).
+
+When constructing `TerminalRenderSnapshot` with a struct literal, set `pointer_shape: None` to
+leave mouse pointer choice to the terminal widget, or include `..Default::default()` for fields
+you do not set explicitly.

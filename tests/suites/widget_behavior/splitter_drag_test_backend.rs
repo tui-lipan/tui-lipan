@@ -313,3 +313,206 @@ fn splitter_handle_preserves_focus_and_content_clicks_still_focus() {
         }
     }
 }
+
+struct PointerSplitter {
+    horizontal: bool,
+    border: bool,
+    hover: Option<PointerShape>,
+    active: Option<PointerShape>,
+}
+
+impl Component for PointerSplitter {
+    type State = bool;
+    type Message = bool;
+    type Properties = ();
+    fn create_state(&self, _: &()) -> bool {
+        true
+    }
+    fn update(&mut self, visible: bool, ctx: &mut Context<Self>) -> Update {
+        ctx.state = visible;
+        Update::full()
+    }
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        if !ctx.state {
+            return Text::new("replacement")
+                .width(Length::Flex(1))
+                .height(Length::Flex(1))
+                .pointer_shape(PointerShape::Help);
+        }
+        let mut splitter = if self.horizontal {
+            Splitter::horizontal()
+        } else {
+            Splitter::vertical()
+        };
+        splitter = splitter.handle_mode(if self.border {
+            SplitterHandleMode::Border
+        } else {
+            SplitterHandleMode::Gutter
+        });
+        if let Some(shape) = self.hover {
+            splitter = splitter.handle_pointer_shape(shape);
+        }
+        if let Some(shape) = self.active {
+            splitter = splitter.handle_active_pointer_shape(shape);
+        }
+        let child = || {
+            Frame::new().border(self.border).child(
+                Text::new("pane")
+                    .width(Length::Flex(1))
+                    .height(Length::Flex(1))
+                    .pointer_shape(PointerShape::Text),
+            )
+        };
+        splitter.child(child()).child(child()).into()
+    }
+}
+
+fn pointer_backend(
+    horizontal: bool,
+    border: bool,
+    hover: Option<PointerShape>,
+    active: Option<PointerShape>,
+) -> TestBackend<PointerSplitter> {
+    let mut backend = TestBackend::new(PointerSplitter {
+        horizontal,
+        border,
+        hover,
+        active,
+    });
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 21,
+        h: 11,
+    });
+    backend.render();
+    backend
+}
+
+#[test]
+fn splitter_handle_pointers_are_opt_in_and_exclude_child_content() {
+    for horizontal in [false, true] {
+        for border in [false, true] {
+            let shape = if horizontal {
+                PointerShape::NsResize
+            } else {
+                PointerShape::EwResize
+            };
+            let default = pointer_backend(horizontal, border, None, None);
+            assert_eq!(default.pointer_shape_at(10, 5), None);
+            let opted_in = pointer_backend(horizontal, border, Some(shape), None);
+            assert_eq!(opted_in.pointer_shape_at(10, 5), Some(shape));
+            assert_eq!(opted_in.pointer_shape_at(1, 1), Some(PointerShape::Text));
+        }
+    }
+}
+
+#[test]
+fn splitter_drag_retains_active_pointer_across_children_and_releases_it() {
+    for horizontal in [false, true] {
+        for border in [false, true] {
+            for active in [None, Some(PointerShape::Grabbing)] {
+                let hover = if horizontal {
+                    PointerShape::NsResize
+                } else {
+                    PointerShape::EwResize
+                };
+                let mut backend = pointer_backend(horizontal, border, Some(hover), active);
+                backend.send_mouse(mouse(10, 5, MouseKind::Moved)).unwrap();
+                assert_eq!(backend.pointer_shape(), Some(hover));
+                backend
+                    .send_mouse(mouse(10, 5, MouseKind::Down(MouseButton::Left)))
+                    .unwrap();
+                backend
+                    .send_mouse(mouse(1, 1, MouseKind::Drag(MouseButton::Left)))
+                    .unwrap();
+                backend.render();
+                assert_eq!(backend.pointer_shape(), active.or(Some(hover)));
+                backend
+                    .send_mouse(mouse(1, 1, MouseKind::Up(MouseButton::Left)))
+                    .unwrap();
+                assert_eq!(backend.pointer_shape(), Some(PointerShape::Text));
+            }
+        }
+    }
+}
+
+#[test]
+fn splitter_pointer_capture_handles_active_only_focus_loss_and_removal() {
+    let mut backend = pointer_backend(false, false, None, Some(PointerShape::Grabbing));
+    backend.send_mouse(mouse(10, 5, MouseKind::Moved)).unwrap();
+    assert_eq!(backend.pointer_shape(), None);
+    backend
+        .send_mouse(mouse(10, 5, MouseKind::Down(MouseButton::Left)))
+        .unwrap();
+    assert_eq!(backend.pointer_shape(), Some(PointerShape::Grabbing));
+    backend.set_window_focused(false).unwrap();
+    assert_eq!(backend.pointer_shape(), None);
+
+    let mut backend = pointer_backend(
+        false,
+        false,
+        Some(PointerShape::EwResize),
+        Some(PointerShape::Grabbing),
+    );
+    backend
+        .send_mouse(mouse(10, 5, MouseKind::Down(MouseButton::Left)))
+        .unwrap();
+    backend.update_level(false).unwrap();
+    backend.render();
+    assert_eq!(backend.pointer_shape(), Some(PointerShape::Help));
+}
+
+#[test]
+fn interactive_splitter_pointers_follow_the_handle_axis_during_hover_and_drag() {
+    struct InteractiveSplitter(bool);
+    impl Component for InteractiveSplitter {
+        type State = ();
+        type Message = ();
+        type Properties = ();
+        fn create_state(&self, _: &()) {}
+        fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            ctx.set_pointer_mode(PointerMode::Interactive);
+            let splitter = if self.0 {
+                Splitter::horizontal()
+            } else {
+                Splitter::vertical()
+            };
+            splitter
+                .child(Text::new("one"))
+                .child(Text::new("two"))
+                .into()
+        }
+    }
+    for horizontal in [false, true] {
+        let expected = if horizontal {
+            PointerShape::NsResize
+        } else {
+            PointerShape::EwResize
+        };
+        let mut backend = TestBackend::new(InteractiveSplitter(horizontal));
+        backend.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 21,
+            h: 11,
+        });
+        backend.render();
+        backend.send_mouse(mouse(10, 5, MouseKind::Moved)).unwrap();
+        assert_eq!(backend.pointer_shape(), Some(expected));
+        backend
+            .send_mouse(mouse(10, 5, MouseKind::Down(MouseButton::Left)))
+            .unwrap();
+        backend
+            .send_mouse(mouse(1, 1, MouseKind::Drag(MouseButton::Left)))
+            .unwrap();
+        assert_eq!(backend.pointer_shape(), Some(expected));
+        backend
+            .send_mouse(mouse(1, 1, MouseKind::Up(MouseButton::Left)))
+            .unwrap();
+        assert_eq!(backend.pointer_shape(), None);
+    }
+}

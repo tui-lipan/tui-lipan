@@ -1392,6 +1392,31 @@ where
         self.capture_ui_snapshot_with_options(&crate::ui_snapshot::UiSnapshotOptions::default())
     }
 
+    /// Resolve the mouse pointer at a viewport cell without changing focus or sending input.
+    /// Call [`Self::render`] first after a view change. Live terminal requests are read directly.
+    pub fn pointer_shape_at(&self, x: u16, y: u16) -> Option<crate::style::PointerShape> {
+        crate::app::pointer::pointer_at(
+            &self.core.tree,
+            x as i16,
+            y as i16,
+            self.core.ctx.pointer_mode(),
+        )
+    }
+
+    /// Resolve the pointer for the current mouse position, including a captured drag.
+    /// Returns `None` when the window is unfocused or mouse capture is disabled.
+    pub fn pointer_shape(&self) -> Option<crate::PointerShape> {
+        if !self.window_focused || !self.core.ctx.env().mouse_capture.get() {
+            return None;
+        }
+        crate::app::pointer::interaction_pointer(
+            &self.core.tree,
+            &self.mouse,
+            &self.drag,
+            self.core.ctx.pointer_mode(),
+        )
+    }
+
     /// Capture a UI snapshot with custom describe options.
     pub fn capture_ui_snapshot_with_options(
         &self,

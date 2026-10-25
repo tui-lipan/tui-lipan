@@ -11442,3 +11442,46 @@ mod structured_mouse_contract_tests {
         assert_eq!(forwarded[0].pixel, None);
     }
 }
+
+#[test]
+fn click_only_checkbox_requests_pointer_motion_only_in_interactive_mode() {
+    #[derive(Clone)]
+    struct CheckboxMotion;
+    impl Component for CheckboxMotion {
+        type State = ();
+        type Message = ();
+        type Properties = ();
+        fn create_state(&self, _: &()) {}
+        fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+        fn view(&self, _: &Context<Self>) -> Element {
+            crate::widgets::Checkbox::new(false)
+                .on_toggle(Callback::new(|_| {}))
+                .into()
+        }
+    }
+    let mut runner = AppRunner::new(App::new().mouse(true), CheckboxMotion, ());
+    init_runner(
+        &mut runner,
+        CheckboxMotion,
+        Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 3,
+        },
+    );
+    assert!(!runner.core.tree.has_hoverables());
+    assert!(!runner.core.tree.has_mouse_move_handlers());
+    for (mode, needed) in [
+        (crate::PointerMode::Explicit, false),
+        (crate::PointerMode::Disabled, false),
+        (crate::PointerMode::Terminal, false),
+        (crate::PointerMode::Interactive, true),
+        (crate::PointerMode::Explicit, false),
+    ] {
+        runner.core.ctx.set_pointer_mode(mode);
+        assert_eq!(runner.needs_mouse_motion(), needed, "mode {mode:?}");
+    }
+}

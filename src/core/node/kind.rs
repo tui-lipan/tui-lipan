@@ -73,6 +73,30 @@ pub(crate) trait WidgetNode {
     fn hover_affects_paint(&self, theme: &Theme) -> bool {
         self.is_hoverable_for_theme(theme)
     }
+    /// Whether this widget owns an intrinsic pointer policy for its visible regions.
+    fn has_pointer_shape(&self) -> bool {
+        false
+    }
+    /// Resolve an intrinsic pointer using root-space coordinates and the allocated rectangle.
+    /// Explicit element/subtree overrides take precedence.
+    fn pointer_shape_at(&self, _x: i16, _y: i16, _rect: Rect) -> Option<crate::PointerShape> {
+        None
+    }
+    /// Semantic pointer feedback when the application opts into Interactive mode.
+    fn interactive_pointer_shape_at(
+        &self,
+        _x: i16,
+        _y: i16,
+        _rect: Rect,
+    ) -> Option<crate::PointerShape> {
+        None
+    }
+
+    /// Pointer retained by a captured drag, independent of the current hover target.
+    fn drag_pointer_shape(&self) -> Option<crate::PointerShape> {
+        None
+    }
+
     /// Refine hit-testing. Returns Some(true/false) to override default interactive check.
     fn hit_test_refinement(&self, _x: i16, _y: i16, _rect: Rect) -> Option<bool> {
         None
@@ -368,6 +392,24 @@ impl WidgetNode for NodeKind {
 
     fn hover_affects_paint(&self, theme: &Theme) -> bool {
         node_kind_delegate_match!(self, hover_affects_paint(theme))
+    }
+
+    fn has_pointer_shape(&self) -> bool {
+        node_kind_delegate_match!(self, has_pointer_shape())
+    }
+    fn pointer_shape_at(&self, x: i16, y: i16, rect: Rect) -> Option<crate::PointerShape> {
+        node_kind_delegate_match!(self, pointer_shape_at(x, y, rect))
+    }
+    fn interactive_pointer_shape_at(
+        &self,
+        x: i16,
+        y: i16,
+        rect: Rect,
+    ) -> Option<crate::PointerShape> {
+        node_kind_delegate_match!(self, interactive_pointer_shape_at(x, y, rect))
+    }
+    fn drag_pointer_shape(&self) -> Option<crate::PointerShape> {
+        node_kind_delegate_match!(self, drag_pointer_shape())
     }
 
     fn hit_test_refinement(&self, x: i16, y: i16, rect: Rect) -> Option<bool> {

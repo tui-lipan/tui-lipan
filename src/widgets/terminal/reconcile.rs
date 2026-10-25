@@ -178,6 +178,9 @@ pub(crate) fn reconcile_terminal(
         cursor_visible: live.as_ref().map_or(terminal.show_cursor, |s| {
             s.cursor_visible && terminal.show_cursor
         }),
+        pointer_shape: live
+            .as_ref()
+            .map_or(terminal.pointer_shape, |s| s.pointer_shape),
         cursor_shape: live
             .as_ref()
             .map_or(terminal.cursor_shape, |s| s.cursor_shape),

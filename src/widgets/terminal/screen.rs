@@ -605,6 +605,7 @@ struct MutationBaseline {
     cursor: Point,
     cursor_style: TermCursorStyle,
     pixel_mouse: bool,
+    pointer_shape: Option<crate::style::PointerShape>,
     modes: TermMode,
     title: Option<String>,
     semantic: TerminalSemanticState,
@@ -625,7 +626,8 @@ impl MutationBaseline {
         TerminalMutation {
             title_changed: self.title != screen.title(),
             modes_changed: self.modes != *screen.term.mode()
-                || self.pixel_mouse != screen.pixel_mouse,
+                || self.pixel_mouse != screen.pixel_mouse
+                || self.pointer_shape != screen.pointer_shape(),
             semantic_changed: self.semantic != screen.semantic_state()
                 || self.status != screen.program_status_snapshot(),
             clipboard_events: self.clipboard_count
@@ -653,6 +655,11 @@ impl TerminalScreenHandle {
     /// Current input modes, read directly without constructing a render snapshot.
     pub fn key_modes(&self) -> TerminalKeyModes {
         self.0.borrow().key_modes()
+    }
+
+    /// Current mouse pointer, independent of presentation cadence.
+    pub fn pointer_shape(&self) -> Option<crate::style::PointerShape> {
+        self.0.borrow().pointer_shape()
     }
 
     /// Current mouse protocol, independent of presentation cadence.
@@ -769,6 +776,8 @@ pub struct TerminalRenderSnapshot {
     pub cursor_visible: bool,
     /// Shape the child program requested for the cursor (via `DECSCUSR`).
     pub cursor_shape: CaretShape,
+    /// Mouse pointer requested by the child on the active screen.
+    pub pointer_shape: Option<crate::style::PointerShape>,
     /// Whether the child program requested a blinking cursor (via `DECSCUSR`).
     pub cursor_blinking: bool,
     /// Application token and screen identity captured with this state.
@@ -917,6 +926,7 @@ impl Default for TerminalRenderSnapshot {
             cursor_col: 0,
             cursor_visible: true,
             cursor_shape: CaretShape::Block,
+            pointer_shape: None,
             cursor_blinking: true,
             presentation: None,
             sequence: 0,
@@ -1024,6 +1034,7 @@ impl TerminalRenderSnapshot {
             cursor_col,
             cursor_visible,
             cursor_shape,
+            pointer_shape: None,
             cursor_blinking,
             sequence,
             presentation: None,
@@ -1400,6 +1411,7 @@ impl TerminalScreen {
             cursor: self.term.grid().cursor.point,
             cursor_style: self.term.cursor_style(),
             pixel_mouse: self.pixel_mouse,
+            pointer_shape: self.pointer_shape(),
             modes: *self.term.mode(),
             title: self.title(),
             semantic: self.semantic_state(),
@@ -1788,6 +1800,9 @@ impl TerminalScreen {
                 break;
             }
             processed += consumed;
+            if let Some(response) = self.semantic.pointer.response.take() {
+                boundaries.push((processed, response));
+            }
             if self.semantic.take_xtversion_query() && self.xtversion_enabled {
                 boundaries.push((processed, self.xtversion_response()));
             }
@@ -2745,6 +2760,7 @@ impl TerminalScreen {
             self.term.reset_damage();
             result.and_then(|()| {
                 writer.write_all(b"\x1b[?1049h")?;
+                self.semantic.pointer.write_stack(writer, true)?;
                 self.write_active_grid_repaint(writer, false, Some(true))?;
                 self.write_cursor_position(writer)?;
                 self.write_modes(writer)
@@ -2941,6 +2957,7 @@ impl TerminalScreen {
                         .into();
                 }
                 self.cache.mouse_mode = self.mouse_mode;
+                self.cache.pointer_shape = self.pointer_shape();
                 self.cache.key_modes = self.key_modes();
                 self.cache.presentation = self.presentation();
                 self.cache.sequence = self.sequence;
@@ -3046,6 +3063,7 @@ impl TerminalScreen {
                 cursor_col,
                 cursor_visible,
                 cursor_shape,
+                pointer_shape: self.pointer_shape(),
                 cursor_blinking,
                 presentation: self.presentation(),
                 sequence: self.sequence,
@@ -3689,6 +3707,7 @@ impl TerminalScreen {
         // (cwd/command phase/executable) - a child hard-reset (RIS) does not imply the shell's
         // last-known working directory or command lifecycle became invalid.
         self.semantic_parser = SemanticVteParser::new();
+        self.semantic.pointer = Default::default();
         self.program_status.reset();
         self.program_status_scanner = Default::default();
         self.mouse_mode = MouseModeState::default();
@@ -3716,6 +3735,11 @@ impl TerminalScreen {
         self.snapshot_damage.mark_full();
     }
 
+    /// Mouse pointer requested by the child on its active screen, or host default.
+    pub fn pointer_shape(&self) -> Option<crate::style::PointerShape> {
+        self.semantic.pointer.current()
+    }
+
     /// Get current mouse mode state.
     pub fn mouse_mode(&self) -> MouseModeState {
         self.mouse_mode
@@ -3738,11 +3762,17 @@ impl TerminalScreen {
 
     fn write_primary_replay<W: Write>(&self, writer: &mut W) -> io::Result<()> {
         writer.write_all(b"\x1bc")?;
+        // RIS clears both pointer stacks. Seed the inactive stack before restoring primary
+        // contents/cursors/modes, so the temporary switch cannot disturb that restored state.
+        writer.write_all(b"\x1b[?1049h")?;
+        self.semantic.pointer.write_stack(writer, true)?;
+        writer.write_all(b"\x1b[?1049l")?;
         #[cfg(feature = "terminal-images")]
         self.graphics.write_replay_transmissions(writer)?;
         self.write_active_grid_repaint(writer, true, Some(false))?;
         self.write_cursor_position(writer)?;
         self.write_title(writer)?;
+        self.semantic.pointer.write_stack(writer, false)?;
         self.write_modes(writer)
     }
 

@@ -99,6 +99,7 @@ impl Component for SplitterDemo {
             .on_select(ctx.link().callback(Msg::TableSelect));
 
         let right = Splitter::horizontal()
+            .handle_pointer_shape(PointerShape::NsResize)
             .handle_mode(handle_mode)
             .weights(vec![0.65, 0.35])
             .child(
@@ -119,6 +120,7 @@ impl Component for SplitterDemo {
             );
 
         let root = Splitter::vertical()
+            .handle_pointer_shape(PointerShape::EwResize)
             .handle_mode(handle_mode)
             .weights(vec![0.3, 0.7])
             .child(

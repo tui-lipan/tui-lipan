@@ -80,6 +80,24 @@ pub struct DraggableTabBarNode {
 }
 
 impl DraggableTabBarNode {
+    fn pointer_target_is_actionable(&self, target: super::DraggableTabHitTarget) -> bool {
+        use super::{DraggableTabHitPart, DraggableTabHitTarget, DraggableTabKind};
+        match target {
+            DraggableTabHitTarget::Overflow(_) => self.show_overflow_controls,
+            DraggableTabHitTarget::Tab(hit) => match hit.part {
+                DraggableTabHitPart::Close => self.on_close.is_some(),
+                DraggableTabHitPart::Body => match self.tabs[hit.index].kind {
+                    DraggableTabKind::Action => self.on_action.is_some(),
+                    DraggableTabKind::Tab => self.on_change.is_some() || self.can_drag_tabs(),
+                },
+            },
+        }
+    }
+
+    fn can_drag_tabs(&self) -> bool {
+        self.draggable && (self.on_reorder.is_some() || self.on_transfer.is_some())
+    }
+
     pub(crate) fn display_options(&self) -> TabDisplayOptions<'_> {
         TabDisplayOptions {
             variant: self.variant,
@@ -133,6 +151,29 @@ impl DraggableTabBarNode {
 }
 
 impl WidgetNode for DraggableTabBarNode {
+    fn interactive_pointer_shape_at(
+        &self,
+        x: i16,
+        y: i16,
+        rect: crate::Rect,
+    ) -> Option<crate::PointerShape> {
+        if self.disabled {
+            return None;
+        }
+        let inner = rect.inner(self.border, self.padding);
+        if y != inner.y || !inner.contains(x, y) {
+            return None;
+        }
+        let target = DraggableTabBar::hit_target_at_view_col(
+            &self.tabs,
+            &self.display_options(),
+            &self.viewport_options(inner.w as usize),
+            (x - inner.x) as usize,
+        )?;
+        self.pointer_target_is_actionable(target)
+            .then_some(crate::PointerShape::Pointer)
+    }
+
     fn is_disabled(&self) -> bool {
         self.disabled
     }

@@ -819,3 +819,23 @@ No changes to element.rs, node/kind.rs, tag.rs, or renderers needed.
 - [`docs/styling.md`](styling.md) - Style, Color, Length, themes
 - [`docs/patterns.md`](patterns.md) - Usage patterns and anti-patterns
 - [`docs/widgets/index.md`](widgets/index.md) - Full widget catalog
+
+## Pointer policies for widget regions
+
+A widget with pointer-sensitive subregions implements `WidgetNode::has_pointer_shape` and
+`WidgetNode::pointer_shape_at(x, y, rect)`. Coordinates are in root space and `rect` is the widget's
+allocation. Use the same region geometry as click hit testing, and return `None` over gaps or
+inactive regions. Keep the policy opt-in through the widget's builder.
+
+A widget with captured drags can implement `WidgetNode::drag_pointer_shape`. The runtime resolves
+this policy from the captured source rather than the current hover target, so crossing another
+widget cannot replace an active drag cursor. Explicit element overrides take precedence over a
+widget's intrinsic policy. Use `TestBackend::pointer_shape_at` to test region boundaries and
+`TestBackend::pointer_shape()` with real mouse events to test capture, release, and cancellation.
+
+
+For semantic control feedback, implement
+`WidgetNode::interactive_pointer_shape_at(x, y, rect)`. The runtime consults this hook only in
+`PointerMode::Interactive`, after explicit overrides and intrinsic pointers. Reuse the widget's
+click hit-testing and exclude disabled targets, headings, separators, and unused space. Widgets
+that already provide explicit pointer policies keep those policies in `Explicit` mode.

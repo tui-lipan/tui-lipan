@@ -235,6 +235,7 @@ where
             overlay_manager: overlay_manager.clone(),
             focus_request,
             mouse_capture,
+            pointer_mode: Rc::default(),
             modifier_key_reporting,
             modifier_key_reporting_keeps_shift,
             surface_mode,

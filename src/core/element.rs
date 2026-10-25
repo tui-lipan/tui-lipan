@@ -96,6 +96,8 @@ pub struct Element {
     pub(crate) semantic_value_sensitive: bool,
     /// Whether pointer presses may acquire focus in this subtree.
     pub(crate) pointer_focus: bool,
+    /// Explicit mouse pointer for this element and descendants without an override.
+    pub(crate) pointer_shape: Option<crate::style::PointerShape>,
     /// Concrete element kind.
     pub(crate) kind: ElementKind,
     /// Layout constraints for stack sizing.
@@ -122,6 +124,7 @@ impl Element {
             semantic_expanded: None,
             semantic_value_sensitive: false,
             pointer_focus: true,
+            pointer_shape: None,
             kind,
             layout: LayoutConstraints::default(),
             layout_hash_cache: Cell::new(None),
@@ -201,6 +204,14 @@ impl Element {
     pub fn pointer_focus(mut self, pointer_focus: bool) -> Self {
         self.pointer_focus = pointer_focus;
         self.clear_caches();
+        self
+    }
+
+    /// Override the automatic mouse pointer in this subtree.
+    ///
+    /// A descendant's explicit override takes precedence. The host terminal must support OSC 22.
+    pub fn pointer_shape(mut self, shape: crate::style::PointerShape) -> Self {
+        self.pointer_shape = Some(shape);
         self
     }
 
@@ -792,6 +803,11 @@ pub trait IntoElement: Into<Element> + Sized {
     /// Convert into an element and control pointer focus acquisition for its subtree.
     fn pointer_focus(self, pointer_focus: bool) -> Element {
         self.into().pointer_focus(pointer_focus)
+    }
+
+    /// Convert into an element and override its mouse pointer. See [`Element::pointer_shape`].
+    fn pointer_shape(self, shape: crate::style::PointerShape) -> Element {
+        self.into().pointer_shape(shape)
     }
 
     /// Convert into an element and assign a path-independent component state

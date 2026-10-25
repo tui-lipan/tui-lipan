@@ -111,6 +111,7 @@ pub(crate) struct Node {
     pub(crate) semantic_value_sensitive: bool,
     /// Whether pointer presses may acquire focus in this subtree.
     pub pointer_focus: bool,
+    pub(crate) pointer_shape: Option<crate::style::PointerShape>,
     /// Layout rectangle.
     pub rect: Rect,
     /// Parent node.
@@ -239,6 +240,7 @@ impl Node {
             semantic_expanded: None,
             semantic_value_sensitive: false,
             pointer_focus: true,
+            pointer_shape: None,
             rect: Rect::default(),
             parent: None,
             children: Vec::new(),
@@ -260,6 +262,7 @@ impl Node {
         self.semantic_expanded = None;
         self.semantic_value_sensitive = false;
         self.pointer_focus = true;
+        self.pointer_shape = None;
         self.parent = None;
         self.rect = Rect::default();
         self.children.clear();
@@ -297,6 +300,9 @@ pub(crate) struct NodeTree {
     scrollbar_zone_vec_pool: Vec<Vec<ScrollbarZone>>,
     overlay_roots: Vec<OverlayRoot>,
     has_hoverables: bool,
+    has_pointer_targets: bool,
+    has_explicit_pointer_targets: bool,
+    has_terminal_pointer_targets: bool,
     has_mouse_move_handlers: bool,
     has_terminal_any_event: bool,
     /// Terminals without a live screen that forward pixel reports; live ones are read on demand.
@@ -382,6 +388,9 @@ impl NodeTree {
             scrollbar_zone_vec_pool: Vec::new(),
             overlay_roots: Vec::new(),
             has_hoverables: false,
+            has_pointer_targets: false,
+            has_explicit_pointer_targets: false,
+            has_terminal_pointer_targets: false,
             has_mouse_move_handlers: false,
             has_terminal_any_event: false,
             has_terminal_pixel_mouse: false,
@@ -486,6 +495,20 @@ impl NodeTree {
             return false;
         }
         self.arena.is_valid(id)
+    }
+
+    pub(crate) fn has_pointer_targets(&self) -> bool {
+        self.has_pointer_targets
+    }
+
+    /// Pointer-driven all-motion reporting, separate from hover/callback requirements.
+    pub(crate) fn needs_pointer_motion(&self, mode: crate::PointerMode) -> bool {
+        match mode {
+            crate::PointerMode::Disabled => false,
+            crate::PointerMode::Terminal => self.has_terminal_pointer_targets,
+            crate::PointerMode::Explicit => self.has_explicit_pointer_targets,
+            crate::PointerMode::Interactive => self.has_pointer_targets(),
+        }
     }
 
     /// Returns true if any hoverable nodes exist in the tree.
@@ -1140,6 +1163,42 @@ impl NodeTree {
         None
     }
 
+    pub(crate) fn inherit_pointer_shape(
+        &mut self,
+        id: NodeId,
+        shape: Option<crate::style::PointerShape>,
+    ) {
+        let Some(shape) = shape else { return };
+        let node = self.node_mut(id);
+        node.pointer_shape = node.pointer_shape.or(Some(shape));
+        self.has_pointer_targets = true;
+        self.has_explicit_pointer_targets = true;
+    }
+
+    /// Resolve a mouse pointer at a cell, respecting clipping and overlay capture.
+    pub fn pointer_shape_at(&self, x: i16, y: i16) -> Option<crate::style::PointerShape> {
+        let hit = self.do_test(x, y, TestKind::Pointer)?;
+        self.pointer_override(hit)
+            .or_else(|| crate::app::pointer::automatic_pointer(self, hit, x, y))
+    }
+
+    pub(crate) fn pointer_target_at(&self, x: i16, y: i16) -> Option<NodeId> {
+        self.do_test(x, y, TestKind::Pointer)
+    }
+
+    /// Closest explicit override on a live node or its ancestors.
+    pub(crate) fn pointer_override(&self, start: NodeId) -> Option<crate::PointerShape> {
+        let mut current = Some(start);
+        while let Some(id) = current {
+            let node = self.node(id);
+            if let Some(shape) = node.pointer_shape {
+                return Some(shape);
+            }
+            current = node.parent;
+        }
+        None
+    }
+
     /// Return the deepest hoverable node at `(x, y)`, respecting overlay layering.
     pub fn hover_test(&self, x: i16, y: i16) -> Option<NodeId> {
         self.do_test(x, y, TestKind::Hover)
@@ -1354,6 +1413,9 @@ impl NodeTree {
         {
             self.tab_drop_bar_ids.push(id);
         }
+        self.has_pointer_targets |= crate::app::pointer::has_pointer_target(node);
+        self.has_explicit_pointer_targets |= crate::app::pointer::has_explicit_pointer_target(node);
+        self.has_terminal_pointer_targets |= crate::app::pointer::has_terminal_pointer_target(node);
         if !self.has_hoverables && node.is_hoverable() {
             self.has_hoverables = true;
         }
@@ -1438,6 +1500,9 @@ impl NodeTree {
             }));
         self.overlay_roots.clear();
         self.has_hoverables = false;
+        self.has_pointer_targets = false;
+        self.has_explicit_pointer_targets = false;
+        self.has_terminal_pointer_targets = false;
         self.has_mouse_move_handlers = false;
         self.has_terminal_any_event = false;
         self.has_terminal_pixel_mouse = false;
@@ -1649,6 +1714,12 @@ impl NodeTree {
                         node.is_hoverable()
                     }
                 }
+                TestKind::Pointer => {
+                    node.kind
+                        .hit_test_refinement(x, y, node.rect)
+                        .unwrap_or(true)
+                        && crate::app::pointer::has_pointer_target(node)
+                }
                 TestKind::MouseMove => {
                     if let Some(hit) = node.kind.hit_test_refinement(x, y, node.rect)
                         && !hit
@@ -1747,6 +1818,9 @@ impl NodeTree {
         }
 
         let mut full_hoverables = false;
+        let mut full_pointer_targets = false;
+        let mut full_explicit_pointer_targets = false;
+        let mut full_terminal_pointer_targets = false;
         let mut full_mouse_move_handlers = false;
         #[cfg(feature = "terminal")]
         let mut full_terminal_any_event = false;
@@ -1775,6 +1849,9 @@ impl NodeTree {
                 continue;
             }
             full_hoverables |= node.is_hoverable();
+            full_pointer_targets |= crate::app::pointer::has_pointer_target(node);
+            full_explicit_pointer_targets |= crate::app::pointer::has_explicit_pointer_target(node);
+            full_terminal_pointer_targets |= crate::app::pointer::has_terminal_pointer_target(node);
             full_mouse_move_handlers |= node.has_on_mouse_move();
             #[cfg(feature = "terminal")]
             {
@@ -1819,6 +1896,18 @@ impl NodeTree {
         assert_eq!(
             self.live_text_ids, full_live_text_ids,
             "live text index must match full scan"
+        );
+        assert_eq!(
+            self.has_pointer_targets, full_pointer_targets,
+            "incremental pointer targets must match full scan"
+        );
+        assert_eq!(
+            self.has_explicit_pointer_targets, full_explicit_pointer_targets,
+            "incremental explicit pointer targets must match full scan"
+        );
+        assert_eq!(
+            self.has_terminal_pointer_targets, full_terminal_pointer_targets,
+            "incremental terminal pointer targets must match full scan"
         );
         assert_eq!(
             self.has_hoverables, full_hoverables,
@@ -1899,6 +1988,7 @@ enum TestKind<'a> {
     DropTarget(&'a [NodeId]),
     Hover,
     MouseMove,
+    Pointer,
 }
 
 #[derive(Clone, Copy)]
@@ -2328,6 +2418,58 @@ mod tests {
             None,
             "a drop surface does not become clickable"
         );
+    }
+
+    #[test]
+    #[cfg(feature = "terminal")]
+    fn pointer_shape_inheritance_does_not_register_a_live_terminal_twice() {
+        use crate::widgets::{Terminal, TerminalScreen, ThemeProvider};
+        use crate::{Element, IntoElement, PointerShape};
+        let screen = Rc::new(RefCell::new(TerminalScreen::new(2, 4, 0)));
+        let element: Element = ThemeProvider::new(crate::Theme::default())
+            .child(Terminal::new().screen(screen))
+            .pointer_shape(PointerShape::Grab);
+        let mut tree = NodeTree::new();
+        crate::layout::LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &element,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 4,
+                h: 2,
+            },
+            None,
+        );
+        assert_eq!(tree.live_terminal_ids.len(), 1);
+        assert_eq!(tree.pointer_shape_at(0, 0), Some(PointerShape::Grab));
+    }
+
+    #[test]
+    fn pointer_shapes_respect_overlay_capture_and_z_order() {
+        let (mut tree, base) = build_base_tree();
+        tree.node_mut(base).pointer_shape = Some(crate::PointerShape::Grab);
+        let overlay = alloc_overlay_button(
+            &mut tree,
+            Rect {
+                x: 8,
+                y: 3,
+                w: 10,
+                h: 4,
+            },
+        );
+        tree.node_mut(overlay).pointer_shape = Some(crate::PointerShape::Help);
+        tree.set_overlay_roots(vec![overlay_root(
+            overlay,
+            0,
+            PointerCapture::BackdropFullScreen,
+        )]);
+        assert_eq!(tree.pointer_shape_at(1, 1), None);
+        assert_eq!(tree.pointer_shape_at(9, 4), Some(crate::PointerShape::Help));
+        tree.set_overlay_roots(vec![overlay_root(overlay, 0, PointerCapture::RectOnly)]);
+        assert_eq!(tree.pointer_shape_at(1, 1), Some(crate::PointerShape::Grab));
+        tree.set_overlay_roots(Vec::new());
+        assert_eq!(tree.pointer_shape_at(9, 4), Some(crate::PointerShape::Grab));
     }
 
     #[test]

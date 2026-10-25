@@ -76,6 +76,47 @@ pub struct ListNode {
 }
 
 impl WidgetNode for ListNode {
+    fn interactive_pointer_shape_at(
+        &self,
+        x: i16,
+        y: i16,
+        rect: crate::Rect,
+    ) -> Option<crate::PointerShape> {
+        if self.disabled
+            || !(self.on_select.is_some()
+                || self.on_activate.is_some()
+                || self.on_click.is_some()
+                || self.on_item_click.is_some()
+                || self.on_ctrl_activate.is_some())
+        {
+            return None;
+        }
+        let inner = rect.inner(self.border, self.padding);
+        if !inner.contains(x, y) {
+            return None;
+        }
+        let (start, end, top, _) = super::utils::calc_list_window_for_items_with_indicators(
+            self.offset,
+            &self.items,
+            inner.h as usize,
+            self.show_scroll_indicators,
+        );
+        let row = usize::try_from(y - inner.y)
+            .ok()?
+            .checked_sub(usize::from(top))?;
+        let index = super::utils::item_index_at_visual_line(
+            &self.items,
+            start,
+            row,
+            end.saturating_sub(start),
+        )?;
+        self.items[index].is_selectable().then(|| {
+            self.items[index]
+                .pointer_shape
+                .unwrap_or(crate::PointerShape::Pointer)
+        })
+    }
+
     fn is_disabled(&self) -> bool {
         self.disabled
     }

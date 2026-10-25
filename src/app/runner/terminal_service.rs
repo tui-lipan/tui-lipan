@@ -109,12 +109,31 @@ impl<C: Component> AppRunner<C> {
         Ok(())
     }
 
+    pub(super) fn update_mouse_pointer(
+        &mut self,
+        backend: &mut impl std::io::Write,
+    ) -> crate::Result<()> {
+        if !self.mouse_enabled || !self.focus.window_focused {
+            return self.terminal.pointer.update(backend, None);
+        }
+        let desired = crate::app::pointer::interaction_pointer(
+            &self.core.tree,
+            &self.mouse,
+            &self.drag,
+            self.core.ctx.pointer_mode(),
+        );
+        self.terminal.pointer.update(backend, desired)
+    }
+
     pub(super) fn needs_mouse_motion(&self) -> bool {
         if !self.mouse_enabled || !self.mouse_capture_active {
             return false;
         }
 
-        self.core.tree.has_hoverables()
+        self.core
+            .tree
+            .needs_pointer_motion(self.core.ctx.pointer_mode())
+            || self.core.tree.has_hoverables()
             || self.core.tree.has_mouse_move_handlers()
             || self.core.tree.has_terminal_any_event()
             || self.core.tree.has_terminal_link_hover()

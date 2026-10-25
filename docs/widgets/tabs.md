@@ -72,6 +72,13 @@ Tab::new("Draft")
 
 ---
 
+### Opt into a tab pointer
+
+`Tab::pointer_shape(PointerShape::Pointer)` requests a pointing hand over that tab's visible label
+and padding. It does not affect dividers or unused strip space. Registering `on_change` or
+`on_click` alone keeps the normal pointer. Use `Element::pointer_shape(...)` when you intend an
+override for an entire element instead.
+
 ## DraggableTabBar
 
 Editor-style tab bar with drag reordering, per-tab close buttons, file icons, and cross-bar transfer.

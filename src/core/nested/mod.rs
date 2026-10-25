@@ -461,6 +461,7 @@ struct ElementMetadata {
     semantic_selected: Option<bool>,
     semantic_expanded: Option<bool>,
     semantic_value_sensitive: bool,
+    pointer_shape: Option<crate::style::PointerShape>,
 }
 
 impl ElementMetadata {
@@ -479,6 +480,7 @@ impl ElementMetadata {
             semantic_selected: self.semantic_selected,
             semantic_expanded: self.semantic_expanded,
             semantic_value_sensitive: self.semantic_value_sensitive,
+            pointer_shape: self.pointer_shape,
             pointer_focus,
             kind,
             layout,
@@ -506,6 +508,7 @@ impl ElementMetadata {
             element.semantic_expanded = self.semantic_expanded;
         }
         element.semantic_value_sensitive |= self.semantic_value_sensitive;
+        element.pointer_shape = element.pointer_shape.or(self.pointer_shape);
         element
     }
 }
@@ -1248,6 +1251,7 @@ impl ComponentRegistry {
                 semantic_selected,
                 semantic_expanded,
                 semantic_value_sensitive,
+                pointer_shape,
                 pointer_focus,
                 kind,
                 layout,
@@ -1260,6 +1264,7 @@ impl ComponentRegistry {
                 semantic_selected,
                 semantic_expanded,
                 semantic_value_sensitive,
+                pointer_shape,
             };
             match kind {
                 ElementKind::Component(component) => {
@@ -1397,6 +1402,7 @@ impl ComponentRegistry {
             semantic_selected,
             semantic_expanded,
             semantic_value_sensitive,
+            pointer_shape,
             pointer_focus,
             kind,
             layout,
@@ -1409,6 +1415,7 @@ impl ComponentRegistry {
             semantic_selected,
             semantic_expanded,
             semantic_value_sensitive,
+            pointer_shape,
         };
         // A non-component child claims no slot, so this container's slot list is empty - the same
         // thing `expand_children` records when its `specs` come out empty.
@@ -2189,6 +2196,7 @@ mod tests {
                 overlay_manager,
                 focus_request: Rc::new(RefCell::new(None)),
                 mouse_capture: Rc::new(Cell::new(true)),
+                pointer_mode: Rc::default(),
                 modifier_key_reporting: Rc::new(Cell::new(false)),
                 modifier_key_reporting_keeps_shift: Rc::new(Cell::new(true)),
                 surface_mode: SurfaceMode::Fullscreen,
@@ -2469,6 +2477,7 @@ mod tests {
                 overlay_manager,
                 focus_request: Rc::new(RefCell::new(None)),
                 mouse_capture: Rc::new(Cell::new(true)),
+                pointer_mode: Rc::default(),
                 modifier_key_reporting: Rc::new(Cell::new(false)),
                 modifier_key_reporting_keeps_shift: Rc::new(Cell::new(true)),
                 surface_mode: SurfaceMode::Fullscreen,
@@ -2690,6 +2699,7 @@ mod tests {
                 overlay_manager,
                 focus_request: Rc::new(RefCell::new(None)),
                 mouse_capture: Rc::new(Cell::new(true)),
+                pointer_mode: Rc::default(),
                 modifier_key_reporting: Rc::new(Cell::new(false)),
                 modifier_key_reporting_keeps_shift: Rc::new(Cell::new(true)),
                 surface_mode: SurfaceMode::Fullscreen,

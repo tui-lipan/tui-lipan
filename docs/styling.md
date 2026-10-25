@@ -972,3 +972,51 @@ let gradient = ColorGradient::new(vec![
 // Use in Sparkline, ProgressBar, Table heatmaps, etc.
 ProgressBar::new(0.7).filled_gradient(gradient)
 ```
+
+## Mouse pointer shapes
+
+The framework requests a text pointer over text inputs and terminals that do not report mouse
+input, a pointing hand over modifier-hovered terminal links, and each terminal application's
+requested pointer over its own pane. In the default `PointerMode::Explicit`, click handlers do not
+change the pointer automatically.
+Opt in with `.pointer_shape(PointerShape::Pointer)` on a clickable control, or
+`Tab::pointer_shape(...)` on individual tabs. Tab pointers exclude dividers and unused strip space.
+These shapes require a host terminal with OSC 22 support. Unsupported terminals keep their usual
+pointer.
+
+Override a region with the `IntoElement` method at the end of a builder chain:
+
+```rust
+use tui_lipan::prelude::*;
+
+let handle = Text::new("Drag here").pointer_shape(PointerShape::Grab);
+```
+
+An explicit shape applies to descendants unless a descendant declares its own override.
+Setting a shape does not make an element clickable or focusable. Use `EwResize` or `NsResize`
+for resize handles and `Grabbing` during a move gesture. Pointer changes do not require repainting
+terminal cells. Leaving the application, suspending it, or handing the terminal to another program
+resets the pointer.
+
+
+Choose the runtime policy with `ctx.set_pointer_mode(...)`, including when applying user settings:
+
+| `PointerMode` | Feedback |
+| --- | --- |
+| `Disabled` | Normal host pointer; mouse input remains enabled. |
+| `Terminal` | Only live OSC 22 requests inside terminal content; no UI overrides, links, or text fallbacks. |
+| `Explicit` | Explicit overrides and intrinsic text/terminal feedback. This is the default. |
+| `Interactive` | Also infer semantic feedback for actionable controls and captured drags. |
+
+`Interactive` uses hands over actionable buttons, checkboxes, click regions, list/table rows,
+and tab labels or controls. List-backed pickers and file trees inherit the same policy. Headings,
+spacers, disabled controls, dividers, and unused tab strip space stay neutral. Sliders and splitters
+use resize pointers. Captured tab and drag-source gestures use `Grabbing` until release or
+cancellation. Explicit element overrides take precedence. `ListItem::pointer_shape(...)` can
+customize an individual row's Interactive feedback; use `Default` for a selectable row whose
+action is unavailable. Read the policy with `ctx.pointer_mode()`.
+
+Pointer policies leave ordinary hover effects and mouse-move callbacks enabled; these retain their
+own motion-reporting requirements. Changing policy takes effect without rebuilding widget
+properties. The terminal emulator controls
+which shapes it can display, including whether it supports shape changes during a held drag.

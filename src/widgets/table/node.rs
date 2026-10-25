@@ -70,6 +70,33 @@ pub struct TableNode {
 }
 
 impl WidgetNode for TableNode {
+    fn interactive_pointer_shape_at(
+        &self,
+        x: i16,
+        y: i16,
+        rect: crate::Rect,
+    ) -> Option<crate::PointerShape> {
+        if self.disabled
+            || !(self.on_select.is_some() || self.on_activate.is_some() || self.on_click.is_some())
+        {
+            return None;
+        }
+        let inner = rect.inner(self.border, self.padding);
+        if !inner.contains(x, y) {
+            return None;
+        }
+        let header = super::table_header_reserved_height(
+            self.header.as_ref(),
+            self.rows.len(),
+            self.row_gap,
+        );
+        let top = u16::from(self.show_scroll_indicators && self.top_indicator);
+        let row = u16::try_from(y - inner.y).ok()?.checked_sub(header + top)?;
+        let index = super::row_index_at_visual_offset(&self.rows, self.offset, row, self.row_gap)?;
+        (self.rows[index].role == super::TableRowRole::Normal)
+            .then_some(crate::PointerShape::Pointer)
+    }
+
     fn is_disabled(&self) -> bool {
         self.disabled
     }

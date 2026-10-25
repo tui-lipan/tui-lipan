@@ -19,6 +19,7 @@ mod node;
 mod osc;
 #[cfg(feature = "terminal-images")]
 mod output;
+mod pointer;
 #[cfg(feature = "terminal-images")]
 pub use output::{
     GraphicsDependency, TerminalImmutableFile, TerminalOutputClass, TerminalOutputMedia,
@@ -127,6 +128,7 @@ impl Default for Terminal {
             cursor_col: 0,
             show_cursor: true,
             cursor_shape: CaretShape::Block,
+            pointer_shape: None,
             cursor_blinking: true,
             cursor_blinking_override: None,
             caret_color: None,
@@ -283,6 +285,7 @@ impl Terminal {
         self.cursor_col = snapshot.cursor_col;
         self.show_cursor = snapshot.cursor_visible;
         self.cursor_shape = snapshot.cursor_shape;
+        self.pointer_shape = snapshot.pointer_shape;
         self.cursor_blinking = snapshot.cursor_blinking;
         self.color_lines = Some(snapshot.color_lines);
         self.color_cache_key = snapshot.sequence;

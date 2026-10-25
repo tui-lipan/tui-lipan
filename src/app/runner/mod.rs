@@ -3121,6 +3121,7 @@ impl<C: Component> AppRunner<C> {
                     continue;
                 }
 
+                self.update_mouse_pointer(terminal.backend_mut())?;
                 let ctx_repaint = self.core.take_full_repaint_request();
                 let devtools_request = self.apply_pending_devtools_request();
                 let handoff_repaint = take_handoff_full_repaint_request();
@@ -3129,6 +3130,7 @@ impl<C: Component> AppRunner<C> {
                     // tracking (1003) does not: forget it so the next render
                     // re-enables it and hover keeps working.
                     self.mouse_all_motion_enabled = false;
+                    self.terminal.pointer.invalidate();
                 }
                 let force_host_redraw =
                     ctx_repaint || handoff_repaint || devtools_request || host_color_refresh;
