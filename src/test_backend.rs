@@ -1392,6 +1392,12 @@ where
         self.capture_ui_snapshot_with_options(&crate::ui_snapshot::UiSnapshotOptions::default())
     }
 
+    /// Resolve the mouse pointer at a viewport cell without changing focus or sending input.
+    /// Call [`Self::render`] first after a view change. Live terminal requests are read directly.
+    pub fn pointer_shape_at(&self, x: u16, y: u16) -> Option<crate::style::PointerShape> {
+        self.core.tree.pointer_shape_at(x as i16, y as i16)
+    }
+
     /// Capture a UI snapshot with custom describe options.
     pub fn capture_ui_snapshot_with_options(
         &self,

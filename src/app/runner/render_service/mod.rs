@@ -1292,6 +1292,7 @@ impl<C: Component> AppRunner<C> {
         self.capture_inline_cursor_offset(frame_area, cursor_position.get());
         self.stabilize_inline_resize_anchor(terminal)?;
 
+        self.update_mouse_pointer(terminal.backend_mut())?;
         self.terminal.update_cursor(
             terminal.backend_mut(),
             &self.core.tree,

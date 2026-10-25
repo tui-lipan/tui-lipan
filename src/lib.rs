@@ -246,9 +246,9 @@ pub use crate::style::{
     DiffPalette, DocumentPalette, DocumentViewPalette, Edge, EffectAmount, EffectAxis, EffectCell,
     EffectChannels, EffectContext, EffectPalette, EffectPrepareContext, EffectPulse,
     FileIconPalette, FloatRect, GitStatusPalette, HexAreaPalette, HostTerminalColors, InputPalette,
-    Justify, LayoutConstraints, Length, Padding, Paint, PreparedCellEffect, Rect, RetroPreset,
-    RichText, RippleRadius, ScrollbarConfig, ScrollbarPalette, ScrollbarVariant, ShrinkPriority,
-    Size, Span, StatusPalette, Style, SurfacePalette, SyntaxPalette, TerminalColor,
+    Justify, LayoutConstraints, Length, Padding, Paint, PointerShape, PreparedCellEffect, Rect,
+    RetroPreset, RichText, RippleRadius, ScrollbarConfig, ScrollbarPalette, ScrollbarVariant,
+    ShrinkPriority, Size, Span, StatusPalette, Style, SurfacePalette, SyntaxPalette, TerminalColor,
     TerminalCursorStyle, TerminalPalette, TextAreaPalette, ThemeExtension, ThemePalette,
     VisualEffect, query_host_colors,
 };

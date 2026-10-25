@@ -38,6 +38,7 @@ pub(crate) struct TerminalNode {
     pub cursor_col: u16,
     pub cursor_visible: bool,
     pub cursor_shape: CaretShape,
+    pub pointer_shape: Option<crate::style::PointerShape>,
     pub cursor_blinking: bool,
     pub cursor_blinking_override: Option<bool>,
     pub caret_color: Option<Color>,
@@ -196,6 +197,7 @@ impl TerminalNode {
         self.cursor_col = snapshot.cursor_col;
         self.cursor_visible = snapshot.cursor_visible && self.show_cursor_requested;
         self.cursor_shape = snapshot.cursor_shape;
+        self.pointer_shape = snapshot.pointer_shape;
         self.cursor_blinking = self
             .cursor_blinking_override
             .unwrap_or(snapshot.cursor_blinking);

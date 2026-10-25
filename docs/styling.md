@@ -972,3 +972,24 @@ let gradient = ColorGradient::new(vec![
 // Use in Sparkline, ProgressBar, Table heatmaps, etc.
 ProgressBar::new(0.7).filled_gradient(gradient)
 ```
+
+## Mouse pointer shapes
+
+The framework requests a text pointer over text inputs and terminals that do not report mouse
+input, a pointing hand over buttons and modifier-hovered terminal links, and each terminal
+application's requested pointer over its own pane. These shapes require a host terminal with
+OSC 22 support. Unsupported terminals keep their usual pointer.
+
+Override a region with the `IntoElement` method at the end of a builder chain:
+
+```rust
+use tui_lipan::prelude::*;
+
+let handle = Text::new("Drag here").pointer_shape(PointerShape::Grab);
+```
+
+An explicit shape applies to descendants unless a descendant declares its own override.
+Setting a shape does not make an element clickable or focusable. Use `EwResize` or `NsResize`
+for resize handles and `Grabbing` during a move gesture. Pointer changes do not require repainting
+terminal cells. Leaving the application, suspending it, or handing the terminal to another program
+resets the pointer.

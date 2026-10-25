@@ -10,15 +10,42 @@ use crate::app::input::text_area_vim::TextAreaVimState;
 use crate::core::node::{NodeId, NodeTree};
 use crate::style::{CaretShape, Color};
 
+#[derive(Default)]
+pub(crate) struct PointerManager {
+    last: Option<crate::style::PointerShape>,
+}
+
+impl PointerManager {
+    pub fn invalidate(&mut self) {
+        self.last = None;
+    }
+
+    pub fn update(
+        &mut self,
+        backend: &mut impl std::io::Write,
+        desired: Option<crate::style::PointerShape>,
+    ) -> Result<()> {
+        if self.last == desired {
+            return Ok(());
+        }
+        let name = desired.map_or("", crate::style::PointerShape::as_str);
+        execute!(backend, Print(format!("\x1b]22;{name}\x1b\\")))?;
+        self.last = desired;
+        Ok(())
+    }
+}
+
 pub(crate) struct TerminalManager {
     pub last_cursor_color: Option<(u8, u8, u8)>,
     pub osc12_supported: bool,
+    pub pointer: PointerManager,
 }
 
 impl Default for TerminalManager {
     fn default() -> Self {
         Self {
             last_cursor_color: None,
+            pointer: PointerManager::default(),
             osc12_supported: supports_osc12_cursor_color(),
         }
     }
@@ -67,6 +94,7 @@ impl TerminalManager {
     }
 
     pub fn reset_cursor<B: std::io::Write>(&mut self, backend: &mut B) -> Result<()> {
+        self.pointer.update(backend, None)?;
         if self.last_cursor_color.is_some() {
             execute!(backend, Print("\x1b]112\x07"))?;
             self.last_cursor_color = None;
@@ -482,5 +510,43 @@ mod tests {
             .unwrap();
 
         assert!(String::from_utf8_lossy(&out).contains("\u{1b}]12;#123456\u{7}"));
+    }
+}
+
+#[cfg(test)]
+mod pointer_tests {
+    use super::PointerManager;
+    use crate::PointerShape;
+
+    #[test]
+    fn host_pointer_changes_are_deduplicated_and_reset_when_leaving() {
+        let mut pointer = PointerManager::default();
+        let mut bytes = Vec::new();
+        pointer
+            .update(&mut bytes, Some(PointerShape::Grab))
+            .unwrap();
+        pointer
+            .update(&mut bytes, Some(PointerShape::Grab))
+            .unwrap();
+        pointer
+            .update(&mut bytes, Some(PointerShape::Text))
+            .unwrap();
+        pointer.update(&mut bytes, None).unwrap();
+        pointer.update(&mut bytes, None).unwrap();
+        assert_eq!(bytes, b"\x1b]22;grab\x1b\\\x1b]22;text\x1b\\\x1b]22;\x1b\\");
+    }
+
+    #[test]
+    fn resuming_from_a_handoff_reapplies_the_pointer() {
+        let mut pointer = PointerManager::default();
+        let mut bytes = Vec::new();
+        pointer
+            .update(&mut bytes, Some(PointerShape::Grab))
+            .unwrap();
+        pointer.invalidate();
+        pointer
+            .update(&mut bytes, Some(PointerShape::Grab))
+            .unwrap();
+        assert_eq!(bytes, b"\x1b]22;grab\x1b\\\x1b]22;grab\x1b\\");
     }
 }

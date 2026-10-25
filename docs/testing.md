@@ -896,3 +896,7 @@ a real change is worse than no baseline.
 1,000, and 10,000 unrelated nodes, both with and without panel-body drop registration. It warms
 the rendered-tree cache and excludes setup and reconciliation from the timed loop. Use it to
 check that unrelated subtree size does not add registration-discovery work to each mouse move.
+
+`TestBackend::pointer_shape_at(x, y)` resolves a mouse pointer without sending input or changing
+focus. Render after a view change before querying it. Live terminal requests are read directly,
+so this also checks updates that arrive without a layout or cell repaint.

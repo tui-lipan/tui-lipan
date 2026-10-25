@@ -4,9 +4,9 @@
 //! Alacritty grid parser *and* a second, independent [`vte::Parser`](alacritty_terminal::vte::Parser)
 //! driven by [`SemanticObserver`]. OSC dispatch tracks working-directory and command-lifecycle
 //! state; CSI dispatch notices XTVERSION, which the grid parser does not implement. Neither path
-//! touches cell/cursor state or the render snapshot.
+//! touches cell/caret state. OSC 22 retains the mouse pointer independently of the grid.
 //!
-//! This state is intentionally kept out of [`TerminalRenderSnapshot`](super::TerminalRenderSnapshot):
+//! Shell semantic state is intentionally kept out of [`TerminalRenderSnapshot`](super::TerminalRenderSnapshot):
 //! it is runtime metadata (current working directory, foreground command phase, reported
 //! executable), not something the renderer paints.
 
@@ -122,12 +122,13 @@ pub struct TerminalSemanticState {
 /// Parallel `vte::Perform` implementation for metadata and unsupported query detection.
 ///
 /// Every callback besides OSC, CSI, and ESC dispatch keeps the trait's no-op default: this
-/// observer never touches grid/cursor state and cannot affect rendering.
+/// observer never touches grid/caret state. Mouse pointer requests affect host output only.
 #[derive(Debug, Default)]
 pub(super) struct SemanticObserver {
     state: TerminalSemanticState,
     events: Vec<TerminalSemanticEvent>,
     xtversion_query: bool,
+    pub(super) pointer: super::pointer::PointerState,
     /// Where in `events` the child last sent `RIS`, until the screen takes it.
     ///
     /// This parser reads a whole chunk before the grid does, so by the time the grid resets, the
@@ -286,6 +287,16 @@ impl SemanticObserver {
 
 impl Perform for SemanticObserver {
     fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], ignore: bool, action: char) {
+        if !ignore && intermediates == b"!" && action == 'p' {
+            self.pointer = Default::default();
+        }
+        if !ignore && intermediates == b"?" && matches!(action, 'h' | 'l') {
+            for param in params.iter() {
+                if matches!(param, [47] | [1047] | [1049]) {
+                    self.pointer.alternate_active = action == 'h';
+                }
+            }
+        }
         if ignore || action != 'q' || intermediates != b">" {
             return;
         }
@@ -304,6 +315,7 @@ impl Perform for SemanticObserver {
     fn esc_dispatch(&mut self, intermediates: &[u8], ignore: bool, byte: u8) {
         if !ignore && byte == b'c' && intermediates.is_empty() {
             self.reset_at = Some(self.events.len());
+            self.pointer = Default::default();
         }
     }
 
@@ -312,6 +324,7 @@ impl Perform for SemanticObserver {
             return;
         };
         match code {
+            b"22" if params.len() == 2 => self.pointer.dispatch(params[1]),
             b"7" => self.handle_osc7(&params[1..]),
             b"9" if params.get(1).copied() == Some(&b"9"[..]) => self.handle_osc9_9(&params[2..]),
             b"133" => self.handle_osc133(&params[1..]),
@@ -320,7 +333,7 @@ impl Perform for SemanticObserver {
     }
 
     fn terminated(&self) -> bool {
-        self.xtversion_query
+        self.xtversion_query || self.pointer.response.is_some()
     }
 }
 

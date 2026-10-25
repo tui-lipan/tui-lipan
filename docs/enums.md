@@ -1672,3 +1672,16 @@ Content in `TerminalPasteEvent::content` and read by `ClipboardHandle::read_cont
 | `Terminal` | Outer-terminal paste event, which may contain plain text or a file-drop path |
 
 `TerminalPasteEvent` contains this origin alongside its `ClipboardContent` payload.
+
+## PointerShape
+
+`PointerShape` controls the mouse pointer independently of `CaretShape`, which controls the text
+insertion cursor. It is available from the crate root, `style`, and the prelude.
+
+The variants use the OSC 22 / CSS names in PascalCase: `Alias`, `Cell`, `Copy`, `Crosshair`,
+`Default`, `EResize`, `EwResize`, `Grab`, `Grabbing`, `Help`, `Move`, `NResize`, `NeResize`,
+`NeswResize`, `NoDrop`, `NotAllowed`, `NsResize`, `NwResize`, `NwseResize`, `Pointer`, `Progress`,
+`SResize`, `SeResize`, `SwResize`, `Text`, `VerticalText`, `WResize`, `Wait`, `ZoomIn`, and
+`ZoomOut`. `Default` selects the host's arrow-style default. An absent override lets the widget
+choose automatically. `as_str()` returns the protocol name and `from_name()` parses a standard
+name, returning `None` for an unknown name.

@@ -39,6 +39,7 @@ pub(crate) enum TerminalOp {
     EnableThemeNotifications,
     DisableThemeNotifications,
     DisablePixelMouse,
+    ResetPointer,
     Flush,
 }
 
@@ -66,7 +67,7 @@ impl TerminalOp {
             Self::DisableThemeNotifications => Some(Self::EnableThemeNotifications),
             // Not undone: pixel reports were not necessarily on before, and only the input worker
             // can switch them on at a point its decoder sees. It asks again when it resumes.
-            Self::ClearScreen | Self::Flush | Self::DisablePixelMouse => None,
+            Self::ClearScreen | Self::Flush | Self::DisablePixelMouse | Self::ResetPointer => None,
         }
     }
 }
@@ -120,7 +121,7 @@ pub(crate) fn exit_plan(
     policy: SurfaceTerminalPolicy,
     keyboard_enhancement: bool,
 ) -> TerminalTransitionPlan {
-    let mut ops = vec![TerminalOp::DisableRawMode];
+    let mut ops = vec![TerminalOp::DisableRawMode, TerminalOp::ResetPointer];
     if keyboard_enhancement {
         ops.push(TerminalOp::PopKeyboardEnhancement);
     }
@@ -145,7 +146,7 @@ pub(crate) fn suspend_plan(
     policy: SurfaceTerminalPolicy,
     pop_keyboard: bool,
 ) -> TerminalTransitionPlan {
-    let mut ops = vec![TerminalOp::DisableRawMode];
+    let mut ops = vec![TerminalOp::DisableRawMode, TerminalOp::ResetPointer];
     if pop_keyboard {
         ops.push(TerminalOp::PopKeyboardEnhancement);
     }
@@ -328,6 +329,7 @@ impl<W: Write> TerminalTransitionExecutor for CrosstermTransitionExecutor<W> {
             TerminalOp::DisableThemeNotifications => {
                 execute!(self.writer, Print("\x1b[?2031l"))
             }
+            TerminalOp::ResetPointer => execute!(self.writer, Print("\x1b]22;\x1b\\")),
             TerminalOp::DisablePixelMouse => execute!(self.writer, Print("\x1b[?1016l")),
             TerminalOp::Flush => self.writer.flush(),
         }
@@ -404,6 +406,7 @@ mod tests {
             plan.ops(),
             &[
                 TerminalOp::DisableRawMode,
+                TerminalOp::ResetPointer,
                 TerminalOp::LeaveAlternateScreen,
                 TerminalOp::DisableBracketedPaste,
                 TerminalOp::DisablePixelMouse,
@@ -426,9 +429,10 @@ mod tests {
         };
         let suspend = suspend_plan(inline, true);
         assert_eq!(
-            &suspend.ops()[..2],
+            &suspend.ops()[..3],
             &[
                 TerminalOp::DisableRawMode,
+                TerminalOp::ResetPointer,
                 TerminalOp::PopKeyboardEnhancement
             ]
         );
