@@ -1437,6 +1437,16 @@ impl GraphicsCommand {
             && (self.action == GraphicsAction::Transmit || self.no_cursor_move)
     }
 
+    /// Format and pixel dimensions of a raw transmission, which fix what it costs the image
+    /// budget once stored. `None` for PNG, whose size only the decoder knows.
+    pub(super) fn declared_raw_size(&self) -> Option<(u32, u32, u32)> {
+        (matches!(self.format, 24 | 32) && self.width > 0 && self.height > 0).then_some((
+            self.format,
+            self.width,
+            self.height,
+        ))
+    }
+
     /// Whether a later replacement in the same input made this command's effect unobservable,
     /// so the parser skips it. Its source has been claimed without being read.
     pub(super) fn is_superseded(&self) -> bool {
@@ -4010,13 +4020,20 @@ pub(super) fn inline_transmission(wire: &[u8], data: &[u8]) -> Vec<u8> {
         }
     };
     let mut out = Vec::with_capacity(data.len() * 4 / 3 + control.len() + 64);
-    write_chunked(&mut out, &keys, quiet.as_deref(), data);
+    write_chunked(&mut out, &keys, None, quiet.as_deref(), data);
     out
 }
 
 /// Append one command carrying `data` under `keys`, base64-encoded and split into protocol
-/// chunks. Continuation chunks repeat `quiet`, since they carry no other keys.
-pub(super) fn write_chunked(out: &mut Vec<u8>, keys: &[&[u8]], quiet: Option<&[u8]>, data: &[u8]) {
+/// chunks. Continuation chunks repeat `quiet`, and `action` when the protocol requires it there:
+/// frame data (`a=f`) names its action on every chunk, a transmission only on the first.
+pub(super) fn write_chunked(
+    out: &mut Vec<u8>,
+    keys: &[&[u8]],
+    action: Option<&[u8]>,
+    quiet: Option<&[u8]>,
+    data: &[u8],
+) {
     let encoded = BASE64.encode(data);
     let chunks: Vec<&[u8]> = if encoded.is_empty() {
         vec![&[][..]]
@@ -4033,6 +4050,10 @@ pub(super) fn write_chunked(out: &mut Vec<u8>, keys: &[&[u8]], quiet: Option<&[u
                 out.extend_from_slice(if keys.is_empty() { b"m=1" } else { b",m=1" });
             }
         } else {
+            if let Some(action) = action {
+                out.extend_from_slice(action);
+                out.push(b',');
+            }
             out.extend_from_slice(if more { b"m=1" } else { b"m=0" });
             if let Some(quiet) = quiet {
                 out.extend_from_slice(b",q=");

@@ -95,20 +95,21 @@ fn edit_targets(replacements: &[usize], commands: usize) -> Vec<usize> {
     }
 }
 
-/// [`RelayBase`] for a batch, when every command before its final replacement leaves that image
-/// alone, so readers will hold exactly the base when the replacement arrives.
+/// [`RelayBase`] for a batch, so readers will hold exactly the base when its replacement arrives.
+///
+/// Only when the replacement is the batch's first graphics command: any image command before it,
+/// of any image, can change what the budget evicts, the base included.
 pub(super) fn batch_relay_base(
     graphics: &super::graphics::TerminalGraphics,
     commands: &[GraphicsCommand],
     replacements: &[usize],
 ) -> Option<Box<RelayBase>> {
     let first = *edit_targets(replacements, commands.len()).first()?;
-    let id = commands[first].transmitted_id()?;
-    commands[..first]
-        .iter()
-        .all(|command| command.replaces_whole_image() && command.transmitted_id() != Some(id))
-        .then(|| graphics.relay_base(id))
-        .flatten()
+    if first != 0 {
+        return None;
+    }
+    graphics
+        .relay_base(commands[first].transmitted_id()?)
         .map(Box::new)
 }
 
@@ -165,19 +166,24 @@ impl TerminalPreparedInput {
 /// replacements of that image in `bytes`. Returns the chain's command indices, oldest first, or
 /// nothing when no later replacement qualifies.
 ///
-/// Between two links only text and replacements of other images may appear: anything else could
-/// observe the earlier frame. Each link is a complete command, so the batch never ends inside one.
+/// Skipping a link must leave the image budget exactly as applying it would. So only text may
+/// separate two links, since another image's replacement would see a different eviction order. And
+/// every link must declare the same raw size, so a skipped link could not have evicted anything the
+/// replacement that succeeds does not. Each link is a complete command, so the batch never ends
+/// inside one.
 pub(super) fn extend_replacements(
     scanner: &mut GraphicsScanner,
     bytes: &[u8],
     commands: &mut Vec<GraphicsCommand>,
     length: &mut usize,
 ) -> Vec<usize> {
-    let Some(id) = commands
+    let Some(last) = commands
         .last()
         .filter(|last| last.needs_media() && last.replaces_whole_image())
-        .and_then(GraphicsCommand::transmitted_id)
     else {
+        return Vec::new();
+    };
+    let (Some(id), Some(size)) = (last.transmitted_id(), last.declared_raw_size()) else {
         return Vec::new();
     };
     let mut chain = vec![commands.len() - 1];
@@ -192,19 +198,17 @@ pub(super) fn extend_replacements(
                 GraphicsSegment::Wire(_) => return finish(chain),
             }
         }
-        let Some((next, between)) = found.split_last() else {
+        let [next] = found.as_slice() else {
             break;
         };
         let links = next.needs_media()
             && next.replaces_whole_image()
             && next.transmitted_id() == Some(id)
-            && between.iter().all(|command| {
-                command.replaces_whole_image() && command.transmitted_id() != Some(id)
-            });
+            && next.declared_raw_size() == Some(size);
         if !links {
             break;
         }
-        chain.push(commands.len() + between.len());
+        chain.push(commands.len());
         commands.extend(found);
         *length += used;
         *scanner = ahead;
@@ -406,9 +410,15 @@ mod tests {
 
     #[test]
     fn anything_that_could_observe_the_earlier_frame_ends_the_burst() {
+        let other = Source::new(&[0, 0, 255, 255]);
+        // Another image's replacement could evict differently once the earlier frame is skipped.
+        let other_replacement = other.command_for('t', 10);
+        let inline_replacement = direct("a=T,f=32,s=1,v=1,i=10,p=1,C=1,q=2", &[1, 2, 3, 4]);
         for between in [
             &b"\x1b_Ga=p,i=9,p=2,q=2\x1b\\"[..],
             b"\x1b_Ga=d,d=a,q=2\x1b\\",
+            &other_replacement,
+            &inline_replacement,
         ] {
             let first = Source::new(&[255, 0, 0, 255]);
             let second = Source::new(&[0, 255, 0, 255]);
@@ -422,6 +432,58 @@ mod tests {
             assert!(!first.0.exists());
             assert!(second.0.exists());
         }
+    }
+
+    #[test]
+    fn a_replacement_of_another_size_ends_the_burst() {
+        // A larger skipped frame could have evicted an image the smaller newest one does not.
+        let first = Source::new(&[255, 0, 0, 255, 0, 0, 0, 255]);
+        let second = Source::new(&[0, 255, 0, 255]);
+        let mut bytes = first.command('t');
+        let size = bytes.windows(7).position(|key| key == b"s=1,v=1").unwrap();
+        bytes[size + 2] = b'2';
+        let expected = bytes.len();
+        bytes.extend(second.command('t'));
+        let screen = screen(GraphicsRelayPolicy::Consuming);
+        let prepared = screen.prepare_media_input(bytes.into()).unwrap().run();
+        assert_eq!(prepared.consumed_bytes(), expected);
+        assert!(second.0.exists());
+    }
+
+    #[test]
+    fn an_image_evicted_earlier_in_the_batch_is_relayed_whole() {
+        // Two 16x16 RGBA images do not fit the budget together.
+        let (w, h) = (16, 16);
+        let budget = w * h * 4 * 3 / 2;
+        let mut server = TerminalScreen::new(24, 80, 100);
+        server.set_image_budget(budget);
+        server.set_image_relay_policy(GraphicsRelayPolicy::All);
+        server.set_output_transaction_recording(true);
+        let mut reader = TerminalScreen::new(24, 80, 100);
+        reader.set_image_budget(budget);
+        reader.set_image_media_policy(GraphicsMediaPolicy::NONE);
+        let first = Source::new(&frame_pixels(w, h, 0));
+        let wire: Vec<u8> = deferred(&mut server, &frame_command(&first, w, h))
+            .into_iter()
+            .flat_map(|(_, bytes)| bytes)
+            .collect();
+        reader.process_bytes(&wire);
+        // Another image arrives inline in the same batch and evicts the first before its next
+        // frame. Readers no longer hold the base, so that frame cannot travel as an edit.
+        let mut bytes = direct(
+            &format!("a=T,f=32,s={w},v={h},i=8,p=1,C=1,q=2"),
+            &frame_pixels(w, h, 7),
+        );
+        let second = Source::new(&frame_pixels(w, h, 0));
+        bytes.extend(frame_command(&second, w, h));
+        let wire: Vec<u8> = deferred(&mut server, &bytes)
+            .into_iter()
+            .flat_map(|(_, bytes)| bytes)
+            .collect();
+        assert!(!wire.windows(4).any(|key| key == b"a=f,"));
+        reader.process_bytes(&wire);
+        assert_eq!(placed(&mut reader), placed(&mut server));
+        assert!(placed(&mut reader).iter().any(|placed| placed.0 == 4));
     }
 
     /// A `w`x`h` RGBA frame of noise that barely compresses, distinct for each `seed`.
@@ -481,7 +543,14 @@ mod tests {
         small[(10 * w + 20) * 4..(10 * w + 26) * 4].fill(255);
         let mut rewritten = frame_pixels(w, h, 99);
         rewritten[0] = 1;
-        let frames = [first.clone(), small.clone(), small, rewritten, first];
+        // A noisy 40x40 region needs an edit of several protocol chunks.
+        let mut large = rewritten.clone();
+        let noise = frame_pixels(40, 40, 50);
+        for row in 0..40 {
+            let start = ((row + 8) * w + 30) * 4;
+            large[start..start + 160].copy_from_slice(&noise[row * 160..(row + 1) * 160]);
+        }
+        let frames = [first.clone(), small.clone(), small, rewritten, large, first];
         let mut server = TerminalScreen::new(24, 80, 100);
         server.set_image_relay_policy(GraphicsRelayPolicy::All);
         server.set_output_transaction_recording(true);
@@ -502,6 +571,24 @@ mod tests {
             assert!(!wire.windows(3).any(|key| key == b"t=t"));
             classes.push(transactions.iter().map(|(class, _)| *class).max().unwrap());
             sizes.push(wire.len());
+            // Every chunk of frame data names its action, as the protocol requires; a
+            // transmission's continuation chunks need not.
+            let mut frame_run = false;
+            for chunk in wire
+                .split(|byte| *byte == 0x1b)
+                .filter(|c| c.starts_with(b"_G"))
+            {
+                let control = chunk.split(|byte| *byte == b';').next().unwrap();
+                let has = |key: &[u8]| control.windows(key.len()).any(|window| window == key);
+                if frame_run {
+                    assert!(
+                        has(b"a=f"),
+                        "frame {index}: {}",
+                        String::from_utf8_lossy(control)
+                    );
+                }
+                frame_run = has(b"a=f") && has(b"m=1");
+            }
             reader.process_bytes(&wire);
             let direct = base64::engine::general_purpose::STANDARD.encode(pixels);
             reference.process_bytes(text.as_bytes());
@@ -517,7 +604,11 @@ mod tests {
         }
         // Small and unchanged frames travel as edits of the previous frame, still marked as a
         // stream of whole frames. A rewritten frame travels whole and stays replaceable.
-        assert_eq!(classes, [1, 3, 3, 2, 2]);
+        assert_eq!(classes, [1, 3, 3, 2, 3, 2]);
+        assert!(
+            sizes[4] > 2 * 4096,
+            "the large edit spans several chunks: {sizes:?}"
+        );
         assert!(
             sizes[1] * 20 < sizes[0],
             "an edit is far smaller: {sizes:?}"

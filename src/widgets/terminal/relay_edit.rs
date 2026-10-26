@@ -75,7 +75,13 @@ pub(super) fn edit_transmission(
             "a=f,r=1,i={id},x={},y={},s={},v={},f={format},X=1,o=z,q=2",
             rect.x, rect.y, rect.width, rect.height
         );
-        write_chunked(&mut out, &[header.as_bytes()], Some(b"2"), &compressed);
+        write_chunked(
+            &mut out,
+            &[header.as_bytes()],
+            Some(b"a=f"),
+            Some(b"2"),
+            &compressed,
+        );
     }
     out.extend_from_slice(format!("\x1b_Ga=d,d=i,i={id},q=2\x1b\\").as_bytes());
     if places {

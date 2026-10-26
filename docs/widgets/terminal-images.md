@@ -299,8 +299,9 @@ frames are compressed on several threads into one ordinary zlib stream. Failed r
 emit no source reference; the authoritative screen answers the child. Chunked out-of-band
 transmissions are rejected. Direct `t=d` chunking remains supported.
 
-When `prepare_media_input` relays a whole replacement inline and readers already hold that image at
-the same size and pixel format, only what changed is sent. The output is a root-frame edit
+When `prepare_media_input` relays a whole replacement inline, only what changed is sent if readers
+hold that image at the same size and pixel format and no other graphics command precedes the
+replacement in its batch. The output is a root-frame edit
 (`a=f,r=1`) for each changed rectangle, followed by `a=d,d=i` and, for `a=T`, an `a=p` with the
 original placement keys. Readers end in the state the whole transmission would have left. A frame
 that changed almost everywhere is still sent whole. Readers must be `TerminalScreen`s, or other
@@ -313,9 +314,9 @@ For large images, call `screen.prepare_media_input(bytes)` before ordinary proce
 bounded worker queue and call its `run()` there. This acquires and validates the source, keeps raw
 pixels in a file snapshot when the screen stores images as files and decodes otherwise, and
 builds the relayed output. The work item stops after one named image even when the input contains
-a burst of references, with one exception. When the input already holds later quiet (`q=2`)
-replacements of the same image, with only text or other images' replacements between them, the work
-item covers them all and only the newest readable one is acquired. Earlier sources are claimed
+a burst of references, with one exception. When the input already holds later quiet (`q=2`) raw
+replacements of the same image at the same size, with only text between them, the work item covers
+them all and only the newest readable one is acquired. Earlier sources are claimed
 without being read, and the parser skips those commands, which leaves the state that applying each
 in turn would. A producer that outpaces its reader then costs one acquisition per batch, not one
 per frame.
