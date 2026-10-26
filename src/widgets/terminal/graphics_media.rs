@@ -113,6 +113,11 @@ pub enum GraphicsRelayPolicy {
     Consuming,
     /// Replace all named sources with inline pixels, including re-readable `t=f` files.
     All,
+    /// Like [`All`](Self::All), but a replacement of an image readers already hold travels as
+    /// root-frame edits (`a=f,r=1`) of what changed. Choose it only while every reader applies those
+    /// edits, as [`TerminalScreen`](crate::widgets::TerminalScreen) does; another reader would keep
+    /// the previous frame without reporting an error.
+    AllWithEdits,
 }
 
 impl GraphicsRelayPolicy {
@@ -120,8 +125,7 @@ impl GraphicsRelayPolicy {
         match self {
             Self::None => false,
             Self::Consuming => medium.consumes_source(),
-            Self::NamedAsFiles => medium.is_out_of_band(),
-            Self::All => medium.is_out_of_band(),
+            Self::NamedAsFiles | Self::All | Self::AllWithEdits => medium.is_out_of_band(),
         }
     }
 }

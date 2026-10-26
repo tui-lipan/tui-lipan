@@ -2497,7 +2497,7 @@ impl TerminalScreen {
         );
         let (media, relay) = self.graphics.media_options();
         let recording = self.output_transactions.is_some();
-        let base = recording
+        let base = (recording && relay == super::GraphicsRelayPolicy::AllWithEdits)
             .then(|| super::media_work::batch_relay_base(&self.graphics, &commands, &replacements))
             .flatten();
         Some(super::TerminalMediaWork {
