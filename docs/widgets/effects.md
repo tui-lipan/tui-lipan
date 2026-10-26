@@ -78,6 +78,16 @@ Nested `Clipped` layers compose; each layer’s `bounds` / `mask` uses the same 
 
 For expensive effects, override `prepare(&EffectPrepareContext)` and return a `PreparedCellEffect`. Preparation runs once per effect scope, bounds, and render phase before the per-cell pass (`EffectPrepareContext` carries the same `phase` and `elapsed`), so you can cache light positions, palettes, masks, or other frame-constant state instead of recomputing it for every cell.
 
+The Hearth Glow variant in `examples/effect_scope_dot_field.rs` prepares flame columns,
+smoke plumes, and sparks once per frame. Its per-cell pass skips sources whose
+contribution is zero before evaluating powers or trigonometry. It keeps the direct
+implementation for cell-for-cell comparisons. To compare their release-mode frame
+cost, including preparation but excluding terminal output, run:
+
+```bash
+cargo test --release --example effect_scope_dot_field hearth_frame_cost -- --ignored --nocapture
+```
+
 ```rust
 use std::fmt;
 

@@ -368,56 +368,11 @@ impl CellEffect for HearthGlowEffect {
         let smoke = fireplace_smoke(x, y, t, w, h);
         let sparks = fireplace_sparks(x, y, t, w, h);
 
-        let grain = hashed_noise(ctx.x as i32, ctx.y as i32) * 0.05;
-        let backdrop =
-            (12.0 + grain * 12.0 + smoke * 16.0 + flame_field * 12.0).clamp(0.0, 255.0) as u8;
-        let bg = TerminalColor::Rgb(
-            backdrop,
-            backdrop.saturating_add(1),
-            backdrop.saturating_add(3),
-        );
+        paint_hearth(cell, ctx, y, flame_field, hot_core, smoke, sparks);
+    }
 
-        let heat = (flame_field + hot_core * 0.72 + sparks * 0.7).clamp(0.0, 1.0);
-        if heat < 0.03 && smoke < 0.06 {
-            cell.set_symbol(" ");
-            cell.set_fg(bg);
-            cell.set_bg(bg);
-            return;
-        }
-
-        let upper_smoke = smoothstep(0.42, 0.08, y);
-        let flame_presence = smoothstep(0.08, 0.52, heat);
-        let sparkiness = smoothstep(0.62, 0.95, sparks);
-
-        let glyph = if sparkiness > 0.88 {
-            "*"
-        } else if heat > 0.82 {
-            "$"
-        } else if heat > 0.56 {
-            "s"
-        } else if flame_presence > 0.22 || smoke > 0.10 || upper_smoke > 0.46 {
-            "."
-        } else {
-            " "
-        };
-
-        let fg = if sparkiness > 0.78 || heat > 0.9 {
-            TerminalColor::Rgb(255, 248, 226)
-        } else if heat > 0.72 {
-            TerminalColor::Rgb(255, 234, 160)
-        } else if heat > 0.54 {
-            TerminalColor::Rgb(255, 189, 92)
-        } else if heat > 0.34 {
-            TerminalColor::Rgb(240, 120, 52)
-        } else if smoke > 0.12 {
-            TerminalColor::Rgb(112, 105, 98)
-        } else {
-            TerminalColor::Rgb(160, 88, 48)
-        };
-
-        cell.set_symbol(glyph);
-        cell.set_fg(fg);
-        cell.set_bg(bg);
+    fn prepare(&self, ctx: &EffectPrepareContext) -> Option<Box<dyn PreparedCellEffect>> {
+        Some(Box::new(PreparedHearthGlowEffect::new(ctx.phase)))
     }
 
     fn is_animated(&self) -> bool {
@@ -430,6 +385,268 @@ impl CellEffect for HearthGlowEffect {
 
     fn cache_key(&self) -> u64 {
         0x1A57_6E4B_u64
+    }
+}
+
+// Cache moving sources once per frame. The direct CellEffect path above remains a
+// reference implementation; the renderer uses this prepared path for the scope.
+#[derive(Debug)]
+struct HearthColumn {
+    center: f32,
+    width: f32,
+    peak: f32,
+    height_phase: f32,
+    flicker_phase: f32,
+    flicker_speed_phase: f32,
+    strength: f32,
+}
+
+impl HearthColumn {
+    fn new(i: i32, t: f32) -> Self {
+        let idx = i as f32;
+        let band = idx / 29.0;
+        let jitter = hashed_unit(i, 11) - 0.5;
+        let sway = (t * (1.15 + idx * 0.04) + idx * 1.31).sin() * 0.014;
+        Self {
+            center: (0.025 + band * 0.95 + jitter * 0.022 + sway).clamp(0.0, 1.0),
+            width: 0.038 + hashed_unit(i, 4) * 0.040,
+            peak: 0.10 + hashed_unit(i, 7) * 0.32,
+            height_phase: t * 1.35 + idx * 0.57,
+            flicker_phase: t * 3.1 + idx * 1.7,
+            flicker_speed_phase: t * 5.2 + idx * 0.9,
+            strength: 0.55 + hashed_unit(i, 13) * 0.70,
+        }
+    }
+
+    fn sample(&self, x: f32, y: f32) -> (f32, f32) {
+        let above_floor = (0.985 - y).clamp(0.0, 1.0);
+        let distance = (x - self.center).abs();
+        // These are conservative bounds. Outside them the original formula is zero.
+        if above_floor >= 0.44 || distance > self.width * (0.24 + 1.08) {
+            return (0.0, 0.0);
+        }
+        let height_wave = 0.075 * (self.height_phase + x * 3.2).sin();
+        let tongue_height = (self.peak + height_wave).clamp(0.08, 0.44);
+        let height_pos = (1.0 - above_floor / tongue_height).clamp(0.0, 1.0);
+        if height_pos == 0.0 {
+            return (0.0, 0.0);
+        }
+        let taper_width = self.width * (0.24 + height_pos * 1.08);
+        let column = (1.0 - distance / taper_width).clamp(0.0, 1.0);
+        if column == 0.0 {
+            return (0.0, 0.0);
+        }
+        let column = column.powf(1.55);
+        let flicker = 0.72
+            + 0.20 * (self.flicker_phase + y * 14.0).sin()
+            + 0.08 * (self.flicker_speed_phase + x * 18.0).cos();
+        let base_anchor = height_pos.powf(0.38);
+        let tip_lick = (height_pos * (1.0 - height_pos)).powf(0.28);
+        (
+            column * flicker * self.strength * (base_anchor * 0.72 + tip_lick * 0.38),
+            column.powf(1.25) * self.strength * height_pos.powf(1.9),
+        )
+    }
+}
+
+#[derive(Debug)]
+struct HearthParticle {
+    x: f32,
+    y: f32,
+    radius: f32,
+    fade: f32,
+    strength: f32,
+}
+
+impl HearthParticle {
+    fn sample(&self, x: f32, y: f32, aspect: f32, power: f32) -> f32 {
+        let dx = x - self.x;
+        let dy = (y - self.y) * aspect;
+        let dist2 = dx * dx + dy * dy;
+        if dist2 > self.radius * self.radius {
+            return 0.0;
+        }
+        (1.0 - dist2.sqrt() / self.radius)
+            .clamp(0.0, 1.0)
+            .powf(power)
+            * self.fade
+            * self.strength
+    }
+}
+
+#[derive(Debug)]
+struct PreparedHearthGlowEffect {
+    t: f32,
+    columns: [HearthColumn; 30],
+    smoke: [HearthParticle; 8],
+    sparks: [HearthParticle; 9],
+}
+
+impl PreparedHearthGlowEffect {
+    fn new(phase: u64) -> Self {
+        let t = phase as f32 * 0.015;
+        Self {
+            t,
+            columns: std::array::from_fn(|i| HearthColumn::new(i as i32, t)),
+            smoke: std::array::from_fn(|i| {
+                let i = i as i32;
+                let idx = i as f32;
+                let life = (t * (0.26 + idx * 0.022) + idx * 0.61).fract();
+                let rise = smoothstep(0.0, 0.96, life);
+                let base_x = 0.10 + hashed_unit(i, 21) * 0.80;
+                let drift = (life * TAU * (0.8 + hashed_unit(i, 5) * 0.5)).sin() * 0.045;
+                HearthParticle {
+                    x: (base_x + drift + (t * 0.12 + idx * 0.9).sin() * 0.015).clamp(0.02, 0.98),
+                    y: (0.78 - rise * (0.58 + hashed_unit(i, 8) * 0.14)).clamp(0.02, 0.98),
+                    radius: 0.022 + hashed_unit(i, 14) * 0.026 + rise * 0.03,
+                    fade: 1.0 - smoothstep(0.40, 1.0, life),
+                    strength: 0.16 + hashed_unit(i, 9) * 0.18,
+                }
+            }),
+            sparks: std::array::from_fn(|i| {
+                let i = i as i32;
+                let idx = i as f32;
+                let cycle = t * (0.88 + idx * 0.05) + idx * 1.17;
+                let life = cycle.fract();
+                let rise = smoothstep(0.0, 0.86, life);
+                let start_x = 0.10 + hashed_unit(i, 31) * 0.80;
+                let lift = 0.45 + hashed_unit(i, 17) * 0.18;
+                let sway = (cycle * 3.2 + idx * 0.8).sin() * 0.03;
+                HearthParticle {
+                    x: (start_x + sway * rise).clamp(0.02, 0.98),
+                    y: (0.80 - rise * lift).clamp(0.04, 0.95),
+                    radius: 0.010 + hashed_unit(i, 23) * 0.010,
+                    fade: 1.0 - smoothstep(0.56, 1.0, life),
+                    strength: 0.18 + hashed_unit(i, 19) * 0.22,
+                }
+            }),
+        }
+    }
+
+    fn columns(&self, x: f32, y: f32) -> (f32, f32) {
+        let mut flame = 0.0;
+        let mut core = 0.0;
+        for column in &self.columns {
+            let (fire, hot) = column.sample(x, y);
+            flame += fire;
+            core += hot;
+        }
+        (
+            (flame * 0.58).clamp(0.0, 1.0),
+            (core * 0.50).clamp(0.0, 1.0),
+        )
+    }
+
+    fn smoke(&self, x: f32, y: f32) -> f32 {
+        if y < 0.18 {
+            return 0.0;
+        }
+        let mut smoke = 0.0;
+        for plume in &self.smoke {
+            smoke += plume.sample(x, y, 1.65, 2.1);
+        }
+        let haze =
+            smoothstep(0.62, 0.20, y) * (0.14 + 0.12 * (self.t * 0.42 + x * 2.8).sin().abs());
+        (smoke * 0.78 + haze * 0.22).clamp(0.0, 1.0)
+    }
+}
+
+impl PreparedCellEffect for PreparedHearthGlowEffect {
+    fn apply(&self, cell: &mut EffectCell, ctx: &EffectContext) {
+        let x = (ctx.x as f32 - ctx.bounds.x as f32 + 0.5) / ctx.bounds.w.max(1) as f32;
+        let y = (ctx.y as f32 - ctx.bounds.y as f32 + 0.5) / ctx.bounds.h.max(1) as f32;
+        let (flame, core) = self.columns(x, y);
+        let base_glow = smoothstep(0.86, 1.0, y).powf(2.4);
+        let flame_field = (flame * 1.28 + base_glow * 0.05).clamp(0.0, 1.0);
+        let hot_core = (core * 1.18).clamp(0.0, 1.0);
+        let smoke = self.smoke(x, y);
+        let mut sparks = 0.0;
+        for spark in &self.sparks {
+            sparks += spark.sample(x, y, 1.55, 2.4);
+        }
+        paint_hearth(
+            cell,
+            ctx,
+            y,
+            flame_field,
+            hot_core,
+            smoke,
+            sparks.clamp(0.0, 1.0),
+        );
+    }
+}
+
+fn paint_hearth(
+    cell: &mut EffectCell,
+    ctx: &EffectContext,
+    y: f32,
+    flame_field: f32,
+    hot_core: f32,
+    smoke: f32,
+    sparks: f32,
+) {
+    let grain = hashed_noise(ctx.x as i32, ctx.y as i32) * 0.05;
+    let backdrop =
+        (12.0 + grain * 12.0 + smoke * 16.0 + flame_field * 12.0).clamp(0.0, 255.0) as u8;
+    let bg = TerminalColor::Rgb(
+        backdrop,
+        backdrop.saturating_add(1),
+        backdrop.saturating_add(3),
+    );
+
+    let heat = (flame_field + hot_core * 0.72 + sparks * 0.7).clamp(0.0, 1.0);
+    if heat < 0.03 && smoke < 0.06 {
+        cell.set_symbol(" ");
+        cell.set_fg(bg);
+        cell.set_bg(bg);
+        return;
+    }
+
+    let upper_smoke = smoothstep(0.42, 0.08, y);
+    let flame_presence = smoothstep(0.08, 0.52, heat);
+    let sparkiness = smoothstep(0.62, 0.95, sparks);
+
+    let glyph = hearth_glyph(heat, flame_presence, smoke, upper_smoke, sparkiness);
+    let fg = hearth_color(heat, smoke, sparkiness);
+
+    cell.set_symbol(glyph);
+    cell.set_fg(fg);
+    cell.set_bg(bg);
+}
+
+fn hearth_glyph(
+    heat: f32,
+    flame_presence: f32,
+    smoke: f32,
+    upper_smoke: f32,
+    sparkiness: f32,
+) -> &'static str {
+    if sparkiness > 0.88 {
+        "*"
+    } else if heat > 0.82 {
+        "$"
+    } else if heat > 0.56 {
+        "s"
+    } else if flame_presence > 0.22 || smoke > 0.10 || upper_smoke > 0.46 {
+        "."
+    } else {
+        " "
+    }
+}
+
+fn hearth_color(heat: f32, smoke: f32, sparkiness: f32) -> TerminalColor {
+    if sparkiness > 0.78 || heat > 0.9 {
+        TerminalColor::Rgb(255, 248, 226)
+    } else if heat > 0.72 {
+        TerminalColor::Rgb(255, 234, 160)
+    } else if heat > 0.54 {
+        TerminalColor::Rgb(255, 189, 92)
+    } else if heat > 0.34 {
+        TerminalColor::Rgb(240, 120, 52)
+    } else if smoke > 0.12 {
+        TerminalColor::Rgb(112, 105, 98)
+    } else {
+        TerminalColor::Rgb(160, 88, 48)
     }
 }
 
@@ -781,4 +998,73 @@ fn main() -> Result<()> {
         .title("EffectScope Dot Field")
         .mount(DotFieldDemo)
         .run()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prepared_hearth_matches_direct_cells() {
+        for (w, h) in [(1, 1), (80, 24), (160, 46)] {
+            let bounds = Rect { x: -7, y: 3, w, h };
+            for phase in [0, 1, 29, 137, 941, 10_000, 100_000] {
+                let prepared = HearthGlowEffect
+                    .prepare(&EffectPrepareContext::new(bounds).with_phase(phase))
+                    .expect("Hearth Glow prepares each frame");
+                for row in 0..h {
+                    for col in 0..w {
+                        let ctx = EffectContext::new(
+                            bounds.x + col as i16,
+                            bounds.y + row as i16,
+                            bounds,
+                        )
+                        .with_phase(phase);
+                        let mut direct = EffectCell::default();
+                        let mut cached = EffectCell::default();
+                        HearthGlowEffect.apply(&mut direct, &ctx);
+                        prepared.apply(&mut cached, &ctx);
+                        assert_eq!(direct, cached, "phase {phase}, cell {col},{row}, {w}x{h}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Run with `cargo test --release --example effect_scope_dot_field hearth_frame_cost
+    /// -- --ignored --nocapture` to measure the effect, including preparation, without terminal I/O.
+    #[test]
+    #[ignore = "manual release-mode performance measurement"]
+    fn hearth_frame_cost() {
+        for (w, h) in [(160, 46), (320, 86)] {
+            let bounds = Rect { x: 0, y: 0, w, h };
+            for prepare in [false, true] {
+                let start = std::time::Instant::now();
+                for phase in 0..60 {
+                    let prepared = prepare.then(|| {
+                        HearthGlowEffect
+                            .prepare(&EffectPrepareContext::new(bounds).with_phase(phase))
+                            .expect("Hearth Glow prepares each frame")
+                    });
+                    for y in 0..h {
+                        for x in 0..w {
+                            let ctx =
+                                EffectContext::new(x as i16, y as i16, bounds).with_phase(phase);
+                            let mut cell = EffectCell::default();
+                            if let Some(effect) = &prepared {
+                                effect.apply(&mut cell, &ctx);
+                            } else {
+                                HearthGlowEffect.apply(&mut cell, &ctx);
+                            }
+                            std::hint::black_box(cell);
+                        }
+                    }
+                }
+                eprintln!(
+                    "{w}x{h}, prepared={prepare}: {:.3} ms/frame",
+                    start.elapsed().as_secs_f64() * 1000.0 / 60.0
+                );
+            }
+        }
+    }
 }
