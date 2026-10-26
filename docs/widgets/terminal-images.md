@@ -299,13 +299,17 @@ frames are compressed on several threads into one ordinary zlib stream. Failed r
 emit no source reference; the authoritative screen answers the child. Chunked out-of-band
 transmissions are rejected. Direct `t=d` chunking remains supported.
 
-When `prepare_media_input` relays a whole replacement inline, only what changed is sent if readers
-hold that image at the same size and pixel format and no other graphics command precedes the
-replacement in its batch. The output is a root-frame edit
+`GraphicsRelayPolicy::AllWithEdits` relays like `All`, and also sends only what changed in a whole
+replacement that `prepare_media_input` prepares. Choose it only while every reader implements
+root-frame edits, as `TerminalScreen` does: a reader that does not keeps the previous frame without
+reporting anything. Switch to `All` as soon as such a reader attaches. Work prepared under
+`AllWithEdits` and rebuilt with `with_relay_policy(All)` carries the whole frame.
+
+An edit is sent when readers hold that image at the same size and pixel format, and no other
+graphics command precedes the replacement in its batch. The output is a root-frame edit
 (`a=f,r=1`) for each changed rectangle, followed by `a=d,d=i` and, for `a=T`, an `a=p` with the
 original placement keys. Readers end in the state the whole transmission would have left. A frame
-that changed almost everywhere is still sent whole. Readers must be `TerminalScreen`s, or other
-parsers that implement root-frame edits. These transactions are classified
+that changed almost everywhere is still sent whole. These transactions are classified
 `GraphicsDependency::EditsPrevious`: keep every one, in order, as for `DependsOnPrevious`. A consumer
 can still pace the producer by them, because the producer is streaming whole frames.
 

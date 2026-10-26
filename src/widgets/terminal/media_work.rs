@@ -457,7 +457,7 @@ mod tests {
         let budget = w * h * 4 * 3 / 2;
         let mut server = TerminalScreen::new(24, 80, 100);
         server.set_image_budget(budget);
-        server.set_image_relay_policy(GraphicsRelayPolicy::All);
+        server.set_image_relay_policy(GraphicsRelayPolicy::AllWithEdits);
         server.set_output_transaction_recording(true);
         let mut reader = TerminalScreen::new(24, 80, 100);
         reader.set_image_budget(budget);
@@ -552,7 +552,7 @@ mod tests {
         }
         let frames = [first.clone(), small.clone(), small, rewritten, large, first];
         let mut server = TerminalScreen::new(24, 80, 100);
-        server.set_image_relay_policy(GraphicsRelayPolicy::All);
+        server.set_image_relay_policy(GraphicsRelayPolicy::AllWithEdits);
         server.set_output_transaction_recording(true);
         let mut reader = TerminalScreen::new(24, 80, 100);
         reader.set_image_media_policy(GraphicsMediaPolicy::NONE);
@@ -695,7 +695,7 @@ mod tests {
         let first = Source::new(&frame_pixels(w, h, 0));
         let second = Source::new(&frame_pixels(w, h, 0));
         let mut server = TerminalScreen::new(24, 80, 100);
-        server.set_image_relay_policy(GraphicsRelayPolicy::All);
+        server.set_image_relay_policy(GraphicsRelayPolicy::AllWithEdits);
         server.set_output_transaction_recording(true);
         deferred(&mut server, &frame_command(&first, w, h));
         // A delete of the image earlier in the batch means readers will not hold it.
@@ -716,6 +716,65 @@ mod tests {
             .flat_map(|(_, bytes)| bytes)
             .collect();
         assert!(!wire.windows(4).any(|key| key == b"a=f,"));
+    }
+
+    fn relay_two_frames(policy: GraphicsRelayPolicy) -> Vec<(u8, Vec<u8>)> {
+        let (w, h) = (32, 16);
+        let first = Source::new(&frame_pixels(w, h, 0));
+        let mut changed = frame_pixels(w, h, 0);
+        changed[..8].fill(255);
+        let second = Source::new(&changed);
+        let mut server = TerminalScreen::new(24, 80, 100);
+        server.set_image_relay_policy(policy);
+        server.set_output_transaction_recording(true);
+        deferred(&mut server, &frame_command(&first, w, h));
+        deferred(&mut server, &frame_command(&second, w, h))
+    }
+
+    #[test]
+    fn only_the_edit_policy_relays_edits() {
+        let has_edit = |output: &[(u8, Vec<u8>)]| {
+            output
+                .iter()
+                .any(|(_, bytes)| bytes.windows(4).any(|key| key == b"a=f,"))
+        };
+        assert!(has_edit(&relay_two_frames(
+            GraphicsRelayPolicy::AllWithEdits
+        )));
+        let whole = relay_two_frames(GraphicsRelayPolicy::All);
+        assert!(
+            !has_edit(&whole),
+            "readers of All need not understand edits"
+        );
+        assert!(whole.iter().any(|(class, _)| *class == 2));
+    }
+
+    #[test]
+    fn prepared_edits_become_a_whole_frame_when_the_policy_drops_them() {
+        let (w, h) = (32, 16);
+        let first = Source::new(&frame_pixels(w, h, 0));
+        let mut changed = frame_pixels(w, h, 0);
+        changed[..8].fill(255);
+        let second = Source::new(&changed);
+        let mut server = TerminalScreen::new(24, 80, 100);
+        server.set_image_relay_policy(GraphicsRelayPolicy::AllWithEdits);
+        server.set_output_transaction_recording(true);
+        deferred(&mut server, &frame_command(&first, w, h));
+        let prepared = server
+            .prepare_media_input(frame_command(&second, w, h).into())
+            .unwrap()
+            .run();
+        // A reader that cannot apply edits attached while the frame was prepared.
+        let prepared = prepared.with_relay_policy(GraphicsRelayPolicy::All).run();
+        server.set_image_relay_policy(GraphicsRelayPolicy::All);
+        server.process_prepared_media_input(prepared).unwrap();
+        let output = output(&mut server);
+        assert!(
+            !output
+                .iter()
+                .any(|(_, bytes)| bytes.windows(4).any(|key| key == b"a=f,"))
+        );
+        assert!(output.iter().any(|(class, _)| *class == 2));
     }
 
     #[test]

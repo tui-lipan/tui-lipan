@@ -1114,7 +1114,8 @@ impl GraphicsCommand {
         let Ok(data) = prepared.relay_bytes() else {
             return (Vec::new(), false);
         };
-        if let Some(base) = base.filter(|base| self.may_relay_as_edit_of(base))
+        if relay == GraphicsRelayPolicy::AllWithEdits
+            && let Some(base) = base.filter(|base| self.may_relay_as_edit_of(base))
             && let Some(old) = base.pixels()
             && let Some(edit) = super::relay_edit::edit_transmission(
                 wire,
