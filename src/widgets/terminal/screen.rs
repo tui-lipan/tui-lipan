@@ -2458,6 +2458,9 @@ impl TerminalScreen {
     ///
     /// Multiplexer servers use `NamedAsFiles`, with file storage enabled, while every
     /// attachment shares their filesystem, and `All` while any attachment cannot open their files.
+    /// `AllWithEdits` relays like `All` but may send a replaced image as root-frame edits of what
+    /// changed. Choose it only while every reader applies those edits, and switch back to `All`
+    /// when one that does not attaches: such a reader silently keeps the previous frame.
     /// This applies to queries too; failed relayed acquisitions emit no source reference.
     /// Recording must be enabled. The default is `None`. With `NamedAsFiles`, retain the owning
     /// media handles returned by [`Self::take_output_transactions`] until all readers acquire or
