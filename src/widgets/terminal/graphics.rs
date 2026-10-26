@@ -27,12 +27,16 @@
 //!   must be compressed to be affordable and one that costs a hundred bytes.
 //! - Transmit (`a=t`), transmit-and-display (`a=T`), display a stored image (`a=p`), delete
 //!   (`a=d`), and query (`a=q`).
+//! - Root-frame edits (`a=f` with `r=1`): direct data overwriting (`X=1`) or blended over (`X=0`)
+//!   a rectangle of an existing image, keeping its placements.
 //! - Source cropping (`x`/`y`/`w`/`h`), explicit cell sizing (`c`/`r`), z-index (`z`), suppressed
 //!   cursor movement (`C=1`), image numbers (`I=`), and response quieting (`q=`).
+//! - Virtual placements (`U=1`) shown through Unicode placeholder cells.
 //!
 //! ## Not implemented
 //!
-//! - Unicode placeholders (`U=1`), animation (`a=a`, `a=f`, `a=c`), and relative placements.
+//! - Animation (`a=a`, `a=c`, and `a=f` for any frame but the root or with a background frame),
+//!   and relative placements.
 //!
 //! Unsupported requests are answered with the protocol's own error report, so a child that probes
 //! before drawing gets a clean "no" instead of silence.
