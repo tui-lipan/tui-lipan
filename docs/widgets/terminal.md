@@ -1204,12 +1204,15 @@ run redundant, so a consumer may keep only the newest. A replacement of a differ
 other transaction, ends the run. Replacements of different images are never reordered, because the
 image budget evicts by recency and size, and moving one could evict an image that the original
 order kept. For the same reason, a replacement whose execution evicted an image is reported as
-`DependsOnPrevious`.
+`DependsOnPrevious`. A replacement that inline relay sent as edits of the previous frame is
+`EditsPrevious`: keep it in order like `DependsOnPrevious`, though its producer is still streaming
+whole frames. See [relay](terminal-images.md#relay-out-of-band-frames).
 
 Two shapes qualify:
 
 - A single command: a complete, accepted replacement of a nonzero image ID with unchanged displayed
-  placement state, quiet responses, reusable media (`t=d` or `t=f`), and no cursor or grid effects.
+  placement state, quiet responses and no cursor or grid effects. Its media is reusable (`t=d` or
+  `t=f`), or consuming (`t=t` or `t=s`) under a relay policy that rewrites it.
 - A whole synchronized update (`CSI ? 2026 h` to `CSI ? 2026 l`) that replaces one image, whose
   text is only absolute cursor positioning (`CSI row ; col H`). Its graphics must be complete,
   quiet transmissions of that image's explicit ID (retransmission retires the image's
@@ -1220,8 +1223,8 @@ Two shapes qualify:
 The screen holds a candidate update until its end marker. Text, other controls, other graphics
 actions, chunked or failed transmissions, or more than 1 MiB release the held bytes unchanged at
 once. An update that touched a second image or caused an eviction is released unchanged at its
-end. Partial patches, chunked uploads, queries, unknown controls, consuming media and id-less
-creations remain dependent or ordered. Patch streams such as terminal-browser's default presenter
+end. Partial patches, chunked uploads, queries, unknown controls, unrelayed consuming media and
+id-less creations remain dependent or ordered. Patch streams such as terminal-browser's default presenter
 are dependency chains: each frame layers new images over earlier ones, so they stay ordered.
 
 A graphics escape spanning several parser calls is emitted only when complete. Additional recording

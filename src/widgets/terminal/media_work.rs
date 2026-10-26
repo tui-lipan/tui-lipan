@@ -2,7 +2,7 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use super::graphics::{GraphicsCommand, MediaFiles};
+use super::graphics::{GraphicsCommand, GraphicsScanner, GraphicsSegment, MediaFiles, RelayBase};
 use super::{GraphicsMediaPolicy, GraphicsRelayPolicy};
 
 /// An input prefix ending at one named-media command, ready for an embedder's bounded worker queue.
@@ -12,6 +12,11 @@ use super::{GraphicsMediaPolicy, GraphicsRelayPolicy};
 /// [`TerminalPreparedInput::with_relay_policy`] before commit. Keep the
 /// embedder's ingress budget charged while the batch is pending. Dropping an unstarted work item
 /// does not claim its sources; running it consumes accepted temporary files and shared memory.
+///
+/// When the input already holds later silent replacements of the same image, the batch extends
+/// over them and only the newest one that can be read is acquired. The sources of the earlier
+/// ones are claimed unread and the parser skips them, which leaves the same state as applying
+/// every one. A producer that outpaces its reader therefore costs one acquisition per batch.
 #[derive(Debug)]
 pub struct TerminalMediaWork {
     pub(super) bytes: Arc<[u8]>,
@@ -23,6 +28,11 @@ pub struct TerminalMediaWork {
     pub(super) relay: GraphicsRelayPolicy,
     pub(super) recording: bool,
     pub(super) files: Option<MediaFiles>,
+    /// Indices into `commands` of successive replacements of one image, oldest first.
+    pub(super) replacements: Vec<usize>,
+    /// What readers hold for the image the batch ends by replacing, when nothing earlier in the
+    /// batch touches it. Inline relay then sends only what changed.
+    pub(super) base: Option<Box<RelayBase>>,
 }
 
 impl TerminalMediaWork {
@@ -30,8 +40,34 @@ impl TerminalMediaWork {
     /// file snapshot when the screen stores images as files; otherwise they are decoded. Output
     /// that relays a source is rewritten too: compressed, encoded and chunked when inline.
     pub fn run(mut self) -> TerminalPreparedInput {
-        for command in &mut self.commands {
-            command.prepare_media(self.media, self.relay, self.recording, self.files.as_ref());
+        let targets = edit_targets(&self.replacements, self.commands.len());
+        let base = self.base.as_deref();
+        // Newest first: the first replacement that succeeds decides the image, so every older
+        // one is unobservable. Newer ones that failed stay in place and fail as they would have.
+        for (position, &index) in self.replacements.iter().enumerate().rev() {
+            let command = &mut self.commands[index];
+            command.prepare_media(
+                self.media,
+                self.relay,
+                self.recording,
+                self.files.as_ref(),
+                base,
+            );
+            if command.prepared_successfully() {
+                for &older in &self.replacements[..position] {
+                    self.commands[older].supersede(self.media);
+                }
+                break;
+            }
+        }
+        for (index, command) in self.commands.iter_mut().enumerate() {
+            command.prepare_media(
+                self.media,
+                self.relay,
+                self.recording,
+                self.files.as_ref(),
+                base.filter(|_| targets.contains(&index)),
+            );
         }
         TerminalPreparedInput {
             bytes: self.bytes,
@@ -43,8 +79,38 @@ impl TerminalMediaWork {
             screen_id: self.screen_id,
             input_revision: self.input_revision,
             commands: self.commands.into(),
+            replacements: self.replacements.into_boxed_slice(),
+            base: self.base,
         }
     }
+}
+
+/// The commands a relay base applies to: every link of a replacement chain, or else the command
+/// that ends the batch.
+fn edit_targets(replacements: &[usize], commands: usize) -> Vec<usize> {
+    if replacements.is_empty() {
+        commands.checked_sub(1).into_iter().collect()
+    } else {
+        replacements.to_vec()
+    }
+}
+
+/// [`RelayBase`] for a batch, so readers will hold exactly the base when its replacement arrives.
+///
+/// Only when the replacement is the batch's first graphics command: any image command before it,
+/// of any image, can change what the budget evicts, the base included.
+pub(super) fn batch_relay_base(
+    graphics: &super::graphics::TerminalGraphics,
+    commands: &[GraphicsCommand],
+    replacements: &[usize],
+) -> Option<Box<RelayBase>> {
+    let first = *edit_targets(replacements, commands.len()).first()?;
+    if first != 0 {
+        return None;
+    }
+    graphics
+        .relay_base(commands[first].transmitted_id()?)
+        .map(Box::new)
 }
 
 /// Prepared bytes and media to commit atomically through their original screen's parser.
@@ -62,6 +128,8 @@ pub struct TerminalPreparedInput {
     pub(super) screen_id: u64,
     pub(super) input_revision: u64,
     pub(super) commands: VecDeque<GraphicsCommand>,
+    pub(super) replacements: Box<[usize]>,
+    pub(super) base: Option<Box<RelayBase>>,
 }
 
 impl TerminalPreparedInput {
@@ -88,8 +156,68 @@ impl TerminalPreparedInput {
             relay,
             recording: self.recording,
             files: self.files,
+            replacements: self.replacements.into_vec(),
+            base: self.base,
         }
     }
+}
+
+/// Extend a media prefix that ends with a whole-image replacement over later complete
+/// replacements of that image in `bytes`. Returns the chain's command indices, oldest first, or
+/// nothing when no later replacement qualifies.
+///
+/// Skipping a link must leave the image budget exactly as applying it would. So only text may
+/// separate two links, since another image's replacement would see a different eviction order. And
+/// every link must declare the same raw size, so a skipped link could not have evicted anything the
+/// replacement that succeeds does not. Each link is a complete command, so the batch never ends
+/// inside one.
+pub(super) fn extend_replacements(
+    scanner: &mut GraphicsScanner,
+    bytes: &[u8],
+    commands: &mut Vec<GraphicsCommand>,
+    length: &mut usize,
+) -> Vec<usize> {
+    let Some(last) = commands
+        .last()
+        .filter(|last| last.needs_media() && last.replaces_whole_image())
+    else {
+        return Vec::new();
+    };
+    let (Some(id), Some(size)) = (last.transmitted_id(), last.declared_raw_size()) else {
+        return Vec::new();
+    };
+    let mut chain = vec![commands.len() - 1];
+    while *length < bytes.len() {
+        let mut ahead = scanner.clone();
+        let (segments, used) = ahead.scan_media_prefix(&bytes[*length..]);
+        let mut found = Vec::new();
+        for segment in segments {
+            match segment {
+                GraphicsSegment::Text(_) | GraphicsSegment::HeldEscape => {}
+                GraphicsSegment::Command(command) => found.push(*command),
+                GraphicsSegment::Wire(_) => return finish(chain),
+            }
+        }
+        let [next] = found.as_slice() else {
+            break;
+        };
+        let links = next.needs_media()
+            && next.replaces_whole_image()
+            && next.transmitted_id() == Some(id)
+            && next.declared_raw_size() == Some(size);
+        if !links {
+            break;
+        }
+        chain.push(commands.len());
+        commands.extend(found);
+        *length += used;
+        *scanner = ahead;
+    }
+    finish(chain)
+}
+
+fn finish(chain: Vec<usize>) -> Vec<usize> {
+    if chain.len() < 2 { Vec::new() } else { chain }
 }
 
 #[cfg(test)]
@@ -114,9 +242,12 @@ mod tests {
             Self(path)
         }
         fn command(&self, medium: char) -> Vec<u8> {
+            self.command_for(medium, 9)
+        }
+        fn command_for(&self, medium: char, id: u32) -> Vec<u8> {
             let name = base64::engine::general_purpose::STANDARD
                 .encode(self.0.to_string_lossy().as_bytes());
-            format!("\x1b_Ga=T,t={medium},f=32,s=1,v=1,i=9,p=1,c=1,r=1,C=1,q=2;{name}\x1b\\")
+            format!("\x1b_Ga=T,t={medium},f=32,s=1,v=1,i={id},p=1,c=1,r=1,C=1,q=2;{name}\x1b\\")
                 .into_bytes()
         }
     }
@@ -148,6 +279,10 @@ mod tests {
                         dependency: GraphicsDependency::Independent,
                         ..
                     } => 2,
+                    TerminalOutputClass::Graphics {
+                        dependency: GraphicsDependency::EditsPrevious,
+                        ..
+                    } => 3,
                 };
                 (class, transaction.bytes)
             })
@@ -215,13 +350,395 @@ mod tests {
         }
     }
 
+    fn pixel(screen: &TerminalScreen) -> Vec<u8> {
+        screen.capture_frame().images[0].rgba[..4].to_vec()
+    }
+
     #[test]
-    fn a_burst_prepares_only_one_named_image_at_a_time() {
-        let first = Source::new(&[255, 0, 0, 255]);
+    fn a_burst_of_one_image_acquires_only_its_newest_frame() {
+        let frames: Vec<_> = (0..4u8).map(|n| Source::new(&[n, 0, 0, 255])).collect();
+        let mut bytes = Vec::new();
+        for (index, frame) in frames.iter().enumerate() {
+            bytes.extend(format!("text {index}").bytes());
+            bytes.extend(frame.command('t'));
+        }
+        bytes.extend(b"tail");
+        let mut screen = screen(GraphicsRelayPolicy::Consuming);
+        let work = screen.prepare_media_input(bytes.clone().into()).unwrap();
+        assert!(frames.iter().all(|frame| frame.0.exists()));
+        let prepared = work.run();
+        assert_eq!(prepared.consumed_bytes(), bytes.len() - b"tail".len());
+        assert!(
+            frames.iter().all(|frame| !frame.0.exists()),
+            "every source is claimed"
+        );
+        screen.process_prepared_media_input(prepared).unwrap();
+        assert_eq!(pixel(&screen), [3, 0, 0, 255]);
+        let transactions = output(&mut screen);
+        let commands = transactions
+            .iter()
+            .flat_map(|(_, bytes)| bytes.windows(3))
+            .filter(|window| *window == b"\x1b_G")
+            .count();
+        assert_eq!(commands, 1, "superseded frames are never relayed");
+        let text: Vec<u8> = transactions
+            .into_iter()
+            .flat_map(|(_, bytes)| bytes)
+            .collect();
+        for index in 0..4 {
+            let marker = format!("text {index}");
+            assert!(text.windows(marker.len()).any(|w| w == marker.as_bytes()));
+        }
+    }
+
+    #[test]
+    fn a_failed_newest_frame_falls_back_to_the_previous_replacement() {
+        let good = Source::new(&[7, 0, 0, 255]);
+        let empty = Source::new(&[]);
+        let mut bytes = good.command('t');
+        bytes.extend(empty.command('t'));
+        let mut screen = screen(GraphicsRelayPolicy::Consuming);
+        let prepared = screen
+            .prepare_media_input(bytes.clone().into())
+            .unwrap()
+            .run();
+        assert_eq!(prepared.consumed_bytes(), bytes.len());
+        screen.process_prepared_media_input(prepared).unwrap();
+        assert_eq!(pixel(&screen), [7, 0, 0, 255]);
+        assert!(!good.0.exists() && !empty.0.exists());
+    }
+
+    #[test]
+    fn anything_that_could_observe_the_earlier_frame_ends_the_burst() {
+        let other = Source::new(&[0, 0, 255, 255]);
+        // Another image's replacement could evict differently once the earlier frame is skipped.
+        let other_replacement = other.command_for('t', 10);
+        let inline_replacement = direct("a=T,f=32,s=1,v=1,i=10,p=1,C=1,q=2", &[1, 2, 3, 4]);
+        for between in [
+            &b"\x1b_Ga=p,i=9,p=2,q=2\x1b\\"[..],
+            b"\x1b_Ga=d,d=a,q=2\x1b\\",
+            &other_replacement,
+            &inline_replacement,
+        ] {
+            let first = Source::new(&[255, 0, 0, 255]);
+            let second = Source::new(&[0, 255, 0, 255]);
+            let mut bytes = first.command('t');
+            let expected = bytes.len();
+            bytes.extend(between);
+            bytes.extend(second.command('t'));
+            let screen = screen(GraphicsRelayPolicy::Consuming);
+            let prepared = screen.prepare_media_input(bytes.into()).unwrap().run();
+            assert_eq!(prepared.consumed_bytes(), expected);
+            assert!(!first.0.exists());
+            assert!(second.0.exists());
+        }
+    }
+
+    #[test]
+    fn a_replacement_of_another_size_ends_the_burst() {
+        // A larger skipped frame could have evicted an image the smaller newest one does not.
+        let first = Source::new(&[255, 0, 0, 255, 0, 0, 0, 255]);
         let second = Source::new(&[0, 255, 0, 255]);
         let mut bytes = first.command('t');
+        let size = bytes.windows(7).position(|key| key == b"s=1,v=1").unwrap();
+        bytes[size + 2] = b'2';
         let expected = bytes.len();
         bytes.extend(second.command('t'));
+        let screen = screen(GraphicsRelayPolicy::Consuming);
+        let prepared = screen.prepare_media_input(bytes.into()).unwrap().run();
+        assert_eq!(prepared.consumed_bytes(), expected);
+        assert!(second.0.exists());
+    }
+
+    #[test]
+    fn an_image_evicted_earlier_in_the_batch_is_relayed_whole() {
+        // Two 16x16 RGBA images do not fit the budget together.
+        let (w, h) = (16, 16);
+        let budget = w * h * 4 * 3 / 2;
+        let mut server = TerminalScreen::new(24, 80, 100);
+        server.set_image_budget(budget);
+        server.set_image_relay_policy(GraphicsRelayPolicy::All);
+        server.set_output_transaction_recording(true);
+        let mut reader = TerminalScreen::new(24, 80, 100);
+        reader.set_image_budget(budget);
+        reader.set_image_media_policy(GraphicsMediaPolicy::NONE);
+        let first = Source::new(&frame_pixels(w, h, 0));
+        let wire: Vec<u8> = deferred(&mut server, &frame_command(&first, w, h))
+            .into_iter()
+            .flat_map(|(_, bytes)| bytes)
+            .collect();
+        reader.process_bytes(&wire);
+        // Another image arrives inline in the same batch and evicts the first before its next
+        // frame. Readers no longer hold the base, so that frame cannot travel as an edit.
+        let mut bytes = direct(
+            &format!("a=T,f=32,s={w},v={h},i=8,p=1,C=1,q=2"),
+            &frame_pixels(w, h, 7),
+        );
+        let second = Source::new(&frame_pixels(w, h, 0));
+        bytes.extend(frame_command(&second, w, h));
+        let wire: Vec<u8> = deferred(&mut server, &bytes)
+            .into_iter()
+            .flat_map(|(_, bytes)| bytes)
+            .collect();
+        assert!(!wire.windows(4).any(|key| key == b"a=f,"));
+        reader.process_bytes(&wire);
+        assert_eq!(placed(&mut reader), placed(&mut server));
+        assert!(placed(&mut reader).iter().any(|placed| placed.0 == 4));
+    }
+
+    /// A `w`x`h` RGBA frame of noise that barely compresses, distinct for each `seed`.
+    fn frame_pixels(w: usize, h: usize, seed: u8) -> Vec<u8> {
+        let mut state = 0x9e37_79b9_u32 ^ u32::from(seed);
+        (0..w * h * 4)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                state as u8
+            })
+            .collect()
+    }
+
+    fn frame_command(source: &Source, w: usize, h: usize) -> Vec<u8> {
+        let name =
+            base64::engine::general_purpose::STANDARD.encode(source.0.to_string_lossy().as_bytes());
+        format!("\x1b_Ga=T,t=t,f=32,s={w},v={h},i=4,p=1,C=1,z=-1,q=2;{name}\x1b\\").into_bytes()
+    }
+
+    fn deferred(screen: &mut TerminalScreen, bytes: &[u8]) -> Vec<(u8, Vec<u8>)> {
+        let mut pending: Arc<[u8]> = bytes.into();
+        let mut out = Vec::new();
+        while let Some(work) = screen.prepare_media_input(Arc::clone(&pending)) {
+            let prepared = std::thread::spawn(move || work.run()).join().unwrap();
+            let consumed = prepared.consumed_bytes();
+            screen.process_prepared_media_input(prepared).unwrap();
+            out.extend(output(screen));
+            pending = pending[consumed..].into();
+        }
+        screen.process_bytes(&pending);
+        out.extend(output(screen));
+        out
+    }
+
+    type Placed = (u32, i32, i32, u16, u16, i32, Vec<u8>);
+
+    /// Every visible placement and the RGBA pixels behind it, however they are stored.
+    fn placed(screen: &mut TerminalScreen) -> Vec<Placed> {
+        screen
+            .render_snapshot()
+            .images
+            .iter()
+            .map(|p| {
+                let pixels = p.image.pixels().unwrap().to_rgba8().into_raw();
+                (p.image_id, p.row, p.col, p.rows, p.cols, p.z, pixels)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_inline_relay_sends_only_changed_rectangles_and_readers_match_the_server() {
+        let (w, h) = (96, 64);
+        let first = frame_pixels(w, h, 0);
+        let mut small = first.clone();
+        small[(10 * w + 20) * 4..(10 * w + 26) * 4].fill(255);
+        let mut rewritten = frame_pixels(w, h, 99);
+        rewritten[0] = 1;
+        // A noisy 40x40 region needs an edit of several protocol chunks.
+        let mut large = rewritten.clone();
+        let noise = frame_pixels(40, 40, 50);
+        for row in 0..40 {
+            let start = ((row + 8) * w + 30) * 4;
+            large[start..start + 160].copy_from_slice(&noise[row * 160..(row + 1) * 160]);
+        }
+        let frames = [first.clone(), small.clone(), small, rewritten, large, first];
+        let mut server = TerminalScreen::new(24, 80, 100);
+        server.set_image_relay_policy(GraphicsRelayPolicy::All);
+        server.set_output_transaction_recording(true);
+        let mut reader = TerminalScreen::new(24, 80, 100);
+        reader.set_image_media_policy(GraphicsMediaPolicy::NONE);
+        // Receives each frame whole, inline: what every reader must end up holding.
+        let mut reference = TerminalScreen::new(24, 80, 100);
+        let mut sizes = Vec::new();
+        let mut classes = Vec::new();
+        for (index, pixels) in frames.iter().enumerate() {
+            let source = Source::new(pixels);
+            // Text between frames, ending at the same cursor so the placement does not move.
+            let text = format!("\x1b[2;1Hframe {index}\x1b[1;1H");
+            let mut bytes = text.clone().into_bytes();
+            bytes.extend(frame_command(&source, w, h));
+            let transactions = deferred(&mut server, &bytes);
+            let wire: Vec<u8> = transactions.iter().flat_map(|(_, b)| b.clone()).collect();
+            assert!(!wire.windows(3).any(|key| key == b"t=t"));
+            classes.push(transactions.iter().map(|(class, _)| *class).max().unwrap());
+            sizes.push(wire.len());
+            // Every chunk of frame data names its action, as the protocol requires; a
+            // transmission's continuation chunks need not.
+            let mut frame_run = false;
+            for chunk in wire
+                .split(|byte| *byte == 0x1b)
+                .filter(|c| c.starts_with(b"_G"))
+            {
+                let control = chunk.split(|byte| *byte == b';').next().unwrap();
+                let has = |key: &[u8]| control.windows(key.len()).any(|window| window == key);
+                if frame_run {
+                    assert!(
+                        has(b"a=f"),
+                        "frame {index}: {}",
+                        String::from_utf8_lossy(control)
+                    );
+                }
+                frame_run = has(b"a=f") && has(b"m=1");
+            }
+            reader.process_bytes(&wire);
+            let direct = base64::engine::general_purpose::STANDARD.encode(pixels);
+            reference.process_bytes(text.as_bytes());
+            reference.process_bytes(
+                format!("\x1b_Ga=T,f=32,s={w},v={h},i=4,p=1,C=1,z=-1,q=2;{direct}\x1b\\")
+                    .as_bytes(),
+            );
+            let held = placed(&mut reader);
+            assert_eq!(held, placed(&mut server), "frame {index}");
+            assert_eq!(held, placed(&mut reference), "frame {index}");
+            assert_eq!(held.len(), 1);
+            assert_eq!(held[0].6, *pixels, "frame {index} pixels");
+        }
+        // Small and unchanged frames travel as edits of the previous frame, still marked as a
+        // stream of whole frames. A rewritten frame travels whole and stays replaceable.
+        assert_eq!(classes, [1, 3, 3, 2, 3, 2]);
+        assert!(
+            sizes[4] > 2 * 4096,
+            "the large edit spans several chunks: {sizes:?}"
+        );
+        assert!(
+            sizes[1] * 20 < sizes[0],
+            "an edit is far smaller: {sizes:?}"
+        );
+        assert!(
+            sizes[2] * 20 < sizes[0],
+            "an unchanged frame sends no pixels: {sizes:?}"
+        );
+        assert!(!server.export_replay_bytes().is_empty());
+    }
+
+    fn direct(keys: &str, pixels: &[u8]) -> Vec<u8> {
+        let data = base64::engine::general_purpose::STANDARD.encode(pixels);
+        format!("\x1b_G{keys};{data}\x1b\\").into_bytes()
+    }
+
+    #[test]
+    fn a_root_frame_edit_rewrites_pixels_in_place_and_keeps_the_placement() {
+        let mut screen = TerminalScreen::new(24, 80, 100);
+        let base: Vec<u8> = [[10, 20, 30, 255]; 8].concat();
+        screen.process_bytes(&direct("a=T,f=32,s=4,v=2,i=3,p=1,C=1,q=2", &base));
+        let before = placed(&mut screen);
+        // Overwrite two pixels of the top row, then blend a half-transparent one below them.
+        screen.process_bytes(&direct(
+            "a=f,r=1,i=3,x=1,y=0,s=2,v=1,X=1,q=2",
+            &[[255, 0, 0, 0], [0, 255, 0, 255]].concat(),
+        ));
+        screen.process_bytes(&direct(
+            "a=f,r=1,i=3,x=1,y=1,s=1,v=1,q=2",
+            &[250, 0, 0, 128],
+        ));
+        let after = placed(&mut screen);
+        assert_eq!(
+            after.len(),
+            1,
+            "the placement survives without being made again"
+        );
+        assert_eq!(
+            after[0].0..after[0].6.len() as u32,
+            before[0].0..before[0].6.len() as u32
+        );
+        let pixels = &after[0].6;
+        assert_eq!(&pixels[4..8], &[255, 0, 0, 0], "overwrite ignores alpha");
+        assert_eq!(&pixels[8..12], &[0, 255, 0, 255]);
+        assert_eq!(&pixels[..4], &[10, 20, 30, 255], "pixels outside are kept");
+        let blended = &pixels[(4 + 1) * 4..(4 + 1) * 4 + 4];
+        assert!(
+            blended[0] > 100 && blended[0] < 250 && blended[3] >= 254,
+            "{blended:?}"
+        );
+    }
+
+    #[test]
+    fn frame_edits_outside_the_root_frame_or_image_are_refused() {
+        let mut screen = TerminalScreen::new(24, 80, 100);
+        screen.process_bytes(&direct("a=T,f=32,s=2,v=2,i=3,q=2", &[0; 16]));
+        for keys in [
+            "a=f,r=2,i=3,s=1,v=1,X=1",
+            "a=f,r=1,c=1,i=3,s=1,v=1,X=1",
+            "a=f,r=1,i=3,x=2,s=1,v=1,X=1",
+            "a=f,r=1,i=9,s=1,v=1,X=1",
+        ] {
+            screen.process_bytes(&direct(keys, &[1, 2, 3, 4]));
+            let responses = String::from_utf8(screen.drain_responses().concat()).unwrap();
+            assert!(!responses.contains(";OK"), "{keys}: {responses}");
+            assert!(
+                responses.contains("ENOTSUPP")
+                    || responses.contains("EINVAL")
+                    || responses.contains("ENOENT"),
+                "{keys}: {responses}"
+            );
+        }
+        assert_eq!(placed_pixels_unchanged(&mut screen), [0; 16]);
+    }
+
+    fn placed_pixels_unchanged(screen: &mut TerminalScreen) -> Vec<u8> {
+        screen.process_bytes(b"\x1b_Ga=p,i=3,q=2\x1b\\");
+        placed(screen)[0].6.clone()
+    }
+
+    #[test]
+    fn edits_are_not_used_without_a_base_readers_are_known_to_hold() {
+        let (w, h) = (32, 16);
+        let first = Source::new(&frame_pixels(w, h, 0));
+        let second = Source::new(&frame_pixels(w, h, 0));
+        let mut server = TerminalScreen::new(24, 80, 100);
+        server.set_image_relay_policy(GraphicsRelayPolicy::All);
+        server.set_output_transaction_recording(true);
+        deferred(&mut server, &frame_command(&first, w, h));
+        // A delete of the image earlier in the batch means readers will not hold it.
+        let mut bytes = b"\x1b_Ga=d,d=I,i=4,q=2\x1b\\".to_vec();
+        bytes.extend(frame_command(&second, w, h));
+        let wire: Vec<u8> = deferred(&mut server, &bytes)
+            .into_iter()
+            .flat_map(|(_, bytes)| bytes)
+            .collect();
+        assert!(!wire.windows(4).any(|key| key == b"a=f,"));
+        // A screen that relays files to local readers never sends edits either.
+        let mut local = screen(GraphicsRelayPolicy::Consuming);
+        let third = Source::new(&frame_pixels(w, h, 0));
+        let fourth = Source::new(&frame_pixels(w, h, 0));
+        deferred(&mut local, &frame_command(&third, w, h));
+        let wire: Vec<u8> = deferred(&mut local, &frame_command(&fourth, w, h))
+            .into_iter()
+            .flat_map(|(_, bytes)| bytes)
+            .collect();
+        assert!(!wire.windows(4).any(|key| key == b"a=f,"));
+    }
+
+    #[test]
+    fn relayed_consuming_replacements_are_independent() {
+        let first = Source::new(&[255, 0, 0, 255]);
+        let second = Source::new(&[0, 255, 0, 255]);
+        let mut screen = screen(GraphicsRelayPolicy::Consuming);
+        screen.process_bytes(&first.command('t'));
+        screen.process_bytes(&second.command('t'));
+        let classes: Vec<_> = output(&mut screen)
+            .into_iter()
+            .map(|(class, _)| class)
+            .collect();
+        assert_eq!(classes, [1, 2]);
+    }
+
+    #[test]
+    fn a_burst_of_distinct_images_prepares_one_named_image_at_a_time() {
+        let first = Source::new(&[255, 0, 0, 255]);
+        let second = Source::new(&[0, 255, 0, 255]);
+        let mut bytes = first.command_for('t', 9);
+        let expected = bytes.len();
+        bytes.extend(second.command_for('t', 10));
         let mut screen = screen(GraphicsRelayPolicy::Consuming);
         let prepared = screen.prepare_media_input(bytes.into()).unwrap().run();
         assert_eq!(prepared.consumed_bytes(), expected);

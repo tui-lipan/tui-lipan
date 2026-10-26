@@ -196,6 +196,22 @@ pub(super) fn acquire<T>(
     }
 }
 
+/// Claim a consuming source without reading it, with the ownership rules [`acquire`] applies.
+/// A re-readable file is left alone.
+pub(super) fn discard(medium: GraphicsMedium, name: &[u8]) {
+    match medium {
+        GraphicsMedium::Direct | GraphicsMedium::File => {}
+        GraphicsMedium::TempFile => {
+            if let Ok(path) = decode_path(name)
+                && is_claimable_temp_file(&path)
+            {
+                let _ = fs::remove_file(path);
+            }
+        }
+        GraphicsMedium::SharedMemory => shared_memory::discard(name),
+    }
+}
+
 #[cfg(unix)]
 pub(super) fn decode_path(name: &[u8]) -> Result<PathBuf, &'static str> {
     use std::ffi::OsStr;
@@ -332,6 +348,26 @@ mod shared_memory {
         result
     }
 
+    /// Unlink an object this process could have read, as [`read`] does after acquiring it.
+    pub(super) fn discard(name: &[u8]) {
+        use std::ffi::CString;
+        use std::os::fd::FromRawFd as _;
+
+        let Ok(name) = CString::new(name) else {
+            return;
+        };
+        if name.is_empty() {
+            return;
+        }
+        let descriptor = unsafe { libc::shm_open(name.as_ptr(), libc::O_RDONLY, 0) };
+        if descriptor < 0 {
+            return;
+        }
+        // SAFETY: `shm_open` just produced this descriptor; the `File` is its sole owner.
+        drop(unsafe { std::fs::File::from_raw_fd(descriptor) });
+        unsafe { libc::shm_unlink(name.as_ptr()) };
+    }
+
     /// Copy through `read`, never a mapping: Linux lets the sender shrink the object while it is
     /// being copied, and touching a mapped page past the new end raises `SIGBUS` in the terminal.
     /// A descriptor read just comes up short.
@@ -413,6 +449,8 @@ mod shared_memory {
     ) -> Result<T, &'static str> {
         Err("ENOTSUPP:shared memory transmission")
     }
+
+    pub(super) fn discard(_name: &[u8]) {}
 }
 
 #[cfg(test)]

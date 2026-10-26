@@ -133,6 +133,8 @@ alacritty_terminal = { version = "0.26.0", optional = true }
 # Kitty graphics `o=z` payloads. Keep miniz explicit: Ghostty 1.3.1's Zig DEFLATE reader crashes
 # on valid streams emitted by zlib-rs.
 flate2 = { version = "1.1", optional = true, default-features = false, features = ["miniz_oxide"] }
+# Whole-frame Adler-32 for zlib streams deflated in parallel bands. Already miniz_oxide's.
+simd-adler32 = { version = "0.3.10", optional = true }
 # Windows path spelling for `FileTree`. Converts a canonical `\\?\C:\x` to `C:\x` only where the
 # plain form still names the same file, keeping verbatim syntax for reserved DOS names, trailing
 # dots or spaces, and paths past the legacy limit. That line is drawn against real Win32 rules, not
@@ -177,7 +179,7 @@ syntax-syntect = ["dep:syntect"]
 syntax-extra = ["syntax-syntect", "dep:two-face"]
 markdown       = ["dep:pulldown-cmark"]
 terminal      = ["dep:portable-pty", "dep:alacritty_terminal", "dep:memchr"]
-terminal-images = ["terminal", "image", "dep:flate2", "dep:tempfile"]
+terminal-images = ["terminal", "image", "dep:flate2", "dep:simd-adler32", "dep:tempfile"]
 terminal-serde = ["terminal", "dep:serde"]
 profiling-tracing = ["dep:tracing"]
 # Investigation-only allocation attribution hooks; see src/alloc_probe.rs.

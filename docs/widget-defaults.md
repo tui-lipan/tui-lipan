@@ -1305,7 +1305,7 @@ Source: `src/widgets/tree/mod.rs:29` (`Tree`).
 
 ## Terminal
 
-Source: `src/widgets/terminal/mod.rs:125` (`Terminal`).
+Source: `src/widgets/terminal/mod.rs:129` (`Terminal`).
 
 | Field | Default initializer |
 |---|---|
