@@ -602,7 +602,7 @@ impl WorkerInput {
         let switch: &[u8] = if wanted {
             b"\x1b[?1016h"
         } else {
-            b"\x1b[?1016l"
+            crate::backend::ratatui_backend::terminal_transition::PIXEL_MOUSE_OFF.as_bytes()
         };
         // A host that never heard the escape keeps sending what it sent, and is read that way.
         if out
@@ -2250,7 +2250,9 @@ mod tests {
             terminal
                 .write_all(b"\x1b[?1016;1$y\x1b[<0;106;46M")
                 .unwrap();
-            wait_for(&mut terminal, b"\x1b[?1016l\x1b[?1016$p");
+            // Dropping the mode asks for SGR again: a host that keeps one encoding falls back to
+            // X10 on `1016l`, which cannot report past column 223.
+            wait_for(&mut terminal, b"\x1b[?1016l\x1b[?1006h\x1b[?1016$p");
             terminal
                 .write_all(b"\x1b[<0;106;46M\x1b[?1016;2$y\x1b[<0;11;6M")
                 .unwrap();
