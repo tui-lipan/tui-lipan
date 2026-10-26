@@ -77,15 +77,45 @@ pub(crate) fn note_window_size(
     pixel_width: Option<u16>,
     pixel_height: Option<u16>,
 ) {
+    learn_window_size(cols, rows, pixel_width, pixel_height, queried_cell_size());
+}
+
+/// [`note_window_size`], with the size the host answered at startup passed in.
+fn learn_window_size(
+    cols: u16,
+    rows: u16,
+    pixel_width: Option<u16>,
+    pixel_height: Option<u16>,
+    queried_at_startup: Option<(u16, u16)>,
+) {
     // The division goes first because it is live: it follows a font zoom, where the size queried
     // once at startup does not. It also only answers when the grid divides the reported area
     // exactly, which is the same condition that makes a pixel report placeable at all.
-    let cell = divide_window(cols, rows, pixel_width, pixel_height)
-        .or_else(queried_cell_size)
-        .filter(usable);
+    let divided = divide_window(cols, rows, pixel_width, pixel_height).filter(usable);
     // Nothing to learn from this size keeps whatever was already known. Reports are still arriving
-    // as pixels if the mode is on, and the previous divisor places them far better than none.
+    // as pixels if the mode is on, and the previous divisor places them far better than none. That
+    // includes a later answer to `CSI 16 t`, which the startup answer is older than, so the startup
+    // answer only fills a size that is not known yet.
+    let cell = divided.or_else(|| {
+        (CELL.load(Ordering::Acquire) == 0)
+            .then_some(queried_at_startup)
+            .flatten()
+            .filter(usable)
+    });
     if let Some(cell) = cell {
+        CELL.store(pack(cell), Ordering::Release);
+    }
+}
+
+/// Take the host's answer to a cell-size query (`CSI 16 t`) asked after startup.
+///
+/// A padded window never divides, so on such a host the startup answer is the only divisor there
+/// is, and a font zoom since then makes it wrong: every pixel report lands too far out, and the
+/// cells near the far corner stop receiving the pointer at all. The host's fresh answer is the
+/// direct one, so it replaces whatever was known, however that was learned.
+pub(crate) fn note_cell_size(width: u16, height: u16) {
+    let cell = (width, height);
+    if usable(&cell) {
         CELL.store(pack(cell), Ordering::Release);
     }
 }
@@ -272,6 +302,30 @@ mod tests {
         // A font zoom does divide, and the fresh size replaces the old one.
         note_window_size(80, 24, Some(880), Some(480));
         assert_eq!(cell_size(), Some((11, 20)));
+
+        // A zoom on a padded window divides into nothing, so only the host's answer to a fresh
+        // query notices it. That answer wins, and a misreported one is ignored like any other.
+        note_window_size(70, 21, Some(888), Some(486));
+        assert_eq!(cell_size(), Some((11, 20)), "padding teaches nothing");
+        note_cell_size(12, 22);
+        assert_eq!(cell_size(), Some((12, 22)));
+        assert_eq!(
+            resolve(837, 461).map(|position| position.cell),
+            Some((69, 20))
+        );
+        note_cell_size(0, 0);
+        assert_eq!(cell_size(), Some((12, 22)));
+
+        reset();
+
+        // The startup answer fills a size nothing else gave, on a padded window from the start.
+        learn_window_size(70, 21, Some(711), Some(426), Some((10, 20)));
+        assert_eq!(cell_size(), Some((10, 20)));
+        // A zoom answered since is newer than it, so a padded resize keeps the zoomed size rather
+        // than going back to what the host said at startup.
+        note_cell_size(15, 30);
+        learn_window_size(47, 14, Some(713), Some(428), Some((10, 20)));
+        assert_eq!(cell_size(), Some((15, 30)), "the startup answer is older");
 
         reset();
 

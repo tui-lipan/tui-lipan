@@ -16,6 +16,15 @@ use super::native_terminal::{
     DisableAutoWrap, DisableMouseAllMotion, EnableAutoWrap, SurfaceTerminalPolicy,
 };
 
+/// Turns pixel reporting (DEC 1016) off and puts the host back on SGR (1006) reports.
+///
+/// Some hosts, Ghostty among them, keep a single report encoding and drop it to X10 when 1016 is
+/// reset, rather than back to the SGR encoding that was on before - while still answering a probe
+/// of 1006 as set. X10 cannot name a column or row past 223, so on a wide window the reports beyond
+/// it stop arriving and the right of the screen ignores the pointer. Asking for 1006 again straight
+/// after is harmless on a host whose encodings are independent.
+pub(crate) const PIXEL_MOUSE_OFF: &str = "\x1b[?1016l\x1b[?1006h";
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TerminalOp {
     EnableRawMode,
@@ -334,7 +343,7 @@ impl<W: Write> TerminalTransitionExecutor for CrosstermTransitionExecutor<W> {
             TerminalOp::ResetPointer => {
                 execute!(self.writer, Print("\x1b]22;default\x1b\\\x1b]22;\x1b\\"))
             }
-            TerminalOp::DisablePixelMouse => execute!(self.writer, Print("\x1b[?1016l")),
+            TerminalOp::DisablePixelMouse => execute!(self.writer, Print(PIXEL_MOUSE_OFF)),
             TerminalOp::Flush => self.writer.flush(),
         }
     }

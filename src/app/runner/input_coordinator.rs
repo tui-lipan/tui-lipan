@@ -48,6 +48,8 @@ const SIZE_CHECK_INTERVAL: Duration = Duration::from_millis(100);
 const PIXEL_SWITCH_TIMEOUT: Duration = Duration::from_millis(500);
 /// Asks the host which way it reports the pointer, for [`PixelSwitch`] to find the answer.
 const PIXEL_MODE_QUERY: &[u8] = b"\x1b[?1016$p";
+/// Asks the host for its cell size in pixels, for [`CellSizeReplyScanner`] to find the answer.
+const CELL_SIZE_QUERY: &[u8] = b"\x1b[16t";
 
 pub(super) struct TerminaInputCoordinator {
     events: mpsc::Receiver<RunnerEvent>,
@@ -415,7 +417,9 @@ fn process_worker_commands(
                                 *terminal = new_terminal;
                                 *input = WorkerInput::default();
                                 // The suspend turned pixel reporting off. The host is the same one
-                                // that answered at startup, so it is asked again straight away.
+                                // that answered at startup, so it is asked again straight away. Its
+                                // font may have changed in the meantime, so its cells are too.
+                                input.ask_cell_size(&mut io::stdout());
                                 input.sync_pixel_mouse(&mut io::stdout());
                                 *query = None;
                                 control.paused.store(false, Ordering::SeqCst);
@@ -462,6 +466,15 @@ struct WorkerInput {
     /// The newest plain motion report of the read being dispatched. See [`WorkerInput::send`].
     pending_motion: Option<RunnerEvent>,
     pixel: PixelSwitch,
+    cell_reply: CellSizeReplyScanner,
+}
+
+/// A host answer found in raw input, ahead of the parser. See [`WorkerInput::push`].
+enum HostReply {
+    /// The host's answer to [`PIXEL_MODE_QUERY`]: what its pointer reports carry from here on.
+    PixelMode(u16),
+    /// The host's answer to [`CELL_SIZE_QUERY`], as width and height in pixels.
+    CellSize(u16, u16),
 }
 
 fn is_pointer_report(event: &RunnerEvent) -> bool {
@@ -486,18 +499,54 @@ fn is_plain_motion(event: &RunnerEvent) -> bool {
 impl WorkerInput {
     fn push(&mut self, bytes: &[u8], events: &mpsc::Sender<RunnerEvent>) -> bool {
         // A switch of the pointer encoding takes effect exactly at the host's answer to the query
-        // behind it, so the bytes before the answer are decoded, and their reports sent, first.
+        // behind it, so the bytes before the answer are decoded, and their reports sent, first. A
+        // new cell size divides the reports after its answer, and not the ones before it, the same
+        // way.
         let mut rest = bytes;
-        while let Some((end, setting)) = self.pixel.reply.find(rest) {
+        while let Some((end, reply)) = self.next_reply(rest) {
             if !self.decode(&rest[..end], events) {
                 return false;
             }
-            if let Some(pixels) = self.pixel.confirm(setting) {
-                pixel_mouse::note_mode_enabled(pixels);
+            match reply {
+                HostReply::PixelMode(setting) => {
+                    if let Some(pixels) = self.pixel.confirm(setting) {
+                        pixel_mouse::note_mode_enabled(pixels);
+                    }
+                }
+                HostReply::CellSize(width, height) => {
+                    pixel_mouse::note_cell_size(width, height);
+                    // The first size this run learns can make the mode worth asking for.
+                    self.sync_pixel_mouse(&mut io::stdout());
+                }
             }
             rest = &rest[end..];
         }
         self.decode(rest, events)
+    }
+
+    /// The offset just past the first complete host answer in `bytes`, and what it said.
+    fn next_reply(&mut self, bytes: &[u8]) -> Option<(usize, HostReply)> {
+        bytes.iter().enumerate().find_map(|(index, &byte)| {
+            // Both scanners see every byte, so neither loses its place in an answer split across
+            // reads. They end on different final bytes, so at most one answers per byte.
+            let mode = self.pixel.reply.step(byte).map(HostReply::PixelMode);
+            let cell = self
+                .cell_reply
+                .step(byte)
+                .map(|(width, height)| HostReply::CellSize(width, height));
+            mode.or(cell).map(|reply| (index + 1, reply))
+        })
+    }
+
+    /// Ask the host how big its cells are now, after something that may have changed them.
+    ///
+    /// The window size cannot say on a host that pads its window, and the size asked at startup
+    /// goes stale with a font zoom. Only a host that implements mode 1016 is asked: pixel reports
+    /// are what read the answer.
+    fn ask_cell_size(&mut self, out: &mut impl Write) {
+        if pixel_mouse::host_supports() {
+            let _ = out.write_all(CELL_SIZE_QUERY).and_then(|()| out.flush());
+        }
     }
 
     fn decode(&mut self, bytes: &[u8], events: &mpsc::Sender<RunnerEvent>) -> bool {
@@ -528,8 +577,9 @@ impl WorkerInput {
             }
         }
         // A resize is where a padded window can first divide evenly, and so where the mode can
-        // first be worth asking for.
+        // first be worth asking for. It is also what a font zoom looks like from here.
         if resized {
+            self.ask_cell_size(&mut io::stdout());
             self.sync_pixel_mouse(&mut io::stdout());
         }
         self.flush_motion(events)
@@ -552,7 +602,7 @@ impl WorkerInput {
         let switch: &[u8] = if wanted {
             b"\x1b[?1016h"
         } else {
-            b"\x1b[?1016l"
+            crate::backend::ratatui_backend::terminal_transition::PIXEL_MOUSE_OFF.as_bytes()
         };
         // A host that never heard the escape keeps sending what it sent, and is read that way.
         if out
@@ -688,6 +738,7 @@ impl ModeReplyScanner {
     const PREFIX: &[u8] = b"\x1b[?1016;";
 
     /// The offset just past the first complete answer in `bytes`, and the setting it reports.
+    #[cfg(test)]
     fn find(&mut self, bytes: &[u8]) -> Option<(usize, u16)> {
         bytes
             .iter()
@@ -718,6 +769,71 @@ impl ModeReplyScanner {
             (2, b'y') => {
                 self.matched = 0;
                 return Some(self.setting);
+            }
+            _ => self.restart(byte),
+        }
+        None
+    }
+
+    /// Anything unexpected ends the match, though it may itself begin the next one.
+    fn restart(&mut self, byte: u8) {
+        self.matched = usize::from(byte == Self::PREFIX[0]);
+    }
+}
+
+/// Finds the host's answer to `CSI 16 t` (`CSI 6 ; height ; width t`) in raw input, across reads.
+///
+/// Termina has no event for it and drops it, so, like [`ModeReplyScanner`], it is found in the
+/// bytes before they are parsed, at its exact place among the pointer reports around it.
+#[derive(Default)]
+struct CellSizeReplyScanner {
+    /// How much of the prefix has matched so far.
+    matched: usize,
+    height: u16,
+    width: u16,
+    /// The height is complete and the width is being read.
+    reading_width: bool,
+    /// The field being read has at least one digit.
+    has_digits: bool,
+}
+
+impl CellSizeReplyScanner {
+    const PREFIX: &[u8] = b"\x1b[6;";
+
+    /// Width and height in pixels, once a complete answer ends at `byte`.
+    fn step(&mut self, byte: u8) -> Option<(u16, u16)> {
+        let prefix = Self::PREFIX.len();
+        if self.matched < prefix {
+            if byte == Self::PREFIX[self.matched] {
+                // Every answer starts its fields afresh once the prefix is in.
+                *self = Self {
+                    matched: self.matched + 1,
+                    ..Self::default()
+                };
+            } else {
+                self.restart(byte);
+            }
+            return None;
+        }
+        match byte {
+            b'0'..=b'9' => {
+                let field = if self.reading_width {
+                    &mut self.width
+                } else {
+                    &mut self.height
+                };
+                *field = field
+                    .saturating_mul(10)
+                    .saturating_add(u16::from(byte - b'0'));
+                self.has_digits = true;
+            }
+            b';' if self.has_digits && !self.reading_width => {
+                self.reading_width = true;
+                self.has_digits = false;
+            }
+            b't' if self.has_digits && self.reading_width => {
+                self.matched = 0;
+                return Some((self.width, self.height));
             }
             _ => self.restart(byte),
         }
@@ -923,6 +1039,7 @@ impl WindowSizeWatch {
         let (columns, rows, width, height) = (size.columns, size.rows, size.width, size.height);
         self.last = Some(size);
         pixel_mouse::note_window_size(columns, rows, Some(width), Some(height));
+        input.ask_cell_size(&mut io::stdout());
         input.sync_pixel_mouse(&mut io::stdout());
         events
             .send(RunnerEvent::Terminal(CrosstermEvent::Resize(columns, rows)))
@@ -2133,7 +2250,9 @@ mod tests {
             terminal
                 .write_all(b"\x1b[?1016;1$y\x1b[<0;106;46M")
                 .unwrap();
-            wait_for(&mut terminal, b"\x1b[?1016l\x1b[?1016$p");
+            // Dropping the mode asks for SGR again: a host that keeps one encoding falls back to
+            // X10 on `1016l`, which cannot report past column 223.
+            wait_for(&mut terminal, b"\x1b[?1016l\x1b[?1006h\x1b[?1016$p");
             terminal
                 .write_all(b"\x1b[<0;106;46M\x1b[?1016;2$y\x1b[<0;11;6M")
                 .unwrap();
@@ -2156,6 +2275,128 @@ mod tests {
                 "cells 10,5"
             ],
             "each report is read as the host sent it"
+        );
+    }
+
+    /// A font zoom on a host that pads its window changes the cells without the window size ever
+    /// dividing, so the size asked at startup would go on dividing every pixel report: the pointer
+    /// lands too far out, and the far corner of the screen never receives it. The worker asks the
+    /// host again when its size changes, and the answer divides the reports after it.
+    #[test]
+    #[cfg(all(target_os = "linux", feature = "terminal"))]
+    fn a_font_zoom_redivides_pixel_reports_from_the_hosts_answer() {
+        use crate::backend::ratatui_backend::host_input::pty_test::{child_report, run_on_pty};
+        use crate::backend::ratatui_backend::terminal_handoff::input_handoff_slot;
+
+        let name = "a_font_zoom_redivides_pixel_reports_from_the_hosts_answer";
+        if let Some(report) = child_report() {
+            crossterm::terminal::enable_raw_mode().expect("raw mode");
+            pixel_mouse::note_host_support(true);
+            // Cells of 10 by 20 pixels.
+            pixel_mouse::note_window_size(80, 24, Some(800), Some(480));
+            pixel_mouse::note_wanted(true);
+            let coordinator = TerminaInputCoordinator::start(input_handoff_slot()).expect("start");
+            report.line("ready", 1);
+            let started = Instant::now();
+            let mut seen = 0;
+            while seen < 3 && started.elapsed() < Duration::from_secs(10) {
+                match coordinator
+                    .receiver()
+                    .recv_timeout(Duration::from_millis(100))
+                {
+                    Ok(RunnerEvent::Pointer {
+                        event: CrosstermEvent::Mouse(mouse),
+                        sub_cell,
+                    }) => {
+                        let read = format!(
+                            "{},{} +{},{}",
+                            mouse.column, mouse.row, sub_cell.0, sub_cell.1
+                        );
+                        report.line(&format!("report{seen}"), read);
+                        seen += 1;
+                    }
+                    // The answer is the host's, not something typed.
+                    Ok(RunnerEvent::Terminal(CrosstermEvent::Key(key))) => {
+                        report.line("stray_key", format!("{key:?}"));
+                    }
+                    _ => {}
+                }
+            }
+            let _ = crossterm::terminal::disable_raw_mode();
+            report.line("done", 1);
+            return;
+        }
+
+        let module = module_path!();
+        let module = module.split_once("::").map_or(module, |(_, rest)| rest);
+        let report = run_on_pty(&format!("{module}::{name}"), |master| {
+            let mut terminal = File::from(master);
+            let mut output = Vec::new();
+            let mut wait_for = |terminal: &mut File, wanted: &[u8]| {
+                read_child_until(terminal, &mut output, wanted);
+            };
+            // Pixel (105, 45) is `106;46` on the wire.
+            wait_for(&mut terminal, b"\x1b[?1016h\x1b[?1016$p");
+            terminal
+                .write_all(b"\x1b[?1016;1$y\x1b[<0;106;46M")
+                .unwrap();
+            // Zoomed to cells of 15 by 30, padded so that nothing divides.
+            let size = libc::winsize {
+                ws_row: 25,
+                ws_col: 83,
+                ws_xpixel: 1254,
+                ws_ypixel: 766,
+            };
+            // SAFETY: one valid descriptor and a `winsize` that outlives the call.
+            let resized = unsafe { libc::ioctl(terminal.as_raw_fd(), libc::TIOCSWINSZ, &size) };
+            assert_eq!(resized, 0, "TIOCSWINSZ failed");
+            wait_for(&mut terminal, b"\x1b[16t");
+            terminal
+                .write_all(b"\x1b[<0;106;46M\x1b[6;30;15t\x1b[<0;106;46M")
+                .unwrap();
+            terminal
+        });
+        assert_eq!(
+            report.get("done").map(String::as_str),
+            Some("1"),
+            "{report:?}"
+        );
+        let reports: Vec<_> = (0..3)
+            .map(|index| report[&format!("report{index}")].as_str())
+            .collect();
+        assert_eq!(
+            reports,
+            ["10,2 +5,5", "10,2 +5,5", "7,1 +0,15"],
+            "a report is divided by the cell size the host had given when it was sent"
+        );
+        assert_eq!(report.get("stray_key"), None, "{report:?}");
+    }
+
+    #[test]
+    fn the_hosts_cell_size_answer_is_found_across_reads() {
+        let mut scanner = CellSizeReplyScanner::default();
+        let find = |scanner: &mut CellSizeReplyScanner, bytes: &[u8]| {
+            bytes
+                .iter()
+                .enumerate()
+                .find_map(|(index, &byte)| scanner.step(byte).map(|cell| (index + 1, cell)))
+        };
+        assert_eq!(
+            find(&mut scanner, b"\x1b[<35;4;2M\x1b[6;18;8t\x1b[A"),
+            Some((19, (8, 18)))
+        );
+
+        // Split anywhere, the answer still ends where its last byte arrives.
+        assert_eq!(find(&mut scanner, b"\x1b[6;1"), None);
+        assert_eq!(find(&mut scanner, b"8;"), None);
+        assert_eq!(find(&mut scanner, b"9t"), Some((2, (9, 18))));
+
+        // The window's pixel size, or an answer missing a field, is not it.
+        assert_eq!(find(&mut scanner, b"\x1b[4;702;968t"), None);
+        assert_eq!(find(&mut scanner, b"\x1b[6;18t\x1b[6;;8t"), None);
+        assert_eq!(
+            find(&mut scanner, b"\x1b[6;\x1b[6;20;10t"),
+            Some((14, (10, 20)))
         );
     }
 

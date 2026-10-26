@@ -971,9 +971,13 @@ runner asks it for the same mode while a forwarding terminal on screen uses that
 answers the probe, and the host reports a cell size that a pixel position can be divided by. It then
 passes the sub-cell offset through to the report. The mode is withdrawn again once no terminal uses
 the encoding: a pixel-reporting host sends a report for every pixel the pointer crosses rather than
-every cell, which the whole input path would otherwise pay for with nothing reading it. These facts
+every cell, which the whole input path would otherwise pay for with nothing reading it. Withdrawing
+the mode also asks the host for SGR reports again, because some hosts fall back to the X10 encoding
+instead, which cannot report a position past column or row 223. These facts
 can settle at different times - a host that pads its window only reveals its cell size on a resize
-that happens to divide evenly - so the request may come mid-run rather than at startup. Each switch
+that happens to divide evenly - so the request may come mid-run rather than at startup. The cell
+size can also change mid-run, with a font zoom, so whenever the host's size changes the runner asks
+the host for its cell size again, and reports after its answer are divided by the new size. Each switch
 is followed by a query of the mode, and reports change meaning exactly where the host's answer
 arrives: one the host sent before acting on the switch is still read the old way, so a click in the
 transition lands on the cell it was made on. A host that only says which cell was
