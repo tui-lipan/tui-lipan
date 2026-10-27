@@ -507,7 +507,9 @@ TreeNode::new("agents")
 
 **Migration:** replace `TreeNode::show_disclosure(false)` with `show_arrow(false)`.
 
-Composed rows use the tree's scroll view and keyboard navigation. Item hover styles and effects
+Composed rows use the tree's scroll view and keyboard navigation. The view follows the selection
+the way a `List` follows its cursor: it scrolls only when the selected row comes within two rows of
+an edge. Item hover styles and effects
 apply only to selectable or collapsible rows. Non-selectable headings and other inert rows keep
 their normal appearance. Hover callbacks still report entry and exit for every composed row.
 On interactive rows, guides and arrows gain hover foreground overrides and contrast adjustment

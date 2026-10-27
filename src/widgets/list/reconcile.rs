@@ -286,13 +286,7 @@ pub fn reconcile_list(tree: &mut NodeTree, id: NodeId, list: &List, rect: Rect) 
         if let Some(forced) = next_scroll_override {
             if len > 0 && visible_items > 0 {
                 if let Some(selected) = selected {
-                    let margin = if visible_items <= 2 {
-                        0
-                    } else if visible_items <= 6 {
-                        1
-                    } else {
-                        2
-                    };
+                    let margin = crate::widgets::scroll::cursor_margin(visible_items);
                     let selected = selected.min(len.saturating_sub(1));
                     let min_selected = forced.saturating_add(margin);
                     let max_selected = forced

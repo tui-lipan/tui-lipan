@@ -395,6 +395,7 @@ pub(crate) fn reconcile_scroll_view(
                     content_height: usize::from(content_height),
                     show_indicators: sv.show_scroll_indicators,
                     reveal_target: sv.reveal_target,
+                    reveal_margin: sv.reveal_margin,
                 },
             )
         })

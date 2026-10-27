@@ -115,6 +115,7 @@ pub(crate) struct ScrollTargetLayout {
     pub content_height: usize,
     pub show_indicators: bool,
     pub reveal_target: bool,
+    pub reveal_margin: usize,
 }
 
 pub(crate) fn scroll_offset_for_target(
@@ -145,6 +146,21 @@ fn reveal_offset(rect: Rect, layout: &ScrollTargetLayout) -> usize {
     }
     let start = rect.y.max(0) as usize;
     let end = start.saturating_add(usize::from(rect.h));
+    // Reveal the child with its margin, unless the margin would not fit beside it.
+    let margin = layout
+        .reveal_margin
+        .min(crate::widgets::scroll::cursor_margin(
+            layout.viewport_height,
+        ));
+    let (start, end) = if end - start + 2 * margin <= layout.viewport_height {
+        (
+            start.saturating_sub(margin),
+            end.saturating_add(margin)
+                .min(layout.content_height.max(end)),
+        )
+    } else {
+        (start, end)
+    };
     // A window reserves zero, one, or two indicator rows. Its first offset
     // that can contain the child's bottom is end - (height - reserved).
     // Check each candidate's actual window, since its indicators may differ.
@@ -745,6 +761,7 @@ mod reveal_tests {
                                     content_height,
                                     show_indicators,
                                     reveal_target: true,
+                                    reveal_margin: 0,
                                 };
                                 let rect = Rect {
                                     x: 0,
