@@ -2301,6 +2301,10 @@ fn terminal_layer_branch_is_opaque(
 }
 
 /// A terminal under a partial-opacity wrapper shows the layer below it, so it cannot punch a hole.
+///
+/// Only a terminal of this layer's own counts. One inside a nested `Canvas` layer belongs to that
+/// layer, which is visited on its own: a full-screen host whose one small window holds a terminal
+/// would otherwise hide every image beneath the whole host.
 #[cfg(feature = "terminal-images")]
 fn subtree_has_opaque_terminal(tree: &NodeTree, root: NodeId) -> bool {
     let mut stack = vec![root];
@@ -2309,7 +2313,7 @@ fn subtree_has_opaque_terminal(tree: &NodeTree, root: NodeId) -> bool {
             continue;
         }
         let node = tree.node(id);
-        if layer_exposes_underlay(node) {
+        if layer_exposes_underlay(node) || (id != root && is_canvas_layer(tree, node)) {
             continue;
         }
         if matches!(node.kind, NodeKind::Terminal(_)) {
@@ -2318,6 +2322,14 @@ fn subtree_has_opaque_terminal(tree: &NodeTree, root: NodeId) -> bool {
         stack.extend(node.children.iter().rev().copied());
     }
     false
+}
+
+/// Whether `node` is positioned by a `Canvas` parent, the boundary of an absolute layer.
+#[cfg(feature = "terminal-images")]
+fn is_canvas_layer(tree: &NodeTree, node: &crate::core::node::Node) -> bool {
+    node.parent.is_some_and(|parent| {
+        tree.is_valid(parent) && matches!(tree.node(parent).kind, NodeKind::Canvas(_))
+    })
 }
 
 /// A node that lets the layer below show through what it holds, so a terminal inside it cannot
@@ -2801,6 +2813,7 @@ mod terminal_image_layer_tests {
         top_opacity_target: Option<Color>,
         top_effect: Option<Reveal>,
         top_frame: bool,
+        top_host: bool,
     }
 
     /// A reveal in progress: every cell shows what lay beneath the scope, or only its own content.
@@ -2861,26 +2874,29 @@ mod terminal_image_layer_tests {
             } else {
                 top_layer
             };
-            Canvas::new()
-                .child_at(
-                    Rect {
-                        x: 0,
-                        y: 0,
-                        w: 10,
-                        h: 5,
-                    },
-                    bottom.key("bottom-terminal"),
-                )
-                .child_at(
-                    Rect {
-                        x: 2,
-                        y: 1,
-                        w: 4,
-                        h: 3,
-                    },
-                    top_layer.key("top-layer"),
-                )
-                .into()
+            let full = Rect {
+                x: 0,
+                y: 0,
+                w: 10,
+                h: 5,
+            };
+            let window = Rect {
+                x: 2,
+                y: 1,
+                w: 4,
+                h: 3,
+            };
+            let canvas = Canvas::new().child_at(full, bottom.key("bottom-terminal"));
+            if self.top_host {
+                // A full-screen host layer, such as a dropdown's, whose one window holds the
+                // terminal.
+                let host = Canvas::new().child_at(window, top_layer.key("top-layer"));
+                canvas
+                    .child_at(full, Element::from(host).key("top-host"))
+                    .into()
+            } else {
+                canvas.child_at(window, top_layer.key("top-layer")).into()
+            }
         }
     }
 
@@ -2896,7 +2912,7 @@ mod terminal_image_layer_tests {
         top_opacity_target: Option<Color>,
         top_effect: Option<Reveal>,
     ) -> RuntimeCore<LayeredTerminals> {
-        runtime_with_frame(top_opacity, top_opacity_target, top_effect, false)
+        runtime_with_layers(top_opacity, top_opacity_target, top_effect, false, false)
     }
 
     fn runtime_with_frame(
@@ -2904,6 +2920,22 @@ mod terminal_image_layer_tests {
         top_opacity_target: Option<Color>,
         top_effect: Option<Reveal>,
         top_frame: bool,
+    ) -> RuntimeCore<LayeredTerminals> {
+        runtime_with_layers(
+            top_opacity,
+            top_opacity_target,
+            top_effect,
+            top_frame,
+            false,
+        )
+    }
+
+    fn runtime_with_layers(
+        top_opacity: f32,
+        top_opacity_target: Option<Color>,
+        top_effect: Option<Reveal>,
+        top_frame: bool,
+        top_host: bool,
     ) -> RuntimeCore<LayeredTerminals> {
         let viewport = Rect {
             x: 0,
@@ -2917,6 +2949,7 @@ mod terminal_image_layer_tests {
                 top_opacity_target,
                 top_effect,
                 top_frame,
+                top_host,
             },
             (),
             viewport,
@@ -3019,6 +3052,23 @@ mod terminal_image_layer_tests {
         assert!(
             terminal_image_layer_occlusions(&runtime.tree, top, content).is_empty(),
             "the upper terminal must still paint inside its own layer"
+        );
+    }
+
+    /// A scratchpad-style host spans the screen to position one window. Taking the host's rect as
+    /// the window's hid every picture beneath the whole host while it was open.
+    #[test]
+    fn host_layer_occludes_only_the_window_holding_its_terminal() {
+        let runtime = runtime_with_layers(1.0, None, None, false, true);
+        let bottom = node_with_key(&runtime, "bottom-terminal");
+
+        assert_eq!(
+            terminal_image_layer_occlusions(
+                &runtime.tree,
+                bottom,
+                ratatui::layout::Rect::new(0, 0, 10, 5),
+            ),
+            vec![ratatui::layout::Rect::new(2, 1, 4, 3)]
         );
     }
 
