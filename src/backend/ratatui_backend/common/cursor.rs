@@ -4,8 +4,7 @@ use std::cell::Cell as StdCell;
 
 use ratatui::layout::Position;
 
-use crate::backend::ratatui_backend::render::RenderOffset;
-use crate::core::node::{NodeId, NodeKind, NodeTree};
+use crate::core::node::{NodeId, NodeTree};
 
 /// Where a focused widget asks the host terminal to put its caret.
 ///
@@ -98,14 +97,9 @@ fn overlay_painted_above(tree: &NodeTree, owner: NodeId, x: i16, y: i16) -> bool
         if !tree.is_valid(root.id) {
             return false;
         }
-        let node = tree.node(root.id);
-        // Match the painter: an animated overlay (a toast sliding in) draws at its visual offset.
-        let offset = match &node.kind {
-            NodeKind::Animated(animated) => {
-                RenderOffset::ZERO.add_cells(animated.visual_position_offset_cells())
-            }
-            _ => RenderOffset::ZERO,
-        };
-        offset.apply_to_rect(node.rect).contains(x, y)
+        // Match the painter: a moving or sliding overlay (a toast) draws at its visual offset.
+        crate::backend::ratatui_backend::render::overlay_paint_offset(tree, root)
+            .apply_to_rect(tree.node(root.id).rect)
+            .contains(x, y)
     })
 }

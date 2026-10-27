@@ -313,6 +313,19 @@ pub(crate) fn restore_fully_transparent_animated(
 }
 
 /// The background paint declared by an overlay's own root node, before resolution.
+/// The node whose style describes an overlay's surface: its root, or the content inside a
+/// wrapping `Animated` root, which moves the overlay without painting a surface of its own.
+pub(crate) fn overlay_surface_node(
+    tree: &crate::core::node::NodeTree,
+    id: crate::core::node::NodeId,
+) -> &crate::core::node::Node {
+    let node = tree.node(id);
+    match (&node.kind, node.children.as_slice()) {
+        (NodeKind::Animated(_), [child]) if tree.is_valid(*child) => tree.node(*child),
+        _ => node,
+    }
+}
+
 fn overlay_root_bg(node: &crate::core::node::Node) -> Option<Paint> {
     match &node.kind {
         NodeKind::Frame(frame) => frame.style.bg,

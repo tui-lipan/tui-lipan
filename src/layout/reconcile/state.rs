@@ -150,6 +150,9 @@ pub(crate) struct OverlayState {
     pub(crate) allow_root_overlays: bool,
     pub(crate) roots: Vec<OverlayRoot>,
     pub(crate) order: u64,
+    /// Each application overlay's root from the previous layout, so the next one reuses the node
+    /// and keeps its state. Taken before the epoch clears the tree's roots.
+    pub(crate) previous_entry_roots: Vec<(crate::overlay::OverlayId, NodeId)>,
 }
 
 impl OverlayState {
@@ -159,6 +162,7 @@ impl OverlayState {
             allow_root_overlays,
             roots: Vec::new(),
             order: 0,
+            previous_entry_roots: Vec::new(),
         }
     }
 

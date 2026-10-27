@@ -274,18 +274,15 @@ pub(crate) fn render(f: &mut ratatui::Frame<'_>, ctx: &RenderContext<'_>) {
         } else {
             overlay_opacity
         };
-        let restore_mode = overlay_clear_restore_mode(tree.node(overlay.id));
-        let surface_alpha = overlay_surface_alpha(tree.node(overlay.id));
+        let surface_node = overlay_surface_node(tree, overlay.id);
+        let restore_mode = overlay_clear_restore_mode(surface_node);
+        let surface_alpha = overlay_surface_alpha(surface_node);
         if let Some(style) = overlay.backdrop {
             render_overlay_backdrop(&mut state, content_rect, style, overlay_opacity);
         }
-        let overlay_node = tree.node(overlay.id);
-        let overlay_offset = if let NodeKind::Animated(animated) = &overlay_node.kind {
-            RenderOffset::ZERO.add_cells(animated.visual_position_offset_cells())
-        } else {
-            RenderOffset::ZERO
-        };
-        let overlay_rect = overlay_offset.apply_to_rect(overlay_node.rect);
+        let slide_offset = overlay_slide_offset(tree, overlay);
+        let overlay_rect =
+            overlay_paint_offset(tree, overlay).apply_to_rect(tree.node(overlay.id).rect);
         let clear_rect = clip_overlay_clear_rect(content_rect, overlay_rect);
         let effect_backdrop = custom_effect
             .as_ref()
@@ -315,12 +312,8 @@ pub(crate) fn render(f: &mut ratatui::Frame<'_>, ctx: &RenderContext<'_>) {
 
             state.f.render_widget(Clear, clear_rect);
         }
-        render_subtree(
-            &mut state,
-            overlay.id,
-            Some(content_rect),
-            RenderOffset::ZERO,
-        );
+        // The subtree applies a wrapping `Animated` root's own move; only the slide comes from here.
+        render_subtree(&mut state, overlay.id, Some(content_rect), slide_offset);
         apply_overlay_ancestor_effect_scopes(&mut state, overlay.id, overlay_rect, content_rect);
 
         // A translucent surface blended against the cleared region, not against what the overlay
@@ -600,6 +593,31 @@ fn overlay_animation_frame<'a>(
             }?;
             Some((&state.recipe, state.context()))
         }
+    }
+}
+
+/// Where an overlay's visibility slide currently paints it, relative to its resting rectangle.
+fn overlay_slide_offset(tree: &NodeTree, overlay: &crate::core::node::OverlayRoot) -> RenderOffset {
+    let Some((recipe, context)) = overlay_animation_frame(tree, overlay) else {
+        return RenderOffset::ZERO;
+    };
+    if !recipe.slides() || !tree.is_valid(overlay.id) {
+        return RenderOffset::ZERO;
+    }
+    let rect = tree.node(overlay.id).rect;
+    RenderOffset::ZERO.add_cells(recipe.slide_offset_cells(context.progress, rect.w, rect.h))
+}
+
+/// Everything that moves an overlay away from its resting rectangle while it paints: a wrapping
+/// `Animated` root's move (a toast stack closing a gap) plus its visibility slide.
+pub(crate) fn overlay_paint_offset(
+    tree: &NodeTree,
+    overlay: &crate::core::node::OverlayRoot,
+) -> RenderOffset {
+    let offset = overlay_slide_offset(tree, overlay);
+    match &tree.node(overlay.id).kind {
+        NodeKind::Animated(animated) => offset.add_cells(animated.visual_position_offset_cells()),
+        _ => offset,
     }
 }
 
@@ -2689,7 +2707,7 @@ fn image_occlusion_rects(
         if !tree.is_valid(overlay.id) {
             continue;
         }
-        if overlay_clear_restore_mode(tree.node(overlay.id))
+        if overlay_clear_restore_mode(overlay_surface_node(tree, overlay.id))
             == OverlayClearRestoreMode::PreserveForeground
         {
             continue;
@@ -2710,15 +2728,9 @@ fn image_occlusion_rects(
                 rects.push(full);
             }
         }
-        let overlay_node = tree.node(overlay.id);
-        let overlay_offset = if let NodeKind::Animated(animated) = &overlay_node.kind {
-            RenderOffset::ZERO.add_cells(animated.visual_position_offset_cells())
-        } else {
-            RenderOffset::ZERO
-        };
         let clear_rect = clip_overlay_clear_rect(
             content_rect,
-            overlay_offset.apply_to_rect(overlay_node.rect),
+            overlay_paint_offset(tree, overlay).apply_to_rect(tree.node(overlay.id).rect),
         );
         if clear_rect.width > 0 && clear_rect.height > 0 {
             rects.push(clear_rect);

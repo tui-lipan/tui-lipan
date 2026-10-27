@@ -30,6 +30,11 @@ pub(crate) fn reconcile_with_overlays_mode(
     overlays: &[crate::overlay::OverlayEntry],
     allow_root_overlays: bool,
 ) {
+    let previous_entry_roots: Vec<_> = tree
+        .overlay_roots()
+        .iter()
+        .filter_map(|root| root.overlay_id.map(|overlay_id| (overlay_id, root.id)))
+        .collect();
     let epoch = tree.begin_epoch();
 
     let root_node = tree.root;
@@ -45,6 +50,7 @@ pub(crate) fn reconcile_with_overlays_mode(
         reuse_root.then_some(root_node),
     );
     let mut overlay_state = OverlayState::new(bounds, allow_root_overlays);
+    overlay_state.previous_entry_roots = previous_entry_roots;
     let _root_id = {
         let mut ctx = ReconcileCtx {
             tree,

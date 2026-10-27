@@ -87,6 +87,9 @@ mod modal_animation;
 #[path = "suites/widget_behavior/visibility_animation.rs"]
 mod visibility_animation;
 
+#[path = "suites/widget_behavior/toast_motion.rs"]
+mod toast_motion;
+
 #[path = "suites/widget_behavior/tree_item_columns.rs"]
 mod tree_item_columns;
 
