@@ -38,6 +38,8 @@ pub struct ScrollView {
     pub(crate) scroll_target: Option<ScrollTarget>,
     /// Reveal a key target with minimal movement instead of top alignment.
     pub(crate) reveal_target: bool,
+    /// Rows a revealed key target keeps between itself and the viewport edge, at most.
+    pub(crate) reveal_margin: usize,
     /// How semantic scroll targets are applied.
     pub(crate) scroll_behavior: ScrollBehavior,
     /// Key bindings to move the viewport.
@@ -103,6 +105,7 @@ impl Default for ScrollView {
             scroll_request: None,
             scroll_target: None,
             reveal_target: false,
+            reveal_margin: 0,
             scroll_behavior: ScrollBehavior::default(),
             scroll_keys: ScrollKeymap::default(),
             scroll_wheel: true,
@@ -264,6 +267,16 @@ impl ScrollView {
     pub fn reveal_key(mut self, key: impl Into<Key>) -> Self {
         self.scroll_target = Some(ScrollTarget::Key(key.into()));
         self.reveal_target = true;
+        self
+    }
+
+    /// Keep up to `rows` rows of context between a [`Self::reveal_key`] child and the viewport
+    /// edge it is revealed against, as a [`List`](crate::widgets::List) keeps around its cursor.
+    ///
+    /// Short viewports keep less: none at two rows or fewer, one up to six rows. The margin never
+    /// reaches past the content, so the first and last children still reveal flush.
+    pub fn reveal_margin(mut self, rows: usize) -> Self {
+        self.reveal_margin = rows;
         self
     }
 

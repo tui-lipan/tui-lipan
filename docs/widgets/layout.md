@@ -359,6 +359,7 @@ Scrollable container with optional scrollbar.
 | `scroll_request` | `Option<ScrollRequest>` | One-shot relative scroll request (`lines`, page fractions, top, bottom) |
 | `scroll_to` | `Option<ScrollTarget>` | Semantic target (`Top`, `Bottom`, `Key`, or `KeyOffset`) resolved each layout |
 | `reveal_key` | `Key` | Reveal a keyed child with minimal scrolling; already visible children stay in place |
+| `reveal_margin` | `usize` | Rows of context `reveal_key` keeps beside the child, at most, like a List cursor: none in viewports of two rows or fewer, one up to six (default `0`) |
 | `scroll_to_key` | `Option<Key>` | Convenience wrapper for `ScrollTarget::Key` |
 | `scroll_to_key_offset` | `(Key, usize)` | Convenience wrapper for `ScrollTarget::KeyOffset`, useful for landing inside large keyed rows |
 | `scroll_to_top` / `scroll_to_bottom` | - | Convenience wrappers for edge targets that do not need sentinel children |

@@ -271,7 +271,8 @@ pub(super) fn view(ctx: &Context<TreeComponent>) -> Element {
     if let Some(entry) = selected.and_then(|index| entries.get(index))
         && (ctx.has_focus_within() || ctx.props.force_scroll_to_selected)
     {
-        view = view.scroll_to_key(row_key(entry));
+        // Follow the cursor the way a List does: scroll only when it nears an edge.
+        view = view.reveal_key(row_key(entry)).reveal_margin(2);
     }
     for (index, entry) in entries.iter().enumerate() {
         let gap = gap_before(index, entry);

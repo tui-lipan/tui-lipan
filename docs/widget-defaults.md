@@ -349,7 +349,7 @@ Source: `src/widgets/list/mod.rs:81` (`ListConfig`).
 
 ## ScrollView
 
-Source: `src/widgets/scroll_view/mod.rs:99` (`ScrollView`).
+Source: `src/widgets/scroll_view/mod.rs:101` (`ScrollView`).
 
 | Field | Default initializer |
 |---|---|
@@ -359,6 +359,7 @@ Source: `src/widgets/scroll_view/mod.rs:99` (`ScrollView`).
 | `scroll_request` | `None` |
 | `scroll_target` | `None` |
 | `reveal_target` | `false` |
+| `reveal_margin` | `0` |
 | `scroll_behavior` | `ScrollBehavior::default()` |
 | `scroll_keys` | `ScrollKeymap::default()` |
 | `scroll_wheel` | `true` |

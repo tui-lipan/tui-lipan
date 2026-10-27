@@ -62,6 +62,49 @@ fn page_down_moves_a_composed_tree_selection_by_a_page() {
     assert_eq!(*backend.state(), Some(0), "and PageUp pages back");
 }
 
+#[test]
+fn moving_down_a_composed_tree_scrolls_only_as_the_cursor_nears_the_bottom() {
+    let mut backend = TestBackend::new(Rows);
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 10,
+    });
+    backend.render();
+    assert!(backend.focus_key(&"rows".into()));
+    let down = KeyEvent {
+        code: KeyCode::Down,
+        mods: KeyMods::NONE,
+    };
+    for _ in 0..8 {
+        backend.send_key(down).unwrap();
+        backend.render();
+    }
+    assert_eq!(*backend.state(), Some(8));
+    let frame = backend.capture_frame().plain_text();
+    let top = frame.lines().next().unwrap_or_default().trim().to_owned();
+    assert_eq!(
+        top, "row 1",
+        "the cursor keeps two rows below it instead of jumping to the top:\n{frame}"
+    );
+    for _ in 0..3 {
+        backend
+            .send_key(KeyEvent {
+                code: KeyCode::Up,
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+        backend.render();
+    }
+    let frame = backend.capture_frame().plain_text();
+    assert_eq!(
+        frame.lines().next().unwrap_or_default().trim(),
+        "row 1",
+        "moving back up inside the viewport leaves it still:\n{frame}"
+    );
+}
+
 /// A parent with two children, collapsed. `composed` draws rows through composed content. Counts
 /// the expansion changes and Ctrl activations it is told about.
 #[derive(Clone, Copy)]

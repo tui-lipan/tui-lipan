@@ -5816,6 +5816,95 @@ fn reveal_key_moves_only_when_a_child_is_outside_the_viewport() {
 }
 
 #[test]
+fn reveal_margin_keeps_rows_of_context_like_a_list_cursor() {
+    let view = |offset, target: &str| {
+        ScrollView::new()
+            .virtualize(false)
+            .offset(offset)
+            .reveal_key(target.to_owned())
+            .reveal_margin(2)
+            .children((0..20).map(|i| Text::new(format!("Row {i}")).key(format!("row-{i}"))))
+    };
+    let bounds = Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 10,
+    };
+    for (offset, key, expected) in [
+        (0, "row-7", 0),
+        (0, "row-8", 1),
+        (0, "row-9", 2),
+        (5, "row-6", 4),
+        (5, "row-0", 0),
+        (10, "row-19", 10),
+    ] {
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(&mut tree, &view(offset, key).into(), bounds, None);
+        let NodeKind::ScrollView(scroll) = &tree.node(tree.root).kind else {
+            panic!("scroll view");
+        };
+        assert_eq!(scroll.offset, expected, "{key} from {offset}");
+    }
+}
+
+#[test]
+fn reveal_margin_gives_way_when_indicator_rows_leave_no_room_for_it() {
+    let mut tree = NodeTree::new();
+    let root = ScrollView::new()
+        .virtualize(false)
+        .show_scroll_indicators(true)
+        .reveal_key("row-8")
+        .reveal_margin(2)
+        .children((0..20).map(|i| Text::new(format!("Row {i}")).key(format!("row-{i}"))));
+    LayoutEngine::reconcile_with_focus(
+        &mut tree,
+        &root.into(),
+        Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 3,
+        },
+        None,
+    );
+    let target = tree.node(find_by_key(&tree, "row-8").unwrap());
+    assert_eq!(target.rect.y, 1, "the revealed row stays on screen");
+}
+
+#[test]
+fn reveal_margin_never_clips_a_tall_child_it_could_show_whole() {
+    let mut tree = NodeTree::new();
+    let root = ScrollView::new()
+        .virtualize(false)
+        .show_scroll_indicators(true)
+        .reveal_key("row-8")
+        .reveal_margin(2)
+        .children((0..20).map(|i| {
+            Text::new(format!("Row {i}"))
+                .height(Length::Px(2))
+                .key(format!("row-{i}"))
+        }));
+    LayoutEngine::reconcile_with_focus(
+        &mut tree,
+        &root.into(),
+        Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 4,
+        },
+        None,
+    );
+    let target = tree.node(find_by_key(&tree, "row-8").unwrap());
+    assert!(
+        target.rect.y >= 1 && target.rect.y + target.rect.h as i16 <= 3,
+        "both rows of the child show between the indicators: {:?}",
+        target.rect
+    );
+}
+
+#[test]
 fn reveal_key_accounts_for_indicator_rows() {
     let mut tree = NodeTree::new();
     let root = ScrollView::new()

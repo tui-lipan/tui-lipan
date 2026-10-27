@@ -155,6 +155,15 @@ fn ensure_selected_visible_with_indicators(
     offset
 }
 
+/// Rows a moving cursor keeps between itself and the viewport edge in a `height`-row viewport.
+pub(crate) fn cursor_margin(height: usize) -> usize {
+    match height {
+        0..=2 => 0,
+        3..=6 => 1,
+        _ => 2,
+    }
+}
+
 pub(crate) fn smart_list_offset(
     old_offset: usize,
     selected: usize,
@@ -166,13 +175,7 @@ pub(crate) fn smart_list_offset(
         return 0;
     }
 
-    let margin = if height <= 2 {
-        0
-    } else if height <= 6 {
-        1
-    } else {
-        2
-    };
+    let margin = cursor_margin(height);
 
     let max_possible_offset = len.saturating_sub(height);
 

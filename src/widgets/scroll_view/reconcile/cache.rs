@@ -115,6 +115,7 @@ pub(crate) struct ScrollTargetLayout {
     pub content_height: usize,
     pub show_indicators: bool,
     pub reveal_target: bool,
+    pub reveal_margin: usize,
 }
 
 pub(crate) fn scroll_offset_for_target(
@@ -145,6 +146,31 @@ fn reveal_offset(rect: Rect, layout: &ScrollTargetLayout) -> usize {
     }
     let start = rect.y.max(0) as usize;
     let end = start.saturating_add(usize::from(rect.h));
+    // The margin is best effort: shrink it until the child and its context fit an actual window,
+    // whose indicator rows can leave less room than the viewport height suggests.
+    let margin = layout
+        .reveal_margin
+        .min(crate::widgets::scroll::cursor_margin(
+            layout.viewport_height,
+        ));
+    (0..=margin)
+        .rev()
+        .find_map(|margin| {
+            let end = end
+                .saturating_add(margin)
+                .min(layout.content_height.max(end));
+            fitting_offset(start.saturating_sub(margin), end, current, layout)
+        })
+        .unwrap_or_else(|| start.min(layout.max_offset))
+}
+
+/// The offset nearest `current` whose window shows all of `start..end`, if any does.
+fn fitting_offset(
+    start: usize,
+    end: usize,
+    current: usize,
+    layout: &ScrollTargetLayout,
+) -> Option<usize> {
     // A window reserves zero, one, or two indicator rows. Its first offset
     // that can contain the child's bottom is end - (height - reserved).
     // Check each candidate's actual window, since its indicators may differ.
@@ -156,7 +182,6 @@ fn reveal_offset(rect: Rect, layout: &ScrollTargetLayout) -> usize {
         .chain([current, start.min(layout.max_offset)])
         .filter(|&offset| child_fits_window(start, end, offset, layout))
         .min_by_key(|&offset| offset.abs_diff(current))
-        .unwrap_or_else(|| start.min(layout.max_offset))
 }
 
 fn child_fits_window(start: usize, end: usize, offset: usize, layout: &ScrollTargetLayout) -> bool {
@@ -745,6 +770,7 @@ mod reveal_tests {
                                     content_height,
                                     show_indicators,
                                     reveal_target: true,
+                                    reveal_margin: 0,
                                 };
                                 let rect = Rect {
                                     x: 0,

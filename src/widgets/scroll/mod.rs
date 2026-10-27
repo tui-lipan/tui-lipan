@@ -15,6 +15,6 @@ pub use behavior::{
     ScrollEvent, ScrollExitedChild, ScrollTarget, ScrollViewportEvent, ScrollVisibleChild,
     ScrollWheelBehavior, ScrollWheelConfig,
 };
-pub(crate) use offset::{smart_list_offset, smart_list_offset_with_indicators};
+pub(crate) use offset::{cursor_margin, smart_list_offset, smart_list_offset_with_indicators};
 pub use smooth::KineticScrollState;
 pub(crate) use smooth::SmoothScrollState;
