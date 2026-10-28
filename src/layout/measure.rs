@@ -14,12 +14,12 @@ use crate::widgets::internal::{
     measure_center_pin, measure_chart, measure_checkbox, measure_class_diagram, measure_divider,
     measure_document_view, measure_document_view_constrained, measure_drag_source,
     measure_draggable_tab_bar, measure_drop_target, measure_effect_scope, measure_er_diagram,
-    measure_flow, measure_flowchart, measure_frame, measure_gantt_diagram, measure_graph,
-    measure_grid, measure_heatmap, measure_hex_area, measure_input, measure_mouse_region,
-    measure_pan_view, measure_progress_bar, measure_scroll_view, measure_sequence_diagram,
-    measure_slider, measure_spacer, measure_sparkline, measure_spinner, measure_splitter,
-    measure_stack, measure_state_diagram, measure_status_bar_layout, measure_tabs,
-    measure_text_area, measure_text_area_constrained,
+    measure_flow, measure_flowchart, measure_frame, measure_frame_within, measure_gantt_diagram,
+    measure_graph, measure_grid, measure_heatmap, measure_hex_area, measure_input,
+    measure_mouse_region, measure_pan_view, measure_progress_bar, measure_scroll_view,
+    measure_sequence_diagram, measure_slider, measure_spacer, measure_sparkline, measure_spinner,
+    measure_splitter, measure_stack, measure_state_diagram, measure_status_bar_layout,
+    measure_tabs, measure_text_area, measure_text_area_constrained,
 };
 
 use crate::style::{Edge, Length};
@@ -361,6 +361,18 @@ fn measure_uncached(
                 },
             )
         }
+    } else if let ElementKind::Frame(frame) = &el.kind {
+        // The effective bound already holds the frame's own percentage size; the frame resolves
+        // that percentage against the parent's offered size and stays within the bound.
+        let basis = |avail: u16| (avail != u16::MAX).then_some(avail);
+        measure_frame_within(
+            frame,
+            effective_max_w,
+            effective_max_h,
+            basis(avail_w),
+            basis(avail_h),
+        )
+        .outer_size()
     } else {
         // Pass the effective (tighter) bounds so children are measured within
         // both the parent's available space and this element's own max constraints.
@@ -472,10 +484,30 @@ mod tests {
     use crate::style::Length;
     use crate::widgets::{
         Button, Center, Checkbox, ContentFormatter, DocumentView, Flow, FormatInput,
-        FormattedBlock, FormattedDocument, FormattedLine, Input, Overflow, Spacer, Text, VStack,
+        FormattedBlock, FormattedDocument, FormattedLine, Frame, Input, Overflow, Spacer, Text,
+        VStack,
     };
 
     use super::{intrinsic_main, min_size_constrained};
+
+    #[test]
+    fn a_percentage_width_frame_measures_its_wrap_at_its_own_width() {
+        // 80% of 40 is 32, leaving 30 inner columns: four 6-letter words a row, so two rows.
+        // Resolving the 80% again against 32 would leave 23 columns and three rows.
+        let frame: Element = Frame::new()
+            .border(true)
+            .width(Length::Percent(80))
+            .height(Length::Auto)
+            .child(
+                Text::new("aaaaaa aaaaaa aaaaaa aaaaaa aaaaaa aaaaaa aaaaaa aaaaaa")
+                    .overflow(Overflow::Wrap),
+            )
+            .into();
+        // Lift the frame's floor at its unwrapped width so the percentage decides it.
+        let frame = frame.min_width(Length::Px(0));
+
+        assert_eq!(min_size_constrained(&frame, Some(40), None), (32, 4));
+    }
 
     #[test]
     fn intrinsic_main_reports_atomic_text_as_single_content_size() {

@@ -303,6 +303,16 @@ pub(crate) fn frame_inner_max_size(
     max_w: Option<u16>,
     max_h: Option<u16>,
 ) -> (Option<u16>, Option<u16>) {
+    frame_inner_max_size_within(frame, max_w, max_h, max_w)
+}
+
+/// [`frame_inner_max_size`], resolving a percentage width against `basis_w` rather than `max_w`.
+pub(crate) fn frame_inner_max_size_within(
+    frame: &crate::widgets::Frame,
+    max_w: Option<u16>,
+    max_h: Option<u16>,
+    basis_w: Option<u16>,
+) -> (Option<u16>, Option<u16>) {
     let geometry = compute_frame_geometry(
         &frame.props,
         Rect::default(),
@@ -330,9 +340,10 @@ pub(crate) fn frame_inner_max_size(
             );
         }
         Length::Percent(p) => {
-            if let Some(parent_w) = max_w {
+            if let Some(parent_w) = basis_w {
                 let percent = p.min(100) as u32;
                 let frame_w = ((parent_w as u32 * percent) / 100).min(u16::MAX as u32) as u16;
+                let frame_w = frame_w.min(max_w.unwrap_or(u16::MAX));
                 let frame_inner_w = frame_w
                     .saturating_sub(geometry.decoration_outside.horizontal())
                     .saturating_sub(border_w)
