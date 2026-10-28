@@ -280,6 +280,10 @@ pub(crate) fn min_size_within(
     if max_w.unwrap_or(u16::MAX) == avail_w && max_h.unwrap_or(u16::MAX) == avail_h {
         return min_size_constrained(el, max_w, max_h);
     }
+    // A wrapper measures its child against the bound alone, which would lose `avail`.
+    if let Some(child) = same_size_child(el) {
+        return min_size_within(child, max_w, max_h, avail_w, avail_h);
+    }
     measure_uncached(
         el,
         max_w,
@@ -288,6 +292,27 @@ pub(crate) fn min_size_within(
         avail_h,
         current_measure_context(),
     )
+}
+
+/// The child of a wrapper that always measures exactly as that child does.
+fn same_size_child(el: &Element) -> Option<&Element> {
+    if el.layout.max_w.is_some() || el.layout.max_h.is_some() {
+        return None;
+    }
+    match &el.kind {
+        ElementKind::Group(g) => Some(g.child.as_ref()),
+        ElementKind::ThemeProvider(tp) => Some(&tp.child),
+        ElementKind::ContextProvider(cp) => Some(&cp.child),
+        ElementKind::Animated(animated)
+            if animated.visibility.is_none()
+                && animated.visibility_layout.is_none()
+                && animated.height.is_none()
+                && animated.layout_height.is_none() =>
+        {
+            Some(animated.child.as_ref())
+        }
+        _ => None,
+    }
 }
 
 fn measure_uncached(

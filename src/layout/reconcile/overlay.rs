@@ -557,7 +557,8 @@ mod tests {
     use super::*;
     use crate::core::element::IntoElement;
     use crate::style::Length;
-    use crate::widgets::{Flow, Frame, Text};
+    use crate::style::Theme;
+    use crate::widgets::{Animated, Flow, Frame, Text, ThemeProvider};
 
     /// Helper: create an element with a known minimum size by setting
     /// min_width / min_height constraints on a zero-content text node.
@@ -859,16 +860,9 @@ mod tests {
         assert_eq!(rect.h, 6);
     }
 
-    #[test]
-    fn center_rect_resolves_a_percentage_cap_once() {
-        // The content's 50% cap resolves against the screen, giving 20. Measuring the content
-        // within that 20 must not resolve its 50% again and squeeze it to 10.
-        let bounds = Rect {
-            x: 0,
-            y: 0,
-            w: 40,
-            h: 20,
-        };
+    /// A bordered frame capped at half the screen, holding four 8-wide chips that wrap two per
+    /// row at the 18 inner columns of a 20-wide frame.
+    fn half_screen_chips() -> Element {
         let content: Element = Frame::new()
             .border(true)
             .height(Length::Auto)
@@ -882,14 +876,43 @@ mod tests {
                     .child(sized_element(8, 1)),
             )
             .into();
-        let content = content
+        content
             .min_width(Length::Px(0))
-            .max_width(Length::Percent(50));
+            .max_width(Length::Percent(50))
+    }
 
-        let rect = resolve_center_rect(&content, bounds, None);
+    const FORTY_BY_TWENTY: Rect = Rect {
+        x: 0,
+        y: 0,
+        w: 40,
+        h: 20,
+    };
+
+    #[test]
+    fn center_rect_resolves_a_percentage_cap_once() {
+        // The content's 50% cap resolves against the screen, giving 20. Measuring the content
+        // within that 20 must not resolve its 50% again and squeeze it to 10.
+        let rect = resolve_center_rect(&half_screen_chips(), FORTY_BY_TWENTY, None);
 
         assert_eq!(rect.w, 20);
-        // Inner width 18 fits two 8-wide chips per row: two rows plus the border.
+        // Two rows of chips plus the border.
         assert_eq!(rect.h, 4);
+    }
+
+    #[test]
+    fn center_rect_resolves_a_wrapped_percentage_cap_against_the_screen() {
+        // A wrapper measures as its child, so the child's cap still resolves against the screen
+        // rather than against the width the first pass settled on.
+        let wrapped: [Element; 2] = [
+            Animated::new(half_screen_chips()).into(),
+            ThemeProvider::new(Theme::default())
+                .child(half_screen_chips())
+                .into(),
+        ];
+        for content in wrapped {
+            let rect = resolve_center_rect(&content, FORTY_BY_TWENTY, None);
+
+            assert_eq!((rect.w, rect.h), (20, 4));
+        }
     }
 }
