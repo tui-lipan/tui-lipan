@@ -74,18 +74,23 @@ fn append_mask_holes(
     let mut previous = std::collections::HashMap::<(u16, u16), usize>::new();
     for y in 0..bounds.h {
         let mut current = std::collections::HashMap::new();
-        for span @ (x, width) in hidden_image_spans(effect, mask, bounds, y) {
+        let Ok(top) = u16::try_from(i32::from(bounds.y) + i32::from(y)) else {
+            previous = current;
+            continue;
+        };
+        for (x, width) in hidden_image_spans(effect, mask, bounds, y) {
+            let left = i32::from(bounds.x) + i32::from(x);
+            let right = left + i32::from(width);
+            if right <= 0 {
+                continue;
+            }
+            let span = (left.max(0) as u16, (right - left.max(0)) as u16);
             let index = if let Some(&index) = previous.get(&span) {
                 holes[index].height += 1;
                 index
             } else {
                 let index = holes.len();
-                holes.push(ratatui::layout::Rect::new(
-                    bounds.x.max(0) as u16 + x,
-                    bounds.y.max(0) as u16 + y,
-                    width,
-                    1,
-                ));
+                holes.push(ratatui::layout::Rect::new(span.0, top, span.1, 1));
                 index
             };
             current.insert(span, index);
@@ -384,6 +389,44 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Hides every image cell of its scope.
+    #[cfg(feature = "terminal-images")]
+    #[derive(Debug)]
+    struct HideAll;
+
+    #[cfg(feature = "terminal-images")]
+    impl crate::style::CellEffect for HideAll {
+        fn apply(&self, _: &mut crate::style::EffectCell, _: &crate::style::EffectContext) {}
+
+        fn image_mask(&self, ctx: &crate::style::EffectPrepareContext) -> Option<crate::CellMask> {
+            let cells = usize::from(ctx.bounds.w) * usize::from(ctx.bounds.h);
+            Some(crate::CellMask {
+                origin: (0, 0),
+                w: ctx.bounds.w,
+                h: ctx.bounds.h,
+                bits: vec![0; cells.div_ceil(64)].into(),
+            })
+        }
+    }
+
+    /// A scope can start left of or above the screen, as a pane sliding in does. Its holes are
+    /// where its cells land, not where they would if it started at the screen's corner.
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn mask_holes_of_a_scope_past_the_screen_edge_keep_their_screen_cells() {
+        let bounds = Rect {
+            x: -2,
+            y: -1,
+            w: 5,
+            h: 3,
+        };
+        let holes = image_mask_holes(
+            &[VisualEffect::Custom(Arc::new(HideAll))],
+            crate::style::EffectPrepareContext::new(bounds),
+        );
+        assert_eq!(holes, vec![ratatui::layout::Rect::new(0, 0, 3, 2)]);
     }
 
     #[test]

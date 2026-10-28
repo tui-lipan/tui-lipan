@@ -98,6 +98,8 @@ mod tree_composed_rows;
 #[path = "suites/widget_behavior/tree_ctrl_activation.rs"]
 mod tree_ctrl_activation;
 
+#[path = "suites/widget_behavior/toast_width.rs"]
+mod toast_width;
 #[path = "suites/widget_behavior/tree_expansion_mode.rs"]
 mod tree_expansion_mode;
 #[path = "suites/widget_behavior/tree_file_tree_parity.rs"]

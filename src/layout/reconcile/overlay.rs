@@ -4,7 +4,7 @@ use crate::core::component::FocusContext;
 use crate::core::element::Element;
 use crate::core::node::{NodeId, NodeKind, NodeTree, OverlayAnimationSource, OverlayRoot};
 use crate::layout::axis::{Axis, requested_main_axis};
-use crate::layout::measure::min_size_constrained;
+use crate::layout::measure::min_size_within;
 use crate::overlay::{
     DismissPolicy, OverlayEntry, OverlayLayer, OverlayPlacement, Portal, ToastPlacement,
 };
@@ -12,34 +12,16 @@ use crate::style::{LayoutConstraints, Length, Padding, Rect};
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 
+/// The overlay's own caps, resolved against the screen. The content's caps are left to measuring,
+/// which resolves them against the same screen.
 fn resolved_overlay_measure_max(
-    content: &Element,
     overlay_constraints: Option<&LayoutConstraints>,
     bounds: Rect,
 ) -> (Option<u16>, Option<u16>) {
-    let content_constraints = content.layout_constraints();
-    let resolve_cap =
-        |content_max: Option<Length>, overlay_max: Option<Length>, available: u16| match (
-            content_max.and_then(|l| l.resolve_as_max(available)),
-            overlay_max.and_then(|l| l.resolve_as_max(available)),
-        ) {
-            (Some(content), Some(overlay)) => Some(content.min(overlay)),
-            (Some(content), None) => Some(content),
-            (None, Some(overlay)) => Some(overlay),
-            (None, None) => None,
-        };
-
+    let cap = |max: Option<Length>, available: u16| max.and_then(|l| l.resolve_as_max(available));
     (
-        resolve_cap(
-            content_constraints.max_w,
-            overlay_constraints.and_then(|c| c.max_w),
-            bounds.w,
-        ),
-        resolve_cap(
-            content_constraints.max_h,
-            overlay_constraints.and_then(|c| c.max_h),
-            bounds.h,
-        ),
+        cap(overlay_constraints.and_then(|c| c.max_w), bounds.w),
+        cap(overlay_constraints.and_then(|c| c.max_h), bounds.h),
     )
 }
 
@@ -51,9 +33,9 @@ fn resolve_overlay_size(
     // In bounded overlay contexts (e.g. modal max_height), measure against the
     // effective max bounds so Auto children size within the real available area
     // instead of growing unconstrained and being clipped afterward.
-    let (measure_max_w, measure_max_h) =
-        resolved_overlay_measure_max(content, overlay_constraints, bounds);
-    let (measured_w, _) = min_size_constrained(content, measure_max_w, measure_max_h);
+    let (measure_max_w, measure_max_h) = resolved_overlay_measure_max(overlay_constraints, bounds);
+    let (measured_w, _) =
+        min_size_within(content, measure_max_w, measure_max_h, bounds.w, bounds.h);
     let requested_w = requested_main_axis(content, Axis::Horizontal, None);
     let requested_h = requested_main_axis(content, Axis::Vertical, None);
 
@@ -75,7 +57,13 @@ fn resolve_overlay_size(
     // narrows; measuring it at the pre-clamp width would under-count rows and the
     // overlay would clip its own content instead of growing to fit.
     let height_measure_max_w = Some(measure_max_w.map_or(width, |max_w| max_w.min(width)));
-    let (_, measured_h) = min_size_constrained(content, height_measure_max_w, measure_max_h);
+    let (_, measured_h) = min_size_within(
+        content,
+        height_measure_max_w,
+        measure_max_h,
+        bounds.w,
+        bounds.h,
+    );
 
     let mut height = requested_h.resolve(bounds.h, measured_h);
     height = constraints.clamp_height(height, bounds.h).min(bounds.h);
@@ -310,6 +298,7 @@ pub(crate) fn reconcile_overlay_entries(ctx: &mut ReconcileCtx<'_>, overlays: &[
             .find(|(overlay_id, _)| *overlay_id == entry.id)
             .map(|&(_, root)| root);
         crate::widgets::internal::prepare_visibility_reflow(tree, &entry.content, reuse);
+        overlay_state.sized_root = true;
         let id = reconcile_element(
             &mut ReconcileCtx {
                 tree,
@@ -324,6 +313,7 @@ pub(crate) fn reconcile_overlay_entries(ctx: &mut ReconcileCtx<'_>, overlays: &[
                 rect,
             },
         );
+        overlay_state.sized_root = false;
 
         let copy_text = if entry.pending_dismiss {
             None
@@ -567,7 +557,8 @@ mod tests {
     use super::*;
     use crate::core::element::IntoElement;
     use crate::style::Length;
-    use crate::widgets::{Flow, Frame, Text};
+    use crate::style::Theme;
+    use crate::widgets::{Animated, Flow, Frame, Text, ThemeProvider};
 
     /// Helper: create an element with a known minimum size by setting
     /// min_width / min_height constraints on a zero-content text node.
@@ -867,5 +858,61 @@ mod tests {
         // bottom border = 6. Measuring at the requested 60-wide frame would report a
         // single footer row and size the overlay to 3, clipping the other three rows.
         assert_eq!(rect.h, 6);
+    }
+
+    /// A bordered frame capped at half the screen, holding four 8-wide chips that wrap two per
+    /// row at the 18 inner columns of a 20-wide frame.
+    fn half_screen_chips() -> Element {
+        let content: Element = Frame::new()
+            .border(true)
+            .height(Length::Auto)
+            .child(
+                Flow::new()
+                    .gap(1)
+                    .row_gap(0)
+                    .child(sized_element(8, 1))
+                    .child(sized_element(8, 1))
+                    .child(sized_element(8, 1))
+                    .child(sized_element(8, 1)),
+            )
+            .into();
+        content
+            .min_width(Length::Px(0))
+            .max_width(Length::Percent(50))
+    }
+
+    const FORTY_BY_TWENTY: Rect = Rect {
+        x: 0,
+        y: 0,
+        w: 40,
+        h: 20,
+    };
+
+    #[test]
+    fn center_rect_resolves_a_percentage_cap_once() {
+        // The content's 50% cap resolves against the screen, giving 20. Measuring the content
+        // within that 20 must not resolve its 50% again and squeeze it to 10.
+        let rect = resolve_center_rect(&half_screen_chips(), FORTY_BY_TWENTY, None);
+
+        assert_eq!(rect.w, 20);
+        // Two rows of chips plus the border.
+        assert_eq!(rect.h, 4);
+    }
+
+    #[test]
+    fn center_rect_resolves_a_wrapped_percentage_cap_against_the_screen() {
+        // A wrapper measures as its child, so the child's cap still resolves against the screen
+        // rather than against the width the first pass settled on.
+        let wrapped: [Element; 2] = [
+            Animated::new(half_screen_chips()).into(),
+            ThemeProvider::new(Theme::default())
+                .child(half_screen_chips())
+                .into(),
+        ];
+        for content in wrapped {
+            let rect = resolve_center_rect(&content, FORTY_BY_TWENTY, None);
+
+            assert_eq!((rect.w, rect.h), (20, 4));
+        }
     }
 }

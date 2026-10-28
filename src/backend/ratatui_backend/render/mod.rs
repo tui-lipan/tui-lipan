@@ -791,7 +791,7 @@ fn render_subtree(
                         node_offset,
                         state.ctx.effect_phase,
                         backdrop,
-                        effect_scope_image_mask(state, node, node_clip, node_offset),
+                        effect_scope_image_mask(state, node, node_offset),
                     ));
                 }
                 let animated_restore_snapshot = if let NodeKind::Animated(animated) = &node.kind {
@@ -1016,16 +1016,17 @@ type EffectImageScope = ();
 fn effect_scope_image_mask(
     _state: &RenderState<'_, '_, '_>,
     _node: &crate::core::node::Node,
-    _clip: Option<Rect>,
     _offset: RenderOffset,
 ) -> EffectImageScope {
 }
 
+/// The scope's image holes, over its whole rect: the same bounds its cell effects get. Not cut to
+/// the clip, which on a partial paint is only the damaged region: an image elsewhere in the scope
+/// keeps its own committed plan, and that plan still has to leave the effect's holes.
 #[cfg(feature = "terminal-images")]
 fn effect_scope_image_mask(
     state: &RenderState<'_, '_, '_>,
     node: &crate::core::node::Node,
-    clip: Option<Rect>,
     offset: RenderOffset,
 ) -> Option<crate::backend::ratatui_backend::renderers::image::ImageOcclusionScope> {
     let NodeKind::EffectScope(scope) = &node.kind else {
@@ -1037,17 +1038,10 @@ fn effect_scope_image_mask(
     let mut rect = offset.apply_to_rect(node.rect);
     rect.x = rect.x.saturating_add(state.content.x as i16);
     rect.y = rect.y.saturating_add(state.content.y as i16);
-    let rect = clip.map_or(rect, |clip| rect.intersection(&clip));
-    let area = to_ratatui_rect(rect);
-    let ctx = crate::style::EffectPrepareContext::new(Rect {
-        x: area.x as i16,
-        y: area.y as i16,
-        w: area.width,
-        h: area.height,
-    })
-    .with_phase(state.ctx.effect_phase)
-    .with_elapsed(crate::animation::registry::render_elapsed())
-    .with_terminal_bg(state.ctx.terminal_bg);
+    let ctx = crate::style::EffectPrepareContext::new(rect)
+        .with_phase(state.ctx.effect_phase)
+        .with_elapsed(crate::animation::registry::render_elapsed())
+        .with_terminal_bg(state.ctx.terminal_bg);
     let holes = crate::backend::ratatui_backend::renderers::image_effects::image_mask_holes(
         &scope.effects,
         ctx,
