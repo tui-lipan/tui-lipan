@@ -1,92 +1,73 @@
-//! Theme showcase example - demonstrates ThemeProvider with switchable themes.
+//! Theme showcase - every built-in preset, applied live through `ThemeProvider`.
 //!
-//! Run with: cargo run --example theme_showcase
+//! Run with: cargo run --example theme_showcase --features markdown,syntax-syntect
+//! (both features are optional; without them the preview panel explains what it would show)
 //!
 //! Controls:
-//! - 1-7: Switch between themes
-//! - Tab: Navigate between widgets
-//! - Ctrl+Q: Quit
+//! - Up/Down, j/k, [ / ], or click: switch theme
+//! - Tab: navigate between widgets
+//! - Ctrl+Q: quit
 
 #[cfg(feature = "syntax-syntect")]
 use tui_lipan::SyntectStrategy;
 use tui_lipan::prelude::*;
 
-/// Available themes in the showcase.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum ThemeChoice {
-    #[default]
-    Lipan,
-    OneDark,
-    Dracula,
-    Nord,
-    Gruvbox,
-    Catppuccin,
-    Ansi,
-}
+/// A preset's display name and constructor.
+type Preset = (&'static str, fn() -> Theme);
 
-impl ThemeChoice {
-    fn name(self) -> &'static str {
-        match self {
-            Self::Lipan => "Lipan",
-            Self::OneDark => "One Dark",
-            Self::Dracula => "Dracula",
-            Self::Nord => "Nord",
-            Self::Gruvbox => "Gruvbox",
-            Self::Catppuccin => "Catppuccin",
-            Self::Ansi => "ANSI",
-        }
-    }
-
-    fn theme(self) -> Theme {
-        // Use the built-in theme presets from the library
-        match self {
-            Self::Lipan => Theme::lipan(),
-            Self::OneDark => Theme::one_dark(),
-            Self::Dracula => Theme::dracula(),
-            Self::Nord => Theme::nord(),
-            Self::Gruvbox => Theme::gruvbox_dark(),
-            Self::Catppuccin => Theme::catppuccin_mocha(),
-            Self::Ansi => Theme::ansi(),
-        }
-    }
-
-    fn all() -> &'static [Self] {
-        &[
-            Self::Lipan,
-            Self::OneDark,
-            Self::Dracula,
-            Self::Nord,
-            Self::Gruvbox,
-            Self::Catppuccin,
-            Self::Ansi,
-        ]
-    }
-}
+/// Every built-in preset, dark themes first.
+const PRESETS: &[Preset] = &[
+    ("Lipan", Theme::lipan),
+    ("One Dark", Theme::one_dark),
+    ("Dracula", Theme::dracula),
+    ("Nord", Theme::nord),
+    ("Gruvbox Dark", Theme::gruvbox_dark),
+    ("Catppuccin Mocha", Theme::catppuccin_mocha),
+    ("Catppuccin Macchiato", Theme::catppuccin_macchiato),
+    ("Catppuccin Frappe", Theme::catppuccin_frappe),
+    ("Tokyo Night", Theme::tokyo_night),
+    ("Solarized Dark", Theme::solarized_dark),
+    ("Monokai", Theme::monokai),
+    ("Rose Pine", Theme::rose_pine),
+    ("Rose Pine Moon", Theme::rose_pine_moon),
+    ("Kanagawa", Theme::kanagawa),
+    ("Everforest", Theme::everforest),
+    ("Ayu Dark", Theme::ayu_dark),
+    ("Ayu Mirage", Theme::ayu_mirage),
+    ("Nightfox", Theme::nightfox),
+    ("Nordfox", Theme::nordfox),
+    ("Night Owl", Theme::night_owl),
+    ("Material Palenight", Theme::material_palenight),
+    ("Oxocarbon", Theme::oxocarbon),
+    ("Zenburn", Theme::zenburn),
+    ("ANSI", Theme::ansi),
+    ("Solarized Light", Theme::solarized_light),
+    ("Gruvbox Light", Theme::gruvbox_light),
+    ("Tokyo Night Day", Theme::tokyo_night_day),
+    ("Catppuccin Latte", Theme::catppuccin_latte),
+    ("Rose Pine Dawn", Theme::rose_pine_dawn),
+    ("Ayu Light", Theme::ayu_light),
+];
 
 #[cfg(feature = "markdown")]
 const MARKDOWN_THEME_SAMPLE: &str = r#"# Markdown + Syntax
 
-Theme palettes now drive headings, links, quotes, and code blocks.
+Theme palettes drive **headings**, [links](https://tui-lipan.dev), `code`, and quotes.
 
 > Blockquotes and table borders pick up themed document styles.
 
-- Themed links and emphasis stay in sync with the selected preset.
-- Lists and separators should also shift with the theme.
+- Lists and separators shift with the theme.
 "#;
 
 #[cfg(feature = "syntax-syntect")]
 const SYNTAX_THEME_SAMPLE: &str = r#"// Theme-native syntax preview
-struct ThemePreview {
+struct Preview {
     title: String,
     count: usize,
 }
 
 fn greet(name: &str) -> String {
-    let preview = ThemePreview {
-        title: name.to_string(),
-        count: 42,
-    };
-
+    let preview = Preview { title: name.into(), count: 42 };
     if preview.count > 10 {
         format!("Hello, {} #{}", preview.title, preview.count)
     } else {
@@ -95,106 +76,124 @@ fn greet(name: &str) -> String {
 }"#;
 
 #[cfg(feature = "syntax-syntect")]
-fn syntax_legend(theme: &Theme) -> Element {
-    HStack::new()
-        .gap(1)
-        .child(Text::new("keyword").style(theme.syntax.keyword))
-        .child(Text::new("string").style(theme.syntax.string))
-        .child(Text::new("number").style(theme.syntax.number))
-        .child(Text::new("function").style(theme.syntax.function))
-        .child(Text::new("type").style(theme.syntax.type_name))
-        .child(Text::new("comment").style(theme.syntax.comment))
-        .into()
+fn syntax_text_area(theme: &Theme) -> TextArea {
+    TextArea::new(SYNTAX_THEME_SAMPLE)
+        .read_only(true)
+        .border(false)
+        .line_numbers(true)
+        .language("rust")
+        .height(Length::Flex(1))
+        .color_strategy(
+            SyntectStrategy::default()
+                .default_theme("One Dark (Atom)")
+                .syntax_palette(theme.syntax),
+        )
 }
 
 #[cfg(all(feature = "markdown", feature = "syntax-syntect"))]
-fn theme_preview_panel(theme: Theme) -> Element {
-    Frame::new()
-        .header_left("Markdown + Syntax")
-        .border(true)
-        .border_style(BorderStyle::Rounded)
-        .height(Length::Flex(1))
-        .child(
-            VStack::new()
-                .gap(1)
-                .child(
-                    DocumentView::new(MARKDOWN_THEME_SAMPLE)
-                        .markdown()
-                        .border(true)
-                        .height(Length::Px(8))
-                        .wrap(true),
-                )
-                .child(syntax_legend(&theme))
-                .child(
-                    TextArea::new(SYNTAX_THEME_SAMPLE)
-                        .read_only(true)
-                        .border(true)
-                        .height(Length::Flex(1))
-                        .line_numbers(true)
-                        .language("rust")
-                        .color_strategy(
-                            SyntectStrategy::default()
-                                .default_theme("One Dark (Atom)")
-                                .syntax_palette(theme.syntax),
-                        ),
-                ),
-        )
-        .into()
-}
-
-#[cfg(all(feature = "markdown", not(feature = "syntax-syntect")))]
-fn theme_preview_panel(_theme: Theme) -> Element {
-    Frame::new()
-        .header_left("Markdown")
-        .border(true)
-        .border_style(BorderStyle::Rounded)
-        .height(Length::Flex(1))
+fn preview_body(theme: &Theme) -> Element {
+    VStack::new()
+        .gap(1)
         .child(
             DocumentView::new(MARKDOWN_THEME_SAMPLE)
                 .markdown()
                 .border(false)
+                .height(Length::Px(9))
                 .wrap(true),
         )
+        .child(syntax_text_area(theme))
+        .into()
+}
+
+#[cfg(all(feature = "markdown", not(feature = "syntax-syntect")))]
+fn preview_body(_theme: &Theme) -> Element {
+    DocumentView::new(MARKDOWN_THEME_SAMPLE)
+        .markdown()
+        .border(false)
+        .wrap(true)
         .into()
 }
 
 #[cfg(all(feature = "syntax-syntect", not(feature = "markdown")))]
-fn theme_preview_panel(theme: Theme) -> Element {
+fn preview_body(theme: &Theme) -> Element {
+    syntax_text_area(theme).into()
+}
+
+#[cfg(not(any(feature = "markdown", feature = "syntax-syntect")))]
+fn preview_body(_theme: &Theme) -> Element {
+    Text::new(
+        "Enable `markdown` and `syntax-syntect` to preview theme-native document and code styling.",
+    )
+    .into()
+}
+
+/// A bordered panel painted with the theme's panel surface.
+fn panel(theme: &Theme, title: &str) -> Frame {
     Frame::new()
-        .header_left("Syntax (syntect)")
+        .header_left(title)
         .border(true)
         .border_style(BorderStyle::Rounded)
-        .height(Length::Flex(1))
+        .style(Style::new().bg(theme.surface.panel))
+}
+
+fn hex(color: Color) -> String {
+    color
+        .to_rgb()
+        .map(|(r, g, b)| format!("{r:02X}{g:02X}{b:02X}"))
+        .unwrap_or_else(|| "ansi".to_string())
+}
+
+/// One colour block with its role and hex value underneath.
+fn swatch(theme: &Theme, label: &str, color: Color) -> Element {
+    VStack::new()
+        .width(Length::Flex(1))
         .child(
-            VStack::new().gap(1).child(syntax_legend(&theme)).child(
-                TextArea::new(SYNTAX_THEME_SAMPLE)
-                    .read_only(true)
-                    .border(false)
-                    .line_numbers(true)
-                    .language("rust")
-                    .color_strategy(
-                        SyntectStrategy::default()
-                            .default_theme("One Dark (Atom)")
-                            .syntax_palette(theme.syntax),
-                    ),
-            ),
+            HStack::new()
+                .style(Style::new().bg(color))
+                .height(Length::Px(2)),
+        )
+        .child(Text::new(label).overflow(Overflow::Ellipsis))
+        .child(
+            Text::new(hex(color))
+                .style(theme.muted)
+                .overflow(Overflow::Ellipsis),
         )
         .into()
 }
 
-#[cfg(not(any(feature = "markdown", feature = "syntax-syntect")))]
-fn theme_preview_panel(_theme: Theme) -> Element {
-    Frame::new()
-        .header_left("Markdown + Syntax")
-        .border(true)
-        .border_style(BorderStyle::Rounded)
-        .height(Length::Flex(1))
-        .padding(1)
-        .child(
-            Text::new(
-                "Enable `markdown` and `syntax-syntect` to preview theme-native document and code styling.",
-            ),
+fn palette_strip(theme: &Theme) -> Element {
+    let fg = |style: Style| style.fg.map_or(Color::Reset, Paint::color);
+    let swatches = [
+        ("bg", theme.surface.backdrop),
+        ("panel", theme.surface.panel),
+        ("menu", theme.surface.menu),
+        ("border", fg(theme.border)),
+        ("text", fg(theme.primary)),
+        ("muted", fg(theme.muted)),
+        ("accent", fg(theme.accent)),
+        (
+            "select",
+            theme.selection.bg.map_or(Color::Reset, Paint::color),
+        ),
+        ("ok", theme.status.success),
+        ("warn", theme.status.warning),
+        ("error", theme.status.error),
+        ("info", theme.status.info),
+    ];
+    HStack::new()
+        .gap(1)
+        .children(
+            swatches
+                .into_iter()
+                .map(|(label, color)| swatch(theme, label, color)),
         )
+        .into()
+}
+
+/// A status word on its own colour, like a statusline segment.
+fn pill(label: &str, bg: Color, fg: Color) -> Element {
+    Text::new(format!(" {label} "))
+        .style(Style::new().bg(bg).fg(fg).bold())
         .into()
 }
 
@@ -203,9 +202,8 @@ fn theme_preview_panel(_theme: Theme) -> Element {
 struct ThemeShowcase;
 
 struct State {
-    current_theme: ThemeChoice,
+    current: usize,
     input: TextInput,
-    list_selected: usize,
     checkbox_checked: bool,
     slider_value: f64,
 }
@@ -213,9 +211,8 @@ struct State {
 impl Default for State {
     fn default() -> Self {
         Self {
-            current_theme: ThemeChoice::default(),
+            current: 0,
             input: TextInput::new("Sample text"),
-            list_selected: 0,
             checkbox_checked: true,
             slider_value: 50.0,
         }
@@ -224,9 +221,8 @@ impl Default for State {
 
 #[derive(Clone, Debug)]
 enum Msg {
-    SetTheme(ThemeChoice),
+    SetTheme(usize),
     InputChanged(InputEvent),
-    ListSelected(ListEvent),
     CheckboxToggled(CheckboxEvent),
     SliderChanged(f64),
 }
@@ -241,228 +237,180 @@ impl Component for ThemeShowcase {
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
-        // Ctrl+Q to quit
         if key.mods.ctrl && matches!(key.code, KeyCode::Char('q') | KeyCode::Char('Q')) {
             ctx.quit();
             return KeyUpdate::handled(Update::full());
         }
 
-        // Number keys to switch themes
-        let theme = match key.code {
-            KeyCode::Char('1') => Some(ThemeChoice::Lipan),
-            KeyCode::Char('2') => Some(ThemeChoice::OneDark),
-            KeyCode::Char('3') => Some(ThemeChoice::Dracula),
-            KeyCode::Char('4') => Some(ThemeChoice::Nord),
-            KeyCode::Char('5') => Some(ThemeChoice::Gruvbox),
-            KeyCode::Char('6') => Some(ThemeChoice::Catppuccin),
-            KeyCode::Char('7') => Some(ThemeChoice::Ansi),
+        let count = PRESETS.len();
+        let next = match key.code {
+            KeyCode::Down | KeyCode::Char('j') | KeyCode::Char(']') => {
+                Some((ctx.state.current + 1) % count)
+            }
+            KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('[') => {
+                Some((ctx.state.current + count - 1) % count)
+            }
             _ => None,
         };
-
-        if let Some(choice) = theme {
-            ctx.link().send(Msg::SetTheme(choice));
-            return KeyUpdate::handled(Update::full());
+        match next {
+            Some(index) => {
+                ctx.link().send(Msg::SetTheme(index));
+                KeyUpdate::handled(Update::full())
+            }
+            None => KeyUpdate::unhandled(Update::none()),
         }
-
-        KeyUpdate::unhandled(Update::none())
     }
 
     fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
         match msg {
-            Msg::SetTheme(theme_choice) => {
-                ctx.state.current_theme = theme_choice;
-                ctx.toast()
-                    .push(Toast::new(format!("Switched to {}", theme_choice.name())));
-            }
+            Msg::SetTheme(index) => ctx.state.current = index.min(PRESETS.len() - 1),
             Msg::InputChanged(ev) => {
                 ctx.state.input.set_text(ev.value.to_string());
                 ctx.state.input.set_cursor(ev.cursor);
             }
-            Msg::ListSelected(ev) => {
-                ctx.state.list_selected = ev.index;
-            }
             Msg::CheckboxToggled(ev) => {
                 ctx.state.checkbox_checked = ev.state == CheckboxState::Checked;
             }
-            Msg::SliderChanged(value) => {
-                ctx.state.slider_value = value;
-            }
+            Msg::SliderChanged(value) => ctx.state.slider_value = value,
         }
         Update::full()
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {
-        let current = ctx.state.current_theme;
-        let theme = current.theme();
+        let (name, make_theme) = PRESETS[ctx.state.current];
+        let theme = make_theme();
+        let backdrop = theme.surface.backdrop;
 
-        // Theme selector buttons
-        let theme_buttons: Vec<Element> = ThemeChoice::all()
-            .iter()
-            .enumerate()
-            .map(|(i, &choice)| {
-                let is_active = choice == current;
-                let variant = if is_active {
-                    ButtonVariant::Filled
-                } else {
-                    ButtonVariant::Outlined
-                };
+        let header = HStack::new()
+            .gap(1)
+            .height(Length::Px(1))
+            .child(
+                Text::new(" tui-lipan themes ").style(
+                    Style::new()
+                        .bg(theme.accent.fg.map_or(Color::Reset, Paint::color))
+                        .fg(backdrop)
+                        .bold(),
+                ),
+            )
+            .child(Text::new(name).style(theme.accent.bold()))
+            .child(
+                Text::new(format!("{}/{}", ctx.state.current + 1, PRESETS.len()))
+                    .style(theme.muted),
+            )
+            .child(Spacer::new())
+            .child(
+                Text::new("↑/↓ or click to switch · Tab to navigate · Ctrl+Q quit")
+                    .style(theme.muted),
+            );
 
-                Button::new(format!("[{}] {}", i + 1, choice.name()))
-                    .variant(variant)
-                    .width(Length::Flex(1))
-                    .on_click(ctx.link().callback(move |_| Msg::SetTheme(choice)))
-                    .into()
-            })
-            .collect();
+        let picker = panel(&theme, "Presets").width(Length::Px(24)).child(
+            List::new()
+                .items(PRESETS.iter().map(|(name, _)| ListItem::new(*name)))
+                .selected(ctx.state.current)
+                .on_select(ctx.link().callback(|ev: ListEvent| Msg::SetTheme(ev.index))),
+        );
 
-        // Sample list items (more items to demonstrate scrollbar)
-        let list_items: Vec<ListItem> = vec![
-            ListItem::new("First item"),
-            ListItem::new("Second item"),
-            ListItem::new("Third item"),
-            ListItem::new("Fourth item"),
-            ListItem::new("Fifth item"),
-            ListItem::new("Sixth item"),
-            ListItem::new("Seventh item"),
-            ListItem::new("Eighth item"),
-        ];
-
-        // Build the theme selector bar
-        let theme_bar = HStack::new()
+        let buttons = HStack::new()
             .gap(1)
             .height(Length::Px(3))
-            .children(theme_buttons);
+            .child(Button::new("Filled").variant(ButtonVariant::Filled))
+            .child(Button::new("Outlined").variant(ButtonVariant::Outlined))
+            .child(Button::new("Bracket").variant(ButtonVariant::Bracket));
 
-        let left_column = VStack::new()
+        let status = HStack::new()
             .gap(1)
+            .height(Length::Px(1))
+            .child(pill("ok", theme.status.success, backdrop))
+            .child(pill("warn", theme.status.warning, backdrop))
+            .child(pill("error", theme.status.error, backdrop))
+            .child(pill("info", theme.status.info, backdrop))
+            .child(Text::new("M").style(Style::new().fg(theme.git_status.modified)))
+            .child(Text::new("A").style(Style::new().fg(theme.git_status.added)))
+            .child(Text::new("D").style(Style::new().fg(theme.git_status.deleted)))
+            .child(Text::new("?").style(Style::new().fg(theme.git_status.untracked)));
+
+        let controls = panel(&theme, "Controls").padding((0, 1)).child(
+            VStack::new()
+                .gap(1)
+                .child(
+                    Input::new(ctx.state.input.text().to_owned())
+                        .cursor(ctx.state.input.cursor())
+                        .placeholder("Type something...")
+                        .border(true)
+                        .on_change(ctx.link().callback(Msg::InputChanged)),
+                )
+                .child(
+                    HStack::new()
+                        .gap(2)
+                        .height(Length::Px(1))
+                        .child(
+                            Checkbox::new(ctx.state.checkbox_checked)
+                                .label("Themed checkbox")
+                                .on_toggle(ctx.link().callback(Msg::CheckboxToggled)),
+                        )
+                        .child(Spinner::new()),
+                )
+                .child(ProgressBar::new(0.65).width(Length::Flex(1)))
+                .child(
+                    Slider::new(ctx.state.slider_value)
+                        .min(0.0)
+                        .max(100.0)
+                        .label("Slider")
+                        .on_change(ctx.link().callback(Msg::SliderChanged)),
+                )
+                .child(buttons)
+                .child(status),
+        );
+
+        let files = panel(&theme, "Files").height(Length::Px(9)).child(
+            FileTree::new(".")
+                .show_hidden(false)
+                .git_status(true)
+                .icon_style(FileIconStyle::NerdFontColored),
+        );
+
+        let preview = panel(&theme, "Document + code")
+            .width(Length::Flex(1))
+            .padding((0, 1))
+            .child(preview_body(&theme));
+
+        let body = HStack::new().gap(1).child(picker).child(
+            VStack::new()
+                .gap(1)
+                .child(
+                    panel(&theme, "Palette")
+                        .height(Length::Auto)
+                        .padding((0, 1))
+                        .child(palette_strip(&theme)),
+                )
+                .child(
+                    HStack::new()
+                        .gap(1)
+                        .child(
+                            VStack::new()
+                                .gap(1)
+                                .width(Length::Flex(1))
+                                .child(files)
+                                .child(controls),
+                        )
+                        .child(preview),
+                ),
+        );
+
+        let root_style = theme.primary.bg(backdrop);
+        ThemeProvider::new(theme)
             .child(
-                Frame::new()
-                    .header_left("FileTree (themed icons)")
-                    .height(Length::Px(12))
-                    .border(true)
-                    .border_style(BorderStyle::Rounded)
-                    .child(
-                        FileTree::new(".")
-                            .show_hidden(false)
-                            .git_status(true)
-                            .icon_style(FileIconStyle::NerdFontColored),
-                    ),
+                VStack::new()
+                    .style(root_style)
+                    .padding((0, 1))
+                    .gap(1)
+                    .child(header)
+                    .child(body),
             )
-            .child(theme_preview_panel(theme.clone()));
-
-        // Main content wrapped in ThemeProvider
-        let themed_content = ThemeProvider::new(theme.clone()).child(rsx! {
-            VStack {
-                gap: 1,
-                padding: 1,
-                Frame {
-                    header_left: format!("Theme Showcase - {}", current.name()),
-                    border: true,
-                    border_style: BorderStyle::Rounded,
-                    padding: 1,
-                    height: Length::Auto,
-                    VStack {
-                        gap: 1,
-                        Text {
-                            content: "Press 1-7 to switch themes. Tab to navigate. Ctrl+Q to quit.",
-                            style: Style::new().dim(),
-                        },
-                        theme_bar,
-                    },
-                },
-                HStack {
-                    gap: 1,
-                    left_column,
-                    VStack {
-                        gap: 1,
-                        Frame {
-                            header_left: "Input",
-                            border: true,
-                            border_style: BorderStyle::Rounded,
-                            padding: 1,
-                            height: Length::Auto,
-                            Input {
-                                value: ctx.state.input.text().to_owned(),
-                                cursor: ctx.state.input.cursor(),
-                                placeholder: "Type something...",
-                                border: true,
-                                on_change: ctx.link().callback(Msg::InputChanged),
-                            },
-                        },
-                        Frame {
-                            header_left: "List",
-                            border: true,
-                            border_style: BorderStyle::Rounded,
-                            List {
-                                items: list_items,
-                                selected: ctx.state.list_selected,
-                                on_select: ctx.link().callback(Msg::ListSelected),
-                            },
-                        },
-                        Frame {
-                            header_left: "Other Widgets",
-                            border: true,
-                            border_style: BorderStyle::Rounded,
-                            padding: 1,
-                            VStack {
-                                gap: 1,
-                                HStack {
-                                    gap: 2,
-                                    Checkbox {
-                                        label: "Themed checkbox",
-                                        checked: ctx.state.checkbox_checked,
-                                        on_toggle: ctx.link().callback(Msg::CheckboxToggled),
-                                    },
-                                    Spinner {},
-                                },
-                                ProgressBar {
-                                    progress: 0.65,
-                                    width: Length::Flex(1),
-                                },
-                                Slider {
-                                    value: ctx.state.slider_value,
-                                    min: 0.0,
-                                    max: 100.0,
-                                    label: "Themed slider",
-                                    on_change: ctx.link().callback(Msg::SliderChanged),
-                                },
-                                HStack {
-                                    gap: 2,
-                                    Text {
-                                        content: "Git:",
-                                        style: Style::new().bold(),
-                                    },
-                                    Text {
-                                        content: " Modified",
-                                        style: Style::new().fg(theme.git_status.modified),
-                                    },
-                                    Text {
-                                        content: " Added",
-                                        style: Style::new().fg(theme.git_status.added),
-                                    },
-                                    Text {
-                                        content: " Deleted",
-                                        style: Style::new().fg(theme.git_status.deleted),
-                                    },
-                                    Text {
-                                        content: " Untracked",
-                                        style: Style::new().fg(theme.git_status.untracked),
-                                    },
-                                },
-                            },
-                        },
-                    },
-                },
-            }
-        });
-
-        themed_content.into()
+            .into()
     }
 }
 
 fn main() -> Result<()> {
-    App::new()
-        .toast_placement(ToastPlacement::BottomEnd)
-        .mount(ThemeShowcase)
-        .run()
+    App::new().mount(ThemeShowcase).run()
 }

@@ -152,7 +152,7 @@ The layout uses two columns in wider terminals and a scrollable single column in
 
 | Example | Description |
 |---------|-------------|
-| `theme_showcase` | `ThemeProvider` and switchable built-in themes |
+| `theme_showcase` | All 30 built-in theme presets through `ThemeProvider`, with palette swatches, widgets, Markdown, and syntax (`markdown`, `syntax-syntect` optional) |
 | `live_host_colors` | `App::system_theme()` plus runner-managed host terminal color refresh for app-owned tokens |
 | `alpha_foreground_backdrop` | Repro for alpha foreground blending against parent backgrounds vs terminal fallback |
 | `color_contrast` | Automatic text readability on varied backgrounds |
