@@ -71,8 +71,10 @@ fn a_percentage_max_width_wraps_the_message_at_that_share_of_the_screen() {
 
 #[test]
 fn a_percentage_width_wraps_the_message_at_the_frame_it_draws() {
+    // 80% of 40 is 32, leaving 30 inner columns: four 6-letter words a row. Measured at 23
+    // columns, the message would take three rows and leave the frame one row too tall.
     let rows = toast_rows(
-        Toast::new(MESSAGE)
+        Toast::new("aaaaaa aaaaaa aaaaaa aaaaaa aaaaaa aaaaaa aaaaaa aaaaaa")
             .duration(10.0)
             .min_width(Length::Px(0))
             .width(Length::Percent(80)),
@@ -81,11 +83,7 @@ fn a_percentage_width_wraps_the_message_at_the_frame_it_draws() {
     assert_eq!(rows[0].chars().count(), usize::from(WIDTH * 4 / 5));
     assert_eq!(
         message_rows(&rows),
-        [
-            "a long message that wraps",
-            "across several lines of the",
-            "toast"
-        ],
+        ["aaaaaa aaaaaa aaaaaa aaaaaa", "aaaaaa aaaaaa aaaaaa aaaaaa"],
         "{rows:#?}"
     );
 }

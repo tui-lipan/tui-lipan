@@ -558,7 +558,7 @@ mod tests {
     use crate::core::element::IntoElement;
     use crate::style::Length;
     use crate::style::Theme;
-    use crate::widgets::{Animated, Flow, Frame, Text, ThemeProvider};
+    use crate::widgets::{Animated, EffectScope, Flow, Frame, Text, ThemeProvider};
 
     /// Helper: create an element with a known minimum size by setting
     /// min_width / min_height constraints on a zero-content text node.
@@ -903,11 +903,12 @@ mod tests {
     fn center_rect_resolves_a_wrapped_percentage_cap_against_the_screen() {
         // A wrapper measures as its child, so the child's cap still resolves against the screen
         // rather than against the width the first pass settled on.
-        let wrapped: [Element; 2] = [
+        let wrapped: [Element; 3] = [
             Animated::new(half_screen_chips()).into(),
             ThemeProvider::new(Theme::default())
                 .child(half_screen_chips())
                 .into(),
+            EffectScope::new().child(half_screen_chips()).into(),
         ];
         for content in wrapped {
             let rect = resolve_center_rect(&content, FORTY_BY_TWENTY, None);

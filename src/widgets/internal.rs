@@ -51,7 +51,7 @@ pub(crate) use super::flowchart::{
 };
 pub(crate) use super::frame::{
     FrameGeometry, FrameJoinOverlap, FrameNode, FrameProps, compute_frame_geometry, measure_frame,
-    reconcile_frame,
+    measure_frame_within, reconcile_frame,
 };
 pub(crate) use super::gantt_diagram::{
     GanttDiagramNode, measure_gantt_diagram, reconcile_gantt_diagram,
