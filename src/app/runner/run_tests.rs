@@ -11596,3 +11596,82 @@ fn headless_recording_keeps_effect_cadence_across_frames() {
     // A built-in effect steps every 16 ms: 62 times in one second, as it does live.
     assert_eq!(runner.core.ctx.env().effect_phase.get(), 62);
 }
+
+/// Shows an animated effect scope only once `show` is set.
+#[derive(Clone)]
+struct RunnerLateEffectScope {
+    show: Rc<Cell<bool>>,
+}
+
+impl Component for RunnerLateEffectScope {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        if self.show.get() {
+            crate::widgets::EffectScope::new()
+                .effect(rainbow_wave())
+                .child(Text::new("animated effect"))
+                .into()
+        } else {
+            Text::new("no effect yet").into()
+        }
+    }
+}
+
+#[test]
+fn headless_recording_steps_a_newly_due_effect_before_advancing() {
+    let bounds = Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 2,
+    };
+    let show = Rc::new(Cell::new(false));
+    let mut runner = AppRunner::new(App::new(), RunnerLateEffectScope { show: show.clone() }, ());
+    runner.core.ctx.set_viewport(bounds);
+    runner.last_bounds = bounds;
+    runner.core.init();
+    runner.headless_render(bounds);
+
+    // A second with no animated scope leaves the effect tick long overdue, so the scope that
+    // appears next is due at once.
+    runner.core.ctx.env().advance_clock(Duration::from_secs(1));
+    show.set(true);
+    runner.headless_render(bounds);
+
+    let mut cast = crate::capture::CastRecording::new(bounds.w, bounds.h);
+    let mut frames = super::headless_record::FrameSink::new(None).expect("inert frame sink");
+    let mut clock = Duration::ZERO;
+    runner
+        .headless_hold(
+            &mut cast,
+            &mut frames,
+            &mut clock,
+            Duration::from_millis(100),
+            Duration::from_secs_f64(1.0 / 30.0),
+            bounds,
+        )
+        .expect("hold records");
+
+    // Live steps at once, then every 16 ms: at 0, 16, 32, 48, 64, 80, and 96 ms.
+    assert_eq!(runner.core.ctx.env().effect_phase.get(), 7);
+}
+
+#[test]
+fn headless_recording_finishes_with_a_zero_interval_effect() {
+    // A zero interval keeps the effect due at every tick; recording must still finish.
+    let (runner, _) = record_effect_scope(
+        crate::style::VisualEffect::Custom(Arc::new(IntervalEffect(Duration::ZERO))),
+        Duration::from_millis(100),
+        Duration::from_millis(50),
+    );
+    assert!(runner.core.ctx.env().effect_phase.get() > 0);
+}

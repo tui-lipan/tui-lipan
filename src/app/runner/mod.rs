@@ -1847,6 +1847,16 @@ impl<C: Component> AppRunner<C> {
                 // effect step falls, as the event loop's poll timeout does. Capping at the whole
                 // interval instead would drop the remainder at every captured frame and play
                 // effects slower than live whenever the frame step is not a multiple of it.
+                // A phase already due, such as for a scope that just appeared after a stretch
+                // with no animated effects, steps now, as the event loop's zero poll timeout
+                // does, rather than after a whole sub-step. Stepping without `continue` keeps
+                // a zero-interval effect from spinning this loop.
+                if self
+                    .until_next_effect_tick()
+                    .is_some_and(|until| until.is_zero())
+                {
+                    self.advance_effect_phase();
+                }
                 let mut tick = (frame_span - advanced).min(MAX_TICK);
                 if let Some(until_effect) = self.until_next_effect_tick()
                     && !until_effect.is_zero()
