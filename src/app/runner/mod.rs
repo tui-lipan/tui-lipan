@@ -1843,16 +1843,16 @@ impl<C: Component> AppRunner<C> {
             let mut advanced = std::time::Duration::ZERO;
             let mut dirty_view = false;
             while advanced < frame_span {
-                // An effect phase steps at most once per tick, so a tick longer than the
-                // effect interval would play the effect slower than the event loop does.
-                let max_tick = self
-                    .core
-                    .tree
-                    .animated_effect_scope_interval()
-                    .map_or(MAX_TICK, |interval| {
-                        interval.clamp(Duration::from_millis(1), MAX_TICK)
-                    });
-                let tick = (frame_span - advanced).min(max_tick);
+                // An effect phase steps at most once per tick, so end a tick where the next
+                // effect step falls, as the event loop's poll timeout does. Capping at the whole
+                // interval instead would drop the remainder at every captured frame and play
+                // effects slower than live whenever the frame step is not a multiple of it.
+                let mut tick = (frame_span - advanced).min(MAX_TICK);
+                if let Some(until_effect) = self.until_next_effect_tick()
+                    && !until_effect.is_zero()
+                {
+                    tick = tick.min(until_effect);
+                }
                 self.core.ctx.env().advance_clock(tick);
                 let (_, _, needs_layout) =
                     crate::app::animation::tick_tree_animations(&mut self.core.tree, tick);

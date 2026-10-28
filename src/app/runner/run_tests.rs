@@ -11487,9 +11487,9 @@ fn click_only_checkbox_requests_pointer_motion_only_in_interactive_mode() {
 }
 
 #[derive(Clone)]
-struct RunnerRainbowScope;
+struct RunnerEffectScope(crate::style::VisualEffect);
 
-impl Component for RunnerRainbowScope {
+impl Component for RunnerEffectScope {
     type Message = ();
     type Properties = ();
     type State = ();
@@ -11502,26 +11502,51 @@ impl Component for RunnerRainbowScope {
 
     fn view(&self, _ctx: &Context<Self>) -> Element {
         crate::widgets::EffectScope::new()
-            .effect(crate::style::VisualEffect::RainbowWave {
-                blend: 1.0,
-                frequency: 1.0,
-                speed: 1.0,
-                axis: crate::style::EffectAxis::Horizontal,
-            })
-            .child(Text::new("rainbow wave"))
+            .effect(self.0.clone())
+            .child(Text::new("animated effect"))
             .into()
     }
 }
 
-#[test]
-fn headless_recording_advances_animated_effect_scopes() {
+/// An animated custom effect with a configurable phase interval.
+#[derive(Debug)]
+struct IntervalEffect(Duration);
+
+impl crate::style::CellEffect for IntervalEffect {
+    fn apply(&self, _cell: &mut crate::style::EffectCell, _ctx: &crate::style::EffectContext) {}
+
+    fn is_animated(&self) -> bool {
+        true
+    }
+
+    fn animation_interval(&self) -> Duration {
+        self.0
+    }
+}
+
+fn rainbow_wave() -> crate::style::VisualEffect {
+    crate::style::VisualEffect::RainbowWave {
+        blend: 1.0,
+        frequency: 1.0,
+        speed: 1.0,
+        axis: crate::style::EffectAxis::Horizontal,
+    }
+}
+
+/// Record `total` of `effect` in headless frames of `step`, returning the runner and the first
+/// captured frame.
+fn record_effect_scope(
+    effect: crate::style::VisualEffect,
+    total: Duration,
+    step: Duration,
+) -> (AppRunner<RunnerEffectScope>, crate::capture::CapturedFrame) {
     let bounds = Rect {
         x: 0,
         y: 0,
         w: 20,
         h: 2,
     };
-    let mut runner = AppRunner::new(App::new(), RunnerRainbowScope, ());
+    let mut runner = AppRunner::new(App::new(), RunnerEffectScope(effect), ());
     runner.core.ctx.set_viewport(bounds);
     runner.last_bounds = bounds;
     runner.core.init();
@@ -11532,18 +11557,42 @@ fn headless_recording_advances_animated_effect_scopes() {
     let mut frames = super::headless_record::FrameSink::new(None).expect("inert frame sink");
     let mut clock = Duration::ZERO;
     runner
-        .headless_hold(
-            &mut cast,
-            &mut frames,
-            &mut clock,
-            Duration::from_millis(200),
-            Duration::from_millis(50),
-            bounds,
-        )
+        .headless_hold(&mut cast, &mut frames, &mut clock, total, step, bounds)
         .expect("hold records");
+    (runner, first)
+}
 
-    // 200ms at the 16ms effect cadence is about a dozen phase steps; the env-var recorder
-    // once skipped them entirely and recorded animated effects as a still image.
-    assert!(runner.core.ctx.env().effect_phase.get() >= 10);
+#[test]
+fn headless_recording_advances_animated_effect_scopes() {
+    // The env-var recorder once skipped the effect phase entirely and recorded animated
+    // effects as a still image.
+    let (runner, first) = record_effect_scope(
+        rainbow_wave(),
+        Duration::from_millis(200),
+        Duration::from_millis(50),
+    );
+    assert!(runner.core.ctx.env().effect_phase.get() > 0);
+    let bounds = runner.last_bounds;
     assert_ne!(runner.headless_frame(bounds).cells, first.cells);
+}
+
+#[test]
+fn headless_recording_keeps_effect_cadence_across_frames() {
+    // Neither cadence divides the frame step, so a recorder that restarts the effect interval at
+    // every captured frame drops the remainder and steps the phase too rarely.
+    let (runner, _) = record_effect_scope(
+        crate::style::VisualEffect::Custom(Arc::new(IntervalEffect(Duration::from_millis(33)))),
+        Duration::from_millis(200),
+        Duration::from_millis(50),
+    );
+    // Steps at 33, 66, 99, 132, 165, and 198 ms.
+    assert_eq!(runner.core.ctx.env().effect_phase.get(), 6);
+
+    let (runner, _) = record_effect_scope(
+        rainbow_wave(),
+        Duration::from_secs(1),
+        Duration::from_secs_f64(1.0 / 24.0),
+    );
+    // A built-in effect steps every 16 ms: 62 times in one second, as it does live.
+    assert_eq!(runner.core.ctx.env().effect_phase.get(), 62);
 }

@@ -33,6 +33,12 @@ impl<C: Component> AppRunner<C> {
         elapsed.min(interval.max(Duration::from_millis(50)))
     }
 
+    /// Time left until the shared `EffectScope` phase is due to step, if any scope is animated.
+    pub(super) fn until_next_effect_tick(&self) -> Option<Duration> {
+        let interval = self.core.tree.animated_effect_scope_interval()?;
+        Some(interval.saturating_sub(self.clock_elapsed(self.animation.last_effect_tick)))
+    }
+
     /// Step the shared `EffectScope` phase once its animation interval has elapsed.
     ///
     /// Returns whether an animated effect scope is still active and needs a repaint. Both the
@@ -168,9 +174,8 @@ impl<C: Component> AppRunner<C> {
             );
         }
 
-        if let Some(interval) = self.core.tree.animated_effect_scope_interval() {
-            poll_timeout = poll_timeout
-                .min(interval.saturating_sub(self.clock_elapsed(self.animation.last_effect_tick)));
+        if let Some(until_effect) = self.until_next_effect_tick() {
+            poll_timeout = poll_timeout.min(until_effect);
         }
 
         #[cfg(feature = "image")]
