@@ -45,6 +45,14 @@ fn toast_rows(toast: Toast) -> Vec<String> {
         .collect()
 }
 
+/// The message rows between the borders, trimmed of the frame.
+fn message_rows(rows: &[String]) -> Vec<&str> {
+    rows[1..rows.len() - 1]
+        .iter()
+        .map(|row| row.trim_matches(['│', ' ']))
+        .collect()
+}
+
 #[test]
 fn a_percentage_max_width_wraps_the_message_at_that_share_of_the_screen() {
     let rows = toast_rows(
@@ -56,9 +64,28 @@ fn a_percentage_max_width_wraps_the_message_at_that_share_of_the_screen() {
     assert_eq!(rows[0].chars().count(), usize::from(WIDTH / 2));
     // Every row between the borders carries text; the frame is as tall as the wrap.
     assert!(
-        rows[1..rows.len() - 1]
-            .iter()
-            .all(|row| !row.trim_matches(['│', ' ']).is_empty()),
+        message_rows(&rows).iter().all(|row| !row.is_empty()),
+        "{rows:#?}"
+    );
+}
+
+#[test]
+fn a_percentage_width_wraps_the_message_at_the_frame_it_draws() {
+    let rows = toast_rows(
+        Toast::new(MESSAGE)
+            .duration(10.0)
+            .min_width(Length::Px(0))
+            .width(Length::Percent(80)),
+    );
+
+    assert_eq!(rows[0].chars().count(), usize::from(WIDTH * 4 / 5));
+    assert_eq!(
+        message_rows(&rows),
+        [
+            "a long message that wraps",
+            "across several lines of the",
+            "toast"
+        ],
         "{rows:#?}"
     );
 }
