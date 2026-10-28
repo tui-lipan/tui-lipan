@@ -1082,9 +1082,13 @@ impl WindowManagerDemo {
                 .into()
         });
 
+        // Windows overlap while floating, dragging, or animating, so a window must occlude what
+        // lies beneath it. The default merge mode would fuse its border into the borders below
+        // (`╫`, `╪`) and leave title text under it showing through the border.
         let mut body = Frame::new()
             .border(true)
             .border_style(border_style)
+            .border_merge_mode(BorderMergeMode::Replace)
             .style(frame_style)
             .focus_style(Style::default())
             .padding((0, 1, 0, 1));
