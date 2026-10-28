@@ -1843,7 +1843,26 @@ impl<C: Component> AppRunner<C> {
             let mut advanced = std::time::Duration::ZERO;
             let mut dirty_view = false;
             while advanced < frame_span {
-                let tick = (frame_span - advanced).min(MAX_TICK);
+                // An effect phase steps at most once per tick, so end a tick where the next
+                // effect step falls, as the event loop's poll timeout does. Capping at the whole
+                // interval instead would drop the remainder at every captured frame and play
+                // effects slower than live whenever the frame step is not a multiple of it.
+                // A phase already due, such as for a scope that just appeared after a stretch
+                // with no animated effects, steps now, as the event loop's zero poll timeout
+                // does, rather than after a whole sub-step. Stepping without `continue` keeps
+                // a zero-interval effect from spinning this loop.
+                if self
+                    .until_next_effect_tick()
+                    .is_some_and(|until| until.is_zero())
+                {
+                    self.advance_effect_phase();
+                }
+                let mut tick = (frame_span - advanced).min(MAX_TICK);
+                if let Some(until_effect) = self.until_next_effect_tick()
+                    && !until_effect.is_zero()
+                {
+                    tick = tick.min(until_effect);
+                }
                 self.core.ctx.env().advance_clock(tick);
                 let (_, _, needs_layout) =
                     crate::app::animation::tick_tree_animations(&mut self.core.tree, tick);
@@ -1854,6 +1873,8 @@ impl<C: Component> AppRunner<C> {
                     .animations
                     .tick(tick, self.core.ctx.env().clock.elapsed());
                 dirty_view |= needs_layout || transitions.view_changed;
+                // The captured frame reads the effect phase directly, so no render is needed.
+                self.advance_effect_phase();
                 let revealed = self.core.ctx.command_chord_revealed();
                 if revealed != self.animation.command_chord_revealed {
                     self.animation.command_chord_revealed = revealed;

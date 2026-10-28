@@ -33,6 +33,30 @@ impl<C: Component> AppRunner<C> {
         elapsed.min(interval.max(Duration::from_millis(50)))
     }
 
+    /// Time left until the shared `EffectScope` phase is due to step, if any scope is animated.
+    pub(super) fn until_next_effect_tick(&self) -> Option<Duration> {
+        let interval = self.core.tree.animated_effect_scope_interval()?;
+        Some(interval.saturating_sub(self.clock_elapsed(self.animation.last_effect_tick)))
+    }
+
+    /// Step the shared `EffectScope` phase once its animation interval has elapsed.
+    ///
+    /// Returns whether an animated effect scope is still active and needs a repaint. Both the
+    /// event loop and headless recording call this, so recorded effects animate like live ones.
+    pub(super) fn advance_effect_phase(&mut self) -> bool {
+        let Some(interval) = self.core.tree.animated_effect_scope_interval() else {
+            return false;
+        };
+        if self.clock_elapsed(self.animation.last_effect_tick) < interval {
+            return false;
+        }
+        self.animation.last_effect_tick = self.clock_now();
+        self.animation.effect_phase_tick = self.animation.effect_phase_tick.wrapping_add(1);
+        self.core.set_effect_phase(self.animation.effect_phase_tick);
+        self.core.tree.refresh_animated_effect_scope_activity();
+        self.core.tree.has_animated_effect_scopes()
+    }
+
     /// Cadence required by the animations currently in flight.
     ///
     /// A concrete property or tree animation feeds view/layout and keeps the app-wide frame rate.
@@ -150,9 +174,8 @@ impl<C: Component> AppRunner<C> {
             );
         }
 
-        if let Some(interval) = self.core.tree.animated_effect_scope_interval() {
-            poll_timeout = poll_timeout
-                .min(interval.saturating_sub(self.clock_elapsed(self.animation.last_effect_tick)));
+        if let Some(until_effect) = self.until_next_effect_tick() {
+            poll_timeout = poll_timeout.min(until_effect);
         }
 
         #[cfg(feature = "image")]
@@ -306,16 +329,8 @@ impl<C: Component> AppRunner<C> {
             }
         }
 
-        if let Some(interval) = self.core.tree.animated_effect_scope_interval()
-            && self.clock_elapsed(self.animation.last_effect_tick) >= interval
-        {
-            self.animation.last_effect_tick = self.clock_now();
-            self.animation.effect_phase_tick = self.animation.effect_phase_tick.wrapping_add(1);
-            self.core.set_effect_phase(self.animation.effect_phase_tick);
-            self.core.tree.refresh_animated_effect_scope_activity();
-            if self.core.tree.has_animated_effect_scopes() {
-                dirty.mark_paint();
-            }
+        if self.advance_effect_phase() {
+            dirty.mark_paint();
         }
 
         if self.stationary_drag_autoscroll_pending() {
