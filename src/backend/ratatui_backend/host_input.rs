@@ -376,10 +376,8 @@ pub(crate) mod pty_test {
         })
     }
 
-    pub(crate) fn run_on_pty<T>(
-        test_name: &str,
-        interact: impl FnOnce(OwnedFd) -> T,
-    ) -> HashMap<String, String> {
+    /// A new pty pair: the master, and the slave opened without becoming anyone's terminal.
+    pub(crate) fn open_pty() -> (OwnedFd, std::fs::File) {
         // SAFETY: straightforward pty allocation; every return value is checked.
         let master = unsafe { libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC) };
         assert!(master >= 0, "posix_openpt failed");
@@ -403,6 +401,14 @@ pub(crate) mod pty_test {
             .custom_flags(libc::O_NOCTTY)
             .open(&slave_path)
             .expect("open pty slave");
+        (master, slave)
+    }
+
+    pub(crate) fn run_on_pty<T>(
+        test_name: &str,
+        interact: impl FnOnce(OwnedFd) -> T,
+    ) -> HashMap<String, String> {
+        let (master, slave) = open_pty();
 
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let report = std::env::temp_dir().join(format!(

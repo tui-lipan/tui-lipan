@@ -154,6 +154,7 @@ ignore = "0.4.31"
 
 [target.'cfg(all(unix, not(target_arch = "wasm32")))'.dependencies]
 termina = "0.4"
+signal-hook = "0.3"
 
 [target.'cfg(all(target_os = "linux", not(target_arch = "wasm32")))'.dependencies]
 wl-clipboard-rs = { version = "0.9.3", optional = true }

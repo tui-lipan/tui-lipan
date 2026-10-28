@@ -2,7 +2,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
@@ -40,8 +40,9 @@ use super::RunnerEvent;
 const INPUT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const ESCAPE_DISAMBIGUATION: Duration = Duration::from_millis(10);
 const HOST_COLOR_QUERY_TIMEOUT: Duration = Duration::from_millis(200);
-/// How often the worker asks the host for its size. The answer only backs up resize reports that
-/// never arrived, and asking after every read would cost a system call per pointer report.
+/// How often the worker asks the host for its size. `SIGWINCH` reports a resize as it happens; this
+/// only backs up a signal that never arrived, and asking after every read would cost a system call
+/// per pointer report.
 const SIZE_CHECK_INTERVAL: Duration = Duration::from_millis(100);
 /// How long a switch of the pointer encoding waits for the host to confirm it before asking again.
 /// Only an answer that went missing waits this long.
@@ -307,7 +308,13 @@ fn run_worker(
             }
         }
 
-        match poll_terminal_input(&terminal, &wake_reader, Duration::ZERO) {
+        match poll_terminal_input(&terminal, &wake_reader, size.signal_fd(), Duration::ZERO) {
+            Ok(ready) if ready.resized => {
+                if !size.on_signal(&terminal, &events, &mut input) {
+                    break;
+                }
+                continue;
+            }
             Ok(ready) if ready.wake => {
                 if let Err(err) = drain_worker_wake(&mut wake_reader) {
                     stop(err);
@@ -351,12 +358,19 @@ fn run_worker(
         match poll_terminal_input(
             &terminal,
             &wake_reader,
+            size.signal_fd(),
             next_poll_timeout(
                 settle_at,
                 query.as_ref(),
                 [input.pixel.deadline, Some(size.next_check)],
             ),
         ) {
+            Ok(ready) if ready.resized => {
+                if !size.on_signal(&terminal, &events, &mut input) {
+                    break;
+                }
+                continue;
+            }
             Ok(ready) if ready.wake => {
                 if let Err(err) = drain_worker_wake(&mut wake_reader) {
                     stop(err);
@@ -996,36 +1010,76 @@ fn window_size(terminal: &impl AsRawFd) -> io::Result<crossterm::terminal::Windo
     })
 }
 
-/// The host size as last seen, checked on a cadence of its own.
+/// The host size as last seen.
 ///
-/// Nothing tells the worker the host was resized - termina reports a resize only when the host
-/// sends one in-band - so it asks. Asking after every read would cost a system call per pointer
-/// report, and an idle worker wakes this often anyway, so a busy one keeps the same pace.
+/// termina reports a resize only when the host sends one in-band, so the worker watches for it
+/// itself. The kernel signals the terminal's foreground process group with `SIGWINCH` on every
+/// resize, and [`ResizeSignal`] turns that into a readable pipe the worker polls alongside its
+/// input, so a resize is seen as soon as it happens. The size is also asked for on a cadence of its
+/// own, in case the signal could not be watched or was taken by another handler. Asking after every
+/// read instead would cost a system call per pointer report.
 struct WindowSizeWatch {
     last: Option<crossterm::terminal::WindowSize>,
     next_check: Instant,
+    signal: Option<ResizeSignal>,
 }
 
 impl WindowSizeWatch {
     fn new(terminal: &impl AsRawFd) -> Self {
+        Self::with_signal(terminal, ResizeSignal::register().ok())
+    }
+
+    fn with_signal(terminal: &impl AsRawFd, signal: Option<ResizeSignal>) -> Self {
         Self {
             last: window_size(terminal).ok(),
             next_check: Instant::now() + SIZE_CHECK_INTERVAL,
+            signal,
         }
     }
 
-    /// Send a resize if the host size changed since the last check. False when the runner is gone.
+    /// The pipe that becomes readable when the host is resized, if the signal is watched.
+    fn signal_fd(&self) -> Option<RawFd> {
+        self.signal.as_ref().map(|signal| signal.reader.as_raw_fd())
+    }
+
+    /// Check the size straight away after a `SIGWINCH`. False when the runner is gone.
+    fn on_signal(
+        &mut self,
+        terminal: &impl AsRawFd,
+        events: &mpsc::Sender<RunnerEvent>,
+        input: &mut WorkerInput,
+    ) -> bool {
+        if let Some(signal) = &mut self.signal
+            && signal.drain().is_err()
+        {
+            // A pipe that cannot be read would stay ready and spin the worker. The cadence check
+            // still sees every resize, only later.
+            self.signal = None;
+        }
+        self.check(terminal, events, input)
+    }
+
+    /// Check the size if the cadence is due. False when the runner is gone.
     fn refresh(
         &mut self,
         terminal: &impl AsRawFd,
         events: &mpsc::Sender<RunnerEvent>,
         input: &mut WorkerInput,
     ) -> bool {
-        let now = Instant::now();
-        if now < self.next_check {
+        if Instant::now() < self.next_check {
             return true;
         }
-        self.next_check = now + SIZE_CHECK_INTERVAL;
+        self.check(terminal, events, input)
+    }
+
+    /// Send a resize if the host size changed since the last check. False when the runner is gone.
+    fn check(
+        &mut self,
+        terminal: &impl AsRawFd,
+        events: &mpsc::Sender<RunnerEvent>,
+        input: &mut WorkerInput,
+    ) -> bool {
+        self.next_check = Instant::now() + SIZE_CHECK_INTERVAL;
         let Ok(size) = window_size(terminal) else {
             return true;
         };
@@ -1047,22 +1101,57 @@ impl WindowSizeWatch {
     }
 }
 
+/// A `SIGWINCH` handler that writes to a pipe, registered for as long as this lives.
+///
+/// The handler chains with any other the process installs through `signal-hook`, so it takes the
+/// signal from no one. Signals that arrive while the worker is paused wait in the pipe, and the
+/// size is checked once it resumes.
+struct ResizeSignal {
+    reader: UnixStream,
+    id: signal_hook::SigId,
+}
+
+impl ResizeSignal {
+    fn register() -> io::Result<Self> {
+        Self::register_for(signal_hook::consts::SIGWINCH)
+    }
+
+    fn register_for(signal: libc::c_int) -> io::Result<Self> {
+        let (reader, writer) = worker_wake_pipe()?;
+        let id = signal_hook::low_level::pipe::register(signal, writer)?;
+        Ok(Self { reader, id })
+    }
+
+    /// Empty the pipe so the next poll waits for the next signal.
+    fn drain(&mut self) -> io::Result<()> {
+        drain_pipe(&mut self.reader, "resize signal pipe closed")
+    }
+}
+
+impl Drop for ResizeSignal {
+    fn drop(&mut self) {
+        // Dropping the handler closes the pipe's write end.
+        signal_hook::low_level::unregister(self.id);
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct WorkerReady {
     terminal: bool,
     wake: bool,
+    resized: bool,
 }
 
 fn drain_worker_wake(wake_reader: &mut UnixStream) -> io::Result<()> {
+    drain_pipe(wake_reader, "input worker wake channel closed")
+}
+
+/// Read a nonblocking wake pipe until it is empty. A closed pipe is an error: it would stay ready.
+fn drain_pipe(reader: &mut UnixStream, closed: &'static str) -> io::Result<()> {
     let mut buffer = [0; 64];
     loop {
-        match wake_reader.read(&mut buffer) {
-            Ok(0) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::BrokenPipe,
-                    "input worker wake channel closed",
-                ));
-            }
+        match reader.read(&mut buffer) {
+            Ok(0) => return Err(io::Error::new(io::ErrorKind::BrokenPipe, closed)),
             Ok(_) => {}
             Err(err) if err.kind() == io::ErrorKind::WouldBlock => return Ok(()),
             Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
@@ -1075,6 +1164,7 @@ fn drain_worker_wake(wake_reader: &mut UnixStream) -> io::Result<()> {
 fn poll_terminal_input(
     terminal: &impl AsRawFd,
     wake_reader: &impl AsRawFd,
+    resize_signal: Option<RawFd>,
     timeout: Duration,
 ) -> io::Result<WorkerReady> {
     let mut descriptors = [
@@ -1085,6 +1175,12 @@ fn poll_terminal_input(
         },
         libc::pollfd {
             fd: wake_reader.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        },
+        // `poll` skips a negative descriptor and reports nothing for it.
+        libc::pollfd {
+            fd: resize_signal.unwrap_or(-1),
             events: libc::POLLIN,
             revents: 0,
         },
@@ -1111,6 +1207,7 @@ fn poll_terminal_input(
     Ok(WorkerReady {
         terminal: ready(&descriptors[0]),
         wake: ready(&descriptors[1]),
+        resized: ready(&descriptors[2]),
     })
 }
 
@@ -1118,6 +1215,7 @@ fn poll_terminal_input(
 fn poll_terminal_input(
     terminal: &impl AsRawFd,
     wake_reader: &impl AsRawFd,
+    resize_signal: Option<RawFd>,
     timeout: Duration,
 ) -> io::Result<WorkerReady> {
     let terminal_fd = terminal.as_raw_fd();
@@ -1127,6 +1225,9 @@ fn poll_terminal_input(
         libc::FD_ZERO(&mut read_fds);
         libc::FD_SET(terminal_fd, &mut read_fds);
         libc::FD_SET(wake_fd, &mut read_fds);
+        if let Some(resize_fd) = resize_signal {
+            libc::FD_SET(resize_fd, &mut read_fds);
+        }
     }
     let mut timeout = libc::timeval {
         tv_sec: timeout.as_secs().min(libc::time_t::MAX as u64) as libc::time_t,
@@ -1134,7 +1235,7 @@ fn poll_terminal_input(
     };
     let result = unsafe {
         libc::select(
-            terminal_fd.max(wake_fd) + 1,
+            terminal_fd.max(wake_fd).max(resize_signal.unwrap_or(-1)) + 1,
             &mut read_fds,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
@@ -1147,6 +1248,8 @@ fn poll_terminal_input(
     Ok(WorkerReady {
         terminal: result > 0 && unsafe { libc::FD_ISSET(terminal_fd, &read_fds) },
         wake: result > 0 && unsafe { libc::FD_ISSET(wake_fd, &read_fds) },
+        resized: result > 0
+            && resize_signal.is_some_and(|fd| unsafe { libc::FD_ISSET(fd, &read_fds) }),
     })
 }
 
@@ -1750,16 +1853,69 @@ mod tests {
 
         control.wake();
         assert_eq!(
-            poll_terminal_input(&terminal_reader, &wake_reader, INPUT_POLL_INTERVAL).unwrap(),
+            poll_terminal_input(&terminal_reader, &wake_reader, None, INPUT_POLL_INTERVAL).unwrap(),
             WorkerReady {
                 terminal: false,
                 wake: true,
+                resized: false,
             }
         );
         drain_worker_wake(&mut wake_reader).unwrap();
         assert_eq!(
-            poll_terminal_input(&terminal_reader, &wake_reader, Duration::ZERO).unwrap(),
+            poll_terminal_input(&terminal_reader, &wake_reader, None, Duration::ZERO).unwrap(),
             WorkerReady::default()
+        );
+    }
+
+    /// A resize is reported when `SIGWINCH` arrives, not when the cadence check next comes due.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn sigwinch_reports_a_resize_before_the_size_check_is_due() {
+        use crate::backend::ratatui_backend::host_input::pty_test::open_pty;
+
+        let (master, terminal) = open_pty();
+        let (_wake_writer, wake_reader) = worker_wake_pipe().unwrap();
+        let (events, receiver) = mpsc::channel();
+        let mut input = WorkerInput::default();
+        let mut size = WindowSizeWatch::new(&terminal);
+        assert!(size.signal_fd().is_some(), "SIGWINCH should be watched");
+
+        let resized = libc::winsize {
+            ws_row: 25,
+            ws_col: 83,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        // SAFETY: one valid descriptor and a `winsize` that outlives the call.
+        assert_eq!(
+            unsafe { libc::ioctl(master.as_raw_fd(), libc::TIOCSWINSZ, &resized) },
+            0,
+            "TIOCSWINSZ failed"
+        );
+        // The pty is no one's controlling terminal, so the kernel signals no one; raise it here.
+        // The cadence check is not due yet, so only the signal can report this resize now.
+        assert!(size.refresh(&terminal, &events, &mut input));
+        assert!(receiver.try_recv().is_err());
+        signal_hook::low_level::raise(signal_hook::consts::SIGWINCH).unwrap();
+
+        let ready = poll_terminal_input(
+            &terminal,
+            &wake_reader,
+            size.signal_fd(),
+            INPUT_POLL_INTERVAL,
+        )
+        .unwrap();
+        assert!(ready.resized, "{ready:?}");
+        assert!(size.on_signal(&terminal, &events, &mut input));
+        std::assert_matches!(
+            receiver.try_recv(),
+            Ok(RunnerEvent::Terminal(CrosstermEvent::Resize(83, 25)))
+        );
+        // Drained: the next poll waits for the next signal.
+        assert!(
+            !poll_terminal_input(&terminal, &wake_reader, size.signal_fd(), Duration::ZERO)
+                .unwrap()
+                .resized
         );
     }
 
@@ -1782,10 +1938,11 @@ mod tests {
             .unwrap();
         control.wake();
         assert_eq!(
-            poll_terminal_input(&terminal_reader, &wake_reader, Duration::ZERO).unwrap(),
+            poll_terminal_input(&terminal_reader, &wake_reader, None, Duration::ZERO).unwrap(),
             WorkerReady {
                 terminal: true,
                 wake: true,
+                resized: false,
             }
         );
         drain_worker_wake(&mut wake_reader).unwrap();
@@ -1799,10 +1956,11 @@ mod tests {
         let (events, receiver) = mpsc::channel();
         let mut input = WorkerInput::default();
         assert_eq!(
-            poll_terminal_input(&terminal_reader, &wake_reader, Duration::ZERO).unwrap(),
+            poll_terminal_input(&terminal_reader, &wake_reader, None, Duration::ZERO).unwrap(),
             WorkerReady {
                 terminal: true,
                 wake: false,
+                resized: false,
             }
         );
         assert!(read_terminal_bytes(&mut terminal_reader, &mut input, &events).unwrap());
@@ -1816,7 +1974,7 @@ mod tests {
 
         terminal_writer.write_all(b"P").unwrap();
         assert!(
-            poll_terminal_input(&terminal_reader, &wake_reader, Duration::ZERO)
+            poll_terminal_input(&terminal_reader, &wake_reader, None, Duration::ZERO)
                 .unwrap()
                 .terminal
         );
