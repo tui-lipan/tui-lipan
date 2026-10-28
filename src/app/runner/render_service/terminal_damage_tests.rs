@@ -2226,3 +2226,133 @@ fn a_cell_effect_removes_native_picture_fragments_on_paint_only_frames() {
         "captures must retain only the same picture fragments"
     );
 }
+
+/// A masked picture above a status row that lies outside the effect.
+#[cfg(feature = "terminal-images")]
+#[derive(Clone)]
+struct MaskedImageWithStatus {
+    screen: Rc<RefCell<TerminalScreen>>,
+    effect: ImageMaskProbe,
+}
+
+#[cfg(feature = "terminal-images")]
+impl Component for MaskedImageWithStatus {
+    type Properties = ();
+    type State = ();
+    type Message = ();
+    fn create_state(&self, _: &()) {}
+    fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+    fn view(&self, _: &Context<Self>) -> Element {
+        let picture = crate::widgets::EffectScope::new()
+            .custom_effect(self.effect.clone())
+            .child(
+                crate::widgets::Terminal::new()
+                    .screen(self.screen.clone())
+                    .scrollbar(false),
+            );
+        crate::widgets::Canvas::new()
+            .child_at(
+                Rect {
+                    x: 0,
+                    y: 0,
+                    w: 12,
+                    h: 5,
+                },
+                picture,
+            )
+            .child_at(
+                Rect {
+                    x: 0,
+                    y: 5,
+                    w: 12,
+                    h: 1,
+                },
+                Text::new("status"),
+            )
+            .into()
+    }
+}
+
+/// A partial paint whose damage reaches only part of an effect's scope, such as a sidebar spinner
+/// ticking beside a closing pane, still lays out the whole committed native scene of the terminal
+/// inside it. Cutting the effect's mask to the damaged region left the rest of that picture without
+/// holes, so every such paint put it back on the host for one frame while the effect hid it.
+#[cfg(feature = "terminal-images")]
+#[test]
+fn a_partial_paint_elsewhere_keeps_an_effect_hiding_native_picture_fragments() {
+    use base64::Engine as _;
+    use std::sync::{Arc, atomic::AtomicU16};
+    let _host = crate::backend::ratatui_backend::image_support::test_kitty_host((10, 20), true);
+    let bounds = Rect {
+        x: 0,
+        y: 0,
+        w: 12,
+        h: 6,
+    };
+    let screen = Rc::new(RefCell::new(TerminalScreen::new(5, 12, 0)));
+    screen
+        .borrow_mut()
+        .set_cell_size(crate::widgets::TerminalCellSize::new(10, 20));
+    let pixels =
+        base64::engine::general_purpose::STANDARD.encode([0, 255, 0, 255].repeat(120 * 100));
+    screen.borrow_mut().process_bytes(
+        format!("\x1b[?25l\x1b[H\x1b_Ga=T,f=32,s=120,v=100,i=7,p=9,C=1,q=2,z=1;{pixels}\x1b\\")
+            .as_bytes(),
+    );
+    let component = MaskedImageWithStatus {
+        screen,
+        effect: ImageMaskProbe {
+            columns: Arc::new(AtomicU16::new(6)),
+        },
+    };
+    let mut runner = AppRunner::new(App::new(), component.clone(), ());
+    runner.core = RuntimeCore::new_test(
+        component,
+        (),
+        bounds,
+        Theme::default(),
+        SurfaceMode::Fullscreen,
+        Rc::new(StdCell::new(false)),
+    )
+    .into();
+    runner.core.init();
+    runner.core.render_element(bounds, None, None, None);
+    let mut terminal = crate::backend::ratatui_backend::create_test_terminal(12, 6).unwrap();
+    let cursor = StdCell::new(None);
+    {
+        let _plans = terminal.backend().native_plan_scope();
+        runner.with_render_context(&cursor, |ctx| {
+            terminal.draw(|f| render(f, ctx)).unwrap();
+        });
+    }
+    let full = terminal.backend().test_output();
+    assert!(
+        String::from_utf8_lossy(&full).contains("w=60,h=100"),
+        "the full paint must place only the unmasked half"
+    );
+    let offset = full.len();
+    // Damage that reaches one row into the picture, as a sidebar or a status line beside a pane
+    // can.
+    let damage = Rect {
+        x: 0,
+        y: 4,
+        w: 12,
+        h: 2,
+    };
+    {
+        let _plans = terminal.backend().native_plan_scope();
+        runner.with_render_context(&cursor, |ctx| {
+            terminal
+                .draw(|f| crate::backend::ratatui_backend::render_regions(f, ctx, &[damage]))
+                .unwrap();
+        });
+    }
+    let output = terminal.backend().test_output();
+    let commands = String::from_utf8_lossy(&output[offset..]);
+    assert!(
+        !commands.contains("w=120"),
+        "a partial paint must not put back the fragments the effect hides: {commands:?}"
+    );
+}
