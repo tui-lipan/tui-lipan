@@ -6,19 +6,16 @@
 
 **Opinionated, component-based TUI framework for Rust.**
 
-Build terminal apps with React/Elm-like components, declarative UI trees,
-scoped messages, and modern interaction primitives - mouse, focus, overlays,
-async commands - out of the box.
-
-General-purpose: editors and IDEs, dashboards, AI-agent interfaces, games,
-and developer tools - anything that runs in a terminal.
+Write components and messages like in Elm or React. tui-lipan handles layout,
+focus, mouse, overlays, animation, and rendering, so a polished terminal app
+does not have to be a fight.
 
 [![Crates.io](https://img.shields.io/crates/v/tui-lipan.svg)](https://crates.io/crates/tui-lipan)
 [![docs.rs](https://img.shields.io/docsrs/tui-lipan)](https://docs.rs/tui-lipan)
 [![Context7](https://img.shields.io/badge/Context7-indexed-8A2BE2)](https://context7.com/websites/tui-lipan_dev)
 [![CI](https://github.com/tui-lipan/tui-lipan/actions/workflows/ci.yml/badge.svg)](https://github.com/tui-lipan/tui-lipan/actions/workflows/ci.yml)
 [![License: MPL-2.0](https://img.shields.io/badge/license-MPL--2.0-blue.svg)](#license)
-[![MSRV](https://img.shields.io/badge/MSRV-1.96-blue)](#)
+[![MSRV](https://img.shields.io/badge/MSRV-1.96-blue)](CONTRIBUTING.md)
 [![Sponsor](https://img.shields.io/github/sponsors/Razuer?logo=githubsponsors&label=sponsor)](https://github.com/sponsors/Razuer)
 
 [Website](https://tui-lipan.dev) ·
@@ -28,19 +25,44 @@ and developer tools - anything that runs in a terminal.
 
 </div>
 
-> **Live demos:** interactive WASM showcases (whack-a-mole, lazygit clone,
-> ghost canvas, OpenCode clone) run in your browser at
-> **[tui-lipan.dev](https://tui-lipan.dev)**.
+<p align="center">
+  <img src="assets/showcase/reel.gif" alt="A reel of tui-lipan examples: a tiling window manager with a floating window, live theme switching, a lazygit-style git client, diagrams, CRT and palette effects, an animated dot field, a process monitor, and a diff viewer" width="960" />
+  <br />
+  <sub>Every clip is a runnable example in <a href="examples/"><code>examples/</code></a>,
+  recorded headlessly by tui-lipan itself (<a href="docs/testing.md#terminal-recordings"><code>TUI_LIPAN_RECORD</code></a>).</sub>
+</p>
 
 ---
 
-## Quick Start
+## What you get
+
+- **Components** with typed `Message`, `Properties`, and `State`; `view()` returns
+  a declarative `Element` tree and the runtime reconciles it.
+- **Flexbox-inspired layout**: stacks, grids, frames with titled borders, splitters,
+  scroll views. lazygit-style panel chrome out of the box.
+- **Mouse and focus everywhere**: precise hit-testing, hover, drag, focus scopes,
+  tab order, and key bubbling from the focused widget up to the root.
+- **Overlays**: modals, popovers, context menus, toasts, and command palettes with
+  focus capture and dismissal policies.
+- **Async without threads in your UI**: background work runs as a `Command` and
+  comes back as a typed message.
+- **Over 70 widgets**: forms, tables, trees, file tree, log view, diff view, charts,
+  diagrams, images, and an embedded PTY terminal.
+- **Themes and motion**: presets, custom TOML themes with live reload, animated
+  geometry, easing transitions, and per-cell effect shaders.
+- **Built for agents**: render any component headlessly to Markdown, JSON, or PNG,
+  and drive a running app over a control socket. See
+  [Agents can see the TUI](#agents-can-see-the-tui).
+- **Anywhere a terminal is**: full-screen, inline below the shell prompt, or in the
+  browser through the WASM backend.
+
+---
+
+## Quick start
 
 ```toml
 [dependencies]
 tui-lipan = "0.33"
-# Optional feature-gated widgets:
-# tui-lipan = { version = "0.11", features = ["image", "big-text", "terminal"] }
 ```
 
 ```rust
@@ -85,102 +107,120 @@ fn main() -> tui_lipan::Result<()> {
 }
 ```
 
-For a guided walkthrough, see the [tutorial](docs/tutorial.md).
-For zero-boilerplate layout previews, see [`mockup!`](#zero-boilerplate-layout-preview).
+From here, the [tutorial](docs/tutorial.md) builds a complete multi-panel app.
+Deep trees can also be written with the optional `ui!` macro, which keeps the
+builder syntax and its autocomplete; see [`docs/macros.md`](docs/macros.md).
 
 ---
 
-## Why this exists
+## Built with tui-lipan
 
-Most Rust TUI codebases eventually hit the same friction:
+### [Rozi](https://github.com/tui-lipan/rozi)
 
-- UI logic and rendering are tightly coupled
-- State updates are scattered across event handlers
-- Reusable UI blocks are hard to isolate
-- Advanced UX (focus chains, overlays, drag, keyboard routing) becomes ad-hoc
+A tiling terminal multiplexer that feels like a window manager: seven tiling
+layouts, floating and fullscreen panes, persistent sessions, SSH remotes, and
+coding-agent awareness. It is the flagship tui-lipan app and the place new
+framework features get proven first.
 
-tui-lipan provides a **high-DX application framework** for TUIs, not just
-rendering primitives. You write components and messages - the runtime handles
-tree expansion, reconciliation, layout, event routing, focus, and rendering.
+<p align="center">
+  <a href="https://github.com/tui-lipan/rozi">
+    <img src="assets/showcase/rozi-demo.gif" alt="A recording of Rozi: panes tile as they open, the layout changes, a log pane floats and is dragged around, goes fullscreen, both sidebars open, and the view slides to another workspace" width="862" />
+  </a>
+  <br />
+  <sub>Recorded with Rozi's own <code>rozi record start ui</code>. The programs inside the panes
+  are ordinary terminal apps; the tiling, animation, frames, sidebars, and the terminal panes
+  themselves are tui-lipan.</sub>
+</p>
 
-## What you get
+<table>
+  <tr>
+    <td width="33%"><img src="assets/showcase/rozi-palette.webp" alt="Rozi command palette: a searchable, grouped list of commands with key hints" /></td>
+    <td width="33%"><img src="assets/showcase/rozi-theme-picker.webp" alt="Rozi theme picker filtering 31 themes while the workspace previews the selection" /></td>
+    <td width="33%"><img src="assets/showcase/rozi-sidebar.webp" alt="Rozi sidebar with a file tree and tabs next to five tiled panes" /></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Command palette with grouped, filterable commands</sub></td>
+    <td align="center"><sub>Theme picker that previews as you type</sub></td>
+    <td align="center"><sub>Sidebar with <code>FileTree</code> and <code>Tabs</code> beside tiled panes</sub></td>
+  </tr>
+</table>
 
-- **Component model** - typed `Message`, `Properties`, and `State`
-- **Declarative UI** - `view()` returns an `Element` tree; builder API + `ui!` macro (with full autocomplete)
-- **Zero-boilerplate previews** - `mockup!` macro for instant layout prototyping without any component code
-- **Nested components** - `child::<C, _>(...)` with scoped state/message routing
-- **Async side effects** - `Command` + background tasks + typed message return
-- **Layout engine** - flexbox-inspired `Auto`/`Px`/`Flex`, stacks, frames, splitters
-- **Interaction model** - `OnDemand`/`Auto`/`Manual` focus policies, tab stops and scopes, mouse hit-testing, focus events, and key bubbling
-- **Overlay system** - modals, popovers, toasts, dismissal policies, focus capture
-- **Rich widget set** - forms, tables, terminal viewport, file tree, log view, diff view, sparkline, charts, and more
-- **Theming** - preset + custom themes, focus-decoration control, host-derived `system` theme, contrast policies, live hot reload
-- **Animation & effects** - easing transitions, animated geometry, and `EffectScope` cell shaders (scanlines, palette quantize, custom per-cell effects)
-- **Agent-visible UI** - headless rendering + `UiSnapshot` markdown/JSON/PNG exports, so AI agents (and CI) can *see* the TUI they build - see [Agents can see the TUI](#agents-can-see-the-tui)
-- **Inline mode** - render below the shell prompt, no alternate screen
-- **Two backends** - native terminal and browser/WASM (`web` feature)
-- **Backend boundary** - no `ratatui` types in public API
-
----
-
-## `ui!` Macro (recommended)
-
-The `ui!` macro gives you readable builder-chain syntax with `=> { children }`
-sugar for nesting. Because the code is standard Rust, you get **full
-rust-analyzer autocomplete**. `rustfmt` preserves `ui!` macro bodies while
-formatting surrounding Rust, and you can optionally run `ui-fmt` (then
-`rsx-fmt`) before `rustfmt` for macro-body formatting.
-
-```rust
-ui! {
-    Frame::new().header_left("Counter").border(true).padding(1) => {
-        VStack::new().gap(1) => {
-            Text::new(format!("Value: {}", ctx.state.value)),
-            Button::new("Increment")
-                .on_click(ctx.link().callback(|_| Msg::Inc)),
-        }
-    }
-}
+```bash
+curl -fsSL https://rozi.tui-lipan.dev/install | bash   # or: cargo install rozi --locked
 ```
 
-An alternative `rsx!` macro with struct-literal syntax is also available
-(`rsx! { Frame { header_left: "Counter", ... } }`), but it lacks editor
-autocomplete. Both macros produce `Element` and can be mixed freely.
-
-See [`docs/macros.md`](docs/macros.md) for full syntax reference, control
-flow, key attributes, and editor integration.
-
-### Zero-boilerplate layout preview
-
-Skip all component code to quickly preview a layout:
-
-```rust
-use tui_lipan::prelude::*;
-
-fn main() -> tui_lipan::Result<()> {
-    mockup!("Dashboard Preview", {
-        HStack::new().gap(1)
-            .child(
-                Frame::new().header_left("Sidebar").border(true).width(Length::Px(28))
-                    .child(List::new()
-                        .items(["Dashboard", "Settings", "Logs"].map(ListItem::new))
-                        .selected(0))
-            )
-            .child(
-                Frame::new().header_left("Content").border(true).padding(1)
-                    .child(Text::new("Press Esc or q to quit"))
-            )
-    })
-}
-```
-
-Press `Esc` or `q` to quit. Interactive widgets (lists, inputs, tabs) still
-respond to focus and mouse - you get a fully interactive preview without
-writing any `update()` logic.
+Built something with tui-lipan? Open a PR adding it here, or say hello in
+[Discussions](https://github.com/tui-lipan/tui-lipan/discussions).
 
 ---
 
-## Optional Features
+## Agents can see the TUI
+
+Terminal UIs have one stubborn development bottleneck: you have to run the app
+and look at it. tui-lipan renders any app or component headlessly, with no
+terminal or PTY, into formats that an AI coding agent, a snapshot test, or a CI
+job can read.
+
+Capture an existing app without writing code:
+
+```sh
+TUI_LIPAN_SNAPSHOT=/tmp/app.png cargo snap todo
+```
+
+Drive a long-lived off-screen app over a Unix socket, with semantic selectors,
+a controllable clock, waits, resize, and Markdown, JSON, or PNG snapshots:
+
+```sh
+TUI_LIPAN_AUTOMATION_HEADLESS=1 TUI_LIPAN_CONTROL=/tmp/todo.sock \
+  cargo run --example todo
+```
+
+Or assert on the render directly in a test:
+
+```rust
+let mut backend = TestBackend::new(MyComponent);
+backend.set_viewport(Rect { x: 0, y: 0, w: 80, h: 24 });
+backend.render();
+
+let snapshot = backend.capture_ui_snapshot();
+std::fs::write("ui.md", snapshot.to_markdown())?;            // always available
+std::fs::write("ui.png", snapshot.try_to_png_default()?)?;   // feature "ui-snapshot-png"
+```
+
+The repository also ships skills for coding agents (Claude Code, opencode,
+Cursor, and compatible) in [`.agents/skills/`](.agents/skills/), covering app
+structure, visual review, and layout debugging. Copy them into your project's
+skills directory. The docs are indexed on
+[Context7](https://context7.com/websites/tui-lipan_dev) as well.
+
+More: [`docs/testing.md`](docs/testing.md) · [`docs/automation.md`](docs/automation.md) ·
+[`examples/ui_snapshot.rs`](examples/ui_snapshot.rs)
+
+---
+
+## Widgets
+
+| Category | Widgets |
+|----------|---------|
+| Layout & composition | `VStack`, `HStack`, `ZStack`, `Canvas`, `Frame`, `Grid`, `Flow`, `ScrollView`, `PanView`, `Center`, `CenterPin`, `Spacer`, `Divider`, `Splitter`, `MouseRegion`, `EffectScope`, `Animated`, `ThemeProvider`, `ContextProvider` |
+| Text, media & charts | `Text`, `DocumentView`, `AsciiCanvas`, `BigText`*, `Image`*, `QrCode`*, `Sparkline`, `Chart`, `Heatmap` |
+| Diagrams | `Graph`, `Flowchart`, `SequenceDiagram`, `ClassDiagram`, `StateDiagram`, `ErDiagram`, `GanttDiagram` |
+| Input | `Button`, `Input`, `TextArea`, `DiffView`*, `Checkbox`, `Radio`, `Select`, `ComboBox`, `MultiSelect`, `Slider`, `DatePicker`, `HexArea`, `Hyperlink`, `KeyCapture`, `DragSource`, `DropTarget` |
+| Data | `List`, `Table`, `Tree`, `FileTree`, `LogView` |
+| Feedback | `ProgressBar`, `Spinner`, `StatusBar`, `PaginationBar`, `Breadcrumb`, `Badge` |
+| Overlays | `Modal`, `Toast`, `Popover`, `Tooltip`, `Accordion`, `CommandPalette`, `SearchPalette`, `ContextMenu` |
+| Tabs | `Tabs`, `DraggableTabBar` |
+| Terminal | `ManagedTerminal`*, `Terminal`*, `TerminalPty`*, `TerminalScreen`* |
+
+\* Behind an optional feature. Full reference with typed props:
+[`docs/widgets/`](docs/widgets/index.md).
+
+Primitive widgets are maintained by the framework. Apps extend the UI by
+composing them into their own `Component`s, which keeps the public API free of
+`ratatui` types.
+
+<details>
+<summary><b>Optional features</b></summary>
 
 | Feature | What it adds |
 |---------|-------------|
@@ -207,288 +247,68 @@ writing any `update()` logic.
 | `theme-reload` | Live reload of TOML theme files without restarting the app - see [`docs/styling.md`](docs/styling.md) |
 | `web` | Browser/WASM backend - see [`docs/web-backend.md`](docs/web-backend.md) |
 
-To disable the system clipboard (no-system-dep builds):
+To build without the system clipboard dependency:
 
 ```toml
 tui-lipan = { version = "0.33", default-features = false }
 ```
 
-For smaller shipping binaries, build with the size-optimized profile:
+For smaller shipping binaries, use the size-optimized profile:
+`cargo build --profile release-size --no-default-features`.
+
+</details>
+
+---
+
+## Examples and demos
 
 ```bash
-cargo build --profile release-size --no-default-features
+cargo run --example window_manager
+cargo run --example theme_showcase --features markdown,syntax-syntect
+cargo run --example lazygit
+cargo run --example diff_hub --features diff-view
 ```
 
----
-
-## Core Runtime Model
-
-```
-event → callback → message queue → update()
-      → (dirty, command) → command runtime
-      → command sends message → queue → reconcile → render
-```
-
-Key behaviors:
-
-- Focused widget handles key events first; unhandled events bubble child → parent → root
-- `Tab` / `Shift+Tab` traverse focusable elements in DOM order
-- Mouse routes to the deepest hit-tested interactive node
-- Background work runs in `Command` closures and returns results via message channels
-- `mockup!` / `Mockup` adapter: full interactive preview with zero `Component` boilerplate
-
----
-
-## Agents Can See the TUI
-
-Terminal UIs have always had one development bottleneck: *you have to run the
-app and look at it*. tui-lipan removes it. Any component can be rendered
-headlessly - no terminal, no PTY - and exported in formats that an AI coding
-agent, a snapshot test, or a CI job can actually read:
-
-The cheapest capture needs **no code at all**. Point an environment variable at
-an output path and run any existing app or example - the runner renders
-off-screen, writes the artifact, and exits without opening a terminal:
-
-```sh
-TUI_LIPAN_SNAPSHOT=/tmp/app.png cargo snap todo
-```
-
-Companion variables include `TUI_LIPAN_SNAPSHOT_VIEWPORT`,
-`TUI_LIPAN_SNAPSHOT_VIEWPORTS` (several sizes in one run),
-`TUI_LIPAN_SNAPSHOT_KEYS`, and `TUI_LIPAN_SNAPSHOT_ADVANCE_MS` (virtual clock
-for time-gated UI such as a which-key panel). See [`docs/testing.md`](docs/testing.md).
-
-For a long-lived off-screen app that an external agent can drive:
-
-```sh
-TUI_LIPAN_AUTOMATION_HEADLESS=1 \
-TUI_LIPAN_CONTROL=/tmp/todo.sock \
-cargo run --example todo
-```
-
-The bounded Unix-socket protocol supports semantic selectors, controlled clock
-advancement, waits, resize, checkpoints, and Markdown, JSON, or PNG snapshots.
-See [`docs/automation.md`](docs/automation.md).
-
-For a screen that does not exist yet, `Sketch` renders a plain view function at
-several viewports in one call:
-
-```rust
-use tui_lipan::{Result, Sketch};
-
-Sketch::view("login", login_screen)
-    .viewport(80, 24)
-    .fit(20, 8)          // content minimum + margin, exposes flex surprises
-    .write()?;
-```
-
-And the full headless runtime is there when a test needs to assert on it:
-
-```rust
-use tui_lipan::prelude::*;
-use tui_lipan::TestBackend;
-
-let mut backend = TestBackend::new(MyComponent);
-backend.set_viewport(Rect { x: 0, y: 0, w: 80, h: 24 });
-backend.render();
-
-let snapshot = backend.capture_ui_snapshot();
-std::fs::write("ui.md", snapshot.to_markdown())?;            // always available
-std::fs::write("ui.png", snapshot.try_to_png_default()?)?;   // feature "ui-snapshot-png"
-```
-
-- **Markdown snapshots** (always available) - layout tree, widget geometry, text,
-  styles, and focus state in an agent-readable report.
-- **PNG snapshots** (`ui-snapshot-png`) - font-backed pixel rendering of the real
-  frame, so multimodal agents review the actual visual result.
-- **JSON snapshots** (`ui-snapshot-json`) - compact structured export for tooling.
-- **Drivable** - `TestBackend` can `dispatch()` messages, move focus, and hover,
-  so agents and tests exercise real interaction flows headlessly.
-- **DevTools** (`devtools`) - in-app `F12` overlay with frame stats and a debug
-  log console for live sessions.
-
-This loop - *write view code → render headlessly → look at the PNG → refine* -
-is how the apps below were built. See [`examples/sketches/`](examples/sketches/)
-for kept design sketches and [`examples/ui_snapshot.rs`](examples/ui_snapshot.rs)
-for the full snapshot API.
-
-### Agent skills included
-
-The repository ships ready-made skills for coding agents (Claude Code,
-opencode, Cursor, and compatible) in [`.agents/skills/`](.agents/skills/):
-
-| Skill | For |
-|-------|-----|
-| `tui-lipan-app-builder` | Structuring full stateful apps: components, messages, props, focus, async |
-| `tui-lipan-visual` | Designing, capturing, and reviewing how a UI looks: kept sketches + PNG inspection |
-| `tui-lipan-layout-debug` | Diagnosing measurement, rect, and caching issues |
-| `tui-lipan-widget` | Framework maintainers: authoring primitive widgets |
-
-The app-facing skills are written to work from *your* application repository -
-copy the ones you want into your project's skills directory (e.g.
-`.claude/skills/` or `.agents/skills/`) or your user-level skills directory,
-and your agent gains framework-specific build, sketch, and review workflows.
-
-The documentation is also indexed on
-[Context7](https://context7.com/websites/tui-lipan_dev): agents with the
-Context7 MCP server can pull current tui-lipan docs and examples on demand
-instead of relying on training data.
-
----
-
-## Extensibility
-
-tui-lipan ships a curated set of framework-maintained primitive widgets. Apps and
-external crates extend the UI through composition: reusable `Component`s, helper
-functions, or composite widget structs that return built-in primitives as an
-`Element` tree. Keeping primitive widgets closed is why the public API stays free
-of `ratatui` types and does not expose primitive render hooks.
-
----
-
-## Widgets Included
-
-**Layout & chrome**
-`VStack`, `HStack`, `ZStack`, `Frame`, `Center`, `Grid`, `ScrollView`, `Splitter`, `Spacer`, `Divider`, `MouseRegion`
-
-**Text & media**
-`Text`, `BigText`*, `AsciiCanvas`, `Image`*
-
-**Forms & input**
-`Input`, `TextArea`, `Button`, `Checkbox`, `Radio`, `Select`, `Slider`, `DatePicker`
-
-**Data & navigation**
-`List`, `Table`, `Tree`, `FileTree`, `Tabs`, `DraggableTabBar`, `Breadcrumb`, `SearchPalette`, `Chart`, `Sparkline`, `Heatmap`
-
-**Diagrams & graphs**
-`Graph`, `PanView`, `Flowchart`, `SequenceDiagram`, `ClassDiagram`, `StateDiagram`, `ErDiagram`, `GanttDiagram`
-
-**Feedback & overlays**
-`ProgressBar`, `Spinner`, `StatusBar`, `Badge`, `Toast`, `Modal`, `Popover`, `Tooltip`, `Accordion`, `ContextMenu`
-
-**Terminal & developer tooling**
-`Terminal`*, `ManagedTerminal`*, `LogView`, `DiffView`*, `StatusBar`
-
-*Requires optional feature - see [Optional Features](#optional-features) above.
-
----
-
-## Examples
-
-```bash
-cargo run --example <name>
-# Feature-gated examples:
-cargo run --example big_text   --features big-text
-cargo run --example image      --features image
-cargo run --example diff_hub  --features diff-view
-cargo run --example diff_inline_comments --features diff-view
-cargo run --example qr_code   --features qr-code
-cargo run --example terminal_filetree_devtools --features terminal
-cargo run --example devtools --features devtools
-```
-
-Browse [`examples/`](examples/) for runnable demos covering widgets, layouts,
-inline mode, and more - full catalog in [`docs/examples.md`](docs/examples.md).
-
----
-
-## Built with tui-lipan
-
-- **[opencode-tui](https://github.com/tui-lipan/opencode-tui)** - a full,
-  parity-focused rebuild of the OpenCode AI coding TUI: streaming transcripts,
-  markdown + syntax + diffs, rich prompt editing, modal workflows, themes, and
-  clipboard images - built end-to-end on tui-lipan. Live preview on
-  [tui-lipan.dev](https://tui-lipan.dev).
-- **[Rozi](https://github.com/tui-lipan/rozi)** - a Hyprland-style tiling
-  terminal multiplexer: dwindle/master layouts, floating and fullscreen panes,
-  workspaces, animated geometry, themes with hot reload, and real PTY panes via
-  tui-lipan's terminal primitives.
-- **[emberdeep](https://github.com/tui-lipan/emberdeep)** - a roguelike where
-  torchlight is health, clock, and field of view: truecolor `AsciiCanvas`
-  rendering, occluded lighting, deterministic particles, and animated title and
-  death screens.
-
-Built something with tui-lipan? Open a PR adding it to this list - or drop a
-note in [Discussions](https://github.com/tui-lipan/tui-lipan/discussions).
-
----
-
-## Design Constraints
-
-- No `ratatui` types in public API
-- Single-threaded UI tree runtime
-- Background work via `Command` + message channel return
-- Keyed identity for stable focus/node reuse across reorders
-
-For architecture details, see [`docs/DESIGN.md`](docs/DESIGN.md).
-
----
+Interactive WASM demos (whack-a-mole, a lazygit clone, ghost canvas) run in the
+browser at **[tui-lipan.dev](https://tui-lipan.dev)**. Every runnable example and
+the features it needs are listed in [`docs/examples.md`](docs/examples.md).
 
 ## Documentation
 
-The hosted documentation site lives at **[docs.tui-lipan.dev](https://docs.tui-lipan.dev)**
-(API reference also on [docs.rs](https://docs.rs/tui-lipan)). The same content
-is shipped in this repository:
+Hosted at **[docs.tui-lipan.dev](https://docs.tui-lipan.dev)**, with the API
+reference on [docs.rs](https://docs.rs/tui-lipan). Good starting points:
 
-| Resource | Contents |
-|----------|----------|
-| [`docs/tutorial.md`](docs/tutorial.md) | End-to-end tutorial: build a complete app |
-| [`docs/quick-start.md`](docs/quick-start.md) | Import map, feature flags, first app |
-| [`docs/components.md`](docs/components.md) | Component lifecycle, commands, async |
-| [`docs/external-programs.md`](docs/external-programs.md) | `$EDITOR`, `terminal_handoff`, `request_full_repaint` |
-| [`docs/text-editing.md`](docs/text-editing.md) | `TextEditor`, `TextInput`, undo/redo, widget integration |
-| [`docs/events.md`](docs/events.md) | Event/callback types for all widgets |
-| [`docs/enums.md`](docs/enums.md) | Enum & type reference (all variants with defaults) |
-| [`docs/perf.md`](docs/perf.md) | App performance, DevTools, tracing, and benchmarks |
-| [`docs/styling.md`](docs/styling.md) | Style, Color, themes, contrast |
-| [`docs/web-backend.md`](docs/web-backend.md) | Browser/WASM backend |
-| [`docs/focus.md`](docs/focus.md) | Focus system, key bubbling |
-| [`docs/keybindings.md`](docs/keybindings.md) | Keymap, chords, `tui_lipan::input` |
-| [`docs/widgets/`](docs/widgets/) | Per-category widget reference with typed prop tables |
-| [`docs/patterns.md`](docs/patterns.md) | Common patterns and anti-patterns |
-| [`docs/examples.md`](docs/examples.md) | Complete example catalog |
-| [`docs/DESIGN.md`](docs/DESIGN.md) | Architecture and runtime internals |
-| `examples/` | Runnable demos |
-| [`.agents/skills/`](.agents/skills/) | Ready-made skills for coding agents (app building, UI sketch, visual review) |
+- [Tutorial](docs/tutorial.md): build a complete app end to end
+- [Quick start](docs/quick-start.md): import map, feature flags, `App` config
+- [Components](docs/components.md): lifecycle, commands, async
+- [Widgets](docs/widgets/index.md): per-category reference with typed props
+- [Patterns](docs/patterns.md): common patterns and anti-patterns
+- [Design](docs/DESIGN.md): runtime architecture and internals
+
+The same Markdown ships in [`docs/`](docs/).
 
 ---
 
 ## Status
 
-tui-lipan is **approaching stability**. The widget set, runtime model, and
-public API surface are mature and used to build full applications (an
-OpenCode TUI clone, among others).
+tui-lipan is **approaching stability**: the runtime model, widget set, and
+public API are mature enough to carry full applications like Rozi.
 
-- **Versioning:** semver under `0.x.y` - minor bumps (`0.1` → `0.2`) may
-  contain breaking changes, patch bumps (`0.1.0` → `0.1.1`) will not. This
-  will tighten to standard semver on `1.0.0`.
-- **API stability:** the public surface (component lifecycle, builder API,
-  `ui!` / `rsx!` / `mockup!` macros, widget props) is stable in spirit.
-  Targeted breaking changes still happen when a clearly better design
-  emerges, but each is called out with migration steps in the GitHub Release.
-- **Compatibility:** all changes - breaking and non-breaking - are tracked
-  in [GitHub Releases](https://github.com/tui-lipan/tui-lipan/releases).
-- **Docs and examples:** kept in sync with current architecture; out-of-date
-  examples are fixed before release.
-
----
+Releases follow semver under `0.x.y`. A minor bump (`0.33` → `0.34`) may break
+the API; a patch bump never does. Every breaking change ships with migration
+steps in [GitHub Releases](https://github.com/tui-lipan/tui-lipan/releases),
+which is the changelog.
 
 ## Contributing
 
-Contributions are very welcome - bug reports, feature ideas, docs, and PRs.
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the dev loop, MSRV, and the
-release-note policy.
-
-If tui-lipan is useful to you, consider
+Bug reports, ideas, docs, and PRs are all welcome. See
+[`CONTRIBUTING.md`](CONTRIBUTING.md) for the dev loop, MSRV, and release-note
+policy. If tui-lipan is useful to you, consider
 [sponsoring its development](https://github.com/sponsors/Razuer) ♥
 
-## Security
-
-To report a security vulnerability, please email
-[security@tui-lipan.dev](mailto:security@tui-lipan.dev) - **do not open a
-public GitHub issue**. See [`SECURITY.md`](SECURITY.md) for the full policy,
-expected response times, and scope.
+To report a security vulnerability, email
+[security@tui-lipan.dev](mailto:security@tui-lipan.dev) instead of opening a
+public issue. See [`SECURITY.md`](SECURITY.md).
 
 ---
 
@@ -510,8 +330,7 @@ OpenCode, and Claude Code, in the simplest way possible, while running faster
 and doing more.
 
 tui-lipan is my answer to that question: over 230,000 lines of Rust, written by
-one person. The OpenCode clone in [Built with tui-lipan](#built-with-tui-lipan)
-is the proof it holds up.
+one person. [Rozi](#built-with-tui-lipan) is the proof it holds up.
 
 ---
 
@@ -525,25 +344,12 @@ top of tui-lipan with no obligation to open your own code. Modifications to
 tui-lipan's **own source files** must stay open under MPL-2.0 - so the framework
 itself cannot be forked into a closed, competing version.
 
-### Commercial support & services
+Priority support, custom development, sponsored features, and a non-copyleft
+commercial license are available; see [COMMERCIAL.md](COMMERCIAL.md) or contact
+<contact@tui-lipan.dev>.
 
-Priority support, custom development, sponsored features, and integration help
-are available. A non-copyleft commercial license also exists for the rare
-organization whose policy forbids any copyleft dependency - though most teams
-never need it, since MPL-2.0 already permits closed, proprietary, commercial
-apps. See [COMMERCIAL.md](COMMERCIAL.md) or contact <contact@tui-lipan.dev>.
-
-### Contribution
-
-Contributions follow **inbound = outbound**: unless you state otherwise, any
-contribution you intentionally submit is licensed under the same MPL-2.0 as the
-project, with no additional terms. You keep the copyright in your contributions
-- there is no CLA. We use a [Developer Certificate of Origin](https://developercertificate.org/)
-sign-off (`git commit -s`) instead. See [CONTRIBUTING.md](CONTRIBUTING.md).
-
-### Third-party licenses
-
-Dependencies are predominantly MIT / Apache-2.0 / MPL-2.0 and remain under their
-own terms. The notices for the optional `syntax-extra` grammar data are in
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md); redistributors enabling that
-feature must retain the applicable notices.
+Contributions follow **inbound = outbound** under MPL-2.0, with a
+[Developer Certificate of Origin](https://developercertificate.org/) sign-off
+(`git commit -s`) and no CLA. Dependencies keep their own licenses; notices for
+the optional `syntax-extra` grammar data are in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

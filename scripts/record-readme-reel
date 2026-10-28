@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# Record the README hero reel (assets/showcase/reel.gif) from runnable examples.
+#
+# Each clip is a headless recording (TUI_LIPAN_RECORD + TUI_LIPAN_RECORD_FRAMES), so the
+# reel is deterministic and needs no real terminal. Requires ffmpeg and bc.
+#
+# Usage: scripts/record-readme-reel [width]   (default width: 960)
+
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+work="$root/target/readme-reel"
+width="${1:-960}"
+fps=15
+fade=0.25
+font="$(fc-match -f '%{file}' 'JetBrains Mono:bold' 2>/dev/null || true)"
+
+# name|seconds|record script|extra cargo features
+clips=(
+    "window_manager|4.5|wait:500; key:alt+t; wait:700; key:alt+t; wait:700; key:alt+space; wait:900; key:alt+f; wait:900; key:alt+f; wait:700|"
+    "theme_showcase|5.0|wait:600; click:text~Dracula; wait:700; click:text~Gruvbox Dark; wait:700; click:text~Kanagawa; wait:700; click:text~Catppuccin Latte; wait:700; click:text~Rose Pine Dawn; wait:900|markdown,syntax-syntect"
+    "lazygit|1.8|wait:1500|"
+    "diagram_showcase|3.8|wait:700; click:15,3; wait:1100; click:30,3; wait:1100; click:36,3; wait:1100|"
+    "visual_effects|3.0|wait:700; key:1; wait:1200; key:2; wait:1200; key:2; wait:1200|"
+    "effect_scope_dot_field|4.5|wait:1500; key:right; wait:1500; key:right; wait:1500; key:right; wait:1500|"
+    "process_monitor|1.6|wait:1500|"
+    "diff_hub|1.8|wait:1500|diff-view,syntax-syntect"
+)
+
+cd "$root"
+cargo build --release --examples --features ui-snapshot-png,diff-view,markdown,syntax-syntect
+mkdir -p "$work"
+
+inputs=()
+filters=""
+labels=""
+i=0
+for clip in "${clips[@]}"; do
+    IFS='|' read -r name seconds script features <<<"$clip"
+    frames="$work/$name"
+    rm -rf "${frames:?}"
+    TUI_LIPAN_RECORD="$work/$name.cast" TUI_LIPAN_RECORD_FRAMES="$frames" \
+        TUI_LIPAN_RECORD_VIEWPORT=120x36 TUI_LIPAN_RECORD_FPS="$fps" \
+        TUI_LIPAN_RECORD_SETTLE_MS=600 TUI_LIPAN_RECORD_KEY_DELAY_MS=0 \
+        TUI_LIPAN_RECORD_SCRIPT="$script" \
+        "target/release/examples/$name" >/dev/null
+
+    label="cargo run --example $name"
+    [[ -n "$features" ]] && label+=" --features $features"
+    size=$((width / 64))
+    fade_out="$(echo "$seconds - $fade" | bc)"
+    inputs+=(-framerate "$fps" -i "$frames/frame_%05d.png")
+    filters+="[$i:v]tpad=stop_mode=clone:stop_duration=$seconds,trim=duration=$seconds,"
+    filters+="setpts=PTS-STARTPTS,scale=$width:-2:flags=lanczos,"
+    filters+="drawtext=${font:+fontfile=$font:}text='$label':fontsize=$size:fontcolor=white:"
+    filters+="box=1:boxcolor=0x000000@0.72:boxborderw=$((size / 2)):"
+    filters+="x=w-tw-$size:y=h-th-$((size * 2)),"
+    filters+="fade=t=in:st=0:d=$fade,fade=t=out:st=$fade_out:d=$fade,format=rgb24[v$i];"
+    labels+="[v$i]"
+    i=$((i + 1))
+done
+filters+="${labels}concat=n=$i:v=1:a=0[out]"
+
+# Encode the GIF from a lossless intermediate: frame-to-frame deltas only stay small when
+# unchanged cells are bit-identical, which a lossy source would break.
+ffmpeg -v error -y "${inputs[@]}" -filter_complex "$filters" -map "[out]" -r "$fps" \
+    -c:v ffv1 "$work/reel.mkv"
+ffmpeg -v error -y -i "$work/reel.mkv" -c:v libx264 -crf 20 -preset slow -pix_fmt yuv420p \
+    -movflags +faststart "$work/reel.mp4"
+ffmpeg -v error -y -i "$work/reel.mkv" \
+    -vf "split[a][b];[a]palettegen=max_colors=160:stats_mode=diff[p];[b][p]paletteuse=dither=none:diff_mode=rectangle" \
+    -loop 0 "$root/assets/showcase/reel.gif"
+
+echo "wrote assets/showcase/reel.gif ($(du -h "$root/assets/showcase/reel.gif" | cut -f1))"
+echo "wrote $work/reel.mp4 (for the website)"
