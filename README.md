@@ -314,8 +314,8 @@ public issue. See [`SECURITY.md`](SECURITY.md).
 
 ## Author
 
-tui-lipan is designed and built by **Adam Mikołajczyk**
-([@Razuer](https://github.com/Razuer)), solo.
+tui-lipan is designed and maintained by **Adam Mikołajczyk**
+([@Razuer](https://github.com/Razuer)).
 
 (The name? *Tulipan* is Polish for tulip: tui-lipan is that word with a TUI
 planted inside. Yes, the logo is a tulip. 🌷)
@@ -329,8 +329,9 @@ personalization - and can rebuild the apps I admired, like lazygit, Neovim,
 OpenCode, and Claude Code, in the simplest way possible, while running faster
 and doing more.
 
-tui-lipan is my answer to that question: over 230,000 lines of Rust, written by
-one person. [Rozi](#built-with-tui-lipan) is the proof it holds up.
+tui-lipan is my answer to that question: over 230,000 lines of Rust, built by
+one developer working with coding agents. [Rozi](#built-with-tui-lipan) is the
+proof it holds up.
 
 ---
 
