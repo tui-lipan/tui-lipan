@@ -358,6 +358,9 @@ impl Toast {
         }
 
         let mut element: Element = frame.into();
+        // A frame floors its width at its unwrapped content, and a floor beats a cap. A
+        // percentage cap cannot lower that floor before layout, so a capped toast drops it.
+        let min_width = min_width.or(max_width.map(|_| Length::Px(0)));
         if let Some(min_width) = min_width {
             element = element.min_width(min_width);
         }

@@ -230,11 +230,75 @@ pub(crate) fn min_size_constrained(
         return size;
     }
 
-    let constraints = el.layout_constraints();
     // Use the parent's offered size as the reference for resolving Percent constraints.
     // When no parent bound is given, u16::MAX means "unconstrained".
-    let avail_w = max_w.unwrap_or(u16::MAX);
-    let avail_h = max_h.unwrap_or(u16::MAX);
+    let size = measure_uncached(
+        el,
+        max_w,
+        max_h,
+        max_w.unwrap_or(u16::MAX),
+        max_h.unwrap_or(u16::MAX),
+        measure_context,
+    );
+
+    if !skip_local_cache {
+        let new_entry = Some(MeasureCacheEntry {
+            max_w,
+            max_h,
+            context: measure_context,
+            size,
+        });
+        let mut slots = el.measure_cache.get();
+        if slots[0] == new_entry {
+            return size;
+        }
+        slots[1] = slots[0];
+        slots[0] = new_entry;
+        el.measure_cache.set(slots);
+    }
+
+    if let Some(key) = global_cache_key {
+        GLOBAL_MEASURE_CACHE.with(|cache| cache.borrow_mut().insert(key, size));
+    }
+
+    size
+}
+
+/// Measure `el` within `max_w`/`max_h`, resolving its relative constraints against
+/// `avail_w`/`avail_h` instead of against the bound.
+///
+/// Overlay sizing needs the two apart: a toast capped at `Percent(80)` resolves that cap against
+/// the screen, then is measured again at its final, already-capped width. Passing that width as
+/// the parent's offered size would apply the percentage a second time.
+pub(crate) fn min_size_within(
+    el: &Element,
+    max_w: Option<u16>,
+    max_h: Option<u16>,
+    avail_w: u16,
+    avail_h: u16,
+) -> (u16, u16) {
+    if max_w.unwrap_or(u16::MAX) == avail_w && max_h.unwrap_or(u16::MAX) == avail_h {
+        return min_size_constrained(el, max_w, max_h);
+    }
+    measure_uncached(
+        el,
+        max_w,
+        max_h,
+        avail_w,
+        avail_h,
+        current_measure_context(),
+    )
+}
+
+fn measure_uncached(
+    el: &Element,
+    max_w: Option<u16>,
+    max_h: Option<u16>,
+    avail_w: u16,
+    avail_h: u16,
+    measure_context: MeasureContext,
+) -> (u16, u16) {
+    let constraints = el.layout_constraints();
 
     // Explicit `.width(Length::Px/Percent)` / `.height(...)` must participate in
     // measurement, not only reconcile. Otherwise Auto/Center parents shrink-wrap to
@@ -281,32 +345,10 @@ pub(crate) fn min_size_constrained(
     let w = resolve_requested_measure(req_w, w, avail_w);
     let h = resolve_requested_measure(req_h, h, avail_h);
 
-    let size = (
+    (
         constraints.clamp_width(w, avail_w),
         constraints.clamp_height(h, avail_h),
-    );
-
-    if !skip_local_cache {
-        let new_entry = Some(MeasureCacheEntry {
-            max_w,
-            max_h,
-            context: measure_context,
-            size,
-        });
-        let mut slots = el.measure_cache.get();
-        if slots[0] == new_entry {
-            return size;
-        }
-        slots[1] = slots[0];
-        slots[0] = new_entry;
-        el.measure_cache.set(slots);
-    }
-
-    if let Some(key) = global_cache_key {
-        GLOBAL_MEASURE_CACHE.with(|cache| cache.borrow_mut().insert(key, size));
-    }
-
-    size
+    )
 }
 
 fn min_size_unconstrained_constrained(
