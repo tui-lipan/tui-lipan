@@ -1,6 +1,6 @@
 //! Toast widget.
 
-use crate::animation::VisibilityAnimation;
+use crate::animation::{TransitionConfig, VisibilityAnimation};
 use crate::callback::Callback;
 use std::sync::Arc;
 
@@ -37,6 +37,7 @@ pub(crate) fn copy_zone_with_right_padding(rect: Rect, right_padding: u16) -> Re
 #[derive(Clone)]
 pub struct Toast {
     pub(crate) animation: VisibilityAnimation,
+    pub(crate) restack: Option<TransitionConfig>,
     /// Message content.
     pub message: Arc<str>,
     /// Duration in seconds.
@@ -86,12 +87,23 @@ impl Toast {
         self
     }
 
+    /// Glide to a new place in the stack instead of jumping there.
+    ///
+    /// Toasts stack in arrival order, so one arriving or leaving moves the others. With this set,
+    /// the toast travels from where it was painted to its new place over `transition`. A zero
+    /// duration, like the default, moves it at once. Painting only: hit-testing uses the new place.
+    pub fn restack(mut self, transition: TransitionConfig) -> Self {
+        self.restack = (!transition.duration.is_zero()).then_some(transition);
+        self
+    }
+
     /// Create a new toast with the given message.
     pub fn new(message: impl Into<Arc<str>>) -> Self {
         Self {
             message: message.into(),
             duration: 3.0,
             animation: VisibilityAnimation::new(),
+            restack: None,
             dismiss_on_click: true,
             on_click: None,
             copyable: false,

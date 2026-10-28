@@ -124,6 +124,12 @@ effect needs different behavior in each direction. The factory runs on the UI th
 capture `Rc` configuration. The complete frame, including its title and border, receives the effect.
 At full visibility the factory is idle and the frame paints normally.
 
+Use `.slide(dx, dy)` to travel in as well. Hidden content sits `dx` of its own width and `dy` of
+its own height away from its place and moves there as visibility rises; exit travels back out.
+`.slide(1.0, 0.0)` enters from one full width to the right. The fade or custom effect runs alongside
+the slide, which is painting only: hit-testing uses the resting rectangle, and content past the
+screen edge is clipped. Toasts, modals, and popovers slide; inline hosts ignore it.
+
 A custom `CellEffect` can implement `uses_backdrop` and `apply_with_backdrop` to restore the live
 cells beneath erased areas. Its backdrop includes the dialog's current dim. The backdrop dim follows
 visibility separately, so a custom effect does not receive an additional automatic content fade.
@@ -193,7 +199,7 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
 | `.push(Toast)` | Show toast, returns `OverlayId` |
 | `.renew(id)` | Restart an active toast's dismissal countdown without redrawing it |
 | `.dismiss(id)` | Dismiss a specific toast |
-| `.dismiss_immediately(id)` | Remove a toast synchronously without its exit transition |
+| `.dismiss_immediately(id)` | Remove a toast synchronously without its exit transition; returns whether it was still on screen |
 | `.clear()` | Clear all toasts |
 
 Use `.dismiss_immediately(id)` before pushing a replacement when the old and new toast must never
@@ -204,6 +210,23 @@ its exit transition.
 managed-overlay clock. Timeout dismissal and hover reversal use the recipe's exit and entry timing.
 `dismiss_immediately` still removes the toast synchronously. Without customization, timing and fade
 behavior remain unchanged.
+
+Toasts stack in arrival order, so one arriving or leaving moves the others. `Toast::restack(TransitionConfig)`
+makes a toast glide to its new place instead of jumping there. Pair it with a recipe that slides
+toward the placement's edge for toasts that enter and leave from the side:
+
+```rust
+use std::time::Duration;
+use tui_lipan::prelude::*;
+
+let motion = TransitionConfig {
+    duration: Duration::from_millis(220),
+    easing: Easing::EaseOutQuad,
+};
+let toast = Toast::new("Saved")
+    .animation(VisibilityAnimation::new().enter(motion).slide(1.0, 0.0))
+    .restack(motion);
+```
 
 **ToastPlacement:** `TopStart`, `TopCenter`, `TopEnd`, `BottomStart`, `BottomCenter`, `BottomEnd` (default).
 
@@ -231,6 +254,8 @@ behavior remain unchanged.
 | `min_width` | `Length` | Minimum width |
 | `max_width` | `Length` | Maximum width |
 | `wrap` | `bool` | Wrap long messages |
+| `animation` | `VisibilityAnimation` | Entry and exit timing, slide, and custom effects |
+| `restack` | `TransitionConfig` | Glide to a new stack position; zero duration (the default) jumps |
 | `decoration` / `decorations` | `FrameDecoration` | Edge decorations |
 
 Use `Toast::new("...").copyable(true)` for error strings, paths, command output, or IDs that

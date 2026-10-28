@@ -57,6 +57,7 @@ impl VisibilityAnimationContext {
 pub struct VisibilityAnimation {
     pub(crate) enter: TransitionConfig,
     pub(crate) exit: TransitionConfig,
+    slide: (f32, f32),
     effect: Option<Rc<dyn Fn(VisibilityAnimationContext) -> VisualEffect>>,
 }
 
@@ -66,6 +67,7 @@ impl PartialEq for VisibilityAnimation {
             && self.enter.easing == other.enter.easing
             && self.exit.duration == other.exit.duration
             && self.exit.easing == other.exit.easing
+            && self.slide == other.slide
             && match (&self.effect, &other.effect) {
                 (None, None) => true,
                 (Some(left), Some(right)) => Rc::ptr_eq(left, right),
@@ -85,6 +87,7 @@ impl Default for VisibilityAnimation {
                 duration: Duration::from_millis(100),
                 easing: Easing::EaseInQuad,
             },
+            slide: (0.0, 0.0),
             effect: None,
         }
     }
@@ -95,6 +98,7 @@ impl fmt::Debug for VisibilityAnimation {
         f.debug_struct("VisibilityAnimation")
             .field("enter", &self.enter)
             .field("exit", &self.exit)
+            .field("slide", &self.slide)
             .field("custom_effect", &self.effect.is_some())
             .finish()
     }
@@ -118,6 +122,21 @@ impl VisibilityAnimation {
         self
     }
 
+    /// Travel in from `dx` of the content's own width and `dy` of its own height away.
+    ///
+    /// Hidden content rests at that offset and moves to its place as visibility rises, so `(1.0,
+    /// 0.0)` enters from one full width to the right and leaves the same way. Negative values move
+    /// left and up. The distance follows the enter and exit easing, and the fade or custom effect
+    /// still runs alongside it.
+    ///
+    /// Painting only: hit-testing uses the resting rectangle, and content travelling past the
+    /// screen edge is clipped there. Overlay hosts (toasts, modals, and popovers) travel; inline
+    /// hosts ignore it.
+    pub fn slide(mut self, dx: f32, dy: f32) -> Self {
+        self.slide = (finite_or_zero(dx), finite_or_zero(dy));
+        self
+    }
+
     /// Replace the content fade with an effect evaluated at the current visibility each draw.
     ///
     /// The effect applies to the complete host content, including its title and border, after
@@ -132,6 +151,21 @@ impl VisibilityAnimation {
         self
     }
 
+    pub(crate) fn slides(&self) -> bool {
+        self.slide != (0.0, 0.0)
+    }
+
+    /// Paint offset, in cells, of content `width` by `height` at visibility `progress`.
+    pub(crate) fn slide_offset_cells(&self, progress: f32, width: u16, height: u16) -> (i16, i16) {
+        let hidden = 1.0 - progress.clamp(0.0, 1.0);
+        let cells = |fraction: f32, extent: u16| {
+            (fraction * f32::from(extent) * hidden)
+                .round()
+                .clamp(f32::from(i16::MIN), f32::from(i16::MAX)) as i16
+        };
+        (cells(self.slide.0, width), cells(self.slide.1, height))
+    }
+
     pub(crate) fn paints_effect(&self) -> bool {
         self.effect.is_some()
     }
@@ -142,6 +176,10 @@ impl VisibilityAnimation {
         }
         self.effect.as_ref().map(|effect| effect(context))
     }
+}
+
+fn finite_or_zero(value: f32) -> f32 {
+    if value.is_finite() { value } else { 0.0 }
 }
 
 /// Node-owned timing survives view rebuilds and freezes the active recipe until it settles.
@@ -264,6 +302,18 @@ mod tests {
             duration: Duration::from_millis(ms),
             easing: Easing::Linear,
         }
+    }
+
+    #[test]
+    fn slide_offsets_scale_with_hidden_share_and_own_size() {
+        let recipe = VisibilityAnimation::new().slide(1.0, -0.5);
+        assert_eq!(recipe.slide_offset_cells(0.0, 20, 4), (20, -2));
+        assert_eq!(recipe.slide_offset_cells(0.5, 20, 4), (10, -1));
+        assert_eq!(recipe.slide_offset_cells(1.0, 20, 4), (0, 0));
+        assert!(recipe.slides());
+        let ignored = VisibilityAnimation::new().slide(f32::NAN, f32::INFINITY);
+        assert!(!ignored.slides());
+        assert_ne!(recipe, VisibilityAnimation::new());
     }
 
     #[test]

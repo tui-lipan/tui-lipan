@@ -352,16 +352,12 @@ impl<C: Component> AppRunner<C> {
             }
         }
 
-        let overlay_tick_interval = {
+        let overlay_interval = {
             let overlay_manager = self.core.overlay_manager.borrow();
-            if overlay_manager.has_active_transitions() {
-                Duration::from_millis(33)
-            } else {
-                Duration::from_millis(100)
-            }
+            overlay_tick_interval(&overlay_manager)
         };
 
-        if self.clock_elapsed(self.animation.last_overlay_tick) >= overlay_tick_interval {
+        if self.clock_elapsed(self.animation.last_overlay_tick) >= overlay_interval {
             let tick_result = self
                 .core
                 .overlay_manager
@@ -377,11 +373,7 @@ impl<C: Component> AppRunner<C> {
         {
             let overlay_manager = self.core.overlay_manager.borrow();
             if !overlay_manager.entries().is_empty() {
-                let interval = if overlay_manager.has_active_transitions() {
-                    Duration::from_millis(33)
-                } else {
-                    Duration::from_millis(100)
-                };
+                let interval = overlay_tick_interval(&overlay_manager);
                 poll_timeout = poll_timeout.min(
                     interval.saturating_sub(self.clock_elapsed(self.animation.last_overlay_tick)),
                 );
@@ -400,5 +392,16 @@ impl<C: Component> AppRunner<C> {
         }
 
         poll_timeout
+    }
+}
+
+/// A fade reads smoothly at 30 FPS; a slide moves whole cells and needs 60 to avoid stepping.
+fn overlay_tick_interval(overlay_manager: &crate::overlay::OverlayManager) -> Duration {
+    if overlay_manager.has_active_motion() {
+        Duration::from_millis(16)
+    } else if overlay_manager.has_active_transitions() {
+        Duration::from_millis(33)
+    } else {
+        Duration::from_millis(100)
     }
 }

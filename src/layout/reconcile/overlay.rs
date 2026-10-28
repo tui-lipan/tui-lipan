@@ -292,11 +292,11 @@ pub(crate) fn reconcile_overlay_entries(ctx: &mut ReconcileCtx<'_>, overlays: &[
             }
         };
 
-        let reuse = tree
-            .overlay_roots()
+        let reuse = overlay_state
+            .previous_entry_roots
             .iter()
-            .find(|root| root.overlay_id == Some(entry.id))
-            .map(|root| root.id);
+            .find(|(overlay_id, _)| *overlay_id == entry.id)
+            .map(|&(_, root)| root);
         crate::widgets::internal::prepare_visibility_reflow(tree, &entry.content, reuse);
         overlay_state.sized_root = true;
         let id = reconcile_element(

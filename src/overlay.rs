@@ -326,6 +326,14 @@ impl OverlayManager {
             .any(|entry| entry.opacity_transition.is_some())
     }
 
+    /// Whether a running transition moves an overlay, which needs a finer cadence than a fade to
+    /// read as motion rather than as steps.
+    pub(crate) fn has_active_motion(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|entry| entry.opacity_transition.is_some() && entry.animation.slides())
+    }
+
     pub(crate) fn push(&mut self, mut entry: OverlayEntry) -> OverlayId {
         let now = self.now();
         let id = self.allocate_id();
@@ -585,7 +593,12 @@ impl OverlayManager {
             DismissPolicy::None
         };
         let on_click = toast.on_click.clone();
+        let restack = toast.restack;
         let content = toast.into_element();
+        let content = match restack {
+            Some(transition) => restacking(content, transition),
+            None => content,
+        };
         let entry = OverlayEntry {
             id: OverlayId(0),
             order: 0,
@@ -616,6 +629,16 @@ impl OverlayManager {
         };
         self.push(entry)
     }
+}
+
+/// Wrap toast content so the overlay root carries a position transition. The overlay reconcile
+/// reuses the root by toast id, so a changed stack offset glides from the previous rectangle.
+/// `Animated` reports its child's size constraints, so the toast measures as it would unwrapped.
+fn restacking(content: Element, transition: crate::animation::TransitionConfig) -> Element {
+    crate::widgets::Animated::new(content)
+        .position_transition(true)
+        .transition(transition)
+        .into()
 }
 
 pub(crate) fn hovered_toast(
@@ -656,9 +679,10 @@ impl ToastHandle {
     /// Dismiss a specific toast synchronously, without its exit transition.
     ///
     /// Use this when replacing an existing toast in place would otherwise leave the fading toast
-    /// visible beside its replacement.
-    pub fn dismiss_immediately(&self, id: OverlayId) {
-        let _ = self.manager.borrow_mut().dismiss_immediately(id);
+    /// visible beside its replacement. Returns whether the toast was still on screen, so a
+    /// replacement can take over its place without arriving again.
+    pub fn dismiss_immediately(&self, id: OverlayId) -> bool {
+        self.manager.borrow_mut().dismiss_immediately(id)
     }
 
     /// Restart a toast's countdown without redrawing it, returning whether it was still alive.
