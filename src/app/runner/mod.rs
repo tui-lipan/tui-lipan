@@ -1843,7 +1843,16 @@ impl<C: Component> AppRunner<C> {
             let mut advanced = std::time::Duration::ZERO;
             let mut dirty_view = false;
             while advanced < frame_span {
-                let tick = (frame_span - advanced).min(MAX_TICK);
+                // An effect phase steps at most once per tick, so a tick longer than the
+                // effect interval would play the effect slower than the event loop does.
+                let max_tick = self
+                    .core
+                    .tree
+                    .animated_effect_scope_interval()
+                    .map_or(MAX_TICK, |interval| {
+                        interval.clamp(Duration::from_millis(1), MAX_TICK)
+                    });
+                let tick = (frame_span - advanced).min(max_tick);
                 self.core.ctx.env().advance_clock(tick);
                 let (_, _, needs_layout) =
                     crate::app::animation::tick_tree_animations(&mut self.core.tree, tick);
@@ -1854,6 +1863,8 @@ impl<C: Component> AppRunner<C> {
                     .animations
                     .tick(tick, self.core.ctx.env().clock.elapsed());
                 dirty_view |= needs_layout || transitions.view_changed;
+                // The captured frame reads the effect phase directly, so no render is needed.
+                self.advance_effect_phase();
                 let revealed = self.core.ctx.command_chord_revealed();
                 if revealed != self.animation.command_chord_revealed {
                     self.animation.command_chord_revealed = revealed;

@@ -11485,3 +11485,65 @@ fn click_only_checkbox_requests_pointer_motion_only_in_interactive_mode() {
         assert_eq!(runner.needs_mouse_motion(), needed, "mode {mode:?}");
     }
 }
+
+#[derive(Clone)]
+struct RunnerRainbowScope;
+
+impl Component for RunnerRainbowScope {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        crate::widgets::EffectScope::new()
+            .effect(crate::style::VisualEffect::RainbowWave {
+                blend: 1.0,
+                frequency: 1.0,
+                speed: 1.0,
+                axis: crate::style::EffectAxis::Horizontal,
+            })
+            .child(Text::new("rainbow wave"))
+            .into()
+    }
+}
+
+#[test]
+fn headless_recording_advances_animated_effect_scopes() {
+    let bounds = Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 2,
+    };
+    let mut runner = AppRunner::new(App::new(), RunnerRainbowScope, ());
+    runner.core.ctx.set_viewport(bounds);
+    runner.last_bounds = bounds;
+    runner.core.init();
+    runner.headless_render(bounds);
+
+    let first = runner.headless_frame(bounds);
+    let mut cast = crate::capture::CastRecording::new(bounds.w, bounds.h);
+    let mut frames = super::headless_record::FrameSink::new(None).expect("inert frame sink");
+    let mut clock = Duration::ZERO;
+    runner
+        .headless_hold(
+            &mut cast,
+            &mut frames,
+            &mut clock,
+            Duration::from_millis(200),
+            Duration::from_millis(50),
+            bounds,
+        )
+        .expect("hold records");
+
+    // 200ms at the 16ms effect cadence is about a dozen phase steps; the env-var recorder
+    // once skipped them entirely and recorded animated effects as a still image.
+    assert!(runner.core.ctx.env().effect_phase.get() >= 10);
+    assert_ne!(runner.headless_frame(bounds).cells, first.cells);
+}
