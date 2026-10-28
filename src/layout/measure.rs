@@ -303,6 +303,7 @@ fn same_size_child(el: &Element) -> Option<&Element> {
         ElementKind::Group(g) => Some(g.child.as_ref()),
         ElementKind::ThemeProvider(tp) => Some(&tp.child),
         ElementKind::ContextProvider(cp) => Some(&cp.child),
+        ElementKind::EffectScope(scope) => scope.child.as_deref(),
         ElementKind::Animated(animated)
             if animated.visibility.is_none()
                 && animated.visibility_layout.is_none()
