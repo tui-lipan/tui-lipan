@@ -6,7 +6,7 @@ pub mod node;
 pub mod reconcile;
 
 pub(crate) use self::box_metrics::{FrameGeometry, FrameJoinOverlap, compute_frame_geometry};
-pub(crate) use self::layout::{measure_frame, measure_frame_chrome};
+pub(crate) use self::layout::{measure_frame, measure_frame_chrome, measure_frame_within};
 pub(crate) use self::reconcile::reconcile_frame;
 
 use crate::callback::Callback;

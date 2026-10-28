@@ -14,12 +14,12 @@ use crate::widgets::internal::{
     measure_center_pin, measure_chart, measure_checkbox, measure_class_diagram, measure_divider,
     measure_document_view, measure_document_view_constrained, measure_drag_source,
     measure_draggable_tab_bar, measure_drop_target, measure_effect_scope, measure_er_diagram,
-    measure_flow, measure_flowchart, measure_frame, measure_gantt_diagram, measure_graph,
-    measure_grid, measure_heatmap, measure_hex_area, measure_input, measure_mouse_region,
-    measure_pan_view, measure_progress_bar, measure_scroll_view, measure_sequence_diagram,
-    measure_slider, measure_spacer, measure_sparkline, measure_spinner, measure_splitter,
-    measure_stack, measure_state_diagram, measure_status_bar_layout, measure_tabs,
-    measure_text_area, measure_text_area_constrained,
+    measure_flow, measure_flowchart, measure_frame, measure_frame_within, measure_gantt_diagram,
+    measure_graph, measure_grid, measure_heatmap, measure_hex_area, measure_input,
+    measure_mouse_region, measure_pan_view, measure_progress_bar, measure_scroll_view,
+    measure_sequence_diagram, measure_slider, measure_spacer, measure_sparkline, measure_spinner,
+    measure_splitter, measure_stack, measure_state_diagram, measure_status_bar_layout,
+    measure_tabs, measure_text_area, measure_text_area_constrained,
 };
 
 use crate::style::{Edge, Length};
@@ -230,11 +230,101 @@ pub(crate) fn min_size_constrained(
         return size;
     }
 
-    let constraints = el.layout_constraints();
     // Use the parent's offered size as the reference for resolving Percent constraints.
     // When no parent bound is given, u16::MAX means "unconstrained".
-    let avail_w = max_w.unwrap_or(u16::MAX);
-    let avail_h = max_h.unwrap_or(u16::MAX);
+    let size = measure_uncached(
+        el,
+        max_w,
+        max_h,
+        max_w.unwrap_or(u16::MAX),
+        max_h.unwrap_or(u16::MAX),
+        measure_context,
+    );
+
+    if !skip_local_cache {
+        let new_entry = Some(MeasureCacheEntry {
+            max_w,
+            max_h,
+            context: measure_context,
+            size,
+        });
+        let mut slots = el.measure_cache.get();
+        if slots[0] == new_entry {
+            return size;
+        }
+        slots[1] = slots[0];
+        slots[0] = new_entry;
+        el.measure_cache.set(slots);
+    }
+
+    if let Some(key) = global_cache_key {
+        GLOBAL_MEASURE_CACHE.with(|cache| cache.borrow_mut().insert(key, size));
+    }
+
+    size
+}
+
+/// Measure `el` within `max_w`/`max_h`, resolving its relative constraints against
+/// `avail_w`/`avail_h` instead of against the bound.
+///
+/// Overlay sizing needs the two apart: a toast capped at `Percent(80)` resolves that cap against
+/// the screen, then is measured again at its final, already-capped width. Passing that width as
+/// the parent's offered size would apply the percentage a second time.
+pub(crate) fn min_size_within(
+    el: &Element,
+    max_w: Option<u16>,
+    max_h: Option<u16>,
+    avail_w: u16,
+    avail_h: u16,
+) -> (u16, u16) {
+    if max_w.unwrap_or(u16::MAX) == avail_w && max_h.unwrap_or(u16::MAX) == avail_h {
+        return min_size_constrained(el, max_w, max_h);
+    }
+    // A wrapper measures its child against the bound alone, which would lose `avail`.
+    if let Some(child) = same_size_child(el) {
+        return min_size_within(child, max_w, max_h, avail_w, avail_h);
+    }
+    measure_uncached(
+        el,
+        max_w,
+        max_h,
+        avail_w,
+        avail_h,
+        current_measure_context(),
+    )
+}
+
+/// The child of a wrapper that always measures exactly as that child does.
+fn same_size_child(el: &Element) -> Option<&Element> {
+    if el.layout.max_w.is_some() || el.layout.max_h.is_some() {
+        return None;
+    }
+    match &el.kind {
+        ElementKind::Group(g) => Some(g.child.as_ref()),
+        ElementKind::ThemeProvider(tp) => Some(&tp.child),
+        ElementKind::ContextProvider(cp) => Some(&cp.child),
+        ElementKind::EffectScope(scope) => scope.child.as_deref(),
+        ElementKind::Animated(animated)
+            if animated.visibility.is_none()
+                && animated.visibility_layout.is_none()
+                && animated.height.is_none()
+                && animated.layout_height.is_none() =>
+        {
+            Some(animated.child.as_ref())
+        }
+        _ => None,
+    }
+}
+
+fn measure_uncached(
+    el: &Element,
+    max_w: Option<u16>,
+    max_h: Option<u16>,
+    avail_w: u16,
+    avail_h: u16,
+    measure_context: MeasureContext,
+) -> (u16, u16) {
+    let constraints = el.layout_constraints();
 
     // Explicit `.width(Length::Px/Percent)` / `.height(...)` must participate in
     // measurement, not only reconcile. Otherwise Auto/Center parents shrink-wrap to
@@ -272,6 +362,18 @@ pub(crate) fn min_size_constrained(
                 },
             )
         }
+    } else if let ElementKind::Frame(frame) = &el.kind {
+        // The effective bound already holds the frame's own percentage size; the frame resolves
+        // that percentage against the parent's offered size and stays within the bound.
+        let basis = |avail: u16| (avail != u16::MAX).then_some(avail);
+        measure_frame_within(
+            frame,
+            effective_max_w,
+            effective_max_h,
+            basis(avail_w),
+            basis(avail_h),
+        )
+        .outer_size()
     } else {
         // Pass the effective (tighter) bounds so children are measured within
         // both the parent's available space and this element's own max constraints.
@@ -281,32 +383,10 @@ pub(crate) fn min_size_constrained(
     let w = resolve_requested_measure(req_w, w, avail_w);
     let h = resolve_requested_measure(req_h, h, avail_h);
 
-    let size = (
+    (
         constraints.clamp_width(w, avail_w),
         constraints.clamp_height(h, avail_h),
-    );
-
-    if !skip_local_cache {
-        let new_entry = Some(MeasureCacheEntry {
-            max_w,
-            max_h,
-            context: measure_context,
-            size,
-        });
-        let mut slots = el.measure_cache.get();
-        if slots[0] == new_entry {
-            return size;
-        }
-        slots[1] = slots[0];
-        slots[0] = new_entry;
-        el.measure_cache.set(slots);
-    }
-
-    if let Some(key) = global_cache_key {
-        GLOBAL_MEASURE_CACHE.with(|cache| cache.borrow_mut().insert(key, size));
-    }
-
-    size
+    )
 }
 
 fn min_size_unconstrained_constrained(
@@ -405,10 +485,30 @@ mod tests {
     use crate::style::Length;
     use crate::widgets::{
         Button, Center, Checkbox, ContentFormatter, DocumentView, Flow, FormatInput,
-        FormattedBlock, FormattedDocument, FormattedLine, Input, Overflow, Spacer, Text, VStack,
+        FormattedBlock, FormattedDocument, FormattedLine, Frame, Input, Overflow, Spacer, Text,
+        VStack,
     };
 
     use super::{intrinsic_main, min_size_constrained};
+
+    #[test]
+    fn a_percentage_width_frame_measures_its_wrap_at_its_own_width() {
+        // 80% of 40 is 32, leaving 30 inner columns: four 6-letter words a row, so two rows.
+        // Resolving the 80% again against 32 would leave 23 columns and three rows.
+        let frame: Element = Frame::new()
+            .border(true)
+            .width(Length::Percent(80))
+            .height(Length::Auto)
+            .child(
+                Text::new("aaaaaa aaaaaa aaaaaa aaaaaa aaaaaa aaaaaa aaaaaa aaaaaa")
+                    .overflow(Overflow::Wrap),
+            )
+            .into();
+        // Lift the frame's floor at its unwrapped width so the percentage decides it.
+        let frame = frame.min_width(Length::Px(0));
+
+        assert_eq!(min_size_constrained(&frame, Some(40), None), (32, 4));
+    }
 
     #[test]
     fn intrinsic_main_reports_atomic_text_as_single_content_size() {

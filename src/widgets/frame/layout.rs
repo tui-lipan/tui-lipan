@@ -2,7 +2,7 @@ use crate::layout::measure::{min_size_constrained, with_frame_measure_context};
 use crate::style::{Length, Rect};
 use crate::widgets::Frame;
 
-use super::box_metrics::{FrameJoinOverlap, compute_frame_geometry, frame_inner_max_size};
+use super::box_metrics::{FrameJoinOverlap, compute_frame_geometry, frame_inner_max_size_within};
 
 /// Calculate the minimal chrome height for a Frame (without content).
 ///
@@ -72,10 +72,23 @@ pub(crate) fn measure_frame(
     max_w: Option<u16>,
     max_h: Option<u16>,
 ) -> super::box_metrics::FrameGeometry {
+    measure_frame_within(frame, max_w, max_h, max_w, max_h)
+}
+
+/// Measure `frame` within `max_w`/`max_h`, resolving a percentage width or height against
+/// `basis_w`/`basis_h`, the parent's offered size, rather than against the bound. A bound that
+/// already holds the frame's own percentage would otherwise apply it a second time.
+pub(crate) fn measure_frame_within(
+    frame: &Frame,
+    max_w: Option<u16>,
+    max_h: Option<u16>,
+    basis_w: Option<u16>,
+    basis_h: Option<u16>,
+) -> super::box_metrics::FrameGeometry {
     let decoration_outside = frame.props.decoration_outside_padding();
     let border_deco_inset = frame.props.decoration_border_content_inset();
 
-    let (inner_max_w, inner_max_h) = frame_inner_max_size(frame, max_w, max_h);
+    let (inner_max_w, inner_max_h) = frame_inner_max_size_within(frame, max_w, max_h, basis_w);
 
     let (content_w, content_h) = frame
         .child
@@ -148,17 +161,17 @@ pub(crate) fn measure_frame(
         outer_w = px;
     }
     if let Length::Percent(pct) = frame.props.width
-        && let Some(parent_w) = max_w
+        && let Some(parent_w) = basis_w
     {
-        outer_w = ((parent_w as u32 * pct.min(100) as u32) / 100).min(u16::MAX as u32) as u16;
+        outer_w = percent_of(parent_w, pct).min(max_w.unwrap_or(u16::MAX));
     }
     if let Length::Px(px) = frame.props.height {
         outer_h = px;
     }
     if let Length::Percent(pct) = frame.props.height
-        && let Some(parent_h) = max_h
+        && let Some(parent_h) = basis_h
     {
-        outer_h = ((parent_h as u32 * pct.min(100) as u32) / 100).min(u16::MAX as u32) as u16;
+        outer_h = percent_of(parent_h, pct).min(max_h.unwrap_or(u16::MAX));
     }
 
     let rect = Rect {
@@ -169,6 +182,10 @@ pub(crate) fn measure_frame(
     };
 
     compute_frame_geometry(&frame.props, rect, FrameJoinOverlap::default(), true)
+}
+
+fn percent_of(size: u16, percent: u16) -> u16 {
+    ((size as u32 * percent.min(100) as u32) / 100).min(u16::MAX as u32) as u16
 }
 
 /// Widest border line this frame needs, in columns.

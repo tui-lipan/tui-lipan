@@ -115,7 +115,8 @@ pub(crate) fn reconcile_frame(
         std::mem::take(&mut node.children)
     };
 
-    let has_parent = tree.node(id).parent.is_some();
+    // A root frame resolves its own percentages, unless an overlay layout already did.
+    let has_parent = tree.node(id).parent.is_some() || overlay_state.sized_root;
     let (join_left, join_top) = frame_join_overlap(tree, id, frame);
     let join_overlap = FrameJoinOverlap {
         left: join_left,
