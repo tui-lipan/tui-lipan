@@ -84,6 +84,20 @@ fn locate(backend: &TestBackend<Host>, needle: &str) -> Option<(usize, usize)> {
         })
 }
 
+/// Assert the toast is `width` wide and exactly as tall as its wrapped message: no empty rows.
+fn assert_fits_its_message(backend: &TestBackend<Host>, width: u16) {
+    let lines = backend.capture_frame().to_fixed_grid_lines();
+    let top = lines.iter().position(|line| line.contains('╭')).unwrap();
+    let bottom = lines.iter().position(|line| line.contains('╰')).unwrap();
+    assert_eq!(lines[top].trim().chars().count(), usize::from(width));
+    assert!(
+        lines[top + 1..bottom]
+            .iter()
+            .all(|line| !line.trim().trim_matches(['│', ' ']).is_empty()),
+        "{lines:#?}"
+    );
+}
+
 fn sliding(enter_ms: u64, exit_ms: u64) -> Toast {
     Toast::new("").duration(10.0).animation(
         VisibilityAnimation::new()
@@ -217,11 +231,34 @@ fn a_restacking_toast_keeps_a_percentage_width_cap() {
     let mut wrapped = backend(surface(Toast::new("")).restack(timing(200)));
     for backend in [&mut plain, &mut wrapped] {
         backend
+            .dispatch(Msg::Push("a long message that wraps across several lines"))
+            .unwrap();
+        backend.advance(Duration::from_millis(50));
+    }
+    assert_fits_its_message(&wrapped, WIDTH * 4 / 5);
+    assert_eq!(plain.capture_frame(), wrapped.capture_frame());
+}
+
+#[test]
+fn a_restacking_toast_keeps_a_percentage_width() {
+    let surface = |toast: Toast| {
+        toast
+            .duration(10.0)
+            // Lift the frame's intrinsic minimum so the requested width decides it.
+            .min_width(Length::Px(0))
+            .width(Length::Percent(80))
+            .animation(VisibilityAnimation::new().enter(timing(0)))
+    };
+    let mut plain = backend(surface(Toast::new("")));
+    let mut wrapped = backend(surface(Toast::new("")).restack(timing(200)));
+    for backend in [&mut plain, &mut wrapped] {
+        backend
             .dispatch(Msg::Push(
                 "a long message that wraps across several lines of the toast",
             ))
             .unwrap();
         backend.advance(Duration::from_millis(50));
     }
+    assert_fits_its_message(&wrapped, WIDTH * 4 / 5);
     assert_eq!(plain.capture_frame(), wrapped.capture_frame());
 }
