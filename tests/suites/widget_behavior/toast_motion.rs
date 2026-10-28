@@ -254,7 +254,7 @@ fn a_restacking_toast_keeps_a_percentage_width() {
     for backend in [&mut plain, &mut wrapped] {
         backend
             .dispatch(Msg::Push(
-                "a long message that wraps across several lines of the toast",
+                "aaaaaa aaaaaa aaaaaa aaaaaa aaaaaa aaaaaa aaaaaa aaaaaa",
             ))
             .unwrap();
         backend.advance(Duration::from_millis(50));
