@@ -202,3 +202,26 @@ fn a_restacking_toast_paints_like_a_plain_one_at_rest() {
     }
     assert_eq!(plain.capture_frame(), wrapped.capture_frame());
 }
+
+#[test]
+fn a_restacking_toast_keeps_a_percentage_width_cap() {
+    let surface = |toast: Toast| {
+        toast
+            .duration(10.0)
+            // Lift the frame's intrinsic minimum so the percentage cap decides the width.
+            .min_width(Length::Px(0))
+            .max_width(Length::Percent(80))
+            .animation(VisibilityAnimation::new().enter(timing(0)))
+    };
+    let mut plain = backend(surface(Toast::new("")));
+    let mut wrapped = backend(surface(Toast::new("")).restack(timing(200)));
+    for backend in [&mut plain, &mut wrapped] {
+        backend
+            .dispatch(Msg::Push(
+                "a long message that wraps across several lines of the toast",
+            ))
+            .unwrap();
+        backend.advance(Duration::from_millis(50));
+    }
+    assert_eq!(plain.capture_frame(), wrapped.capture_frame());
+}

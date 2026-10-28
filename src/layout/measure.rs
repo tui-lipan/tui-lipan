@@ -246,8 +246,11 @@ pub(crate) fn min_size_constrained(
 
     // Resolve the element's own max constraints to pixels, then take the tighter of
     // the element's resolved max, requested size, and the parent's offered size.
-    let element_max_w = constraints.max_w.and_then(|l| l.resolve_as_max(avail_w));
-    let element_max_h = constraints.max_h.and_then(|l| l.resolve_as_max(avail_h));
+    // A transparent wrapper (Group, Animated, ...) reports its child's constraints;
+    // tightening by those here would let the child resolve a relative bound such as
+    // `Percent(50)` a second time, against the already-halved size.
+    let element_max_w = el.layout.max_w.and_then(|l| l.resolve_as_max(avail_w));
+    let element_max_h = el.layout.max_h.and_then(|l| l.resolve_as_max(avail_h));
     let effective_max_w = [element_max_w, max_w, requested_max_w]
         .into_iter()
         .flatten()

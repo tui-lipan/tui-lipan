@@ -632,16 +632,13 @@ impl OverlayManager {
 }
 
 /// Wrap toast content so the overlay root carries a position transition. The overlay reconcile
-/// reuses the root by toast id, so a changed stack offset glides from the previous rectangle. The
-/// wrapper takes the content's own size constraints, keeping the toast's measured size unchanged.
+/// reuses the root by toast id, so a changed stack offset glides from the previous rectangle.
+/// `Animated` reports its child's size constraints, so the toast measures as it would unwrapped.
 fn restacking(content: Element, transition: crate::animation::TransitionConfig) -> Element {
-    let layout = content.layout;
-    Element::from(
-        crate::widgets::Animated::new(content)
-            .position_transition(true)
-            .transition(transition),
-    )
-    .with_layout(layout)
+    crate::widgets::Animated::new(content)
+        .position_transition(true)
+        .transition(transition)
+        .into()
 }
 
 pub(crate) fn hovered_toast(
