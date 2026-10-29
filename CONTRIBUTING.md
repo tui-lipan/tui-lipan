@@ -183,6 +183,13 @@ After implementation:
 7. After verification and note generation succeed, Trusted Publishing
    publishes `tui-lipan-macro` and then `tui-lipan`. The workflow creates the
    GitHub Release from the same frozen notes.
+8. Once the release workflow succeeds, `.github/workflows/website.yml` moves
+   the `website` branch to the new tag, and Cloudflare Pages redeploys
+   docs.tui-lipan.dev from it. The docs site therefore describes the latest
+   release, not `main`. To publish documentation fixes before the next
+   release, run the Website workflow by hand with `commits` set to the
+   documentation commits from `main` (or a range such as `vX.Y.Z..<commit>`);
+   each must touch only `docs/` or `README.md`.
 
 ## Filing issues
 

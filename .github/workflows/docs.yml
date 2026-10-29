@@ -1,8 +1,9 @@
 name: Docs site
 
 # The docs/ folder is the source for docs.tui-lipan.dev. Cloudflare Pages
-# deploys it; this job only proves it still builds, which is what catches a
-# renamed page breaking a cross-reference (VitePress fails on dead links).
+# deploys it from the `website` branch, which website.yml moves to each release;
+# this job only proves it still builds, which is what catches a renamed page
+# breaking a cross-reference (VitePress fails on dead links).
 
 on:
   push:

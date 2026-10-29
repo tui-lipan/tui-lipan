@@ -403,3 +403,6 @@ and test suite while the `/changelog` command has Rosie write notes from each
 PR Summary since the previous published release. Generated notes
 are validated and must succeed before either crate can publish through crates.io
 Trusted Publishing. The same frozen notes become the GitHub Release body.
+After a successful release, `.github/workflows/website.yml` moves the `website`
+branch (which Cloudflare Pages deploys as docs.tui-lipan.dev) to the new tag. Run
+it by hand with `commits` to publish `docs/`/`README.md`-only fixes early.
