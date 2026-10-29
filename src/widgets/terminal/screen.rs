@@ -20,7 +20,6 @@ use alacritty_terminal::term::{
 };
 use alacritty_terminal::vte::Parser as SemanticVteParser;
 use alacritty_terminal::vte::ansi::Processor as VteProcessor;
-#[cfg(feature = "terminal-images")]
 use alacritty_terminal::vte::ansi::Timeout as _;
 use alacritty_terminal::vte::ansi::{
     Color as TermColor, CursorShape as TermCursorShape, CursorStyle as TermCursorStyle, NamedColor,
@@ -1832,7 +1831,10 @@ impl TerminalScreen {
             evicted_total += self.feed_grid_with_prompt_boundaries(&bytes[start..end]);
             match stop {
                 ChunkStop::Respond(response) => self.listener.responses.borrow_mut().push(response),
-                ChunkStop::RecordMarks(until) => self.record_semantic_marks_until(until),
+                ChunkStop::RecordMarks(until) => {
+                    evicted_total += self
+                        .at_committed_cursor(|screen| screen.record_semantic_marks_until(until));
+                }
             }
             start = end;
         }
@@ -1855,7 +1857,8 @@ impl TerminalScreen {
             let evicted = self.feed_grid(&bytes[start..end]);
             self.drop_evicted_semantic_marks(evicted);
             evicted_total += evicted;
-            self.apply_prompt_boundary(boundary);
+            evicted_total +=
+                self.at_committed_cursor(|screen| screen.apply_prompt_boundary(boundary));
             start = end;
         }
 
@@ -2091,7 +2094,27 @@ impl TerminalScreen {
         (before, after)
     }
 
-    #[cfg(feature = "terminal-images")]
+    /// Run `read` against the grid as the bytes fed so far left it, even inside a synchronized
+    /// update, and return the lines that committing the update evicted.
+    ///
+    /// VTE buffers grid, cursor, and mode changes between BSU/ESU markers, so a cursor read in the
+    /// middle of one sees the previous frame. Commit the prefix, run `read`, then resume
+    /// synchronization for the rest of the frame, as [`Self::apply_graphics`] does.
+    fn at_committed_cursor(&mut self, read: impl FnOnce(&mut Self)) -> usize {
+        let synchronized = self.processor.sync_timeout().pending_timeout()
+            || self.processor.sync_bytes_count() != 0;
+        if !synchronized {
+            read(self);
+            return 0;
+        }
+        let evicted = self.stop_vte_sync();
+        self.drop_evicted_semantic_marks(evicted);
+        #[cfg(feature = "terminal-images")]
+        self.settle_graphics(evicted);
+        read(self);
+        evicted + self.advance_vte(b"\x1b[?2026h")
+    }
+
     fn stop_vte_sync(&mut self) -> usize {
         let mut ledger = LedgerTerm::new(
             &mut self.term,
@@ -7157,6 +7180,55 @@ mod tests {
             screen.export_last_command_output().as_deref(),
             Some("one\ntwo")
         );
+    }
+
+    #[test]
+    fn marks_inside_a_synchronized_update_land_on_their_own_lines() {
+        let frame =
+            b"\x1b[?2026h\x1b]133;A\x1b\\$ ls\r\n\x1b]133;C\x1b\\one\r\n\x1b[?2026l".as_slice();
+        let end = b"\x1b]133;D;0\x1b\\\x1b]133;A\x1b\\$ ".as_slice();
+        let split = frame.len() - b"one\r\n\x1b[?2026l".len();
+        for chunks in [
+            vec![[frame, end].concat()],
+            vec![
+                frame[..split].to_vec(),
+                frame[split..].to_vec(),
+                end.to_vec(),
+            ],
+        ] {
+            let mut screen = TerminalScreen::new(10, 20, 50);
+            for chunk in chunks {
+                screen.process_bytes(&chunk);
+            }
+
+            assert_eq!(screen.export_last_command_output().as_deref(), Some("one"));
+        }
+    }
+
+    #[test]
+    fn reset_inside_a_synchronized_update_keeps_the_marks_after_it() {
+        let mut screen = TerminalScreen::new(10, 20, 50);
+        screen
+            .process_bytes(b"\x1b]133;A\x1b\\$ old\r\n\x1b]133;C\x1b\\stale\r\n\x1b]133;D;0\x1b\\");
+        screen.process_bytes(
+            b"\x1b[?2026h\x1bc\x1b]133;A\x1b\\$ ls\r\n\x1b]133;C\x1b\\two\r\n\x1b[?2026l\x1b]133;D;0\x1b\\",
+        );
+
+        let kinds: Vec<_> = screen
+            .semantic_marks()
+            .iter()
+            .map(|mark| mark.kind)
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                SemanticMarkKind::Prompt,
+                SemanticMarkKind::OutputStart,
+                SemanticMarkKind::OutputEnd
+            ],
+            "the reset drops the marks before it and only those"
+        );
+        assert_eq!(screen.export_last_command_output().as_deref(), Some("two"));
     }
 
     #[test]
