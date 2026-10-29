@@ -1041,7 +1041,8 @@ let _ = screen.try_for_each_text_line(0, total, |absolute, line| {
 ## Semantic marks (OSC 133)
 
 When the shell emits [OSC 133](https://gitlab.freedesktop.org/Per_Bothner/specifications/blob/master/proposals/prompts-data-model.md)
-prompt markers, `TerminalScreen` records them against the same absolute line space:
+prompt markers, `TerminalScreen` records each one at the line the cursor was on when the marker
+arrived, in the primary screen's absolute line space:
 
 ```rust
 pub struct SemanticMark {
@@ -1055,10 +1056,16 @@ pub struct SemanticMark {
 |--------|---------|
 | `semantic_marks()` | Retained marks, oldest first |
 | `last_command_output_range()` | `Option<(start, end)>` for the last command's output |
-| `export_last_command_output()` | That range as text |
+| `export_last_command_output()` | That range as text, read from the primary screen (`&mut self`) |
 
 While a command is still running (an `OutputStart` with no matching `OutputEnd`), the
 range extends to the live bottom.
+
+While a full-screen program holds the alternate screen, the running command is that program,
+and none of what it draws reaches the primary screen. The range is then the most recent command
+that completed before it, and `export_last_command_output()` reads it from the primary screen
+without disturbing the alternate one. `export_text()` reads whichever screen is active, so use
+`export_last_command_output()` rather than pairing it with the range yourself.
 
 ```rust
 if let Some(output) = screen.export_last_command_output() {
