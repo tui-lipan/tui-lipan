@@ -20,7 +20,6 @@ use alacritty_terminal::term::{
 };
 use alacritty_terminal::vte::Parser as SemanticVteParser;
 use alacritty_terminal::vte::ansi::Processor as VteProcessor;
-#[cfg(feature = "terminal-images")]
 use alacritty_terminal::vte::ansi::Timeout as _;
 use alacritty_terminal::vte::ansi::{
     Color as TermColor, CursorShape as TermCursorShape, CursorStyle as TermCursorStyle, NamedColor,
@@ -214,6 +213,14 @@ fn normalize_terminal_identity(identity: &str) -> Arc<str> {
     } else {
         Arc::from(identity)
     }
+}
+
+/// Something to do once the grid has been fed up to a byte offset in a PTY chunk.
+enum ChunkStop {
+    /// Queue a reply the child asked for, after the bytes before the request.
+    Respond(Vec<u8>),
+    /// Record line marks for the semantic events before this count.
+    RecordMarks(usize),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1377,9 +1384,9 @@ impl TerminalScreen {
         }
         self.grid_mutated = false;
         let before = self.mutation_baseline();
-        let response_boundaries = self.response_boundaries(bytes);
-        let evicted = if !response_boundaries.is_empty() {
-            self.feed_grid_with_response_boundaries(bytes, &response_boundaries)
+        let stops = self.chunk_stops(bytes);
+        let evicted = if !stops.is_empty() {
+            self.feed_grid_with_stops(bytes, stops)
         } else {
             self.feed_grid_with_prompt_boundaries(bytes)
         };
@@ -1391,15 +1398,8 @@ impl TerminalScreen {
             self.history_epoch = self.history_epoch.saturating_add(1);
             self.alt_screen = alt_screen;
         }
-        if self.term.mode().contains(TermMode::ALT_SCREEN) {
-            // Alt-screen programs still emit OSC 133, but those marks belong to a grid
-            // with no scrollback and no absolute-line space of its own. Discard them
-            // rather than leaving them pending, or they get replayed against
-            // main-screen coordinates the moment the alt screen is torn down.
-            self.discard_pending_semantic_marks();
+        if alt_screen {
             self.active_prompt_mark = None;
-        } else {
-            self.record_semantic_marks_from_pending();
         }
         self.scrollback_offset = self.term.grid().display_offset();
         self.mouse_mode = mouse_mode_from_term(*self.term.mode(), self.pixel_mouse);
@@ -1786,12 +1786,17 @@ impl TerminalScreen {
         self.damage.take()
     }
 
-    fn response_boundaries(&mut self, bytes: &[u8]) -> Vec<(usize, Vec<u8>)> {
+    fn chunk_stops(&mut self, bytes: &[u8]) -> Vec<(usize, ChunkStop)> {
         let mut boundaries: Vec<_> = self
             .program_status_scanner
             .scan(bytes, &mut self.program_status)
             .into_iter()
-            .map(|end| (end, super::program_status::RESPONSE.to_vec()))
+            .map(|end| {
+                (
+                    end,
+                    ChunkStop::Respond(super::program_status::RESPONSE.to_vec()),
+                )
+            })
             .collect();
         let mut processed = 0;
         while processed < bytes.len() {
@@ -1803,27 +1808,34 @@ impl TerminalScreen {
             }
             processed += consumed;
             if let Some(response) = self.semantic.pointer.response.take() {
-                boundaries.push((processed, response));
+                boundaries.push((processed, ChunkStop::Respond(response)));
             }
             if self.semantic.take_xtversion_query() && self.xtversion_enabled {
-                boundaries.push((processed, self.xtversion_response()));
+                boundaries.push((processed, ChunkStop::Respond(self.xtversion_response())));
+            }
+            if self.semantic.take_phase_change() {
+                boundaries.push((
+                    processed,
+                    ChunkStop::RecordMarks(self.semantic.event_count()),
+                ));
             }
         }
         boundaries.sort_by_key(|(end, _)| *end);
         boundaries
     }
 
-    fn feed_grid_with_response_boundaries(
-        &mut self,
-        bytes: &[u8],
-        boundaries: &[(usize, Vec<u8>)],
-    ) -> usize {
+    fn feed_grid_with_stops(&mut self, bytes: &[u8], stops: Vec<(usize, ChunkStop)>) -> usize {
         let mut evicted_total = 0;
         let mut start = 0;
-        for (end, response) in boundaries {
-            let end = *end;
+        for (end, stop) in stops {
             evicted_total += self.feed_grid_with_prompt_boundaries(&bytes[start..end]);
-            self.listener.responses.borrow_mut().push(response.clone());
+            match stop {
+                ChunkStop::Respond(response) => self.listener.responses.borrow_mut().push(response),
+                ChunkStop::RecordMarks(until) => {
+                    evicted_total += self
+                        .at_committed_cursor(|screen| screen.record_semantic_marks_until(until));
+                }
+            }
             start = end;
         }
         evicted_total + self.feed_grid_with_prompt_boundaries(&bytes[start..])
@@ -1845,7 +1857,8 @@ impl TerminalScreen {
             let evicted = self.feed_grid(&bytes[start..end]);
             self.drop_evicted_semantic_marks(evicted);
             evicted_total += evicted;
-            self.apply_prompt_boundary(boundary);
+            evicted_total +=
+                self.at_committed_cursor(|screen| screen.apply_prompt_boundary(boundary));
             start = end;
         }
 
@@ -2081,7 +2094,27 @@ impl TerminalScreen {
         (before, after)
     }
 
-    #[cfg(feature = "terminal-images")]
+    /// Run `read` against the grid as the bytes fed so far left it, even inside a synchronized
+    /// update, and return the lines that committing the update evicted.
+    ///
+    /// VTE buffers grid, cursor, and mode changes between BSU/ESU markers, so a cursor read in the
+    /// middle of one sees the previous frame. Commit the prefix, run `read`, then resume
+    /// synchronization for the rest of the frame, as [`Self::apply_graphics`] does.
+    fn at_committed_cursor(&mut self, read: impl FnOnce(&mut Self)) -> usize {
+        let synchronized = self.processor.sync_timeout().pending_timeout()
+            || self.processor.sync_bytes_count() != 0;
+        if !synchronized {
+            read(self);
+            return 0;
+        }
+        let evicted = self.stop_vte_sync();
+        self.drop_evicted_semantic_marks(evicted);
+        #[cfg(feature = "terminal-images")]
+        self.settle_graphics(evicted);
+        read(self);
+        evicted + self.advance_vte(b"\x1b[?2026h")
+    }
+
     fn stop_vte_sync(&mut self) -> usize {
         let mut ledger = LedgerTerm::new(
             &mut self.term,
@@ -2768,25 +2801,7 @@ impl TerminalScreen {
 
         let was_alt = self.term.mode().contains(TermMode::ALT_SCREEN);
         let result = if was_alt {
-            let saved_selection = self.term.selection.clone();
-            let saved_alt_cursor = self.term.grid().cursor.clone();
-            let saved_alt_saved_cursor = self.term.grid().saved_cursor.clone();
-            let alt_repaint = self.export_active_grid_repaint(false);
-            self.term.swap_alt();
-            let result = self.write_primary_replay(writer);
-
-            // Switching primary -> alt clears the alt grid, so immediately
-            // replay the synthesized alt repaint to restore the source screen.
-            self.term.swap_alt();
-            let mut repair_processor: VteProcessor = VteProcessor::new();
-            repair_processor.advance(&mut self.term, &alt_repaint);
-            self.term.grid_mut().cursor = saved_alt_cursor;
-            self.term.grid_mut().saved_cursor = saved_alt_saved_cursor;
-            self.term.selection = saved_selection;
-            // Both swaps and the repair repaint mark emulator damage even though export leaves the
-            // source grid unchanged. Real PTY damage was already folded into `self.damage` by the
-            // processing path that produced it.
-            self.term.reset_damage();
+            let result = self.with_primary_grid(|screen| screen.write_primary_replay(writer));
             result.and_then(|()| {
                 writer.write_all(b"\x1b[?1049h")?;
                 self.semantic.pointer.write_stack(writer, true)?;
@@ -3566,28 +3581,49 @@ impl TerminalScreen {
 
     /// Half-open absolute-line range `[start, end)` of the last command's output.
     ///
-    /// Uses the last `OutputStart` paired with a following `OutputEnd`. While a command is still
-    /// running (start without end), falls back to `[start, total_text_lines())`.
+    /// Lines address the primary screen. Uses the last `OutputStart` paired with a following
+    /// `OutputEnd`. While a command is still running (start without end), falls back to
+    /// `[start, total_text_lines())`.
+    ///
+    /// While a full-screen program holds the alternate screen, the running command is that
+    /// program, and none of what it draws reaches the primary screen. The range is then the most
+    /// recent command that completed before it.
     pub fn last_command_output_range(&self) -> Option<(usize, usize)> {
-        let start_idx = self
+        let alt_screen = self.term.mode().contains(TermMode::ALT_SCREEN);
+        let mut starts = self
             .semantic_marks
             .iter()
-            .rposition(|mark| mark.kind == SemanticMarkKind::OutputStart)?;
-        let start = self.semantic_marks[start_idx].absolute_line;
-        let end = self
-            .semantic_marks
+            .enumerate()
+            .rev()
+            .filter(|(_, mark)| mark.kind == SemanticMarkKind::OutputStart);
+        if !alt_screen {
+            let (start_idx, mark) = starts.next()?;
+            let end = self
+                .output_end_after(start_idx)
+                .unwrap_or_else(|| self.total_text_lines());
+            return Some((mark.absolute_line, end.max(mark.absolute_line)));
+        }
+        starts.find_map(|(start_idx, mark)| {
+            let end = self.output_end_after(start_idx)?;
+            Some((mark.absolute_line, end.max(mark.absolute_line)))
+        })
+    }
+
+    fn output_end_after(&self, start_idx: usize) -> Option<usize> {
+        self.semantic_marks
             .iter()
             .skip(start_idx + 1)
+            .take_while(|mark| mark.kind != SemanticMarkKind::OutputStart)
             .find(|mark| mark.kind == SemanticMarkKind::OutputEnd)
             .map(|mark| mark.absolute_line)
-            .unwrap_or_else(|| self.total_text_lines());
-        Some((start, end.max(start)))
     }
 
     /// Plain text of [`last_command_output_range`](Self::last_command_output_range), when known.
-    pub fn export_last_command_output(&self) -> Option<String> {
+    ///
+    /// Reads the primary screen even while the alternate screen is active.
+    pub fn export_last_command_output(&mut self) -> Option<String> {
         let (start, end) = self.last_command_output_range()?;
-        Some(self.export_text(start, end))
+        Some(self.with_primary_grid(|screen| screen.export_text(start, end)))
     }
 
     fn cursor_absolute_line(&self) -> usize {
@@ -3624,24 +3660,21 @@ impl TerminalScreen {
         });
     }
 
-    /// Consume pending semantic events without recording marks for them.
-    fn discard_pending_semantic_marks(&mut self) {
-        self.semantic.take_reset_at();
-        self.semantic_events_seen = self.semantic.event_count();
-    }
-
-    fn record_semantic_marks_from_pending(&mut self) {
-        let absolute_line = self.cursor_absolute_line();
-        // Events from before a reset in this chunk describe lines the reset erased; only those
-        // after it are marks on the fresh screen. The grid has already dropped the old marks.
-        let reset_at = self.semantic.take_reset_at();
+    /// Record marks for the semantic events before `until`, with the grid fed up to them.
+    ///
+    /// Marks are only recorded on the primary screen. Alt-screen programs still emit OSC 133, but
+    /// that grid has no scrollback and no absolute-line space of its own, so those events are
+    /// consumed without a mark. A reset earlier in the chunk has already cleared older marks.
+    fn record_semantic_marks_until(&mut self, until: usize) {
         let events = self.semantic.peek_events();
-        let from = self
-            .semantic_events_seen
-            .max(reset_at.unwrap_or(0))
-            .min(events.len());
-        let pending: Vec<_> = events[from..].to_vec();
-        self.semantic_events_seen = self.semantic.event_count();
+        let until = until.min(events.len());
+        let from = self.semantic_events_seen.min(until);
+        self.semantic_events_seen = until;
+        if self.term.mode().contains(TermMode::ALT_SCREEN) {
+            return;
+        }
+        let absolute_line = self.cursor_absolute_line();
+        let pending: Vec<_> = events[from..until].to_vec();
         for event in pending {
             let TerminalSemanticEvent::CommandPhaseChanged(phase) = event else {
                 continue;
@@ -3787,6 +3820,34 @@ impl TerminalScreen {
     /// set or it was reset. Updated as bytes are processed.
     pub fn title(&self) -> Option<String> {
         self.listener.title.borrow().clone()
+    }
+
+    /// Run `read` with the primary grid active, then put the alternate screen back as it was.
+    ///
+    /// `alacritty_terminal` only exposes the active grid. Switching back to the alternate screen
+    /// clears it, so its contents are restored from a synthesized repaint.
+    fn with_primary_grid<R>(&mut self, read: impl FnOnce(&Self) -> R) -> R {
+        if !self.term.mode().contains(TermMode::ALT_SCREEN) {
+            return read(self);
+        }
+        let saved_selection = self.term.selection.clone();
+        let saved_alt_cursor = self.term.grid().cursor.clone();
+        let saved_alt_saved_cursor = self.term.grid().saved_cursor.clone();
+        let alt_repaint = self.export_active_grid_repaint(false);
+        self.term.swap_alt();
+        let result = read(self);
+
+        self.term.swap_alt();
+        let mut repair_processor: VteProcessor = VteProcessor::new();
+        repair_processor.advance(&mut self.term, &alt_repaint);
+        self.term.grid_mut().cursor = saved_alt_cursor;
+        self.term.grid_mut().saved_cursor = saved_alt_saved_cursor;
+        self.term.selection = saved_selection;
+        // Both swaps and the repair repaint mark emulator damage even though the grids end up
+        // unchanged. Real PTY damage was already folded into `self.damage` by the processing path
+        // that produced it.
+        self.term.reset_damage();
+        result
     }
 
     fn write_primary_replay<W: Write>(&self, writer: &mut W) -> io::Result<()> {
@@ -7087,18 +7148,125 @@ mod tests {
 
     #[test]
     fn alt_screen_marks_do_not_leak_onto_main_screen() {
-        let mut screen = TerminalScreen::new(5, 20, 50);
-        screen.process_bytes(b"\x1b[?1049h");
-        screen.process_bytes(b"\x1b]133;A\x1b\\\x1b]133;C\x1b\\");
-        screen.process_bytes(b"altstuff\r\n");
-        screen.process_bytes(b"\x1b[?1049l");
-        screen.process_bytes(b"back-on-main\r\n");
+        let marks = b"\x1b]133;A\x1b\\\x1b]133;C\x1b\\".as_slice();
+        for chunks in [
+            vec![b"\x1b[?1049h".to_vec(), marks.to_vec()],
+            vec![[b"\x1b[?1049h".as_slice(), marks].concat()],
+        ] {
+            let mut screen = TerminalScreen::new(5, 20, 50);
+            for chunk in chunks {
+                screen.process_bytes(&chunk);
+            }
+            screen.process_bytes(b"altstuff\r\n");
+            screen.process_bytes(b"\x1b[?1049l");
+            screen.process_bytes(b"back-on-main\r\n");
 
-        assert!(
-            screen.semantic_marks().is_empty(),
-            "alt-screen OSC 133 must not be replayed against main-screen lines"
+            assert!(
+                screen.semantic_marks().is_empty(),
+                "alt-screen OSC 133 must not be replayed against main-screen lines"
+            );
+            assert_eq!(screen.last_command_output_range(), None);
+        }
+    }
+
+    #[test]
+    fn marks_in_one_chunk_land_on_their_own_lines() {
+        let mut screen = TerminalScreen::new(10, 20, 50);
+        screen.process_bytes(
+            b"\x1b]133;A\x1b\\$ ls\r\n\x1b]133;C\x1b\\one\r\ntwo\r\n\x1b]133;D;0\x1b\\\x1b]133;A\x1b\\$ ",
         );
-        assert_eq!(screen.last_command_output_range(), None);
+
+        assert_eq!(
+            screen.export_last_command_output().as_deref(),
+            Some("one\ntwo")
+        );
+    }
+
+    #[test]
+    fn marks_inside_a_synchronized_update_land_on_their_own_lines() {
+        let frame =
+            b"\x1b[?2026h\x1b]133;A\x1b\\$ ls\r\n\x1b]133;C\x1b\\one\r\n\x1b[?2026l".as_slice();
+        let end = b"\x1b]133;D;0\x1b\\\x1b]133;A\x1b\\$ ".as_slice();
+        let split = frame.len() - b"one\r\n\x1b[?2026l".len();
+        for chunks in [
+            vec![[frame, end].concat()],
+            vec![
+                frame[..split].to_vec(),
+                frame[split..].to_vec(),
+                end.to_vec(),
+            ],
+        ] {
+            let mut screen = TerminalScreen::new(10, 20, 50);
+            for chunk in chunks {
+                screen.process_bytes(&chunk);
+            }
+
+            assert_eq!(screen.export_last_command_output().as_deref(), Some("one"));
+        }
+    }
+
+    #[test]
+    fn reset_inside_a_synchronized_update_keeps_the_marks_after_it() {
+        let mut screen = TerminalScreen::new(10, 20, 50);
+        screen
+            .process_bytes(b"\x1b]133;A\x1b\\$ old\r\n\x1b]133;C\x1b\\stale\r\n\x1b]133;D;0\x1b\\");
+        screen.process_bytes(
+            b"\x1b[?2026h\x1bc\x1b]133;A\x1b\\$ ls\r\n\x1b]133;C\x1b\\two\r\n\x1b[?2026l\x1b]133;D;0\x1b\\",
+        );
+
+        let kinds: Vec<_> = screen
+            .semantic_marks()
+            .iter()
+            .map(|mark| mark.kind)
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                SemanticMarkKind::Prompt,
+                SemanticMarkKind::OutputStart,
+                SemanticMarkKind::OutputEnd
+            ],
+            "the reset drops the marks before it and only those"
+        );
+        assert_eq!(screen.export_last_command_output().as_deref(), Some("two"));
+    }
+
+    #[test]
+    fn full_screen_program_resolves_to_the_command_before_it() {
+        let mut screen = TerminalScreen::new(4, 20, 50);
+        screen.process_bytes(b"\x1b]133;A\x1b\\$ ls\r\n");
+        screen.process_bytes(b"\x1b]133;C\x1b\\");
+        screen.process_bytes(b"files\r\n");
+        screen.process_bytes(b"\x1b]133;D;0\x1b\\\x1b]133;A\x1b\\$ vim\r\n");
+        // Shells emit `C` just before running the command, so it shares a chunk with the
+        // program's switch to the alternate screen.
+        screen.process_bytes(b"\x1b]133;C\x1b\\\x1b[?1049h\x1b[2;3Hvim-ui");
+
+        let starts = screen
+            .semantic_marks()
+            .iter()
+            .filter(|mark| mark.kind == SemanticMarkKind::OutputStart)
+            .count();
+        assert_eq!(starts, 2, "the full-screen program's start mark is kept");
+        assert_eq!(
+            screen.export_last_command_output().as_deref(),
+            Some("files")
+        );
+        assert!(screen.term.mode().contains(TermMode::ALT_SCREEN));
+        assert_eq!(
+            screen.text_lines(0, screen.total_text_lines()),
+            vec!["", "  vim-ui", "", ""],
+            "reading the primary screen must leave the alternate screen as it was"
+        );
+        assert_eq!(screen.term.grid().cursor.point.line, Line(1));
+        assert_eq!(screen.term.grid().cursor.point.column.0, 8);
+
+        screen.process_bytes(b"\x1b[?1049l\x1b]133;D;0\x1b\\\x1b]133;A\x1b\\$ ");
+        assert_eq!(
+            screen.export_last_command_output().as_deref(),
+            Some(""),
+            "a full-screen program leaves no output on the primary screen"
+        );
     }
 
     #[test]

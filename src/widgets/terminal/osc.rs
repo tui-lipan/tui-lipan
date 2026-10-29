@@ -129,12 +129,12 @@ pub(super) struct SemanticObserver {
     events: Vec<TerminalSemanticEvent>,
     xtversion_query: bool,
     pub(super) pointer: super::pointer::PointerState,
-    /// Where in `events` the child last sent `RIS`, until the screen takes it.
+    /// Set when the command phase changes, until the screen takes it.
     ///
-    /// This parser reads a whole chunk before the grid does, so by the time the grid resets, the
-    /// events on both sides of the reset are already queued. The screen records line marks from
-    /// them afterwards, and needs to know which ones belong to the lines the reset erased.
-    reset_at: Option<usize>,
+    /// This parser reads ahead of the grid. Stopping at each phase change lets the screen advance
+    /// the grid to the same byte and record the mark where the sequence actually arrived, on the
+    /// screen that was active then.
+    phase_changed: bool,
 }
 
 impl SemanticObserver {
@@ -147,17 +147,11 @@ impl SemanticObserver {
     }
 
     pub(super) fn drain_events(&mut self) -> Vec<TerminalSemanticEvent> {
-        // Whatever preceded a reset left with the drained events.
-        if self.reset_at.is_some() {
-            self.reset_at = Some(0);
-        }
         std::mem::take(&mut self.events)
     }
 
-    /// The index into [`Self::peek_events`] at which the child last sent `RIS`, if it has since
-    /// the previous call. Events before it describe lines the reset erased.
-    pub(super) fn take_reset_at(&mut self) -> Option<usize> {
-        self.reset_at.take()
+    pub(super) fn take_phase_change(&mut self) -> bool {
+        std::mem::take(&mut self.phase_changed)
     }
 
     pub(super) fn peek_events(&self) -> &[TerminalSemanticEvent] {
@@ -185,6 +179,7 @@ impl SemanticObserver {
             self.state.command_phase = phase;
             self.events
                 .push(TerminalSemanticEvent::CommandPhaseChanged(phase));
+            self.phase_changed = true;
         }
     }
 
@@ -314,7 +309,6 @@ impl Perform for SemanticObserver {
 
     fn esc_dispatch(&mut self, intermediates: &[u8], ignore: bool, byte: u8) {
         if !ignore && byte == b'c' && intermediates.is_empty() {
-            self.reset_at = Some(self.events.len());
             self.pointer = Default::default();
         }
     }
@@ -333,7 +327,7 @@ impl Perform for SemanticObserver {
     }
 
     fn terminated(&self) -> bool {
-        self.xtversion_query || self.pointer.response.is_some()
+        self.xtversion_query || self.pointer.response.is_some() || self.phase_changed
     }
 }
 
