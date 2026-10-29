@@ -263,6 +263,11 @@ fn numbered_panel_frame(pane: Pane) -> Frame {
     panel_frame().header_left(format!("[{}]", pane.number()))
 }
 
+// `header_left` holds one label, so the number and title share it.
+fn titled_panel_frame(pane: Pane) -> Frame {
+    panel_frame().header_left(format!("[{}]─{}", pane.number(), pane.title()))
+}
+
 fn panel_list(
     items: impl IntoIterator<Item = ListItem>,
     selected: usize,
@@ -489,10 +494,9 @@ impl Component for LazygitDemo {
         };
         let stash_len = stash_items.len();
 
-        let status_panel: Element = numbered_panel_frame(Pane::Status)
+        let status_panel: Element = titled_panel_frame(Pane::Status)
             .height(Length::Auto)
             .focus_min_height(3)
-            .header_left(Pane::Status.title())
             .focusable(true)
             .child(rsx! {
                 VStack {
@@ -620,8 +624,7 @@ impl Component for LazygitDemo {
             .into();
         let commits_panel = commits_panel.key(Pane::Commits.key());
 
-        let stash_panel: Element = numbered_panel_frame(Pane::Stash)
-            .header_left(Pane::Stash.title())
+        let stash_panel: Element = titled_panel_frame(Pane::Stash)
             .footer_right(count_status(ctx.state.stash_selected, stash_len))
             .height(Length::Flex(1))
             .unfocused_height(Length::Px(3))
@@ -636,8 +639,7 @@ impl Component for LazygitDemo {
             .into();
         let stash_panel = stash_panel.key(Pane::Stash.key());
 
-        let log_panel: Element = numbered_panel_frame(Pane::Log)
-            .header_left(Pane::Log.title())
+        let log_panel: Element = titled_panel_frame(Pane::Log)
             .height(Length::Flex(2))
             .focus_min_height(FOCUSED_PANEL_MIN_HEIGHT)
             .width(Length::Flex(1))
