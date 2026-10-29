@@ -143,7 +143,7 @@ dunce = "1.0.5"
 typed-path = "0.12.3"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-ratatui = { version = "0.30", default-features = false, features = ["crossterm", "scrolling-regions", "layout-cache", "underline-color"] }
+ratatui = { version = "0.30.1", default-features = false, features = ["crossterm", "scrolling-regions", "layout-cache", "underline-color"] }
 syntect = { version = "5.2", optional = true, default-features = false, features = ["default-onig"] }
 two-face = { version = "0.5.1", optional = true, default-features = false, features = ["syntect-onig"] }
 crossterm = "0.29"
@@ -160,7 +160,7 @@ signal-hook = "0.3"
 wl-clipboard-rs = { version = "0.9.3", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-ratatui = { version = "0.30", default-features = false, features = ["layout-cache", "underline-color"] }
+ratatui = { version = "0.30.1", default-features = false, features = ["layout-cache", "underline-color"] }
 syntect = { version = "5.2", optional = true, default-features = false, features = ["default-fancy"] }
 two-face = { version = "0.5.1", optional = true, default-features = false, features = ["syntect-fancy"] }
 
