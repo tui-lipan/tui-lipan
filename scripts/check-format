@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+#
+# Everything the CI Format job checks, for CI and the pre-push hook alike. Add a check here, never to
+# the workflow, so the two cannot disagree. Runs every check and reports all failures together.
+
+set -uo pipefail
+
+cd "$(dirname "$0")/.." || exit 1
+
+check_macro_and_rust_formatting() {
+    find src tests benches examples tui-lipan-macro -name '*.rs' -print0 \
+        | xargs -0 -r ./scripts/format-rust-with-macros --check
+}
+
+failed=()
+
+check() {
+    local name=$1
+    shift
+    if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+        printf '::group::%s\n' "$name"
+    else
+        printf '==> %s\n' "$name"
+    fi
+    "$@"
+    local status=$?
+    if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+        printf '::endgroup::\n'
+    fi
+    if [[ "$status" -ne 0 ]]; then
+        failed+=("$name")
+    fi
+}
+
+check "Widget variant parity" python3 scripts/check-widget-variant-parity.py
+check "Generated NodeKind delegation" python3 scripts/generate-node-kind-delegate-arms.py
+check "Generated widget defaults" python3 scripts/generate-widget-defaults.py --check
+check "Widget style slots" python3 scripts/check-widget-style-slots.py
+check "Disabled/focus rule" python3 scripts/check-disabled-focus.py
+check "children()/child() ordering" python3 scripts/check-children-replace.py
+check "Release tooling" python3 -m unittest scripts.test_release_notes scripts.test_bump_version
+check "Macro and Rust formatting" check_macro_and_rust_formatting
+check "Documented feature tables" python3 scripts/check-feature-tables.py
+check "Documented install snippets" python3 scripts/check-install-snippets.py
+check "Workspace formatting" cargo fmt --all -- --check
+
+if [[ "${#failed[@]}" -ne 0 ]]; then
+    printf '\ncheck-format: failed:\n' >&2
+    printf '  - %s\n' "${failed[@]}" >&2
+    exit 1
+fi
