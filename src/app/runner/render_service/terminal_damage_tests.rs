@@ -2106,6 +2106,101 @@ impl crate::style::CellEffect for ImageMaskProbe {
 
 #[cfg(feature = "terminal-images")]
 #[derive(Clone)]
+struct DimmedImagePane {
+    screen: Rc<RefCell<TerminalScreen>>,
+}
+
+#[cfg(feature = "terminal-images")]
+impl Component for DimmedImagePane {
+    type Properties = ();
+    type State = ();
+    type Message = ();
+    fn create_state(&self, _: &()) {}
+    fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+    fn view(&self, _: &Context<Self>) -> Element {
+        crate::widgets::EffectScope::new()
+            .dim_by(0.25)
+            .child(
+                crate::widgets::Terminal::new()
+                    .screen(self.screen.clone())
+                    .scrollbar(false),
+            )
+            .into()
+    }
+}
+
+/// A picture that is not a whole number of cells is composed into fixed tiles, which reach well
+/// past it. Drawn as Unicode placeholders, every tile replaced its cells and erased the text around
+/// the picture, wherever the tile was transparent.
+#[cfg(feature = "terminal-images")]
+#[test]
+fn a_dimmed_unaligned_image_leaves_the_text_around_it() {
+    use base64::Engine as _;
+    let _host = crate::backend::ratatui_backend::image_support::test_kitty_host((10, 20), true);
+    let bounds = Rect {
+        x: 0,
+        y: 0,
+        w: 40,
+        h: 20,
+    };
+    let screen = Rc::new(RefCell::new(TerminalScreen::new(20, 40, 0)));
+    screen
+        .borrow_mut()
+        .set_cell_size(crate::widgets::TerminalCellSize::new(10, 20));
+    let pixels =
+        base64::engine::general_purpose::STANDARD.encode([255, 0, 0, 255].repeat(105 * 105));
+    screen.borrow_mut().process_bytes(
+        format!(
+            "\x1b[?25l\x1b[2;2Habove\x1b[6;1H\x1b_Ga=T,f=32,s=105,v=105,i=7,q=2;{pixels}\x1b\\\
+             \x1b[13;2Hbelow"
+        )
+        .as_bytes(),
+    );
+    let component = DimmedImagePane { screen };
+    let mut runner = AppRunner::new(App::new(), component.clone(), ());
+    runner.core = RuntimeCore::new_test(
+        component,
+        (),
+        bounds,
+        Theme::default(),
+        SurfaceMode::Fullscreen,
+        Rc::new(StdCell::new(false)),
+    )
+    .into();
+    runner.core.init();
+    runner.core.render_element(bounds, None, None, None);
+    let mut terminal = crate::backend::ratatui_backend::create_test_terminal(40, 20).unwrap();
+    let cursor = StdCell::new(None);
+    let rendered = runner.with_render_context(&cursor, |ctx| {
+        terminal.draw(|f| render(f, ctx)).unwrap().buffer.clone()
+    });
+    let output = terminal.backend().test_output();
+    let output = String::from_utf8_lossy(&output);
+
+    let text = |x: u16, y: u16| -> String {
+        (x..x + 5)
+            .map(|x| rendered[(x, y)].symbol().to_owned())
+            .collect()
+    };
+    assert!(
+        text(1, 1).ends_with('e') && output.contains("above"),
+        "{output:?}"
+    );
+    assert!(
+        text(1, 12).ends_with('w') && output.contains("below"),
+        "{output:?}"
+    );
+    assert!(
+        !output.contains('\u{10EEEE}'),
+        "a placeholder would replace the text in its cell"
+    );
+    assert!(output.contains("a=p,"), "the picture must still be placed");
+}
+
+#[cfg(feature = "terminal-images")]
+#[derive(Clone)]
 struct MaskedImagePane {
     screen: Rc<RefCell<TerminalScreen>>,
     effect: ImageMaskProbe,

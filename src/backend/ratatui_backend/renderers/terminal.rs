@@ -101,9 +101,7 @@ fn render_terminal_images(
         crate::widgets::composite_terminal_images(&node.images, content_rect.w, content_rect.h);
     let render = crate::backend::ratatui_backend::renderers::image::TerminalImageRender {
         alive: lifetime,
-        use_placements: images
-            .first()
-            .is_some_and(|first| first.z < 0 || images.iter().any(|p| p.z != first.z)),
+        use_placements: crate::widgets::terminal_images_use_placements(&images),
     };
     let visible: Vec<_> = images
         .iter()

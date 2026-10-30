@@ -45,7 +45,7 @@
 
 mod composite;
 
-pub(crate) use composite::composite_terminal_images;
+pub(crate) use composite::{composite_terminal_images, terminal_images_use_placements};
 
 use std::borrow::Cow;
 use std::collections::HashMap;
