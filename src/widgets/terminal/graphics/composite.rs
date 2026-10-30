@@ -437,6 +437,26 @@ mod tests {
     use crate::widgets::{TerminalCellSize, TerminalScreen};
     use base64::Engine as _;
 
+    /// Behind tmux a tile must stay a placeholder like any other image on one plane: tmux does not
+    /// forward placements, so as one the picture would disappear.
+    #[test]
+    fn tmux_keeps_placeholders_for_composed_tiles() {
+        let mut screen = TerminalScreen::new(20, 40, 0);
+        screen.set_cell_size(TerminalCellSize::new(10, 20));
+        transmit(&mut screen, "i=1", 105, 105, [0, 0, 0, 255]);
+        let snapshot = screen.render_snapshot();
+
+        let composed = composite_terminal_images(&snapshot.images, 40, 20);
+        assert!(
+            composed
+                .iter()
+                .all(|placement| placement.image.composition.is_none()),
+            "a picture off the cell grid is composed into tiles"
+        );
+        assert!(!terminal_images_use_placements(&composed, true));
+        assert!(terminal_images_use_placements(&composed, false));
+    }
+
     #[test]
     fn only_tmux_keeps_placeholders_and_only_for_a_single_plane_above_text() {
         let mut screen = TerminalScreen::new(4, 8, 0);
