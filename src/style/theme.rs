@@ -1897,6 +1897,10 @@ pub struct SyntaxPalette {
     pub parameter: Style,
     /// Style for operators and punctuation-like emphasis.
     pub operator: Style,
+    /// Style for markup tag names, such as HTML elements.
+    pub tag: Style,
+    /// Style for markup attribute names.
+    pub attribute: Style,
 }
 
 impl Default for SyntaxPalette {
@@ -1917,6 +1921,8 @@ impl Default for SyntaxPalette {
             variable,
             parameter: variable.italic(),
             operator: Style::new().fg(Color::LightRed),
+            tag: Style::new().fg(Color::LightBlue),
+            attribute: variable,
         }
     }
 }
@@ -2236,6 +2242,8 @@ impl Theme {
                     .fg(primary_fg.blend_toward(accent, 0.12))
                     .italic(),
                 operator: Style::new().fg(accent.blend_toward(error, 0.45)),
+                tag: Style::new().fg(accent.blend_toward(info, 0.32)),
+                attribute: Style::new().fg(primary_fg),
             },
             input: InputPalette::default(),
             text_area: TextAreaPalette::default(),
@@ -2789,6 +2797,8 @@ impl From<ThemePalette> for Theme {
                 variable: Style::new().fg(p.text),
                 parameter: Style::new().fg(p.text).italic(),
                 operator: Style::new().fg(error.blend_toward(p.accent, 0.45)),
+                tag: Style::new().fg(p.accent.blend_toward(info, 0.35)),
+                attribute: Style::new().fg(p.text),
             },
             input: InputPalette::default(),
             text_area: TextAreaPalette::default(),

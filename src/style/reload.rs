@@ -649,6 +649,8 @@ struct TomlSyntaxPalette {
     variable: Option<TomlStyle>,
     parameter: Option<TomlStyle>,
     operator: Option<TomlStyle>,
+    tag: Option<TomlStyle>,
+    attribute: Option<TomlStyle>,
 }
 
 impl TomlSyntaxPalette {
@@ -685,6 +687,12 @@ impl TomlSyntaxPalette {
         }
         if let Some(style) = self.operator {
             base.operator = style.apply(base.operator);
+        }
+        if let Some(style) = self.tag {
+            base.tag = style.apply(base.tag);
+        }
+        if let Some(style) = self.attribute {
+            base.attribute = style.apply(base.attribute);
         }
         base
     }

@@ -734,12 +734,14 @@ fn syntax_scope_items(palette: SyntaxPalette) -> Vec<ThemeItem> {
             "comment, punctuation.definition.comment, comment.block.documentation",
             palette.comment,
         ),
+        // Grammars disagree on `storage.type`: it is a declaration keyword in these
+        // languages, while C keeps `int` and `struct` under one scope and stays builtin.
         scope_item(
-            "keyword, keyword.control, storage, storage.modifier, storage.type.impl, storage.type.struct, storage.type.enum, keyword.operator.word",
+            "keyword, keyword.control, storage, storage.modifier, storage.type.impl, storage.type.struct, storage.type.enum, storage.type.class, storage.type.interface, storage.type.type, storage.type.keyword, storage.type.rust, storage.type.js, storage.type.jsx, storage.type.ts, storage.type.tsx, storage.type.java, keyword.operator.word",
             palette.keyword,
         ),
         scope_item(
-            "constant.language.boolean, constant.language, constant.other, constant.character",
+            "constant.language.boolean, constant.language, constant.other, constant.character, entity.other.attribute-name.id.css",
             palette.constant,
         ),
         scope_item("constant.numeric", palette.number),
@@ -748,27 +750,30 @@ fn syntax_scope_items(palette: SyntaxPalette) -> Vec<ThemeItem> {
             palette.string,
         ),
         scope_item(
-            "entity.name.function, storage.type.function",
+            "entity.name.function, storage.type.function, storage.type.keyword.function, keyword.declaration.function",
             palette.function,
         ),
         scope_item(
-            "support.function, support.type, support.class, support.constant, storage.type",
+            "support.function, support.type, support.class, support.constant, storage.type, storage.type.primitive",
             palette.builtin,
         ),
         scope_item(
-            "entity.name.type, entity.name.class, entity.name.struct, entity.name.enum, entity.name.trait, entity.name.namespace, entity.name.tag, entity.name.impl, meta.generic",
+            "entity.name.type, entity.name.class, entity.name.struct, entity.name.enum, entity.name.trait, entity.name.namespace, entity.name.impl, meta.generic, entity.other.attribute-name.class.css",
             palette.type_name,
         ),
         scope_item("variable.other.member, variable.member", palette.function),
+        // Keys of data formats are properties, whatever scope each grammar gives them.
         scope_item(
-            "variable, variable.other, variable.function, meta.function-call, meta.definition.variable, entity.name.variable, entity.other.attribute-name",
+            "variable, variable.other, variable.function, meta.function-call, meta.definition.variable, entity.name.variable, variable.other.member.declaration.go, entity.name.tag.toml, entity.name.tag.yaml, meta.mapping.key string, meta.mapping.key punctuation.definition.string, meta.mapping.key, string.unquoted.key, support.type.property-name",
             palette.variable,
         ),
         scope_item("variable.parameter", palette.parameter),
         scope_item(
-            "keyword.operator, punctuation.separator, punctuation.accessor, punctuation.definition.generic, punctuation.section",
+            "keyword.operator, punctuation.separator, punctuation.accessor, punctuation.terminator, punctuation.definition.generic, punctuation.definition.key-value",
             palette.operator,
         ),
+        scope_item("entity.name.tag", palette.tag),
+        scope_item("entity.other.attribute-name", palette.attribute),
     ]
 }
 
@@ -1179,8 +1184,13 @@ fn span_allows_rust_semantic_fallback(
     // example `Vec`) as support/builtin types. Let Rust's syntactic fallback
     // promote those to the upstream type color, but never recolor strings or
     // comments that merely contain Rust-looking text.
-    semantic.fg == palette.type_name.fg
-        && base.fg == palette.builtin.fg
+    //
+    // `storage.type.rust` also covers `let`, so primitive types arrive in the
+    // keyword color and take the builtin color back from the same fallback.
+    let promotes_builtin_type =
+        semantic.fg == palette.type_name.fg && base.fg == palette.builtin.fg;
+    let demotes_primitive = semantic.fg == palette.builtin.fg && base.fg == palette.keyword.fg;
+    (promotes_builtin_type || demotes_primitive)
         && base.fg != palette.string.fg
         && base.fg != palette.comment.fg
 }
@@ -1399,6 +1409,8 @@ mod tests {
             variable: Style::new().fg(Color::Rgb(19, 20, 21)),
             parameter: Style::new().fg(Color::Rgb(20, 21, 22)).italic(),
             operator: Style::new().fg(Color::Rgb(22, 23, 24)),
+            tag: Style::new().fg(Color::Rgb(90, 91, 92)),
+            attribute: Style::new().fg(Color::Rgb(93, 94, 95)),
         };
         let app_theme = AppTheme::default().syntax(palette).primary(
             Style::new()
@@ -1922,6 +1934,152 @@ mod tests {
                 .flat_map(|line| line.iter())
                 .any(|span| span.style.fg.is_some()),
             "TOML highlighting should produce styled spans"
+        );
+    }
+
+    /// Each palette slot gets its own color, so a token's color names its slot.
+    #[cfg(feature = "syntax-extra")]
+    fn slot_of_tokens(language: &str, source: &str) -> Vec<(String, &'static str)> {
+        const SLOTS: [&str; 13] = [
+            "comment",
+            "keyword",
+            "string",
+            "number",
+            "constant",
+            "function",
+            "builtin",
+            "type",
+            "variable",
+            "parameter",
+            "operator",
+            "tag",
+            "attribute",
+        ];
+        let fg = |index: usize| Style::new().fg(Color::Rgb(index as u8 + 1, 0, 0));
+        let palette = SyntaxPalette {
+            comment: fg(0),
+            keyword: fg(1),
+            string: fg(2),
+            number: fg(3),
+            constant: fg(4),
+            function: fg(5),
+            builtin: fg(6),
+            type_name: fg(7),
+            variable: fg(8),
+            parameter: fg(9),
+            operator: fg(10),
+            tag: fg(11),
+            attribute: fg(12),
+        };
+        let mut strategy = SyntectStrategy::default().default_theme("One Dark (Atom)");
+        strategy.set_app_theme_if_absent(AppTheme::default().syntax(palette));
+        strategy
+            .highlight(TextAreaColorInput {
+                value: source,
+                language: Some(language),
+                theme: Some("One Dark (Atom)"),
+            })
+            .iter()
+            .flatten()
+            .filter(|span| !span.content.trim().is_empty())
+            .map(|span| {
+                let slot = match span.style.fg.map(Paint::color) {
+                    Some(Color::Rgb(index, 0, 0)) if (1..=13).contains(&index) => {
+                        SLOTS[usize::from(index) - 1]
+                    }
+                    _ => "plain",
+                };
+                (span.content.trim().to_string(), slot)
+            })
+            .collect()
+    }
+
+    #[cfg(feature = "syntax-extra")]
+    #[track_caller]
+    fn assert_slots(language: &str, source: &str, expected: &[(&str, &str)]) {
+        let tokens = slot_of_tokens(language, source);
+        for (token, slot) in expected {
+            assert!(
+                tokens.iter().any(|(t, s)| t == token && s == slot),
+                "{language}: expected {token:?} as {slot}: {tokens:?}"
+            );
+        }
+    }
+
+    #[cfg(feature = "syntax-extra")]
+    #[test]
+    fn data_format_keys_are_properties() {
+        assert_slots(
+            "toml",
+            "name = 1\n",
+            &[("name", "variable"), ("=", "operator"), ("1", "number")],
+        );
+        assert_slots(
+            "yaml",
+            "name: value\n",
+            &[("name", "variable"), (":", "operator"), ("value", "string")],
+        );
+        assert_slots(
+            "json",
+            "{\"name\": \"value\"}\n",
+            &[("name", "variable"), ("value", "string"), ("{", "plain")],
+        );
+        assert_slots(
+            "css",
+            ".a #b div { color: red; }\n",
+            &[
+                ("a", "type"),
+                ("b", "constant"),
+                ("div", "tag"),
+                ("color", "variable"),
+                (";", "operator"),
+            ],
+        );
+        assert_slots(
+            "html",
+            "<div class=\"a\"></div>\n",
+            &[("div", "tag"), ("class", "attribute"), ("a", "string")],
+        );
+    }
+
+    #[cfg(feature = "syntax-extra")]
+    #[test]
+    fn declaration_words_are_keywords_and_primitive_types_stay_builtin() {
+        assert_slots(
+            "rust",
+            "fn run(x: u32) {\n    let y: u8 = 1;\n}\n",
+            &[
+                ("fn", "function"),
+                ("let", "keyword"),
+                ("u32", "builtin"),
+                ("u8", "builtin"),
+                ("(", "plain"),
+                (";", "operator"),
+            ],
+        );
+        assert_slots(
+            "typescript",
+            "const x: string = \"s\"; class Z {}\n",
+            &[
+                ("const", "keyword"),
+                ("class", "keyword"),
+                ("string", "builtin"),
+            ],
+        );
+        assert_slots(
+            "go",
+            "func Run() { var x int }\n",
+            &[("func", "function"), ("var", "keyword"), ("int", "builtin")],
+        );
+        assert_slots(
+            "python",
+            "def run(a):\n    pass\n",
+            &[("def", "function"), ("run", "function")],
+        );
+        assert_slots(
+            "java",
+            "class Foo { int a; }\n",
+            &[("class", "keyword"), ("int", "builtin")],
         );
     }
 

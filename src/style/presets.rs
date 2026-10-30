@@ -113,6 +113,8 @@ impl Theme {
                 variable: super::Style::new().fg(Color::Gray),
                 parameter: super::Style::new().fg(Color::DarkGray).italic(),
                 operator: super::Style::new().fg(Color::DarkGray),
+                tag: super::Style::new().fg(Color::Cyan),
+                attribute: super::Style::new().fg(Color::Gray),
             },
             input: InputPalette::default(),
             text_area: TextAreaPalette::default(),
