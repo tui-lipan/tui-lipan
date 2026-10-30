@@ -54,6 +54,7 @@ pub struct InputNode {
     pub tab_stop: bool,
     pub on_focus: Option<Callback<()>>,
     pub on_blur: Option<Callback<()>>,
+    pub history_scope: Option<Arc<str>>,
 }
 
 impl WidgetNode for InputNode {

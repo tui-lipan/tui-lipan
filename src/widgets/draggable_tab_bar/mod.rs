@@ -321,9 +321,8 @@ impl DraggableTab {
     /// app-specific reason, such as an unsaved marker or an error state, is emphasized too, and
     /// without this reads as a flat colored block beside shaped peers.
     ///
-    /// The remaining cap conditions still apply: the tab must be fully visible in the viewport, its
-    /// background must differ from the strip's, and the caps must fit the padding cells they
-    /// replace.
+    /// The remaining cap conditions still apply: its background must differ from the strip's, and
+    /// the caps must fit the padding cells they replace.
     pub fn capped(mut self, capped: bool) -> Self {
         self.capped = capped;
         self
@@ -735,8 +734,9 @@ impl DraggableTabBar {
     /// [`crate::widgets::CapStyle::chars`] for the named padded, half, round, and arrow sets.
     /// `None` (the default) keeps flat space padding on every tab.
     ///
-    /// A tab falls back to flat padding when it is clipped by horizontal scroll, when its
-    /// background matches the strip's, or when either cap is not exactly one cell wide. Label
+    /// A tab falls back to flat padding when its background matches the strip's, or when either cap
+    /// is not exactly one cell wide. A tab clipped by horizontal scroll keeps the cap on its visible
+    /// end, and the viewport edge cuts the other end square. Label
     /// ellipsis from [`Self::tab_max_width`] or [`DraggableTabBarOverflow::ShrinkThenScroll`]
     /// does not drop caps, because those shrink the label, not the padding cells. Caps must be
     /// single-width because a wider glyph would push later tabs off the columns the widget
@@ -908,7 +908,9 @@ impl DraggableTabBar {
         self
     }
 
-    /// Set initial horizontal tab scroll offset (tab index).
+    /// Set the initial horizontal scroll offset, in columns.
+    ///
+    /// Left at `0`, a newly mounted bar scrolls to its active tab instead.
     pub fn scroll_offset(mut self, offset: usize) -> Self {
         self.scroll_offset = offset;
         self
@@ -2081,23 +2083,6 @@ fn tabs_prefix_width_from_metrics(
 fn tabs_prefix_width(tabs: &[DraggableTab], opts: &TabDisplayOptions<'_>, offset: usize) -> usize {
     let metrics = tab_metrics_for_viewport(tabs, opts, None);
     tabs_prefix_width_from_metrics(&metrics, opts, offset)
-}
-
-pub(crate) fn tab_fully_visible_at_offset(
-    tabs: &[DraggableTab],
-    opts: &TabDisplayOptions<'_>,
-    tab_index: usize,
-    offset: usize,
-    viewport_width: usize,
-) -> bool {
-    if tabs.is_empty() || tab_index >= tabs.len() || viewport_width == 0 {
-        return false;
-    }
-    let metrics = tab_metrics_for_viewport(tabs, opts, Some(viewport_width));
-    let tab_start = tabs_prefix_width_from_metrics(&metrics, opts, tab_index);
-    let tab_width = metrics[tab_index].width;
-    let tab_end = tab_start.saturating_add(tab_width);
-    tab_start >= offset && tab_end <= offset.saturating_add(viewport_width)
 }
 
 fn default_overflow_control_label(side: OverflowControlSide, hidden_count: usize) -> Arc<str> {

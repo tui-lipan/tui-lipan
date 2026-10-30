@@ -155,13 +155,10 @@ fn resolve_draggable_accent_style(
 fn tab_cap_glyphs(
     caps: Option<(char, char)>,
     paint_caps: bool,
-    fully_visible: bool,
     tab_style: Style,
     base_style: Style,
 ) -> Option<(char, char)> {
-    caps.filter(|caps| {
-        paint_caps && fully_visible && tab_style.bg != base_style.bg && caps_fit_padding(*caps)
-    })
+    caps.filter(|caps| paint_caps && tab_style.bg != base_style.bg && caps_fit_padding(*caps))
 }
 
 fn cap_ratatui_style(tab_style: Style, base_style: Style) -> ratatui::style::Style {
@@ -511,8 +508,6 @@ pub(crate) fn render_draggable_tab_bar(
             let is_tab_hovered = hovered_tab == Some(vis.index);
             let is_close_hovered = hovered_close_tab == Some(vis.index);
             let is_active = !is_action_tab && vis.index == active;
-            let fully_visible =
-                vis.clip_left == 0 && vis.end.saturating_sub(vis.start) == vis.metrics.width;
 
             // The close control keeps its cells in the tab's measured width whether or not the
             // symbol is drawn, so a hover-only close would otherwise truncate the label for a
@@ -549,7 +544,6 @@ pub(crate) fn render_draggable_tab_bar(
             let cap_glyphs = tab_cap_glyphs(
                 caps,
                 is_active || is_tab_hovered || tab.capped,
-                fully_visible,
                 tab_style,
                 base_style,
             );

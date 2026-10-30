@@ -291,6 +291,7 @@ fn dispatch_selection_clipboard_request(
                 let is_masked = node.mask.is_some();
                 let on_change = node.on_change.clone();
                 let on_edit = node.on_edit.clone();
+                let history_scope = node.history_scope.clone();
                 let selection = selection_range(cursor, anchor, node.value.len());
                 if cut_requested && !disabled && !read_only && on_change.is_some() {
                     let input = ctx.input_history.entry(id).or_insert_with(|| {
@@ -299,6 +300,7 @@ fn dispatch_selection_clipboard_request(
                         input.set_anchor(anchor);
                         input
                     });
+                    input.sync_history_scope(history_scope.as_ref());
                     input.sync_from(value.as_ref(), cursor, anchor);
 
                     let dispatch = {

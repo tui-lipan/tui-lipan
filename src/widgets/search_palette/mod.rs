@@ -546,6 +546,7 @@ pub(crate) struct SearchPaletteProps<T> {
     sync_match_limit: usize,
     sync_selection: bool,
     initial_query: Arc<str>,
+    reset_key: Option<Arc<str>>,
     /// Index into [`SearchPaletteProps::items`]. Seeds keyboard selection and
     /// reseeds it when the prop changes; otherwise navigation remains
     /// authoritative across result refreshes.
@@ -652,6 +653,7 @@ impl<T: PartialEq> PartialEq for SearchPaletteProps<T> {
             && self.sync_match_limit == other.sync_match_limit
             && self.sync_selection == other.sync_selection
             && self.initial_query == other.initial_query
+            && self.reset_key == other.reset_key
             && self.initial_selected_item_index == other.initial_selected_item_index
             && match (self.item_key, other.item_key) {
                 (Some(left), Some(right)) => std::ptr::fn_addr_eq(left, right),
@@ -828,6 +830,7 @@ impl<T: Clone + PartialEq> Default for SearchPalette<T> {
                 sync_match_limit: DEFAULT_SYNC_MATCH_LIMIT,
                 sync_selection: false,
                 initial_query: "".into(),
+                reset_key: None,
                 initial_selected_item_index: None,
                 item_key: None,
                 query: None,
@@ -1035,6 +1038,19 @@ impl<T: Clone + PartialEq> SearchPalette<T> {
     /// Only used in uncontrolled mode (when [`query`](Self::query) is not set).
     pub fn initial_query(mut self, query: impl Into<Arc<str>>) -> Self {
         self.props.initial_query = query.into();
+        self
+    }
+
+    /// Start over when this value changes, keeping the palette mounted.
+    ///
+    /// The search field returns to [`initial_query`](Self::initial_query) with an empty undo history
+    /// and the highlight to
+    /// [`initial_selected_item_index`](Self::initial_selected_item_index), as they would for a
+    /// remounted palette, while focus and the scroll position of anything in
+    /// [`results_header`](Self::results_header) survive. Use it when one palette presents several
+    /// pages, such as category tabs. No callback reports the new query.
+    pub fn reset_key(mut self, key: impl Into<Arc<str>>) -> Self {
+        self.props.reset_key = Some(key.into());
         self
     }
 

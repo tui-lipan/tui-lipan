@@ -154,6 +154,7 @@ Source: `src/widgets/input/mod.rs` (`Input`).
 | `tab_stop` | `true` |
 | `on_focus` | `None` |
 | `on_blur` | `None` |
+| `history_scope` | `None` |
 
 ## TextArea
 
@@ -1165,6 +1166,7 @@ Source: `src/widgets/search_palette/mod.rs` (`SearchPalette`).
 | `sync_match_limit` | `DEFAULT_SYNC_MATCH_LIMIT` |
 | `sync_selection` | `false` |
 | `initial_query` | `"".into()` |
+| `reset_key` | `None` |
 | `initial_selected_item_index` | `None` |
 | `item_key` | `None` |
 | `query` | `None` |

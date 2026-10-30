@@ -137,7 +137,7 @@ symbol still appears when nothing else about the bar reacts to the pointer.
 | `close_style` | `Style` | Close button style |
 | `close_hover_style` | `Style` | Close button hover style |
 | `divider` | `char` | Tab separator character |
-| `caps` | `Option<(char, char)>` | End-cap glyphs drawn around the active and hovered tabs, plus any tab opted in with `DraggableTab::capped(true)`. Each cap replaces one padding cell (the tab keeps its measured width and hit region), painted in the tab's own background over the strip background, so the tab reads as a rounded/pointed pill. `None` (default) keeps flat padding. Pass `CapStyle::Round.chars()` / `CapStyle::Arrow.chars()` / `CapStyle::Half.chars()` for the named sets. A tab falls back to flat padding when it is clipped by horizontal scroll, when its background matches the strip's, or when either cap is not single-width. Label ellipsis from `tab_max_width` or `ShrinkThenScroll` does not drop caps, because those shrink the label, not the padding cells. On `FrameLine`, a shaped tab draws the accent marker outside the pill on the strip (no tab background); caps wrap the padding cells like `Bordered`. A dragged snapshot keeps the destination background on cap and FrameLine accent cells so the float reads as a pill. |
+| `caps` | `Option<(char, char)>` | End-cap glyphs drawn around the active and hovered tabs, plus any tab opted in with `DraggableTab::capped(true)`. Each cap replaces one padding cell (the tab keeps its measured width and hit region), painted in the tab's own background over the strip background, so the tab reads as a rounded/pointed pill. `None` (default) keeps flat padding. Pass `CapStyle::Round.chars()` / `CapStyle::Arrow.chars()` / `CapStyle::Half.chars()` for the named sets. A tab falls back to flat padding when its background matches the strip's or when either cap is not single-width. A tab clipped by horizontal scroll keeps the cap on its visible end, and the viewport edge cuts the other end square. Label ellipsis from `tab_max_width` or `ShrinkThenScroll` does not drop caps, because those shrink the label, not the padding cells. On `FrameLine`, a shaped tab draws the accent marker outside the pill on the strip (no tab background); caps wrap the padding cells like `Bordered`. A dragged snapshot keeps the destination background on cap and FrameLine accent cells so the float reads as a pill. |
 | `accent_symbol` | `char` | Left/right accent character |
 | `active_accent_symbol` | `char` | Active tab accent |
 | `accent_style` | `Style` | Accent style |
@@ -175,8 +175,8 @@ DraggableTab::new("main.rs")
 
 // A tab the widget cannot know is emphasized — an unsaved marker, an error state — carrying its
 // own background. `capped(true)` shapes it like the active and hovered tabs instead of leaving
-// it a flat colored block. The other cap conditions still apply: fully visible, a background
-// distinct from the strip, and caps that fit the padding cells they replace.
+// it a flat colored block. The other cap conditions still apply: a background distinct from the
+// strip, and caps that fit the padding cells they replace.
 DraggableTab::new("Draft")
     .style(Style::new().fg(Color::Black).bg(Color::Yellow))
     .capped(true)

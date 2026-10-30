@@ -31,34 +31,30 @@ pub fn reconcile_draggable_tab_bar(
             _ => (bar.scroll_offset, None, bar.active, None, None),
         };
 
-    let active_changed =
-        !bar.tabs.is_empty() && bar.active < bar.tabs.len() && bar.active != old_previous_active;
+    // A newly mounted bar has no earlier position to keep, so it opens on its active tab unless the
+    // app asked for a position of its own. Its first layout can be provisional, so a later width
+    // reveals again, until the user scrolls the strip themselves.
+    let mounting = !matches!(tree.node(id).kind, NodeKind::DraggableTabBar(_));
+    let resized = old_override.is_none() && tree.node(id).rect.w != rect.w;
+    let reveal_active = bar.active < bar.tabs.len()
+        && (bar.active != old_previous_active || ((mounting || resized) && bar.scroll_offset == 0));
     let viewport_w = rect.w.saturating_sub(bar.padding.horizontal()).max(1) as usize;
     let display_options = bar.display_options();
     let mut next_offset = old_override.unwrap_or(old_offset);
     if bar.tabs.is_empty() {
         next_offset = 0;
-    } else if active_changed && bar.active < bar.tabs.len() {
-        let still_visible = super::tab_fully_visible_at_offset(
+    } else if reveal_active {
+        next_offset = DraggableTabBar::scroll_offset_to_reveal_tab(
             &bar.tabs,
             &display_options,
+            &super::TabViewportOptions {
+                scroll_offset: next_offset,
+                viewport_width: viewport_w,
+                show_overflow_controls: bar.show_overflow_controls,
+                overflow_labels: bar.overflow_labels.clone(),
+            },
             bar.active,
-            next_offset,
-            viewport_w,
         );
-        if !still_visible {
-            next_offset = DraggableTabBar::scroll_offset_to_reveal_tab(
-                &bar.tabs,
-                &display_options,
-                &super::TabViewportOptions {
-                    scroll_offset: 0,
-                    viewport_width: viewport_w,
-                    show_overflow_controls: bar.show_overflow_controls,
-                    overflow_labels: bar.overflow_labels.clone(),
-                },
-                bar.active,
-            );
-        }
     } else {
         let total_width =
             DraggableTabBar::content_width_for_viewport(&bar.tabs, &display_options, viewport_w);
@@ -156,6 +152,136 @@ mod tests {
             layout.visible_tabs[0].metrics.close_end,
             Some(locked_width.saturating_sub(1))
         );
+    }
+
+    const BOUNDS: Rect = Rect {
+        x: 0,
+        y: 0,
+        w: 30,
+        h: 1,
+    };
+    const LABELS: [&str; 8] = [
+        "alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel",
+    ];
+
+    fn scrolling_bar(active: usize) -> DraggableTabBar {
+        DraggableTabBar::new()
+            .tabs(LABELS.iter().map(|label| DraggableTab::new(*label)))
+            .active(active)
+            .show_close_buttons(false)
+            .border(false)
+            .divider(' ')
+    }
+
+    /// The columns of the content strip the active tab occupies, and the strip's scroll offset.
+    fn active_span(tree: &NodeTree) -> (usize, usize, usize, usize) {
+        let NodeKind::DraggableTabBar(node) = &tree.node(tree.root).kind else {
+            panic!("expected draggable tab bar");
+        };
+        let layout = DraggableTabBar::viewport_layout(
+            &node.tabs,
+            &node.display_options(),
+            &node.viewport_options(BOUNDS.w as usize),
+        );
+        let active = layout
+            .visible_tabs
+            .iter()
+            .find(|tab| tab.index == node.active)
+            .expect("active tab is on screen");
+        (
+            active.clip_left,
+            active.end - active.start,
+            active.metrics.width,
+            layout.offset,
+        )
+    }
+
+    #[test]
+    fn a_newly_mounted_bar_opens_on_its_active_tab() {
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(&mut tree, &scrolling_bar(6).into(), BOUNDS, None);
+
+        let (clip_left, shown, width, offset) = active_span(&tree);
+        assert!(offset > 0, "the bar should have scrolled to reach the tab");
+        assert_eq!(clip_left, 0, "the active tab starts on screen");
+        assert_eq!(shown, width, "the active tab is shown whole");
+    }
+
+    #[test]
+    fn a_bar_first_laid_out_wider_than_it_ends_up_still_opens_on_its_active_tab() {
+        let wide = Rect { w: 200, ..BOUNDS };
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(&mut tree, &scrolling_bar(6).into(), wide, None);
+        LayoutEngine::reconcile_with_focus(&mut tree, &scrolling_bar(6).into(), BOUNDS, None);
+
+        let (clip_left, shown, width, _) = active_span(&tree);
+        assert_eq!(clip_left, 0, "the active tab starts on screen");
+        assert_eq!(shown, width, "the active tab is shown whole");
+    }
+
+    #[test]
+    fn a_resize_does_not_undo_a_scroll_the_user_made() {
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(&mut tree, &scrolling_bar(0).into(), BOUNDS, None);
+        let NodeKind::DraggableTabBar(node) = &mut tree.node_mut(tree.root).kind else {
+            panic!("expected draggable tab bar");
+        };
+        node.scroll_override = Some(12);
+
+        let narrower = Rect { w: 25, ..BOUNDS };
+        LayoutEngine::reconcile_with_focus(&mut tree, &scrolling_bar(0).into(), narrower, None);
+
+        let NodeKind::DraggableTabBar(node) = &tree.node(tree.root).kind else {
+            panic!("expected draggable tab bar");
+        };
+        assert_eq!(node.scroll_offset, 12);
+    }
+
+    #[test]
+    fn a_newly_mounted_bar_keeps_a_position_the_app_asked_for() {
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &scrolling_bar(0).scroll_offset(8).into(),
+            BOUNDS,
+            None,
+        );
+
+        let NodeKind::DraggableTabBar(node) = &tree.node(tree.root).kind else {
+            panic!("expected draggable tab bar");
+        };
+        assert_eq!(node.scroll_offset, 8);
+    }
+
+    #[test]
+    fn changing_to_a_tab_under_an_overflow_control_reveals_it() {
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(&mut tree, &scrolling_bar(0).into(), BOUNDS, None);
+        // Walk right one tab at a time: each step lands on a tab that fits the bar's full width but
+        // can sit behind the control the strip reserves on that side.
+        for active in 1..LABELS.len() {
+            LayoutEngine::reconcile_with_focus(
+                &mut tree,
+                &scrolling_bar(active).into(),
+                BOUNDS,
+                None,
+            );
+            let (clip_left, shown, width, _) = active_span(&tree);
+            assert_eq!(clip_left, 0, "tab {active} starts on screen");
+            assert_eq!(shown, width, "tab {active} is shown whole");
+        }
+    }
+
+    #[test]
+    fn changing_to_a_tab_already_on_screen_leaves_the_strip_where_it_is() {
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(&mut tree, &scrolling_bar(6).into(), BOUNDS, None);
+        let (_, _, _, offset) = active_span(&tree);
+
+        LayoutEngine::reconcile_with_focus(&mut tree, &scrolling_bar(5).into(), BOUNDS, None);
+
+        let (_, _, _, after) = active_span(&tree);
+        assert_eq!(after, offset, "stepping to a visible neighbor scrolled");
     }
 
     fn bar_with_action(tabs: &[&str]) -> Element {

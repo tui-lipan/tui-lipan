@@ -4,6 +4,7 @@ use crate::text::edit::TextEditKind;
 use crate::utils::text::clamp_cursor;
 use crate::widgets::InputEvent;
 use std::ops::{Deref, DerefMut};
+use std::sync::Arc;
 
 /// A minimal, single-line text input model with selection support.
 ///
@@ -16,6 +17,7 @@ use std::ops::{Deref, DerefMut};
 #[derive(Clone, Debug)]
 pub struct TextInput {
     pub(crate) core: TextBufferCore,
+    history_scope: Option<Arc<str>>,
 }
 
 impl Default for TextInput {
@@ -47,6 +49,15 @@ impl DerefMut for TextInput {
 }
 
 impl TextInput {
+    /// Forget the undo history when the owning `Input` moved to another scope, even if its text
+    /// reads the same in both.
+    pub(crate) fn sync_history_scope(&mut self, scope: Option<&Arc<str>>) {
+        if self.history_scope.as_ref() != scope {
+            self.history_scope = scope.cloned();
+            self.core.reset_history();
+        }
+    }
+
     /// Create a new input with the cursor at the end.
     pub fn new(text: impl Into<String>) -> Self {
         let text = text.into();
@@ -59,6 +70,7 @@ impl TextInput {
                 history: TextBufferCore::fresh_history(),
                 last_edit: None,
             },
+            history_scope: None,
         }
     }
 
