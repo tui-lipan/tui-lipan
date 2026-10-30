@@ -230,6 +230,16 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
         let mut should_refresh = false;
         let mut reset_selection = false;
 
+        if old_props.reset_key != ctx.props.reset_key {
+            if let QuerySource::Uncontrolled(input) = &mut ctx.state.query_source {
+                input.set_text(ctx.props.initial_query.to_string());
+                input.set_cursor(ctx.props.initial_query.len());
+            }
+            ctx.state.last_notified_selection = None;
+            should_refresh = true;
+            reset_selection = true;
+        }
+
         match &ctx.props.query {
             Some(new_query) => {
                 let query_changed = !matches!(
@@ -1750,6 +1760,83 @@ mod tests {
             }
             palette.into()
         }
+    }
+
+    /// One palette across pages, with a scrolling tab strip above its results. `(page, query)`.
+    struct PagedPaletteRoot;
+
+    const PAGE_LABELS: [&str; 8] = [
+        "alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel",
+    ];
+
+    impl Component for PagedPaletteRoot {
+        type Message = usize;
+        type Properties = ();
+        type State = usize;
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            6
+        }
+
+        fn update(&mut self, page: usize, ctx: &mut Context<Self>) -> Update {
+            ctx.state = page;
+            Update::full()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            let page = ctx.state;
+            SearchPalette::new()
+                .items((0..10).map(|i| SearchItem::new(format!("page{i}"), i)))
+                .height(Length::Px(8))
+                .initial_query(format!("page{page}"))
+                .initial_selected_item_index(Some(page))
+                .reset_key(page.to_string())
+                .results_header(
+                    crate::widgets::DraggableTabBar::new()
+                        .tabs(
+                            PAGE_LABELS
+                                .iter()
+                                .map(|label| crate::widgets::DraggableTab::new(*label)),
+                        )
+                        .active(page)
+                        .show_close_buttons(false)
+                        .border(false)
+                        .divider(' ')
+                        .height(Length::Px(1)),
+                )
+                .into()
+        }
+    }
+
+    #[test]
+    fn a_new_reset_key_reseeds_the_query_and_keeps_the_header_mounted() {
+        let mut backend = crate::TestBackend::new(PagedPaletteRoot);
+        backend.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 8,
+        });
+        backend.render();
+        let strip = |frame: &str| {
+            frame
+                .lines()
+                .find(|line| line.contains("golf") || line.contains("foxtrot"))
+                .map(str::to_string)
+                .unwrap_or_else(|| panic!("no tab strip in:\n{frame}"))
+        };
+        let first = backend.capture_frame().plain_text();
+        assert!(first.contains("page6"), "seeded on mount:\n{first}");
+        assert!(first.contains("golf"), "opens on its active tab:\n{first}");
+
+        backend.dispatch(5).unwrap();
+        backend.render();
+        let second = backend.capture_frame().plain_text();
+        assert!(second.contains("page5"), "reseeded query:\n{second}");
+        assert!(!second.contains("page6"), "old query left:\n{second}");
+        // A remounted bar would rebuild its position from the start and move the neighbor it was
+        // told to show out to the far edge; a mounted one finds it on screen and stays put.
+        assert_eq!(strip(&first), strip(&second), "the tab strip moved");
     }
 
     struct MutableRendererRoot {

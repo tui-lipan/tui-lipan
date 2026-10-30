@@ -1,7 +1,8 @@
 //! Verifies `DraggableTabBar::caps`: a highlighted tab's two padding cells become the
 //! `(left, right)` cap glyphs, painted in the tab's own background over the strip background,
-//! without shifting tab widths or hit regions. Tabs that are inactive, clipped by scroll, or
-//! background-matched to the strip, or capped with a wide glyph, keep flat space padding.
+//! without shifting tab widths or hit regions. A tab clipped by scroll keeps the cap on its visible
+//! end. Tabs that are inactive or background-matched to the strip, or capped with a wide glyph, keep
+//! flat space padding.
 
 use tui_lipan::core::event::MouseKind;
 use tui_lipan::prelude::*;
@@ -25,6 +26,7 @@ struct BarApp {
     mark_first: bool,
     variant: DraggableTabBarVariant,
     close_buttons: bool,
+    scroll_offset: usize,
 }
 
 impl BarApp {
@@ -35,6 +37,7 @@ impl BarApp {
             mark_first: false,
             variant: DraggableTabBarVariant::Bordered,
             close_buttons: false,
+            scroll_offset: 0,
         }
     }
 
@@ -45,6 +48,7 @@ impl BarApp {
             mark_first: true,
             variant: DraggableTabBarVariant::Bordered,
             close_buttons: false,
+            scroll_offset: 0,
         }
     }
 }
@@ -84,6 +88,7 @@ impl Component for BarApp {
             .draggable(false)
             .divider(' ')
             .caps(self.caps)
+            .scroll_offset(self.scroll_offset)
             .variant(self.variant)
             .show_close_buttons(self.close_buttons)
             .close_symbol("x")
@@ -192,20 +197,48 @@ fn tab_matching_the_strip_background_falls_back_to_flat_padding() {
         mark_first: false,
         variant: DraggableTabBarVariant::Bordered,
         close_buttons: false,
+        scroll_offset: 0,
     });
     assert_eq!(frame.cell(4, 0).symbol, " ", "leading pad stays a space");
     assert_eq!(frame.cell(5, 0).symbol, "B", "label unshifted");
     assert_eq!(frame.cell(6, 0).symbol, " ", "trailing pad stays a space");
 }
 
+/// The strip is cut through the active tab, which covers columns 4 to 6 of the whole strip.
+fn clipped(scroll_offset: usize, width: u16) -> CapturedFrame {
+    let app = BarApp {
+        scroll_offset,
+        ..BarApp::capped(Some((LEFT_CAP, RIGHT_CAP)))
+    };
+    backend(app, width).capture_frame()
+}
+
 #[test]
-fn clipped_tab_falls_back_to_flat_padding() {
-    let frame = backend(BarApp::capped(Some((LEFT_CAP, RIGHT_CAP))), 6).capture_frame();
-    for x in 0..6 {
-        let symbol = &frame.cell(x, 0).symbol;
-        assert_ne!(symbol, &LEFT_CAP.to_string(), "no left cap at col {x}");
-        assert_ne!(symbol, &RIGHT_CAP.to_string(), "no right cap at col {x}");
-    }
+fn a_tab_clipped_on_its_left_keeps_its_right_cap() {
+    let frame = clipped(5, 6);
+    assert_eq!(frame.cell(0, 0).symbol, "B", "the label meets the edge");
+    let right = frame.cell(1, 0);
+    assert_eq!(right.symbol, RIGHT_CAP.to_string());
+    assert_eq!(right.fg, ACCENT, "right cap fills with the tab's own color");
+    assert_eq!(right.bg, PANEL, "right cap rounds off over the strip");
+    assert!(
+        !row(&frame, 6).contains(LEFT_CAP),
+        "the left cap is scrolled away"
+    );
+}
+
+#[test]
+fn a_tab_clipped_on_its_right_keeps_its_left_cap() {
+    let frame = clipped(1, 5);
+    let left = frame.cell(3, 0);
+    assert_eq!(left.symbol, LEFT_CAP.to_string());
+    assert_eq!(left.fg, ACCENT, "left cap fills with the tab's own color");
+    assert_eq!(left.bg, PANEL, "left cap rounds off over the strip");
+    assert_eq!(frame.cell(4, 0).symbol, "B", "the label meets the edge");
+    assert!(
+        !row(&frame, 5).contains(RIGHT_CAP),
+        "the right cap is scrolled away"
+    );
 }
 
 #[test]
@@ -260,6 +293,7 @@ fn close_button_tabs_keep_caps_on_the_outer_padding() {
         mark_first: false,
         variant: DraggableTabBarVariant::Bordered,
         close_buttons: true,
+        scroll_offset: 0,
     });
     // Active " B x " starts after " A x " (cols 0..=4) and a space divider (5).
     assert_eq!(frame.cell(6, 0).symbol, LEFT_CAP.to_string());
@@ -323,6 +357,7 @@ fn frame_line_accent_sits_outside_the_pill() {
         mark_first: false,
         variant: DraggableTabBarVariant::FrameLine,
         close_buttons: false,
+        scroll_offset: 0,
     });
     // FrameLine tab "B" after tab "A" (width 4): accent on the strip, then the Bordered-style pill.
     let accent = frame.cell(4, 0);
