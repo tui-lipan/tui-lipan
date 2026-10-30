@@ -42,12 +42,25 @@ quit = ctrl-q
 toggle_devtools = f12
 ```
 
-**Available actions:** `copy`, `paste`, `paste_selection`, `cut`, `undo`, `redo`, `clear`, `select_all`, `move_left`, `move_right`, `move_up`, `move_down`, `move_word_left`, `move_word_right`, `select_word_left`, `select_word_right`, `delete_word_left`, `delete_word_right`, `move_home`, `move_end`, `select_home`, `select_end`, `insert_newline`, `copy_image`, `paste_image`, `quit`, `dismiss_overlay`, `focus_next`, `focus_prev`, `toggle_devtools`.
+**Available actions:** `copy`, `paste`, `paste_selection`, `cut`, `undo`, `redo`, `clear`, `select_all`, `move_left`, `move_right`, `move_up`, `move_down`, `move_word_left`, `move_word_right`, `select_word_left`, `select_word_right`, `delete_word_left`, `delete_word_right`, `delete_to_line_start`, `move_home`, `move_end`, `select_home`, `select_end`, `insert_newline`, `copy_image`, `paste_image`, `quit`, `dismiss_overlay`, `focus_next`, `focus_prev`, `toggle_devtools`.
 
 The text-widget `clear` action also accepts `clear-text` and `clear-input`
 aliases. It has no default binding; users or apps opt in, for example
 `clear = ctrl-u` or `clear = ctrl-c`. Clear performs an internal replace edit
 and emits the normal text edit/change callbacks.
+
+`delete_to_line_start` deletes from the cursor to the start of the line, so
+`hello|world` becomes `|world`, or removes the selection if there is one. In a
+`TextArea` it stops at the current line, and at the start of a line it does
+nothing. It is an undoable edit, and consecutive backward deletes (including
+`Backspace` and word deletion) undo as one step. It applies to every `Input` and
+`TextArea` in the app, including the filter inside a `SearchPalette`. It has no
+default binding; opt in with `delete_to_line_start = ctrl-u` or from Rust with
+`FrameworkKeymap::bind(FrameworkAction::DeleteToLineStart, bindings)`. A
+`key_interceptor` still runs first, so a widget can keep the key for itself.
+
+Text-editing actions such as `clear` and `delete_to_line_start` only resolve from
+single-step bindings; a chord bound to one has no effect.
 
 `toggle_devtools` is available when the `devtools` feature is enabled. `F12` is the default binding, but you can remap or unbind it in `keymap.conf`. App code can also control the panel directly with `ctx.show_devtools()`, `ctx.hide_devtools()`, and `ctx.toggle_devtools()`.
 

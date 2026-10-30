@@ -1405,10 +1405,18 @@ fn vim_modes_bubble_unhandled_non_char_editor_keys() {
             ..KeyMods::default()
         },
     };
+    let ctrl_u = KeyEvent {
+        code: KeyCode::Char('u'),
+        mods: KeyMods {
+            ctrl: true,
+            ..KeyMods::default()
+        },
+    };
     let cases = [
         (key(KeyCode::Backspace), Action::Backspace),
         (key(KeyCode::Delete), Action::Delete),
         (ctrl_backspace, Action::DeleteWordLeft),
+        (ctrl_u, Action::DeleteToLineStart),
         (key(KeyCode::Insert), Action::None),
         (key(KeyCode::PageUp), Action::None),
         (key(KeyCode::PageDown), Action::None),

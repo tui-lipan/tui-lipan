@@ -76,6 +76,8 @@ pub enum Action {
     Delete,
     DeleteWordLeft,
     DeleteWordRight,
+    /// Delete from the cursor to the start of the line, or the selection if any.
+    DeleteToLineStart,
     InsertNewline,
 
     /// Default action (usually insert char).
@@ -97,6 +99,9 @@ pub enum FrameworkAction {
     FocusPrev,
     /// Toggle DevTools visibility.
     ToggleDevTools,
+    /// Delete from the cursor to the start of the line in `Input` and `TextArea`, or the
+    /// selection if any. Has no default binding; bind it to opt in, for example to `ctrl-u`.
+    DeleteToLineStart,
 }
 
 impl FrameworkAction {
@@ -107,6 +112,7 @@ impl FrameworkAction {
             Self::FocusNext => Action::FocusNext,
             Self::FocusPrev => Action::FocusPrev,
             Self::ToggleDevTools => Action::ToggleDevTools,
+            Self::DeleteToLineStart => Action::DeleteToLineStart,
         }
     }
 }
@@ -199,6 +205,7 @@ impl Action {
             "delete" => Some(Self::Delete),
             "delete-word-left" => Some(Self::DeleteWordLeft),
             "delete-word-right" => Some(Self::DeleteWordRight),
+            "delete-to-line-start" => Some(Self::DeleteToLineStart),
             "insert-newline" | "newline" | "enter" => Some(Self::InsertNewline),
             "none" | "unbind" | "disabled" => Some(Self::None),
             _ => None,
@@ -543,11 +550,16 @@ fn apply_framework_keymap_overrides(bindings: &mut Vec<Binding>, keymap: &Framew
         let action = framework_action.action();
         bindings.retain(|binding| binding.action != action);
         if let FrameworkBindingOverride::Bind(key_bindings) = override_ {
-            bindings.extend(key_bindings.iter().cloned().map(|combination| Binding {
-                mode: binding_mode_for(action, &combination),
-                combination,
-                action,
-            }));
+            // Keys resolve to their first binding, so an app binding goes in front to outrank a
+            // default or file binding on the same key.
+            bindings.splice(
+                0..0,
+                key_bindings.iter().cloned().map(|combination| Binding {
+                    mode: binding_mode_for(action, &combination),
+                    combination,
+                    action,
+                }),
+            );
         }
     }
 }
@@ -1136,6 +1148,89 @@ mod tests {
         assert_eq!(Action::from_config_name("clear"), Some(Action::Clear));
         assert_eq!(Action::from_config_name("clear-text"), Some(Action::Clear));
         assert_eq!(Action::from_config_name("clear_input"), Some(Action::Clear));
+    }
+
+    #[test]
+    fn delete_to_line_start_has_a_config_name_and_no_default_binding() {
+        assert_eq!(
+            Action::from_config_name("delete_to_line_start"),
+            Some(Action::DeleteToLineStart)
+        );
+        assert_eq!(
+            Action::from_config_name("delete-to-line-start"),
+            Some(Action::DeleteToLineStart)
+        );
+        assert_eq!(default_keymap().resolve_action(ctrl_key('u')), Action::None);
+    }
+
+    #[test]
+    fn keymap_file_can_bind_delete_to_line_start() {
+        let path = write_temp_keymap("delete_to_line_start = ctrl-u\n");
+        let keymap = Keymap::new(
+            KeymapConfig::from_clipboard_config(&ClipboardConfig::default()).keymap_path(&path),
+        );
+        let _ = fs::remove_file(&path);
+
+        assert_eq!(
+            keymap.resolve_action(ctrl_key('u')),
+            Action::DeleteToLineStart
+        );
+    }
+
+    #[test]
+    fn rust_text_action_bind_beats_default_binding_on_the_same_key() {
+        let config = KeymapConfig::from_clipboard_config(&ClipboardConfig::default())
+            .user_keymap_policy(UserKeymapPolicy::Disabled)
+            .framework_keymap(FrameworkKeymap::default().bind(
+                FrameworkAction::DeleteToLineStart,
+                KeyBindings::from_str("ctrl-a").unwrap(),
+            ));
+        let keymap = Keymap::new(config);
+
+        assert_eq!(
+            keymap.resolve_action(ctrl_key('a')),
+            Action::DeleteToLineStart
+        );
+        assert_eq!(
+            KeymapRuntime::new(&keymap).feed(ctrl_key('a')),
+            KeymapRuntimeResult::Matched(KeymapRuntimeMatch {
+                action: Action::DeleteToLineStart,
+                mode: BindingMode::Always,
+                is_chord: false,
+            })
+        );
+    }
+
+    #[test]
+    fn rust_text_action_bind_beats_keymap_file_on_the_same_key() {
+        let path = write_temp_keymap("clear = ctrl-u\n");
+        let config = KeymapConfig::from_clipboard_config(&ClipboardConfig::default())
+            .keymap_path(&path)
+            .framework_keymap(FrameworkKeymap::default().bind(
+                FrameworkAction::DeleteToLineStart,
+                KeyBindings::from_str("ctrl-u").unwrap(),
+            ));
+        let keymap = Keymap::new(config);
+        let _ = fs::remove_file(&path);
+
+        assert_eq!(
+            keymap.resolve_action(ctrl_key('u')),
+            Action::DeleteToLineStart
+        );
+    }
+
+    #[test]
+    fn rust_framework_unbind_removes_a_file_delete_to_line_start_binding() {
+        let path = write_temp_keymap("delete_to_line_start = ctrl-u\n");
+        let config = KeymapConfig::from_clipboard_config(&ClipboardConfig::default())
+            .keymap_path(&path)
+            .framework_keymap(
+                FrameworkKeymap::default().unbind(FrameworkAction::DeleteToLineStart),
+            );
+        let keymap = Keymap::new(config);
+        let _ = fs::remove_file(&path);
+
+        assert_eq!(keymap.resolve_action(ctrl_key('u')), Action::None);
     }
 
     #[test]

@@ -38,6 +38,7 @@ let editor = TextEditor::default(); // empty text, cursor at 0
 | `delete()` | Delete character after cursor or delete selection |
 | `delete_word_left()` | Delete word before cursor |
 | `delete_word_right()` | Delete word after cursor |
+| `delete_to_line_start()` | Delete from the start of the current line to the cursor (or delete selection) |
 | `clear()` | Clear the full buffer as an undoable replace edit; returns `true` when text, cursor, or selection changed |
 
 ### Cursor movement
@@ -96,6 +97,8 @@ if changed {
 
 Supported keys include character insertion, arrow keys, word movement (`Ctrl+Left/Right`), `Home`/`End`, `Backspace`/`Delete`, word deletion (`Ctrl+Backspace`/`Ctrl+Delete`), `Enter` (newline), and undo/redo (`Ctrl+Z`/`Ctrl+Shift+Z`).
 
+`handle_key` uses the default keymap, which leaves `delete_to_line_start` unbound. Call `delete_to_line_start()` or `delete_to_start()` directly, or bind the action for the widgets through [`keymap.conf` or `FrameworkKeymap`](keybindings.md).
+
 Clipboard operations (copy/cut/paste) are handled at the widget layer, not by `handle_key`.
 `TextEditor` itself remains plain and keymap-driven; opt-in Vim motions are a
 `TextArea` widget-layer behavior enabled with `TextArea::vim_motions(true)`,
@@ -128,7 +131,7 @@ let input = TextInput::default(); // empty text, cursor at 0
 | Method | Description |
 |--------|-------------|
 | `clear()` | Clear all text content |
-| `delete_to_start()` | Delete from cursor to start of text (or delete selection) |
+| `delete_to_start()` | Delete from cursor to start of text (or delete selection); the keymap's `delete_to_line_start` action runs this |
 | `delete_to_end()` | Delete from cursor to end of text (or delete selection) |
 
 All methods from `TextEditor` (accessors, cursor movement, selection, undo/redo) are available on `TextInput` as well, except for vertical movement methods.

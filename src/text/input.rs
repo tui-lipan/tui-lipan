@@ -158,6 +158,7 @@ impl TextInput {
             Action::Delete => self.core.delete(),
             Action::DeleteWordLeft => self.core.delete_word_left(),
             Action::DeleteWordRight => self.core.delete_word_right(),
+            Action::DeleteToLineStart => self.delete_to_start(),
 
             Action::Copy
             | Action::Cut
@@ -549,6 +550,86 @@ mod tests {
         assert_eq!(input.text(), "hello");
         assert_eq!(input.cursor(), 4);
         assert_eq!(input.anchor(), Some(1));
+    }
+
+    #[test]
+    fn delete_to_line_start_action_keeps_text_after_the_cursor() {
+        let mut input = TextInput::new("helloworld");
+        input.set_cursor(5);
+
+        assert!(input.handle_action(crate::app::input::keymap::Action::DeleteToLineStart));
+        assert_eq!(input.text(), "world");
+        assert_eq!(input.cursor(), 0);
+        assert_eq!(input.anchor(), None);
+    }
+
+    #[test]
+    fn delete_to_line_start_action_at_the_start_changes_nothing() {
+        let mut input = TextInput::new("hello");
+        input.set_cursor(0);
+
+        assert!(!input.handle_action(crate::app::input::keymap::Action::DeleteToLineStart));
+        assert_eq!(input.text(), "hello");
+        assert!(!input.can_undo());
+    }
+
+    #[test]
+    fn delete_to_line_start_action_removes_only_the_selection() {
+        let mut input = TextInput::new("helloworld");
+        input.set_cursor(7);
+        input.set_anchor(Some(3));
+
+        assert!(input.handle_action(crate::app::input::keymap::Action::DeleteToLineStart));
+        assert_eq!(input.text(), "helrld");
+        assert_eq!(input.cursor(), 3);
+        assert_eq!(input.anchor(), None);
+    }
+
+    #[test]
+    fn delete_to_line_start_action_keeps_multibyte_text_intact() {
+        let text = "zażółć🦀gęślą";
+        let cursor = text.find('g').unwrap();
+        let mut input = TextInput::new(text);
+        input.set_cursor(cursor);
+
+        assert!(input.handle_action(crate::app::input::keymap::Action::DeleteToLineStart));
+        assert_eq!(input.text(), "gęślą");
+        assert_eq!(input.cursor(), 0);
+
+        assert!(input.undo());
+        assert_eq!(input.text(), text);
+        assert_eq!(input.cursor(), cursor);
+    }
+
+    #[test]
+    fn delete_to_line_start_action_is_one_undo_step_with_selection_restored() {
+        let mut input = TextInput::new("helloworld");
+        input.set_cursor(7);
+        input.set_anchor(Some(3));
+
+        assert!(input.handle_action(crate::app::input::keymap::Action::DeleteToLineStart));
+        assert!(input.undo());
+        assert_eq!(input.text(), "helloworld");
+        assert_eq!(input.cursor(), 7);
+        assert_eq!(input.anchor(), Some(3));
+
+        assert!(input.redo());
+        assert_eq!(input.text(), "helrld");
+        assert_eq!(input.cursor(), 3);
+    }
+
+    #[test]
+    fn delete_to_line_start_action_does_not_merge_into_typed_text() {
+        let mut input = TextInput::new("");
+        assert!(input.handle_key(key(KeyCode::Char('a'))));
+        assert!(input.handle_key(key(KeyCode::Char('b'))));
+
+        assert!(input.handle_action(crate::app::input::keymap::Action::DeleteToLineStart));
+        assert_eq!(input.text(), "");
+
+        assert!(input.undo());
+        assert_eq!(input.text(), "ab");
+        assert_eq!(input.cursor(), 2);
     }
 
     #[test]

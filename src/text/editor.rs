@@ -231,6 +231,20 @@ impl TextEditor {
         changed
     }
 
+    /// Delete from the start of the current line to the cursor, or the selection if any.
+    ///
+    /// At the start of a line this changes nothing rather than joining the previous line.
+    pub fn delete_to_line_start(&mut self) -> bool {
+        self.core.normalize_cursor_and_anchor();
+        if self.core.delete_selection() {
+            return true;
+        }
+        let cursor = self.core.cursor;
+        let start = self.core.text[..cursor].rfind('\n').map_or(0, |i| i + 1);
+        self.core
+            .replace_range(start, cursor, "", TextEditKind::DeleteBackspace)
+    }
+
     /// Apply a [`TextAreaEvent`] to this state bundle.
     pub fn apply(&mut self, ev: &TextAreaEvent) {
         self.core.text = ev.value.to_string();
@@ -279,6 +293,7 @@ impl TextEditor {
             Action::Delete => self.core.delete(),
             Action::DeleteWordLeft => self.core.delete_word_left(),
             Action::DeleteWordRight => self.core.delete_word_right(),
+            Action::DeleteToLineStart => self.delete_to_line_start(),
 
             Action::Copy
             | Action::Cut
@@ -847,6 +862,43 @@ mod tests {
         assert!(editor.redo());
         assert_eq!(editor.text(), "");
         assert_eq!(editor.cursor(), 0);
+        assert_eq!(editor.anchor(), None);
+    }
+
+    #[test]
+    fn delete_to_line_start_stops_at_the_current_line() {
+        let mut editor = TextEditor::new("abc\nhelloworld\nxyz");
+        editor.set_cursor(9);
+
+        assert!(editor.delete_to_line_start());
+        assert_eq!(editor.text(), "abc\nworld\nxyz");
+        assert_eq!(editor.cursor(), 4);
+
+        assert!(editor.undo());
+        assert_eq!(editor.text(), "abc\nhelloworld\nxyz");
+        assert_eq!(editor.cursor(), 9);
+    }
+
+    #[test]
+    fn delete_to_line_start_at_a_line_start_changes_nothing() {
+        let mut editor = TextEditor::new("abc\ndef");
+        editor.set_cursor(4);
+
+        assert!(!editor.delete_to_line_start());
+        assert_eq!(editor.text(), "abc\ndef");
+        assert_eq!(editor.cursor(), 4);
+        assert!(!editor.can_undo());
+    }
+
+    #[test]
+    fn delete_to_line_start_removes_a_selection_across_lines() {
+        let mut editor = TextEditor::new("abc\ndef");
+        editor.set_cursor(5);
+        editor.set_anchor(Some(1));
+
+        assert!(editor.delete_to_line_start());
+        assert_eq!(editor.text(), "aef");
+        assert_eq!(editor.cursor(), 1);
         assert_eq!(editor.anchor(), None);
     }
 

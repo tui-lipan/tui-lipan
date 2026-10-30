@@ -247,12 +247,13 @@ Framework-owned actions configurable from Rust via `FrameworkKeymap` and `App::f
 | `FocusNext` | `tab` | Tab traversal |
 | `FocusPrev` | `shift-tab` | Reverse tab traversal |
 | `ToggleDevTools` | `f12` | DevTools panel (requires `devtools` feature at runtime) |
+| `DeleteToLineStart` | None | Delete from the cursor to the line start in `Input` and `TextArea`; single-step bindings only |
 
 Sugar: `App::global_quit(None)` unbinds quit without touching other framework actions.
 
 ### `FrameworkKeymap`
 
-Builder for Rust-side framework binding overrides. Applied **after** user keymap files and built-in defaults. Methods: `.bind(action, KeyBindings)`, `.unbind(action)`.
+Builder for Rust-side framework binding overrides. Applied **after** user keymap files and built-in defaults, and outranks them when they use the same key. Methods: `.bind(action, KeyBindings)`, `.unbind(action)`.
 
 ### `UserKeymapPolicy`
 

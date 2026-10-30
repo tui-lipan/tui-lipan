@@ -378,6 +378,8 @@ Input::new(self.query.clone())
 
 **Undo/Redo:** `Ctrl+Z`, `Ctrl+Shift+Z`, `Ctrl+Y` (also handles raw control codes).
 
+**Delete to line start:** bind the `delete_to_line_start` action to give `Input`, `TextArea`, and `SearchPalette` filters a shortcut such as `Ctrl+U`; see [Keybindings](../keybindings.md).
+
 ---
 
 ## TextArea
