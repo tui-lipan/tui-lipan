@@ -552,30 +552,6 @@ where
             return Ok(true);
         }
 
-        let selection_handled = {
-            let mut key_ctx = make_key_ctx(
-                Some(&self.widgets.read_only_selection),
-                &mut self.widgets.input_history,
-                &mut self.widgets.textarea_history,
-                &mut self.widgets.text_area_vim_state,
-                &mut self.widgets.hex_history,
-                &mut self.widgets.hex_pending_edit,
-                &self.keymap,
-                self.text_area_newline_binding,
-                &clipboard,
-                &clipboard_config,
-                &mut self.copy_feedback,
-            );
-            selection_clipboard_shortcut(&mut self.core.tree, self.focused, &mut key_ctx, key)
-        };
-        if selection_handled {
-            let pump_dirty = self.pump()?;
-            if !pump_dirty {
-                self.render();
-            }
-            return Ok(true);
-        }
-
         let focus = if self
             .focused
             .is_some_and(|id| self.core.tree.is_valid(id) && self.focused_is_terminal(id))
@@ -610,6 +586,30 @@ where
             }
         } else {
             self.keymap_runtime.reset();
+        }
+
+        let selection_handled = chord_text_action.is_none() && {
+            let mut key_ctx = make_key_ctx(
+                Some(&self.widgets.read_only_selection),
+                &mut self.widgets.input_history,
+                &mut self.widgets.textarea_history,
+                &mut self.widgets.text_area_vim_state,
+                &mut self.widgets.hex_history,
+                &mut self.widgets.hex_pending_edit,
+                &self.keymap,
+                self.text_area_newline_binding,
+                &clipboard,
+                &clipboard_config,
+                &mut self.copy_feedback,
+            );
+            selection_clipboard_shortcut(&mut self.core.tree, self.focused, &mut key_ctx, key)
+        };
+        if selection_handled {
+            let pump_dirty = self.pump()?;
+            if !pump_dirty {
+                self.render();
+            }
+            return Ok(true);
         }
 
         let dismiss_handled = self

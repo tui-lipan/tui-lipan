@@ -647,8 +647,13 @@ fn apply_framework_keymap_overrides(bindings: &mut Vec<Binding>, keymap: &Framew
         let action = framework_action.action();
         bindings.retain(|binding| binding.action != action);
         if let FrameworkBindingOverride::Bind(key_bindings) = override_ {
-            // Keys resolve to their first binding, so an app binding goes in front to outrank a
-            // default or file binding on the same key.
+            // Some dispatch paths act on every binding for a key, so a key this bind claims must
+            // not keep a default, file, or earlier Rust binding.
+            bindings.retain(|binding| {
+                !key_bindings
+                    .iter()
+                    .any(|claimed| *claimed == binding.combination)
+            });
             bindings.splice(
                 0..0,
                 key_bindings.iter().cloned().map(|combination| Binding {
@@ -1332,6 +1337,105 @@ mod tests {
 
             assert_eq!(Keymap::new(config).resolve_action(ctrl_key('u')), expected);
         }
+    }
+
+    fn esc_key() -> KeyEvent {
+        KeyEvent {
+            code: KeyCode::Esc,
+            mods: KeyMods::default(),
+        }
+    }
+
+    fn rust_keymap(overrides: FrameworkKeymap) -> Keymap {
+        Keymap::new(
+            KeymapConfig::from_clipboard_config(&ClipboardConfig::default())
+                .user_keymap_policy(UserKeymapPolicy::Disabled)
+                .framework_keymap(overrides),
+        )
+    }
+
+    fn actions_on(keymap: &Keymap, key: KeyEvent) -> Vec<Action> {
+        keymap
+            .matches(key)
+            .into_iter()
+            .map(|binding| binding.action)
+            .collect()
+    }
+
+    #[test]
+    fn rust_binding_is_the_only_match_on_its_key() {
+        let keymap = rust_keymap(
+            FrameworkKeymap::default()
+                .bind(
+                    FrameworkAction::DeleteToLineStart,
+                    KeyBindings::from_str("ctrl-c").unwrap(),
+                )
+                .bind(FrameworkAction::Undo, KeyBindings::from_str("esc").unwrap()),
+        );
+
+        assert_eq!(
+            actions_on(&keymap, ctrl_key('c')),
+            [Action::DeleteToLineStart]
+        );
+        assert_eq!(actions_on(&keymap, esc_key()), [Action::Undo]);
+    }
+
+    #[test]
+    fn rust_binding_is_the_only_match_over_a_keymap_file() {
+        let path = write_temp_keymap("copy = ctrl-u\n");
+        let keymap = Keymap::new(
+            KeymapConfig::from_clipboard_config(&ClipboardConfig::default())
+                .keymap_path(&path)
+                .framework_keymap(FrameworkKeymap::default().bind(
+                    FrameworkAction::DeleteToLineStart,
+                    KeyBindings::from_str("ctrl-u").unwrap(),
+                )),
+        );
+        let _ = fs::remove_file(&path);
+
+        assert_eq!(
+            actions_on(&keymap, ctrl_key('u')),
+            [Action::DeleteToLineStart]
+        );
+    }
+
+    #[test]
+    fn later_rust_bind_takes_only_the_shared_key_from_the_earlier_one() {
+        let keymap = rust_keymap(
+            FrameworkKeymap::default()
+                .bind(
+                    FrameworkAction::Clear,
+                    KeyBindings::from_str("ctrl-u, ctrl-g").unwrap(),
+                )
+                .bind(
+                    FrameworkAction::DeleteToLineStart,
+                    KeyBindings::from_str("ctrl-u").unwrap(),
+                ),
+        );
+
+        assert_eq!(
+            actions_on(&keymap, ctrl_key('u')),
+            [Action::DeleteToLineStart]
+        );
+        assert_eq!(actions_on(&keymap, ctrl_key('g')), [Action::Clear]);
+    }
+
+    #[test]
+    fn rust_binding_keeps_its_key_when_clipboard_settings_change() {
+        let mut keymap = rust_keymap(FrameworkKeymap::default().bind(
+            FrameworkAction::DeleteToLineStart,
+            KeyBindings::from_str("ctrl-c").unwrap(),
+        ));
+
+        keymap.reconfigure_clipboard(&ClipboardConfig {
+            enable_performable_ctrl_c_copy: true,
+            ..ClipboardConfig::default()
+        });
+
+        assert_eq!(
+            actions_on(&keymap, ctrl_key('c')),
+            [Action::DeleteToLineStart]
+        );
     }
 
     #[test]

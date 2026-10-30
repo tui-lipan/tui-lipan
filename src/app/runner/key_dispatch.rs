@@ -75,16 +75,6 @@ impl<C: Component> AppRunner<C> {
             }
         }
 
-        let selection = self.dispatch_selection_clipboard_shortcut(key);
-        if selection.handled {
-            return LayeredKeyEventResult {
-                consumed: true,
-                dirty_override: selection.dirty_override,
-                mark_full: selection.dirty_override.is_none(),
-                ..Default::default()
-            };
-        }
-
         let focus_kind = if self
             .focus
             .focused
@@ -132,6 +122,20 @@ impl<C: Component> AppRunner<C> {
             }
         } else {
             self.keymap_runtime.reset();
+        }
+
+        // After the chord matcher, so a chord can claim a copy or cut key as its next step, and a
+        // copy that breaks a chord has already cancelled it.
+        if chord_text_action.is_none() {
+            let selection = self.dispatch_selection_clipboard_shortcut(key);
+            if selection.handled {
+                return LayeredKeyEventResult {
+                    consumed: true,
+                    dirty_override: selection.dirty_override,
+                    mark_full: selection.dirty_override.is_none(),
+                    ..Default::default()
+                };
+            }
         }
 
         let dismiss_handled = self

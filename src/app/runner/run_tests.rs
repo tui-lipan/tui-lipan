@@ -10620,6 +10620,7 @@ fn key_capture_records_a_framework_chord_prefix_before_the_chord_claims_it() {
 #[derive(Clone)]
 struct ChordInputRecorder {
     values: Rc<RefCell<Vec<String>>>,
+    anchor: Option<usize>,
 }
 
 impl Component for ChordInputRecorder {
@@ -10637,6 +10638,7 @@ impl Component for ChordInputRecorder {
         let values = self.values.clone();
         Input::new("helloworld")
             .cursor(5)
+            .anchor(self.anchor)
             .on_change(Callback::new(move |event: crate::widgets::InputEvent| {
                 values.borrow_mut().push(event.value.to_string());
             }))
@@ -10648,14 +10650,24 @@ fn chord_input_runner(
     action: crate::FrameworkAction,
     values: &Rc<RefCell<Vec<String>>>,
 ) -> AppRunner<ChordInputRecorder> {
+    bound_input_runner(action, "ctrl-g u", None, values)
+}
+
+fn bound_input_runner(
+    action: crate::FrameworkAction,
+    keys: &str,
+    anchor: Option<usize>,
+    values: &Rc<RefCell<Vec<String>>>,
+) -> AppRunner<ChordInputRecorder> {
     let app = crate::App::new()
         .user_keymap_policy(crate::UserKeymapPolicy::Disabled)
-        .framework_keymap(crate::FrameworkKeymap::default().bind(
-            action,
-            crate::KeyBindings::from_str("ctrl-g u").expect("binding"),
-        ));
+        .framework_keymap(
+            crate::FrameworkKeymap::default()
+                .bind(action, crate::KeyBindings::from_str(keys).expect("binding")),
+        );
     let component = ChordInputRecorder {
         values: values.clone(),
+        anchor,
     };
     let mut runner = AppRunner::new(app, component.clone(), ());
     init_runner(
@@ -10682,6 +10694,61 @@ fn chord_runs_a_text_action_on_the_focused_input_without_typing_its_final_key() 
 
     assert!(prefix.consumed && last.consumed);
     assert_eq!(values.borrow().as_slice(), ["world"]);
+}
+
+#[test]
+fn rust_binding_on_the_copy_key_edits_a_selected_input_instead_of_copying() {
+    let values = Rc::new(RefCell::new(Vec::new()));
+    let mut runner = bound_input_runner(
+        crate::FrameworkAction::DeleteToLineStart,
+        "ctrl-c",
+        Some(2),
+        &values,
+    );
+
+    let result = runner.dispatch_layered_key(ctrl_char('c'));
+
+    assert!(result.consumed);
+    assert_eq!(values.borrow().as_slice(), ["heworld"]);
+}
+
+#[test]
+fn chord_ending_in_the_copy_key_completes_on_a_selected_input() {
+    let values = Rc::new(RefCell::new(Vec::new()));
+    let mut runner = bound_input_runner(
+        crate::FrameworkAction::DeleteToLineStart,
+        "ctrl-g ctrl-c",
+        Some(2),
+        &values,
+    );
+
+    runner.dispatch_layered_key(ctrl_char('g'));
+    let last = runner.dispatch_layered_key(ctrl_char('c'));
+
+    assert!(last.consumed);
+    assert_eq!(values.borrow().as_slice(), ["heworld"]);
+}
+
+#[test]
+fn copy_key_that_breaks_a_chord_copies_and_cancels_the_chord() {
+    let values = Rc::new(RefCell::new(Vec::new()));
+    let mut runner = bound_input_runner(
+        crate::FrameworkAction::DeleteToLineStart,
+        "ctrl-g u",
+        Some(2),
+        &values,
+    );
+
+    runner.dispatch_layered_key(ctrl_char('g'));
+    assert!(runner.dispatch_layered_key(ctrl_char('c')).consumed);
+    assert!(values.borrow().is_empty(), "copy edits nothing");
+    runner.dispatch_layered_key(key(KeyCode::Char('u')));
+
+    assert_eq!(
+        values.borrow().as_slice(),
+        ["heuworld"],
+        "u is typed over the selection, not the end of a stale chord"
+    );
 }
 
 #[test]

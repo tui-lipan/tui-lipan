@@ -333,6 +333,47 @@ fn chord_final_key_does_not_also_run_its_single_key_binding() {
 }
 
 #[test]
+fn rust_binding_on_the_copy_key_edits_a_selected_input() {
+    let app = app_binding(FrameworkAction::DeleteToLineStart, "ctrl-c");
+    let mut backend = TestBackend::new_with_app(app, BoundInput { mask: None }, ());
+    backend.render();
+    assert!(backend.focus_key(&Key::from(TARGET)));
+
+    send(&mut backend, &[shift_left(), shift_left(), ctrl('c')]);
+
+    assert_eq!(backend.state().text(), "hellowor");
+}
+
+#[test]
+fn chord_ending_in_the_copy_key_completes_on_a_selected_input() {
+    let app = app_binding(FrameworkAction::DeleteToLineStart, "ctrl-g ctrl-c");
+    let mut backend = TestBackend::new_with_app(app, BoundInput { mask: None }, ());
+    backend.render();
+    assert!(backend.focus_key(&Key::from(TARGET)));
+
+    send(&mut backend, &[shift_left(), shift_left()]);
+    send(&mut backend, &[ctrl('g'), ctrl('c')]);
+
+    assert_eq!(backend.state().text(), "hellowor");
+}
+
+#[test]
+fn copy_key_that_breaks_a_chord_cancels_the_chord() {
+    let app = app_binding(FrameworkAction::DeleteToLineStart, "ctrl-g u");
+    let mut backend = TestBackend::new_with_app(app, BoundInput { mask: None }, ());
+    backend.render();
+    assert!(backend.focus_key(&Key::from(TARGET)));
+
+    send(&mut backend, &[shift_left(), shift_left()]);
+    send(
+        &mut backend,
+        &[ctrl('g'), ctrl('c'), plain(KeyCode::Char('u'))],
+    );
+
+    assert_eq!(backend.state().text(), "helloworu");
+}
+
+#[test]
 fn chord_for_an_action_a_widget_cannot_run_still_types_nothing() {
     let app = app_binding(FrameworkAction::Copy, "ctrl-g c");
     let mut backend = TestBackend::new_with_app(app, BoundInput { mask: None }, ());
@@ -569,11 +610,76 @@ fn visual_line_home_and_end_stay_on_the_wrapped_row() {
     send(&mut backend, &[ctrl('e')]);
     assert_eq!(
         backend.state().cursor(),
-        next_row - 1,
-        "last column of the row"
+        next_row,
+        "past the row's last character"
     );
     send(&mut backend, &[ctrl('e')]);
-    assert_eq!(backend.state().cursor(), next_row - 1, "stays on the row");
+    assert_eq!(backend.state().cursor(), next_row, "stays when repeated");
+    send(&mut backend, &[ctrl('b')]);
+    assert_eq!(
+        backend.state().cursor(),
+        row,
+        "home returns to the same row"
+    );
+}
+
+#[test]
+fn typing_after_visual_line_end_follows_the_rows_last_character() {
+    let app = app_binding(FrameworkAction::MoveVisualLineEnd, "ctrl-e");
+    let mut backend = wrapped_backend(app, WRAPS, 0, true);
+    let starts = wrapped_row_starts(&mut backend);
+    let next_row = starts[2];
+
+    backend.state_mut().set_cursor(starts[1] + 1);
+    backend.render();
+    send(&mut backend, &[ctrl('e'), plain(KeyCode::Char('!'))]);
+
+    assert_eq!(
+        backend.state().text(),
+        format!("{}!{}", &WRAPS[..next_row], &WRAPS[next_row..])
+    );
+}
+
+#[test]
+fn visual_line_end_selection_includes_the_rows_last_character() {
+    let app = app_binding(FrameworkAction::SelectVisualLineEnd, "ctrl-e");
+    let mut backend = wrapped_backend(app, WRAPS, 0, true);
+    let starts = wrapped_row_starts(&mut backend);
+    let (row, next_row) = (starts[1], starts[2]);
+
+    backend.state_mut().set_cursor(row);
+    backend.render();
+    send(&mut backend, &[ctrl('e')]);
+    assert_eq!(backend.state().selected_text(), Some(&WRAPS[row..next_row]));
+
+    send(&mut backend, &[ctrl('e')]);
+    assert_eq!(
+        backend.state().selected_text(),
+        Some(&WRAPS[row..next_row]),
+        "stays when repeated"
+    );
+}
+
+#[test]
+fn visual_line_end_memory_ends_with_any_other_key() {
+    let app = app_binding(FrameworkAction::MoveVisualLineEnd, "ctrl-e");
+    let mut backend = wrapped_backend(app, WRAPS, 0, true);
+    let starts = wrapped_row_starts(&mut backend);
+
+    backend.state_mut().set_cursor(starts[1]);
+    backend.render();
+    send(&mut backend, &[ctrl('e')]);
+    assert_eq!(backend.state().cursor(), starts[2]);
+
+    send(
+        &mut backend,
+        &[plain(KeyCode::Right), plain(KeyCode::Left), ctrl('e')],
+    );
+    assert_eq!(
+        backend.state().cursor(),
+        starts[3],
+        "from the start of the next row, end means that row's end"
+    );
 }
 
 #[test]

@@ -139,28 +139,31 @@ pub(super) fn perform_visual_line_edge_nav(
     }
 
     let text = editor.text();
-    let cur_idx = visual_line_for_cursor(lines, clamp_text_area_cursor(text, editor.cursor()));
+    let cursor = clamp_text_area_cursor(text, editor.cursor());
+    let mut cur_idx = visual_line_for_cursor(lines, cursor);
+    // The caret draws at the start of the next row after moving to a soft-wrapped row's end.
+    if editor.visual_row_end == Some(cursor)
+        && cur_idx > 0
+        && clamp_text_area_cursor(text, lines[cur_idx - 1].end) == cursor
+    {
+        cur_idx -= 1;
+    }
     let row = &lines[cur_idx];
-    let target = if matches!(
+    let to_end = matches!(
         action,
-        Action::MoveVisualLineHome | Action::SelectVisualLineHome
-    ) {
-        row.start
-    } else {
-        let row_end = clamp_text_area_cursor(text, row.end);
-        // A soft-wrapped row shares its end byte with the next row's start, where the cursor
-        // would draw on the next row.
-        let ends_at_soft_wrap = lines
-            .get(cur_idx + 1)
-            .is_some_and(|next| next.line_num == row.line_num && next.continuation);
-        if ends_at_soft_wrap {
-            crate::utils::text::prev_char_boundary(text, row_end).max(row.start)
-        } else {
-            row_end
-        }
-    };
+        Action::MoveVisualLineEnd | Action::SelectVisualLineEnd
+    );
+    let target = clamp_text_area_cursor(text, if to_end { row.end } else { row.start });
+    let row_end_is_shared = lines.get(cur_idx + 1).is_some_and(|next| {
+        next.line_num == row.line_num
+            && next.continuation
+            && clamp_text_area_cursor(text, next.start) == target
+    });
+    let visual_row_end = (to_end && row_end_is_shared).then_some(target);
 
-    perform_visual_boundary_nav(editor, action, target)
+    let changed = perform_visual_boundary_nav(editor, action, target);
+    editor.visual_row_end = visual_row_end;
+    changed
 }
 
 pub(super) fn perform_visual_boundary_nav(

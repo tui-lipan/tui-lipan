@@ -30,6 +30,9 @@ pub struct TextEditor {
     /// movement, clicks). Set by the textarea key handler before performing
     /// visual navigation.
     pub(crate) visual_nav_col: Option<usize>,
+    /// Set after moving to the end of a soft-wrapped row. That byte is also where the next row
+    /// starts, so this records that the caret still counts as on the row it came from.
+    pub(crate) visual_row_end: Option<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -95,6 +98,7 @@ impl TextEditor {
             image_snapshots: Vec::new(),
             sentinel_snapshots: Vec::new(),
             visual_nav_col: None,
+            visual_row_end: None,
         }
     }
 
@@ -133,6 +137,7 @@ impl TextEditor {
         }
         if text_changed || self.core.cursor != prev_cursor {
             self.visual_nav_col = None;
+            self.visual_row_end = None;
         }
     }
 

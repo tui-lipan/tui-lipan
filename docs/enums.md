@@ -255,7 +255,7 @@ Sugar: `App::global_quit(None)` unbinds quit without touching other framework ac
 
 ### `FrameworkKeymap`
 
-Builder for Rust-side framework binding overrides. Applied **after** user keymap files and built-in defaults, and outranks them when they use the same key; the later `bind` wins if two Rust bindings share a key. Binding an action replaces all of its other keys. Methods: `.bind(action, KeyBindings)`, `.unbind(action)`.
+Builder for Rust-side framework binding overrides. Applied **after** user keymap files and built-in defaults, and takes a key it binds away from them; the later `bind` wins if two Rust bindings share a key. Binding an action replaces all of its other keys. Methods: `.bind(action, KeyBindings)`, `.unbind(action)`.
 
 ### `UserKeymapPolicy`
 

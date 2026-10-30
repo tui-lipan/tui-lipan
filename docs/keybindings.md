@@ -55,8 +55,9 @@ toggle_devtools = f12
 
 Every action can also be bound from Rust with `FrameworkKeymap::bind(FrameworkAction::…, bindings)`.
 Binding an action replaces all of its default keys, so list any it should keep, for example
-`"ctrl-w, ctrl-backspace, alt-backspace"` for `DeleteWordLeft`. A Rust binding outranks a default or
-keymap-file binding on the same key, and when two Rust bindings share a key the later `bind` wins.
+`"ctrl-w, ctrl-backspace, alt-backspace"` for `DeleteWordLeft`. A Rust binding takes its key away from
+any default or keymap-file binding, so binding `ctrl-c` to another action also stops `Ctrl+C` from
+copying. When two Rust bindings share a key the later `bind` wins.
 
 The text-widget `clear` action also accepts `clear-text` and `clear-input`
 aliases. It has no default binding; users or apps opt in, for example
@@ -72,7 +73,7 @@ keep a key for itself.
 | `delete_to_line_start` | `hello\|world` becomes `\|world`. Does nothing at the start of a line. |
 | `delete_to_line_end` | `hello\|world` becomes `hello\|`. Does nothing at the end of a line. |
 | `delete_line` | Removes the current line and its line break; in an `Input`, the whole value. |
-| `move_visual_line_home`, `move_visual_line_end` | Move to the edge of the wrapped row, or of the line where text does not wrap. |
+| `move_visual_line_home`, `move_visual_line_end` | Move to the edge of the wrapped row, or of the line where text does not wrap. The end is after the row's last character, which is the same text position as the start of the next row, so the caret draws there. Repeating the action stays put. |
 | `select_visual_line_home`, `select_visual_line_end` | Extend the selection to the same edges. |
 | `move_buffer_home`, `move_buffer_end` | Move to the start or end of all the text. |
 | `select_buffer_home`, `select_buffer_end` | Extend the selection to the same edges. |
@@ -153,7 +154,7 @@ their trapped focus, and explicit `ctx.focus_next()` / `ctx.focus_prev()` calls 
 
 Entries are parsed with the same **`KeyBinding` rules** as the public API, including chord syntax. The bundled keymap runtime drives built-in actions from both single-step bindings and multi-step chords such as `ctrl+x b`.
 
-When a key is a pending chord prefix, the runner consumes that prefix before focused-widget dispatch. If the following key completes the chord, the runner consumes it too and the mapped built-in action runs, within the limits listed above. If it does not complete the chord, the matcher resets and tries that key as a fresh keypress, so it can still trigger a single-step keymap action or fall through to normal widget handling. There is no chord timeout.
+When a key is a pending chord prefix, the runner consumes that prefix before focused-widget dispatch. If the following key completes the chord, the runner consumes it too and the mapped built-in action runs, within the limits listed above, even if that key is otherwise a copy or cut shortcut. If the following key does not complete the chord, the matcher resets and tries that key as a fresh keypress, so it can still trigger a single-step keymap action or fall through to normal widget handling. There is no chord timeout. A chord prefix also claims a copy or cut key: with `ctrl-c x` bound, `Ctrl+C` waits for the next key instead of copying.
 
 ### Layered dispatch (Rust API)
 

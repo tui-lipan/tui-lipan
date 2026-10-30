@@ -510,6 +510,15 @@ pub(crate) fn handle_key(
         if !is_vert {
             editor.set_visual_nav_col(None);
         }
+        if !matches!(
+            action,
+            Action::MoveVisualLineHome
+                | Action::MoveVisualLineEnd
+                | Action::SelectVisualLineHome
+                | Action::SelectVisualLineEnd
+        ) {
+            editor.visual_row_end = None;
+        }
 
         if handled
             && vim_motions
