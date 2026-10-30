@@ -1043,7 +1043,8 @@ impl<T: Clone + PartialEq> SearchPalette<T> {
 
     /// Start over when this value changes, keeping the palette mounted.
     ///
-    /// The search field returns to [`initial_query`](Self::initial_query) and the highlight to
+    /// The search field returns to [`initial_query`](Self::initial_query) with an empty undo history
+    /// and the highlight to
     /// [`initial_selected_item_index`](Self::initial_selected_item_index), as they would for a
     /// remounted palette, while focus and the scroll position of anything in
     /// [`results_header`](Self::results_header) survive. Use it when one palette presents several

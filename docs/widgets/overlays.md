@@ -531,7 +531,7 @@ order is the visual order navigation walks.
 | `sync_selection` | `bool` | Keep `on_select` synced with the selected source item; reranking that item alone does not emit again |
 | `preserve_item_order` | `bool` | Keep matched rows in source order instead of fuzzy-score order; applies to synchronous and asynchronous results |
 | `initial_query` | `impl Into<Arc<str>>` | Pre-populate search field |
-| `reset_key` | `Option<Arc<str>>` | Changing the value returns the search field to `initial_query` and the highlight to `initial_selected_item_index` while the palette stays mounted, so focus and the state of `results_header` survive. Use it when one palette presents several pages, such as category tabs |
+| `reset_key` | `Option<Arc<str>>` | Changing the value returns the search field to `initial_query` with an empty undo history and the highlight to `initial_selected_item_index` while the palette stays mounted, so focus and the state of `results_header` survive. Use it when one palette presents several pages, such as category tabs |
 | `initial_selected_item_index` | `Option<usize>` | Seed selection from this `items` index (else first row); changing the prop reseeds, while an unchanged value does not override navigation during refresh/reranking |
 | `navigation_wrap` | `bool` | Wrap Up/Down at the first and last result (default: `true`). Forwards to the inner `List` and uses `List::step_index` for input-focused navigation |
 | `placeholder` | `impl Into<Arc<str>>` | Input placeholder (default: `"Search..."`) |

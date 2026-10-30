@@ -37,6 +37,7 @@ pub(crate) fn handle_key(
     let has_on_change = node.on_change.is_some();
     let is_masked = node.mask.is_some();
     let on_change = node.on_change.clone();
+    let history_scope = node.history_scope.clone();
     let on_edit = node.on_edit.clone();
     let on_key = node.on_key.clone();
     let key_interceptor = node.key_interceptor.clone();
@@ -73,6 +74,7 @@ pub(crate) fn handle_key(
                 input.set_anchor(anchor);
                 input
             });
+            input.sync_history_scope(history_scope.as_ref());
             input.sync_from(value.as_ref(), cursor, anchor);
 
             let mut context = InputClipboardContext::new(
@@ -118,6 +120,7 @@ pub(crate) fn handle_key(
             input.set_anchor(anchor);
             input
         });
+        input.sync_history_scope(history_scope.as_ref());
         input.sync_from(value.as_ref(), cursor, anchor);
 
         let action = ctx
@@ -169,6 +172,7 @@ pub(crate) fn handle_paste(
     let has_on_change = node.on_change.is_some();
     let is_masked = node.mask.is_some();
     let on_change = node.on_change.clone();
+    let history_scope = node.history_scope.clone();
     let on_edit = node.on_edit.clone();
 
     if read_only || !has_on_change {
@@ -181,6 +185,7 @@ pub(crate) fn handle_paste(
         input.set_anchor(anchor);
         input
     });
+    input.sync_history_scope(history_scope.as_ref());
     input.sync_from(value.as_ref(), cursor, anchor);
 
     let mut context = InputClipboardContext::new(

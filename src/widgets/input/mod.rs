@@ -76,6 +76,7 @@ pub struct Input {
     pub(crate) tab_stop: bool,
     pub(crate) on_focus: Option<Callback<()>>,
     pub(crate) on_blur: Option<Callback<()>>,
+    pub(crate) history_scope: Option<Arc<str>>,
 }
 
 impl Input {
@@ -132,6 +133,7 @@ impl Input {
             tab_stop: true,
             on_focus: None,
             on_blur: None,
+            history_scope: None,
         }
     }
 
@@ -466,6 +468,12 @@ impl Input {
     /// Set the callback fired when the input loses focus.
     pub fn on_blur(mut self, cb: Callback<()>) -> Self {
         self.on_blur = Some(cb);
+        self
+    }
+
+    /// Start the undo history over whenever this value changes, keeping the node and its focus.
+    pub(crate) fn history_scope(mut self, scope: Arc<str>) -> Self {
+        self.history_scope = Some(scope);
         self
     }
 }

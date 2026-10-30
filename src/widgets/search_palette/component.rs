@@ -27,7 +27,7 @@ use super::{SearchEvent, SearchItem, SearchMatchMode, SearchPaletteProps};
 /// time, so no dead heap (undo history etc.) accumulates in controlled mode.
 pub(crate) enum QuerySource {
     /// Default mode: the widget renders its own `Input` and owns the query.
-    Uncontrolled(TextInput),
+    Uncontrolled(Box<TextInput>),
     /// Controlled mode: query is set by the caller via `SearchPalette::query()`.
     /// No `TextInput` or undo history is allocated.
     Controlled(Arc<str>),
@@ -176,7 +176,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                 input.set_text(props.initial_query.to_string());
                 input.set_cursor(props.initial_query.len());
             }
-            QuerySource::Uncontrolled(input)
+            QuerySource::Uncontrolled(Box::new(input))
         };
 
         let results = initial_results(props, query_source.query_str());
@@ -257,7 +257,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                     let mut input = TextInput::default();
                     input.set_text(current.to_string());
                     input.set_cursor(current.len());
-                    ctx.state.query_source = QuerySource::Uncontrolled(input);
+                    ctx.state.query_source = QuerySource::Uncontrolled(Box::new(input));
                     should_refresh = true;
                     reset_selection = true;
                 }
@@ -608,6 +608,9 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                 .tab_stop(ctx.props.tab_stop)
                 .on_change(ctx.link().callback(SearchPaletteMsg::QueryChanged));
 
+            if let Some(key) = ctx.props.reset_key.clone() {
+                input = input.history_scope(key);
+            }
             if let Some(shape) = ctx.props.input_caret_shape {
                 input = input.caret_shape(shape);
             }
@@ -1837,6 +1840,75 @@ mod tests {
         // A remounted bar would rebuild its position from the start and move the neighbor it was
         // told to show out to the far edge; a mounted one finds it on screen and stays put.
         assert_eq!(strip(&first), strip(&second), "the tab strip moved");
+    }
+
+    /// Keep the query empty on every page, so nothing but the new key tells the Input it moved.
+    struct EmptyPagesRoot;
+
+    impl Component for EmptyPagesRoot {
+        type Message = usize;
+        type Properties = ();
+        type State = usize;
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            0
+        }
+
+        fn update(&mut self, page: usize, ctx: &mut Context<Self>) -> Update {
+            ctx.state = page;
+            Update::full()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            SearchPalette::new()
+                .items((0..3).map(|i| SearchItem::new(format!("result-{i}"), i)))
+                .height(Length::Px(6))
+                .reset_key(ctx.state.to_string())
+                .into()
+        }
+    }
+
+    fn press(backend: &mut crate::TestBackend<EmptyPagesRoot>, code: KeyCode, mods: KeyMods) {
+        backend.send_key(KeyEvent { code, mods }).unwrap();
+        backend.render();
+    }
+
+    #[test]
+    fn a_new_reset_key_starts_the_search_fields_undo_history_over() {
+        let mut backend = crate::TestBackend::new(EmptyPagesRoot);
+        backend.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 6,
+        });
+        backend.render();
+        backend.focus_next();
+        let undo = KeyMods {
+            ctrl: true,
+            ..KeyMods::NONE
+        };
+
+        // Undo works on the page the text was typed on, so what it restores below is a real leak.
+        press(&mut backend, KeyCode::Char('f'), KeyMods::NONE);
+        press(&mut backend, KeyCode::Backspace, KeyMods::NONE);
+        press(&mut backend, KeyCode::Char('z'), undo);
+        assert!(
+            backend.capture_frame().plain_text().contains('f'),
+            "undo restores text on its own page"
+        );
+        press(&mut backend, KeyCode::Backspace, KeyMods::NONE);
+
+        backend.dispatch(1).unwrap();
+        backend.render();
+        let focused = backend.focused();
+        press(&mut backend, KeyCode::Char('z'), undo);
+
+        let frame = backend.capture_frame().plain_text();
+        let query = frame.lines().next().unwrap_or_default();
+        assert!(!query.contains('f'), "undo reached the last page:\n{frame}");
+        assert!(focused.is_some(), "the search field keeps focus");
+        assert_eq!(backend.focused(), focused);
     }
 
     struct MutableRendererRoot {

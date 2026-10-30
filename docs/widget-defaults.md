@@ -107,7 +107,7 @@ Source: `src/widgets/checkbox/mod.rs:188` (`Checkbox`).
 
 ## Input
 
-Source: `src/widgets/input/mod.rs:86` (`Input`).
+Source: `src/widgets/input/mod.rs:87` (`Input`).
 
 | Field | Default initializer |
 |---|---|
@@ -154,6 +154,7 @@ Source: `src/widgets/input/mod.rs:86` (`Input`).
 | `tab_stop` | `true` |
 | `on_focus` | `None` |
 | `on_blur` | `None` |
+| `history_scope` | `None` |
 
 ## TextArea
 
