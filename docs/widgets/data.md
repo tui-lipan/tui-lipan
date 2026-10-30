@@ -645,6 +645,7 @@ entries and git-backed or application-provided change projections.
 | `max_entries_per_dir` | `usize` | Cap entries per directory, keeping the first in display order |
 | `show_icons` | `bool` | Show file and directory icons independently of arrows (default: true) |
 | `show_arrows` | `bool` | Show directory expansion arrows independently of icons (default: true) |
+| `root_collapsible` | `bool` | Let the root row collapse; `false` makes it a fixed, always-open heading with no arrow (default: true) |
 | `expanded_arrow` | `impl Into<Arc<str>>` | Expanded-directory arrow (default: `▼`) |
 | `collapsed_arrow` | `impl Into<Arc<str>>` | Collapsed-directory arrow (default: `▶`) |
 | `arrow_style` | `Style` | Expansion arrow style, independent of icon and label styles |
