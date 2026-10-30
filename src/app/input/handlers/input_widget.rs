@@ -20,7 +20,8 @@ pub(crate) fn handle_key(
     key: KeyEvent,
     ctx: &mut KeyCtx<'_>,
 ) -> bool {
-    let handle_on_key = |handler: &KeyHandler| -> bool { handler.handle(key) };
+    let from_chord = ctx.chord_action.is_some();
+    let handle_on_key = |handler: &KeyHandler| -> bool { !from_chord && handler.handle(key) };
 
     // ── Phase 1: immutable borrow – read fields & handle clipboard ──────
     let node = tree.node(id);
@@ -105,7 +106,7 @@ pub(crate) fn handle_key(
     }
 
     // ── Phase 2.5: pre-insertion key interceptor ────────────────────────
-    if handle_key_interceptor(key_interceptor.as_ref(), key) {
+    if !from_chord && handle_key_interceptor(key_interceptor.as_ref(), key) {
         return true;
     }
 
@@ -119,7 +120,10 @@ pub(crate) fn handle_key(
         });
         input.sync_from(value.as_ref(), cursor, anchor);
 
-        if input.handle_key_with_masked(key, ctx.keymap, is_masked) {
+        let action = ctx
+            .chord_action
+            .unwrap_or_else(|| ctx.keymap.resolve_action(key));
+        if input.handle_action_masked(action, is_masked) {
             if let Some(cb) = on_edit.as_ref()
                 && let Some(edit) = input.take_last_edit()
             {

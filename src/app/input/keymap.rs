@@ -60,6 +60,10 @@ pub enum Action {
     MoveEnd,
     MoveWordLeft,
     MoveWordRight,
+    MoveVisualLineHome,
+    MoveVisualLineEnd,
+    MoveBufferHome,
+    MoveBufferEnd,
 
     // Selection
     SelectLeft,
@@ -70,6 +74,10 @@ pub enum Action {
     SelectEnd,
     SelectWordLeft,
     SelectWordRight,
+    SelectVisualLineHome,
+    SelectVisualLineEnd,
+    SelectBufferHome,
+    SelectBufferEnd,
 
     // Editing
     Backspace,
@@ -78,6 +86,10 @@ pub enum Action {
     DeleteWordRight,
     /// Delete from the cursor to the start of the line, or the selection if any.
     DeleteToLineStart,
+    /// Delete from the cursor to the end of the line, or the selection if any.
+    DeleteToLineEnd,
+    /// Delete the current line, or the selection if any.
+    DeleteLine,
     InsertNewline,
 
     /// Default action (usually insert char).
@@ -86,35 +98,156 @@ pub enum Action {
     None,
 }
 
-/// Framework-owned actions that can be configured from Rust app builders.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum FrameworkAction {
-    /// Quit the application.
-    Quit,
-    /// Dismiss the top-most overlay.
-    DismissOverlay,
-    /// Move focus to the next focusable widget.
-    FocusNext,
-    /// Move focus to the previous focusable widget.
-    FocusPrev,
-    /// Toggle DevTools visibility.
-    ToggleDevTools,
-    /// Delete from the cursor to the start of the line in `Input` and `TextArea`, or the
-    /// selection if any. Has no default binding; bind it to opt in, for example to `ctrl-u`.
-    DeleteToLineStart,
+/// Generates [`FrameworkAction`] and the config-file names from one table, so a bindable action
+/// cannot be missing from either. `Action::framework_action` matches exhaustively, so an [`Action`]
+/// left out of the table fails to compile. Names are in the `-` form config names normalize to.
+macro_rules! bindable_actions {
+    ($($(#[$meta:meta])* $variant:ident = $name:literal $(| $alias:literal)*;)+) => {
+        /// Actions that can be bound from Rust through [`FrameworkKeymap`] or `App` builders.
+        ///
+        /// Covers every action `keymap.conf` can bind. Binding an action replaces all of its
+        /// default bindings, so list any keys it should keep.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        #[non_exhaustive]
+        pub enum FrameworkAction {
+            $($(#[$meta])* $variant,)+
+        }
+
+        impl FrameworkAction {
+            #[cfg(test)]
+            const ALL: &'static [(Self, &'static str)] = &[$((Self::$variant, $name),)+];
+
+            fn action(self) -> Action {
+                match self {
+                    $(Self::$variant => Action::$variant,)+
+                }
+            }
+        }
+
+        impl Action {
+            fn from_config_name(raw: &str) -> Option<Self> {
+                let mut name = raw.trim().to_ascii_lowercase();
+                if name.is_empty() {
+                    return None;
+                }
+                name = name.replace('_', "-");
+                match name.as_str() {
+                    $($name $(| $alias)* => Some(Self::$variant),)+
+                    "none" | "unbind" | "disabled" => Some(Self::None),
+                    _ => None,
+                }
+            }
+
+            /// The bindable action this runs as, if it is one.
+            #[cfg_attr(not(test), allow(dead_code))]
+            fn framework_action(self) -> Option<FrameworkAction> {
+                match self {
+                    $(Self::$variant => Some(FrameworkAction::$variant),)+
+                    Self::InsertChar(_) | Self::None => None,
+                }
+            }
+        }
+    };
 }
 
-impl FrameworkAction {
-    fn action(self) -> Action {
-        match self {
-            Self::Quit => Action::Quit,
-            Self::DismissOverlay => Action::DismissOverlay,
-            Self::FocusNext => Action::FocusNext,
-            Self::FocusPrev => Action::FocusPrev,
-            Self::ToggleDevTools => Action::ToggleDevTools,
-            Self::DeleteToLineStart => Action::DeleteToLineStart,
-        }
-    }
+bindable_actions! {
+    /// Quit the application.
+    Quit = "quit" | "exit" | "app-quit" | "app-exit";
+    /// Dismiss the top-most overlay.
+    DismissOverlay = "dismiss-overlay" | "dismiss" | "close" | "cancel" | "escape";
+    /// Move focus to the next focusable widget.
+    FocusNext = "focus-next" | "next-focus" | "next-widget" | "focus-forward";
+    /// Move focus to the previous focusable widget.
+    FocusPrev = "focus-prev" | "focus-previous" | "prev-focus" | "previous-focus" | "prev-widget"
+        | "focus-backward";
+    /// Toggle DevTools visibility.
+    ToggleDevTools = "toggle-devtools" | "devtools-toggle" | "devtools" | "toggle-dev-tools"
+        | "toggle-debug" | "debug-toggle";
+    /// Copy the selection to the clipboard.
+    Copy = "copy";
+    /// Cut the selection to the clipboard.
+    Cut = "cut";
+    /// Paste from the clipboard.
+    Paste = "paste";
+    /// Paste from the primary selection, where supported.
+    PasteFromSelection = "paste-selection" | "paste-from-selection" | "paste-primary"
+        | "paste-primary-selection";
+    /// Copy an image to the clipboard.
+    CopyImage = "copy-image";
+    /// Paste an image from the clipboard.
+    PasteImage = "paste-image";
+    /// Undo the last edit.
+    Undo = "undo";
+    /// Redo the last undone edit.
+    Redo = "redo";
+    /// Select all text.
+    SelectAll = "select-all";
+    /// Clear all text.
+    Clear = "clear" | "clear-text" | "clear-input";
+    /// Move the cursor left.
+    MoveLeft = "move-left";
+    /// Move the cursor right.
+    MoveRight = "move-right";
+    /// Move the cursor up.
+    MoveUp = "move-up";
+    /// Move the cursor down.
+    MoveDown = "move-down";
+    /// Move to the start of the line.
+    MoveHome = "move-home";
+    /// Move to the end of the line.
+    MoveEnd = "move-end";
+    /// Move to the previous word.
+    MoveWordLeft = "move-word-left";
+    /// Move to the next word.
+    MoveWordRight = "move-word-right";
+    /// Move to the start of the wrapped row; the line start where text does not wrap.
+    MoveVisualLineHome = "move-visual-line-home";
+    /// Move to the end of the wrapped row; the line end where text does not wrap.
+    MoveVisualLineEnd = "move-visual-line-end";
+    /// Move to the start of the text.
+    MoveBufferHome = "move-buffer-home";
+    /// Move to the end of the text.
+    MoveBufferEnd = "move-buffer-end";
+    /// Extend the selection left.
+    SelectLeft = "select-left";
+    /// Extend the selection right.
+    SelectRight = "select-right";
+    /// Extend the selection up.
+    SelectUp = "select-up";
+    /// Extend the selection down.
+    SelectDown = "select-down";
+    /// Extend the selection to the start of the line.
+    SelectHome = "select-home";
+    /// Extend the selection to the end of the line.
+    SelectEnd = "select-end";
+    /// Extend the selection to the previous word.
+    SelectWordLeft = "select-word-left";
+    /// Extend the selection to the next word.
+    SelectWordRight = "select-word-right";
+    /// Extend the selection to the start of the wrapped row.
+    SelectVisualLineHome = "select-visual-line-home";
+    /// Extend the selection to the end of the wrapped row.
+    SelectVisualLineEnd = "select-visual-line-end";
+    /// Extend the selection to the start of the text.
+    SelectBufferHome = "select-buffer-home";
+    /// Extend the selection to the end of the text.
+    SelectBufferEnd = "select-buffer-end";
+    /// Delete the previous character or the selection.
+    Backspace = "backspace";
+    /// Delete the next character or the selection.
+    Delete = "delete";
+    /// Delete the previous word or the selection.
+    DeleteWordLeft = "delete-word-left";
+    /// Delete the next word or the selection.
+    DeleteWordRight = "delete-word-right";
+    /// Delete from the cursor to the start of the line, or the selection if any.
+    DeleteToLineStart = "delete-to-line-start";
+    /// Delete from the cursor to the end of the line, or the selection if any.
+    DeleteToLineEnd = "delete-to-line-end";
+    /// Delete the current line, or the selection if any.
+    DeleteLine = "delete-line";
+    /// Insert a newline.
+    InsertNewline = "insert-newline" | "newline" | "enter";
 }
 
 /// Enables or disables loading user keymap files from env/default paths.
@@ -134,84 +267,32 @@ enum FrameworkBindingOverride {
 }
 
 /// Rust-side framework keymap overrides applied after file and built-in bindings.
+///
+/// When two actions are bound to the same key, the later `bind` call wins.
 #[derive(Debug, Clone, Default)]
 pub struct FrameworkKeymap {
-    overrides: StdHashMap<FrameworkAction, FrameworkBindingOverride>,
+    overrides: Vec<(FrameworkAction, FrameworkBindingOverride)>,
 }
 
 impl FrameworkKeymap {
     /// Bind a framework action to one or more key bindings.
-    pub fn bind(mut self, action: FrameworkAction, bindings: KeyBindings) -> Self {
-        self.overrides
-            .insert(action, FrameworkBindingOverride::Bind(bindings));
-        self
+    pub fn bind(self, action: FrameworkAction, bindings: KeyBindings) -> Self {
+        self.with_override(action, FrameworkBindingOverride::Bind(bindings))
     }
 
     /// Remove all key bindings for a framework action.
-    pub fn unbind(mut self, action: FrameworkAction) -> Self {
-        self.overrides
-            .insert(action, FrameworkBindingOverride::Unbind);
+    pub fn unbind(self, action: FrameworkAction) -> Self {
+        self.with_override(action, FrameworkBindingOverride::Unbind)
+    }
+
+    fn with_override(mut self, action: FrameworkAction, value: FrameworkBindingOverride) -> Self {
+        self.overrides.retain(|(existing, _)| *existing != action);
+        self.overrides.push((action, value));
         self
     }
 }
 
 impl Action {
-    fn from_config_name(raw: &str) -> Option<Self> {
-        let mut name = raw.trim().to_ascii_lowercase();
-        if name.is_empty() {
-            return None;
-        }
-        name = name.replace('_', "-");
-        match name.as_str() {
-            "quit" | "exit" | "app-quit" | "app-exit" => Some(Self::Quit),
-            "dismiss" | "dismiss-overlay" | "close" | "cancel" | "escape" => {
-                Some(Self::DismissOverlay)
-            }
-            "focus-next" | "next-focus" | "next-widget" | "focus-forward" => Some(Self::FocusNext),
-            "focus-prev" | "focus-previous" | "prev-focus" | "previous-focus" | "prev-widget"
-            | "focus-backward" => Some(Self::FocusPrev),
-            "toggle-devtools" | "devtools-toggle" | "devtools" | "toggle-dev-tools"
-            | "toggle-debug" | "debug-toggle" => Some(Self::ToggleDevTools),
-            "copy" => Some(Self::Copy),
-            "cut" => Some(Self::Cut),
-            "paste" => Some(Self::Paste),
-            "paste-selection"
-            | "paste-from-selection"
-            | "paste-primary"
-            | "paste-primary-selection" => Some(Self::PasteFromSelection),
-            "copy-image" => Some(Self::CopyImage),
-            "paste-image" => Some(Self::PasteImage),
-            "undo" => Some(Self::Undo),
-            "redo" => Some(Self::Redo),
-            "select-all" => Some(Self::SelectAll),
-            "clear" | "clear-text" | "clear-input" => Some(Self::Clear),
-            "move-left" => Some(Self::MoveLeft),
-            "move-right" => Some(Self::MoveRight),
-            "move-up" => Some(Self::MoveUp),
-            "move-down" => Some(Self::MoveDown),
-            "move-home" => Some(Self::MoveHome),
-            "move-end" => Some(Self::MoveEnd),
-            "move-word-left" => Some(Self::MoveWordLeft),
-            "move-word-right" => Some(Self::MoveWordRight),
-            "select-left" => Some(Self::SelectLeft),
-            "select-right" => Some(Self::SelectRight),
-            "select-up" => Some(Self::SelectUp),
-            "select-down" => Some(Self::SelectDown),
-            "select-home" => Some(Self::SelectHome),
-            "select-end" => Some(Self::SelectEnd),
-            "select-word-left" => Some(Self::SelectWordLeft),
-            "select-word-right" => Some(Self::SelectWordRight),
-            "backspace" => Some(Self::Backspace),
-            "delete" => Some(Self::Delete),
-            "delete-word-left" => Some(Self::DeleteWordLeft),
-            "delete-word-right" => Some(Self::DeleteWordRight),
-            "delete-to-line-start" => Some(Self::DeleteToLineStart),
-            "insert-newline" | "newline" | "enter" => Some(Self::InsertNewline),
-            "none" | "unbind" | "disabled" => Some(Self::None),
-            _ => None,
-        }
-    }
-
     pub(crate) fn is_clipboard(self) -> bool {
         matches!(
             self,
@@ -222,6 +303,22 @@ impl Action {
                 | Self::CopyImage
                 | Self::PasteImage
         )
+    }
+
+    /// Whether a focused `Input` or `TextArea` carries this out directly, without a clipboard or
+    /// other framework service, so a chord can run it.
+    pub(crate) fn runs_in_text_widget(self) -> bool {
+        !self.is_clipboard()
+            && !matches!(
+                self,
+                Self::Quit
+                    | Self::DismissOverlay
+                    | Self::FocusNext
+                    | Self::FocusPrev
+                    | Self::ToggleDevTools
+                    | Self::InsertChar(_)
+                    | Self::None
+            )
     }
 }
 
@@ -1148,6 +1245,119 @@ mod tests {
         assert_eq!(Action::from_config_name("clear"), Some(Action::Clear));
         assert_eq!(Action::from_config_name("clear-text"), Some(Action::Clear));
         assert_eq!(Action::from_config_name("clear_input"), Some(Action::Clear));
+    }
+
+    #[test]
+    fn every_bindable_action_round_trips_through_its_config_name_and_is_documented() {
+        let docs = include_str!("../../../docs/keybindings.md");
+        for &(framework_action, name) in FrameworkAction::ALL {
+            let action = framework_action.action();
+            assert_eq!(Action::from_config_name(name), Some(action), "{name}");
+            assert_eq!(
+                Action::from_config_name(&name.replace('-', "_")),
+                Some(action),
+                "{name}"
+            );
+            assert_eq!(action.framework_action(), Some(framework_action), "{name}");
+            let documented = format!("`{}`", name.replace('-', "_"));
+            assert!(docs.contains(&documented), "{documented} in keybindings.md");
+        }
+    }
+
+    #[test]
+    fn newly_bindable_actions_have_no_default_binding() {
+        let keymap = default_keymap();
+        for action in [
+            Action::DeleteToLineStart,
+            Action::DeleteToLineEnd,
+            Action::DeleteLine,
+            Action::MoveVisualLineHome,
+            Action::MoveVisualLineEnd,
+            Action::SelectVisualLineHome,
+            Action::SelectVisualLineEnd,
+            Action::MoveBufferHome,
+            Action::MoveBufferEnd,
+            Action::SelectBufferHome,
+            Action::SelectBufferEnd,
+        ] {
+            assert_eq!(keymap.binding_for_action(action), None, "{action:?}");
+        }
+    }
+
+    #[test]
+    fn rust_bind_replaces_an_actions_default_keys() {
+        let config = KeymapConfig::from_clipboard_config(&ClipboardConfig::default())
+            .user_keymap_policy(UserKeymapPolicy::Disabled)
+            .framework_keymap(FrameworkKeymap::default().bind(
+                FrameworkAction::DeleteWordLeft,
+                KeyBindings::from_str("ctrl-w").unwrap(),
+            ));
+        let keymap = Keymap::new(config);
+
+        assert_eq!(keymap.resolve_action(ctrl_key('w')), Action::DeleteWordLeft);
+        assert_eq!(
+            keymap.resolve_action(KeyEvent {
+                code: KeyCode::Backspace,
+                mods: KeyMods {
+                    alt: true,
+                    ..KeyMods::default()
+                },
+            }),
+            Action::None
+        );
+    }
+
+    #[test]
+    fn later_rust_bind_wins_when_two_actions_share_a_key() {
+        for (first, second, expected) in [
+            (
+                FrameworkAction::DeleteToLineStart,
+                FrameworkAction::Clear,
+                Action::Clear,
+            ),
+            (
+                FrameworkAction::Clear,
+                FrameworkAction::DeleteToLineStart,
+                Action::DeleteToLineStart,
+            ),
+        ] {
+            let bindings = KeyBindings::from_str("ctrl-u").unwrap();
+            let config = KeymapConfig::from_clipboard_config(&ClipboardConfig::default())
+                .user_keymap_policy(UserKeymapPolicy::Disabled)
+                .framework_keymap(
+                    FrameworkKeymap::default()
+                        .bind(first, bindings.clone())
+                        .bind(second, bindings),
+                );
+
+            assert_eq!(Keymap::new(config).resolve_action(ctrl_key('u')), expected);
+        }
+    }
+
+    #[test]
+    fn rust_bound_clipboard_action_stays_performable() {
+        let config = KeymapConfig::from_clipboard_config(&ClipboardConfig::default())
+            .user_keymap_policy(UserKeymapPolicy::Disabled)
+            .framework_keymap(FrameworkKeymap::default().bind(
+                FrameworkAction::Copy,
+                KeyBindings::from_str("alt-c").unwrap(),
+            ));
+        let keymap = Keymap::new(config);
+        let alt_c = KeyEvent {
+            code: KeyCode::Char('c'),
+            mods: KeyMods {
+                alt: true,
+                ..KeyMods::default()
+            },
+        };
+
+        assert_eq!(
+            keymap.matches(alt_c),
+            vec![BindingMatch {
+                action: Action::Copy,
+                mode: BindingMode::Performable,
+            }]
+        );
     }
 
     #[test]

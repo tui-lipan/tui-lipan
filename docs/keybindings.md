@@ -42,25 +42,51 @@ quit = ctrl-q
 toggle_devtools = f12
 ```
 
-**Available actions:** `copy`, `paste`, `paste_selection`, `cut`, `undo`, `redo`, `clear`, `select_all`, `move_left`, `move_right`, `move_up`, `move_down`, `move_word_left`, `move_word_right`, `select_word_left`, `select_word_right`, `delete_word_left`, `delete_word_right`, `delete_to_line_start`, `move_home`, `move_end`, `select_home`, `select_end`, `insert_newline`, `copy_image`, `paste_image`, `quit`, `dismiss_overlay`, `focus_next`, `focus_prev`, `toggle_devtools`.
+**Available actions:**
+
+| Group | Actions |
+|-------|---------|
+| Clipboard | `copy`, `cut`, `paste`, `paste_from_selection` (also `paste_selection`), `copy_image`, `paste_image` |
+| History | `undo`, `redo` |
+| Movement | `move_left`, `move_right`, `move_up`, `move_down`, `move_home`, `move_end`, `move_word_left`, `move_word_right`, `move_visual_line_home`, `move_visual_line_end`, `move_buffer_home`, `move_buffer_end` |
+| Selection | `select_all`, `select_left`, `select_right`, `select_up`, `select_down`, `select_home`, `select_end`, `select_word_left`, `select_word_right`, `select_visual_line_home`, `select_visual_line_end`, `select_buffer_home`, `select_buffer_end` |
+| Editing | `backspace`, `delete`, `delete_word_left`, `delete_word_right`, `delete_to_line_start`, `delete_to_line_end`, `delete_line`, `clear`, `insert_newline` |
+| App | `quit`, `dismiss_overlay`, `focus_next`, `focus_prev`, `toggle_devtools` |
+
+Every action can also be bound from Rust with `FrameworkKeymap::bind(FrameworkAction::…, bindings)`.
+Binding an action replaces all of its default keys, so list any it should keep, for example
+`"ctrl-w, ctrl-backspace, alt-backspace"` for `DeleteWordLeft`. A Rust binding outranks a default or
+keymap-file binding on the same key, and when two Rust bindings share a key the later `bind` wins.
 
 The text-widget `clear` action also accepts `clear-text` and `clear-input`
 aliases. It has no default binding; users or apps opt in, for example
 `clear = ctrl-u` or `clear = ctrl-c`. Clear performs an internal replace edit
 and emits the normal text edit/change callbacks.
 
-`delete_to_line_start` deletes from the cursor to the start of the line, so
-`hello|world` becomes `|world`, or removes the selection if there is one. In a
-`TextArea` it stops at the current line, and at the start of a line it does
-nothing. It is an undoable edit, and consecutive backward deletes (including
-`Backspace` and word deletion) undo as one step. It applies to every `Input` and
-`TextArea` in the app, including the filter inside a `SearchPalette`. It has no
-default binding; opt in with `delete_to_line_start = ctrl-u` or from Rust with
-`FrameworkKeymap::bind(FrameworkAction::DeleteToLineStart, bindings)`. A
-`key_interceptor` still runs first, so a widget can keep the key for itself.
+These actions have no default binding, and apply to every `Input` and `TextArea` in the app,
+including the filter inside a `SearchPalette`. A `key_interceptor` still runs first, so a widget can
+keep a key for itself.
 
-Text-editing actions such as `clear` and `delete_to_line_start` only resolve from
-single-step bindings; a chord bound to one has no effect.
+| Action | Behavior |
+|--------|----------|
+| `delete_to_line_start` | `hello\|world` becomes `\|world`. Does nothing at the start of a line. |
+| `delete_to_line_end` | `hello\|world` becomes `hello\|`. Does nothing at the end of a line. |
+| `delete_line` | Removes the current line and its line break; in an `Input`, the whole value. |
+| `move_visual_line_home`, `move_visual_line_end` | Move to the edge of the wrapped row, or of the line where text does not wrap. |
+| `select_visual_line_home`, `select_visual_line_end` | Extend the selection to the same edges. |
+| `move_buffer_home`, `move_buffer_end` | Move to the start or end of all the text. |
+| `select_buffer_home`, `select_buffer_end` | Extend the selection to the same edges. |
+
+The three delete actions remove only the selection when there is one, and are undoable. Consecutive
+backward deletes (`backspace`, `delete_word_left`, `delete_to_line_start`) undo as one step.
+
+In a Vim-enabled `TextArea` these actions apply in Insert mode. Normal and Visual modes keep their
+own commands.
+
+A chord can run any movement, selection, editing, or history action on the focused `Input` or
+`TextArea`, for example `delete_to_line_start = ctrl-x u`. The key that completes the chord is never
+typed and never reaches `key_interceptor` or `on_key`. Besides these, chords also run `quit` and
+`dismiss_overlay`; a chord for a clipboard, focus, or DevTools action does nothing.
 
 `toggle_devtools` is available when the `devtools` feature is enabled. `F12` is the default binding, but you can remap or unbind it in `keymap.conf`. App code can also control the panel directly with `ctx.show_devtools()`, `ctx.hide_devtools()`, and `ctx.toggle_devtools()`.
 
@@ -127,7 +153,7 @@ their trapped focus, and explicit `ctx.focus_next()` / `ctx.focus_prev()` calls 
 
 Entries are parsed with the same **`KeyBinding` rules** as the public API, including chord syntax. The bundled keymap runtime drives built-in actions from both single-step bindings and multi-step chords such as `ctrl+x b`.
 
-When a key is a pending chord prefix, the runner consumes that prefix before focused-widget dispatch. If the following key completes the chord, the mapped built-in action runs. If it does not complete the chord, the matcher resets and tries that key as a fresh keypress, so it can still trigger a single-step keymap action or fall through to normal widget handling. There is no chord timeout.
+When a key is a pending chord prefix, the runner consumes that prefix before focused-widget dispatch. If the following key completes the chord, the runner consumes it too and the mapped built-in action runs, within the limits listed above. If it does not complete the chord, the matcher resets and tries that key as a fresh keypress, so it can still trigger a single-step keymap action or fall through to normal widget handling. There is no chord timeout.
 
 ### Layered dispatch (Rust API)
 

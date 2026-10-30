@@ -128,6 +128,41 @@ fn logical_line_bounds(value: &str, cursor: usize) -> (usize, usize) {
     (start, end)
 }
 
+/// Move or extend the selection to the start or end of the wrapped row holding the cursor.
+pub(super) fn perform_visual_line_edge_nav(
+    editor: &mut TextEditor,
+    action: Action,
+    lines: &[TextAreaVisualLine],
+) -> bool {
+    if lines.is_empty() {
+        return false;
+    }
+
+    let text = editor.text();
+    let cur_idx = visual_line_for_cursor(lines, clamp_text_area_cursor(text, editor.cursor()));
+    let row = &lines[cur_idx];
+    let target = if matches!(
+        action,
+        Action::MoveVisualLineHome | Action::SelectVisualLineHome
+    ) {
+        row.start
+    } else {
+        let row_end = clamp_text_area_cursor(text, row.end);
+        // A soft-wrapped row shares its end byte with the next row's start, where the cursor
+        // would draw on the next row.
+        let ends_at_soft_wrap = lines
+            .get(cur_idx + 1)
+            .is_some_and(|next| next.line_num == row.line_num && next.continuation);
+        if ends_at_soft_wrap {
+            crate::utils::text::prev_char_boundary(text, row_end).max(row.start)
+        } else {
+            row_end
+        }
+    };
+
+    perform_visual_boundary_nav(editor, action, target)
+}
+
 pub(super) fn perform_visual_boundary_nav(
     editor: &mut TextEditor,
     action: Action,
@@ -137,7 +172,13 @@ pub(super) fn perform_visual_boundary_nav(
     let cursor = clamp_text_area_cursor(editor.text(), editor.cursor());
     let prev_anchor = editor.anchor();
 
-    if matches!(action, Action::SelectUp | Action::SelectDown) {
+    if matches!(
+        action,
+        Action::SelectUp
+            | Action::SelectDown
+            | Action::SelectVisualLineHome
+            | Action::SelectVisualLineEnd
+    ) {
         if editor.anchor().is_none() {
             editor.set_anchor(Some(cursor));
         }

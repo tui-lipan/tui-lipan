@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use crate::app::context::TextAreaNewlineBinding;
 use crate::app::copy_feedback::CopyFeedbackState;
 use crate::app::input::hex_history::HexHistory;
+use crate::app::input::keymap::Action;
 use crate::app::input::keymap::Keymap;
 use crate::app::input::text_area_vim::TextAreaVimState;
 use crate::app::interaction_state::DirtyLevel;
@@ -55,6 +56,9 @@ pub(crate) struct KeyCtx<'a> {
     /// When a handler consumes a key without mutating layout/component state,
     /// it can override the event loop's generic handled-key dirty level.
     pub dirty_override: Option<DirtyLevel>,
+    /// The action a just-completed chord runs. Set only for the `Input` and `TextArea` handlers,
+    /// which then ignore the key itself: it completed the chord and is not text or a shortcut.
+    pub chord_action: Option<Action>,
 }
 
 impl KeyCtx<'_> {

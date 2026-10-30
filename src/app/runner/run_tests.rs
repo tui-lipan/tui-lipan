@@ -10617,6 +10617,85 @@ fn key_capture_records_a_framework_chord_prefix_before_the_chord_claims_it() {
     );
 }
 
+#[derive(Clone)]
+struct ChordInputRecorder {
+    values: Rc<RefCell<Vec<String>>>,
+}
+
+impl Component for ChordInputRecorder {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _: &()) -> Self::State {}
+
+    fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _: &Context<Self>) -> Element {
+        let values = self.values.clone();
+        Input::new("helloworld")
+            .cursor(5)
+            .on_change(Callback::new(move |event: crate::widgets::InputEvent| {
+                values.borrow_mut().push(event.value.to_string());
+            }))
+            .key("input")
+    }
+}
+
+fn chord_input_runner(
+    action: crate::FrameworkAction,
+    values: &Rc<RefCell<Vec<String>>>,
+) -> AppRunner<ChordInputRecorder> {
+    let app = crate::App::new()
+        .user_keymap_policy(crate::UserKeymapPolicy::Disabled)
+        .framework_keymap(crate::FrameworkKeymap::default().bind(
+            action,
+            crate::KeyBindings::from_str("ctrl-g u").expect("binding"),
+        ));
+    let component = ChordInputRecorder {
+        values: values.clone(),
+    };
+    let mut runner = AppRunner::new(app, component.clone(), ());
+    init_runner(
+        &mut runner,
+        component,
+        Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 5,
+        },
+    );
+    runner.focus.focused = Some(node_id_by_key(&runner.core.tree, "input"));
+    runner
+}
+
+#[test]
+fn chord_runs_a_text_action_on_the_focused_input_without_typing_its_final_key() {
+    let values = Rc::new(RefCell::new(Vec::new()));
+    let mut runner = chord_input_runner(crate::FrameworkAction::DeleteToLineStart, &values);
+
+    let prefix = runner.dispatch_layered_key(ctrl_char('g'));
+    let last = runner.dispatch_layered_key(key(KeyCode::Char('u')));
+
+    assert!(prefix.consumed && last.consumed);
+    assert_eq!(values.borrow().as_slice(), ["world"]);
+}
+
+#[test]
+fn chord_for_a_non_text_action_does_not_type_its_final_key() {
+    let values = Rc::new(RefCell::new(Vec::new()));
+    let mut runner = chord_input_runner(crate::FrameworkAction::Copy, &values);
+
+    runner.dispatch_layered_key(ctrl_char('g'));
+    let last = runner.dispatch_layered_key(key(KeyCode::Char('u')));
+
+    assert!(last.consumed);
+    assert!(values.borrow().is_empty());
+}
+
 #[cfg(feature = "terminal")]
 #[derive(Clone)]
 struct TerminalFocusReportSmoke {

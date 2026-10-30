@@ -115,9 +115,17 @@ impl TextInput {
         keymap: &crate::app::input::keymap::Keymap,
         masked: bool,
     ) -> bool {
-        use crate::app::input::keymap::Action;
+        self.handle_action_masked(keymap.resolve_action(key), masked)
+    }
 
-        let action = keymap.resolve_action(key);
+    /// Run a keymap action. Word motions cover the whole value when `masked`, so they cannot
+    /// reveal where the words of a hidden value begin.
+    pub(crate) fn handle_action_masked(
+        &mut self,
+        action: crate::app::input::keymap::Action,
+        masked: bool,
+    ) -> bool {
+        use crate::app::input::keymap::Action;
 
         if masked {
             match action {
@@ -142,15 +150,21 @@ impl TextInput {
             Action::MoveRight => self.core.move_right(),
             Action::MoveWordLeft => self.core.move_word_left(),
             Action::MoveWordRight => self.core.move_word_right(),
-            Action::MoveHome => self.move_home(),
-            Action::MoveEnd => self.move_end(),
+            Action::MoveHome | Action::MoveVisualLineHome | Action::MoveBufferHome => {
+                self.move_home()
+            }
+            Action::MoveEnd | Action::MoveVisualLineEnd | Action::MoveBufferEnd => self.move_end(),
 
             Action::SelectLeft => self.core.select_left(),
             Action::SelectRight => self.core.select_right(),
             Action::SelectWordLeft => self.core.select_word_left(),
             Action::SelectWordRight => self.core.select_word_right(),
-            Action::SelectHome => self.select_home(),
-            Action::SelectEnd => self.select_end(),
+            Action::SelectHome | Action::SelectVisualLineHome | Action::SelectBufferHome => {
+                self.select_home()
+            }
+            Action::SelectEnd | Action::SelectVisualLineEnd | Action::SelectBufferEnd => {
+                self.select_end()
+            }
             Action::SelectAll => self.core.select_all(),
 
             Action::Backspace => self.core.backspace(),
@@ -159,6 +173,8 @@ impl TextInput {
             Action::DeleteWordLeft => self.core.delete_word_left(),
             Action::DeleteWordRight => self.core.delete_word_right(),
             Action::DeleteToLineStart => self.delete_to_start(),
+            Action::DeleteToLineEnd => self.delete_to_end(),
+            Action::DeleteLine => self.core.delete_selection() || self.clear_changed(),
 
             Action::Copy
             | Action::Cut
@@ -630,6 +646,51 @@ mod tests {
         assert!(input.undo());
         assert_eq!(input.text(), "ab");
         assert_eq!(input.cursor(), 2);
+    }
+
+    #[test]
+    fn delete_to_line_end_action_keeps_text_before_the_cursor() {
+        let mut input = TextInput::new("helloworld");
+        input.set_cursor(5);
+
+        assert!(input.handle_action(crate::app::input::keymap::Action::DeleteToLineEnd));
+        assert_eq!(input.text(), "hello");
+        assert_eq!(input.cursor(), 5);
+
+        assert!(input.undo());
+        assert_eq!(input.text(), "helloworld");
+        assert_eq!(input.cursor(), 5);
+    }
+
+    #[test]
+    fn delete_line_action_empties_the_input_or_removes_the_selection() {
+        let mut input = TextInput::new("hello");
+        input.set_cursor(2);
+        assert!(input.handle_action(crate::app::input::keymap::Action::DeleteLine));
+        assert_eq!(input.text(), "");
+        assert!(input.undo());
+        assert_eq!(input.text(), "hello");
+
+        input.set_cursor(4);
+        input.set_anchor(Some(1));
+        assert!(input.handle_action(crate::app::input::keymap::Action::DeleteLine));
+        assert_eq!(input.text(), "ho");
+    }
+
+    #[test]
+    fn line_and_buffer_motions_cover_the_whole_input() {
+        use crate::app::input::keymap::Action;
+
+        let mut input = TextInput::new("hello");
+        input.set_cursor(2);
+        assert!(input.handle_action(Action::MoveVisualLineEnd));
+        assert_eq!(input.cursor(), 5);
+        assert!(input.handle_action(Action::MoveBufferHome));
+        assert_eq!(input.cursor(), 0);
+        assert!(input.handle_action(Action::SelectBufferEnd));
+        assert_eq!((input.cursor(), input.anchor()), (5, Some(0)));
+        assert!(input.handle_action(Action::SelectVisualLineHome));
+        assert_eq!(input.anchor(), None);
     }
 
     #[test]

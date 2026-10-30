@@ -95,6 +95,7 @@ impl<C: Component> AppRunner<C> {
             FocusKind::Widget
         };
 
+        let mut chord_text_action = None;
         if focus_kind == FocusKind::Widget {
             match self.keymap_runtime.feed(key) {
                 KeymapRuntimeResult::Pending => {
@@ -119,6 +120,13 @@ impl<C: Component> AppRunner<C> {
                             ..Default::default()
                         };
                     }
+                    if !binding.action.runs_in_text_widget() {
+                        return LayeredKeyEventResult {
+                            consumed: true,
+                            ..Default::default()
+                        };
+                    }
+                    chord_text_action = Some(binding.action);
                 }
                 KeymapRuntimeResult::Matched(_) | KeymapRuntimeResult::None => {}
             }
@@ -209,7 +217,23 @@ impl<C: Component> AppRunner<C> {
             clipboard_config,
             copy_feedback,
             dirty_override: None,
+            chord_action: None,
         };
+
+        if let Some(action) = chord_text_action {
+            keyboard::dispatch_chord_action(
+                &mut core.tree,
+                focus_state.focused,
+                action,
+                &mut key_ctx,
+            );
+            return LayeredKeyEventResult {
+                consumed: true,
+                dirty_override: key_ctx.dirty_override,
+                mark_full: true,
+                ..Default::default()
+            };
+        }
 
         let mut ops = RunnerDispatchOps {
             core,

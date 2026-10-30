@@ -245,6 +245,83 @@ impl TextEditor {
             .replace_range(start, cursor, "", TextEditKind::DeleteBackspace)
     }
 
+    /// Delete from the cursor to the end of the current line, or the selection if any.
+    ///
+    /// At the end of a line this changes nothing rather than joining the next line.
+    pub fn delete_to_line_end(&mut self) -> bool {
+        self.core.normalize_cursor_and_anchor();
+        if self.core.delete_selection() {
+            return true;
+        }
+        let cursor = self.core.cursor;
+        let end = self.core.text[cursor..]
+            .find('\n')
+            .map_or(self.core.text.len(), |i| cursor + i);
+        self.core
+            .replace_range(cursor, end, "", TextEditKind::DeleteForward)
+    }
+
+    /// Delete the current line with its line break, or the selection if any.
+    ///
+    /// The cursor lands at the start of the following line, or at the end of the new last line
+    /// when the last line was deleted.
+    pub fn delete_line(&mut self) -> bool {
+        self.core.normalize_cursor_and_anchor();
+        if self.core.delete_selection() {
+            return true;
+        }
+        let text = &self.core.text;
+        let cursor = self.core.cursor;
+        let line_start = text[..cursor].rfind('\n').map_or(0, |i| i + 1);
+        let (start, end) = match text[cursor..].find('\n') {
+            Some(i) => (line_start, cursor + i + 1),
+            None => (line_start.saturating_sub(1), text.len()),
+        };
+        self.core
+            .replace_range(start, end, "", TextEditKind::Replace)
+    }
+
+    /// Move to the start of the text, clearing selection.
+    pub fn move_buffer_home(&mut self) -> bool {
+        self.move_to_buffer_edge(0)
+    }
+
+    /// Move to the end of the text, clearing selection.
+    pub fn move_buffer_end(&mut self) -> bool {
+        self.move_to_buffer_edge(self.core.text.len())
+    }
+
+    /// Extend the selection to the start of the text.
+    pub fn select_buffer_home(&mut self) -> bool {
+        self.select_to_buffer_edge(0)
+    }
+
+    /// Extend the selection to the end of the text.
+    pub fn select_buffer_end(&mut self) -> bool {
+        self.select_to_buffer_edge(self.core.text.len())
+    }
+
+    fn move_to_buffer_edge(&mut self, target: usize) -> bool {
+        self.core.normalize_cursor_and_anchor();
+        let changed = self.core.cursor != target || self.core.anchor.is_some();
+        self.core.anchor = None;
+        self.core.cursor = target;
+        changed
+    }
+
+    fn select_to_buffer_edge(&mut self, target: usize) -> bool {
+        self.core.normalize_cursor_and_anchor();
+        if self.core.cursor == target {
+            return false;
+        }
+        if self.core.anchor.is_none() {
+            self.core.anchor = Some(self.core.cursor);
+        }
+        self.core.cursor = target;
+        self.core.collapse_empty_selection();
+        true
+    }
+
     /// Apply a [`TextAreaEvent`] to this state bundle.
     pub fn apply(&mut self, ev: &TextAreaEvent) {
         self.core.text = ev.value.to_string();
@@ -266,17 +343,23 @@ impl TextEditor {
         key: KeyEvent,
         keymap: &crate::app::input::keymap::Keymap,
     ) -> bool {
+        self.handle_action(keymap.resolve_action(key))
+    }
+
+    pub(crate) fn handle_action(&mut self, action: crate::app::input::keymap::Action) -> bool {
         use crate::app::input::keymap::Action;
 
-        match keymap.resolve_action(key) {
+        match action {
             Action::MoveLeft => self.core.move_left(),
             Action::MoveRight => self.core.move_right(),
             Action::MoveUp => self.move_up(),
             Action::MoveDown => self.move_down(),
             Action::MoveWordLeft => self.core.move_word_left(),
             Action::MoveWordRight => self.core.move_word_right(),
-            Action::MoveHome => self.move_home(),
-            Action::MoveEnd => self.move_end(),
+            Action::MoveHome | Action::MoveVisualLineHome => self.move_home(),
+            Action::MoveEnd | Action::MoveVisualLineEnd => self.move_end(),
+            Action::MoveBufferHome => self.move_buffer_home(),
+            Action::MoveBufferEnd => self.move_buffer_end(),
 
             Action::SelectLeft => self.core.select_left(),
             Action::SelectRight => self.core.select_right(),
@@ -284,8 +367,10 @@ impl TextEditor {
             Action::SelectDown => self.select_down(),
             Action::SelectWordLeft => self.core.select_word_left(),
             Action::SelectWordRight => self.core.select_word_right(),
-            Action::SelectHome => self.select_home(),
-            Action::SelectEnd => self.select_end(),
+            Action::SelectHome | Action::SelectVisualLineHome => self.select_home(),
+            Action::SelectEnd | Action::SelectVisualLineEnd => self.select_end(),
+            Action::SelectBufferHome => self.select_buffer_home(),
+            Action::SelectBufferEnd => self.select_buffer_end(),
             Action::SelectAll => self.core.select_all(),
 
             Action::Backspace => self.core.backspace(),
@@ -294,6 +379,8 @@ impl TextEditor {
             Action::DeleteWordLeft => self.core.delete_word_left(),
             Action::DeleteWordRight => self.core.delete_word_right(),
             Action::DeleteToLineStart => self.delete_to_line_start(),
+            Action::DeleteToLineEnd => self.delete_to_line_end(),
+            Action::DeleteLine => self.delete_line(),
 
             Action::Copy
             | Action::Cut
@@ -900,6 +987,94 @@ mod tests {
         assert_eq!(editor.text(), "aef");
         assert_eq!(editor.cursor(), 1);
         assert_eq!(editor.anchor(), None);
+    }
+
+    #[test]
+    fn delete_to_line_end_stops_at_the_current_line() {
+        let mut editor = TextEditor::new("abc\nhelloworld\nxyz");
+        editor.set_cursor(9);
+
+        assert!(editor.delete_to_line_end());
+        assert_eq!(editor.text(), "abc\nhello\nxyz");
+        assert_eq!(editor.cursor(), 9);
+
+        assert!(!editor.delete_to_line_end(), "no join with the next line");
+
+        assert!(editor.undo());
+        assert_eq!(editor.text(), "abc\nhelloworld\nxyz");
+    }
+
+    #[test]
+    fn delete_to_line_end_keeps_multibyte_text_intact() {
+        let mut editor = TextEditor::new("żółć🦀\ngęś");
+        editor.set_cursor("żó".len());
+
+        assert!(editor.delete_to_line_end());
+        assert_eq!(editor.text(), "żó\ngęś");
+    }
+
+    #[test]
+    fn delete_line_removes_the_line_and_its_break() {
+        let mut editor = TextEditor::new("abc\ndef\nghi");
+        editor.set_cursor(5);
+
+        assert!(editor.delete_line());
+        assert_eq!(editor.text(), "abc\nghi");
+        assert_eq!(editor.cursor(), 4);
+
+        assert!(editor.undo());
+        assert_eq!(editor.text(), "abc\ndef\nghi");
+        assert_eq!(editor.cursor(), 5);
+    }
+
+    #[test]
+    fn delete_line_on_the_last_line_removes_the_break_before_it() {
+        let mut editor = TextEditor::new("abc\ndef");
+        editor.set_cursor(5);
+
+        assert!(editor.delete_line());
+        assert_eq!(editor.text(), "abc");
+        assert_eq!(editor.cursor(), 3);
+
+        assert!(editor.delete_line());
+        assert_eq!(editor.text(), "");
+        assert!(!editor.delete_line(), "nothing left to delete");
+    }
+
+    #[test]
+    fn delete_line_on_an_empty_line_removes_only_that_line() {
+        let mut editor = TextEditor::new("abc\n\ndef");
+        editor.set_cursor(4);
+
+        assert!(editor.delete_line());
+        assert_eq!(editor.text(), "abc\ndef");
+        assert_eq!(editor.cursor(), 4);
+    }
+
+    #[test]
+    fn delete_line_removes_only_a_selection() {
+        let mut editor = TextEditor::new("abc\ndef");
+        editor.set_cursor(5);
+        editor.set_anchor(Some(1));
+
+        assert!(editor.delete_line());
+        assert_eq!(editor.text(), "aef");
+    }
+
+    #[test]
+    fn buffer_motions_cross_lines_and_extend_selections() {
+        let mut editor = TextEditor::new("abc\ndef");
+        editor.set_cursor(5);
+
+        assert!(editor.select_buffer_home());
+        assert_eq!((editor.cursor(), editor.anchor()), (0, Some(5)));
+        assert!(editor.select_buffer_end());
+        assert_eq!((editor.cursor(), editor.anchor()), (7, Some(5)));
+        assert!(editor.move_buffer_home());
+        assert_eq!((editor.cursor(), editor.anchor()), (0, None));
+        assert!(!editor.move_buffer_home());
+        assert!(editor.move_buffer_end());
+        assert_eq!(editor.cursor(), 7);
     }
 
     #[test]

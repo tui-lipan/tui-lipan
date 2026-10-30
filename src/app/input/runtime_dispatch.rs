@@ -528,6 +528,7 @@ pub(crate) fn make_key_ctx<'a>(
         clipboard_config,
         copy_feedback,
         dirty_override: None,
+        chord_action: None,
     }
 }
 

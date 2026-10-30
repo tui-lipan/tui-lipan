@@ -39,6 +39,8 @@ let editor = TextEditor::default(); // empty text, cursor at 0
 | `delete_word_left()` | Delete word before cursor |
 | `delete_word_right()` | Delete word after cursor |
 | `delete_to_line_start()` | Delete from the start of the current line to the cursor (or delete selection) |
+| `delete_to_line_end()` | Delete from the cursor to the end of the current line (or delete selection) |
+| `delete_line()` | Delete the current line and its line break (or delete selection) |
 | `clear()` | Clear the full buffer as an undoable replace edit; returns `true` when text, cursor, or selection changed |
 
 ### Cursor movement
@@ -49,6 +51,7 @@ let editor = TextEditor::default(); // empty text, cursor at 0
 | `move_up()` / `move_down()` | Move cursor by one line (grapheme-column aware) |
 | `move_word_left()` / `move_word_right()` | Move cursor by one word |
 | `move_home()` / `move_end()` | Move to start/end of **current line** |
+| `move_buffer_home()` / `move_buffer_end()` | Move to start/end of **all text** |
 
 ### Selection
 
@@ -58,6 +61,7 @@ let editor = TextEditor::default(); // empty text, cursor at 0
 | `select_up()` / `select_down()` | Extend selection by one line |
 | `select_word_left()` / `select_word_right()` | Extend selection by one word |
 | `select_home()` / `select_end()` | Extend selection to start/end of current line |
+| `select_buffer_home()` / `select_buffer_end()` | Extend selection to start/end of all text |
 | `select_all()` | Select all text |
 | `clear_selection()` | Remove selection (keep cursor position) |
 
@@ -97,7 +101,7 @@ if changed {
 
 Supported keys include character insertion, arrow keys, word movement (`Ctrl+Left/Right`), `Home`/`End`, `Backspace`/`Delete`, word deletion (`Ctrl+Backspace`/`Ctrl+Delete`), `Enter` (newline), and undo/redo (`Ctrl+Z`/`Ctrl+Shift+Z`).
 
-`handle_key` uses the default keymap, which leaves `delete_to_line_start` unbound. Call `delete_to_line_start()` or `delete_to_start()` directly, or bind the action for the widgets through [`keymap.conf` or `FrameworkKeymap`](keybindings.md).
+`handle_key` uses the default keymap, which leaves the line-deletion and buffer actions unbound. Call their methods directly, or bind the actions for the widgets through [`keymap.conf` or `FrameworkKeymap`](keybindings.md).
 
 Clipboard operations (copy/cut/paste) are handled at the widget layer, not by `handle_key`.
 `TextEditor` itself remains plain and keymap-driven; opt-in Vim motions are a
@@ -132,7 +136,7 @@ let input = TextInput::default(); // empty text, cursor at 0
 |--------|-------------|
 | `clear()` | Clear all text content |
 | `delete_to_start()` | Delete from cursor to start of text (or delete selection); the keymap's `delete_to_line_start` action runs this |
-| `delete_to_end()` | Delete from cursor to end of text (or delete selection) |
+| `delete_to_end()` | Delete from cursor to end of text (or delete selection); the keymap's `delete_to_line_end` action runs this |
 
 All methods from `TextEditor` (accessors, cursor movement, selection, undo/redo) are available on `TextInput` as well, except for vertical movement methods.
 

@@ -585,6 +585,7 @@ where
             crate::app::input::key_dispatch::FocusKind::Widget
         };
 
+        let mut chord_text_action = None;
         if focus == crate::app::input::key_dispatch::FocusKind::Widget {
             use crate::app::input::keymap::KeymapRuntimeResult;
             match self.keymap_runtime.feed(key) {
@@ -600,6 +601,10 @@ where
                         self.render();
                         return Ok(true);
                     }
+                    if !binding.action.runs_in_text_widget() {
+                        return Ok(true);
+                    }
+                    chord_text_action = Some(binding.action);
                 }
                 KeymapRuntimeResult::Matched(_) | KeymapRuntimeResult::None => {}
             }
@@ -688,7 +693,16 @@ where
             clipboard_config: &clipboard_config,
             copy_feedback,
             dirty_override: None,
+            chord_action: None,
         };
+
+        if let Some(action) = chord_text_action {
+            keyboard::dispatch_chord_action(&mut core.tree, *focused, action, &mut key_ctx);
+            if !self.pump()? {
+                self.render();
+            }
+            return Ok(true);
+        }
 
         let mut ops = TestBackendDispatchOps {
             core,
@@ -788,6 +802,7 @@ where
             clipboard_config: &clipboard_config,
             copy_feedback: &mut self.copy_feedback,
             dirty_override: None,
+            chord_action: None,
         };
 
         let handled = keyboard::dispatch_paste(

@@ -8,8 +8,6 @@ mod closing_modal_focus;
 mod cursor_occlusion;
 #[path = "suites/widget_behavior/data_overflow_indicator_clicks.rs"]
 mod data_overflow_indicator_clicks;
-#[path = "suites/widget_behavior/delete_to_line_start.rs"]
-mod delete_to_line_start;
 #[path = "suites/widget_behavior/disabled_focus.rs"]
 mod disabled_focus;
 #[path = "suites/widget_behavior/drag_drop_test_backend.rs"]
@@ -82,6 +80,8 @@ mod table_row_gap_render;
 mod table_styles_render;
 #[path = "suites/widget_behavior/tabs_caps_render.rs"]
 mod tabs_caps_render;
+#[path = "suites/widget_behavior/text_edit_actions.rs"]
+mod text_edit_actions;
 
 #[path = "suites/widget_behavior/modal_animation.rs"]
 mod modal_animation;
