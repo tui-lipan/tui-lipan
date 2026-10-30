@@ -5,6 +5,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use tui_lipan::TestBackend;
+use tui_lipan::core::event::{MouseButton, MouseKind};
 use tui_lipan::prelude::*;
 
 const TARGET: &str = "target";
@@ -657,6 +658,61 @@ fn visual_line_end_selection_includes_the_rows_last_character() {
         backend.state().selected_text(),
         Some(&WRAPS[row..next_row]),
         "stays when repeated"
+    );
+}
+
+#[test]
+fn clicking_the_next_row_start_after_visual_line_end_moves_to_that_row() {
+    let app = App::new()
+        .user_keymap_policy(UserKeymapPolicy::Disabled)
+        .framework_keymap(
+            FrameworkKeymap::default()
+                .bind(
+                    FrameworkAction::MoveVisualLineHome,
+                    KeyBindings::from_str("ctrl-b").unwrap(),
+                )
+                .bind(
+                    FrameworkAction::MoveVisualLineEnd,
+                    KeyBindings::from_str("ctrl-e").unwrap(),
+                ),
+        );
+    let mut backend = wrapped_backend(app, WRAPS, 0, true);
+    let starts = wrapped_row_starts(&mut backend);
+
+    backend.state_mut().set_cursor(starts[1]);
+    backend.render();
+    send(&mut backend, &[ctrl('e')]);
+    assert_eq!(backend.state().cursor(), starts[2]);
+
+    // Rendered text starts past the border, so find the row on screen.
+    let next_row_text = &WRAPS[starts[2]..starts[3]];
+    let frame = backend.capture_frame().plain_text();
+    let (y, x) = frame
+        .lines()
+        .enumerate()
+        .find_map(|(y, line)| Some((y, line[..line.find(next_row_text)?].chars().count())))
+        .unwrap_or_else(|| panic!("{next_row_text} on screen:\n{frame}"));
+    for kind in [
+        MouseKind::Down(MouseButton::Left),
+        MouseKind::Up(MouseButton::Left),
+    ] {
+        backend
+            .send_mouse(MouseEvent {
+                x: x as u16,
+                y: y as u16,
+                kind,
+                mods: KeyMods::default(),
+            })
+            .unwrap();
+    }
+    backend.render();
+    assert_eq!(backend.state().cursor(), starts[2], "same byte as before");
+
+    send(&mut backend, &[ctrl('b')]);
+    assert_eq!(
+        backend.state().cursor(),
+        starts[2],
+        "home stays on the clicked row"
     );
 }
 

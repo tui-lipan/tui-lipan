@@ -10696,6 +10696,58 @@ fn chord_runs_a_text_action_on_the_focused_input_without_typing_its_final_key() 
     assert_eq!(values.borrow().as_slice(), ["world"]);
 }
 
+#[derive(Clone)]
+struct ClickableTextArea;
+
+impl Component for ClickableTextArea {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _: &()) -> Self::State {}
+
+    fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _: &Context<Self>) -> Element {
+        TextArea::new("abcdef")
+            .cursor(3)
+            .on_change(Callback::new(|_| {}))
+            .key("area")
+    }
+}
+
+#[test]
+fn clicking_a_text_area_forgets_the_row_end_at_the_same_byte() {
+    let mut runner = AppRunner::new(App::new(), ClickableTextArea, ());
+    init_runner(
+        &mut runner,
+        ClickableTextArea,
+        Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 5,
+        },
+    );
+    let id = node_id_by_key(&runner.core.tree, "area");
+    runner.focus.focused = Some(id);
+    let mut editor = TextEditor::new("abcdef");
+    editor.set_cursor(3);
+    editor.visual_row_end = Some(3);
+    runner.widgets.textarea_history.insert(id, editor);
+
+    let _ = runner.dispatch_mouse(MouseEvent {
+        x: 3,
+        y: 0,
+        kind: MouseKind::Down(MouseButton::Left),
+        mods: KeyMods::default(),
+    });
+
+    assert_eq!(runner.widgets.textarea_history[&id].visual_row_end, None);
+}
+
 #[test]
 fn rust_binding_on_the_copy_key_edits_a_selected_input_instead_of_copying() {
     let values = Rc::new(RefCell::new(Vec::new()));
