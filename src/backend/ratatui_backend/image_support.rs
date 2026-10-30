@@ -26,6 +26,16 @@ pub(crate) fn test_kitty_host(cell: (u16, u16), measured: bool) -> impl Drop {
     Scope(TEST_HOST.with(|host| host.replace(Some((picker, measured)))))
 }
 
+/// Whether output reaches the terminal through tmux, which does not forward Kitty placements.
+#[cfg(feature = "terminal-images")]
+pub(crate) fn host_is_behind_tmux() -> bool {
+    #[cfg(test)]
+    if TEST_HOST.with(|host| host.borrow().is_some()) {
+        return false;
+    }
+    std::env::var_os("TMUX").is_some()
+}
+
 fn picker_state() -> &'static RwLock<Picker> {
     static PICKER: OnceLock<RwLock<Picker>> = OnceLock::new();
     PICKER.get_or_init(|| RwLock::new(Picker::halfblocks()))

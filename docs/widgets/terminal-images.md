@@ -101,11 +101,12 @@ placements of one source share a single upload of that source, and each crop is 
 lone crop uses that upload only when the source is at most four times the crop's area; a smaller
 crop of a large image uploads just the crop. Overlapping images
 blend in pixel space within each exact z plane, so a small patch preserves the rest of the cell.
-On Kitty hosts, mixed-z and negative-z images use ordinary placements that leave text cells intact.
+On Kitty hosts, images use ordinary placements that leave text cells intact, so text shows through
+transparent pixels. Behind tmux, which does not forward placements, images on one plane at a
+non-negative z use Unicode placeholders, and each replaces the text in its cell.
 Negative z values remain below text; values below `INT32_MIN/2` also remain below non-default cell
 backgrounds. The backend keeps unchanged placements and deletes regions that disappear,
-including when the pane closes. Composed single-plane images at non-negative z use Unicode placeholders. Native patches use
-ordinary pixel-cropped placements at every z.
+including when the pane closes. Native patches use ordinary pixel-cropped placements at every z.
 Unchanged regions reuse cached pixels and encodings. Composed tiles retain their upload identity
 when their resulting pixels stay the same, even if another part of the source image changes.
 Cursor placement capacity scales with the terminal grid; stale-screen and off-screen placements

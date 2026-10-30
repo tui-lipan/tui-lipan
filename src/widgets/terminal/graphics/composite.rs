@@ -243,20 +243,21 @@ pub(crate) fn composite_terminal_images(
     result
 }
 
-/// Whether `images`, as [`composite_terminal_images`] resolved them, must be drawn as ordinary
-/// placements rather than Unicode placeholders.
+/// Whether terminal images draw as ordinary Kitty placements rather than Unicode placeholders.
 ///
-/// A placeholder replaces its whole cell and holds one image. Ordinary placements leave text cells
-/// intact and let several z planes share a cell. A composed tile needs that even on one plane: it
-/// is cut from a fixed grid rather than from the picture, so it reaches over text its transparent
-/// padding should leave showing.
-pub(crate) fn terminal_images_use_placements(images: &[TerminalImagePlacement]) -> bool {
-    images.first().is_some_and(|first| {
-        first.z < 0
-            || images
-                .iter()
-                .any(|placement| placement.z != first.z || placement.image.composition.is_none())
-    })
+/// A placeholder replaces its whole cell and holds one image, so it erases text that a transparent
+/// pixel should leave showing. Ordinary placements leave text cells intact and let several z planes
+/// share a cell. Only tmux needs placeholders: they reach the terminal as text, while it does not
+/// forward a placement, and a passthrough placement would land at the wrong cell. It keeps them
+/// wherever a single plane can do without placements.
+pub(crate) fn terminal_images_use_placements(
+    images: &[TerminalImagePlacement],
+    behind_tmux: bool,
+) -> bool {
+    !behind_tmux
+        || images.first().is_some_and(|first| {
+            first.z < 0 || images.iter().any(|placement| placement.z != first.z)
+        })
 }
 
 fn tile_layers<'a>(
@@ -435,6 +436,20 @@ mod tests {
     use super::*;
     use crate::widgets::{TerminalCellSize, TerminalScreen};
     use base64::Engine as _;
+
+    #[test]
+    fn only_tmux_keeps_placeholders_and_only_for_a_single_plane_above_text() {
+        let mut screen = TerminalScreen::new(4, 8, 0);
+        screen.set_cell_size(TerminalCellSize::new(10, 20));
+        transmit(&mut screen, "i=1", 10, 20, [0, 0, 0, 255]);
+        let plane = screen.render_snapshot().images;
+        assert!(terminal_images_use_placements(&plane, false));
+        assert!(!terminal_images_use_placements(&plane, true));
+
+        transmit(&mut screen, "i=2,z=-1", 10, 20, [0, 0, 0, 255]);
+        let mixed = screen.render_snapshot().images;
+        assert!(terminal_images_use_placements(&mixed, true));
+    }
 
     fn transmit(screen: &mut TerminalScreen, keys: &str, width: u32, height: u32, color: [u8; 4]) {
         let payload = base64::engine::general_purpose::STANDARD

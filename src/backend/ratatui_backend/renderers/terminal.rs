@@ -101,7 +101,10 @@ fn render_terminal_images(
         crate::widgets::composite_terminal_images(&node.images, content_rect.w, content_rect.h);
     let render = crate::backend::ratatui_backend::renderers::image::TerminalImageRender {
         alive: lifetime,
-        use_placements: crate::widgets::terminal_images_use_placements(&images),
+        use_placements: crate::widgets::terminal_images_use_placements(
+            &images,
+            crate::backend::ratatui_backend::image_support::host_is_behind_tmux(),
+        ),
     };
     let visible: Vec<_> = images
         .iter()
