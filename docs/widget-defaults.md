@@ -886,7 +886,7 @@ Source: `src/widgets/tabs/mod.rs:137` (`Tabs`).
 
 ## DraggableTabBar
 
-Source: `src/widgets/draggable_tab_bar/mod.rs:525` (`DraggableTabBar`).
+Source: `src/widgets/draggable_tab_bar/mod.rs:524` (`DraggableTabBar`).
 
 | Field | Default initializer |
 |---|---|
@@ -1156,7 +1156,7 @@ Source: `src/widgets/file_tree/mod.rs:383` (`FileTree`).
 
 ## SearchPalette
 
-Source: `src/widgets/search_palette/mod.rs:825` (`SearchPalette`).
+Source: `src/widgets/search_palette/mod.rs:827` (`SearchPalette`).
 
 | Field | Default initializer |
 |---|---|
@@ -1165,6 +1165,7 @@ Source: `src/widgets/search_palette/mod.rs:825` (`SearchPalette`).
 | `sync_match_limit` | `DEFAULT_SYNC_MATCH_LIMIT` |
 | `sync_selection` | `false` |
 | `initial_query` | `"".into()` |
+| `reset_key` | `None` |
 | `initial_selected_item_index` | `None` |
 | `item_key` | `None` |
 | `query` | `None` |
