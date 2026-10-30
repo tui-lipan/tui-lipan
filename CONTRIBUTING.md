@@ -7,12 +7,12 @@ know to land a PR.
 
 Before opening a PR:
 
-- [ ] `cargo fmt --all` passes
+- [ ] `./scripts/check-format` passes (everything the CI Format job checks: Rust and
+      macro-body formatting, generated files, and repository rules)
 - [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings` passes
 - [ ] `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps` passes
       (catches broken intra-doc links, which the other lints do not)
 - [ ] `cargo test --workspace --all-features` passes
-- [ ] Macro-body formatting: `./scripts/format-rust-with-macros --check` passes
 - [ ] The PR summary calls out user-visible and breaking changes with migration steps
 - [ ] Docs in `docs/` are updated if the behavior or API surface changed
 - [ ] If you added a new widget, all checklist steps in
@@ -92,6 +92,9 @@ lints surface.
 cargo fmt --all
 ./scripts/format-rust-with-macros src/ examples/ tests/ benches/ tui-lipan-macro/
 
+# Everything the CI Format job checks
+./scripts/check-format
+
 # Lint
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
@@ -103,6 +106,13 @@ cargo test --workspace --all-features
 cargo run --example showcase
 cargo run --example image --features image
 cargo run --example markdown_hub --features markdown
+```
+
+To run `./scripts/check-format` before every push and sign off commits automatically, enable the
+tracked hooks once per clone:
+
+```bash
+git config core.hooksPath .githooks
 ```
 
 For faster iteration on examples without paying full release-build costs:

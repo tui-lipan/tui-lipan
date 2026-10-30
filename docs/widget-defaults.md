@@ -11,7 +11,7 @@ Regenerate with `python3 scripts/generate-widget-defaults.py --write`. Check fre
 
 ## Accordion
 
-Source: `src/widgets/accordion/mod.rs:48` (`Accordion`).
+Source: `src/widgets/accordion/mod.rs` (`Accordion`).
 
 | Field | Default initializer |
 |---|---|
@@ -44,7 +44,7 @@ Source: `src/widgets/accordion/mod.rs:48` (`Accordion`).
 
 ## Button
 
-Source: `src/widgets/button/mod.rs:100` (`Button`).
+Source: `src/widgets/button/mod.rs` (`Button`).
 
 | Field | Default initializer |
 |---|---|
@@ -77,7 +77,7 @@ Source: `src/widgets/button/mod.rs:100` (`Button`).
 
 ## Checkbox
 
-Source: `src/widgets/checkbox/mod.rs:188` (`Checkbox`).
+Source: `src/widgets/checkbox/mod.rs` (`Checkbox`).
 
 | Field | Default initializer |
 |---|---|
@@ -107,7 +107,7 @@ Source: `src/widgets/checkbox/mod.rs:188` (`Checkbox`).
 
 ## Input
 
-Source: `src/widgets/input/mod.rs:87` (`Input`).
+Source: `src/widgets/input/mod.rs` (`Input`).
 
 | Field | Default initializer |
 |---|---|
@@ -158,7 +158,7 @@ Source: `src/widgets/input/mod.rs:87` (`Input`).
 
 ## TextArea
 
-Source: `src/widgets/text_area/mod.rs:458` (`TextArea`).
+Source: `src/widgets/text_area/mod.rs` (`TextArea`).
 
 | Field | Default initializer |
 |---|---|
@@ -261,7 +261,7 @@ Source: `src/widgets/text_area/mod.rs:458` (`TextArea`).
 
 ## List
 
-Source: `src/widgets/list/mod.rs:1637` (`List`).
+Source: `src/widgets/list/mod.rs` (`List`).
 
 | Field | Default initializer |
 |---|---|
@@ -322,7 +322,7 @@ Source: `src/widgets/list/mod.rs:1637` (`List`).
 
 ## ListConfig
 
-Source: `src/widgets/list/mod.rs:81` (`ListConfig`).
+Source: `src/widgets/list/mod.rs` (`ListConfig`).
 
 | Field | Default initializer |
 |---|---|
@@ -350,7 +350,7 @@ Source: `src/widgets/list/mod.rs:81` (`ListConfig`).
 
 ## ScrollView
 
-Source: `src/widgets/scroll_view/mod.rs:101` (`ScrollView`).
+Source: `src/widgets/scroll_view/mod.rs` (`ScrollView`).
 
 | Field | Default initializer |
 |---|---|
@@ -390,7 +390,7 @@ Source: `src/widgets/scroll_view/mod.rs:101` (`ScrollView`).
 
 ## VStack/HStack shared StackProps
 
-Source: `src/widgets/containers/mod.rs:209` (`StackProps`).
+Source: `src/widgets/containers/mod.rs` (`StackProps`).
 
 Note: Applies to the shared props backing stack container defaults.
 
@@ -411,7 +411,7 @@ Note: Applies to the shared props backing stack container defaults.
 
 ## Frame/FrameNode
 
-Source: `src/widgets/frame/node.rs:279` (`FrameNode`).
+Source: `src/widgets/frame/node.rs` (`FrameNode`).
 
 Note: `Frame` is the public builder; these defaults come from its `FrameNode` backing type.
 
@@ -448,7 +448,7 @@ Note: `Frame` is the public builder; these defaults come from its `FrameNode` ba
 
 ## ProgressBar
 
-Source: `src/widgets/progress/mod.rs:240` (`ProgressBar`).
+Source: `src/widgets/progress/mod.rs` (`ProgressBar`).
 
 | Field | Default initializer |
 |---|---|
@@ -482,7 +482,7 @@ Source: `src/widgets/progress/mod.rs:240` (`ProgressBar`).
 
 ## Spinner
 
-Source: `src/widgets/spinner/mod.rs:184` (`Spinner`).
+Source: `src/widgets/spinner/mod.rs` (`Spinner`).
 
 | Field | Default initializer |
 |---|---|
@@ -498,7 +498,7 @@ Source: `src/widgets/spinner/mod.rs:184` (`Spinner`).
 
 ## Select
 
-Source: `src/widgets/select/mod.rs:60` (`Select`).
+Source: `src/widgets/select/mod.rs` (`Select`).
 
 | Field | Default initializer |
 |---|---|
@@ -541,7 +541,7 @@ Source: `src/widgets/select/mod.rs:60` (`Select`).
 
 ## ComboBox
 
-Source: `src/widgets/combo_box.rs:74` (`ComboBox`).
+Source: `src/widgets/combo_box.rs` (`ComboBox`).
 
 | Field | Default initializer |
 |---|---|
@@ -588,7 +588,7 @@ Source: `src/widgets/combo_box.rs:74` (`ComboBox`).
 
 ## MultiSelect
 
-Source: `src/widgets/multi_select.rs:146` (`MultiSelect`).
+Source: `src/widgets/multi_select.rs` (`MultiSelect`).
 
 | Field | Default initializer |
 |---|---|
@@ -624,7 +624,7 @@ Source: `src/widgets/multi_select.rs:146` (`MultiSelect`).
 
 ## Modal
 
-Source: `src/widgets/modal.rs:42` (`Modal`).
+Source: `src/widgets/modal.rs` (`Modal`).
 
 | Field | Default initializer |
 |---|---|
@@ -650,7 +650,7 @@ Source: `src/widgets/modal.rs:42` (`Modal`).
 
 ## Popover
 
-Source: `src/widgets/popover/mod.rs:104` (`Popover`).
+Source: `src/widgets/popover/mod.rs` (`Popover`).
 
 | Field | Default initializer |
 |---|---|
@@ -673,7 +673,7 @@ Source: `src/widgets/popover/mod.rs:104` (`Popover`).
 
 ## HexArea
 
-Source: `src/widgets/hex_area/mod.rs:117` (`HexArea`).
+Source: `src/widgets/hex_area/mod.rs` (`HexArea`).
 
 | Field | Default initializer |
 |---|---|
@@ -712,7 +712,7 @@ Source: `src/widgets/hex_area/mod.rs:117` (`HexArea`).
 
 ## Hyperlink
 
-Source: `src/widgets/hyperlink.rs:51` (`Hyperlink`).
+Source: `src/widgets/hyperlink.rs` (`Hyperlink`).
 
 | Field | Default initializer |
 |---|---|
@@ -738,7 +738,7 @@ Source: `src/widgets/hyperlink.rs:51` (`Hyperlink`).
 
 ## PanView
 
-Source: `src/widgets/pan_view/mod.rs:239` (`PanView`).
+Source: `src/widgets/pan_view/mod.rs` (`PanView`).
 
 | Field | Default initializer |
 |---|---|
@@ -762,7 +762,7 @@ Source: `src/widgets/pan_view/mod.rs:239` (`PanView`).
 
 ## Slider
 
-Source: `src/widgets/slider/mod.rs:93` (`Slider`).
+Source: `src/widgets/slider/mod.rs` (`Slider`).
 
 | Field | Default initializer |
 |---|---|
@@ -801,7 +801,7 @@ Source: `src/widgets/slider/mod.rs:93` (`Slider`).
 
 ## Table
 
-Source: `src/widgets/table/mod.rs:357` (`Table`).
+Source: `src/widgets/table/mod.rs` (`Table`).
 
 | Field | Default initializer |
 |---|---|
@@ -856,7 +856,7 @@ Source: `src/widgets/table/mod.rs:357` (`Table`).
 
 ## Tabs
 
-Source: `src/widgets/tabs/mod.rs:137` (`Tabs`).
+Source: `src/widgets/tabs/mod.rs` (`Tabs`).
 
 | Field | Default initializer |
 |---|---|
@@ -887,7 +887,7 @@ Source: `src/widgets/tabs/mod.rs:137` (`Tabs`).
 
 ## DraggableTabBar
 
-Source: `src/widgets/draggable_tab_bar/mod.rs:524` (`DraggableTabBar`).
+Source: `src/widgets/draggable_tab_bar/mod.rs` (`DraggableTabBar`).
 
 | Field | Default initializer |
 |---|---|
@@ -952,7 +952,7 @@ Source: `src/widgets/draggable_tab_bar/mod.rs:524` (`DraggableTabBar`).
 
 ## DocumentView
 
-Source: `src/widgets/document_view/mod.rs:333` (`DocumentView`).
+Source: `src/widgets/document_view/mod.rs` (`DocumentView`).
 
 | Field | Default initializer |
 |---|---|
@@ -1030,7 +1030,7 @@ Source: `src/widgets/document_view/mod.rs:333` (`DocumentView`).
 
 ## FileTree
 
-Source: `src/widgets/file_tree/mod.rs:383` (`FileTree`).
+Source: `src/widgets/file_tree/mod.rs` (`FileTree`).
 
 | Field | Default initializer |
 |---|---|
@@ -1157,7 +1157,7 @@ Source: `src/widgets/file_tree/mod.rs:383` (`FileTree`).
 
 ## SearchPalette
 
-Source: `src/widgets/search_palette/mod.rs:827` (`SearchPalette`).
+Source: `src/widgets/search_palette/mod.rs` (`SearchPalette`).
 
 | Field | Default initializer |
 |---|---|
@@ -1243,7 +1243,7 @@ Source: `src/widgets/search_palette/mod.rs:827` (`SearchPalette`).
 
 ## Tree
 
-Source: `src/widgets/tree/mod.rs:29` (`Tree`).
+Source: `src/widgets/tree/mod.rs` (`Tree`).
 
 | Field | Default initializer |
 |---|---|
@@ -1309,7 +1309,7 @@ Source: `src/widgets/tree/mod.rs:29` (`Tree`).
 
 ## Terminal
 
-Source: `src/widgets/terminal/mod.rs:130` (`Terminal`).
+Source: `src/widgets/terminal/mod.rs` (`Terminal`).
 
 | Field | Default initializer |
 |---|---|
@@ -1375,7 +1375,7 @@ Source: `src/widgets/terminal/mod.rs:130` (`Terminal`).
 
 ## DiffView
 
-Source: `src/widgets/diff_view/mod.rs:289` (`DiffView`).
+Source: `src/widgets/diff_view/mod.rs` (`DiffView`).
 
 Note: `DiffView::new()` delegates to `new_internal("", "", None)`; argument-backed content fields are shown as constructor/local values.
 
@@ -1436,7 +1436,7 @@ Note: `DiffView::new()` delegates to `new_internal("", "", None)`; argument-back
 
 ## ManagedTerminal
 
-Source: `src/widgets/managed_terminal.rs:119` (`ManagedTerminalProps`).
+Source: `src/widgets/managed_terminal.rs` (`ManagedTerminalProps`).
 
 Note: `ManagedTerminal` is a component; defaults come from `ManagedTerminalProps`.
 
@@ -1466,7 +1466,7 @@ Note: `ManagedTerminal` is a component; defaults come from `ManagedTerminalProps
 
 ## CommandPalette
 
-Source: `src/widgets/command_palette.rs:334` (`CommandPalette`).
+Source: `src/widgets/command_palette.rs` (`CommandPalette`).
 
 | Field | Default initializer |
 |---|---|
@@ -1474,7 +1474,7 @@ Source: `src/widgets/command_palette.rs:334` (`CommandPalette`).
 
 ## ContextMenu
 
-Source: `src/widgets/context_menu.rs:51` (`ContextMenu`).
+Source: `src/widgets/context_menu.rs` (`ContextMenu`).
 
 | Field | Default initializer |
 |---|---|

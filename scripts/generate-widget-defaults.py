@@ -133,10 +133,6 @@ def write(path: Path, text: str) -> None:
         raise SystemExit(f"error: failed to write {path.relative_to(ROOT)}: {exc}") from exc
 
 
-def line_number(text: str, offset: int) -> int:
-    return text.count("\n", 0, offset) + 1
-
-
 def find_matching(text: str, open_index: int) -> int:
     pairs = {"{": "}", "(": ")", "[": "]"}
     opener = text[open_index]
@@ -189,7 +185,7 @@ def find_impl_block(text: str, type_name: str) -> tuple[int, int] | None:
     return open_index, find_matching(text, open_index)
 
 
-def extract_default_initializer(text: str, type_name: str) -> tuple[str, int]:
+def extract_default_initializer(text: str, type_name: str) -> str:
     pattern = re.compile(rf"\bimpl\s+Default\s+for\s+{re.escape(type_name)}\s*{{")
     match = pattern.search(text)
     if not match:
@@ -199,7 +195,7 @@ def extract_default_initializer(text: str, type_name: str) -> tuple[str, int]:
     return extract_self_initializer(text, impl_open, impl_close)
 
 
-def extract_new_initializer(text: str, type_name: str) -> tuple[str, int]:
+def extract_new_initializer(text: str, type_name: str) -> str:
     impl_block = find_impl_block(text, type_name)
     if impl_block is None:
         raise ValueError(f"impl {type_name} not found")
@@ -216,7 +212,7 @@ def extract_new_initializer(text: str, type_name: str) -> tuple[str, int]:
     return extract_self_initializer(text, fn_open, fn_close)
 
 
-def extract_function_initializer(text: str, type_name: str, function_name: str) -> tuple[str, int]:
+def extract_function_initializer(text: str, type_name: str, function_name: str) -> str:
     impl_block = find_impl_block(text, type_name)
     if impl_block is None:
         raise ValueError(f"impl {type_name} not found")
@@ -235,7 +231,7 @@ def extract_function_initializer(text: str, type_name: str, function_name: str) 
 
 def extract_nested_new_initializer(
     text: str, type_name: str, nested_type: str
-) -> tuple[str, int]:
+) -> str:
     impl_block = find_impl_block(text, type_name)
     if impl_block is None:
         raise ValueError(f"impl {type_name} not found")
@@ -254,12 +250,12 @@ def extract_nested_new_initializer(
         raise ValueError(f"{nested_type} initializer not found in {type_name}::new")
     open_index = fn_open + nested_match.end() - 1
     close_index = find_matching(text, open_index)
-    return text[open_index + 1 : close_index], line_number(text, open_index)
+    return text[open_index + 1 : close_index]
 
 
 def extract_nested_default_initializer(
     text: str, type_name: str, nested_type: str
-) -> tuple[str, int]:
+) -> str:
     pattern = re.compile(
         rf"\bimpl(?:\s*<[^>]*>)?\s+Default\s+for\s+{re.escape(type_name)}"
         rf"(?:\s*<[^>]*>)?\s*{{"
@@ -274,10 +270,10 @@ def extract_nested_default_initializer(
         raise ValueError(f"{nested_type} initializer not found in {type_name}::default")
     open_index = impl_open + nested_match.end() - 1
     close_index = find_matching(text, open_index)
-    return text[open_index + 1 : close_index], line_number(text, open_index)
+    return text[open_index + 1 : close_index]
 
 
-def extract_self_initializer(text: str, start: int, end: int) -> tuple[str, int]:
+def extract_self_initializer(text: str, start: int, end: int) -> str:
     for match in re.finditer(r"\bSelf\s*{", text[start:end]):
         open_index = start + match.end() - 1
         close_index = find_matching(text, open_index)
@@ -286,7 +282,7 @@ def extract_self_initializer(text: str, start: int, end: int) -> tuple[str, int]
         # can look like an initializer. Skip the function body wrapper.
         if contents.lstrip().startswith("Self {"):
             continue
-        return contents, line_number(text, open_index)
+        return contents
     raise ValueError("Self initializer not found")
 
 
@@ -368,7 +364,7 @@ def merge_with_default_fields(
     if not any(field == ".." and value == "..Self::default()" for field, value in fields):
         return fields
     try:
-        default_initializer, _line = extract_default_initializer(text, type_name)
+        default_initializer = extract_default_initializer(text, type_name)
     except ValueError:
         return fields
 
@@ -388,10 +384,6 @@ def merge_with_default_fields(
     return merged
 
 
-def source_link(path: str, line: int) -> str:
-    return f"`{path}:{line}`"
-
-
 def render_initializer(field: str, value: str) -> str:
     if value == f"{field} (shorthand local/argument)" or value in {
         f"{field}.into()",
@@ -402,43 +394,43 @@ def render_initializer(field: str, value: str) -> str:
     return value
 
 
-def extract_widget(spec: WidgetSpec) -> tuple[list[tuple[str, str]], int]:
+def extract_widget(spec: WidgetSpec) -> list[tuple[str, str]]:
     text = read(ROOT / spec.source_path)
     used_new = False
     try:
         if spec.extractor == "default":
-            initializer, line = extract_default_initializer(text, spec.source_type)
+            initializer = extract_default_initializer(text, spec.source_type)
         elif spec.extractor == "new":
             try:
-                initializer, line = extract_new_initializer(text, spec.source_type)
+                initializer = extract_new_initializer(text, spec.source_type)
                 used_new = True
             except ValueError as exc:
                 if "Self initializer not found" not in str(exc):
                     raise
-                initializer, line = extract_default_initializer(text, spec.source_type)
+                initializer = extract_default_initializer(text, spec.source_type)
         elif spec.extractor.startswith("fn:"):
-            initializer, line = extract_function_initializer(
+            initializer = extract_function_initializer(
                 text, spec.source_type, spec.extractor.removeprefix("fn:")
             )
         elif spec.extractor.startswith("nested-new:"):
-            initializer, line = extract_nested_new_initializer(
+            initializer = extract_nested_new_initializer(
                 text, spec.source_type, spec.extractor.removeprefix("nested-new:")
             )
         elif spec.extractor.startswith("nested-default:"):
-            initializer, line = extract_nested_default_initializer(
+            initializer = extract_nested_default_initializer(
                 text, spec.source_type, spec.extractor.removeprefix("nested-default:")
             )
         else:
             try:
-                initializer, line = extract_default_initializer(text, spec.source_type)
+                initializer = extract_default_initializer(text, spec.source_type)
             except ValueError:
-                initializer, line = extract_new_initializer(text, spec.source_type)
+                initializer = extract_new_initializer(text, spec.source_type)
     except ValueError as exc:
         raise SystemExit(f"error: {spec.source_path}: {exc}") from exc
     fields = parse_fields(initializer)
     if used_new:
         fields = merge_with_default_fields(text, spec.source_type, fields)
-    return fields, line
+    return fields
 
 
 def render() -> str:
@@ -456,12 +448,12 @@ def render() -> str:
         "",
     ]
     for spec in WIDGETS:
-        fields, line = extract_widget(spec)
+        fields = extract_widget(spec)
         lines.extend(
             [
                 f"## {spec.name}",
                 "",
-                f"Source: {source_link(spec.source_path, line)} (`{spec.source_type}`).",
+                f"Source: `{spec.source_path}` (`{spec.source_type}`).",
                 "",
             ]
         )
