@@ -34,41 +34,8 @@ jobs:
       - name: Fetch dependencies
         run: cargo fetch
 
-      - name: Check widget variant parity
-        run: python3 scripts/check-widget-variant-parity.py
-
-      - name: Check generated NodeKind delegation
-        run: python3 scripts/generate-node-kind-delegate-arms.py
-
-      - name: Check generated widget defaults
-        run: python3 scripts/generate-widget-defaults.py --check
-
-      - name: Check widget style slots
-        run: python3 scripts/check-widget-style-slots.py
-
-      - name: Check disabled/focus rule
-        run: python3 scripts/check-disabled-focus.py
-
-      - name: Check children()/child() ordering
-        run: python3 scripts/check-children-replace.py
-
-      - name: Test release tooling
-        run: python3 -m unittest scripts.test_release_notes scripts.test_bump_version
-
-      - name: Check macro and rust formatting
-        shell: bash
-        run: |
-          find src tests benches examples tui-lipan-macro -name '*.rs' -print0 \
-            | xargs -0 -r ./scripts/format-rust-with-macros --check
-
-      - name: Check documented feature tables
-        run: python3 scripts/check-feature-tables.py
-
-      - name: Check documented install snippets
-        run: python3 scripts/check-install-snippets.py
-
-      - name: Check workspace formatting
-        run: cargo fmt --all -- --check
+      - name: Run format checks
+        run: ./scripts/check-format
 
   lint:
     name: Lint

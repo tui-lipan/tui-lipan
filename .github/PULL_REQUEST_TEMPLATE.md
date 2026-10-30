@@ -20,8 +20,7 @@ Call out breaking changes and concrete migration steps in the summary.
 
 Mirrors `CONTRIBUTING.md` (single source of truth). Run before requesting review:
 
-- [ ] `cargo fmt --all` passes
-- [ ] `./scripts/format-rust-with-macros --check` passes (macro-body formatting)
+- [ ] `./scripts/check-format` passes (everything the CI Format job checks)
 - [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings` passes
 - [ ] `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps` passes
 - [ ] `cargo test --workspace --all-features` passes

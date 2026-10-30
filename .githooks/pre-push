@@ -1,0 +1,3 @@
+#!/bin/sh
+# Stop a push the CI Format job would reject. Checks the working tree; `git push --no-verify` skips it.
+exec "$(git rev-parse --show-toplevel)/scripts/check-format"

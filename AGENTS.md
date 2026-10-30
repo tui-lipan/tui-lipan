@@ -110,16 +110,7 @@ more, time its suite and module filter and say why in the PR.
 ### CI Pipeline
 ```bash
 cargo fetch
-python3 scripts/check-widget-variant-parity.py
-python3 scripts/generate-node-kind-delegate-arms.py
-python3 scripts/check-widget-style-slots.py
-python3 scripts/check-children-replace.py
-python3 -m unittest scripts.test_release_notes scripts.test_bump_version
-find src tests benches examples tui-lipan-macro -name '*.rs' -print0 \
-  | xargs -0 -r ./scripts/format-rust-with-macros --check
-python3 scripts/check-feature-tables.py
-python3 scripts/check-install-snippets.py
-cargo fmt --all -- --check
+./scripts/check-format   # Every Format job check: formatting, generated files, repository rules
 cargo check --workspace --all-targets --all-features
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
@@ -201,6 +192,7 @@ cargo build          # Ensure everything compiles
 cargo lint           # Full clippy (same as CI)
 cargo fmt            # Format code
 cargo test           # Run tests to verify nothing broke
+./scripts/check-format  # Generated files and repository rules, same as CI
 ```
 
 Use the helper script for changed Rust files before building or running examples so `ui!` and `rsx!` bodies are formatted in addition to normal Rust code.
