@@ -25,6 +25,7 @@ pub(crate) struct FileTreeProps {
     pub(crate) icon_palette: FileIconPalette,
     pub(crate) icon_overrides: HashMap<Arc<str>, FileIconOverride>,
     pub(crate) show_arrows: bool,
+    pub(crate) root_collapsible: bool,
     pub(crate) expanded_arrow: Arc<str>,
     pub(crate) collapsed_arrow: Arc<str>,
     pub(crate) arrow_style: Style,

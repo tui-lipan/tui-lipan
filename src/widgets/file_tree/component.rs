@@ -2996,7 +2996,8 @@ fn build_projected_tree_node(
 
     let mut spans = Vec::new();
 
-    let is_expanded = ctx.expanded.contains(&node.path);
+    let fixed_root = is_root && !ctx.props.root_collapsible;
+    let is_expanded = fixed_root || ctx.expanded.contains(&node.path);
 
     // Get git decorations for this node
     let git_decoration = ctx.git_decorations.get(node.path.as_ref()).copied();
@@ -3120,7 +3121,10 @@ fn build_projected_tree_node(
         // Deriving this from the loaded children instead would strand an empty one: opening it
         // loads nothing, so closing it again would leave a row with no arrow and no way back open.
         .expanded(is_expanded)
-        .expansion_mode(if node.is_dir() {
+        .show_arrow(!fixed_root)
+        .expansion_mode(if fixed_root {
+            crate::widgets::TreeExpansionMode::AlwaysOpen
+        } else if node.is_dir() {
             crate::widgets::TreeExpansionMode::Collapsible
         } else {
             crate::widgets::TreeExpansionMode::Auto
@@ -4159,6 +4163,35 @@ mod tests {
             .values()
             .any(|entry| entry.path.as_ref() == "/remote/repo/src/widgets");
         assert!(!deep, "collapsed subtree must not populate the lookup");
+    }
+
+    #[test]
+    fn a_non_collapsible_root_is_a_fixed_heading() {
+        let mut props = collapsed_projection_props();
+        props.root_collapsible = false;
+        let mut state = FileTreeComponent::new().create_state(&props);
+        // Even a root collapsed before the option applied keeps its children.
+        state.expanded.remove::<str>("/remote/repo");
+
+        let projection = build_projection(&props, &state, None);
+        assert!(!projection.root.show_arrow);
+        assert!(!projection.root.is_collapsible());
+        assert!(projection.root.expanded);
+
+        // Only the root changes: its children still expand and draw arrows.
+        let src = projected_child(&projection.root, "src");
+        assert!(src.show_arrow);
+        assert!(src.is_collapsible());
+    }
+
+    #[test]
+    fn the_root_is_collapsible_by_default() {
+        let props = collapsed_projection_props();
+        let state = FileTreeComponent::new().create_state(&props);
+
+        let projection = build_projection(&props, &state, None);
+        assert!(projection.root.show_arrow);
+        assert!(projection.root.is_collapsible());
     }
 
     /// An empty directory must be expandable whether or not it has been opened yet. A lazy tree

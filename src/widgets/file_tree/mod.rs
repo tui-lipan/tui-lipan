@@ -392,6 +392,7 @@ impl FileTree {
                 icon_palette: FileIconPalette::default(),
                 icon_overrides: HashMap::new(),
                 show_arrows: true,
+                root_collapsible: true,
                 expanded_arrow: "▼".into(),
                 collapsed_arrow: "▶".into(),
                 arrow_style: Style::default(),
@@ -598,6 +599,15 @@ impl FileTree {
     /// Set both `show_icons(false)` and `show_arrows(false)` for labels only.
     pub fn show_arrows(mut self, show: bool) -> Self {
         self.props.show_arrows = show;
+        self
+    }
+
+    /// Let the root row collapse (default true).
+    ///
+    /// Set to false to make the root a fixed heading: it stays open, draws no arrow, and its
+    /// children hang beneath its first glyph. Other directories keep their arrows.
+    pub fn root_collapsible(mut self, collapsible: bool) -> Self {
+        self.props.root_collapsible = collapsible;
         self
     }
 
