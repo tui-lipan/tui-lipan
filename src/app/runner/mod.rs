@@ -1093,6 +1093,7 @@ impl<C: Component> AppRunner<C> {
             clipboard_config: &self.clipboard_config,
             copy_feedback: &mut self.copy_feedback,
             dirty_override: None,
+            chord_action: None,
         };
         let handled = keyboard::dispatch_key(&mut self.core.tree, focused, key, &mut key_ctx);
         KeyDispatchResult {
@@ -1118,6 +1119,7 @@ impl<C: Component> AppRunner<C> {
             clipboard_config: &self.clipboard_config,
             copy_feedback: &mut self.copy_feedback,
             dirty_override: None,
+            chord_action: None,
         };
         let handled = keyboard::dispatch_selection_clipboard_shortcut(
             &mut self.core.tree,
@@ -1146,6 +1148,7 @@ impl<C: Component> AppRunner<C> {
             clipboard_config: &self.clipboard_config,
             copy_feedback: &mut self.copy_feedback,
             dirty_override: None,
+            chord_action: None,
         };
         keyboard::dispatch_paste(&mut self.core.tree, focused, text, origin, &mut key_ctx)
     }
@@ -1178,6 +1181,7 @@ impl<C: Component> AppRunner<C> {
             clipboard_config: &self.clipboard_config,
             copy_feedback: &mut self.copy_feedback,
             dirty_override: None,
+            chord_action: None,
         };
         keyboard::copy_active_selection(&mut self.core.tree, scope, target, intent, &mut key_ctx)
     }

@@ -552,7 +552,43 @@ where
             return Ok(true);
         }
 
-        let selection_handled = {
+        let focus = if self
+            .focused
+            .is_some_and(|id| self.core.tree.is_valid(id) && self.focused_is_terminal(id))
+        {
+            crate::app::input::key_dispatch::FocusKind::Terminal
+        } else {
+            crate::app::input::key_dispatch::FocusKind::Widget
+        };
+
+        let mut chord_text_action = None;
+        if focus == crate::app::input::key_dispatch::FocusKind::Widget {
+            use crate::app::input::keymap::KeymapRuntimeResult;
+            match self.keymap_runtime.feed(key) {
+                KeymapRuntimeResult::Pending => return Ok(true),
+                KeymapRuntimeResult::Matched(binding) if binding.is_chord => {
+                    if binding.action == Action::Quit {
+                        self.core.ctx.quit();
+                        let _ = self.pump()?;
+                        return Ok(true);
+                    }
+                    if binding.action == Action::DismissOverlay && self.handle_overlay_escape() {
+                        let _ = self.pump()?;
+                        self.render();
+                        return Ok(true);
+                    }
+                    if !binding.action.runs_in_text_widget() {
+                        return Ok(true);
+                    }
+                    chord_text_action = Some(binding.action);
+                }
+                KeymapRuntimeResult::Matched(_) | KeymapRuntimeResult::None => {}
+            }
+        } else {
+            self.keymap_runtime.reset();
+        }
+
+        let selection_handled = chord_text_action.is_none() && {
             let mut key_ctx = make_key_ctx(
                 Some(&self.widgets.read_only_selection),
                 &mut self.widgets.input_history,
@@ -574,37 +610,6 @@ where
                 self.render();
             }
             return Ok(true);
-        }
-
-        let focus = if self
-            .focused
-            .is_some_and(|id| self.core.tree.is_valid(id) && self.focused_is_terminal(id))
-        {
-            crate::app::input::key_dispatch::FocusKind::Terminal
-        } else {
-            crate::app::input::key_dispatch::FocusKind::Widget
-        };
-
-        if focus == crate::app::input::key_dispatch::FocusKind::Widget {
-            use crate::app::input::keymap::KeymapRuntimeResult;
-            match self.keymap_runtime.feed(key) {
-                KeymapRuntimeResult::Pending => return Ok(true),
-                KeymapRuntimeResult::Matched(binding) if binding.is_chord => {
-                    if binding.action == Action::Quit {
-                        self.core.ctx.quit();
-                        let _ = self.pump()?;
-                        return Ok(true);
-                    }
-                    if binding.action == Action::DismissOverlay && self.handle_overlay_escape() {
-                        let _ = self.pump()?;
-                        self.render();
-                        return Ok(true);
-                    }
-                }
-                KeymapRuntimeResult::Matched(_) | KeymapRuntimeResult::None => {}
-            }
-        } else {
-            self.keymap_runtime.reset();
         }
 
         let dismiss_handled = self
@@ -688,7 +693,16 @@ where
             clipboard_config: &clipboard_config,
             copy_feedback,
             dirty_override: None,
+            chord_action: None,
         };
+
+        if let Some(action) = chord_text_action {
+            keyboard::dispatch_chord_action(&mut core.tree, *focused, action, &mut key_ctx);
+            if !self.pump()? {
+                self.render();
+            }
+            return Ok(true);
+        }
 
         let mut ops = TestBackendDispatchOps {
             core,
@@ -788,6 +802,7 @@ where
             clipboard_config: &clipboard_config,
             copy_feedback: &mut self.copy_feedback,
             dirty_override: None,
+            chord_action: None,
         };
 
         let handled = keyboard::dispatch_paste(

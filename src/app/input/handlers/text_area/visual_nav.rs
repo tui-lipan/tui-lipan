@@ -128,6 +128,44 @@ fn logical_line_bounds(value: &str, cursor: usize) -> (usize, usize) {
     (start, end)
 }
 
+/// Move or extend the selection to the start or end of the wrapped row holding the cursor.
+pub(super) fn perform_visual_line_edge_nav(
+    editor: &mut TextEditor,
+    action: Action,
+    lines: &[TextAreaVisualLine],
+) -> bool {
+    if lines.is_empty() {
+        return false;
+    }
+
+    let text = editor.text();
+    let cursor = clamp_text_area_cursor(text, editor.cursor());
+    let mut cur_idx = visual_line_for_cursor(lines, cursor);
+    // The caret draws at the start of the next row after moving to a soft-wrapped row's end.
+    if editor.visual_row_end == Some(cursor)
+        && cur_idx > 0
+        && clamp_text_area_cursor(text, lines[cur_idx - 1].end) == cursor
+    {
+        cur_idx -= 1;
+    }
+    let row = &lines[cur_idx];
+    let to_end = matches!(
+        action,
+        Action::MoveVisualLineEnd | Action::SelectVisualLineEnd
+    );
+    let target = clamp_text_area_cursor(text, if to_end { row.end } else { row.start });
+    let row_end_is_shared = lines.get(cur_idx + 1).is_some_and(|next| {
+        next.line_num == row.line_num
+            && next.continuation
+            && clamp_text_area_cursor(text, next.start) == target
+    });
+    let visual_row_end = (to_end && row_end_is_shared).then_some(target);
+
+    let changed = perform_visual_boundary_nav(editor, action, target);
+    editor.visual_row_end = visual_row_end;
+    changed
+}
+
 pub(super) fn perform_visual_boundary_nav(
     editor: &mut TextEditor,
     action: Action,
@@ -137,7 +175,13 @@ pub(super) fn perform_visual_boundary_nav(
     let cursor = clamp_text_area_cursor(editor.text(), editor.cursor());
     let prev_anchor = editor.anchor();
 
-    if matches!(action, Action::SelectUp | Action::SelectDown) {
+    if matches!(
+        action,
+        Action::SelectUp
+            | Action::SelectDown
+            | Action::SelectVisualLineHome
+            | Action::SelectVisualLineEnd
+    ) {
         if editor.anchor().is_none() {
             editor.set_anchor(Some(cursor));
         }

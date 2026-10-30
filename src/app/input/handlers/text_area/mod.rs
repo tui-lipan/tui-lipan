@@ -69,7 +69,7 @@ use vim::{
     handle_text_area_vim_edit_command, remap_vim_marks_for_last_edit,
     sync_text_area_vim_render_feedback, text_area_clipboard_action_may_mutate,
 };
-use visual_nav::perform_visual_vertical_nav;
+use visual_nav::{perform_visual_line_edge_nav, perform_visual_vertical_nav};
 // ── Keyboard handler ────────────────────────────────────────────────────────
 
 fn sync_text_area_vim_after_key(
@@ -117,7 +117,8 @@ pub(crate) fn handle_key(
     key: KeyEvent,
     ctx: &mut KeyCtx<'_>,
 ) -> bool {
-    let handle_on_key = |handler: &KeyHandler| -> bool { handler.handle(key) };
+    let from_chord = ctx.chord_action.is_some();
+    let handle_on_key = |handler: &KeyHandler| -> bool { !from_chord && handler.handle(key) };
 
     // ── Phase 1: immutable borrow – read fields & handle clipboard ──────
     let node = tree.node(id);
@@ -276,7 +277,7 @@ pub(crate) fn handle_key(
         return on_key.as_ref().map(handle_on_key).unwrap_or(false);
     }
 
-    if handle_key_interceptor(key_interceptor.as_ref(), key) {
+    if !from_chord && handle_key_interceptor(key_interceptor.as_ref(), key) {
         return true;
     }
 
@@ -312,7 +313,9 @@ pub(crate) fn handle_key(
             on_sentinel_event: on_sentinel_event.as_ref(),
         };
 
-        let action = ctx.keymap.resolve_action(key);
+        let action = ctx
+            .chord_action
+            .unwrap_or_else(|| ctx.keymap.resolve_action(key));
         let is_vert = matches!(
             action,
             Action::MoveUp | Action::MoveDown | Action::SelectUp | Action::SelectDown
@@ -479,6 +482,16 @@ pub(crate) fn handle_key(
             let count = tab - (col % tab);
             let spaces = " ".repeat(count);
             editor.insert_str(&spaces)
+        } else if let Some(lines) = visual_lines.as_deref().filter(|_| {
+            matches!(
+                action,
+                Action::MoveVisualLineHome
+                    | Action::MoveVisualLineEnd
+                    | Action::SelectVisualLineHome
+                    | Action::SelectVisualLineEnd
+            )
+        }) {
+            perform_visual_line_edge_nav(editor, action, lines)
         } else if let Some(lines) = visual_lines.as_deref().filter(|_| is_vert && wrap) {
             let sentinel =
                 sentinel_info_for(image_mode, images.len(), &image_placeholder, &sentinels);
@@ -491,11 +504,20 @@ pub(crate) fn handle_key(
                 &virtual_texts,
             )
         } else {
-            editor.handle_key_with(key, ctx.keymap)
+            editor.handle_action(action)
         };
 
         if !is_vert {
             editor.set_visual_nav_col(None);
+        }
+        if !matches!(
+            action,
+            Action::MoveVisualLineHome
+                | Action::MoveVisualLineEnd
+                | Action::SelectVisualLineHome
+                | Action::SelectVisualLineEnd
+        ) {
+            editor.visual_row_end = None;
         }
 
         if handled

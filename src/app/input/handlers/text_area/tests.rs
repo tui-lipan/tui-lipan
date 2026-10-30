@@ -212,6 +212,7 @@ fn default_key_ctx<'a>(
             crate::app::copy_feedback::CopyFeedbackState::default(),
         )),
         dirty_override: None,
+        chord_action: None,
     }
 }
 
@@ -1405,10 +1406,18 @@ fn vim_modes_bubble_unhandled_non_char_editor_keys() {
             ..KeyMods::default()
         },
     };
+    let ctrl_u = KeyEvent {
+        code: KeyCode::Char('u'),
+        mods: KeyMods {
+            ctrl: true,
+            ..KeyMods::default()
+        },
+    };
     let cases = [
         (key(KeyCode::Backspace), Action::Backspace),
         (key(KeyCode::Delete), Action::Delete),
         (ctrl_backspace, Action::DeleteWordLeft),
+        (ctrl_u, Action::DeleteToLineStart),
         (key(KeyCode::Insert), Action::None),
         (key(KeyCode::PageUp), Action::None),
         (key(KeyCode::PageDown), Action::None),
@@ -3695,6 +3704,7 @@ fn tab_width_inserts_spaces_when_tab_reaches_text_area() {
             crate::app::copy_feedback::CopyFeedbackState::default(),
         )),
         dirty_override: None,
+        chord_action: None,
     };
 
     assert!(handle_key(&mut tree, root_id, key(KeyCode::Tab), &mut ctx));
@@ -3758,6 +3768,7 @@ fn tab_width_aligns_after_literal_tab() {
             crate::app::copy_feedback::CopyFeedbackState::default(),
         )),
         dirty_override: None,
+        chord_action: None,
     };
 
     assert!(handle_key(&mut tree, root_id, key(KeyCode::Tab), &mut ctx));
@@ -3820,6 +3831,7 @@ fn tab_width_aligns_to_next_tab_stop_mid_line() {
             crate::app::copy_feedback::CopyFeedbackState::default(),
         )),
         dirty_override: None,
+        chord_action: None,
     };
 
     assert!(handle_key(&mut tree, root_id, key(KeyCode::Tab), &mut ctx));
@@ -4009,6 +4021,7 @@ fn key_interceptor_consumes_tab_before_tab_width() {
             crate::app::copy_feedback::CopyFeedbackState::default(),
         )),
         dirty_override: None,
+        chord_action: None,
     };
 
     assert!(handle_key(&mut tree, root_id, key(KeyCode::Tab), &mut ctx));
@@ -4070,6 +4083,7 @@ fn key_interceptor_consumes_clear_binding_before_clear() {
             crate::app::copy_feedback::CopyFeedbackState::default(),
         )),
         dirty_override: None,
+        chord_action: None,
     };
 
     assert!(handle_key(&mut tree, root_id, ctrl_char('c'), &mut ctx));
@@ -4135,6 +4149,7 @@ fn clear_binding_clears_and_preserves_history_across_rerender() {
             crate::app::copy_feedback::CopyFeedbackState::default(),
         )),
         dirty_override: None,
+        chord_action: None,
     };
 
     let root_id = tree.root;
@@ -4259,6 +4274,7 @@ fn arrow_up_down_walks_wrapped_visual_lines() {
             crate::app::copy_feedback::CopyFeedbackState::default(),
         )),
         dirty_override: None,
+        chord_action: None,
     };
 
     // Re-render with updated cursor between key events, the way a real

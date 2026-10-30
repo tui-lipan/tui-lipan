@@ -75,16 +75,6 @@ impl<C: Component> AppRunner<C> {
             }
         }
 
-        let selection = self.dispatch_selection_clipboard_shortcut(key);
-        if selection.handled {
-            return LayeredKeyEventResult {
-                consumed: true,
-                dirty_override: selection.dirty_override,
-                mark_full: selection.dirty_override.is_none(),
-                ..Default::default()
-            };
-        }
-
         let focus_kind = if self
             .focus
             .focused
@@ -95,6 +85,7 @@ impl<C: Component> AppRunner<C> {
             FocusKind::Widget
         };
 
+        let mut chord_text_action = None;
         if focus_kind == FocusKind::Widget {
             match self.keymap_runtime.feed(key) {
                 KeymapRuntimeResult::Pending => {
@@ -119,11 +110,32 @@ impl<C: Component> AppRunner<C> {
                             ..Default::default()
                         };
                     }
+                    if !binding.action.runs_in_text_widget() {
+                        return LayeredKeyEventResult {
+                            consumed: true,
+                            ..Default::default()
+                        };
+                    }
+                    chord_text_action = Some(binding.action);
                 }
                 KeymapRuntimeResult::Matched(_) | KeymapRuntimeResult::None => {}
             }
         } else {
             self.keymap_runtime.reset();
+        }
+
+        // After the chord matcher, so a chord can claim a copy or cut key as its next step, and a
+        // copy that breaks a chord has already cancelled it.
+        if chord_text_action.is_none() {
+            let selection = self.dispatch_selection_clipboard_shortcut(key);
+            if selection.handled {
+                return LayeredKeyEventResult {
+                    consumed: true,
+                    dirty_override: selection.dirty_override,
+                    mark_full: selection.dirty_override.is_none(),
+                    ..Default::default()
+                };
+            }
         }
 
         let dismiss_handled = self
@@ -209,7 +221,23 @@ impl<C: Component> AppRunner<C> {
             clipboard_config,
             copy_feedback,
             dirty_override: None,
+            chord_action: None,
         };
+
+        if let Some(action) = chord_text_action {
+            keyboard::dispatch_chord_action(
+                &mut core.tree,
+                focus_state.focused,
+                action,
+                &mut key_ctx,
+            );
+            return LayeredKeyEventResult {
+                consumed: true,
+                dirty_override: key_ctx.dirty_override,
+                mark_full: true,
+                ..Default::default()
+            };
+        }
 
         let mut ops = RunnerDispatchOps {
             core,

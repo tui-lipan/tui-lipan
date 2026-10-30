@@ -1339,6 +1339,10 @@ impl<C: Component> MouseDispatchCtx<C> for TestBackend<C> {
                 &mut self.mouse.last_click,
                 self.core.ctx.env().now(),
             );
+            // A click puts the caret where it landed, even on the byte End left it at.
+            if let Some(editor) = self.widgets.textarea_history.get_mut(&change.node_id) {
+                editor.visual_row_end = None;
+            }
             self.drag.last_pointer_pos = None;
             self.drag.last_autoscroll_tick = None;
             self.drag.autoscroll_layout_dirty = false;

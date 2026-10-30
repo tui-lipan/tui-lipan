@@ -804,6 +804,11 @@ impl<C: Component> AppRunner<C> {
                 self.core.ctx.env().now(),
             );
 
+            // A click puts the caret where it landed, even on the byte End left it at.
+            if let Some(editor) = self.widgets.textarea_history.get_mut(&change.node_id) {
+                editor.visual_row_end = None;
+            }
+
             // Start drag tracking for selection
             self.drag.last_pointer_pos = None;
             self.drag.last_autoscroll_tick = None;

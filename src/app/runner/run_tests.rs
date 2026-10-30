@@ -10617,6 +10617,204 @@ fn key_capture_records_a_framework_chord_prefix_before_the_chord_claims_it() {
     );
 }
 
+#[derive(Clone)]
+struct ChordInputRecorder {
+    values: Rc<RefCell<Vec<String>>>,
+    anchor: Option<usize>,
+}
+
+impl Component for ChordInputRecorder {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _: &()) -> Self::State {}
+
+    fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _: &Context<Self>) -> Element {
+        let values = self.values.clone();
+        Input::new("helloworld")
+            .cursor(5)
+            .anchor(self.anchor)
+            .on_change(Callback::new(move |event: crate::widgets::InputEvent| {
+                values.borrow_mut().push(event.value.to_string());
+            }))
+            .key("input")
+    }
+}
+
+fn chord_input_runner(
+    action: crate::FrameworkAction,
+    values: &Rc<RefCell<Vec<String>>>,
+) -> AppRunner<ChordInputRecorder> {
+    bound_input_runner(action, "ctrl-g u", None, values)
+}
+
+fn bound_input_runner(
+    action: crate::FrameworkAction,
+    keys: &str,
+    anchor: Option<usize>,
+    values: &Rc<RefCell<Vec<String>>>,
+) -> AppRunner<ChordInputRecorder> {
+    let app = crate::App::new()
+        .user_keymap_policy(crate::UserKeymapPolicy::Disabled)
+        .framework_keymap(
+            crate::FrameworkKeymap::default()
+                .bind(action, crate::KeyBindings::from_str(keys).expect("binding")),
+        );
+    let component = ChordInputRecorder {
+        values: values.clone(),
+        anchor,
+    };
+    let mut runner = AppRunner::new(app, component.clone(), ());
+    init_runner(
+        &mut runner,
+        component,
+        Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 5,
+        },
+    );
+    runner.focus.focused = Some(node_id_by_key(&runner.core.tree, "input"));
+    runner
+}
+
+#[test]
+fn chord_runs_a_text_action_on_the_focused_input_without_typing_its_final_key() {
+    let values = Rc::new(RefCell::new(Vec::new()));
+    let mut runner = chord_input_runner(crate::FrameworkAction::DeleteToLineStart, &values);
+
+    let prefix = runner.dispatch_layered_key(ctrl_char('g'));
+    let last = runner.dispatch_layered_key(key(KeyCode::Char('u')));
+
+    assert!(prefix.consumed && last.consumed);
+    assert_eq!(values.borrow().as_slice(), ["world"]);
+}
+
+#[derive(Clone)]
+struct ClickableTextArea;
+
+impl Component for ClickableTextArea {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _: &()) -> Self::State {}
+
+    fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _: &Context<Self>) -> Element {
+        TextArea::new("abcdef")
+            .cursor(3)
+            .on_change(Callback::new(|_| {}))
+            .key("area")
+    }
+}
+
+#[test]
+fn clicking_a_text_area_forgets_the_row_end_at_the_same_byte() {
+    let mut runner = AppRunner::new(App::new(), ClickableTextArea, ());
+    init_runner(
+        &mut runner,
+        ClickableTextArea,
+        Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 5,
+        },
+    );
+    let id = node_id_by_key(&runner.core.tree, "area");
+    runner.focus.focused = Some(id);
+    let mut editor = TextEditor::new("abcdef");
+    editor.set_cursor(3);
+    editor.visual_row_end = Some(3);
+    runner.widgets.textarea_history.insert(id, editor);
+
+    let _ = runner.dispatch_mouse(MouseEvent {
+        x: 3,
+        y: 0,
+        kind: MouseKind::Down(MouseButton::Left),
+        mods: KeyMods::default(),
+    });
+
+    assert_eq!(runner.widgets.textarea_history[&id].visual_row_end, None);
+}
+
+#[test]
+fn rust_binding_on_the_copy_key_edits_a_selected_input_instead_of_copying() {
+    let values = Rc::new(RefCell::new(Vec::new()));
+    let mut runner = bound_input_runner(
+        crate::FrameworkAction::DeleteToLineStart,
+        "ctrl-c",
+        Some(2),
+        &values,
+    );
+
+    let result = runner.dispatch_layered_key(ctrl_char('c'));
+
+    assert!(result.consumed);
+    assert_eq!(values.borrow().as_slice(), ["heworld"]);
+}
+
+#[test]
+fn chord_ending_in_the_copy_key_completes_on_a_selected_input() {
+    let values = Rc::new(RefCell::new(Vec::new()));
+    let mut runner = bound_input_runner(
+        crate::FrameworkAction::DeleteToLineStart,
+        "ctrl-g ctrl-c",
+        Some(2),
+        &values,
+    );
+
+    runner.dispatch_layered_key(ctrl_char('g'));
+    let last = runner.dispatch_layered_key(ctrl_char('c'));
+
+    assert!(last.consumed);
+    assert_eq!(values.borrow().as_slice(), ["heworld"]);
+}
+
+#[test]
+fn copy_key_that_breaks_a_chord_copies_and_cancels_the_chord() {
+    let values = Rc::new(RefCell::new(Vec::new()));
+    let mut runner = bound_input_runner(
+        crate::FrameworkAction::DeleteToLineStart,
+        "ctrl-g u",
+        Some(2),
+        &values,
+    );
+
+    runner.dispatch_layered_key(ctrl_char('g'));
+    assert!(runner.dispatch_layered_key(ctrl_char('c')).consumed);
+    assert!(values.borrow().is_empty(), "copy edits nothing");
+    runner.dispatch_layered_key(key(KeyCode::Char('u')));
+
+    assert_eq!(
+        values.borrow().as_slice(),
+        ["heuworld"],
+        "u is typed over the selection, not the end of a stale chord"
+    );
+}
+
+#[test]
+fn chord_for_a_non_text_action_does_not_type_its_final_key() {
+    let values = Rc::new(RefCell::new(Vec::new()));
+    let mut runner = chord_input_runner(crate::FrameworkAction::Copy, &values);
+
+    runner.dispatch_layered_key(ctrl_char('g'));
+    let last = runner.dispatch_layered_key(key(KeyCode::Char('u')));
+
+    assert!(last.consumed);
+    assert!(values.borrow().is_empty());
+}
+
 #[cfg(feature = "terminal")]
 #[derive(Clone)]
 struct TerminalFocusReportSmoke {

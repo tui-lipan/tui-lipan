@@ -238,21 +238,24 @@ Bitflag-style key set for `scroll_keys(...)` on `ScrollView`, `List`, `Table`, `
 
 ### `FrameworkAction`
 
-Framework-owned actions configurable from Rust via `FrameworkKeymap` and `App::framework_keymap(...)`. Maps to internal keymap actions after file/env/user bindings are applied.
+Actions configurable from Rust via `FrameworkKeymap` and `App::framework_keymap(...)`. It covers every action `keymap.conf` can bind, and its variants are the `PascalCase` form of the [action names](keybindings.md), such as `DeleteToLineStart` for `delete_to_line_start`. The enum is `#[non_exhaustive]`, because new actions get added.
 
-| Variant | Default binding (typical) | `FrameworkKeymap` use |
+| Common variant | Default binding (typical) | Use |
 |---------|---------------------------|------------------------|
 | `Quit` | `ctrl-q` | `.unbind(FrameworkAction::Quit)` or rebind |
 | `DismissOverlay` | `esc` | Overlay dismissal |
 | `FocusNext` | `tab` | Tab traversal |
 | `FocusPrev` | `shift-tab` | Reverse tab traversal |
 | `ToggleDevTools` | `f12` | DevTools panel (requires `devtools` feature at runtime) |
+| `DeleteWordLeft` | `ctrl-backspace`, `alt-backspace` | Add `ctrl-w` for readline-style deletion, keeping the defaults you want |
+| `DeleteToLineStart` | None | Delete from the cursor to the line start, typically `ctrl-u` |
+| `DeleteToLineEnd` | None | Delete from the cursor to the line end, typically `ctrl-k` |
 
 Sugar: `App::global_quit(None)` unbinds quit without touching other framework actions.
 
 ### `FrameworkKeymap`
 
-Builder for Rust-side framework binding overrides. Applied **after** user keymap files and built-in defaults. Methods: `.bind(action, KeyBindings)`, `.unbind(action)`.
+Builder for Rust-side framework binding overrides. Applied **after** user keymap files and built-in defaults, and takes a key it binds away from them; the later `bind` wins if two Rust bindings share a key. Binding an action replaces all of its other keys. Methods: `.bind(action, KeyBindings)`, `.unbind(action)`.
 
 ### `UserKeymapPolicy`
 

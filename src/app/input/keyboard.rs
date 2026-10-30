@@ -650,6 +650,38 @@ pub(crate) fn dispatch_key(
     false
 }
 
+/// Run a chord's action on the focused `Input` or `TextArea`, if one is focused.
+///
+/// Handlers receive a key nothing binds, so the key that completed the chord cannot also act as a
+/// shortcut, a newline, or text.
+pub(crate) fn dispatch_chord_action(
+    tree: &mut NodeTree,
+    focused: Option<NodeId>,
+    action: crate::app::input::keymap::Action,
+    ctx: &mut KeyCtx<'_>,
+) -> bool {
+    const INERT_KEY: KeyEvent = KeyEvent {
+        code: crate::core::event::KeyCode::F(u8::MAX),
+        mods: crate::core::event::KeyMods::NONE,
+    };
+
+    let Some(id) = focused.filter(|id| tree.is_valid(*id)) else {
+        return false;
+    };
+    ctx.chord_action = Some(action);
+    let handled = match handlers::classify_interactive(&tree.node(id).kind) {
+        handlers::InteractiveTag::Input => {
+            handlers::input_widget::handle_key(tree, id, INERT_KEY, ctx)
+        }
+        handlers::InteractiveTag::TextArea => {
+            handlers::text_area::handle_key(tree, id, INERT_KEY, ctx)
+        }
+        _ => false,
+    };
+    ctx.chord_action = None;
+    handled
+}
+
 pub(crate) fn dispatch_paste(
     tree: &mut NodeTree,
     focused: Option<NodeId>,
@@ -815,6 +847,7 @@ mod tests {
             clipboard_config,
             copy_feedback: &mut copy_feedback,
             dirty_override: None,
+            chord_action: None,
         };
 
         dispatch_selection_clipboard_shortcut(tree, None, key, &mut ctx)
@@ -851,6 +884,7 @@ mod tests {
             clipboard_config: &clipboard_config,
             copy_feedback: &mut copy_feedback,
             dirty_override: None,
+            chord_action: None,
         };
 
         copy_active_selection(
