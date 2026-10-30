@@ -4778,9 +4778,10 @@ mod tests {
         let snapshot = screen.render_snapshot();
         let placements =
             crate::widgets::composite_terminal_images(&snapshot.images, area.width, area.height);
-        let use_placements = placements
-            .first()
-            .is_some_and(|first| first.z < 0 || placements.iter().any(|p| p.z != first.z));
+        let use_placements = crate::widgets::terminal_images_use_placements(
+            &placements,
+            image_support::host_is_behind_tmux(),
+        );
         begin_kitty_frame();
         frame
             .draw(|f| {
