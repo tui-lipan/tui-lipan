@@ -9,7 +9,9 @@ the squashed commit subject. Make the title a valid Conventional Commit:
     fix(scroll_view): clip last row on odd content height
     feat(modal): add max_height + reserve_max_height
 
-Call out breaking changes and concrete migration steps in the summary.
+Release notes are written from the Summary, and the PR description check fails without one on
+feat, fix, perf, and `!` titles. Put breaking changes under `### Breaking changes` in the Summary,
+with concrete migration steps. A `!` title requires that section.
 -->
 
 ## Summary

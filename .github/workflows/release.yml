@@ -54,14 +54,25 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$OPENAI_API_KEY"
-          opencode run --variant low --command changelog
-          test -s release-notes.md
+          # The writer is not deterministic, so one dropped change should not fail a tagged release.
+          for attempt in 1 2 3; do
+            opencode run --variant low --command changelog
+            if test -s release-notes.md && python3 scripts/release_notes.py validate \
+              --input release-notes.md \
+              --output release-notes-checked.md \
+              --metadata release-notes-range.json; then
+              exit 0
+            fi
+            echo "::warning::Release notes attempt $attempt failed validation"
+          done
+          exit 1
 
       - name: Validate and freeze generated Markdown
         run: |
           python3 scripts/release_notes.py validate \
             --input release-notes.md \
-            --output release-notes.md
+            --output release-notes.md \
+            --metadata release-notes-range.json
 
       - name: Upload immutable release-note input and result
         uses: actions/upload-artifact@v7

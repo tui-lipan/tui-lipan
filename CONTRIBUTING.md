@@ -136,11 +136,17 @@ Rosie writes the prose from each PR Summary. Keep titles and summaries useful:
 - Put the user-visible effect in the Summary: what broke or changed, and what
   happens now. Name APIs, defaults, feature flags, MSRV changes, and migration
   steps there so the notes can repeat them.
-- Give a concrete replacement or migration step for every breaking change.
+- Give a concrete replacement or migration step for every breaking change, under
+  a `### Breaking changes` heading in the Summary. A `!` title requires it.
 - Update app-author documentation and examples in the same PR.
 
 Internal refactors, tests, formatting, CI, and documentation-only commits are
 excluded from release notes.
+
+The `PR description` check enforces the title and Summary while the PR can still
+be edited, since squash merging copies both into history. At release time, the
+notes must link every user-facing PR and list every breaking one under
+Compatibility, or the release stops before anything publishes.
 
 ## Adding a new widget
 

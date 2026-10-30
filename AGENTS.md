@@ -351,6 +351,14 @@ Use conventional commits:
 - Imperative mood: "feat: Add button widget" not "Added"
 - Keep under 72 characters, no period at end
 
+Breaking changes:
+- Mark every breaking change with `!` after the type or scope:
+  `fix(syntect)!: color tokens by their role`.
+- Add a `### Breaking changes` section saying what breaks and how to migrate. It goes
+  in the PR Summary, or in the commit body when there is no PR. A `!` title without
+  it fails the `PR description` check, and release notes list the section under
+  Compatibility.
+
 Sign-off and identity:
 - Every commit needs a DCO sign-off: `git commit -s` (see
   [`CONTRIBUTING.md`](CONTRIBUTING.md) for what the sign-off means and how to
@@ -382,6 +390,9 @@ Other expectations:
 - One logical change per PR - keep unrelated refactors out.
 - The PR body follows [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md);
   work through its checklist (which mirrors `CONTRIBUTING.md`) before requesting review.
+- Keep the `## Summary` heading: release notes are written from it, and the `PR description`
+  check fails without it on `feat`, `fix`, `perf`, and `!` titles.
+- Follow the breaking change rules in [Commit Practices](#commit-practices).
 - Individual commits inside the PR should also be conventional, but the **title**
   is what ships to history - get that one right.
 
@@ -393,8 +404,9 @@ install snippets, then creates the signed-off `release: vX.Y.Z` commit and tag;
 push them with `git push origin main vX.Y.Z`. `.github/workflows/release.yml` verifies the versions
 and test suite while the `/changelog` command has Rosie write notes from each
 PR Summary since the previous published release. Generated notes
-are validated and must succeed before either crate can publish through crates.io
-Trusted Publishing. The same frozen notes become the GitHub Release body.
+are validated, including that they link every user-facing PR and list every breaking
+one under Compatibility, and must succeed before either crate can publish through
+crates.io Trusted Publishing. The same frozen notes become the GitHub Release body.
 After a successful release, `.github/workflows/website.yml` moves the `website`
 branch (which Cloudflare Pages deploys as docs.tui-lipan.dev) to the new tag. Run
 it by hand with `commits` to publish `docs/`/`README.md`-only fixes early.
