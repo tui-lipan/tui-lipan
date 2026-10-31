@@ -965,7 +965,7 @@ style directly.
 
 | Variant | Description |
 |---------|-------------|
-| `DraggableTabKind::Tab` | Regular selectable, draggable tab **(default)** |
+| `DraggableTabKind::Tab` | Regular selectable tab **(default)**. Reorderable unless `DraggableTab::reorderable(false)` |
 | `DraggableTabKind::Action` | Pinned action item, such as a `+` new-tab button, that emits `on_action` instead of selecting or reordering |
 
 ### `DraggableTabBarVariant`

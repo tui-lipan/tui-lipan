@@ -132,7 +132,8 @@ impl DraggableTabBarNode {
             return;
         };
         // Action tabs (e.g. trailing `+`) must not inherit a closed tab's width.
-        if !super::is_reorderable_tab(replacement) {
+        // A fixed selectable tab is still a normal tab for this lock.
+        if !super::is_selectable_tab(replacement) {
             self.width_lock = None;
             return;
         }

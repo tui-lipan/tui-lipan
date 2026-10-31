@@ -89,7 +89,7 @@ pub fn reconcile_draggable_tab_bar(
         next_node
             .tabs
             .get(lock.index)
-            .is_some_and(super::is_reorderable_tab)
+            .is_some_and(super::is_selectable_tab)
     });
     next_node.pending_swap = old_pending_swap.filter(|&(from, to)| {
         from != to

@@ -20,6 +20,8 @@ mod draggable_tab_bar_clipped_render;
 mod draggable_tab_bar_empty_text_render;
 #[path = "suites/widget_behavior/draggable_tab_bar_empty_transfer.rs"]
 mod draggable_tab_bar_empty_transfer;
+#[path = "suites/widget_behavior/draggable_tab_bar_fixed_tabs.rs"]
+mod draggable_tab_bar_fixed_tabs;
 #[path = "suites/widget_behavior/draggable_tab_bar_hover_close_width.rs"]
 mod draggable_tab_bar_hover_close_width;
 #[path = "suites/widget_behavior/effect_scope_backdrop.rs"]

@@ -4364,3 +4364,89 @@ fn context_menu_consumes_the_entire_terminal_right_button_gesture() {
         );
     }
 }
+
+#[test]
+fn fixed_tab_selects_without_arming_a_drag() {
+    struct App;
+
+    struct State {
+        selected: usize,
+    }
+
+    #[derive(Clone)]
+    enum Msg {
+        Select(crate::widgets::TabsEvent),
+        Ignore,
+    }
+
+    impl Component for App {
+        type Message = Msg;
+        type Properties = ();
+        type State = State;
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            State { selected: 0 }
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            if let Msg::Select(event) = msg {
+                ctx.state.selected = event.index;
+            }
+            Update::full()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            crate::widgets::DraggableTabBar::new()
+                .tabs([
+                    crate::widgets::DraggableTab::new("Home").reorderable(false),
+                    crate::widgets::DraggableTab::new("Alpha"),
+                ])
+                .active(ctx.state.selected)
+                .divider('|')
+                .show_overflow_controls(false)
+                .show_close_buttons(false)
+                .focusable(false)
+                .height(Length::Px(1))
+                .on_change(ctx.link().callback(Msg::Select))
+                .on_reorder(ctx.link().callback(|_| Msg::Ignore))
+                .into()
+        }
+    }
+
+    let mut backend = TestBackend::new(App);
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 40,
+        h: 1,
+    });
+    backend.render();
+
+    backend
+        .send_mouse(MouseEvent {
+            x: 1,
+            y: 0,
+            kind: MouseKind::Down(MouseButton::Left),
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    assert!(
+        matches!(backend.drag.active, ActiveDrag::None),
+        "clicking a fixed tab armed {:?}",
+        backend.drag.active
+    );
+
+    backend
+        .send_mouse(MouseEvent {
+            x: 8,
+            y: 0,
+            kind: MouseKind::Down(MouseButton::Left),
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    assert!(
+        matches!(backend.drag.active, ActiveDrag::DraggableTabBar(_)),
+        "clicking a normal tab should arm a drag, got {:?}",
+        backend.drag.active
+    );
+}

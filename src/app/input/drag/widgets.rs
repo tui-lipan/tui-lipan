@@ -178,21 +178,13 @@ pub(crate) fn handle_draggable_tab_bar_drag(
     }
 
     if can_transfer {
-        let to_index = if over_body {
-            target_bar
-                .tabs
-                .iter()
-                .rposition(crate::widgets::draggable_tab_bar::is_reorderable_tab)
-                .map_or(0, |index| index + 1)
-        } else {
-            DraggableTabBar::reorder_index_at_view_col(
-                &target_bar.tabs,
-                &target_disp_opts,
-                &target_vp_opts,
-                view_col,
-            )
-            .unwrap_or_else(|| target_bar.tabs.len().saturating_sub(1))
-        };
+        let to_index = crate::widgets::draggable_tab_bar::transfer_insertion_index(
+            &target_bar.tabs,
+            &target_disp_opts,
+            &target_vp_opts,
+            view_col,
+            over_body,
+        );
 
         match drag.reorder_mode {
             DragReorderMode::Live => {
@@ -272,27 +264,19 @@ pub(crate) fn handle_draggable_tab_bar_drag(
             DragReorderMode::OnDrop => {
                 let bar_disp_opts_ondrop = bar.display_options();
                 let bar_vp_opts_ondrop = bar.viewport_options(target_inner.w as usize);
-                let target =
+                if let Some(target) =
                     crate::widgets::draggable_tab_bar::reorder_target_at_view_col_with_options(
                         &bar.tabs,
                         &bar_disp_opts_ondrop,
                         &bar_vp_opts_ondrop,
                         view_col,
+                        drag.current_index,
                     )
-                    .unwrap_or_else(|| {
-                        if view_col == 0 {
-                            0
-                        } else {
-                            bar.tabs
-                                .iter()
-                                .rposition(crate::widgets::draggable_tab_bar::is_reorderable_tab)
-                                .unwrap_or_else(|| bar.tabs.len().saturating_sub(1))
-                        }
-                    });
-
-                drag.pending_id = drag.id;
-                drag.pending_bar_id = drag.bar_id.clone();
-                drag.pending_index = target;
+                {
+                    drag.pending_id = drag.id;
+                    drag.pending_bar_id = drag.bar_id.clone();
+                    drag.pending_index = target;
+                }
                 Some((drag, None))
             }
         }
