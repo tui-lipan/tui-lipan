@@ -226,8 +226,64 @@ pub(crate) fn transition_middle_click<C: Component, T: MouseDispatchCtx<C>>(
     let Some(hit) = ctx.tree().hit_test(x as i16, y as i16) else {
         return Some(hover_dirty);
     };
+    if middle_click_draggable_tab_bar(ctx, hit, x, y) {
+        return Some(true);
+    }
     let (_, source) = ctx.pointer_clipboard_actions();
     Some(paste_at_pointer(ctx, hit, source) || hover_dirty)
+}
+
+/// Close a closeable tab in a `DraggableTabBar` on middle-click anywhere on the tab.
+fn middle_click_draggable_tab_bar<C: Component, T: MouseDispatchCtx<C>>(
+    ctx: &mut T,
+    hit: NodeId,
+    x: u16,
+    y: u16,
+) -> bool {
+    if ctx.drag_is_active() {
+        return false;
+    }
+    let node = ctx.tree().node(hit);
+    let NodeKind::DraggableTabBar(node_tabs) = &node.kind else {
+        return false;
+    };
+    if node_tabs.disabled || node_tabs.tabs.is_empty() {
+        return false;
+    }
+    let Some(on_close) = node_tabs.on_close.clone() else {
+        return false;
+    };
+    let inner = node.rect.inner(node_tabs.border, node_tabs.padding);
+    if !inner.contains(x as i16, y as i16) {
+        return false;
+    }
+    let col = (x as i32).saturating_sub(inner.x as i32) as usize;
+    let Some(crate::widgets::draggable_tab_bar::DraggableTabHitTarget::Tab(tab_hit)) =
+        crate::widgets::DraggableTabBar::hit_target_at_view_col(
+            &node_tabs.tabs,
+            &node_tabs.display_options(),
+            &node_tabs.viewport_options(inner.w as usize),
+            col,
+        )
+    else {
+        return false;
+    };
+    if !node_tabs
+        .tabs
+        .get(tab_hit.index)
+        .is_some_and(crate::widgets::draggable_tab_bar::is_closeable_tab)
+    {
+        return false;
+    }
+
+    let inner_w = inner.w as usize;
+    if let NodeKind::DraggableTabBar(node_tabs) = &mut ctx.tree_mut().node_mut(hit).kind {
+        node_tabs.lock_closed_tab_width(tab_hit.index, inner_w);
+    }
+    on_close.emit(crate::widgets::DraggableTabCloseEvent {
+        index: tab_hit.index,
+    });
+    true
 }
 
 /// Run the configured right-click clipboard action against the widget under the pointer.

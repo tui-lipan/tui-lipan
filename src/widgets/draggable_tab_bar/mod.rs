@@ -73,7 +73,7 @@ pub struct DraggableTabActionEvent {
     pub index: usize,
 }
 
-/// Event emitted when a tab close button is clicked.
+/// Event emitted when a tab is closed via its close button or middle-click.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct DraggableTabCloseEvent {
@@ -1017,7 +1017,7 @@ impl DraggableTabBar {
         self
     }
 
-    /// Callback fired when a close button is clicked.
+    /// Callback fired when a closeable tab is closed via its close button or middle-click.
     pub fn on_close(mut self, cb: Callback<DraggableTabCloseEvent>) -> Self {
         self.on_close = Some(cb);
         self
@@ -1720,6 +1720,10 @@ pub(crate) fn is_reorderable_tab(tab: &DraggableTab) -> bool {
     tab.kind == DraggableTabKind::Tab
 }
 
+pub(crate) fn is_closeable_tab(tab: &DraggableTab) -> bool {
+    tab.closeable && is_reorderable_tab(tab)
+}
+
 #[cfg(test)]
 pub(crate) fn reorder_target_at_col_with_options(
     tabs: &[DraggableTab],
@@ -1834,7 +1838,7 @@ fn tab_metrics_with_label_width(
     let badge_gap_w = if badge_w > 0 { 1 } else { 0 };
 
     let close_symbol_w = UnicodeWidthStr::width(opts.close_symbol).max(1);
-    let has_close = opts.show_close_buttons && tab.closeable && is_reorderable_tab(tab);
+    let has_close = opts.show_close_buttons && is_closeable_tab(tab);
     let close_gap_w = if has_close { 1 } else { 0 };
     let close_zone_w = if has_close { close_symbol_w } else { 0 };
 
