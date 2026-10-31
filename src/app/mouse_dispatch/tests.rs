@@ -4131,3 +4131,236 @@ fn middle_clicking_closeable_tab_locks_width_for_rapid_repeated_closing() {
     press(&mut backend, MouseButton::Middle, click_x, 0);
     assert_eq!(backend.state().tabs, vec!["c"]);
 }
+
+struct ContextHitHarness {
+    tab_bar: bool,
+    events: Rc<RefCell<Vec<Option<usize>>>>,
+}
+impl Component for ContextHitHarness {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+    fn create_state(&self, _: &()) {}
+    fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+    fn view(&self, _: &Context<Self>) -> Element {
+        let events = self.events.clone();
+        if self.tab_bar {
+            DraggableTabBar::new()
+                .tabs([DraggableTab::new("First")])
+                .border(true)
+                .padding((1, 2))
+                .width(Length::Px(24))
+                .height(Length::Px(7))
+                .on_context_menu(Callback::new(move |(index, _)| {
+                    events.borrow_mut().push(index)
+                }))
+                .into()
+        } else {
+            MouseRegion::new()
+                .hit_test(|x, _| x == 0)
+                .on_context_menu(Callback::new(move |_| events.borrow_mut().push(Some(99))))
+                .child(
+                    Button::new("wide button")
+                        .width(Length::Px(20))
+                        .on_click(Callback::new(|_| {})),
+                )
+                .into()
+        }
+    }
+}
+
+#[test]
+fn context_menu_respects_ancestor_hit_test_for_interactive_children() {
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let mut backend = TestBackend::new(ContextHitHarness {
+        tab_bar: false,
+        events: events.clone(),
+    });
+    backend.render();
+    for x in [5, 0] {
+        backend
+            .send_mouse(MouseEvent {
+                x,
+                y: 0,
+                kind: MouseKind::Down(MouseButton::Right),
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+    }
+    assert_eq!(
+        &*events.borrow(),
+        &[Some(99)],
+        "only the accepted point opens the menu"
+    );
+}
+
+#[test]
+fn context_menu_tab_border_and_padding_do_not_report_a_tab() {
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let mut backend = TestBackend::new(ContextHitHarness {
+        tab_bar: true,
+        events: events.clone(),
+    });
+    backend.render();
+    let node = backend
+        .core
+        .tree
+        .iter()
+        .find(|node| matches!(node.kind, NodeKind::DraggableTabBar(_)))
+        .unwrap();
+    let NodeKind::DraggableTabBar(bar) = &node.kind else {
+        unreachable!()
+    };
+    let inner = node.rect.inner(bar.border, bar.padding);
+    let points = [
+        (node.rect.x, node.rect.y),
+        (inner.x - 1, inner.y),
+        (inner.x, inner.y - 1),
+        (inner.x + inner.w as i16, inner.y),
+        (inner.x, inner.y + inner.h as i16),
+        (inner.x, inner.y + 1),
+        (inner.x, inner.y),
+    ];
+    for (x, y) in points {
+        backend
+            .send_mouse(MouseEvent {
+                x: x as u16,
+                y: y as u16,
+                kind: MouseKind::Down(MouseButton::Right),
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+    }
+    assert_eq!(
+        &*events.borrow(),
+        &[None, None, None, None, None, None, Some(0)]
+    );
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn context_menu_consumes_the_entire_terminal_right_button_gesture() {
+    struct ContextTerminal {
+        mode: MouseMode,
+        forwarded: Rc<RefCell<Vec<Vec<u8>>>>,
+    }
+    impl Component for ContextTerminal {
+        type Message = bool;
+        type Properties = ();
+        type State = bool;
+        fn create_state(&self, _: &()) -> bool {
+            true
+        }
+        fn update(&mut self, enabled: bool, ctx: &mut Context<Self>) -> Update {
+            ctx.state = enabled;
+            Update::layout()
+        }
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            let forwarded = self.forwarded.clone();
+            let terminal = Terminal::new()
+                .snapshot(TerminalRenderSnapshot {
+                    mouse_mode: MouseModeState {
+                        mode: self.mode,
+                        encoding: MouseEncoding::Sgr,
+                        focus_events_enabled: false,
+                    },
+                    ..TerminalRenderSnapshot::default()
+                })
+                .on_mouse_forward(Callback::new(move |bytes| {
+                    forwarded.borrow_mut().push(bytes)
+                }));
+            let region = MouseRegion::new().child(terminal);
+            if ctx.state {
+                region
+                    .on_context_menu(ctx.link().callback(|_| false))
+                    .into()
+            } else {
+                region.into()
+            }
+        }
+    }
+    for mode in [MouseMode::Normal, MouseMode::AnyEvent] {
+        let forwarded = Rc::new(RefCell::new(Vec::new()));
+        let mut backend = TestBackend::new(ContextTerminal {
+            mode,
+            forwarded: forwarded.clone(),
+        });
+        backend.render();
+        let id = backend
+            .core
+            .tree
+            .iter()
+            .find(|node| matches!(node.kind, NodeKind::Terminal(_)))
+            .unwrap()
+            .id;
+        backend.set_focused(id);
+        for kind in [
+            MouseKind::Down(MouseButton::Right),
+            MouseKind::Drag(MouseButton::Right),
+            MouseKind::Up(MouseButton::Right),
+        ] {
+            backend
+                .send_mouse(MouseEvent {
+                    x: 1,
+                    y: 0,
+                    kind,
+                    mods: KeyMods::NONE,
+                })
+                .unwrap();
+            backend.render();
+        }
+        assert!(
+            !*backend.state(),
+            "the callback disables itself before drag/release"
+        );
+        assert!(
+            forwarded.borrow().is_empty(),
+            "{mode:?}: child must receive none of a consumed gesture"
+        );
+        // After release, an unhandled gesture must again reach the child intact.
+        for kind in [
+            MouseKind::Down(MouseButton::Right),
+            MouseKind::Up(MouseButton::Right),
+        ] {
+            backend
+                .send_mouse(MouseEvent {
+                    x: 1,
+                    y: 0,
+                    kind,
+                    mods: KeyMods::NONE,
+                })
+                .unwrap();
+        }
+        assert_eq!(
+            forwarded.borrow().len(),
+            2,
+            "{mode:?}: suppression must end at release"
+        );
+        // A lost release must not suppress the next full right-button gesture.
+        forwarded.borrow_mut().clear();
+        *backend.state_mut() = true;
+        backend.render();
+        for kind in [
+            MouseKind::Down(MouseButton::Right),
+            MouseKind::Down(MouseButton::Right),
+            MouseKind::Up(MouseButton::Right),
+        ] {
+            backend
+                .send_mouse(MouseEvent {
+                    x: 1,
+                    y: 0,
+                    kind,
+                    mods: KeyMods::NONE,
+                })
+                .unwrap();
+            backend.render();
+        }
+        assert_eq!(
+            forwarded.borrow().len(),
+            2,
+            "{mode:?}: a fresh right press recovers from a lost release"
+        );
+    }
+}

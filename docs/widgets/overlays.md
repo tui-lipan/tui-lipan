@@ -810,7 +810,7 @@ A popup menu backed by `Popover` + `List`. Typically triggered by right-click or
 | `trigger` | `impl IntoElement` | **Constructor** | The element that owns the menu |
 | `items` | `impl IntoIterator<Item = impl Into<ListItem>>` | `[]` | Menu items |
 | `open` | `bool` | `false` | Controlled open state |
-| `on_select` | `Callback<usize>` | - | Fires with selected item index |
+| `on_select` | `Callback<usize>` | - | Activates the item on Enter or left click; highlight movement does not invoke it |
 | `on_close` | `Callback<()>` | - | Fires when menu should close |
 | `anchor` | `Option<(u16, u16)>` | `None` | Absolute anchor position (content coordinates) |
 | `placement` | `PopoverPlacement` | `BelowStart` | Menu placement relative to trigger |

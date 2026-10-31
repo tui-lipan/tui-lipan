@@ -942,6 +942,7 @@ Source: `src/widgets/draggable_tab_bar/mod.rs` (`DraggableTabBar`).
 | `on_reorder` | `None` |
 | `on_transfer` | `None` |
 | `on_click` | `None` |
+| `on_context_menu` | `None` |
 | `on_key` | `None` |
 | `disabled` | `false` |
 | `disabled_style` | `Style::default()` |

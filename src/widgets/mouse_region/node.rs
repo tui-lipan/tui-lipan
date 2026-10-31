@@ -10,6 +10,7 @@ use super::MouseRegion;
 #[derive(Clone, Default)]
 pub struct MouseRegionNode {
     pub on_click: Option<Callback<MouseRegionEvent>>,
+    pub on_context_menu: Option<Callback<MouseRegionEvent>>,
     pub on_mouse_down: Option<Callback<MouseRegionEvent>>,
     pub bubble_mouse_down: bool,
     pub on_mouse_up: Option<Callback<MouseRegionEvent>>,
@@ -48,6 +49,7 @@ impl WidgetNode for MouseRegionNode {
     fn has_on_click(&self) -> bool {
         self.enabled
             && (self.on_click.is_some()
+                || self.on_context_menu.is_some()
                 || self.on_mouse_down.is_some()
                 || self.on_mouse_up.is_some()
                 || self.on_drag_start.is_some()
@@ -96,6 +98,7 @@ impl From<MouseRegion> for MouseRegionNode {
     fn from(value: MouseRegion) -> Self {
         Self {
             on_click: value.on_click,
+            on_context_menu: value.on_context_menu,
             on_mouse_down: value.on_mouse_down,
             bubble_mouse_down: value.bubble_mouse_down,
             on_mouse_up: value.on_mouse_up,
