@@ -259,7 +259,7 @@ impl TabsHubDemo {
                     .style(Style::new().bold().fg(Color::Rgb(109, 198, 255))),
             )
             .child(Text::new(
-                "Drag tabs to reorder/transfer, click + to create, wheel-scroll horizontally, arrows show hidden counts.",
+                "Drag tabs to reorder/transfer, click + to create, click  or middle-click to close, wheel-scroll horizontally.",
             ))
             .child(
                 Frame::new()

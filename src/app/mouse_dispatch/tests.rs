@@ -19,9 +19,10 @@ use crate::style::{Align, Color, Length, Rect, Span};
 use crate::widgets::document_view::FormattedLink;
 use crate::widgets::{
     AsciiCanvas, Button, CenterPin, ContentFormatter, DocumentClickEvent, DocumentView,
-    EffectScope, FormatInput, FormattedBlock, FormattedDocument, FormattedLine, Frame, HStack,
-    List, ListItem, MouseRegion, ScrollEvent, ScrollView, Spacer, StatusBar, Table, TableRow, Text,
-    TextArea, TextAreaEvent, TextAreaVimMode, VStack,
+    DraggableTab, DraggableTabBar, DraggableTabCloseEvent, EffectScope, FormatInput,
+    FormattedBlock, FormattedDocument, FormattedLine, Frame, HStack, List, ListItem, MouseRegion,
+    ScrollEvent, ScrollView, Spacer, StatusBar, Table, TableRow, TabsEvent, Text, TextArea,
+    TextAreaEvent, TextAreaVimMode, VStack,
 };
 #[cfg(feature = "terminal")]
 use crate::widgets::{MouseEncoding, MouseMode, MouseModeState, Terminal, TerminalRenderSnapshot};
@@ -3793,4 +3794,227 @@ fn only_a_forwarding_sgr_pixels_terminal_wants_pixel_reports() {
         !wants_pixels(MouseEncoding::SgrPixels, MouseMode::AnyEvent, false),
         "reports that are never forwarded reach no program"
     );
+}
+
+#[test]
+fn middle_clicking_closeable_tab_closes_without_activating_or_closing_non_closeable_items() {
+    struct TabCloseRoot {
+        closed: Rc<RefCell<Vec<usize>>>,
+        changed: Rc<RefCell<Vec<usize>>>,
+        actions: Rc<RefCell<Vec<usize>>>,
+        show_close_buttons: bool,
+        disabled: bool,
+    }
+
+    impl Component for TabCloseRoot {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            let closed = Rc::clone(&self.closed);
+            let changed = Rc::clone(&self.changed);
+            let actions = Rc::clone(&self.actions);
+            DraggableTabBar::new()
+                .tabs([
+                    DraggableTab::new("one").closeable(true),
+                    DraggableTab::new("two").closeable(true),
+                    DraggableTab::new("pinned").closeable(false),
+                    DraggableTab::action("+").closeable(true),
+                ])
+                .active(0)
+                .show_close_buttons(self.show_close_buttons)
+                .disabled(self.disabled)
+                .on_close(Callback::new(move |ev: DraggableTabCloseEvent| {
+                    closed.borrow_mut().push(ev.index);
+                }))
+                .on_change(Callback::new(move |ev: TabsEvent| {
+                    changed.borrow_mut().push(ev.index);
+                }))
+                .on_action(Callback::new(
+                    move |ev: crate::widgets::DraggableTabActionEvent| {
+                        actions.borrow_mut().push(ev.index);
+                    },
+                ))
+                .into()
+        }
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+    }
+
+    let closed = Rc::new(RefCell::new(Vec::new()));
+    let changed = Rc::new(RefCell::new(Vec::new()));
+    let actions = Rc::new(RefCell::new(Vec::new()));
+    let mut backend = TestBackend::new(TabCloseRoot {
+        closed: Rc::clone(&closed),
+        changed: Rc::clone(&changed),
+        actions: Rc::clone(&actions),
+        show_close_buttons: true,
+        disabled: false,
+    });
+
+    let bar_id = backend
+        .core
+        .tree
+        .iter()
+        .find(|node| matches!(node.kind, NodeKind::DraggableTabBar(_)))
+        .map(|node| node.id)
+        .expect("expected a DraggableTabBar node");
+    let (inner, layout) = {
+        let node = backend.core.tree.node(bar_id);
+        let NodeKind::DraggableTabBar(bar) = &node.kind else {
+            unreachable!();
+        };
+        let inner = node.rect.inner(bar.border, bar.padding);
+        let layout = DraggableTabBar::viewport_layout(
+            &bar.tabs,
+            &bar.display_options(),
+            &bar.viewport_options(inner.w as usize),
+        );
+        (inner, layout)
+    };
+
+    let tab0 = &layout.visible_tabs[0];
+    let tab1 = &layout.visible_tabs[1];
+    let tab2 = &layout.visible_tabs[2];
+    let tab3 = &layout.visible_tabs[3];
+    let tab0_close_x = inner.x as u16
+        + tab0.start as u16
+        + tab0.metrics.close_start.expect("tab0 close slot") as u16;
+    let tab1_body_x = inner.x as u16 + tab1.start as u16 + 1;
+    let divider_x = inner.x as u16 + tab0.end as u16;
+    let tab2_body_x = inner.x as u16 + tab2.start as u16 + 1;
+    let tab3_body_x = inner.x as u16 + tab3.start as u16 + 1;
+    let y = inner.y as u16;
+
+    // Middle-click body of inactive closeable tab 1: closes tab 1 without changing active tab.
+    press(&mut backend, MouseButton::Middle, tab1_body_x, y);
+    assert_eq!(&*closed.borrow(), &[1]);
+    assert!(changed.borrow().is_empty());
+    assert!(actions.borrow().is_empty());
+    assert!(!backend.drag_is_active());
+
+    // Middle-click close button of tab 0: also closes tab 0.
+    press(&mut backend, MouseButton::Middle, tab0_close_x, y);
+    assert_eq!(&*closed.borrow(), &[1, 0]);
+
+    // Middle-click divider, non-closeable tab, and action tab: none should close.
+    press(&mut backend, MouseButton::Middle, divider_x, y);
+    press(&mut backend, MouseButton::Middle, tab2_body_x, y);
+    press(&mut backend, MouseButton::Middle, tab3_body_x, y);
+    assert_eq!(&*closed.borrow(), &[1, 0]);
+    assert!(changed.borrow().is_empty());
+    assert!(actions.borrow().is_empty());
+
+    // Middle-click still closes closeable tabs when `show_close_buttons(false)` is set.
+    let closed_hidden = Rc::new(RefCell::new(Vec::new()));
+    let mut hidden_backend = TestBackend::new(TabCloseRoot {
+        closed: Rc::clone(&closed_hidden),
+        changed: Rc::new(RefCell::new(Vec::new())),
+        actions: Rc::new(RefCell::new(Vec::new())),
+        show_close_buttons: false,
+        disabled: false,
+    });
+    press(&mut hidden_backend, MouseButton::Middle, 1, 0);
+    assert_eq!(&*closed_hidden.borrow(), &[0]);
+
+    // Disabled bar ignores middle-click.
+    let closed_disabled = Rc::new(RefCell::new(Vec::new()));
+    let mut disabled_backend = TestBackend::new(TabCloseRoot {
+        closed: Rc::clone(&closed_disabled),
+        changed: Rc::new(RefCell::new(Vec::new())),
+        actions: Rc::new(RefCell::new(Vec::new())),
+        show_close_buttons: true,
+        disabled: true,
+    });
+    press(&mut disabled_backend, MouseButton::Middle, 1, 0);
+    assert!(closed_disabled.borrow().is_empty());
+}
+
+#[test]
+fn middle_clicking_closeable_tab_locks_width_for_rapid_repeated_closing() {
+    struct StatefulTabs;
+
+    #[derive(Default)]
+    struct State {
+        tabs: Vec<&'static str>,
+    }
+
+    impl Component for StatefulTabs {
+        type Message = usize;
+        type Properties = ();
+        type State = State;
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            State {
+                tabs: vec!["very-long-first-tab", "b", "c"],
+            }
+        }
+
+        fn update(&mut self, index: Self::Message, ctx: &mut Context<Self>) -> Update {
+            if index < ctx.state.tabs.len() {
+                ctx.state.tabs.remove(index);
+                Update::full()
+            } else {
+                Update::none()
+            }
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            DraggableTabBar::new()
+                .tabs(
+                    ctx.state
+                        .tabs
+                        .iter()
+                        .copied()
+                        .map(|label| DraggableTab::new(label).closeable(true)),
+                )
+                .on_close(ctx.link().callback(|ev: DraggableTabCloseEvent| ev.index))
+                .into()
+        }
+    }
+
+    let mut backend = TestBackend::new(StatefulTabs);
+    let bar_id = backend
+        .core
+        .tree
+        .iter()
+        .find(|node| matches!(node.kind, NodeKind::DraggableTabBar(_)))
+        .map(|node| node.id)
+        .expect("expected a DraggableTabBar node");
+
+    // Click near the right end of "very-long-first-tab" (well past the natural width of "b").
+    let click_x = {
+        let node = backend.core.tree.node(bar_id);
+        let NodeKind::DraggableTabBar(bar) = &node.kind else {
+            unreachable!();
+        };
+        let inner = node.rect.inner(bar.border, bar.padding);
+        let layout = DraggableTabBar::viewport_layout(
+            &bar.tabs,
+            &bar.display_options(),
+            &bar.viewport_options(inner.w as usize),
+        );
+        inner.x as u16 + layout.visible_tabs[0].end as u16 - 2
+    };
+
+    press(&mut backend, MouseButton::Middle, click_x, 0);
+    assert_eq!(backend.state().tabs, vec!["b", "c"]);
+    {
+        let NodeKind::DraggableTabBar(bar) = &backend.core.tree.node(bar_id).kind else {
+            unreachable!();
+        };
+        assert!(
+            bar.width_lock.is_some(),
+            "middle-click close should lock the closed tab width on the bar"
+        );
+    }
+
+    // Without moving the mouse, a second middle-click at the same X hits the replacement tab "b".
+    press(&mut backend, MouseButton::Middle, click_x, 0);
+    assert_eq!(backend.state().tabs, vec!["c"]);
 }

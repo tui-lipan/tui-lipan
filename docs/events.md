@@ -963,7 +963,7 @@ Quick lookup - which callbacks does each widget support?
 |----------|---------|------|
 | `on_change` | `TabsEvent` | Active tab changed |
 | `on_action` | `DraggableTabActionEvent` | Action tab clicked |
-| `on_close` | `DraggableTabCloseEvent` | Tab close button clicked |
+| `on_close` | `DraggableTabCloseEvent` | Tab close button clicked or closeable tab middle-clicked |
 | `on_reorder` | `DraggableTabReorderEvent` | Tab dragged to new position |
 | `on_transfer` | `DraggableTabTransferEvent` | Tab transferred to another bar; destination `on_change` follows |
 | `on_click` | `MouseEvent` | Raw mouse click on tab bar |

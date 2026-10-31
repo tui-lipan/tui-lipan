@@ -83,9 +83,12 @@ override for an entire element instead.
 
 Editor-style tab bar with drag reordering, per-tab close buttons, file icons, and cross-bar transfer.
 
-When a close button is clicked with the mouse, the tab that moves into the
-closed tab's position temporarily inherits its width. This keeps the next close
-button under the pointer for rapid repeated closing. Natural or shrink-to-fit
+Closeable tabs (`DraggableTab::closeable(true)`) can be closed by clicking their
+close button or by middle-clicking anywhere on the tab (even when
+`show_close_buttons(false)` or `close_on_hover_only(true)` hides the symbol).
+When a tab is closed with the mouse, the tab that moves into the
+closed tab's position temporarily inherits its width. This keeps the next tab
+and close button under the pointer for rapid repeated closing. Natural or shrink-to-fit
 widths are restored as soon as the pointer leaves the tab bar. Action tabs such
 as a trailing `+` never inherit this lock.
 
@@ -153,7 +156,7 @@ symbol still appears when nothing else about the bar reacts to the pointer.
 | `width` | `Length` | Width |
 | `height` | `Length` | Height |
 | `on_change` | `Callback<TabsEvent>` | Active tab changed |
-| `on_close` | `Callback<DraggableTabCloseEvent>` | Close button clicked |
+| `on_close` | `Callback<DraggableTabCloseEvent>` | Close button clicked or closeable tab middle-clicked |
 | `on_reorder` | `Callback<DraggableTabReorderEvent>` | Tab dragged to new position |
 | `on_transfer` | `Callback<DraggableTabTransferEvent>` | Tab transferred to another bar |
 | `on_click` | `Callback<MouseEvent>` | Raw tab bar click |
