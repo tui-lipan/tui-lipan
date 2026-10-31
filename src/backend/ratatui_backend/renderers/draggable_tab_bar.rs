@@ -793,12 +793,17 @@ pub(crate) fn render_draggable_tab_bar_node(
         && to < tabs.len()
         && from != to
     {
-        tabs.swap(from, to);
-        if active == from {
-            active = to;
-        } else if active == to {
-            active = from;
-        }
+        let moved = tabs.remove(from);
+        tabs.insert(to, moved);
+        active = if active == from {
+            to
+        } else if from < to && active > from && active <= to {
+            active.saturating_sub(1)
+        } else if to < from && active >= to && active < from {
+            active.saturating_add(1)
+        } else {
+            active
+        };
     }
     for tab in &mut tabs {
         if let Some(spinner) = tab

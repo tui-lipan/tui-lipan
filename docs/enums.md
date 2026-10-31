@@ -987,7 +987,7 @@ style directly.
 | Variant | Description |
 |---------|-------------|
 | `DragReorderMode::Live` | Emit reorder events as the drag crosses tab boundaries **(default)** |
-| `DragReorderMode::OnDrop` | Preview the swapped tabs in the bar while dragging and emit one reorder event when the mouse is released |
+| `DragReorderMode::OnDrop` | Preview the reordered tabs in the bar while dragging and emit one reorder event when the mouse is released |
 
 ### `ButtonVariant`
 

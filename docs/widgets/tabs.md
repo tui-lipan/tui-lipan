@@ -106,7 +106,7 @@ symbol still appears when nothing else about the bar reacts to the pointer.
 | `variant` | `DraggableTabBarVariant` | `Bordered` or `FrameLine` |
 | `draggable` | `bool` | Enable drag reordering |
 | `drag_preview` | `bool` | Floating snapshot of the tab near the pointer while dragging (default: `true`). Cap cells keep the destination background so a pill floats instead of a rectangle. |
-| `reorder_mode` | `DragReorderMode` | `Live` (reorder at each crossed boundary) or `OnDrop` (preview the swapped tabs while dragging and emit one reorder event on release) |
+| `reorder_mode` | `DragReorderMode` | `Live` (reorder at each crossed boundary) or `OnDrop` (preview the reordered tabs while dragging and emit one reorder event on release) |
 | `drag_threshold` | `u16` | Terminal cells along either axis before drag starts |
 | `show_close_buttons` | `bool` | Show close buttons |
 | `close_symbol` | `&str` | Close button symbol |
