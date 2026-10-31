@@ -403,3 +403,146 @@ fn non_passthrough_layered_panel_accepts_body_transfers_over_paint_only_children
         assert_eq!(b.state().right, ["Agents"]);
     }
 }
+
+#[derive(Default)]
+struct OnDropSwapPreviewApp;
+
+#[derive(Default)]
+struct OnDropSwapPreviewState {
+    tabs: Vec<String>,
+    active: usize,
+    reorders: Vec<(usize, usize)>,
+}
+
+#[derive(Clone)]
+enum OnDropSwapPreviewMsg {
+    Select(TabsEvent),
+    Reorder(DraggableTabReorderEvent),
+}
+
+impl Component for OnDropSwapPreviewApp {
+    type State = OnDropSwapPreviewState;
+    type Message = OnDropSwapPreviewMsg;
+    type Properties = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {
+        OnDropSwapPreviewState {
+            tabs: vec!["one".into(), "two".into(), "three".into(), "four".into()],
+            active: 0,
+            reorders: Vec::new(),
+        }
+    }
+
+    fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+        match msg {
+            OnDropSwapPreviewMsg::Select(event) => ctx.state.active = event.index,
+            OnDropSwapPreviewMsg::Reorder(event) => {
+                ctx.state.reorders.push((event.from, event.to));
+                ctx.state.tabs.swap(event.from, event.to);
+                if ctx.state.active == event.from {
+                    ctx.state.active = event.to;
+                } else if ctx.state.active == event.to {
+                    ctx.state.active = event.from;
+                }
+            }
+        }
+        Update::full()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        DraggableTabBar::new()
+            .tabs(
+                ctx.state
+                    .tabs
+                    .iter()
+                    .map(|label| DraggableTab::new(label.as_str())),
+            )
+            .active(ctx.state.active)
+            .reorder_mode(DragReorderMode::OnDrop)
+            .divider(' ')
+            .show_close_buttons(false)
+            .show_overflow_controls(false)
+            .active_style(Style::new().bg(Color::Blue))
+            .height(Length::Px(1))
+            .on_change(ctx.link().callback(OnDropSwapPreviewMsg::Select))
+            .on_reorder(ctx.link().callback(OnDropSwapPreviewMsg::Reorder))
+            .into()
+    }
+}
+
+#[test]
+fn on_drop_reorder_previews_the_swapped_tabs_before_release_and_clears_when_returning_home() {
+    let mut b = TestBackend::new(OnDropSwapPreviewApp);
+    b.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 40,
+        h: 1,
+    });
+    b.render();
+
+    let row_text = |b: &mut TestBackend<OnDropSwapPreviewApp>| -> String {
+        b.render();
+        b.capture_frame().to_fixed_grid_lines()[0].clone()
+    };
+
+    let initial = row_text(&mut b);
+    let one_x = initial.find("one").expect("first tab") as u16;
+    let four_x = initial.find("four").expect("fourth tab") as u16;
+
+    b.send_mouse(mouse(one_x, 0, MouseKind::Down(MouseButton::Left)))
+        .unwrap();
+    b.send_mouse(mouse(four_x, 0, MouseKind::Drag(MouseButton::Left)))
+        .unwrap();
+
+    assert!(
+        b.state().reorders.is_empty(),
+        "OnDrop must not emit reorder before mouse release"
+    );
+    let preview = row_text(&mut b);
+    let preview_four = preview
+        .find("four")
+        .expect("target tab swaps into source slot");
+    let preview_two = preview.find("two").expect("middle tab stays in place");
+    let preview_three = preview.find("three").expect("middle tab stays in place");
+    let preview_one = preview
+        .find("one")
+        .expect("source tab swaps into target slot");
+    assert!(
+        preview_four < preview_two && preview_two < preview_three && preview_three < preview_one,
+        "expected `four two three one` during drag preview, got {preview:?}"
+    );
+    let frame = b.capture_frame();
+    assert_eq!(
+        frame.cell(preview_one as u16, 0).bg,
+        Color::Blue,
+        "active styling follows the dragged tab to its previewed drop slot"
+    );
+    assert_ne!(
+        frame.cell(preview_four as u16, 0).bg,
+        Color::Blue,
+        "the displaced tab in the source slot keeps its inactive style"
+    );
+
+    // Dragging back onto the source slot clears the swap preview and cancels on release.
+    b.send_mouse(mouse(one_x, 0, MouseKind::Drag(MouseButton::Left)))
+        .unwrap();
+    let home = row_text(&mut b);
+    assert_eq!(
+        home, initial,
+        "returning to source slot restores original order"
+    );
+    b.send_mouse(mouse(one_x, 0, MouseKind::Up(MouseButton::Left)))
+        .unwrap();
+    assert!(b.state().reorders.is_empty());
+
+    // Dragging to the fourth tab and releasing commits the swap.
+    b.send_mouse(mouse(one_x, 0, MouseKind::Down(MouseButton::Left)))
+        .unwrap();
+    b.send_mouse(mouse(four_x, 0, MouseKind::Drag(MouseButton::Left)))
+        .unwrap();
+    b.send_mouse(mouse(four_x, 0, MouseKind::Up(MouseButton::Left)))
+        .unwrap();
+    assert_eq!(b.state().reorders, vec![(0, 3)]);
+    assert_eq!(row_text(&mut b), preview);
+}
