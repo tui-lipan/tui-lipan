@@ -50,6 +50,11 @@ pub enum RightClickAction {
     PasteClipboard,
     /// Copy an active text selection, or paste the regular clipboard when none exists.
     CopyOrPaste,
+    /// Copy the selection owned by the widget under the pointer to the regular clipboard.
+    ///
+    /// Does nothing when that widget has no selection, including when a selection exists
+    /// somewhere else. Never pastes and never moves focus.
+    CopyOnly,
 }
 
 #[derive(Debug, Clone)]

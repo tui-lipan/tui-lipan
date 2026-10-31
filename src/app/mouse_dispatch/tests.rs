@@ -3587,6 +3587,119 @@ fn right_click_copy_ignores_a_selection_the_pointer_is_not_on() {
     assert_eq!(backend.state()[1].text(), "regular");
 }
 
+#[test]
+fn right_click_copy_only_copies_the_selection() {
+    let clipboard = Rc::new(RefCell::new(MouseClipboardState {
+        clipboard: "stale".to_string(),
+        ..MouseClipboardState::default()
+    }));
+    let config = ClipboardConfig {
+        enable_osc52: false,
+        copy_on_mouse_select: CopyOnSelect::Disabled,
+        right_click_action: RightClickAction::CopyOnly,
+        ..ClipboardConfig::default()
+    };
+    let mut backend = mouse_clipboard_backend("alpha beta", Rc::clone(&clipboard), config);
+    let id = text_area_id(&backend);
+
+    select_then_right_click(&mut backend);
+
+    assert_eq!(clipboard.borrow().clipboard, "alpha");
+    assert_eq!(clipboard.borrow().clipboard_reads, 0);
+    assert_eq!(backend.state().text(), "alpha beta");
+    assert!(backend.copy_feedback.is_active(id));
+}
+
+#[test]
+fn right_click_copy_only_does_nothing_without_a_selection() {
+    let clipboard = Rc::new(RefCell::new(MouseClipboardState {
+        clipboard: "regular".to_string(),
+        ..MouseClipboardState::default()
+    }));
+    let config = ClipboardConfig {
+        enable_osc52: false,
+        right_click_action: RightClickAction::CopyOnly,
+        ..ClipboardConfig::default()
+    };
+    let mut backend = mouse_clipboard_backend("", Rc::clone(&clipboard), config);
+    let id = text_area_id(&backend);
+    backend.set_focused(id);
+    let (x, y) = node_origin(&backend, id);
+
+    press(&mut backend, MouseButton::Right, x, y);
+
+    assert_eq!(backend.state().text(), "");
+    assert_eq!(clipboard.borrow().clipboard, "regular");
+    assert_eq!(clipboard.borrow().clipboard_reads, 0);
+    assert!(!backend.copy_feedback.is_active(id));
+    assert_eq!(backend.focused, Some(id));
+}
+
+#[test]
+fn right_click_copy_only_leaves_another_editors_selection_alone() {
+    let clipboard = Rc::new(RefCell::new(MouseClipboardState {
+        clipboard: "regular".to_string(),
+        ..MouseClipboardState::default()
+    }));
+    let config = ClipboardConfig {
+        enable_osc52: false,
+        copy_on_mouse_select: CopyOnSelect::Disabled,
+        right_click_action: RightClickAction::CopyOnly,
+        ..ClipboardConfig::default()
+    };
+    let mut backend = paired_editors_backend("alpha beta", Rc::clone(&clipboard), config);
+    let [left, right] = paired_editor_ids(&backend);
+    let (x, y) = node_origin(&backend, left);
+    for (event_x, kind) in [
+        (x, MouseKind::Down(MouseButton::Left)),
+        (x + 5, MouseKind::Drag(MouseButton::Left)),
+        (x + 5, MouseKind::Up(MouseButton::Left)),
+    ] {
+        backend
+            .send_mouse(MouseEvent {
+                x: event_x,
+                y,
+                kind,
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+    }
+
+    let (x, y) = node_origin(&backend, right);
+    press(&mut backend, MouseButton::Right, x, y);
+
+    assert_eq!(clipboard.borrow().clipboard, "regular");
+    assert_eq!(clipboard.borrow().clipboard_reads, 0);
+    assert!(!backend.copy_feedback.is_active(left));
+    assert_eq!(backend.state()[0].text(), "alpha beta");
+    assert_eq!(backend.state()[1].text(), "");
+    assert_ne!(backend.focused, Some(right));
+}
+
+#[test]
+fn failed_right_click_copy_only_does_not_paste() {
+    let clipboard = Rc::new(RefCell::new(MouseClipboardState {
+        clipboard: "stale".to_string(),
+        fail_clipboard_writes: true,
+        ..MouseClipboardState::default()
+    }));
+    let config = ClipboardConfig {
+        enable_osc52: false,
+        copy_on_mouse_select: CopyOnSelect::Disabled,
+        right_click_action: RightClickAction::CopyOnly,
+        ..ClipboardConfig::default()
+    };
+    let mut backend = mouse_clipboard_backend("alpha beta", Rc::clone(&clipboard), config);
+    let id = text_area_id(&backend);
+
+    select_then_right_click(&mut backend);
+
+    assert!(!backend.copy_feedback.is_active(id));
+    assert_eq!(backend.state().text(), "alpha beta");
+    assert_eq!(clipboard.borrow().clipboard, "stale");
+    assert_eq!(clipboard.borrow().clipboard_reads, 0);
+}
+
 #[cfg(feature = "terminal")]
 #[test]
 fn right_click_pastes_into_the_terminal_under_the_pointer() {

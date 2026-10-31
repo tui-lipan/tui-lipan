@@ -239,6 +239,7 @@ fn right_click_clipboard<C: Component, T: MouseDispatchCtx<C>>(ctx: &mut T, hit:
         RightClickAction::CopyOrPaste => {
             copy_at_pointer(ctx, hit) || paste_at_pointer(ctx, hit, PasteSource::Clipboard)
         }
+        RightClickAction::CopyOnly => copy_at_pointer(ctx, hit),
     }
 }
 
