@@ -29,7 +29,7 @@ as `click`, `focus`, `resize`, `advance`, `wait_for`, and `checkpoint`.
 |------|--------------------|
 | `CopyOnSelect` | `Disabled`, `PrimarySelection`, `Clipboard`, `Both` |
 | `PasteSource` | `Disabled`, `PrimarySelection`, `Clipboard` |
-| `RightClickAction` | `Disabled`, `PasteClipboard`, `CopyOrPaste` |
+| `RightClickAction` | `Disabled`, `PasteClipboard`, `CopyOrPaste`, `CopyOnly` |
 | `PasteShiftInsertBehavior` | `PrimarySelection`, `Clipboard` |
 
 `PrimarySelection` is the Linux select-to-copy buffer normally pasted with the middle mouse

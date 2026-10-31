@@ -92,15 +92,17 @@ want selection followed by `Ctrl+V` can choose `CopyOnSelect::Clipboard` or
 `CopyOnSelect::Both`. On macOS, Windows, web, and Linux sessions without a detected display,
 mouse copy and middle-click paste default to disabled.
 
-`RightClickAction::PasteClipboard` and `RightClickAction::CopyOrPaste` are opt-in. Existing
-overlay, nested-terminal, `TextArea::on_click`, and right-drag handlers take precedence; the
-configured action is only a fallback for an otherwise-unhandled right-button press.
+`RightClickAction::PasteClipboard`, `RightClickAction::CopyOrPaste`, and
+`RightClickAction::CopyOnly` are opt-in. Existing overlay, nested-terminal, `TextArea::on_click`,
+and right-drag handlers take precedence; the configured action is only a fallback for an
+otherwise-unhandled right-button press.
 
-The copy flash follows intent, not input device. A deliberate copy, whether a copy shortcut or a
-`CopyOrPaste` right click, flashes the copied selection once the write succeeds, so users can tell
-a right-click copy from a right-click paste. Copy-on-select stays silent because it fires on every
-completed selection. A failed right-click copy reports the clipboard error and does not fall
-through to a paste.
+The copy flash follows intent, not input device. A deliberate copy, whether a copy shortcut, a
+`CopyOrPaste` right click, or a `CopyOnly` right click, flashes the copied selection once the write
+succeeds, so users can tell a right-click copy from a right-click paste. Copy-on-select stays
+silent because it fires on every completed selection. A failed right-click copy reports the
+clipboard error and does not fall through to a paste. `CopyOnly` never pastes, whether or not the
+copy succeeds.
 
 Mouse clipboard gestures act on the widget under the pointer, never on whatever happens to hold
 focus:
@@ -114,6 +116,9 @@ focus:
   `DocumentView` with a `shared_selection_id`, that is the selection of its own group in its scroll
   view, including rows scrolled off screen; other groups in the same scroll view are left alone. If
   the pointer is not on a selection, the click falls through to a paste at the pointer.
+- A `CopyOnly` right click copies that same selection to the regular clipboard. When the widget
+  under the pointer has no selection, the click does nothing: it does not paste, and it does not
+  move focus. A selection owned by some other widget stays where it is.
 - A press over anything else, such as a status bar, tab strip, frame border, or empty space, does
   nothing.
 
