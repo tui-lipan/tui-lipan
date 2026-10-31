@@ -787,6 +787,19 @@ pub(crate) fn render_draggable_tab_bar_node(
     let tab_hover_style = resolve_slot(theme, ThemeRole::ItemHover, &node.tab_hover_style);
     let active_style = resolve_slot(theme, ThemeRole::Selection, &node.active_style);
     let mut tabs = node.tabs.to_vec();
+    let mut active = node.active;
+    if let Some((from, to)) = node.pending_swap
+        && from < tabs.len()
+        && to < tabs.len()
+        && from != to
+    {
+        tabs.swap(from, to);
+        if active == from {
+            active = to;
+        } else if active == to {
+            active = from;
+        }
+    }
     for tab in &mut tabs {
         if let Some(spinner) = tab
             .leading
@@ -804,7 +817,7 @@ pub(crate) fn render_draggable_tab_bar_node(
     render_draggable_tab_bar(
         state.f,
         &tabs,
-        node.active,
+        active,
         rect,
         rrect,
         DraggableTabBarRenderCtx {

@@ -336,6 +336,47 @@ fn compute_tab_snapshot_anchor(
     })
 }
 
+/// Synchronize `DraggableTabBarNode::pending_swap` on `tree` with an active tab drag, returning
+/// whether the previewed swap changed.
+pub(crate) fn sync_draggable_tab_bar_pending_swap(
+    tree: &mut NodeTree,
+    drag: &DraggableTabBarDrag,
+) -> bool {
+    if !tree.is_valid(drag.source_id) {
+        return false;
+    }
+    let NodeKind::DraggableTabBar(bar) = &mut tree.node_mut(drag.source_id).kind else {
+        return false;
+    };
+    let next = (drag.started
+        && drag.reorder_mode == DragReorderMode::OnDrop
+        && drag.pending_id == drag.source_id
+        && drag.pending_index != drag.source_index
+        && bar
+            .tabs
+            .get(drag.source_index)
+            .is_some_and(crate::widgets::draggable_tab_bar::is_reorderable_tab)
+        && bar
+            .tabs
+            .get(drag.pending_index)
+            .is_some_and(crate::widgets::draggable_tab_bar::is_reorderable_tab))
+    .then_some((drag.source_index, drag.pending_index));
+    let changed = bar.pending_swap != next;
+    bar.pending_swap = next;
+    changed
+}
+
+/// Clear `DraggableTabBarNode::pending_swap` on `bar_id`, returning whether a swap was cleared.
+pub(crate) fn clear_draggable_tab_bar_pending_swap(tree: &mut NodeTree, bar_id: NodeId) -> bool {
+    if !tree.is_valid(bar_id) {
+        return false;
+    }
+    let NodeKind::DraggableTabBar(bar) = &mut tree.node_mut(bar_id).kind else {
+        return false;
+    };
+    bar.pending_swap.take().is_some()
+}
+
 /// Resolve final reorder event when drag ends.
 pub(crate) fn finish_draggable_tab_bar_drag(
     drag: DraggableTabBarDrag,

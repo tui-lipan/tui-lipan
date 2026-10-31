@@ -1380,13 +1380,17 @@ impl<C: Component> AppRunner<C> {
             ActiveDrag::DraggableTabBar(drag) => {
                 let drag = drag.clone();
                 let was_started = drag.started;
+                let swap_cleared = crate::app::input::drag::clear_draggable_tab_bar_pending_swap(
+                    &mut self.core.tree,
+                    drag.source_id,
+                );
                 self.clear_dnd_snapshot_cache();
                 self.drag.clear();
                 let handled = self.finish_draggable_tab_bar_drag(drag);
                 let hover_dirty = self.update_hover(x, y);
                 // Always repaint when a visible drag was in progress so the
                 // floating preview is cleared even if no reorder occurred.
-                Some(handled || hover_dirty || was_started)
+                Some(handled || hover_dirty || was_started || swap_cleared)
             }
             ActiveDrag::Progress(_) => {
                 self.drag.clear();
