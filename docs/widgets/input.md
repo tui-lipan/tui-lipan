@@ -175,6 +175,7 @@ Wrapper that adds pointer callbacks to an arbitrary child subtree.
 |------|------|-------------|
 | `child` | `impl Into<Element>` | Wrapped content |
 | `on_click` | `Callback<MouseRegionEvent>` | Left-button click after press and release on the same region |
+| `on_context_menu` | `Callback<MouseRegionEvent>` | Right-button press accepted by the region hit test; owns drag/release without changing focus |
 | `on_mouse_down` | `Callback<MouseRegionEvent>` | Left-button press |
 | `on_mouse_up` | `Callback<MouseRegionEvent>` | Left-button release over the region |
 | `on_mouse_move` | `Callback<MouseMoveEvent>` | Pointer movement over the region |

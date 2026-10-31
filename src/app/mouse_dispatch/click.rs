@@ -259,7 +259,7 @@ fn context_menu_tab_index(
     mouse: MouseEvent,
 ) -> Option<usize> {
     let inner = rect.inner(bar.border, bar.padding);
-    if !inner.contains(mouse.x as i16, mouse.y as i16) {
+    if !inner.contains(mouse.x as i16, mouse.y as i16) || mouse.y as i16 != inner.y {
         return None;
     }
     let col = (mouse.x as i16).saturating_sub(inner.x) as usize;

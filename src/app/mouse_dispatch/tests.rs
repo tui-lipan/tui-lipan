@@ -4220,6 +4220,7 @@ fn context_menu_tab_border_and_padding_do_not_report_a_tab() {
         (inner.x, inner.y - 1),
         (inner.x + inner.w as i16, inner.y),
         (inner.x, inner.y + inner.h as i16),
+        (inner.x, inner.y + 1),
         (inner.x, inner.y),
     ];
     for (x, y) in points {
@@ -4232,7 +4233,10 @@ fn context_menu_tab_border_and_padding_do_not_report_a_tab() {
             })
             .unwrap();
     }
-    assert_eq!(&*events.borrow(), &[None, None, None, None, None, Some(0)]);
+    assert_eq!(
+        &*events.borrow(),
+        &[None, None, None, None, None, None, Some(0)]
+    );
 }
 
 #[cfg(feature = "terminal")]
