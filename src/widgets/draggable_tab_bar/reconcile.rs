@@ -19,7 +19,7 @@ pub fn reconcile_draggable_tab_bar(
         rect.h = h.min(rect.h);
     }
 
-    let (old_offset, old_override, old_previous_active, old_tabs, old_width_lock) =
+    let (old_offset, old_override, old_previous_active, old_tabs, old_width_lock, old_pending_swap) =
         match &tree.node(id).kind {
             NodeKind::DraggableTabBar(node) => (
                 node.scroll_offset,
@@ -27,8 +27,9 @@ pub fn reconcile_draggable_tab_bar(
                 node.previous_active,
                 Some(node.tabs.clone()),
                 node.width_lock,
+                node.pending_swap,
             ),
-            _ => (bar.scroll_offset, None, bar.active, None, None),
+            _ => (bar.scroll_offset, None, bar.active, None, None, None),
         };
 
     // A newly mounted bar has no earlier position to keep, so it opens on its active tab unless the
@@ -89,6 +90,17 @@ pub fn reconcile_draggable_tab_bar(
             .tabs
             .get(lock.index)
             .is_some_and(super::is_reorderable_tab)
+    });
+    next_node.pending_swap = old_pending_swap.filter(|&(from, to)| {
+        from != to
+            && next_node
+                .tabs
+                .get(from)
+                .is_some_and(super::is_reorderable_tab)
+            && next_node
+                .tabs
+                .get(to)
+                .is_some_and(super::is_reorderable_tab)
     });
 
     let node = tree.node_mut(id);

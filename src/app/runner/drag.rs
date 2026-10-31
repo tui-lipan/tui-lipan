@@ -1061,6 +1061,8 @@ impl<C: Component> AppRunner<C> {
         else {
             return (edge_scrolled, drag_state);
         };
+        let swap_preview_changed =
+            drag::sync_draggable_tab_bar_pending_swap(&mut self.core.tree, &next_drag);
 
         if let Some(event) = reorder {
             match event {
@@ -1085,7 +1087,7 @@ impl<C: Component> AppRunner<C> {
             }
         }
 
-        (edge_scrolled, next_drag)
+        (edge_scrolled || swap_preview_changed, next_drag)
     }
 
     pub(crate) fn finish_draggable_tab_bar_drag(

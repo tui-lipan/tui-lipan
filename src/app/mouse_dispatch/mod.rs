@@ -1090,6 +1090,10 @@ impl<C: Component> MouseDispatchCtx<C> for TestBackend<C> {
             return Some(true);
         }
         if let ActiveDrag::DraggableTabBar(drag_state) = self.drag.active.clone() {
+            crate::app::input::drag::clear_draggable_tab_bar_pending_swap(
+                &mut self.core.tree,
+                drag_state.source_id,
+            );
             let event = crate::app::input::drag::finish_draggable_tab_bar_drag(drag_state.clone());
             self.drag.clear();
             match event {

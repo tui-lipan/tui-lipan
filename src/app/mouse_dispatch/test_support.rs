@@ -1157,6 +1157,8 @@ pub(crate) fn dispatch_active_drag_test_backend<C: Component>(
             else {
                 return Some(false);
             };
+            let swap_preview_changed =
+                drag::sync_draggable_tab_bar_pending_swap(&mut backend.core.tree, &next_drag);
             backend.drag.active = ActiveDrag::DraggableTabBar(next_drag.clone());
             match event {
                 Some(drag::DraggableTabDragEvent::Reorder(event)) => {
@@ -1168,7 +1170,7 @@ pub(crate) fn dispatch_active_drag_test_backend<C: Component>(
                         callback.emit(event);
                         Some(true)
                     } else {
-                        Some(false)
+                        Some(swap_preview_changed)
                     }
                 }
                 Some(drag::DraggableTabDragEvent::Transfer {
@@ -1183,7 +1185,7 @@ pub(crate) fn dispatch_active_drag_test_backend<C: Component>(
                     }
                     Some(true)
                 }
-                None => Some(false),
+                None => Some(swap_preview_changed),
             }
         }
         ActiveDrag::Splitter(drag_state) => {
