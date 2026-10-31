@@ -11,7 +11,7 @@ use crate::app::input::scrollbar::ScrollbarDrag;
 use crate::app::input::text_area_vim::TextAreaVimState;
 use crate::callback::Callback;
 use crate::core::element::Key;
-use crate::core::event::MouseButton;
+use crate::core::event::{MouseButton, MouseKind};
 use crate::core::node::{NodeId, NodeKind, NodeTree};
 use crate::layout::tag::Tag;
 use crate::style::Rect;
@@ -426,6 +426,8 @@ pub(crate) struct MouseTrackingState {
     pub drag_threshold_exceeded: bool,
     /// Whether the logical click (MouseUp) should be suppressed because a widget handled it during Down.
     pub click_consumed: bool,
+    /// A context-menu handler owns the right-button gesture until its release.
+    pub context_menu_press_consumed: bool,
     /// A modified terminal-link press waiting for release on the same destination.
     pub terminal_link_press: Option<TerminalLinkPress>,
     /// A left press consumed because it only focused a mouse-tracking terminal.
@@ -463,6 +465,22 @@ pub(crate) struct TerminalLinkPress {
 }
 
 impl MouseTrackingState {
+    /// Consume drag/release even if the handler was removed or the pointer left it.
+    /// A fresh right press abandons stale state from a lost release.
+    pub(crate) fn consume_context_menu_gesture(&mut self, kind: MouseKind) -> bool {
+        match kind {
+            MouseKind::Down(MouseButton::Right) => {
+                self.context_menu_press_consumed = false;
+                false
+            }
+            MouseKind::Drag(MouseButton::Right) => self.context_menu_press_consumed,
+            MouseKind::Up(MouseButton::Right) => {
+                std::mem::take(&mut self.context_menu_press_consumed)
+            }
+            _ => false,
+        }
+    }
+
     /// Share the runtime's last-pointer cell so `Context::last_mouse` sees the same value.
     pub(crate) fn with_pointer_cell(last_mouse: Rc<Cell<Option<(u16, u16)>>>) -> Self {
         Self {

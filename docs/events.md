@@ -496,10 +496,12 @@ pub struct MouseMoveEvent {
 
 ### `MouseRegionEvent`
 
-Emitted by: `MouseRegion::on_click`, `MouseRegion::on_mouse_down`, `MouseRegion::on_mouse_up`
+Emitted by: `MouseRegion::on_click`, `MouseRegion::on_mouse_down`, `MouseRegion::on_mouse_up`,
+`MouseRegion::on_context_menu`
 
 `kind` is the raw event that triggered the callback: `Down(Left)` for `on_mouse_down`,
-`Up(Left)` for `on_mouse_up` and `on_click` (a click completes on release).
+`Up(Left)` for `on_mouse_up` and `on_click` (a click completes on release), and
+`Down(Right)` for `on_context_menu`.
 
 ```rust
 pub struct MouseRegionEvent {
@@ -966,6 +968,7 @@ Quick lookup - which callbacks does each widget support?
 | `on_close` | `DraggableTabCloseEvent` | Tab close button clicked or closeable tab middle-clicked |
 | `on_reorder` | `DraggableTabReorderEvent` | Tab dragged to new position |
 | `on_transfer` | `DraggableTabTransferEvent` | Tab transferred to another bar; destination `on_change` follows |
+| `on_context_menu` | `(Option<usize>, MouseEvent)` | Right-button press and hit tab index without switching tabs; empty space, border/padding and overflow controls report `None` |
 | `on_click` | `MouseEvent` | Raw mouse click on tab bar |
 
 ### ScrollView
@@ -1001,6 +1004,7 @@ Quick lookup - which callbacks does each widget support?
 
 | Callback | Payload | When |
 |----------|---------|------|
+| `on_context_menu` | `MouseRegionEvent` | Right-button press accepted by the region hit test; consumes its drag/release without changing focus |
 | `on_click` | `MouseRegionEvent` | Left-button click; `kind` is the release (`Up(Left)`) |
 | `on_mouse_down` | `MouseRegionEvent` | Left-button press |
 | `on_mouse_up` | `MouseRegionEvent` | Left-button release over the region |

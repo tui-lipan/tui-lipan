@@ -292,6 +292,10 @@ fn dispatch_mouse_inner<C: Component, T: MouseDispatchCtx<C>>(
     ctx: &mut T,
     mouse: MouseEvent,
 ) -> bool {
+    // Gesture ownership precedes overlays, drags and terminal release forwarding.
+    if ctx.mouse_state().consume_context_menu_gesture(mouse.kind) {
+        return true;
+    }
     let x = mouse.x;
     let y = mouse.y;
     let adjusted_mouse = mouse;

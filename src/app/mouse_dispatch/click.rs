@@ -168,6 +168,7 @@ pub(crate) fn transition_right_click<C: Component, T: MouseDispatchCtx<C>>(
         };
 
         if dispatch_context_menu(ctx.tree(), hit, adjusted_mouse) {
+            ctx.mouse_state().context_menu_press_consumed = true;
             return Some(true);
         }
 
@@ -219,7 +220,9 @@ fn dispatch_context_menu(tree: &NodeTree, mut hit: NodeId, mouse: MouseEvent) ->
     loop {
         let node = tree.node(hit);
         match &node.kind {
-            NodeKind::MouseRegion(region) if region.enabled => {
+            NodeKind::MouseRegion(region)
+                if mouse::mouse_region_accepts_point(region, node.rect, mouse.x, mouse.y) =>
+            {
                 if let Some(callback) = &region.on_context_menu {
                     callback.emit(crate::core::event::MouseRegionEvent {
                         x: mouse.x,
@@ -236,19 +239,7 @@ fn dispatch_context_menu(tree: &NodeTree, mut hit: NodeId, mouse: MouseEvent) ->
             }
             NodeKind::DraggableTabBar(bar) if !bar.disabled => {
                 if let Some(callback) = &bar.on_context_menu {
-                    let inner = node.rect.inner(bar.border, bar.padding);
-                    let col = (mouse.x as i16).saturating_sub(inner.x).max(0) as usize;
-                    let index = match crate::widgets::DraggableTabBar::hit_target_at_view_col(
-                        &bar.tabs,
-                        &bar.display_options(),
-                        &bar.viewport_options(inner.w as usize),
-                        col,
-                    ) {
-                        Some(crate::widgets::draggable_tab_bar::DraggableTabHitTarget::Tab(
-                            tab,
-                        )) => Some(tab.index),
-                        _ => None,
-                    };
+                    let index = context_menu_tab_index(bar, node.rect, mouse);
                     callback.emit((index, mouse));
                     return true;
                 }
@@ -259,6 +250,27 @@ fn dispatch_context_menu(tree: &NodeTree, mut hit: NodeId, mouse: MouseEvent) ->
             return false;
         };
         hit = parent;
+    }
+}
+
+fn context_menu_tab_index(
+    bar: &crate::widgets::internal::DraggableTabBarNode,
+    rect: crate::style::Rect,
+    mouse: MouseEvent,
+) -> Option<usize> {
+    let inner = rect.inner(bar.border, bar.padding);
+    if !inner.contains(mouse.x as i16, mouse.y as i16) {
+        return None;
+    }
+    let col = (mouse.x as i16).saturating_sub(inner.x) as usize;
+    match crate::widgets::DraggableTabBar::hit_target_at_view_col(
+        &bar.tabs,
+        &bar.display_options(),
+        &bar.viewport_options(inner.w as usize),
+        col,
+    ) {
+        Some(crate::widgets::draggable_tab_bar::DraggableTabHitTarget::Tab(tab)) => Some(tab.index),
+        _ => None,
     }
 }
 
