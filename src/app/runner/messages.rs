@@ -24,7 +24,7 @@ impl<C: Component> AppRunner<C> {
                 self.apply_component_update(dirty, scope, update_level);
             }
         }
-        self.sync_clipboard_config();
+        self.sync_runtime_keymap_config();
         Ok(())
     }
 

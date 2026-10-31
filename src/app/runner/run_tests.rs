@@ -4188,6 +4188,104 @@ fn runtime_clipboard_config_normalizes_against_the_active_provider() {
 }
 
 #[test]
+fn runtime_framework_keymap_updates_runner_keymap_and_cancels_pending_framework_chord() {
+    use std::str::FromStr;
+
+    let app = App::new()
+        .mouse(false)
+        .user_keymap_policy(crate::UserKeymapPolicy::Disabled)
+        .key_dispatch_policy(crate::KeyDispatchPolicy::AppCommandsFirst)
+        .framework_keymap(crate::FrameworkKeymap::default().bind(
+            crate::FrameworkAction::Quit,
+            crate::input::KeyBindings::from_str("ctrl-x q").unwrap(),
+        ));
+    let mut runner = AppRunner::new(app, RunnerKeymapSmoke, ());
+
+    let command_fired = Rc::new(Cell::new(false));
+    let command_fired_sink = Rc::clone(&command_fired);
+    runner.core.ctx.register_command(
+        crate::CommandEntry::builder("app.chord")
+            .label("App Chord")
+            .shortcut(crate::input::KeyBinding::from_str("ctrl-k a").unwrap())
+            .handler(Callback::new(move |_| {
+                command_fired_sink.set(true);
+            }))
+            .build(),
+    );
+
+    // Start both a pending framework chord (Ctrl+X) and a pending command chord (Ctrl+K).
+    let prefix = runner.dispatch_layered_key(ctrl_char('x'));
+    assert!(prefix.consumed);
+    assert!(!prefix.quit);
+    assert!(runner.keymap_runtime.is_pending());
+
+    let cmd_prefix = runner.dispatch_layered_key(ctrl_char('k'));
+    assert!(cmd_prefix.consumed);
+    assert!(runner.key_dispatch_state.command_runtime.is_pending());
+
+    // Start the framework chord again before replacing the framework keymap.
+    let _ = runner.dispatch_layered_key(ctrl_char('x'));
+    assert!(runner.keymap_runtime.is_pending());
+
+    // Start the command chord again so both are pending when the framework keymap changes.
+    runner.keymap_runtime.reset();
+    let _ = runner.dispatch_layered_key(ctrl_char('k'));
+    assert!(runner.key_dispatch_state.command_runtime.is_pending());
+    let _ = runner.keymap_runtime.feed(ctrl_char('x'));
+    assert!(runner.keymap_runtime.is_pending());
+
+    // Two calls before sync: last replacement wins.
+    runner
+        .core
+        .ctx
+        .set_framework_keymap(crate::FrameworkKeymap::default().bind(
+            crate::FrameworkAction::Quit,
+            crate::input::KeyBindings::from_str("ctrl-y").unwrap(),
+        ));
+    runner
+        .core
+        .ctx
+        .set_framework_keymap(crate::FrameworkKeymap::default());
+    runner.sync_runtime_keymap_config();
+
+    assert!(
+        !runner.keymap_runtime.is_pending(),
+        "replacing the framework keymap must cancel a pending framework chord"
+    );
+    assert!(
+        runner.key_dispatch_state.command_runtime.is_pending(),
+        "replacing the framework keymap must leave a pending command-registry chord untouched"
+    );
+    assert!(
+        runner
+            .keymap
+            .matches(ctrl_char('q'))
+            .iter()
+            .any(|binding| binding.action == crate::app::input::keymap::Action::Quit),
+        "replacing with FrameworkKeymap::default() must restore built-in Ctrl+Q"
+    );
+
+    // Completing the pending command-registry chord still works.
+    let complete_cmd = runner.dispatch_layered_key(KeyEvent {
+        code: KeyCode::Char('a'),
+        mods: KeyMods::default(),
+    });
+    assert!(complete_cmd.consumed);
+    assert!(command_fired.get());
+
+    // Sending 'q' now does not complete the old 'ctrl-x q' framework chord.
+    let q_result = runner.dispatch_layered_key(KeyEvent {
+        code: KeyCode::Char('q'),
+        mods: KeyMods::default(),
+    });
+    assert!(!q_result.quit);
+
+    // Built-in Ctrl+Q quits again.
+    let ctrl_q_result = runner.dispatch_layered_key(ctrl_char('q'));
+    assert!(ctrl_q_result.quit);
+}
+
+#[test]
 fn selected_document_view_copy_inside_scroll_view_is_paint_only() {
     let writes = Rc::new(RefCell::new(Vec::new()));
     let app = App::new()

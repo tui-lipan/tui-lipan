@@ -1242,6 +1242,18 @@ impl<C: Component> Context<C> {
         self.env.clipboard_config_changed.set(true);
     }
 
+    /// Replace the Rust [`FrameworkKeymap`](crate::FrameworkKeymap) overlay for the running
+    /// application.
+    ///
+    /// This replaces the complete Rust overlay rather than merging with the previous one, using the
+    /// same precedence as [`App::framework_keymap`](crate::App::framework_keymap): Rust overrides
+    /// win over the startup `keymap.conf` snapshot and built-in defaults, and removing a Rust
+    /// override reveals the file or default binding underneath without re-reading `keymap.conf`.
+    /// Any pending framework chord is cancelled when the replacement takes effect.
+    pub fn set_framework_keymap(&mut self, keymap: crate::FrameworkKeymap) {
+        *self.env.framework_keymap_request.borrow_mut() = Some(keymap);
+    }
+
     /// Access the command registry API.
     pub fn command_registry(&self) -> CommandRegistry {
         self.env.command_registry.clone()

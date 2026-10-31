@@ -158,12 +158,16 @@ When a key is a pending chord prefix, the runner consumes that prefix before foc
 
 ### Layered dispatch (Rust API)
 
-Explicit `App` configuration wins over file and environment keymaps:
+Explicit Rust configuration wins over file and environment keymaps:
 
-1. `App::framework_keymap(...)` / `App::global_quit(None)` (Rust)
+1. Rust `FrameworkKeymap`
+   - `App::framework_keymap(...)` / `App::global_quit(None)` at startup
+   - `Context::set_framework_keymap(...)` replaces the Rust overlay at runtime
 2. `App::keymap_path(...)` (app file)
 3. `TUI_LIPAN_KEYMAP` / default user keymap (when `UserKeymapPolicy::Enabled`)
 4. Built-in defaults
+
+`ctx.set_framework_keymap(keymap)` replaces the complete Rust `FrameworkKeymap` overlay rather than merging with the previous one. Rebuilding uses the `keymap.conf` snapshot loaded at startup (it does not re-read `keymap.conf` from disk), so removing a Rust override reveals the file or built-in binding underneath, and replacing the map cancels any pending framework chord while leaving pending `CommandRegistry` chords untouched.
 
 Policy builders on `App`:
 

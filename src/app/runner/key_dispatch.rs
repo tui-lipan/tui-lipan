@@ -47,6 +47,7 @@ impl<C: Component> AppRunner<C> {
     }
 
     pub(crate) fn dispatch_layered_key(&mut self, key: KeyEvent) -> LayeredKeyEventResult {
+        self.sync_runtime_keymap_config();
         self.framework_effects.clear();
 
         if key_capture::preflight(&self.core.tree, self.focus.focused, key) {
