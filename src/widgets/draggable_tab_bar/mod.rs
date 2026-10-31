@@ -510,6 +510,7 @@ pub struct DraggableTabBar {
     pub(crate) on_reorder: Option<Callback<DraggableTabReorderEvent>>,
     pub(crate) on_transfer: Option<Callback<DraggableTabTransferEvent>>,
     pub(crate) on_click: Option<Callback<MouseEvent>>,
+    pub(crate) on_context_menu: Option<Callback<(Option<usize>, MouseEvent)>>,
     pub(crate) on_key: Option<KeyHandler>,
     pub(crate) disabled: bool,
     pub(crate) disabled_style: Style,
@@ -573,6 +574,7 @@ impl Default for DraggableTabBar {
             on_reorder: None,
             on_transfer: None,
             on_click: None,
+            on_context_menu: None,
             on_key: None,
             disabled: false,
             disabled_style: Style::default(),
@@ -1038,6 +1040,13 @@ impl DraggableTabBar {
     /// Set on-click handler.
     pub fn on_click(mut self, cb: Callback<MouseEvent>) -> Self {
         self.on_click = Some(cb);
+        self
+    }
+
+    /// Handle right-button presses with the hit tab index and content coordinates.
+    /// Empty space and overflow controls report `None`. Does not select the tab.
+    pub fn on_context_menu(mut self, cb: Callback<(Option<usize>, MouseEvent)>) -> Self {
+        self.on_context_menu = Some(cb);
         self
     }
 

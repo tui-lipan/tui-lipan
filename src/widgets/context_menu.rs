@@ -1,7 +1,7 @@
 //! Context menu widget.
 
 use crate::animation::VisibilityAnimation;
-use std::sync::Arc;
+use std::{rc::Rc, sync::Arc};
 
 use crate::callback::Callback;
 use crate::core::element::{Element, IntoElement};
@@ -89,7 +89,7 @@ impl ContextMenu {
         self
     }
 
-    /// Set selection callback.
+    /// Set activation callback (Enter or left click, not highlight movement).
     pub fn on_select(mut self, cb: Callback<usize>) -> Self {
         self.on_select = Some(cb);
         self
@@ -298,15 +298,15 @@ impl From<ContextMenu> for Element {
             .item_hover_style_slot(menu.item_hover_style.unwrap_or(menu.selection_style));
 
         if let Some(cb) = menu.on_select {
-            list = list.on_select(Callback::new(move |ev: crate::widgets::ListEvent| {
-                cb.emit(ev.index)
-            }));
+            list = list.activate_on_click(true).on_activate(Callback::new(
+                move |ev: crate::widgets::ListEvent| cb.emit(ev.index),
+            ));
         }
 
         Popover::new()
             .animation(menu.animation.clone())
             .trigger(menu.trigger)
-            .content(list)
+            .content(crate::child(|| MenuList, MenuListProps(Rc::new(list))))
             .open(menu.open)
             .placement(menu.placement)
             .offset(menu.offset)
@@ -315,6 +315,50 @@ impl From<ContextMenu> for Element {
             .min_trigger_width(false)
             .anchor(menu.anchor)
             .on_close(menu.on_close.unwrap_or_else(|| Callback::new(|_| {})))
+            .into()
+    }
+}
+
+// Keep navigation state across parent renders. List itself is controlled.
+#[derive(Clone)]
+struct MenuListProps(Rc<List>);
+impl PartialEq for MenuListProps {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+struct MenuList;
+impl crate::Component for MenuList {
+    type Properties = MenuListProps;
+    type State = Option<usize>;
+    type Message = usize;
+    fn create_state(&self, props: &Self::Properties) -> Self::State {
+        List::nearest_selectable_index(&props.0.items, 0)
+    }
+    fn on_props_changed(
+        &mut self,
+        old: &Self::Properties,
+        ctx: &mut crate::Context<Self>,
+    ) -> crate::Update {
+        if old.0.items != ctx.props.0.items {
+            ctx.state = List::nearest_selectable_index(&ctx.props.0.items, ctx.state.unwrap_or(0));
+        }
+        crate::Update::layout()
+    }
+    fn update(&mut self, selected: usize, ctx: &mut crate::Context<Self>) -> crate::Update {
+        ctx.state = Some(selected);
+        crate::Update::layout()
+    }
+    fn view(&self, ctx: &crate::Context<Self>) -> Element {
+        ctx.props
+            .0
+            .as_ref()
+            .clone()
+            .selected(ctx.state)
+            .on_select(
+                ctx.link()
+                    .callback(|event: crate::widgets::ListEvent| event.index),
+            )
             .into()
     }
 }

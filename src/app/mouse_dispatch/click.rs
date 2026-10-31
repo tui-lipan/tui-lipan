@@ -167,6 +167,10 @@ pub(crate) fn transition_right_click<C: Component, T: MouseDispatchCtx<C>>(
             return Some(hover_dirty);
         };
 
+        if dispatch_context_menu(ctx.tree(), hit, adjusted_mouse) {
+            return Some(true);
+        }
+
         // Right-drag bubbles to any enabled ancestor mouse region
         // (`allow_ungated_ancestors = true`), unlike left-drag which only bubbles to
         // ancestors that gate behind a modifier. This lets right-drag-to-resize work
@@ -208,6 +212,54 @@ pub(crate) fn transition_right_click<C: Component, T: MouseDispatchCtx<C>>(
         return Some(hover_dirty);
     }
     None
+}
+
+// Resolve tab geometry in the framework, including scrolling, clipping and overflow.
+fn dispatch_context_menu(tree: &NodeTree, mut hit: NodeId, mouse: MouseEvent) -> bool {
+    loop {
+        let node = tree.node(hit);
+        match &node.kind {
+            NodeKind::MouseRegion(region) if region.enabled => {
+                if let Some(callback) = &region.on_context_menu {
+                    callback.emit(crate::core::event::MouseRegionEvent {
+                        x: mouse.x,
+                        y: mouse.y,
+                        local_x: (mouse.x as i16).saturating_sub(node.rect.x).max(0) as u16,
+                        local_y: (mouse.y as i16).saturating_sub(node.rect.y).max(0) as u16,
+                        target_w: node.rect.w,
+                        target_h: node.rect.h,
+                        kind: mouse.kind,
+                        mods: mouse.mods,
+                    });
+                    return true;
+                }
+            }
+            NodeKind::DraggableTabBar(bar) if !bar.disabled => {
+                if let Some(callback) = &bar.on_context_menu {
+                    let inner = node.rect.inner(bar.border, bar.padding);
+                    let col = (mouse.x as i16).saturating_sub(inner.x).max(0) as usize;
+                    let index = match crate::widgets::DraggableTabBar::hit_target_at_view_col(
+                        &bar.tabs,
+                        &bar.display_options(),
+                        &bar.viewport_options(inner.w as usize),
+                        col,
+                    ) {
+                        Some(crate::widgets::draggable_tab_bar::DraggableTabHitTarget::Tab(
+                            tab,
+                        )) => Some(tab.index),
+                        _ => None,
+                    };
+                    callback.emit((index, mouse));
+                    return true;
+                }
+            }
+            _ => {}
+        }
+        let Some(parent) = node.parent else {
+            return false;
+        };
+        hit = parent;
+    }
 }
 
 pub(crate) fn transition_middle_click<C: Component, T: MouseDispatchCtx<C>>(

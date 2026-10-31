@@ -157,6 +157,7 @@ symbol still appears when nothing else about the bar reacts to the pointer.
 | `height` | `Length` | Height |
 | `on_change` | `Callback<TabsEvent>` | Active tab changed |
 | `on_close` | `Callback<DraggableTabCloseEvent>` | Close button clicked or closeable tab middle-clicked |
+| `on_context_menu` | `Callback<(Option<usize>, MouseEvent)>` | Right-button press with hit tab index and content coordinates; empty space/overflow reports `None`. Does not change the active tab |
 | `on_reorder` | `Callback<DraggableTabReorderEvent>` | Tab dragged to new position |
 | `on_transfer` | `Callback<DraggableTabTransferEvent>` | Tab transferred to another bar |
 | `on_click` | `Callback<MouseEvent>` | Raw tab bar click |

@@ -27,6 +27,7 @@ pub const DEFAULT_DRAG_THRESHOLD: (u16, u16) = (3, 1);
 pub struct MouseRegion {
     pub(crate) child: Option<Box<Element>>,
     pub(crate) on_click: Option<Callback<MouseRegionEvent>>,
+    pub(crate) on_context_menu: Option<Callback<MouseRegionEvent>>,
     pub(crate) on_mouse_down: Option<Callback<MouseRegionEvent>>,
     pub(crate) bubble_mouse_down: bool,
     pub(crate) on_mouse_up: Option<Callback<MouseRegionEvent>>,
@@ -162,6 +163,13 @@ impl MouseRegion {
         self
     }
 
+    /// Handle a right-button press before clipboard or ancestor drag behavior.
+    /// The nearest enabled handler owns the event without changing focus.
+    pub fn on_context_menu(mut self, cb: Callback<MouseRegionEvent>) -> Self {
+        self.on_context_menu = Some(cb);
+        self
+    }
+
     /// Set custom hit-test predicate using local coordinates.
     pub fn hit_test(mut self, f: impl Fn(u16, u16) -> bool + Send + Sync + 'static) -> Self {
         self.hit_test = Some(Arc::new(f));
@@ -275,6 +283,7 @@ impl crate::layout::hash::LayoutHash for MouseRegion {
         use std::hash::Hash;
         self.enabled.hash(hasher);
         self.on_click.is_some().hash(hasher);
+        self.on_context_menu.is_some().hash(hasher);
         self.on_mouse_down.is_some().hash(hasher);
         self.bubble_mouse_down.hash(hasher);
         self.on_mouse_up.is_some().hash(hasher);

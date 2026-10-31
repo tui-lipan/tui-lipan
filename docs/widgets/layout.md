@@ -640,6 +640,7 @@ Wraps any subtree to handle pointer movement, clicks, and hover visuals.
 |------|------|-------------|
 | `on_click` | `Callback<MouseRegionEvent>` | Left-button release after a press on the same region; `kind` is `MouseKind::Up(Left)` |
 | `on_mouse_down` / `on_mouse_up` | `Callback<MouseRegionEvent>` | Left-button press / release over the region |
+| `on_context_menu` | `Callback<MouseRegionEvent>` | Right-button press; nearest enabled handler consumes it before clipboard/ancestor drag behavior, without moving focus |
 | `on_mouse_move` | `Callback<MouseMoveEvent>` | Emits on pointer movement |
 | `on_drag_start` / `on_drag` / `on_drag_end` | `Callback<MouseDragEvent>` | Left-button drag lifecycle after threshold |
 | `drag_requires_mods` | `KeyMods` | Require modifiers before left-button drag callbacks can start |

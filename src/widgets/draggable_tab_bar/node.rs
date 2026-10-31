@@ -71,6 +71,7 @@ pub struct DraggableTabBarNode {
     pub on_reorder: Option<Callback<DraggableTabReorderEvent>>,
     pub on_transfer: Option<Callback<DraggableTabTransferEvent>>,
     pub on_click: Option<Callback<MouseEvent>>,
+    pub on_context_menu: Option<Callback<(Option<usize>, MouseEvent)>>,
     pub on_key: Option<KeyHandler>,
     pub disabled: bool,
     pub disabled_style: Style,
@@ -197,6 +198,7 @@ impl WidgetNode for DraggableTabBarNode {
     fn has_on_click(&self) -> bool {
         !self.disabled
             && (self.on_click.is_some()
+                || self.on_context_menu.is_some()
                 || self.on_change.is_some()
                 || self.on_action.is_some()
                 || self.on_close.is_some()
@@ -284,6 +286,7 @@ impl From<DraggableTabBar> for DraggableTabBarNode {
             on_reorder: value.on_reorder,
             on_transfer: value.on_transfer,
             on_click: value.on_click,
+            on_context_menu: value.on_context_menu,
             on_key: value.on_key,
             disabled: value.disabled,
             disabled_style: value.disabled_style,
