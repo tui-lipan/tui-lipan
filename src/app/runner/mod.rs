@@ -726,6 +726,19 @@ impl<C: Component> AppRunner<C> {
         self.keymap_runtime = KeymapRuntime::new(&self.keymap);
     }
 
+    fn sync_framework_keymap(&mut self) {
+        let Some(keymap) = self.core.ctx.env().take_framework_keymap_request() else {
+            return;
+        };
+        self.keymap.reconfigure_framework_keymap(keymap);
+        self.keymap_runtime = KeymapRuntime::new(&self.keymap);
+    }
+
+    pub(crate) fn sync_runtime_keymap_config(&mut self) {
+        self.sync_clipboard_config();
+        self.sync_framework_keymap();
+    }
+
     pub(crate) fn new(app: App, component: C, props: C::Properties) -> Self {
         #[cfg(feature = "devtools")]
         crate::debug::set_devtools_logs_enabled(app.devtools_config.logs);
@@ -1750,7 +1763,7 @@ impl<C: Component> AppRunner<C> {
             self.mouse.hovered,
         );
         self.pop_drag_layout_collapse_hint();
-        self.sync_clipboard_config();
+        self.sync_runtime_keymap_config();
         self.restore_focus_after_closed_overlays();
         self.apply_pending_focus_request();
         focus::restore_focus(

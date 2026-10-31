@@ -15,6 +15,7 @@ use smallvec::SmallVec;
 use crate::animation::AnimationRegistry;
 use crate::app::context::SurfaceMode;
 use crate::app::input::command_registry::CommandRegistry;
+use crate::app::input::keymap::FrameworkKeymap;
 use crate::automation::ClockMode;
 use crate::callback::ScopeId;
 use crate::clipboard::{ClipboardConfig, ClipboardService};
@@ -355,6 +356,8 @@ pub(crate) struct RuntimeEnv {
     pub clipboard_config: Rc<RefCell<ClipboardConfig>>,
     /// Set when a component changes clipboard policy and the runner must refresh derived state.
     pub clipboard_config_changed: Rc<Cell<bool>>,
+    /// Pending replacement for the Rust [`FrameworkKeymap`] overlay.
+    pub framework_keymap_request: Rc<RefCell<Option<FrameworkKeymap>>>,
     pub active_theme: Rc<RefCell<Theme>>,
     pub active_theme_generation: Rc<Cell<u64>>,
     pub effect_phase: Rc<Cell<u64>>,
@@ -546,6 +549,10 @@ impl RuntimeEnv {
 
     pub(crate) fn take_copy_feedback_requests(&self) -> Vec<CopyFeedbackRequest> {
         std::mem::take(&mut *self.copy_feedback_request.borrow_mut())
+    }
+
+    pub(crate) fn take_framework_keymap_request(&self) -> Option<FrameworkKeymap> {
+        self.framework_keymap_request.borrow_mut().take()
     }
 
     pub(crate) fn take_host_terminal_color_refresh_request(&self) -> bool {

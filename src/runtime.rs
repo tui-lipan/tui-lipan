@@ -244,6 +244,7 @@ where
             clipboard,
             clipboard_config,
             clipboard_config_changed,
+            framework_keymap_request: Rc::default(),
             active_theme,
             active_theme_generation,
             effect_phase,

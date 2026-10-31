@@ -772,3 +772,187 @@ fn visual_line_motions_fall_back_to_the_line_when_not_wrapping() {
 
     assert_eq!(backend.state().cursor(), 6);
 }
+
+#[derive(Default)]
+struct RuntimeKeymapInputState {
+    input: TextInput,
+    global_ctrl_k_count: usize,
+}
+
+enum RuntimeKeymapMsg {
+    Input(InputEvent),
+    ReplaceKeymap(FrameworkKeymap),
+    ReplaceTwice(FrameworkKeymap, FrameworkKeymap),
+}
+
+struct RuntimeKeymapInput {
+    init_keymap: Option<FrameworkKeymap>,
+    rebind_on_f2: Option<FrameworkKeymap>,
+}
+
+impl Component for RuntimeKeymapInput {
+    type Message = RuntimeKeymapMsg;
+    type Properties = ();
+    type State = RuntimeKeymapInputState;
+
+    fn create_state(&self, _: &()) -> Self::State {
+        RuntimeKeymapInputState {
+            input: TextInput::new("helloworld"),
+            global_ctrl_k_count: 0,
+        }
+    }
+
+    fn init(&mut self, ctx: &mut Context<Self>) -> Option<Command> {
+        if let Some(keymap) = self.init_keymap.clone() {
+            ctx.set_framework_keymap(keymap);
+        }
+        None
+    }
+
+    fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+        match msg {
+            RuntimeKeymapMsg::Input(event) => {
+                event.apply_to(&mut ctx.state.input);
+                Update::full()
+            }
+            RuntimeKeymapMsg::ReplaceKeymap(keymap) => {
+                ctx.set_framework_keymap(keymap);
+                Update::none()
+            }
+            RuntimeKeymapMsg::ReplaceTwice(first, second) => {
+                ctx.set_framework_keymap(first);
+                ctx.set_framework_keymap(second);
+                Update::none()
+            }
+        }
+    }
+
+    fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
+        if key == plain(KeyCode::F(2))
+            && let Some(keymap) = self.rebind_on_f2.clone()
+        {
+            ctx.set_framework_keymap(keymap);
+            return KeyUpdate::unhandled(Update::none());
+        }
+        if key == ctrl('k') {
+            ctx.state.global_ctrl_k_count += 1;
+            return KeyUpdate::handled(Update::none());
+        }
+        KeyUpdate::unhandled(Update::none())
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        Input::bound(&ctx.state.input)
+            .on_change(ctx.link().callback(RuntimeKeymapMsg::Input))
+            .key(TARGET)
+    }
+}
+
+#[test]
+fn runtime_framework_keymap_release_of_ctrl_k_lets_global_shortcut_handle_next_key() {
+    let app = app_binding(FrameworkAction::DeleteToLineEnd, "ctrl-k");
+    let mut backend = TestBackend::new_with_app(
+        app,
+        RuntimeKeymapInput {
+            init_keymap: None,
+            rebind_on_f2: None,
+        },
+        (),
+    );
+    backend.render();
+    assert!(backend.focus_key(&Key::from(TARGET)));
+
+    send(&mut backend, &lefts(5));
+    send(&mut backend, &[ctrl('k')]);
+    assert_eq!(backend.state().input.text(), "hello");
+    assert_eq!(backend.state().global_ctrl_k_count, 0);
+
+    // Replace the framework keymap so Ctrl+K is no longer bound to DeleteToLineEnd,
+    // and bind DeleteToLineStart -> Ctrl+U instead.
+    backend
+        .dispatch(RuntimeKeymapMsg::ReplaceKeymap(
+            FrameworkKeymap::default().bind(
+                FrameworkAction::DeleteToLineStart,
+                KeyBindings::from_str("ctrl-u").unwrap(),
+            ),
+        ))
+        .unwrap();
+
+    send(&mut backend, &lefts(2));
+    send(&mut backend, &[ctrl('k')]);
+    assert_eq!(
+        backend.state().input.text(),
+        "hello",
+        "focused Input must no longer consume Ctrl+K after runtime replacement"
+    );
+    assert_eq!(backend.state().global_ctrl_k_count, 1);
+
+    send(&mut backend, &[ctrl('u')]);
+    assert_eq!(backend.state().input.text(), "lo");
+}
+
+#[test]
+fn runtime_framework_keymap_set_in_init_and_on_key_applies_to_next_key() {
+    let mut backend = TestBackend::new_with_app(
+        app_without_binding(),
+        RuntimeKeymapInput {
+            init_keymap: Some(FrameworkKeymap::default().bind(
+                FrameworkAction::DeleteToLineEnd,
+                KeyBindings::from_str("ctrl-k").unwrap(),
+            )),
+            rebind_on_f2: Some(FrameworkKeymap::default().bind(
+                FrameworkAction::DeleteToLineStart,
+                KeyBindings::from_str("ctrl-u").unwrap(),
+            )),
+        },
+        (),
+    );
+    assert!(backend.focus_key(&Key::from(TARGET)));
+
+    // Keymap configured in init() is active before the first key.
+    send(&mut backend, &lefts(5));
+    send(&mut backend, &[ctrl('k')]);
+    assert_eq!(backend.state().input.text(), "hello");
+
+    // F2 in on_key replaces the map and returns KeyUpdate::unhandled(Update::none());
+    // the very next key must see the new map without needing a render in between.
+    backend.send_key(plain(KeyCode::F(2))).unwrap();
+    backend.send_key(ctrl('k')).unwrap();
+    assert_eq!(backend.state().global_ctrl_k_count, 1);
+
+    backend.send_key(ctrl('u')).unwrap();
+    assert_eq!(backend.state().input.text(), "");
+}
+
+#[test]
+fn runtime_framework_keymap_cancels_pending_framework_chord_and_last_write_wins() {
+    let app = app_binding(FrameworkAction::DeleteToLineStart, "ctrl-g u");
+    let mut backend = TestBackend::new_with_app(
+        app,
+        RuntimeKeymapInput {
+            init_keymap: None,
+            rebind_on_f2: None,
+        },
+        (),
+    );
+    assert!(backend.focus_key(&Key::from(TARGET)));
+    send(&mut backend, &lefts(5));
+
+    // Start the 'ctrl-g u' chord, then replace the keymap twice in one update.
+    backend.send_key(ctrl('g')).unwrap();
+    backend
+        .dispatch(RuntimeKeymapMsg::ReplaceTwice(
+            FrameworkKeymap::default().bind(
+                FrameworkAction::DeleteToLineEnd,
+                KeyBindings::from_str("ctrl-k").unwrap(),
+            ),
+            FrameworkKeymap::default(),
+        ))
+        .unwrap();
+
+    // 'u' is now typed as a plain character rather than completing the cancelled chord,
+    // and Ctrl+K is not bound because the second replacement won.
+    send(&mut backend, &[plain(KeyCode::Char('u')), ctrl('k')]);
+    assert_eq!(backend.state().input.text(), "hellouworld");
+    assert_eq!(backend.state().global_ctrl_k_count, 1);
+}

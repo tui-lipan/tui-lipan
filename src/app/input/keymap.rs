@@ -817,11 +817,21 @@ impl Keymap {
         }
     }
 
+    fn rebuild(&mut self) {
+        let config = self.config.clone();
+        let user_keymap = self.user_keymap.clone();
+        *self = Self::from_config_and_user_keymap(config, user_keymap);
+    }
+
     pub(crate) fn reconfigure_clipboard(&mut self, config: &ClipboardConfig) {
-        let mut keymap_config = self.config.clone();
-        keymap_config.enable_performable_ctrl_c_copy = config.enable_performable_ctrl_c_copy;
-        keymap_config.paste_shift_insert_behavior = config.paste_shift_insert_behavior;
-        *self = Self::from_config_and_user_keymap(keymap_config, self.user_keymap.clone());
+        self.config.enable_performable_ctrl_c_copy = config.enable_performable_ctrl_c_copy;
+        self.config.paste_shift_insert_behavior = config.paste_shift_insert_behavior;
+        self.rebuild();
+    }
+
+    pub(crate) fn reconfigure_framework_keymap(&mut self, framework_keymap: FrameworkKeymap) {
+        self.config.framework_keymap = framework_keymap;
+        self.rebuild();
     }
 
     pub(crate) fn resolve_action(&self, key: KeyEvent) -> Action {
@@ -1709,5 +1719,107 @@ mod tests {
                 is_chord: false,
             })
         );
+    }
+
+    #[test]
+    fn reconfigure_framework_keymap_replaces_earlier_rust_binding_and_restores_builtins() {
+        let mut keymap = rust_keymap(
+            FrameworkKeymap::default()
+                .bind(
+                    FrameworkAction::Quit,
+                    KeyBindings::from_str("ctrl-x q").unwrap(),
+                )
+                .bind(
+                    FrameworkAction::DeleteToLineStart,
+                    KeyBindings::from_str("ctrl-a").unwrap(),
+                ),
+        );
+
+        assert_eq!(keymap.resolve_action(ctrl_key('q')), Action::None);
+        assert_eq!(
+            actions_on(&keymap, ctrl_key('a')),
+            [Action::DeleteToLineStart]
+        );
+
+        keymap.reconfigure_framework_keymap(FrameworkKeymap::default().bind(
+            FrameworkAction::DeleteToLineEnd,
+            KeyBindings::from_str("ctrl-k").unwrap(),
+        ));
+
+        assert_eq!(keymap.resolve_action(ctrl_key('q')), Action::Quit);
+        assert_eq!(actions_on(&keymap, ctrl_key('a')), [Action::SelectAll]);
+        assert_eq!(
+            actions_on(&keymap, ctrl_key('k')),
+            [Action::DeleteToLineEnd]
+        );
+
+        keymap.reconfigure_framework_keymap(FrameworkKeymap::default());
+        assert_eq!(keymap.resolve_action(ctrl_key('k')), Action::None);
+    }
+
+    #[test]
+    fn reconfigure_framework_keymap_restores_cached_user_keymap_without_rereading_file() {
+        let path = write_temp_keymap("quit = ctrl-g\ndelete_to_line_start = ctrl-u\n");
+        let mut keymap = Keymap::new(
+            KeymapConfig::from_clipboard_config(&ClipboardConfig::default())
+                .keymap_path(&path)
+                .framework_keymap(
+                    FrameworkKeymap::default()
+                        .unbind(FrameworkAction::Quit)
+                        .bind(
+                            FrameworkAction::DeleteToLineStart,
+                            KeyBindings::from_str("ctrl-k").unwrap(),
+                        ),
+                ),
+        );
+        fs::remove_file(&path).expect("remove test keymap");
+
+        assert_eq!(keymap.resolve_action(ctrl_key('g')), Action::None);
+        assert_eq!(keymap.resolve_action(ctrl_key('u')), Action::None);
+        assert_eq!(
+            keymap.resolve_action(ctrl_key('k')),
+            Action::DeleteToLineStart
+        );
+
+        keymap.reconfigure_framework_keymap(FrameworkKeymap::default());
+
+        assert_eq!(keymap.resolve_action(ctrl_key('g')), Action::Quit);
+        assert_eq!(
+            keymap.resolve_action(ctrl_key('u')),
+            Action::DeleteToLineStart
+        );
+        assert_eq!(keymap.resolve_action(ctrl_key('k')), Action::None);
+    }
+
+    #[test]
+    fn reconfigure_framework_keymap_and_clipboard_preserve_each_other() {
+        let mut keymap = rust_keymap(FrameworkKeymap::default());
+
+        keymap.reconfigure_framework_keymap(FrameworkKeymap::default().bind(
+            FrameworkAction::DeleteToLineEnd,
+            KeyBindings::from_str("ctrl-k").unwrap(),
+        ));
+        keymap.reconfigure_clipboard(&ClipboardConfig {
+            enable_performable_ctrl_c_copy: false,
+            ..ClipboardConfig::default()
+        });
+
+        assert_eq!(
+            keymap.resolve_action(ctrl_key('k')),
+            Action::DeleteToLineEnd
+        );
+        assert_eq!(keymap.resolve_action(ctrl_key('c')), Action::None);
+
+        keymap.reconfigure_framework_keymap(FrameworkKeymap::default().bind(
+            FrameworkAction::DeleteToLineStart,
+            KeyBindings::from_str("ctrl-u").unwrap(),
+        ));
+
+        assert_eq!(
+            keymap.resolve_action(ctrl_key('u')),
+            Action::DeleteToLineStart
+        );
+        assert_eq!(keymap.resolve_action(ctrl_key('k')), Action::None);
+        assert_eq!(keymap.resolve_action(ctrl_key('c')), Action::None);
     }
 }

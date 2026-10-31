@@ -512,7 +512,7 @@ where
         let level = self
             .core
             .update_from_boxed(crate::callback::ScopeId(1), Box::new(msg))?;
-        self.sync_clipboard_config();
+        self.sync_runtime_keymap_config();
         Ok(level)
     }
 
@@ -530,6 +530,7 @@ where
     /// handled; that work is not counted here so browser embeddings can use the return value for
     /// `preventDefault` without stealing shortcuts when unrelated updates flush.
     pub fn send_key(&mut self, key: KeyEvent) -> Result<bool> {
+        self.sync_runtime_keymap_config();
         let clipboard = Rc::clone(&self.core.ctx.env().clipboard);
         let clipboard_config = self.core.ctx.env().clipboard_config.borrow().clone();
         self.framework_effects.clear();
@@ -978,6 +979,19 @@ where
         self.keymap_runtime = KeymapRuntime::new(&self.keymap);
     }
 
+    fn sync_framework_keymap(&mut self) {
+        let Some(keymap) = self.core.ctx.env().take_framework_keymap_request() else {
+            return;
+        };
+        self.keymap.reconfigure_framework_keymap(keymap);
+        self.keymap_runtime = KeymapRuntime::new(&self.keymap);
+    }
+
+    fn sync_runtime_keymap_config(&mut self) {
+        self.sync_clipboard_config();
+        self.sync_framework_keymap();
+    }
+
     /// Process all queued messages and any messages produced by background commands.
     ///
     /// Returns `true` if any update requested a re-render.
@@ -1017,7 +1031,7 @@ where
             );
         }
 
-        self.sync_clipboard_config();
+        self.sync_runtime_keymap_config();
 
         dirty |= self.drain_copy_feedback_requests();
 
@@ -1174,7 +1188,7 @@ where
         if let Some(title) = self.core.ctx.take_title_request() {
             self.host_title = Some(title);
         }
-        self.sync_clipboard_config();
+        self.sync_runtime_keymap_config();
         focus_service::restore_focus_after_closed_overlays(&self.core.tree, &mut focus_refs!(self));
         if let Some(request) = self.core.ctx.take_focus_request() {
             self.apply_focus_request(request);

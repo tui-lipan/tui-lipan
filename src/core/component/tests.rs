@@ -53,6 +53,7 @@ fn new_registry() -> ComponentRegistry {
             clipboard: crate::clipboard::test_clipboard(),
             clipboard_config: Rc::new(RefCell::new(ClipboardConfig::default())),
             clipboard_config_changed: Rc::new(Cell::new(false)),
+            framework_keymap_request: Rc::default(),
             active_theme: Rc::new(RefCell::new(Theme::default())),
             active_theme_generation: Rc::new(Cell::new(1)),
             effect_phase: Rc::new(Cell::new(0)),
