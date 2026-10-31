@@ -58,7 +58,10 @@ pub enum DraggableTabBarOverflow {
 /// Behavior kind for a [`DraggableTab`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub enum DraggableTabKind {
-    /// A regular selectable, draggable tab.
+    /// A regular selectable tab.
+    ///
+    /// Selectable tabs reorder by default. [`DraggableTab::reorderable`]`(false)`
+    /// keeps the tab selectable and anchors it so other tabs cannot cross it.
     #[default]
     Tab,
     /// A pinned action item inside the tab strip, such as a `+` new-tab button.
@@ -200,6 +203,7 @@ pub struct DraggableTab {
     pub(crate) accent_style: Style,
     pub(crate) active_accent_style: Style,
     pub(crate) closeable: bool,
+    pub(crate) reorderable: bool,
     pub(crate) icon: Option<Span>,
     pub(crate) leading: Option<TabLeadingContent>,
     pub(crate) path: Option<Arc<str>>,
@@ -219,6 +223,7 @@ impl DraggableTab {
             accent_style: Style::default(),
             active_accent_style: Style::default(),
             closeable: false,
+            reorderable: true,
             icon: None,
             leading: None,
             path: None,
@@ -283,6 +288,18 @@ impl DraggableTab {
     /// Enable or disable close affordance for this tab.
     pub fn closeable(mut self, closeable: bool) -> Self {
         self.closeable = closeable;
+        self
+    }
+
+    /// Whether this selectable tab can be reordered or transferred.
+    ///
+    /// `false` keeps the tab selectable, hoverable, and closeable, and turns it
+    /// into a reorder barrier: it cannot start a drag, and other tabs cannot
+    /// move across it. Action tabs stay non-reorderable either way.
+    ///
+    /// Defaults to `true`.
+    pub fn reorderable(mut self, reorderable: bool) -> Self {
+        self.reorderable = reorderable;
         self
     }
 
@@ -1317,52 +1334,34 @@ impl DraggableTabBar {
             return None;
         }
 
-        if !tabs.get(current_index).is_some_and(is_reorderable_tab) {
+        let (run_start, run_end) = reorderable_run(tabs, current_index)?;
+        if current_index >= metrics.len() {
             return None;
         }
 
-        let mut starts = Vec::with_capacity(tabs.len());
-        let mut widths = Vec::with_capacity(tabs.len());
-        let mut reorder_indices = Vec::new();
+        let mut starts = Vec::with_capacity(metrics.len());
+        let mut widths = Vec::with_capacity(metrics.len());
         let mut x = 0usize;
-        for (i, (tab, metrics)) in tabs.iter().zip(metrics).enumerate() {
+        for (i, tab_metrics) in metrics.iter().enumerate() {
             starts.push(x);
-            widths.push(metrics.width);
-            if is_reorderable_tab(tab) {
-                reorder_indices.push(i);
-            }
-            x = x.saturating_add(metrics.width);
-            if i + 1 < tabs.len() {
+            widths.push(tab_metrics.width);
+            x = x.saturating_add(tab_metrics.width);
+            if i + 1 < metrics.len() {
                 x = x.saturating_add(separator_width(opts.variant, opts.divider));
             }
         }
 
-        let mut position = reorder_indices
-            .iter()
-            .position(|&index| index == current_index)?;
-        let mut run_start = position;
-        while run_start > 0 && reorder_indices[run_start - 1] + 1 == reorder_indices[run_start] {
-            run_start -= 1;
-        }
-        let mut run_end = position;
-        while run_end + 1 < reorder_indices.len()
-            && reorder_indices[run_end] + 1 == reorder_indices[run_end + 1]
-        {
-            run_end += 1;
-        }
-
         let midpoint = |idx: usize| -> usize { starts[idx].saturating_add(widths[idx] / 2) };
 
-        while position < run_end && col >= midpoint(reorder_indices[position + 1]) {
+        let mut position = current_index;
+        while position < run_end && col >= midpoint(position + 1) {
             position += 1;
         }
-
-        while position > run_start && col < midpoint(reorder_indices[position - 1]) {
+        while position > run_start && col < midpoint(position - 1) {
             position -= 1;
         }
 
-        let target = reorder_indices[position];
-        (target != current_index).then_some(target)
+        (position != current_index).then_some(position)
     }
 
     pub(crate) fn viewport_layout(
@@ -1725,12 +1724,41 @@ impl DraggableTabBar {
     }
 }
 
-pub(crate) fn is_reorderable_tab(tab: &DraggableTab) -> bool {
+pub(crate) fn is_selectable_tab(tab: &DraggableTab) -> bool {
     tab.kind == DraggableTabKind::Tab
 }
 
+pub(crate) fn is_reorderable_tab(tab: &DraggableTab) -> bool {
+    is_selectable_tab(tab) && tab.reorderable
+}
+
 pub(crate) fn is_closeable_tab(tab: &DraggableTab) -> bool {
-    tab.closeable && is_reorderable_tab(tab)
+    is_selectable_tab(tab) && tab.closeable
+}
+
+/// Inclusive index range of the contiguous reorderable run containing `index`.
+pub(crate) fn reorderable_run(tabs: &[DraggableTab], index: usize) -> Option<(usize, usize)> {
+    if !tabs.get(index).is_some_and(is_reorderable_tab) {
+        return None;
+    }
+    let mut start = index;
+    while start > 0 && tabs.get(start - 1).is_some_and(is_reorderable_tab) {
+        start -= 1;
+    }
+    let mut end = index;
+    while tabs.get(end + 1).is_some_and(is_reorderable_tab) {
+        end += 1;
+    }
+    Some((start, end))
+}
+
+fn clamp_reorder_target(
+    tabs: &[DraggableTab],
+    source_index: usize,
+    candidate: usize,
+) -> Option<usize> {
+    let (run_start, run_end) = reorderable_run(tabs, source_index)?;
+    Some(candidate.clamp(run_start, run_end))
 }
 
 #[cfg(test)]
@@ -1738,19 +1766,10 @@ pub(crate) fn reorder_target_at_col_with_options(
     tabs: &[DraggableTab],
     opts: &TabDisplayOptions<'_>,
     col: usize,
+    source_index: usize,
 ) -> Option<usize> {
     let candidate = DraggableTabBar::reorder_index_at_col_with_options(tabs, opts, col)?;
-    if tabs.get(candidate).is_some_and(is_reorderable_tab) {
-        return Some(candidate);
-    }
-
-    (0..candidate)
-        .rev()
-        .find(|&index| tabs.get(index).is_some_and(is_reorderable_tab))
-        .or_else(|| {
-            ((candidate + 1)..tabs.len())
-                .find(|&index| tabs.get(index).is_some_and(is_reorderable_tab))
-        })
+    clamp_reorder_target(tabs, source_index, candidate)
 }
 
 pub(crate) fn reorder_target_at_view_col_with_options(
@@ -1758,19 +1777,61 @@ pub(crate) fn reorder_target_at_view_col_with_options(
     opts: &TabDisplayOptions<'_>,
     vp: &TabViewportOptions,
     col: usize,
+    source_index: usize,
 ) -> Option<usize> {
-    let candidate = DraggableTabBar::reorder_index_at_view_col(tabs, opts, vp, col)?;
-    if tabs.get(candidate).is_some_and(is_reorderable_tab) {
-        return Some(candidate);
-    }
+    let candidate =
+        DraggableTabBar::reorder_index_at_view_col(tabs, opts, vp, col).unwrap_or_else(|| {
+            if col == 0 {
+                0
+            } else {
+                tabs.len().saturating_sub(1)
+            }
+        });
+    clamp_reorder_target(tabs, source_index, candidate)
+}
 
-    (0..candidate)
-        .rev()
-        .find(|&index| tabs.get(index).is_some_and(is_reorderable_tab))
-        .or_else(|| {
-            ((candidate + 1)..tabs.len())
-                .find(|&index| tabs.get(index).is_some_and(is_reorderable_tab))
-        })
+/// Insertion index for a tab transferred onto this bar.
+///
+/// Non-reorderable selectable tabs are barriers. A pointer on a leading fixed
+/// tab resolves to the first slot after that tab, so an incoming tab cannot
+/// land before Home. Body drops still append after the last reorderable tab,
+/// or after a leading fixed run when the bar has no reorderable tab.
+pub(crate) fn transfer_insertion_index(
+    tabs: &[DraggableTab],
+    opts: &TabDisplayOptions<'_>,
+    vp: &TabViewportOptions,
+    view_col: usize,
+    over_body: bool,
+) -> usize {
+    if over_body {
+        return body_transfer_insertion_index(tabs);
+    }
+    let raw = DraggableTabBar::reorder_index_at_view_col(tabs, opts, vp, view_col)
+        .unwrap_or_else(|| tabs.len().saturating_sub(1));
+    clamp_transfer_insertion(tabs, raw)
+}
+
+fn body_transfer_insertion_index(tabs: &[DraggableTab]) -> usize {
+    if let Some(index) = tabs.iter().rposition(is_reorderable_tab) {
+        return index.saturating_add(1);
+    }
+    tabs.iter()
+        .position(|tab| !is_selectable_tab(tab))
+        .unwrap_or(tabs.len())
+}
+
+fn clamp_transfer_insertion(tabs: &[DraggableTab], candidate: usize) -> usize {
+    let Some(tab) = tabs.get(candidate) else {
+        return candidate.min(tabs.len());
+    };
+    let leading_fixed = is_selectable_tab(tab)
+        && !tab.reorderable
+        && !tabs[..candidate].iter().any(is_reorderable_tab);
+    if leading_fixed {
+        candidate.saturating_add(1)
+    } else {
+        candidate
+    }
 }
 
 fn separator_width(variant: DraggableTabBarVariant, divider: char) -> usize {
@@ -2019,7 +2080,7 @@ fn apply_tab_width_lock(
     let (Some(tab), Some(current)) = (tabs.get(lock.index), metrics.get(lock.index)) else {
         return metrics;
     };
-    if !is_reorderable_tab(tab) {
+    if !is_selectable_tab(tab) {
         return metrics;
     }
     let fixed_width = current.width.saturating_sub(current.label_width);
@@ -2432,7 +2493,7 @@ mod tests {
 
         let raw_target =
             DraggableTabBar::reorder_index_at_col_with_options(&tabs, &opts, action_col);
-        let reorder_target = super::reorder_target_at_col_with_options(&tabs, &opts, action_col);
+        let reorder_target = super::reorder_target_at_col_with_options(&tabs, &opts, action_col, 1);
 
         assert_eq!(raw_target, Some(2));
         assert_eq!(reorder_target, Some(1));
@@ -2849,6 +2910,191 @@ mod tests {
             layout.hidden_right, 0,
             "offset={} content_width={} hidden_left={} layout={:?}",
             layout.offset, layout.content_width, layout.hidden_left, layout
+        );
+    }
+
+    fn bordered_opts<'a>(
+        palette: &'a FileIconPalette,
+        overrides: &'a HashMap<std::sync::Arc<str>, super::FileIconOverride>,
+    ) -> super::TabDisplayOptions<'a> {
+        super::TabDisplayOptions {
+            variant: DraggableTabBarVariant::Bordered,
+            divider: '|',
+            accent_symbol: '|',
+            close_symbol: "x",
+            show_close_buttons: false,
+            tab_max_width: None,
+            overflow: super::DraggableTabBarOverflow::Scroll,
+            show_file_icons: false,
+            file_icon_style: FileIconStyle::NerdFont,
+            file_icon_palette: palette,
+            file_icon_overrides: overrides,
+            width_lock: None,
+        }
+    }
+
+    fn wide_viewport() -> super::TabViewportOptions {
+        super::TabViewportOptions {
+            scroll_offset: 0,
+            viewport_width: 200,
+            show_overflow_controls: false,
+            overflow_labels: Default::default(),
+        }
+    }
+
+    fn midpoint_col(
+        tabs: &[DraggableTab],
+        opts: &super::TabDisplayOptions<'_>,
+        index: usize,
+    ) -> usize {
+        super::tabs_prefix_width(tabs, opts, index)
+            + super::tab_metrics_with_options(&tabs[index], opts).width / 2
+    }
+
+    #[test]
+    fn fixed_tab_stays_selectable_and_closeable() {
+        let fixed = DraggableTab::new("Home").reorderable(false).closeable(true);
+        let action = DraggableTab::action("+").reorderable(true).closeable(true);
+
+        assert!(super::is_selectable_tab(&fixed));
+        assert!(!super::is_reorderable_tab(&fixed));
+        assert!(super::is_closeable_tab(&fixed));
+        assert!(!super::is_selectable_tab(&action));
+        assert!(!super::is_reorderable_tab(&action));
+        assert!(!super::is_closeable_tab(&action));
+
+        let metrics = super::tab_metrics(&fixed, DraggableTabBarVariant::Bordered, '|', "x", true);
+        assert!(metrics.close_start.is_some());
+    }
+
+    #[test]
+    fn fixed_home_splits_one_reorder_run_for_live_and_on_drop() {
+        let tabs = vec![
+            DraggableTab::new("Home").reorderable(false),
+            DraggableTab::new("Alpha"),
+            DraggableTab::new("Beta"),
+        ];
+        let palette = FileIconPalette::default();
+        let overrides = HashMap::new();
+        let opts = bordered_opts(&palette, &overrides);
+        let home = midpoint_col(&tabs, &opts, 0);
+        let alpha = midpoint_col(&tabs, &opts, 1);
+        // Live moves left only once the pointer is strictly before the neighbor midpoint.
+        let before_alpha = alpha.saturating_sub(1);
+        let beta = midpoint_col(&tabs, &opts, 2);
+
+        assert_eq!(
+            DraggableTabBar::adjacent_reorder_target(&tabs, &opts, 1, home),
+            None
+        );
+        assert_eq!(
+            DraggableTabBar::adjacent_reorder_target(&tabs, &opts, 1, beta),
+            Some(2)
+        );
+        assert_eq!(
+            DraggableTabBar::adjacent_reorder_target(&tabs, &opts, 2, before_alpha),
+            Some(1)
+        );
+
+        assert_eq!(
+            super::reorder_target_at_col_with_options(&tabs, &opts, home, 1),
+            Some(1)
+        );
+        assert_eq!(
+            super::reorder_target_at_col_with_options(&tabs, &opts, beta, 1),
+            Some(2)
+        );
+        assert_eq!(
+            super::reorder_target_at_col_with_options(&tabs, &opts, home, 2),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn interior_fixed_tab_separates_reorder_runs() {
+        let tabs = vec![
+            DraggableTab::new("Left"),
+            DraggableTab::new("Pin").reorderable(false),
+            DraggableTab::new("Right"),
+        ];
+        let palette = FileIconPalette::default();
+        let overrides = HashMap::new();
+        let opts = bordered_opts(&palette, &overrides);
+        let left = midpoint_col(&tabs, &opts, 0);
+        let right = midpoint_col(&tabs, &opts, 2);
+
+        assert_eq!(
+            DraggableTabBar::adjacent_reorder_target(&tabs, &opts, 0, right),
+            None
+        );
+        assert_eq!(
+            DraggableTabBar::adjacent_reorder_target(&tabs, &opts, 2, left),
+            None
+        );
+        assert_eq!(
+            super::reorder_target_at_col_with_options(&tabs, &opts, right, 0),
+            Some(0)
+        );
+        assert_eq!(
+            super::reorder_target_at_col_with_options(&tabs, &opts, left, 2),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn transfer_cannot_insert_before_a_leading_fixed_tab() {
+        let home = vec![DraggableTab::new("Home").reorderable(false)];
+        let strip = vec![
+            DraggableTab::new("Home").reorderable(false),
+            DraggableTab::new("Alpha"),
+            DraggableTab::new("Beta"),
+            DraggableTab::action("+"),
+        ];
+        let palette = FileIconPalette::default();
+        let overrides = HashMap::new();
+        let opts = bordered_opts(&palette, &overrides);
+        let viewport = wide_viewport();
+        let on_home = midpoint_col(&strip, &opts, 0);
+        let on_beta = midpoint_col(&strip, &opts, 2);
+        let on_action = midpoint_col(&strip, &opts, 3);
+
+        assert_eq!(
+            super::transfer_insertion_index(&home, &opts, &viewport, 0, true),
+            1
+        );
+        assert_eq!(
+            super::transfer_insertion_index(&strip, &opts, &viewport, on_home, false),
+            1
+        );
+        assert_eq!(
+            super::transfer_insertion_index(&strip, &opts, &viewport, on_beta, false),
+            2
+        );
+        assert_eq!(
+            super::transfer_insertion_index(&strip, &opts, &viewport, on_action, false),
+            3
+        );
+        assert_eq!(
+            super::transfer_insertion_index(&strip, &opts, &viewport, 0, true),
+            3
+        );
+
+        let split = vec![
+            DraggableTab::new("Left"),
+            DraggableTab::new("Pin").reorderable(false),
+            DraggableTab::new("Right"),
+        ];
+        let on_pin = midpoint_col(&split, &opts, 1);
+        let on_right = midpoint_col(&split, &opts, 2);
+        assert_eq!(
+            super::transfer_insertion_index(&split, &opts, &viewport, on_pin, false),
+            1,
+            "an interior fixed tab accepts the incoming tab at the end of the previous run"
+        );
+        assert_eq!(
+            super::transfer_insertion_index(&split, &opts, &viewport, on_right, false),
+            2,
+            "the run after an interior fixed tab stays a valid insertion point"
         );
     }
 }

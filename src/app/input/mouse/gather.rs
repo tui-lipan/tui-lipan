@@ -811,9 +811,15 @@ pub(crate) fn gather_hit_actions(
                                 on_transfer: node_tabs.on_transfer.clone(),
                             },
                             crate::widgets::draggable_tab_bar::DraggableTabHitTarget::Tab(hit) => {
-                                let action_hit = node_tabs.tabs.get(hit.index).is_some_and(|tab| {
+                                let tab = node_tabs.tabs.get(hit.index);
+                                let action_hit = tab.is_some_and(|tab| {
                                     tab.kind == crate::widgets::DraggableTabKind::Action
                                 });
+                                // A fixed selectable tab still selects, but it must not arm a drag.
+                                let draggable = node_tabs.draggable
+                                    && tab.is_some_and(
+                                        crate::widgets::draggable_tab_bar::is_reorderable_tab,
+                                    );
                                 DraggableTabBarAction {
                                     node_id: node.id,
                                     overflow_scroll_step: 0,
@@ -826,7 +832,7 @@ pub(crate) fn gather_hit_actions(
                                     active,
                                     bar_id: node_tabs.bar_id.clone(),
                                     drag_group: node_tabs.drag_group.clone(),
-                                    draggable: node_tabs.draggable,
+                                    draggable,
                                     reorder_mode: node_tabs.reorder_mode,
                                     drag_threshold: node_tabs.drag_threshold,
                                     on_change: node_tabs.on_change.clone(),

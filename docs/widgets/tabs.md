@@ -210,6 +210,23 @@ Action tabs render in the strip but do not emit `on_change`, become active,
 show close buttons, or participate as same-bar reorder targets. A trailing
 action tab stays pinned while normal tabs reorder before it.
 
+A normal tab can stay selectable and still anchor the strip:
+
+```rust
+DraggableTab::new("Home").reorderable(false)
+```
+
+`reorderable(false)` is a barrier, not merely "this tab cannot start a drag."
+The tab still selects, hovers, takes active styling, and can be closed.
+It cannot start a reorder or a transfer, and other tabs cannot move across it.
+In `[Home, Session A, Session B]`, Session A and Session B can swap, and neither
+can move ahead of Home. The same run boundary applies in `Live` and `OnDrop`.
+An incoming transfer that lands on Home, or to its left, inserts in the first
+slot after Home. A fixed tab in the middle splits the strip into two runs.
+Closing is separate: `.reorderable(false).closeable(true)` still shows a close
+button. `DraggableTab::action("+")` stays non-selectable and non-closeable
+either way.
+
 To show a spinner in the icon position (replaces icon and file-icon when set):
 
 ```rust
@@ -356,7 +373,7 @@ VStack::new()
     .key("editor-panel")
 ```
 
-Body transfers append before trailing action items; the bar still chooses the precise insertion index.
+Body transfers append before trailing action items, and after a leading fixed tab when the bar has nothing reorderable; the bar still chooses the precise insertion index.
 Register exactly one bar per ancestor container. If multiple bars register the same ancestor,
 its body ignores transfers; each bar remains a direct strip target. Disabled bars reject transfers. Hovering a
 bar's own body does not reorder tabs. The area follows normal clipping and overlay hit testing,
