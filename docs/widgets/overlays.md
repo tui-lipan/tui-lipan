@@ -532,7 +532,9 @@ patch over item styles. Active label styles apply before the per-item style;
 focused/active description overrides apply before the per-item right style.
 
 `SearchItem::disabled(true)` and `SearchEntry::disabled(true)` mute the row using
-the theme's muted style with dim text, including custom-rendered text. Disabled
+the theme's muted style with dim text, including custom-rendered text, status and
+gutter content, and label/description spinners with their labels. Explicit slot
+colours are muted even while the row is selected. Disabled
 rows remain selectable for inspection and emit `on_select`, but never emit
 `on_activate` through Enter or mouse double-click. Navigation and result counts
 include them. CommandPalette uses this behaviour for `show_disabled(true)`.

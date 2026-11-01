@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::style::{Length, RowStylePolicy, Span, Style};
 use crate::utils::gradient::{ColorGradient, GradientRange};
-use crate::widgets::list::ListItemSpinnerSlot;
+use crate::widgets::list::{ListItemGutterKind, ListItemSpinnerSlot, ListItemStatusKind};
 use crate::widgets::{
     ListItem, ListItemGutter, ListItemLine, ListItemStatus, ListSymbolPosition, Spinner,
 };
@@ -278,15 +278,61 @@ fn mute_spans(spans: &mut [Span], style: Style) {
     }
 }
 
+fn mute_spinner(spinner: &mut ListItemSpinnerSlot, style: Style) {
+    spinner.style = spinner.style.patch(style);
+    spinner.label_style = spinner.label_style.patch(style);
+    spinner.preserve_foreground = true;
+}
+
+fn mute_line_spinners(
+    label: &mut Option<ListItemSpinnerSlot>,
+    description: &mut Option<ListItemSpinnerSlot>,
+    style: Style,
+) {
+    for spinner in [label, description].into_iter().flatten() {
+        mute_spinner(spinner, style);
+    }
+}
+
+fn mute_status(status: &mut ListItemStatus, style: Style) {
+    match &mut status.kind {
+        ListItemStatusKind::Text(spans) => mute_spans(spans, style),
+        ListItemStatusKind::Spinner(spinner) => mute_spinner(spinner, style),
+    }
+}
+
+fn mute_gutter(gutter: &mut ListItemGutter, style: Style) {
+    match &mut gutter.kind {
+        ListItemGutterKind::Text(spans) => mute_spans(spans, style),
+        ListItemGutterKind::Spinner(spinner) => mute_spinner(spinner, style),
+    }
+}
+
 fn mute_item(item: &mut ListItem, style: Style) {
     item.pointer_shape = Some(crate::PointerShape::Default);
     item.style = item.style.patch(style);
     mute_spans(&mut item.spans, style);
     mute_spans(&mut item.description_spans, style);
+    mute_line_spinners(
+        &mut item.label_spinner,
+        &mut item.description_spinner,
+        style,
+    );
+    if let Some(status) = &mut item.status {
+        mute_status(status, style);
+    }
+    if let Some(gutter) = &mut item.gutter {
+        mute_gutter(gutter, style);
+    }
     for line in &mut item.extra_lines {
         line.style = line.style.patch(style);
         mute_spans(&mut line.spans, style);
         mute_spans(&mut line.description_spans, style);
+        mute_line_spinners(
+            &mut line.label_spinner,
+            &mut line.description_spinner,
+            style,
+        );
     }
 }
 

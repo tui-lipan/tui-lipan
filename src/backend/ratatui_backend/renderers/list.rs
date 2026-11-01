@@ -208,6 +208,15 @@ fn concrete_list_state_style(style: Style) -> Style {
     }
 }
 
+fn auxiliary_row_override(mut style: Style, preserve_foreground: bool) -> Style {
+    if preserve_foreground {
+        style.fg = None;
+        style.fg_transform = None;
+        style.contrast_policy = None;
+    }
+    style
+}
+
 struct SpinnerSlotDraw {
     spinner_style: SpinnerStyle,
     frame: usize,
@@ -350,8 +359,12 @@ fn push_gutter_spans<'v, 's>(
     match &gutter.kind {
         ListItemGutterKind::Text(spans) => {
             for span in spans {
-                let span_style = list_rich_text_span_style(left_base_style, span.style)
-                    .patch(left_style_override);
+                let row_override = auxiliary_row_override(
+                    left_style_override,
+                    span.row_style_policy == RowStylePolicy::PreserveForeground,
+                );
+                let span_style =
+                    list_rich_text_span_style(left_base_style, span.style).patch(row_override);
                 let span_style =
                     finalize_style(span_style, style_backdrop(left_base_style), contrast_policy);
                 item_spans.push(Span::styled(
@@ -361,6 +374,8 @@ fn push_gutter_spans<'v, 's>(
             }
         }
         ListItemGutterKind::Spinner(spinner) => {
+            let left_style_override =
+                auxiliary_row_override(left_style_override, spinner.preserve_foreground);
             let inset = usize::from(spinner.leading);
             if inset > 0 {
                 item_spans.push(Span::styled(spaces(inset), rs_base));
@@ -457,6 +472,7 @@ fn push_line_spinner_draw(
         slot_x,
         contrast_policy,
     } = ctx;
+    let style_override = auxiliary_row_override(style_override, spinner.preserve_foreground);
     let inset = usize::from(spinner.leading);
     let body_width = (spinner.slot_width() as usize).saturating_sub(inset);
     if body_width == 0 {
@@ -523,8 +539,12 @@ fn push_status_symbol_spans<'v, 's>(
     match &status.kind {
         ListItemStatusKind::Text(spans) => {
             for span in spans {
-                let span_style = list_rich_text_span_style(left_base_style, span.style)
-                    .patch(left_style_override);
+                let row_override = auxiliary_row_override(
+                    left_style_override,
+                    span.row_style_policy == RowStylePolicy::PreserveForeground,
+                );
+                let span_style =
+                    list_rich_text_span_style(left_base_style, span.style).patch(row_override);
                 let span_style =
                     finalize_style(span_style, style_backdrop(left_base_style), contrast_policy);
                 item_spans.push(Span::styled(
@@ -534,6 +554,8 @@ fn push_status_symbol_spans<'v, 's>(
             }
         }
         ListItemStatusKind::Spinner(spinner) => {
+            let left_style_override =
+                auxiliary_row_override(left_style_override, spinner.preserve_foreground);
             let virtual_x = content_inner
                 .x
                 .saturating_add(item_spans_width.saturating_add(left_pad) as i16);
@@ -605,14 +627,7 @@ fn resolve_list_row_state_style(input: ListRowStateStyleInput<'_>) -> Style {
             durability: Durability::Durable,
         },
     ];
-    // An empty trailing patch would resolve and discard an active transform
-    // before it has a row background to operate on.
-    let layers = if selection_style.is_empty() {
-        &layers[..2]
-    } else {
-        &layers[..]
-    };
-    resolve_state_cascade(base, layers)
+    resolve_state_cascade(base, &layers)
 }
 
 pub(crate) fn render_list(params: ListRenderParams<'_, '_, '_>) {
@@ -4106,6 +4121,42 @@ mod tests {
         });
 
         assert_eq!(buffer[(0, 0)].bg, ratatui::style::Color::Rgb(50, 50, 50));
+    }
+
+    #[test]
+    fn unrelated_selection_fields_preserve_active_background_transform() {
+        for selection_style in [Style::new().bold(), Style::new().fg(Color::White)] {
+            let buffer = draw_list_state_case(DrawListStateCaseInput {
+                item: ListItem::new("Label")
+                    .style(Style::new().bg(Color::Rgb(100, 100, 100)))
+                    .active(true),
+                selected: Some(0),
+                item_hover_style: Style::default(),
+                active_style: Style::new().transform_bg(ColorTransform::dim(0.5)),
+                selection_style,
+                is_hovered: false,
+                mouse_pos: None,
+            });
+            assert_eq!(buffer[(0, 0)].bg, ratatui::style::Color::Rgb(50, 50, 50));
+        }
+    }
+
+    #[test]
+    fn unrelated_selection_fields_preserve_active_foreground_transform() {
+        for selection_style in [Style::new().bold(), Style::new().bg(Color::Blue)] {
+            let buffer = draw_list_state_case(DrawListStateCaseInput {
+                item: ListItem::new("Label")
+                    .style(Style::new().fg(Color::Rgb(100, 100, 100)))
+                    .active(true),
+                selected: Some(0),
+                item_hover_style: Style::default(),
+                active_style: Style::new().transform_fg(ColorTransform::dim(0.5)),
+                selection_style,
+                is_hovered: false,
+                mouse_pos: None,
+            });
+            assert_eq!(buffer[(0, 0)].fg, ratatui::style::Color::Rgb(50, 50, 50));
+        }
     }
 
     #[test]

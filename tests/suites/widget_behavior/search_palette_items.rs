@@ -256,3 +256,135 @@ fn disabled_custom_renderer_is_muted_and_cannot_activate() {
     assert_ne!(frame.cell(x, y).fg, Color::Red);
     assert!(activations.borrow().is_empty());
 }
+
+fn coloured_spinner() -> Spinner {
+    Spinner::new()
+        .spinner_style(SpinnerStyle::Line)
+        .frame(0)
+        .label("S")
+        .style(Style::new().fg(Color::Red))
+        .label_style(Style::new().fg(Color::Red))
+}
+
+#[test]
+fn disabled_rows_mute_explicit_status_gutter_and_spinner_styles() {
+    use std::sync::Arc;
+    for selected in [false, true] {
+        for spinner_slots in [false, true] {
+            for placement in [
+                DescriptionPlacement::Inline,
+                DescriptionPlacement::Right,
+                DescriptionPlacement::Above,
+                DescriptionPlacement::Below,
+            ] {
+                let mut palette = SearchPalette::new()
+                    .items([
+                        SearchItem::new("label", 0).disabled(true).description(
+                            ItemDescription::new()
+                                .left("details")
+                                .spinner(coloured_spinner()),
+                        ),
+                        SearchItem::new("other", 1),
+                    ])
+                    .initial_selected_item_index(Some(usize::from(!selected)))
+                    .query("")
+                    .description_placement(placement)
+                    .list_selection_style(Style::new().fg(Color::Yellow).bg(Color::Blue));
+                if spinner_slots {
+                    palette = palette
+                        .item_status(Arc::new(|item, _| {
+                            item.disabled
+                                .then(|| ListItemStatus::spinner(coloured_spinner()))
+                        }))
+                        .item_gutter(Arc::new(|item, _| {
+                            item.disabled
+                                .then(|| ListItemGutter::spinner(coloured_spinner()))
+                        }));
+                } else {
+                    palette = palette
+                        .item_status(Arc::new(|item, _| {
+                            item.disabled.then(|| {
+                                ListItemStatus::from_spans([Span::new("●").fg(Color::Red)])
+                            })
+                        }))
+                        .item_gutter(Arc::new(|item, _| {
+                            item.disabled.then(|| {
+                                ListItemGutter::from_spans([Span::new("G").fg(Color::Red)])
+                            })
+                        }));
+                }
+                let mut backend = backend(palette);
+                backend.focus_next();
+                backend.render();
+                let frame = backend.capture_frame();
+                let (x, y) = find(&frame, "l");
+                let muted = frame.cell(x, y).fg;
+                for symbol in if spinner_slots {
+                    vec!["|", "S"]
+                } else {
+                    vec!["●", "G", "|", "S"]
+                } {
+                    let mut count = 0;
+                    for y in 0..10 {
+                        for x in 0..32 {
+                            let cell = frame.cell(x, y);
+                            if cell.symbol == symbol {
+                                assert_eq!(cell.fg, muted, "{placement:?} {symbol}");
+                                assert!(cell.modifiers.dim, "{placement:?} {symbol}");
+                                count += 1;
+                            }
+                        }
+                    }
+                    assert!(count > 0, "{placement:?} missing {symbol}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn disabled_custom_renderer_mutes_primary_and_extra_line_spinners() {
+    use std::sync::Arc;
+    let mut backend = backend(
+        SearchPalette::new()
+            .items([SearchItem::new("label", 0).disabled(true)])
+            .query("")
+            .list_selection_style(Style::new().fg(Color::Yellow).bg(Color::Blue))
+            .render_item(Arc::new(|_, _| {
+                Some(
+                    ListItem::new("row")
+                        .description("hint")
+                        .label_spinner(coloured_spinner())
+                        .description_spinner(coloured_spinner())
+                        .line(
+                            ListItemLine::new("extra")
+                                .description("info")
+                                .label_spinner(coloured_spinner())
+                                .description_spinner(coloured_spinner()),
+                        ),
+                )
+            })),
+    );
+    backend.focus_next();
+    backend.render();
+    let frame = backend.capture_frame();
+    let (x, y) = find(&frame, "r");
+    let muted = frame.cell(x, y).fg;
+    for symbol in ["|", "S"] {
+        let mut count = 0;
+        for y in 0..10 {
+            for x in 0..32 {
+                let cell = frame.cell(x, y);
+                if cell.symbol == symbol {
+                    assert_eq!(cell.fg, muted);
+                    assert!(cell.modifiers.dim);
+                    count += 1;
+                }
+            }
+        }
+        assert_eq!(
+            count, 4,
+            "every primary/extra-line spinner must render {symbol}"
+        );
+    }
+}
