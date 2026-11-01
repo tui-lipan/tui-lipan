@@ -4576,3 +4576,133 @@ fn middle_click_consumes_the_entire_terminal_gesture() {
         );
     }
 }
+
+#[test]
+fn explicit_middle_click_region_takes_precedence_over_tab_close() {
+    struct WrappedTabs(Rc<RefCell<Vec<&'static str>>>);
+    impl Component for WrappedTabs {
+        type Properties = ();
+        type Message = ();
+        type State = ();
+        fn create_state(&self, _: &()) {}
+        fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+        fn view(&self, _: &Context<Self>) -> Element {
+            let region = self.0.clone();
+            let tab = self.0.clone();
+            MouseRegion::new()
+                .on_middle_click(Callback::new(move |_| region.borrow_mut().push("region")))
+                .child(
+                    DraggableTabBar::new()
+                        .tabs([DraggableTab::new("closeable").closeable(true)])
+                        .on_close(Callback::new(move |_| tab.borrow_mut().push("tab"))),
+                )
+                .into()
+        }
+    }
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let mut backend = TestBackend::new(WrappedTabs(events.clone()));
+    for kind in [
+        MouseKind::Down(MouseButton::Middle),
+        MouseKind::Drag(MouseButton::Middle),
+        MouseKind::Up(MouseButton::Middle),
+    ] {
+        backend
+            .send_mouse(MouseEvent {
+                x: 1,
+                y: 0,
+                kind,
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+    }
+    assert_eq!(&*events.borrow(), &["region"]);
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn tab_middle_close_owns_drag_and_release_after_terminal_replaces_bar() {
+    struct ClosingTabs {
+        mode: MouseMode,
+        forwarded: Rc<RefCell<Vec<Vec<u8>>>>,
+    }
+    impl Component for ClosingTabs {
+        type Properties = ();
+        type Message = bool;
+        type State = bool;
+        fn create_state(&self, _: &()) -> bool {
+            true
+        }
+        fn update(&mut self, open: bool, ctx: &mut Context<Self>) -> Update {
+            ctx.state = open;
+            Update::layout()
+        }
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            if ctx.state {
+                return DraggableTabBar::new()
+                    .tabs([DraggableTab::new("closeable").closeable(true)])
+                    .on_close(ctx.link().callback(|_| false))
+                    .into();
+            }
+            let forwarded = self.forwarded.clone();
+            Terminal::new()
+                .snapshot(TerminalRenderSnapshot {
+                    mouse_mode: MouseModeState {
+                        mode: self.mode,
+                        encoding: MouseEncoding::Sgr,
+                        focus_events_enabled: false,
+                    },
+                    ..TerminalRenderSnapshot::default()
+                })
+                .on_mouse_forward(Callback::new(move |bytes| {
+                    forwarded.borrow_mut().push(bytes)
+                }))
+                .into()
+        }
+    }
+    for mode in [MouseMode::Normal, MouseMode::AnyEvent] {
+        let forwarded = Rc::new(RefCell::new(Vec::new()));
+        let mut backend = TestBackend::new(ClosingTabs {
+            mode,
+            forwarded: forwarded.clone(),
+        });
+        for kind in [
+            MouseKind::Down(MouseButton::Middle),
+            MouseKind::Drag(MouseButton::Middle),
+            MouseKind::Up(MouseButton::Middle),
+        ] {
+            backend
+                .send_mouse(MouseEvent {
+                    x: 1,
+                    y: 0,
+                    kind,
+                    mods: KeyMods::NONE,
+                })
+                .unwrap();
+        }
+        assert!(!*backend.state());
+        assert!(
+            forwarded.borrow().is_empty(),
+            "{mode:?}: tab close owns the entire gesture"
+        );
+        for kind in [
+            MouseKind::Down(MouseButton::Middle),
+            MouseKind::Up(MouseButton::Middle),
+        ] {
+            backend
+                .send_mouse(MouseEvent {
+                    x: 1,
+                    y: 0,
+                    kind,
+                    mods: KeyMods::NONE,
+                })
+                .unwrap();
+        }
+        assert_eq!(
+            forwarded.borrow().len(),
+            2,
+            "{mode:?}: forwarding resumes after release"
+        );
+    }
+}
