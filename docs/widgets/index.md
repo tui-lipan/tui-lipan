@@ -21,7 +21,7 @@ All widgets are available via `use tui_lipan::prelude::*;`
 | `Animated` | Opacity / fg/bg color lerp / height / keyed position transition wrapper (`layout_height`, `position_transition`, transition-end callbacks; see [layout.md](layout.md#animated)) |
 | `Spacer` | Flexible empty space |
 | `Divider` | Visual separator line |
-| `MouseRegion` | Pointer click/move/drag wrapper with optional hover style |
+| `MouseRegion` | Pointer click, middle-click, context-menu, move and drag wrapper with optional hover style |
 | `Splitter` | Resizable panes with draggable handles |
 | `ThemeProvider` | Applies a `Theme` to a subtree (see [styling.md](../styling.md)) |
 | `ContextProvider` | Provides typed context to a subtree (`ctx.use_context::<T>()`) |

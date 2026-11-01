@@ -119,3 +119,6 @@ mod tree_row_icons;
 mod component_paste;
 #[path = "suites/widget_behavior/context_menu_routing.rs"]
 mod context_menu_routing;
+
+#[path = "suites/widget_behavior/mouse_region_middle_click.rs"]
+mod mouse_region_middle_click;

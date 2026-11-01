@@ -22,6 +22,7 @@ pub(crate) fn reconcile_mouse_region(
         node.kind = NodeKind::MouseRegion(MouseRegionNode {
             on_click: region.on_click.clone(),
             on_context_menu: region.on_context_menu.clone(),
+            on_middle_click: region.on_middle_click.clone(),
             on_mouse_down: region.on_mouse_down.clone(),
             bubble_mouse_down: region.bubble_mouse_down,
             on_mouse_up: region.on_mouse_up.clone(),
