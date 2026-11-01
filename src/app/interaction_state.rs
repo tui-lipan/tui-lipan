@@ -428,6 +428,8 @@ pub(crate) struct MouseTrackingState {
     pub click_consumed: bool,
     /// A context-menu handler owns the right-button gesture until its release.
     pub context_menu_press_consumed: bool,
+    /// A middle-click handler owns drag/release even after its subtree disappears.
+    pub middle_click_press_consumed: bool,
     /// A modified terminal-link press waiting for release on the same destination.
     pub terminal_link_press: Option<TerminalLinkPress>,
     /// A left press consumed because it only focused a mouse-tracking terminal.
@@ -476,6 +478,21 @@ impl MouseTrackingState {
             MouseKind::Drag(MouseButton::Right) => self.context_menu_press_consumed,
             MouseKind::Up(MouseButton::Right) => {
                 std::mem::take(&mut self.context_menu_press_consumed)
+            }
+            _ => false,
+        }
+    }
+
+    /// A new press recovers ownership after a lost middle-button release.
+    pub(crate) fn consume_middle_click_gesture(&mut self, kind: MouseKind) -> bool {
+        match kind {
+            MouseKind::Down(MouseButton::Middle) => {
+                self.middle_click_press_consumed = false;
+                false
+            }
+            MouseKind::Drag(MouseButton::Middle) => self.middle_click_press_consumed,
+            MouseKind::Up(MouseButton::Middle) => {
+                std::mem::take(&mut self.middle_click_press_consumed)
             }
             _ => false,
         }

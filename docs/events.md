@@ -497,11 +497,11 @@ pub struct MouseMoveEvent {
 ### `MouseRegionEvent`
 
 Emitted by: `MouseRegion::on_click`, `MouseRegion::on_mouse_down`, `MouseRegion::on_mouse_up`,
-`MouseRegion::on_context_menu`
+`MouseRegion::on_context_menu`, `MouseRegion::on_middle_click`
 
 `kind` is the raw event that triggered the callback: `Down(Left)` for `on_mouse_down`,
 `Up(Left)` for `on_mouse_up` and `on_click` (a click completes on release), and
-`Down(Right)` for `on_context_menu`.
+`Down(Right)` for `on_context_menu`, and `Down(Middle)` for `on_middle_click`.
 
 ```rust
 pub struct MouseRegionEvent {
@@ -1004,6 +1004,7 @@ Quick lookup - which callbacks does each widget support?
 
 | Callback | Payload | When |
 |----------|---------|------|
+| `on_middle_click` | `MouseRegionEvent` | Middle-button press accepted by the region hit test; consumes drag/release before terminal forwarding or clipboard paste without changing focus |
 | `on_context_menu` | `MouseRegionEvent` | Right-button press accepted by the region hit test; consumes its drag/release without changing focus |
 | `on_click` | `MouseRegionEvent` | Left-button click; `kind` is the release (`Up(Left)`) |
 | `on_mouse_down` | `MouseRegionEvent` | Left-button press |

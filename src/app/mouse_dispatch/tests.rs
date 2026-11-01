@@ -4450,3 +4450,129 @@ fn fixed_tab_selects_without_arming_a_drag() {
         backend.drag.active
     );
 }
+
+#[cfg(feature = "terminal")]
+#[test]
+fn middle_click_consumes_the_entire_terminal_gesture() {
+    struct ContextTerminal {
+        mode: MouseMode,
+        forwarded: Rc<RefCell<Vec<Vec<u8>>>>,
+    }
+    impl Component for ContextTerminal {
+        type Message = bool;
+        type Properties = ();
+        type State = bool;
+        fn create_state(&self, _: &()) -> bool {
+            true
+        }
+        fn update(&mut self, enabled: bool, ctx: &mut Context<Self>) -> Update {
+            ctx.state = enabled;
+            Update::layout()
+        }
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            let forwarded = self.forwarded.clone();
+            let terminal = Terminal::new()
+                .snapshot(TerminalRenderSnapshot {
+                    mouse_mode: MouseModeState {
+                        mode: self.mode,
+                        encoding: MouseEncoding::Sgr,
+                        focus_events_enabled: false,
+                    },
+                    ..TerminalRenderSnapshot::default()
+                })
+                .on_mouse_forward(Callback::new(move |bytes| {
+                    forwarded.borrow_mut().push(bytes)
+                }));
+            let region = MouseRegion::new().child(terminal);
+            if ctx.state {
+                region
+                    .on_middle_click(ctx.link().callback(|_| false))
+                    .into()
+            } else {
+                region.into()
+            }
+        }
+    }
+    for mode in [MouseMode::Normal, MouseMode::AnyEvent] {
+        let forwarded = Rc::new(RefCell::new(Vec::new()));
+        let mut backend = TestBackend::new(ContextTerminal {
+            mode,
+            forwarded: forwarded.clone(),
+        });
+        backend.render();
+        let id = backend
+            .core
+            .tree
+            .iter()
+            .find(|node| matches!(node.kind, NodeKind::Terminal(_)))
+            .unwrap()
+            .id;
+        backend.set_focused(id);
+        for kind in [
+            MouseKind::Down(MouseButton::Middle),
+            MouseKind::Drag(MouseButton::Middle),
+            MouseKind::Up(MouseButton::Middle),
+        ] {
+            backend
+                .send_mouse(MouseEvent {
+                    x: 1,
+                    y: 0,
+                    kind,
+                    mods: KeyMods::NONE,
+                })
+                .unwrap();
+            backend.render();
+        }
+        assert!(
+            !*backend.state(),
+            "the callback disables itself before drag/release"
+        );
+        assert!(
+            forwarded.borrow().is_empty(),
+            "{mode:?}: child must receive none of a consumed gesture"
+        );
+        // After release, an unhandled gesture must again reach the child intact.
+        for kind in [
+            MouseKind::Down(MouseButton::Middle),
+            MouseKind::Up(MouseButton::Middle),
+        ] {
+            backend
+                .send_mouse(MouseEvent {
+                    x: 1,
+                    y: 0,
+                    kind,
+                    mods: KeyMods::NONE,
+                })
+                .unwrap();
+        }
+        assert_eq!(
+            forwarded.borrow().len(),
+            2,
+            "{mode:?}: suppression must end at release"
+        );
+        // A lost release must not suppress the next full middle-button gesture.
+        forwarded.borrow_mut().clear();
+        *backend.state_mut() = true;
+        backend.render();
+        for kind in [
+            MouseKind::Down(MouseButton::Middle),
+            MouseKind::Down(MouseButton::Middle),
+            MouseKind::Up(MouseButton::Middle),
+        ] {
+            backend
+                .send_mouse(MouseEvent {
+                    x: 1,
+                    y: 0,
+                    kind,
+                    mods: KeyMods::NONE,
+                })
+                .unwrap();
+            backend.render();
+        }
+        assert_eq!(
+            forwarded.borrow().len(),
+            2,
+            "{mode:?}: a fresh middle press recovers from a lost release"
+        );
+    }
+}

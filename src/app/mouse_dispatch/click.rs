@@ -216,14 +216,28 @@ pub(crate) fn transition_right_click<C: Component, T: MouseDispatchCtx<C>>(
 }
 
 // Resolve tab geometry in the framework, including scrolling, clipping and overflow.
-fn dispatch_context_menu(tree: &NodeTree, mut hit: NodeId, mouse: MouseEvent) -> bool {
+fn dispatch_context_menu(tree: &NodeTree, hit: NodeId, mouse: MouseEvent) -> bool {
+    dispatch_secondary_click(tree, hit, mouse, false)
+}
+
+fn dispatch_secondary_click(
+    tree: &NodeTree,
+    mut hit: NodeId,
+    mouse: MouseEvent,
+    middle: bool,
+) -> bool {
     loop {
         let node = tree.node(hit);
         match &node.kind {
             NodeKind::MouseRegion(region)
                 if mouse::mouse_region_accepts_point(region, node.rect, mouse.x, mouse.y) =>
             {
-                if let Some(callback) = &region.on_context_menu {
+                let callback = if middle {
+                    &region.on_middle_click
+                } else {
+                    &region.on_context_menu
+                };
+                if let Some(callback) = callback {
                     callback.emit(crate::core::event::MouseRegionEvent {
                         x: mouse.x,
                         y: mouse.y,
@@ -237,7 +251,7 @@ fn dispatch_context_menu(tree: &NodeTree, mut hit: NodeId, mouse: MouseEvent) ->
                     return true;
                 }
             }
-            NodeKind::DraggableTabBar(bar) if !bar.disabled => {
+            NodeKind::DraggableTabBar(bar) if !middle && !bar.disabled => {
                 if let Some(callback) = &bar.on_context_menu {
                     let index = context_menu_tab_index(bar, node.rect, mouse);
                     callback.emit((index, mouse));
@@ -284,13 +298,18 @@ pub(crate) fn transition_middle_click<C: Component, T: MouseDispatchCtx<C>>(
     if !matches!(mouse.kind, MouseKind::Down(MouseButton::Middle)) {
         return None;
     }
-    if ctx.forward_terminal_mouse(mouse) {
-        return Some(true);
-    }
     let Some(hit) = ctx.tree().hit_test(x as i16, y as i16) else {
         return Some(hover_dirty);
     };
+    if !ctx.drag_is_active() && dispatch_secondary_click(ctx.tree(), hit, mouse, true) {
+        ctx.mouse_state().middle_click_press_consumed = true;
+        return Some(true);
+    }
+    if ctx.forward_terminal_mouse(mouse) {
+        return Some(true);
+    }
     if middle_click_draggable_tab_bar(ctx, hit, x, y) {
+        ctx.mouse_state().middle_click_press_consumed = true;
         return Some(true);
     }
     let (_, source) = ctx.pointer_clipboard_actions();

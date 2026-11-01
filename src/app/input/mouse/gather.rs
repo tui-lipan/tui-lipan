@@ -1521,6 +1521,7 @@ mod tests {
             };
             node.kind = NodeKind::MouseRegion(MouseRegionNode {
                 on_context_menu: None,
+                on_middle_click: None,
                 on_click: Some(noop_mouse_cb()),
                 on_mouse_down: None,
                 bubble_mouse_down: false,
@@ -1556,6 +1557,7 @@ mod tests {
             };
             node.kind = NodeKind::MouseRegion(MouseRegionNode {
                 on_context_menu: None,
+                on_middle_click: None,
                 on_click: Some(noop_mouse_cb()),
                 on_mouse_down: None,
                 bubble_mouse_down: false,
@@ -1620,6 +1622,7 @@ mod tests {
             };
             node.kind = NodeKind::MouseRegion(MouseRegionNode {
                 on_context_menu: None,
+                on_middle_click: None,
                 on_click: Some(noop_mouse_cb()),
                 on_mouse_down: None,
                 bubble_mouse_down: false,
@@ -1684,6 +1687,7 @@ mod tests {
             };
             node.kind = NodeKind::MouseRegion(MouseRegionNode {
                 on_context_menu: None,
+                on_middle_click: None,
                 on_click: None,
                 on_mouse_down: Some(noop_mouse_cb()),
                 bubble_mouse_down: false,
@@ -1763,6 +1767,7 @@ mod tests {
             // outer has on_click but inner is closer - inner should win
             node.kind = NodeKind::MouseRegion(MouseRegionNode {
                 on_context_menu: None,
+                on_middle_click: None,
                 on_click: Some(noop_mouse_cb()),
                 on_mouse_down: None,
                 bubble_mouse_down: false,
@@ -1792,6 +1797,7 @@ mod tests {
             node.children = vec![leaf];
             node.kind = NodeKind::MouseRegion(MouseRegionNode {
                 on_context_menu: None,
+                on_middle_click: None,
                 on_click: Some(noop_mouse_cb()),
                 on_mouse_down: None,
                 bubble_mouse_down: false,
@@ -1849,6 +1855,7 @@ mod tests {
             node.children = vec![leaf];
             node.kind = NodeKind::MouseRegion(MouseRegionNode {
                 on_context_menu: None,
+                on_middle_click: None,
                 on_click: Some(noop_mouse_cb()),
                 on_mouse_down: None,
                 bubble_mouse_down: false,

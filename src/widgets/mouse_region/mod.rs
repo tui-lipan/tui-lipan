@@ -27,6 +27,7 @@ pub const DEFAULT_DRAG_THRESHOLD: (u16, u16) = (3, 1);
 pub struct MouseRegion {
     pub(crate) child: Option<Box<Element>>,
     pub(crate) on_click: Option<Callback<MouseRegionEvent>>,
+    pub(crate) on_middle_click: Option<Callback<MouseRegionEvent>>,
     pub(crate) on_context_menu: Option<Callback<MouseRegionEvent>>,
     pub(crate) on_mouse_down: Option<Callback<MouseRegionEvent>>,
     pub(crate) bubble_mouse_down: bool,
@@ -163,6 +164,14 @@ impl MouseRegion {
         self
     }
 
+    /// Handle a middle-button press before terminal forwarding or clipboard paste.
+    ///
+    /// The nearest enabled handler owns the entire gesture without changing focus.
+    pub fn on_middle_click(mut self, cb: Callback<MouseRegionEvent>) -> Self {
+        self.on_middle_click = Some(cb);
+        self
+    }
+
     /// Handle a right-button press before clipboard or ancestor drag behavior.
     /// The nearest enabled handler owns the event without changing focus.
     pub fn on_context_menu(mut self, cb: Callback<MouseRegionEvent>) -> Self {
@@ -284,6 +293,7 @@ impl crate::layout::hash::LayoutHash for MouseRegion {
         self.enabled.hash(hasher);
         self.on_click.is_some().hash(hasher);
         self.on_context_menu.is_some().hash(hasher);
+        self.on_middle_click.is_some().hash(hasher);
         self.on_mouse_down.is_some().hash(hasher);
         self.bubble_mouse_down.hash(hasher);
         self.on_mouse_up.is_some().hash(hasher);
