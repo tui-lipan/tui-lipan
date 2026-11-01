@@ -587,7 +587,7 @@ pub struct KeyUpdate {
 }
 
 impl KeyUpdate {
-    /// Mark the key event as handled.
+    /// Mark the input event as handled.
     pub fn handled(update: Update) -> Self {
         Self {
             handled: true,
@@ -595,7 +595,7 @@ impl KeyUpdate {
         }
     }
 
-    /// Mark the key event as unhandled.
+    /// Mark the input event as unhandled.
     pub fn unhandled(update: Update) -> Self {
         Self {
             handled: false,

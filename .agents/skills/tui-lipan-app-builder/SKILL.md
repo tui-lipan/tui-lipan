@@ -149,6 +149,7 @@ Keep `ui!` focused on composition. Move chrome, repeated styling, and prepared w
 - Focused `Button` activates `on_click` on plain `Enter` and `Space`; custom `on_key` runs first and can consume the key.
 - In headless tests, use `TestBackend::focus_next()` / `focus_prev()` for traversal and `TestBackend::focused_key()` to assert the keyed focus target.
 - Use `KeyUpdate::handled(...)` to stop bubbling and `KeyUpdate::unhandled(...)` to allow it.
+- Editable widgets receive paste first. Declined paste bubbles through `Component::on_paste` from the focused component to its ancestors; return `KeyUpdate::handled(...)` to stop it.
 - Mirror controlled widget state in the parent only when the parent truly needs ownership.
 - Emit child-to-parent communication through callback props, not shared mutable access.
 - Use state flags for overlays and dialogs.

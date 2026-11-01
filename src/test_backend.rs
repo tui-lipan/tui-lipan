@@ -874,10 +874,7 @@ where
             &text,
             crate::PasteOrigin::Clipboard,
         );
-        if result.dirty {
-            self.render();
-        }
-        result.handled
+        result.handled || result.dirty
     }
 
     pub(crate) fn copy_active_selection_for_mouse(

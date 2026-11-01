@@ -542,7 +542,7 @@ pub struct MouseDragEvent {
 
 ### `KeyEvent`
 
-Emitted by: `Component::on_key`, `Component::on_paste`, `KeyHandler`
+Emitted by: `Component::on_key`, `KeyHandler`
 
 ```rust
 pub struct KeyEvent {
