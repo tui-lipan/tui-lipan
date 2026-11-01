@@ -619,6 +619,46 @@ where
     ) -> BubbleKeyResult {
         // Focus can move between frames (Tab, a click, a scripted focus) before the next
         // render; key handlers must see where it is now, not where the last frame left it.
+        self.bubble_input(focused, focused_key, |runtime, scope| {
+            if scope == ScopeId(1) {
+                runtime.ctx.set_active_theme(runtime.theme.clone());
+                runtime.component.on_key(key, &mut runtime.ctx)
+            } else {
+                runtime.components.on_key_by_scope(scope, key)
+            }
+        })
+    }
+
+    pub(crate) fn bubble_paste(
+        &mut self,
+        focused: Option<NodeId>,
+        focused_key: Option<&Key>,
+        text: &str,
+        origin: crate::PasteOrigin,
+    ) -> BubbleKeyResult {
+        // Pasting requires an actual focus target, never an unrelated mounted sibling.
+        if !focused.is_some_and(|id| self.tree.is_valid(id) && !self.tree.node(id).inert) {
+            return BubbleKeyResult {
+                handled: false,
+                dirty: false,
+            };
+        }
+        self.bubble_input(focused, focused_key, |runtime, scope| {
+            if scope == ScopeId(1) {
+                runtime.ctx.set_active_theme(runtime.theme.clone());
+                runtime.component.on_paste(text, origin, &mut runtime.ctx)
+            } else {
+                runtime.components.on_paste_by_scope(scope, text, origin)
+            }
+        })
+    }
+
+    fn bubble_input(
+        &mut self,
+        focused: Option<NodeId>,
+        focused_key: Option<&Key>,
+        mut dispatch: impl FnMut(&mut Self, ScopeId) -> KeyUpdate,
+    ) -> BubbleKeyResult {
         self.focus
             .update_from_tree(&self.tree, focused, focused_key);
         let scope = self.resolve_bubble_key_scope(focused, focused_key);
@@ -628,12 +668,7 @@ where
         let mut cur = scope;
 
         loop {
-            let KeyUpdate { handled, update } = if cur == ScopeId(1) {
-                self.ctx.set_active_theme(self.theme.clone());
-                self.component.on_key(key, &mut self.ctx)
-            } else {
-                self.components.on_key_by_scope(cur, key)
-            };
+            let KeyUpdate { handled, update } = dispatch(self, cur);
 
             if let Some(cmd) = update.command {
                 cmd.run(CommandRuntime {

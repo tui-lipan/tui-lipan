@@ -4,6 +4,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use super::*;
+
+mod component_paste;
 use crate::app::interaction_state::{DragState, MouseRegionDragState, MouseTrackingState};
 use crate::callback::Callback;
 use crate::clipboard::{

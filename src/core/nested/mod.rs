@@ -639,6 +639,33 @@ impl ComponentRegistry {
         update
     }
 
+    pub(crate) fn on_paste_by_scope(
+        &mut self,
+        scope: ScopeId,
+        text: &str,
+        origin: crate::PasteOrigin,
+    ) -> KeyUpdate {
+        let Some(id) = self.scope_to_id.get(&scope).copied() else {
+            return KeyUpdate::unhandled(Update::none());
+        };
+        if !self.is_valid(id) {
+            return KeyUpdate::unhandled(Update::none());
+        }
+        let entry = self.arena.get_mut(id);
+        if let Some(theme) = entry.active_theme.clone() {
+            entry.component.set_active_theme(theme);
+        }
+        entry.component.set_contexts(
+            entry.active_contexts.clone(),
+            entry.active_context_generations.clone(),
+        );
+        let update = entry.component.on_paste(text, origin);
+        if update.update.dirty {
+            self.mark_dirty_path(id);
+        }
+        update
+    }
+
     /// Whether `scope` names a mounted component: the root, or a nested instance that survived the
     /// latest sweep.
     pub(crate) fn is_mounted_scope(&self, scope: ScopeId) -> bool {

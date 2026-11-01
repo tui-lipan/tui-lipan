@@ -806,16 +806,27 @@ where
             chord_action: None,
         };
 
-        let handled = keyboard::dispatch_paste(
+        let widget_handled = keyboard::dispatch_paste(
             &mut self.core.tree,
             self.focused,
             text,
             crate::PasteOrigin::Terminal,
             &mut key_ctx,
         );
+        let (handled, paste_dirty) = if widget_handled {
+            (true, false)
+        } else {
+            let result = self.core.bubble_paste(
+                self.focused,
+                self.focused_key.as_ref(),
+                text,
+                crate::PasteOrigin::Terminal,
+            );
+            (result.handled, result.dirty)
+        };
 
         let pump_dirty = self.pump()?;
-        if handled && !pump_dirty {
+        if (handled || paste_dirty) && !pump_dirty {
             self.render();
         }
 
@@ -848,13 +859,22 @@ where
             &clipboard_config,
             &mut self.copy_feedback,
         );
-        keyboard::dispatch_paste(
+        if keyboard::dispatch_paste(
             &mut self.core.tree,
             focused,
             &text,
             crate::PasteOrigin::Clipboard,
             &mut key_ctx,
-        )
+        ) {
+            return true;
+        }
+        let result = self.core.bubble_paste(
+            focused,
+            self.focused_key.as_ref(),
+            &text,
+            crate::PasteOrigin::Clipboard,
+        );
+        result.handled || result.dirty
     }
 
     pub(crate) fn copy_active_selection_for_mouse(

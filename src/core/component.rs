@@ -576,18 +576,18 @@ impl Update {
     }
 }
 
-/// The return type of `Component::on_key`.
+/// The return type of `Component::on_key` and `Component::on_paste`.
 ///
 /// `handled` is tracked separately from `dirty` and `command`.
 pub struct KeyUpdate {
-    /// Whether the key event was handled.
+    /// Whether the input event was handled.
     pub handled: bool,
     /// State change and side-effect work, same as `Update`.
     pub update: Update,
 }
 
 impl KeyUpdate {
-    /// Mark the key event as handled.
+    /// Mark the input event as handled.
     pub fn handled(update: Update) -> Self {
         Self {
             handled: true,
@@ -595,7 +595,7 @@ impl KeyUpdate {
         }
     }
 
-    /// Mark the key event as unhandled.
+    /// Mark the input event as unhandled.
     pub fn unhandled(update: Update) -> Self {
         Self {
             handled: false,
@@ -645,6 +645,19 @@ pub trait Component: Sized + 'static {
     /// This enables global shortcuts (e.g. `Ctrl+S`) without attaching handlers to every widget.
     /// Return `KeyUpdate::handled` to stop bubbling.
     fn on_key(&mut self, _key: KeyEvent, _ctx: &mut Context<Self>) -> KeyUpdate {
+        KeyUpdate::unhandled(Update::none())
+    }
+
+    /// Handle pasted text declined by the focused widget.
+    ///
+    /// Bubbles from the focused component to its ancestors. Editable children receive the
+    /// paste first. Return `KeyUpdate::handled` to stop bubbling.
+    fn on_paste(
+        &mut self,
+        _text: &str,
+        _origin: crate::PasteOrigin,
+        _ctx: &mut Context<Self>,
+    ) -> KeyUpdate {
         KeyUpdate::unhandled(Update::none())
     }
 

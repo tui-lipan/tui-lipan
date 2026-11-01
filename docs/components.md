@@ -21,6 +21,7 @@ impl Component for MyApp {
 | `view` | Yes | `(&self, &Context<Self>) -> Element` | Return UI tree |
 | `update` | Yes | `(&mut self, Msg, &mut Context<Self>) -> Update` | Handle messages |
 | `init` | No | `(&mut self, &mut Context<Self>) -> Option<Command>` | One-time setup on mount |
+| `on_paste` | No | `(&mut self, &str, PasteOrigin, &mut Context<Self>) -> KeyUpdate` | Handle pasted text declined by the focused widget |
 | `on_key` | No | `(&mut self, KeyEvent, &mut Context<Self>) -> KeyUpdate` | Handle unhandled key events |
 | `on_modifiers_changed` | No, root only | `(&mut self, KeyMods, &mut Context<Self>) -> Update` | React to physically held modifier keys |
 | `on_window_focus_changed` | No, root only | `(&mut self, bool, &mut Context<Self>) -> Update` | React to host terminal/window focus transitions |
@@ -634,3 +635,31 @@ of value type. A restart with zero duration snaps to the requested target.
 An explicit control replaces a pulse on that key. Ordinary pulse reads keep their phase,
 including across changes to their amplitude; unrelated and suspended pulses keep their
 own timelines. Reading a controlled key as a pulse again starts a new pulse cycle.
+
+## Paste routing
+
+Implement `Component::on_paste` to accept text while a non-editable child such as a
+form option list has focus. Inputs, text areas and terminals receive pastes first.
+Unhandled pastes then visit the focused component and its parents, stopping at
+`KeyUpdate::handled`. Sibling components do not receive the paste, and no component
+receives it without a focused node. Focus queries reflect the current focus.
+
+```rust,ignore
+fn on_paste(
+    &mut self,
+    text: &str,
+    _origin: PasteOrigin,
+    ctx: &mut Context<Self>,
+) -> KeyUpdate {
+    ctx.state.custom_answer = text.to_owned();
+    ctx.state.editing = true;
+    ctx.request_focus("custom-answer");
+    KeyUpdate::handled(Update::layout())
+}
+```
+
+`PasteOrigin` distinguishes terminal paste events from clipboard text delivered by
+mouse paste. Updates and commands returned by the hook run in the receiving
+component's scope, just as for `on_key`. Return `KeyUpdate::unhandled` to let a
+parent handle the text. An editable child that accepts the paste prevents the
+component hook from running.

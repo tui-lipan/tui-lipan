@@ -1163,7 +1163,13 @@ impl<C: Component> AppRunner<C> {
             dirty_override: None,
             chord_action: None,
         };
-        keyboard::dispatch_paste(&mut self.core.tree, focused, text, origin, &mut key_ctx)
+        if keyboard::dispatch_paste(&mut self.core.tree, focused, text, origin, &mut key_ctx) {
+            return true;
+        }
+        let result = self
+            .core
+            .bubble_paste(focused, self.focus.focused_key.as_ref(), text, origin);
+        result.handled || result.dirty
     }
 
     pub(crate) fn paste_from_source(&mut self, source: crate::clipboard::PasteSource) -> bool {
