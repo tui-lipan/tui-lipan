@@ -31,10 +31,10 @@ pub(crate) fn resolve_state_cascade(base: Style, layers: &[StateLayer<'_>]) -> S
     for layer in layers {
         match layer.durability {
             Durability::Durable => {
-                resolved = resolved.patch(*layer.style);
+                resolved = patch_state_layer(resolved, *layer.style);
             }
             Durability::Transient => {
-                resolved = resolved.patch(concrete_state_style(*layer.style));
+                resolved = patch_state_layer(resolved, concrete_state_style(*layer.style));
                 let effects = transient_effect_style(*layer.style);
                 if !effects.is_empty() {
                     transient_effects.push(effects);
@@ -44,10 +44,23 @@ pub(crate) fn resolve_state_cascade(base: Style, layers: &[StateLayer<'_>]) -> S
     }
 
     for effects in transient_effects {
-        resolved = resolved.patch(effects);
+        resolved = patch_state_layer(resolved, effects);
     }
 
     resolved
+}
+
+/// A state cascade may not yet have the content colours that pending transforms
+/// operate on. Retain those transforms until a later layer supplies that channel.
+fn patch_state_layer(base: Style, overlay: Style) -> Style {
+    let mut patched = base.patch(overlay);
+    if patched.fg.is_none() && overlay.fg_transform.is_none() {
+        patched.fg_transform = base.fg_transform;
+    }
+    if patched.bg.is_none() && overlay.bg_transform.is_none() {
+        patched.bg_transform = base.bg_transform;
+    }
+    patched
 }
 
 fn concrete_state_style(style: Style) -> Style {

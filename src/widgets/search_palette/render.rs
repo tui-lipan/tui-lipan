@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::style::{Length, RowStylePolicy, Span, Style};
 use crate::utils::gradient::{ColorGradient, GradientRange};
-use crate::widgets::list::ListItemSpinnerSlot;
+use crate::widgets::list::{ListItemGutterKind, ListItemSpinnerSlot, ListItemStatusKind};
 use crate::widgets::{
     ListItem, ListItemGutter, ListItemLine, ListItemStatus, ListSymbolPosition, Spinner,
 };
@@ -37,6 +37,7 @@ pub(super) struct RenderStyles {
     pub primary_min_label_width: Option<Length>,
     pub line_width: Option<u16>,
     pub highlight: Style,
+    pub disabled: Style,
 }
 
 #[derive(Clone, Copy)]
@@ -264,7 +265,119 @@ fn render_result<T>(
         rendered = rendered.gutter(gutter).gutter_line(gutter_line);
     }
 
+    if item.disabled {
+        mute_item(&mut rendered, styles.disabled);
+    }
     Some(rendered)
+}
+
+fn mute_spans(spans: &mut [Span], style: Style) {
+    for span in spans {
+        span.style = span.style.patch(style);
+        span.row_style_policy = RowStylePolicy::PreserveForeground;
+    }
+}
+
+fn mute_spinner(spinner: &mut ListItemSpinnerSlot, style: Style) {
+    spinner.style = spinner.style.patch(style);
+    spinner.label_style = spinner.label_style.patch(style);
+    spinner.preserve_foreground = true;
+}
+
+fn mute_line_spinners(
+    label: &mut Option<ListItemSpinnerSlot>,
+    description: &mut Option<ListItemSpinnerSlot>,
+    style: Style,
+) {
+    for spinner in [label, description].into_iter().flatten() {
+        mute_spinner(spinner, style);
+    }
+}
+
+fn mute_status(status: &mut ListItemStatus, style: Style) {
+    match &mut status.kind {
+        ListItemStatusKind::Text(spans) => mute_spans(spans, style),
+        ListItemStatusKind::Spinner(spinner) => mute_spinner(spinner, style),
+    }
+}
+
+fn mute_gutter(gutter: &mut ListItemGutter, style: Style) {
+    match &mut gutter.kind {
+        ListItemGutterKind::Text(spans) => mute_spans(spans, style),
+        ListItemGutterKind::Spinner(spinner) => mute_spinner(spinner, style),
+    }
+}
+
+fn mute_item(item: &mut ListItem, style: Style) {
+    item.pointer_shape = Some(crate::PointerShape::Default);
+    item.style = item.style.patch(style);
+    mute_spans(&mut item.spans, style);
+    mute_spans(&mut item.description_spans, style);
+    mute_line_spinners(
+        &mut item.label_spinner,
+        &mut item.description_spinner,
+        style,
+    );
+    if let Some(status) = &mut item.status {
+        mute_status(status, style);
+    }
+    if let Some(gutter) = &mut item.gutter {
+        mute_gutter(gutter, style);
+    }
+    for line in &mut item.extra_lines {
+        line.style = line.style.patch(style);
+        mute_spans(&mut line.spans, style);
+        mute_spans(&mut line.description_spans, style);
+        mute_line_spinners(
+            &mut line.label_spinner,
+            &mut line.description_spinner,
+            style,
+        );
+    }
+}
+
+fn item_spans(text: &str, hits: &[u32], base: Style, highlight: Style, item: Style) -> Vec<Span> {
+    let base = if item.is_empty() {
+        base
+    } else {
+        base.patch(item)
+    };
+    let mut spans = highlight_spans(text, hits, base, highlight);
+    if item.fg.is_some() || item.fg_transform.is_some() {
+        for span in &mut spans {
+            span.row_style_policy = RowStylePolicy::PreserveForeground;
+        }
+    }
+    spans
+}
+
+fn label_lines<T>(
+    item: &SearchItem<T>,
+    hits: &[u32],
+    base: Style,
+    highlight: Style,
+) -> Vec<Vec<Span>> {
+    let mut offset = 0;
+    item.label
+        .split('\n')
+        .map(|line| {
+            let end = offset + line.chars().count() as u32;
+            let local_hits: Vec<_> = hits
+                .iter()
+                .copied()
+                .filter(|hit| *hit >= offset && *hit < end)
+                .map(|hit| hit - offset)
+                .collect();
+            offset = end + 1;
+            item_spans(
+                line,
+                &local_hits,
+                base,
+                highlight,
+                item.label_style.as_deref().copied().unwrap_or_default(),
+            )
+        })
+        .collect()
 }
 
 fn default_render<T>(
@@ -284,12 +397,10 @@ fn default_render<T>(
     } else {
         styles.item
     };
-    let mut label_spans = highlight_spans(
-        &item.label,
-        &highlight.label_hits,
-        label_style,
-        styles.highlight,
-    );
+    let mut lines =
+        label_lines(item, &highlight.label_hits, label_style, styles.highlight).into_iter();
+    let mut label_spans = lines.next().unwrap_or_default();
+    let label_continuations: Vec<_> = lines.map(ListItemLine::from_spans).collect();
 
     let is_focused = selected_result_index == Some(result_idx);
     let explicit_focused_description = if is_focused {
@@ -316,11 +427,17 @@ fn default_render<T>(
         .as_ref()
         .and_then(|d| d.left.as_ref())
         .map(|desc| {
-            let spans = highlight_spans(
+            let right_style = if styles.description_placement == DescriptionPlacement::Right {
+                item.right_style.as_deref().copied().unwrap_or_default()
+            } else {
+                Style::default()
+            };
+            let spans = item_spans(
                 desc,
                 &highlight.description_hits,
                 description_style,
                 styles.highlight,
+                right_style,
             );
             if explicit_description_override.is_some() {
                 disable_row_style_for_spans(spans)
@@ -362,7 +479,7 @@ fn default_render<T>(
     let mut primary_right_hover = explicit_description_override.is_none();
     let mut primary_truncate_description_first = false;
     let mut top_lines: Vec<ListItemLine> = Vec::new();
-    let mut bottom_lines: Vec<ListItemLine> = Vec::new();
+    let mut bottom_lines: Vec<ListItemLine> = label_continuations;
 
     if let Some(desc_spans) = description_spans {
         let overflow = effective_description_overflow(
@@ -478,11 +595,12 @@ fn default_render<T>(
                     .row_style_policy(description_row_policy),
             );
         }
-        let desc_right_spans = highlight_spans(
+        let desc_right_spans = item_spans(
             right_text,
             &highlight.description_right_hits,
             description_style,
             styles.highlight,
+            item.right_style.as_deref().copied().unwrap_or_default(),
         );
         if !desc_right_spans.is_empty() && styles.primary_truncate_description_first {
             primary_truncate_description_first = true;
@@ -672,19 +790,20 @@ fn truncate_spans_with_ellipsis(spans: &[Span], max_width: u16) -> Vec<Span> {
     let ellipsis = "…";
     let ellipsis_width = UnicodeWidthStr::width(ellipsis) as u16;
     if max_width <= ellipsis_width {
-        let style = spans.last().map(|span| span.style).unwrap_or_default();
-        return vec![Span::new(ellipsis).style(style)];
+        return vec![span_with_text(spans.last(), ellipsis)];
     }
 
     let target = max_width.saturating_sub(ellipsis_width);
     let (mut prefix, _) = take_prefix_spans(spans, target);
-    let style = prefix
-        .last()
-        .map(|span| span.style)
-        .or_else(|| spans.last().map(|span| span.style))
-        .unwrap_or_default();
-    prefix.push(Span::new(ellipsis).style(style));
+    let ellipsis = span_with_text(prefix.last().or_else(|| spans.last()), ellipsis);
+    prefix.push(ellipsis);
     prefix
+}
+
+fn span_with_text(template: Option<&Span>, text: &str) -> Span {
+    let mut span = template.cloned().unwrap_or_else(|| Span::new(""));
+    span.content = Arc::from(text);
+    span
 }
 
 fn take_prefix_spans(spans: &[Span], max_width: u16) -> (Vec<Span>, Vec<Span>) {
@@ -731,13 +850,13 @@ fn take_prefix_spans(spans: &[Span], max_width: u16) -> (Vec<Span>, Vec<Span>) {
 
         if split_byte > 0 {
             let head = &text[..split_byte];
-            prefix.push(Span::new(head.to_owned()).style(span.style));
+            prefix.push(span_with_text(Some(span), head));
         }
 
         if split_byte < text.len() {
             let tail = &text[split_byte..];
             if !tail.is_empty() {
-                suffix.push(Span::new(tail.to_owned()).style(span.style));
+                suffix.push(span_with_text(Some(span), tail));
             }
         }
 
@@ -843,6 +962,35 @@ mod tests {
             primary_min_label_width: None,
             line_width: None,
             highlight: Style::default(),
+            disabled: Style::new().dim(),
+        }
+    }
+
+    #[test]
+    fn truncation_keeps_semantic_foreground_policy_on_fragments_and_ellipsis() {
+        let spans = super::item_spans(
+            "long hint",
+            &[],
+            Style::default(),
+            Style::default(),
+            Style::new().fg(Color::Cyan),
+        );
+        for width in [1, 5] {
+            let truncated = super::truncate_spans_with_ellipsis(&spans, width);
+            assert!(
+                truncated
+                    .iter()
+                    .all(|span| span.row_style_policy == RowStylePolicy::PreserveForeground)
+            );
+            assert!(
+                truncated
+                    .iter()
+                    .all(|span| span.style.fg == Style::new().fg(Color::Cyan).fg)
+            );
+            assert_eq!(
+                truncated.last().map(|span| span.content.as_ref()),
+                Some("…")
+            );
         }
     }
 
@@ -928,6 +1076,7 @@ mod tests {
                 primary_min_label_width: None,
                 line_width: Some(20),
                 highlight: Style::default(),
+                disabled: Style::new().dim(),
             },
             0,
             ScoreRender {
@@ -965,6 +1114,7 @@ mod tests {
                 primary_min_label_width: None,
                 line_width: Some(20),
                 highlight: Style::default(),
+                disabled: Style::new().dim(),
             },
             0,
             ScoreRender {
@@ -1016,6 +1166,7 @@ mod tests {
                 primary_min_label_width: None,
                 line_width: Some(20),
                 highlight: Style::default(),
+                disabled: Style::new().dim(),
             },
             0,
             ScoreRender {
@@ -1052,6 +1203,7 @@ mod tests {
                 primary_min_label_width: None,
                 line_width: Some(11),
                 highlight: Style::default(),
+                disabled: Style::new().dim(),
             },
             0,
             ScoreRender {
@@ -1094,6 +1246,7 @@ mod tests {
                 primary_min_label_width: None,
                 line_width: Some(10),
                 highlight: Style::default(),
+                disabled: Style::new().dim(),
             },
             0,
             ScoreRender {
@@ -1131,6 +1284,7 @@ mod tests {
                 primary_min_label_width: None,
                 line_width: Some(30),
                 highlight: Style::default(),
+                disabled: Style::new().dim(),
             },
             0,
             ScoreRender {
@@ -1176,6 +1330,7 @@ mod tests {
                 primary_min_label_width: None,
                 line_width: Some(10),
                 highlight: Style::default(),
+                disabled: Style::new().dim(),
             },
             0,
             ScoreRender {
@@ -1213,6 +1368,7 @@ mod tests {
                 primary_min_label_width: None,
                 line_width: Some(11),
                 highlight: Style::default(),
+                disabled: Style::new().dim(),
             },
             0,
             ScoreRender {
@@ -1255,6 +1411,7 @@ mod tests {
                 primary_min_label_width: None,
                 line_width: Some(20),
                 highlight: Style::default(),
+                disabled: Style::new().dim(),
             },
             0,
             ScoreRender {
@@ -1291,6 +1448,7 @@ mod tests {
                 primary_min_label_width: None,
                 line_width: Some(10),
                 highlight: Style::default(),
+                disabled: Style::new().dim(),
             },
             0,
             ScoreRender {
@@ -1335,6 +1493,7 @@ mod tests {
                 primary_min_label_width: None,
                 line_width: Some(5),
                 highlight: Style::default(),
+                disabled: Style::new().dim(),
             },
             0,
             ScoreRender {
@@ -1370,6 +1529,7 @@ mod tests {
                 primary_min_label_width: None,
                 line_width: Some(20),
                 highlight: Style::default(),
+                disabled: Style::new().dim(),
             },
             0,
             ScoreRender {
@@ -1407,6 +1567,7 @@ mod tests {
                 primary_min_label_width: None,
                 line_width: Some(4),
                 highlight: Style::default(),
+                disabled: Style::new().dim(),
             },
             0,
             ScoreRender {
@@ -1445,6 +1606,7 @@ mod tests {
                 primary_min_label_width: None,
                 line_width: Some(20),
                 highlight: Style::default(),
+                disabled: Style::new().dim(),
             },
             0,
             ScoreRender {
@@ -1485,6 +1647,7 @@ mod tests {
                 primary_min_label_width: None,
                 line_width: Some(20),
                 highlight: Style::default(),
+                disabled: Style::new().dim(),
             },
             0,
             ScoreRender {

@@ -370,6 +370,8 @@ pub(crate) struct ListItemSpinnerSlot {
     pub leading: u16,
     pub style: Style,
     pub label_style: Style,
+    /// Keep semantic foregrounds when the row selection supplies its own colour.
+    pub preserve_foreground: bool,
 }
 
 impl ListItemSpinnerSlot {
@@ -385,6 +387,7 @@ impl ListItemSpinnerSlot {
             leading: 0,
             style: spinner.style,
             label_style: spinner.label_style,
+            preserve_foreground: false,
         }
     }
 
@@ -474,6 +477,7 @@ impl From<Spinner> for ListItemGutter {
                 leading: 0,
                 style: spinner.style,
                 label_style: spinner.label_style,
+                preserve_foreground: false,
             }),
         }
     }
@@ -533,6 +537,7 @@ impl From<Spinner> for ListItemStatus {
                 leading: 0,
                 style: spinner.style,
                 label_style: spinner.label_style,
+                preserve_foreground: false,
             }),
         }
     }

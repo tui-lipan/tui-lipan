@@ -29,6 +29,7 @@
 //! as a single example, so new sketches never touch build config.
 
 mod login;
+mod search_palette_items;
 
 use tui_lipan::Result;
 
@@ -36,7 +37,10 @@ use tui_lipan::Result;
 type SketchFn = fn() -> Result<()>;
 
 /// Every sketch that can be run by name.
-const SKETCHES: &[(&str, SketchFn)] = &[("login", login::sketch)];
+const SKETCHES: &[(&str, SketchFn)] = &[
+    ("login", login::sketch),
+    ("search-palette-items", search_palette_items::sketch),
+];
 
 fn main() -> Result<()> {
     let requested: Vec<String> = std::env::args().skip(1).collect();

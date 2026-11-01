@@ -6,10 +6,8 @@ use crate::callback::Callback;
 use crate::core::component::{Component, Context, Update};
 use crate::core::element::Element;
 use crate::overlay::OverlayScope;
-use crate::style::{Align, BorderStyle, Length, Padding, RichText, Span, Style};
-use crate::widgets::{
-    ItemDescription, ListItem, Modal, SearchEntry, SearchHighlight, SearchItem, SearchPalette,
-};
+use crate::style::{Align, BorderStyle, Length, Padding, RichText, Style};
+use crate::widgets::{ItemDescription, Modal, SearchEntry, SearchPalette};
 
 #[derive(Clone, PartialEq)]
 struct CommandPaletteProps {
@@ -32,13 +30,6 @@ struct CommandPaletteProps {
 #[derive(Clone, Default, PartialEq)]
 struct CommandPaletteState {
     entries: Vec<SearchEntry<CommandId>>,
-    disabled_ids: Vec<CommandId>,
-}
-
-#[derive(Clone, PartialEq)]
-struct DisabledRenderStyle {
-    style: Style,
-    disabled_ids: Vec<CommandId>,
 }
 
 struct CommandPaletteComponent;
@@ -83,53 +74,9 @@ impl Component for CommandPaletteComponent {
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {
-        let muted_style = ctx.theme().muted.dim();
-        let disabled_style = DisabledRenderStyle {
-            style: muted_style,
-            disabled_ids: ctx.state.disabled_ids.clone(),
-        };
-        let render_item = Arc::new(
-            move |item: &SearchItem<CommandId>, _highlight: &SearchHighlight| {
-                if !disabled_style
-                    .disabled_ids
-                    .iter()
-                    .any(|id| id == &item.value)
-                {
-                    return None;
-                }
-
-                let mut spans = vec![Span::new(item.label.clone()).style(disabled_style.style)];
-                if let Some(description) = &item.description
-                    && let Some(left) = &description.left
-                {
-                    spans.push(Span::new(" - ").style(disabled_style.style));
-                    spans.push(Span::new(left.clone()).style(disabled_style.style));
-                }
-
-                let mut row = ListItem::from_spans(spans).style(disabled_style.style);
-                if let Some(description) = &item.description
-                    && let Some(right) = &description.right
-                {
-                    row = row.description_spans([
-                        Span::new(" ").style(disabled_style.style),
-                        Span::new(right.clone()).style(disabled_style.style),
-                    ]);
-                }
-
-                Some(row)
-            },
-        );
-
         let registry = ctx.command_registry();
-        let disabled_for_activate = ctx.state.disabled_ids.clone();
         let on_close_for_activate = ctx.props.on_close.clone();
         let on_activate = Callback::new(move |event: crate::widgets::SearchEvent<CommandId>| {
-            if disabled_for_activate
-                .iter()
-                .any(|id| id == &event.item.value)
-            {
-                return;
-            }
             if registry.execute(event.item.value.clone())
                 && let Some(on_close) = &on_close_for_activate
             {
@@ -144,8 +91,7 @@ impl Component for CommandPaletteComponent {
             .list_border(false)
             .list_selection_full_width(true)
             .preserve_groups(true)
-            .on_activate(on_activate)
-            .render_item(render_item);
+            .on_activate(on_activate);
 
         let mut modal = Modal::new()
             .animation(ctx.props.animation.clone())
@@ -178,15 +124,13 @@ impl Component for CommandPaletteComponent {
 
 fn rebuild_state(ctx: &mut Context<CommandPaletteComponent>) {
     let registry = ctx.command_registry();
-    let (entries, disabled_ids) = build_palette_entries(&registry, ctx.props.show_disabled);
-    ctx.state.entries = entries;
-    ctx.state.disabled_ids = disabled_ids;
+    ctx.state.entries = build_palette_entries(&registry, ctx.props.show_disabled);
 }
 
 fn build_palette_entries(
     registry: &CommandRegistry,
     show_disabled: bool,
-) -> (Vec<SearchEntry<CommandId>>, Vec<CommandId>) {
+) -> Vec<SearchEntry<CommandId>> {
     let mut commands: Vec<CommandEntry> = registry.entries();
     commands.sort_by(|left, right| {
         let left_category = left.category.as_deref().unwrap_or("General");
@@ -198,15 +142,11 @@ fn build_palette_entries(
     });
 
     let mut entries = Vec::new();
-    let mut disabled_ids = Vec::new();
     let mut active_category: Option<Arc<str>> = None;
 
     for command in commands {
-        if !command.enabled {
-            disabled_ids.push(command.id.clone());
-            if !show_disabled {
-                continue;
-            }
+        if !command.enabled && !show_disabled {
+            continue;
         }
 
         let category = command.category.unwrap_or_else(|| Arc::from("General"));
@@ -215,7 +155,8 @@ fn build_palette_entries(
             active_category = Some(category);
         }
 
-        let mut entry = SearchEntry::item(command.label.clone(), command.id.clone());
+        let mut entry =
+            SearchEntry::item(command.label.clone(), command.id.clone()).disabled(!command.enabled);
         if command.description.is_some() || command.keybinding_hint.is_some() {
             let mut description = ItemDescription::new();
             if let Some(left) = command.description {
@@ -229,7 +170,7 @@ fn build_palette_entries(
         entries.push(entry);
     }
 
-    (entries, disabled_ids)
+    entries
 }
 
 /// Composite command palette built from the runtime [`CommandRegistry`].

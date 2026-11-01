@@ -204,6 +204,11 @@ row/current-item selections use `theme.selection`, while text/range selections
 in `Input`, `TextArea`, `DocumentView`, `Terminal`, and `HexArea` use
 `theme.text_selection`.
 
+For List rows that are both active and selected, selection takes precedence
+over active styling on the channels it specifies. Selection modifiers or a
+foreground override retain an active background transform; a selection background
+override retains an active foreground transform. Active symbols retain their own priority.
+
 Active row/tab slots inherit the selection theme role by default. This keeps
 active-row and active-tab overlays visually aligned with selected items unless
 you replace or extend the active slot.
