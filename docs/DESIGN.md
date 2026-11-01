@@ -332,3 +332,16 @@ batch after the frame's host writes and flush complete without output being disc
 renders suspend token collection. Direct graphics presentations use the same post-success observer
 and committed plan visibility. Host output failure leaves the transition pending and emits no
 presentation report.
+
+### Component expansion stack usage
+
+Component expansion selects a container-specific helper before moving the element
+parameters. Keep the dispatch match limited to selecting a function pointer, then
+call it once. A match that moves the parameters separately in every arm reserves
+space for each move in an unoptimized build. Likewise, combining all container
+implementations in one recursive function reserves stack space for unrelated
+branches at every depth.
+
+The nested-component regression wraps a component in pointer, drag, frame and
+popup containers and expands it twice on the default test stack. Keep this test
+on the default stack. Raising `RUST_MIN_STACK` would hide expansion regressions.
