@@ -405,3 +405,10 @@ VStack::new()
 `FocusAccordion::sticky` defaults to `true`, retaining the last focused child for sizing when real
 focus leaves the stack. Set it to `false` to return all panels to normal sizing. Children need
 unique keys for sticky tracking.
+
+### Focused paste bubbling
+
+After the focused widget declines pasted text, `Component::on_paste` receives it
+in the owning component, then its ancestors. Editable children keep normal paste
+handling. The hook sees current focus, and `KeyUpdate::handled` stops bubbling.
+See [paste routing](components.md#paste-routing) for an editor-opening example.

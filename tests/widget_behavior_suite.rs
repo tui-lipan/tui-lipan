@@ -115,5 +115,7 @@ mod tree_pages_and_clicks;
 #[path = "suites/widget_behavior/tree_row_icons.rs"]
 mod tree_row_icons;
 
+#[path = "suites/widget_behavior/component_paste.rs"]
+mod component_paste;
 #[path = "suites/widget_behavior/context_menu_routing.rs"]
 mod context_menu_routing;

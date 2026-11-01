@@ -46,6 +46,7 @@ pub(crate) trait ErasedComponent {
     fn view(&self) -> Element;
     fn update(&mut self, msg: Box<dyn Any>) -> crate::Result<Update>;
     fn on_key(&mut self, key: KeyEvent) -> KeyUpdate;
+    fn on_paste(&mut self, text: &str, origin: crate::PasteOrigin) -> KeyUpdate;
     fn unmount(&mut self);
 }
 
@@ -149,6 +150,10 @@ impl<C: Component> ErasedComponent for Mounted<C> {
         self.component.on_key(key, &mut self.ctx)
     }
 
+    fn on_paste(&mut self, text: &str, origin: crate::PasteOrigin) -> KeyUpdate {
+        self.component.on_paste(text, origin, &mut self.ctx)
+    }
+
     fn unmount(&mut self) {
         self.component.unmount(&mut self.ctx);
     }
@@ -215,6 +220,10 @@ impl ErasedComponent for EmptyComponent {
     }
 
     fn on_key(&mut self, _key: KeyEvent) -> KeyUpdate {
+        KeyUpdate::unhandled(Update::none())
+    }
+
+    fn on_paste(&mut self, _text: &str, _origin: crate::PasteOrigin) -> KeyUpdate {
         KeyUpdate::unhandled(Update::none())
     }
 
