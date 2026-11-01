@@ -122,3 +122,6 @@ mod context_menu_routing;
 
 #[path = "suites/widget_behavior/mouse_region_middle_click.rs"]
 mod mouse_region_middle_click;
+
+#[path = "suites/widget_behavior/search_palette_items.rs"]
+mod search_palette_items;

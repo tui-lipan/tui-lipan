@@ -591,23 +591,28 @@ fn resolve_list_row_state_style(input: ListRowStateStyleInput<'_>) -> Style {
     let selection_style = if selected { selection_style } else { &empty };
     let active_style = if active { active_style } else { &empty };
 
-    resolve_state_cascade(
-        base,
-        &[
-            StateLayer {
-                style: hover_style,
-                durability: Durability::Transient,
-            },
-            StateLayer {
-                style: selection_style,
-                durability: Durability::Durable,
-            },
-            StateLayer {
-                style: active_style,
-                durability: Durability::Durable,
-            },
-        ],
-    )
+    let layers = [
+        StateLayer {
+            style: hover_style,
+            durability: Durability::Transient,
+        },
+        StateLayer {
+            style: active_style,
+            durability: Durability::Durable,
+        },
+        StateLayer {
+            style: selection_style,
+            durability: Durability::Durable,
+        },
+    ];
+    // An empty trailing patch would resolve and discard an active transform
+    // before it has a row background to operate on.
+    let layers = if selection_style.is_empty() {
+        &layers[..2]
+    } else {
+        &layers[..]
+    };
+    resolve_state_cascade(base, layers)
 }
 
 pub(crate) fn render_list(params: ListRenderParams<'_, '_, '_>) {
@@ -1081,7 +1086,7 @@ pub(crate) fn render_list(params: ListRenderParams<'_, '_, '_>) {
             // they must override span-level values (which come from item_style).
             // We capture the override style here and patch it onto each span
             // after list_rich_text_span_style, which otherwise lets span fields
-            // take precedence. Hover < selection < active.
+            // take precedence. Hover < active < selection.
             let left_row_state_style = resolve_list_row_state_style(ListRowStateStyleInput {
                 base: Style::default(),
                 hovered: is_item_hovered && hover_left,
@@ -3975,7 +3980,7 @@ mod tests {
     }
 
     #[test]
-    fn active_style_overrides_selection_style_when_both_apply() {
+    fn selection_style_overrides_active_style_when_both_apply() {
         let item = ListItem::new("Label").active(true);
 
         let rect = Rect {
@@ -4053,7 +4058,7 @@ mod tests {
             .expect("draw");
 
         let buffer = terminal.backend().buffer();
-        assert_eq!(buffer[(0, 0)].bg, ratatui::style::Color::Green);
+        assert_eq!(buffer[(0, 0)].bg, ratatui::style::Color::Blue);
     }
 
     #[test]
@@ -4072,7 +4077,7 @@ mod tests {
     }
 
     #[test]
-    fn active_concrete_style_overrides_selection_and_hover_concrete_style_when_hovered() {
+    fn selection_concrete_style_overrides_active_and_hover_when_hovered() {
         let buffer = draw_list_state_case(DrawListStateCaseInput {
             item: ListItem::new("Label").active(true),
             selected: Some(0),
@@ -4083,7 +4088,7 @@ mod tests {
             mouse_pos: Some((0, 0)),
         });
 
-        assert_eq!(buffer[(0, 0)].bg, ratatui::style::Color::Green);
+        assert_eq!(buffer[(0, 0)].bg, ratatui::style::Color::Blue);
     }
 
     #[test]
@@ -4104,7 +4109,7 @@ mod tests {
     }
 
     #[test]
-    fn selected_active_transform_applies_once_after_selection_concrete_bg() {
+    fn selection_concrete_bg_overrides_active_transform() {
         let buffer = draw_list_state_case(DrawListStateCaseInput {
             item: ListItem::new("Label").active(true),
             selected: Some(0),
@@ -4115,7 +4120,7 @@ mod tests {
             mouse_pos: None,
         });
 
-        assert_eq!(buffer[(0, 0)].bg, ratatui::style::Color::Rgb(50, 50, 50));
+        assert_eq!(buffer[(0, 0)].bg, ratatui::style::Color::Rgb(100, 100, 100));
     }
 
     #[test]

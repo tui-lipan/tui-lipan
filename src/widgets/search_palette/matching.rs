@@ -70,6 +70,7 @@ pub(super) fn match_items(
     }
 
     match mode {
+        SearchMatchMode::External => all_item_results(items.len()),
         SearchMatchMode::Fuzzy => match_items_fuzzy(items, query, case_matching, normalization),
         SearchMatchMode::Hybrid => hybrid::match_items_hybrid(items, query, case_matching),
     }

@@ -231,6 +231,11 @@ literals so newly added fields do not break app code.
 
 > **Pill / capsule selection:** pair `selection_symbol` (left cap) with `selection_symbol_right` (right cap). Color both caps via `selection_symbol_style` with foreground equal to the selection background and background equal to the row/terminal background, e.g. `selection_symbol(Some(""))`, `selection_symbol_right(Some(""))`, `selection_symbol_style(Style::new().fg(sel_bg).bg(row_bg))`. That foreground is a fill, not text: caps keep it even when it would fail WCAG against the row body (set `contrast_policy` on the symbol style to opt back in). The trailing cap renders only on the selected row and always closes the **right edge of the highlighted region**. The highlight spans the full row width only when you opt in with `selection_full_width(true)` (or when right-aligned content must be pushed to the edge); otherwise it hugs the content. `item_horizontal_padding` stays interior to the highlight and does **not** force a full-width bar; on the selected row, start/end caps consume that inset so unselected rows keep their padding while the caps sit in those cells. Reaching the edge is decided per **item**, not per visual line: if any line of a multi-line row carries a description, every line of that row spans the full width, so one row never draws two differently sized bars. So `selection_full_width(false)` gives a tight capsule around the label (plus any remaining padding), and `selection_full_width(true)` gives a full-width capsule with the cap at the row's right edge. A right-positioned `active_symbol` shares this slot and takes priority when both apply.
 
+When a List row is both active and selected, selection styles take precedence
+over active styles. The active symbol keeps its existing priority. If an app
+previously relied on an active background replacing the cursor background,
+move that styling to `selection_style` or `unfocused_selection_style`.
+
 > Active row rendering is independent from selection. Use `active_symbol_position(ListSymbolPosition::Right)` to render the active marker after the label instead of in the left symbol column. When using the right position, include any desired separator in the symbol itself (for example `" ✓"`).
 
 > `item_horizontal_padding` and `header_horizontal_padding` accept `Padding`, but only `left`/`right` are applied in `List`.

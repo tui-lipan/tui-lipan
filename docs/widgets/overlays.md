@@ -506,6 +506,55 @@ Item text is typically built from `SearchItem::new(label, value)` and optional
 `.description("...")`. By default, description renders inline as
 `label - description` and uses `description_style`.
 
+Per-item builders:
+
+| Builder | Type | Default / behaviour |
+|---------|------|---------------------|
+| `label_style` | `Style` | No override; patches the palette label style |
+| `right_style` | `Style` | No override; patches right-hand metadata styling |
+| `disabled` | `bool` | `false`; muted and selectable, activation blocked |
+
+When migrating code that constructs `SearchItem` with a struct literal, prefer
+`SearchItem::new(label, value)` and its builders. Otherwise add `label_style: None`,
+`right_style: None`, and `disabled: false` to the literal. Exhaustive matches on
+`SearchMatchMode` must handle the new `External` variant.
+
+Labels split on `\n` in the default renderer, including empty and trailing lines.
+Descriptions and right-hand metadata attach to the first label line; above/below
+placement surrounds the complete label block. Match indices still refer to the
+original label, including newline characters.
+
+Use `SearchItem::label_style(Style)` and `SearchItem::right_style(Style)` to patch
+the palette's label and right-hand text styles per item. These keep the default
+layout, truncation, and match highlights. Explicit per-item foreground colours
+survive selection, while List supplies the selection background. Match styles
+patch over item styles. Active label styles apply before the per-item style;
+focused/active description overrides apply before the per-item right style.
+
+`SearchItem::disabled(true)` and `SearchEntry::disabled(true)` mute the row using
+the theme's muted style with dim text, including custom-rendered text. Disabled
+rows remain selectable for inspection and emit `on_select`, but never emit
+`on_activate` through Enter or mouse double-click. Navigation and result counts
+include them. CommandPalette uses this behaviour for `show_disabled(true)`.
+
+For async or server-backed filtering, use `.match_mode(SearchMatchMode::External)`
+and `.on_query_change(...)` to start the caller's search. Replace `.items(...)`
+or `.entries(...)` when results arrive. The palette retains its input and
+navigation and preserves the selected item across result updates using
+`item_key`, or value equality when no key is supplied. External mode displays
+all supplied items in source order, regardless of query, priority,
+`preserve_item_order`, or `sync_match_limit`, and does not run a background matcher.
+Scores are zero and match highlights are empty. Group chrome follows the usual
+`preserve_groups` rule; set it to `true` to retain headers with a non-empty query.
+The caller must discard stale server responses.
+
+```rust,ignore
+SearchPalette::new()
+    .items(results)
+    .match_mode(SearchMatchMode::External)
+    .on_query_change(start_search)
+```
+
 You can also add hidden aliases with `SearchItem::alias(...)` or
 `SearchItem::aliases(...)`. Aliases are searched and scored like the label,
 but they are never rendered, which makes them useful for abbreviations,
@@ -759,6 +808,16 @@ field may be omitted, so `switchmodel` matches `Switch model`.
       .items(items)
       .match_mode(SearchMatchMode::Hybrid)
   ```
+
+### Custom renderer selection
+
+`render_item` replaces row content. List owns the selection highlight, so a
+renderer should not add its own selected-row background. For semantic colours,
+set `.row_style_policy(RowStylePolicy::PreserveForeground)` on the relevant
+`Span`s. List will retain their foreground colours and apply its selection
+background. `RowStylePolicy::Disabled` opts out of the entire row style and can
+leave holes in the selection. Prefer per-item text styles when the default
+layout meets your needs.
 
 **Standalone ranking** - `rank_search_palette_indices(&[SearchItem<T>], query)` returns each item’s index in the source slice ordered like the palette’s fuzzy results (smart case matching and normalization). Use `rank_search_palette_indices_with_score(..., |index, item, score| ...)` when another signal should boost or demote matched items before final ordering; `NaN` adjusted scores rank after finite scores. Use `rank_search_palette_indices_with_mode(..., match_mode, |index, item, score| ...)` to pick the matching strategy (for example `SearchMatchMode::Hybrid`) while still applying a score adjustment; `_with_score` is the `Fuzzy` shorthand. Use these helpers when another widget owns the query/focus but you need the same ordering for keyboard selection.
 

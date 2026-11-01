@@ -136,6 +136,13 @@ pub struct SearchItem<T> {
     /// order matching produced (score order, or source order under
     /// [`SearchPalette::preserve_item_order`]). Defaults to `0`.
     pub priority: i32,
+    /// Per-item label style, patched over the palette label style.
+    /// Boxed so unstyled items do not carry two full styles.
+    pub label_style: Option<Box<Style>>,
+    /// Per-item right-hand text style, patched over the description style.
+    pub right_style: Option<Box<Style>>,
+    /// Muted and inspectable, but cannot be activated by keyboard or mouse.
+    pub disabled: bool,
     /// User data.
     pub value: T,
 }
@@ -151,8 +158,29 @@ impl<T> SearchItem<T> {
             aliases: Vec::new(),
             active: false,
             priority: 0,
+            label_style: None,
+            right_style: None,
+            disabled: false,
             value,
         }
+    }
+
+    /// Style the label while retaining layout, truncation, and match highlights.
+    pub fn label_style(mut self, style: Style) -> Self {
+        self.label_style = Some(Box::new(style));
+        self
+    }
+
+    /// Style right-hand text while retaining layout and match highlights.
+    pub fn right_style(mut self, style: Style) -> Self {
+        self.right_style = Some(Box::new(style));
+        self
+    }
+
+    /// Mute this item and prevent activation. It remains selectable for inspection.
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
     }
 
     /// Set description. Accepts a plain string or an [`ItemDescription`].
@@ -238,6 +266,7 @@ where
 /// tiered score under `Hybrid`), so multiplicative adjustments such as frecency boosts compose the
 /// same way in either mode. Results are ordered by descending adjusted score, with the source item
 /// index as the tie-breaker; `NaN` adjusted scores rank after finite scores.
+/// [`SearchMatchMode::External`] always returns source order and never calls `score_fn`.
 pub fn rank_search_palette_indices_with_mode<T: Clone + PartialEq, F>(
     items: &[SearchItem<T>],
     query: &str,
@@ -248,7 +277,7 @@ where
     F: FnMut(usize, &SearchItem<T>, u32) -> f64,
 {
     let query = query.trim();
-    if query.is_empty() {
+    if query.is_empty() || match_mode == SearchMatchMode::External {
         return (0..items.len()).collect();
     }
     let entries = matching::build_search_entries(items);
@@ -291,6 +320,18 @@ mod tests {
         SearchItem, SearchMatchMode, rank_search_palette_indices,
         rank_search_palette_indices_with_mode, rank_search_palette_indices_with_score,
     };
+
+    #[test]
+    fn external_ranking_returns_source_order_without_scoring() {
+        let items = [SearchItem::new("unrelated", 0), SearchItem::new("other", 1)];
+        let ranked = rank_search_palette_indices_with_mode(
+            &items,
+            "query",
+            SearchMatchMode::External,
+            |_, _, _| panic!("external mode must not score"),
+        );
+        assert_eq!(ranked, [0, 1]);
+    }
 
     #[test]
     fn rank_search_palette_indices_uses_identity_scoring() {
@@ -478,6 +519,9 @@ pub enum SearchMatchMode {
     /// only matches via exact or substring comparison (no fuzzy/prefix
     /// matching), which suits keybinding-style hints.
     Hybrid,
+    /// Display every supplied item in source order without matching, scoring,
+    /// priority sorting, or a synchronous match cap. The caller owns filtering.
+    External,
 }
 
 /// An entry in the search palette item list.
@@ -517,6 +561,14 @@ impl<T> SearchEntry<T> {
     pub fn description(self, description: impl Into<ItemDescription>) -> Self {
         match self {
             Self::Item(item) => Self::Item(item.description(description)),
+            other => other,
+        }
+    }
+
+    /// Mute an item entry and block activation. No-op for headers and spacers.
+    pub fn disabled(self, disabled: bool) -> Self {
+        match self {
+            Self::Item(item) => Self::Item(item.disabled(disabled)),
             other => other,
         }
     }
@@ -1838,6 +1890,11 @@ impl<T: Clone + PartialEq> SearchPalette<T> {
     }
 
     /// Set a custom renderer for matched items.
+    ///
+    /// List owns the selection highlight. Do not paint a selection background here.
+    /// Use [`crate::style::RowStylePolicy::PreserveForeground`] on semantic spans
+    /// to retain their foreground colours while List applies the selection background.
+    /// Prefer [`SearchItem::label_style`] and [`SearchItem::right_style`] for text styling.
     ///
     /// Return [`Some`] to replace the default rendering for that item, or [`None`] to fall
     /// through to the built-in default renderer.

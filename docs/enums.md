@@ -1066,6 +1066,7 @@ style directly.
 
 | Variant | Description |
 |---------|-------------|
+| `SearchMatchMode::External` | Display caller-filtered results in source order. Ignore query, priority, and match cap; no local scoring or highlights. |
 | `SearchMatchMode::Fuzzy` | Plain `nucleo` fuzzy matching across label, aliases, and description; label matches outrank synonym-only alias hits **(default)** |
 | `SearchMatchMode::Hybrid` | Exact/prefix/word-prefix/substring/fuzzy tiers evaluated independently per field (label, aliases, description, right-hand hint) and ranked in that priority order; any label hit outranks a synonym-only alias hit; weak scattered fuzzy matches are quality-gated and rejected. See `docs/widgets/overlays.md` (Matching config). |
 

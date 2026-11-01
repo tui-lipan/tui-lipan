@@ -200,7 +200,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
 
         // When all items fit within the cap, create_state already computed the
         // complete result set synchronously - nothing to do.
-        if ctx.props.items.len() <= sync_match_limit(&ctx.props) {
+        if matches_synchronously(&ctx.props) {
             return None;
         }
 
@@ -342,7 +342,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                         .and_then(|item| find_item(index, item))
                 });
                 let result_index = ctx.state.selected;
-                if items_changed && ctx.props.items.len() > sync_match_limit(&ctx.props) {
+                if items_changed && !matches_synchronously(&ctx.props) {
                     ctx.state.results = ctx
                         .state
                         .results
@@ -450,6 +450,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                     primary_min_label_width: ctx.props.primary_min_label_width,
                     line_width: effective_search_line_width(ctx),
                     highlight: ctx.props.match_style,
+                    disabled: ctx.theme().muted.dim(),
                 },
                 score: ScoreRender {
                     show: ctx.props.show_scores,
@@ -819,6 +820,9 @@ fn resolve_source_result_index(item_index: Option<usize>, results: &[SearchResul
 }
 
 fn initial_results<T>(props: &SearchPaletteProps<T>, query: &str) -> Vec<SearchResult> {
+    if props.match_mode == SearchMatchMode::External {
+        return all_item_results(props.items.len());
+    }
     if query.trim().is_empty() {
         let cap = props.items.len().min(sync_match_limit(props));
         let mut results = all_item_results(cap);
@@ -826,7 +830,7 @@ fn initial_results<T>(props: &SearchPaletteProps<T>, query: &str) -> Vec<SearchR
         return results;
     }
 
-    if props.items.len() <= sync_match_limit(props) {
+    if matches_synchronously(props) {
         let entries = build_search_entries(&props.items);
         let mut results = match_items(
             &entries,
@@ -853,8 +857,8 @@ fn refresh_results<T: Clone + PartialEq + 'static>(
     ctx.state.pending_preserved_selection = None;
 
     if query.is_empty()
-        && !(ctx.props.items.len() > sync_match_limit(&ctx.props)
-            && matches!(selection, SelectionRefresh::PreserveCurrent { .. }))
+        && (matches_synchronously(&ctx.props)
+            || !matches!(selection, SelectionRefresh::PreserveCurrent { .. }))
     {
         ctx.state.results = initial_results(&ctx.props, query.as_ref());
         ctx.state.results_query = query.clone();
@@ -863,12 +867,12 @@ fn refresh_results<T: Clone + PartialEq + 'static>(
             ctx.props.initial_selected_item_index,
             &ctx.state.results,
         );
-        if ctx.props.items.len() <= sync_match_limit(&ctx.props) {
+        if matches_synchronously(&ctx.props) {
             ctx.state.pending_selection_reset = None;
             sync_current_selection(&ctx.props, &mut ctx.state);
             return Update::layout();
         }
-    } else if ctx.props.items.len() <= sync_match_limit(&ctx.props) {
+    } else if matches_synchronously(&ctx.props) {
         let results = initial_results(&ctx.props, query.as_ref());
         ctx.state.results = results;
         ctx.state.results_query = query.clone();
@@ -990,11 +994,18 @@ fn effective_search_line_width<T: Clone + PartialEq + 'static>(
     if width == 0 { None } else { Some(width) }
 }
 
+fn matches_synchronously<T>(props: &SearchPaletteProps<T>) -> bool {
+    props.match_mode == SearchMatchMode::External || props.items.len() <= sync_match_limit(props)
+}
+
 fn sync_match_limit<T>(props: &SearchPaletteProps<T>) -> usize {
     props.sync_match_limit.max(1)
 }
 
 fn sort_results_for_display<T>(props: &SearchPaletteProps<T>, results: &mut [SearchResult]) {
+    if props.match_mode == SearchMatchMode::External {
+        return;
+    }
     if props.preserve_item_order || (props.preserve_groups && !props.entries.is_empty()) {
         results.sort_unstable_by_key(|result| result.item_index);
     }
@@ -1091,6 +1102,10 @@ fn emit_search_event<T: Clone>(
     let Some(item) = props.items.get(result.item_index) else {
         return;
     };
+
+    if !is_select && item.disabled {
+        return;
+    }
 
     let event = SearchEvent {
         match_index,
