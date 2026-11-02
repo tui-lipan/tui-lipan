@@ -207,19 +207,32 @@ impl TextAreaNode {
         }
     }
 
-    pub(crate) fn metrics(&self, rect: Rect) -> TextAreaMetrics {
+    /// Whether a mouse press can place a caret, select, or activate a sentinel in this text area.
+    pub(crate) fn accepts_pointer_text(&self) -> bool {
+        !self.disabled
+            && (self.on_change.is_some() || self.read_only || self.on_sentinel_click.is_some())
+    }
+
+    /// The cells that show text, inside the chrome, gutter and scrollbars.
+    pub(crate) fn content_rect(&self, rect: Rect) -> Rect {
         let inner = rect.inner(self.border, self.padding);
         let editor_h = self.geometry.content_viewport_h(
             self.h_scrollbar
                 && matches!(self.h_scrollbar_variant, ScrollbarVariant::Integrated)
                 && self.border,
-        ) as usize;
-        let content_rect = Rect {
+        );
+        Rect {
             x: inner.x.saturating_add(self.geometry.gutter_width as i16),
             y: inner.y,
             w: self.geometry.content_width.min(u16::MAX as usize) as u16,
-            h: editor_h.min(u16::MAX as usize) as u16,
-        };
+            h: (editor_h as usize).min(u16::MAX as usize) as u16,
+        }
+    }
+
+    pub(crate) fn metrics(&self, rect: Rect) -> TextAreaMetrics {
+        let inner = rect.inner(self.border, self.padding);
+        let content_rect = self.content_rect(rect);
+        let editor_h = content_rect.h as usize;
         let lines = self.visual_cache.latest_lines().unwrap_or(&[]);
         let start = self.scroll_offset.min(lines.len());
         let end = start.saturating_add(editor_h).min(lines.len());
