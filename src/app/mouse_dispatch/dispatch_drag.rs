@@ -492,7 +492,8 @@ pub(crate) fn transition_mouse_region_drag<C: Component, T: MouseDispatchCtx<C>>
             if state.button != button {
                 return None;
             }
-            if !mouse_region_drag_threshold_met(ctx, state.node_id, x, y) {
+            // The threshold decides when a drag starts, not which of its moves count.
+            if !state.started && !mouse_region_drag_threshold_met(ctx, state.node_id, x, y) {
                 return None;
             }
 

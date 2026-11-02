@@ -1021,7 +1021,9 @@ Use `drag_requires_mods(...)` and `right_drag_requires_mods(...)` to require
 modifiers before drag callbacks can start. The threshold above is
 `DEFAULT_DRAG_THRESHOLD` — 3 columns or 1 row of pointer travel from the press;
 override it per region with `drag_threshold(columns, rows)`, and use `(1, 1)` for
-handles that exist only to be dragged. A started drag belongs to the pointer rather
+handles that exist only to be dragged. The threshold only decides when a drag starts:
+after that every move is delivered, including one back within the threshold of the
+press. A started drag belongs to the pointer rather
 than to the region: if a re-render removes the region, including one retained for an
 exit animation, its last `on_drag` and `on_drag_end` (or the right-button pair) keep
 receiving the gesture until the release, and the drag's pointer shape stays in effect.

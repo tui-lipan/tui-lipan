@@ -1034,6 +1034,80 @@ fn mouse_region_drag_outlives_its_region() {
     }
 }
 
+/// The threshold decides when a drag starts, not which of its moves count: once started, every move
+/// reaches the region, including those that come back within the threshold of the press. Dropping
+/// them left whatever the drag was moving parked at the last move delivered.
+#[test]
+fn mouse_region_drag_reports_moves_back_within_its_threshold() {
+    struct ThresholdRoot {
+        log: Rc<RefCell<Vec<String>>>,
+        threshold: Option<(u16, u16)>,
+    }
+
+    impl Component for ThresholdRoot {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            let mut region = MouseRegion::new().on_drag({
+                let log = Rc::clone(&self.log);
+                Callback::new(move |event: MouseDragEvent| {
+                    log.borrow_mut().push(format!("drag {}", event.x));
+                })
+            });
+            if let Some((columns, rows)) = self.threshold {
+                region = region.drag_threshold(columns, rows);
+            }
+            region.child(Text::new("a wide enough region")).into()
+        }
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+    }
+
+    // The press is at column 5. `None` is the default threshold of three columns.
+    for (threshold, path, expected) in [
+        (
+            Some((1, 1)),
+            vec![7, 5, 6],
+            vec!["drag 7", "drag 5", "drag 6"],
+        ),
+        (
+            None,
+            vec![9, 6, 5, 8],
+            vec!["drag 9", "drag 6", "drag 5", "drag 8"],
+        ),
+    ] {
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let mut backend = TestBackend::new(ThresholdRoot {
+            log: Rc::clone(&log),
+            threshold,
+        });
+        backend.render();
+        let button = MouseButton::Left;
+        let send = |backend: &mut TestBackend<ThresholdRoot>, kind, x| {
+            backend
+                .send_mouse(MouseEvent {
+                    x,
+                    y: 0,
+                    kind,
+                    mods: KeyMods::NONE,
+                })
+                .expect("mouse event");
+        };
+        send(&mut backend, MouseKind::Down(button), 5);
+        for x in path {
+            send(&mut backend, MouseKind::Drag(button), x);
+        }
+        send(&mut backend, MouseKind::Up(button), 8);
+        assert_eq!(*log.borrow(), expected, "threshold {threshold:?}");
+    }
+}
+
 /// Before the threshold nothing has started, so there is no gesture to keep alive - including when
 /// the departed region is still in the tree for its exit animation.
 #[test]
