@@ -311,6 +311,11 @@ inherit ScrollView clipping from the overlay's declaration site.
 
 `Popover` renders through the root overlay pipeline by default, so it appears above normal in-tree content and captures focus while open. Auto-focus and trapping remain active under `FocusPolicy::Manual`. Use `.capture_focus(false)` for passive root-portal overlays, such as autocomplete suggestions, that must render above the tree while the trigger retains keyboard focus. Use `.scope(OverlayScope::Local)` when the content should stay inside parent stacking order. Use `.auto_focus(false)` for a capturing popover that must suspend focus while retaining its trap.
 
+With `.capture_pointer(false)` and `.capture_focus(false)`, unhandled clicks inside
+passive content continue through lower overlays before reaching background controls.
+A lower popover can still consume or dismiss an outside click. Interactive descendants
+in the upper popup receive their clicks before those lower-overlay policies run.
+
 By default, `Popover` uses `.min_trigger_width(true)`: the overlay is at least as wide as its trigger but can grow wider for long content. Use `.fit_trigger_width(true)` for exact trigger width, or `.max_width(...)` to cap content-driven growth.
 
 

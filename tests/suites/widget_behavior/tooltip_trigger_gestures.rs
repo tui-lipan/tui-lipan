@@ -7,17 +7,20 @@ use tui_lipan::{
 struct TriggerApp {
     tooltip: bool,
     draggable: bool,
+    lower: Option<bool>,
 }
 #[derive(Default)]
 struct State {
     hovered: bool,
     clicks: usize,
     popup_clicks: usize,
+    closed: bool,
 }
 enum Msg {
     Hover(bool),
     Click,
     PopupClick,
+    Close,
 }
 impl Component for TriggerApp {
     type Properties = ();
@@ -31,6 +34,7 @@ impl Component for TriggerApp {
             Msg::Hover(hovered) => ctx.state.hovered = hovered,
             Msg::Click => ctx.state.clicks += 1,
             Msg::PopupClick => ctx.state.popup_clicks += 1,
+            Msg::Close => ctx.state.closed = true,
         }
         Update::layout()
     }
@@ -56,7 +60,7 @@ impl Component for TriggerApp {
             .on_click(ctx.link().callback(|_| Msg::Click))
             .child(body)
             .key("region");
-        if self.draggable {
+        let region = if self.draggable {
             DropTarget::new()
                 .accept_group("rows")
                 .child(
@@ -68,9 +72,45 @@ impl Component for TriggerApp {
                 .into()
         } else {
             region
-        }
+        };
+        with_lower_popover(region, self.lower, ctx)
     }
 }
+
+fn with_lower_popover<C: Component<Message = Msg, State = State>>(
+    trigger: Element,
+    dismiss: Option<bool>,
+    ctx: &Context<C>,
+) -> Element {
+    let Some(dismiss) = dismiss else {
+        return trigger;
+    };
+    let mut popover = Popover::new()
+        .trigger(trigger)
+        .content(Text::new("Lower").key("lower"))
+        .anchor(Some((10, 10)))
+        .min_trigger_width(false)
+        .open(!ctx.state.closed);
+    if dismiss {
+        popover = popover.on_close(ctx.link().callback(|_| Msg::Close));
+    }
+    popover.into()
+}
+
+fn assert_details_covers_click<C: Component>(backend: &TestBackend<C>) {
+    let snapshot = backend.capture_ui_snapshot();
+    let details = snapshot
+        .widgets
+        .iter()
+        .find(|widget| widget.label.as_deref() == Some("Details"))
+        .expect("tooltip text must be present");
+    assert!(
+        details.rect.contains(3, 0),
+        "tooltip must cover the click: {:?}",
+        details.rect
+    );
+}
+
 fn mouse(kind: MouseKind) -> MouseEvent {
     MouseEvent {
         x: 3,
@@ -84,11 +124,15 @@ fn tooltip_trigger_click_survives_hover_layout_with_and_without_drag_source() {
     for tooltip in [false, true] {
         for draggable in [false, true] {
             for hover_first in [false, true] {
-                let mut backend = TestBackend::new(TriggerApp { tooltip, draggable });
+                let mut backend = TestBackend::new(TriggerApp {
+                    tooltip,
+                    draggable,
+                    lower: None,
+                });
                 backend.set_viewport(Rect {
                     x: 0,
                     y: 0,
-                    w: 80,
+                    w: 20,
                     h: 20,
                 });
                 backend.render();
@@ -100,7 +144,7 @@ fn tooltip_trigger_click_survives_hover_layout_with_and_without_drag_source() {
                     .unwrap();
                 if tooltip {
                     assert!(backend.state().hovered);
-                    assert!(backend.capture_frame().plain_text().contains("Details"));
+                    assert_details_covers_click(&backend);
                 }
                 backend
                     .send_mouse(mouse(MouseKind::Up(MouseButton::Left)))
@@ -121,6 +165,7 @@ fn tooltip_trigger_click_survives_hover_layout_with_and_without_drag_source() {
 struct PopupApp {
     capture: bool,
     interactive: bool,
+    lower: Option<bool>,
 }
 impl Component for PopupApp {
     type Properties = ();
@@ -133,6 +178,7 @@ impl Component for PopupApp {
         match message {
             Msg::Click => ctx.state.clicks += 1,
             Msg::PopupClick => ctx.state.popup_clicks += 1,
+            Msg::Close => ctx.state.closed = true,
             Msg::Hover(_) => {}
         }
         Update::none()
@@ -145,7 +191,7 @@ impl Component for PopupApp {
         } else {
             Text::new("Popup").into()
         };
-        MouseRegion::new()
+        let region = MouseRegion::new()
             .on_click(ctx.link().callback(|_| Msg::Click))
             .child(
                 Popover::new()
@@ -157,7 +203,8 @@ impl Component for PopupApp {
                     .placement(PopoverPlacement::RightStart)
                     .min_trigger_width(false),
             )
-            .into()
+            .into();
+        with_lower_popover(region, self.lower, ctx)
     }
 }
 
@@ -168,6 +215,7 @@ fn passive_popover_space_passes_through_but_interactive_content_still_activates(
             let mut backend = TestBackend::new(PopupApp {
                 capture,
                 interactive,
+                lower: None,
             });
             backend.set_viewport(Rect {
                 x: 0,
@@ -193,5 +241,56 @@ fn passive_popover_space_passes_through_but_interactive_content_still_activates(
                 "capture={capture}, interactive={interactive}"
             );
         }
+    }
+}
+
+#[test]
+fn tooltip_preserves_lower_popover_capture_and_outside_dismissal() {
+    for dismiss in [false, true] {
+        let mut backend = TestBackend::new(TriggerApp {
+            tooltip: true,
+            draggable: false,
+            lower: Some(dismiss),
+        });
+        backend.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 20,
+        });
+        backend.render();
+        backend.send_mouse(mouse(MouseKind::Moved)).unwrap();
+        assert_details_covers_click(&backend);
+        assert!(!backend.rect_of_key(&"lower".into()).unwrap().contains(3, 0));
+        backend
+            .send_mouse(mouse(MouseKind::Down(MouseButton::Left)))
+            .unwrap();
+        backend
+            .send_mouse(mouse(MouseKind::Up(MouseButton::Left)))
+            .unwrap();
+        assert_eq!(backend.state().closed, dismiss);
+        assert_eq!(backend.state().clicks, 0, "dismiss={dismiss}");
+    }
+}
+
+#[test]
+fn interactive_upper_popover_receives_click_above_capturing_popover() {
+    for dismiss in [false, true] {
+        let mut backend = TestBackend::new(PopupApp {
+            capture: false,
+            interactive: true,
+            lower: Some(dismiss),
+        });
+        backend.render();
+        assert!(!backend.rect_of_key(&"lower".into()).unwrap().contains(3, 0));
+        backend
+            .send_mouse(mouse(MouseKind::Down(MouseButton::Left)))
+            .unwrap();
+        backend
+            .send_mouse(mouse(MouseKind::Up(MouseButton::Left)))
+            .unwrap();
+        assert_eq!(backend.state().popup_clicks, 1);
+        assert!(!backend.state().closed);
+        assert_eq!(backend.state().clicks, 0);
     }
 }

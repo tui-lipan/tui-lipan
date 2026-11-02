@@ -1098,6 +1098,20 @@ impl NodeTree {
         }
     }
 
+    /// Whether an unhandled click may continue to lower overlays at this coordinate.
+    pub(crate) fn overlay_allows_pointer_passthrough(
+        &self,
+        root: &OverlayRoot,
+        x: i16,
+        y: i16,
+    ) -> bool {
+        !root.captures_focus
+            && !self.overlay_captures_pointer(root, x, y)
+            && self
+                .depth_first_test(root.id, x, y, TestKind::Hit)
+                .is_none()
+    }
+
     /// Return the deepest interactive node at `(x, y)`, respecting overlay layering.
     pub fn hit_test(&self, x: i16, y: i16) -> Option<NodeId> {
         self.do_test(x, y, TestKind::Hit)
