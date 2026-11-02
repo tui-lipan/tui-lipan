@@ -896,8 +896,9 @@ Splitter::vertical()
     .child(main_content)
 ```
 
-Without either setting, the splitter leaves the pointer unchanged. An active-only setting changes
-the cursor only while dragging. Release, cancellation, and removing the splitter return pointer
+Without either setting, the splitter leaves the pointer at the host default, and a drag holds it
+there while crossing panes with pointers of their own. An active-only setting changes the cursor
+only while dragging. Release, cancellation, and removing the splitter return pointer
 control to the hovered content. `Element::pointer_shape(...)` remains a separate, explicit override
 for the entire subtree.
 
