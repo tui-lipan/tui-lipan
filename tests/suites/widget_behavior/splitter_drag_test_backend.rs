@@ -207,6 +207,67 @@ fn pane_limits_stop_the_drag_at_the_bound() {
     assert_eq!(backend.state()[0], 5.0 / 39.0);
 }
 
+/// The handle follows the pointer on every move, including a move back to where the drag began.
+/// Measuring a move against the drag's starting sizes made that one look like no change, so the
+/// handle skipped its starting position: a run of single-cell moves came out 1, 1, then 2.
+#[test]
+fn a_handle_dragged_back_to_where_it_started_follows_the_pointer() {
+    let handle_column = |backend: &TestBackend<LimitedSplitter>| {
+        let frame = backend.capture_frame();
+        (0..40)
+            .find(|x| frame.cell(*x, 2).symbol == "│")
+            .expect("splitter handle")
+    };
+    let mut backend = TestBackend::new(LimitedSplitter);
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 40,
+        h: 5,
+    });
+    backend.render();
+    assert_eq!(handle_column(&backend), 10);
+
+    backend
+        .send_mouse(mouse(10, 2, MouseKind::Down(MouseButton::Left)))
+        .unwrap();
+    for column in [12, 11, 10, 9, 10, 11] {
+        backend
+            .send_mouse(mouse(column, 2, MouseKind::Drag(MouseButton::Left)))
+            .unwrap();
+        backend.render();
+        assert_eq!(handle_column(&backend), column, "pointer at {column}");
+    }
+    // Releasing on the starting column commits that column, not the one before it.
+    backend
+        .send_mouse(mouse(10, 2, MouseKind::Drag(MouseButton::Left)))
+        .unwrap();
+    backend
+        .send_mouse(mouse(10, 2, MouseKind::Up(MouseButton::Left)))
+        .unwrap();
+    backend.render();
+    assert_eq!(handle_column(&backend), 10);
+    assert_eq!(backend.state()[0], 10.0 / 39.0);
+
+    // A drag starting at a limit returns to it when the pointer overshoots: the clamped size equals
+    // the starting one, and the handle still has to get back there.
+    drag_handle(&mut backend, 10, 15);
+    assert_eq!(handle_column(&backend), 15);
+    backend
+        .send_mouse(mouse(15, 2, MouseKind::Down(MouseButton::Left)))
+        .unwrap();
+    for (pointer, expected) in [(13, 13), (20, 15), (14, 14)] {
+        backend
+            .send_mouse(mouse(pointer, 2, MouseKind::Drag(MouseButton::Left)))
+            .unwrap();
+        backend.render();
+        assert_eq!(handle_column(&backend), expected, "pointer at {pointer}");
+    }
+    backend
+        .send_mouse(mouse(14, 2, MouseKind::Up(MouseButton::Left)))
+        .unwrap();
+}
+
 #[test]
 fn touching_nested_splitters_render_directional_tees() {
     let viewport = Rect {

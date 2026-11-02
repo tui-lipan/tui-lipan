@@ -202,13 +202,14 @@ pub(crate) fn apply_splitter_drag_target(
         (min_left, max_left)
     };
     let new_left = (sizes[handle] as i32 + delta as i32).clamp(lower as i32, upper as i32) as u16;
-    let new_right = total.saturating_sub(new_left);
-    if new_left == sizes[handle] && new_right == sizes[handle + 1] {
+    sizes[handle] = new_left;
+    sizes[handle + 1] = total.saturating_sub(new_left);
+    // Against what is laid out now, not `start_sizes`: a move back to where the drag began changes
+    // the split even though it matches the sizes the drag started from.
+    if sizes == splitter.pane_sizes {
         return false;
     }
 
-    sizes[handle] = new_left;
-    sizes[handle + 1] = new_right;
     splitter.set_drag_sizes(sizes);
     splitter.active_handle = Some(handle);
     if let Some(callback) = &splitter.on_resize_live {
