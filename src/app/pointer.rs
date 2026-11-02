@@ -54,69 +54,83 @@ pub(crate) fn interaction_pointer(
     drag: &crate::app::interaction_state::DragState,
     mode: PointerMode,
 ) -> Option<PointerShape> {
-    if matches!(mode, PointerMode::Disabled | PointerMode::Terminal) {
+    let held = match mode {
+        PointerMode::Disabled | PointerMode::Terminal => None,
+        PointerMode::Explicit | PointerMode::Interactive => held_pointer(tree, mouse, drag, mode),
+    };
+    held.unwrap_or_else(|| {
         let (x, y) = mouse.last_mouse.get()?;
-        return pointer_at(tree, x as i16, y as i16, mode);
-    }
-    drag_owner(mouse, drag, mode)
-        .and_then(|id| {
-            captured_pointer(tree, id)
-                .or_else(|| interactive_capture(tree, id, mode))
-                .or_else(|| departed_mouse_region_pointer(tree, mouse, id, mode))
-        })
-        .or_else(|| {
-            let (x, y) = mouse.last_mouse.get()?;
-            pointer_at(tree, x as i16, y as i16, mode)
-        })
+        pointer_at(tree, x as i16, y as i16, mode)
+    })
 }
 
-/// The pointer of a started mouse-region drag whose region has left the view: what the region
-/// showed while it was live, including the shape interactive mode infers for a captured drag.
-fn departed_mouse_region_pointer(
+/// What a held gesture shows wherever the mouse travels, `None` when no gesture holds the pointer.
+///
+/// A gesture without a shape of its own still holds it, at the host default. Falling through to
+/// hover would show whatever lies under the mouse, which is flicker when a drag moves its own
+/// widget: the mouse leaves the handle with each event and is back on it after each layout.
+fn held_pointer(
     tree: &NodeTree,
-    mouse: &crate::app::interaction_state::MouseTrackingState,
-    owner: NodeId,
-    mode: PointerMode,
-) -> Option<PointerShape> {
-    let drag = mouse.mouse_region_drag.as_ref()?;
-    if drag.node_id != owner || mouse_region_is_live(tree, owner) {
-        return None;
-    }
-    drag.target
-        .pointer
-        .or((mode == PointerMode::Interactive).then_some(PointerShape::Grabbing))
-}
-
-fn drag_owner(
     mouse: &crate::app::interaction_state::MouseTrackingState,
     drag: &crate::app::interaction_state::DragState,
     mode: PointerMode,
-) -> Option<NodeId> {
+) -> Option<Option<PointerShape>> {
     use crate::app::interaction_state::ActiveDrag;
-    if let ActiveDrag::Splitter(drag) = &drag.active {
-        return Some(drag.id);
+    match &drag.active {
+        ActiveDrag::Splitter(drag) => control_pointer(tree, drag.id, mode),
+        ActiveDrag::Slider(drag) => control_pointer(tree, drag.id, mode),
+        ActiveDrag::Progress(drag) => control_pointer(tree, drag.id, mode),
+        ActiveDrag::Scrollbar(drag) => control_pointer(tree, drag.id, mode),
+        ActiveDrag::DraggableTabBar(drag) if drag.started => {
+            control_pointer(tree, drag.source_id, mode)
+        }
+        ActiveDrag::DragDrop(drag) if drag.started => control_pointer(tree, drag.source_id, mode),
+        ActiveDrag::TextArea(drag) => selection_pointer(tree, drag.id),
+        ActiveDrag::Input(drag) => selection_pointer(tree, drag.id),
+        ActiveDrag::HexArea(drag) => selection_pointer(tree, drag.id),
+        ActiveDrag::DocumentView(drag) => selection_pointer(tree, drag.id),
+        #[cfg(feature = "terminal")]
+        ActiveDrag::Terminal(drag) => selection_pointer(tree, drag.id),
+        _ => mouse_region_pointer(tree, mouse, mode),
     }
-    if mode == PointerMode::Interactive
-        && let Some(id) = interactive_drag_owner(&drag.active)
-    {
-        return Some(id);
-    }
-    mouse
-        .mouse_region_drag
-        .as_ref()
-        .filter(|drag| drag.started)
-        .map(|drag| drag.node_id)
 }
 
-fn interactive_drag_owner(drag: &crate::app::interaction_state::ActiveDrag) -> Option<NodeId> {
-    use crate::app::interaction_state::ActiveDrag;
-    match drag {
-        ActiveDrag::DraggableTabBar(drag) if drag.started => Some(drag.source_id),
-        ActiveDrag::DragDrop(drag) if drag.started => Some(drag.source_id),
-        ActiveDrag::Slider(drag) => Some(drag.id),
-        ActiveDrag::Scrollbar(drag) => Some(drag.id),
-        _ => None,
+fn control_pointer(tree: &NodeTree, id: NodeId, mode: PointerMode) -> Option<Option<PointerShape>> {
+    let node = captured_node(tree, id)?;
+    Some(
+        captured_pointer(tree, id)
+            .or((mode == PointerMode::Interactive).then(|| interactive_drag_shape(&node.kind))),
+    )
+}
+
+/// A selection drag keeps the pointer its widget shows on hover, whichever widget it crosses.
+fn selection_pointer(tree: &NodeTree, id: NodeId) -> Option<Option<PointerShape>> {
+    let node = captured_node(tree, id)?;
+    Some(
+        tree.pointer_override(id)
+            .or_else(|| intrinsic_pointer(node)),
+    )
+}
+
+/// A started mouse-region drag belongs to the mouse, not to the region: once the region has left
+/// the view the drag shows what it showed while the region was live.
+fn mouse_region_pointer(
+    tree: &NodeTree,
+    mouse: &crate::app::interaction_state::MouseTrackingState,
+    mode: PointerMode,
+) -> Option<Option<PointerShape>> {
+    let drag = mouse
+        .mouse_region_drag
+        .as_ref()
+        .filter(|drag| drag.started)?;
+    if mouse_region_is_live(tree, drag.node_id) {
+        return control_pointer(tree, drag.node_id, mode);
     }
+    Some(
+        drag.target
+            .pointer
+            .or((mode == PointerMode::Interactive).then_some(PointerShape::Grabbing)),
+    )
 }
 
 fn captured_node(tree: &NodeTree, id: NodeId) -> Option<&Node> {
@@ -130,13 +144,6 @@ fn captured_node(tree: &NodeTree, id: NodeId) -> Option<&Node> {
     Some(node)
 }
 
-fn interactive_capture(tree: &NodeTree, id: NodeId, mode: PointerMode) -> Option<PointerShape> {
-    if mode != PointerMode::Interactive {
-        return None;
-    }
-    Some(interactive_drag_shape(&captured_node(tree, id)?.kind))
-}
-
 fn interactive_drag_shape(kind: &NodeKind) -> PointerShape {
     match kind {
         NodeKind::Splitter(splitter) => match splitter.orientation {
@@ -144,6 +151,7 @@ fn interactive_drag_shape(kind: &NodeKind) -> PointerShape {
             crate::widgets::Orientation::Vertical => PointerShape::EwResize,
         },
         NodeKind::Slider(_) => PointerShape::EwResize,
+        NodeKind::ProgressBar(_) => PointerShape::Pointer,
         _ => PointerShape::Grabbing,
     }
 }
@@ -232,6 +240,15 @@ fn widget_pointer(node: &Node) -> Option<PointerShape> {
     }
 }
 
+/// The pointer a widget showing text selects with, ignoring which cell of it the mouse is over.
+fn intrinsic_pointer(node: &Node) -> Option<PointerShape> {
+    #[cfg(feature = "terminal")]
+    if let NodeKind::Terminal(terminal) = &node.kind {
+        return terminal_pointer(terminal);
+    }
+    widget_pointer(node)
+}
+
 #[cfg(feature = "terminal")]
 fn terminal_pointer(terminal: &crate::widgets::internal::TerminalNode) -> Option<PointerShape> {
     use crate::widgets::MouseMode;
@@ -259,9 +276,11 @@ fn terminal_pointer(terminal: &crate::widgets::internal::TerminalNode) -> Option
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::callback::Callback;
+    use crate::core::event::{MouseButton, MouseEvent, MouseKind};
     use crate::layout::LayoutEngine;
-    use crate::style::Rect;
-    use crate::widgets::{Button, HStack, Input, MouseRegion, Text};
+    use crate::style::{Length, Rect};
+    use crate::widgets::{Button, HStack, Input, MouseRegion, ProgressBar, Slider, Text, TextArea};
     use crate::{Element, IntoElement};
 
     fn tree(element: impl Into<Element>) -> NodeTree {
@@ -378,6 +397,164 @@ mod tests {
         assert_eq!(tree.pointer_shape_at(1, 1), None);
         assert_eq!(tree.pointer_shape_at(2, 2), Some(PointerShape::Grab));
         assert_eq!(tree.pointer_shape_at(39, 7), None);
+    }
+
+    /// A widget beside a neighbour with its own pointer, to drag from the first onto the second.
+    struct DragSubject {
+        mode: PointerMode,
+        subject: fn() -> Element,
+    }
+
+    impl crate::Component for DragSubject {
+        type State = ();
+        type Message = ();
+        type Properties = ();
+        fn create_state(&self, _: &()) {}
+        fn update(&mut self, _: (), _: &mut crate::Context<Self>) -> crate::Update {
+            crate::Update::none()
+        }
+        fn view(&self, ctx: &crate::Context<Self>) -> Element {
+            ctx.set_pointer_mode(self.mode);
+            HStack::new()
+                .child((self.subject)())
+                .child(
+                    Text::new("neighbour")
+                        .width(Length::Flex(1))
+                        .height(Length::Flex(1))
+                        .pointer_shape(PointerShape::Help),
+                )
+                .into()
+        }
+    }
+
+    #[test]
+    fn a_held_gesture_keeps_its_pointer_over_a_neighbour_with_its_own() {
+        fn slider() -> Slider {
+            Slider::new(0.5)
+                .width(Length::Px(20))
+                .on_change(Callback::new(|_| {}))
+        }
+        fn progress() -> ProgressBar {
+            ProgressBar::new(0.5)
+                .draggable(true)
+                .width(Length::Px(20))
+                .on_change(Callback::new(|_| {}))
+        }
+        fn input() -> Element {
+            Input::new("some text")
+                .width(Length::Px(20))
+                .on_change(Callback::new(|_| {}))
+                .into()
+        }
+        fn text_area() -> Element {
+            TextArea::new("some text")
+                .width(Length::Px(20))
+                .on_change(Callback::new(|_| {}))
+                .into()
+        }
+        type Case = (
+            &'static str,
+            PointerMode,
+            fn() -> Element,
+            Option<PointerShape>,
+        );
+        let cases: [Case; 9] = [
+            (
+                "explicit slider override",
+                PointerMode::Explicit,
+                || slider().pointer_shape(PointerShape::Move),
+                Some(PointerShape::Move),
+            ),
+            (
+                "explicit plain slider",
+                PointerMode::Explicit,
+                || slider().into(),
+                None,
+            ),
+            (
+                "interactive slider",
+                PointerMode::Interactive,
+                || slider().into(),
+                Some(PointerShape::EwResize),
+            ),
+            (
+                "explicit progress override",
+                PointerMode::Explicit,
+                || progress().pointer_shape(PointerShape::Move),
+                Some(PointerShape::Move),
+            ),
+            (
+                "explicit plain progress",
+                PointerMode::Explicit,
+                || progress().into(),
+                None,
+            ),
+            (
+                "interactive progress",
+                PointerMode::Interactive,
+                || progress().into(),
+                Some(PointerShape::Pointer),
+            ),
+            (
+                "explicit input selection",
+                PointerMode::Explicit,
+                input,
+                Some(PointerShape::Text),
+            ),
+            (
+                "interactive input selection",
+                PointerMode::Interactive,
+                input,
+                Some(PointerShape::Text),
+            ),
+            (
+                "explicit text area selection",
+                PointerMode::Explicit,
+                text_area,
+                Some(PointerShape::Text),
+            ),
+        ];
+        let mouse = |x, kind| MouseEvent {
+            x,
+            y: 0,
+            kind,
+            mods: Default::default(),
+        };
+        for (case, mode, subject, held) in cases {
+            let mut backend = crate::TestBackend::new(DragSubject { mode, subject });
+            backend.set_viewport(Rect {
+                x: 0,
+                y: 0,
+                w: 40,
+                h: 1,
+            });
+            backend.render();
+            // A text widget selects only once it has focus, which the first click gives it.
+            for kind in [
+                MouseKind::Down(MouseButton::Left),
+                MouseKind::Up(MouseButton::Left),
+            ] {
+                backend.send_mouse(mouse(2, kind)).unwrap();
+            }
+            backend.render();
+            backend
+                .send_mouse(mouse(2, MouseKind::Down(MouseButton::Left)))
+                .unwrap();
+            backend
+                .send_mouse(mouse(30, MouseKind::Drag(MouseButton::Left)))
+                .unwrap();
+            assert_eq!(backend.pointer_shape(), held, "{case}: over the neighbour");
+            backend.render();
+            assert_eq!(backend.pointer_shape(), held, "{case}: after layout");
+            backend
+                .send_mouse(mouse(30, MouseKind::Up(MouseButton::Left)))
+                .unwrap();
+            assert_eq!(
+                backend.pointer_shape(),
+                Some(PointerShape::Help),
+                "{case}: the release returns the pointer to the neighbour"
+            );
+        }
     }
 
     #[test]

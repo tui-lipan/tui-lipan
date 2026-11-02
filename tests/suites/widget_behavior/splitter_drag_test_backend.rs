@@ -498,6 +498,50 @@ fn splitter_drag_retains_active_pointer_across_children_and_releases_it() {
     }
 }
 
+/// The pointer outruns the handle between a drag event and the next layout, so it spends those
+/// moments over a pane. The pane's pointer must not show through, configured shape or not.
+#[test]
+fn splitter_drag_does_not_show_the_pointer_of_the_pane_it_crosses() {
+    let grabbing = Some(PointerShape::Grabbing);
+    let resize = Some(PointerShape::EwResize);
+    for (hover, active, held) in [
+        (None, None, None),
+        (resize, None, resize),
+        (None, grabbing, grabbing),
+    ] {
+        let case = format!("hover {hover:?} active {active:?}");
+        let mut backend = pointer_backend(false, false, hover, active);
+        backend
+            .send_mouse(mouse(10, 5, MouseKind::Down(MouseButton::Left)))
+            .unwrap();
+        for x in [11, 12, 13, 12, 11, 10, 9, 8] {
+            backend
+                .send_mouse(mouse(x, 5, MouseKind::Drag(MouseButton::Left)))
+                .unwrap();
+            assert_eq!(
+                backend.pointer_shape(),
+                held,
+                "{case}: at {x} before layout"
+            );
+            backend.render();
+            assert_eq!(backend.pointer_shape(), held, "{case}: at {x} after layout");
+        }
+        backend
+            .send_mouse(mouse(1, 1, MouseKind::Drag(MouseButton::Left)))
+            .unwrap();
+        backend.render();
+        assert_eq!(backend.pointer_shape(), held, "{case}: far over a pane");
+        backend
+            .send_mouse(mouse(1, 1, MouseKind::Up(MouseButton::Left)))
+            .unwrap();
+        assert_eq!(
+            backend.pointer_shape(),
+            Some(PointerShape::Text),
+            "{case}: the release returns the pointer to the hovered pane"
+        );
+    }
+}
+
 #[test]
 fn splitter_pointer_capture_handles_active_only_focus_loss_and_removal() {
     let mut backend = pointer_backend(false, false, None, Some(PointerShape::Grabbing));

@@ -1021,6 +1021,12 @@ cancellation. Explicit element overrides take precedence. `ListItem::pointer_sha
 customize an individual row's Interactive feedback; use `Default` for a selectable row whose
 action is unavailable. Read the policy with `ctx.pointer_mode()`.
 
+A held gesture owns the pointer until release or cancellation, in `Explicit` and `Interactive`:
+crossing another widget never shows that widget's pointer. This covers splitter handles, sliders,
+draggable progress bars, scrollbars, started tab, drag-source and `MouseRegion` drags, and text
+selection. The gesture shows its widget's explicit shape, then its intrinsic one (`Text` for a text
+selection), then its `Interactive` inference, and otherwise the host default.
+
 Pointer policies leave ordinary hover effects and mouse-move callbacks enabled; these retain their
 own motion-reporting requirements. Changing policy takes effect without rebuilding widget
 properties. The terminal emulator controls
