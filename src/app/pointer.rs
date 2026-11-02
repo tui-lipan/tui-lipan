@@ -27,8 +27,8 @@ pub(crate) fn has_explicit_pointer_target(node: &Node) -> bool {
         return true;
     }
     match &node.kind {
-        NodeKind::Input(input) => !input.disabled,
-        NodeKind::TextArea(area) => !area.disabled,
+        NodeKind::Input(input) => input.accepts_pointer_text(),
+        NodeKind::TextArea(area) => area.accepts_pointer_text(),
         #[cfg(feature = "terminal")]
         NodeKind::Terminal(_) => true,
         _ => false,
@@ -216,7 +216,7 @@ pub(crate) fn automatic_pointer(
         if node.kind.has_pointer_shape() {
             return node.kind.pointer_shape_at(x, y, node.rect);
         }
-        if let Some(shape) = widget_pointer(node) {
+        if let Some(shape) = widget_pointer(node).filter(|_| shows_text_at(node, x, y)) {
             return Some(shape);
         }
         current = node.parent;
@@ -224,10 +224,19 @@ pub(crate) fn automatic_pointer(
     None
 }
 
+/// Whether a cell holds a text widget's text, rather than its border, gutter or scrollbar.
+fn shows_text_at(node: &Node, x: i16, y: i16) -> bool {
+    match &node.kind {
+        NodeKind::Input(input) => input.pointer_text_rect(node.rect).contains(x, y),
+        NodeKind::TextArea(area) => area.content_rect(node.rect).contains(x, y),
+        _ => false,
+    }
+}
+
 fn widget_pointer(node: &Node) -> Option<PointerShape> {
     match &node.kind {
-        NodeKind::Input(input) if !input.disabled => Some(PointerShape::Text),
-        NodeKind::TextArea(textarea) if !textarea.disabled => Some(PointerShape::Text),
+        NodeKind::Input(input) if input.accepts_pointer_text() => Some(PointerShape::Text),
+        NodeKind::TextArea(area) if area.accepts_pointer_text() => Some(PointerShape::Text),
         _ => None,
     }
 }
@@ -332,6 +341,122 @@ mod tests {
     }
 
     #[test]
+    fn the_text_pointer_covers_an_input_value_and_not_its_chrome() {
+        use crate::callback::Callback;
+        let editable = || {
+            Input::new("value")
+                .border(true)
+                .prefix("> ")
+                .suffix("%")
+                .on_change(Callback::new(|_| {}))
+                .width(crate::Length::Px(20))
+        };
+        let affixed = tree(HStack::new().child(editable()));
+        // HStack centres the three-row field in the eight-row viewport.
+        let row = |x| affixed.pointer_shape_at(x, 3);
+        assert_eq!(affixed.pointer_shape_at(5, 2), None, "top border");
+        assert_eq!(row(0), None, "left border");
+        assert_eq!(row(1), None, "padding outside the prefix");
+        assert_eq!(row(2), None, "prefix");
+        assert_eq!(row(3), None, "prefix");
+        assert_eq!(row(4), Some(PointerShape::Text), "first cell of the value");
+        assert_eq!(row(16), Some(PointerShape::Text), "last cell of the value");
+        assert_eq!(row(17), None, "suffix");
+        assert_eq!(row(18), None, "padding outside the suffix");
+        assert_eq!(row(19), None, "right border");
+
+        // With no affix in the way, padding is part of the field.
+        let plain = tree_of_plain_input();
+        assert_eq!(plain.pointer_shape_at(0, 3), None, "left border");
+        for x in [1, 2, 18] {
+            assert_eq!(
+                plain.pointer_shape_at(x, 3),
+                Some(PointerShape::Text),
+                "{x}"
+            );
+        }
+        assert_eq!(plain.pointer_shape_at(19, 3), None, "right border");
+    }
+
+    fn tree_of_plain_input() -> NodeTree {
+        tree(
+            HStack::new().child(
+                Input::new("value")
+                    .border(true)
+                    .read_only(true)
+                    .width(crate::Length::Px(20)),
+            ),
+        )
+    }
+
+    #[test]
+    fn the_text_pointer_needs_an_input_that_takes_the_press() {
+        use crate::callback::Callback;
+        let at_origin = |input: Input| tree(input.border(false)).pointer_shape_at(0, 0);
+        assert_eq!(at_origin(Input::new("value")), None, "nothing handles it");
+        assert_eq!(
+            at_origin(Input::new("value").on_change(Callback::new(|_| {}))),
+            Some(PointerShape::Text)
+        );
+        assert_eq!(
+            at_origin(Input::new("value").read_only(true)),
+            Some(PointerShape::Text),
+            "read-only text can still be selected"
+        );
+        assert_eq!(
+            at_origin(Input::new("value").read_only(true).disabled(true)),
+            None
+        );
+    }
+
+    #[test]
+    fn the_text_pointer_covers_text_area_content_and_not_its_chrome() {
+        use crate::callback::Callback;
+        use crate::style::{ScrollbarConfig, ScrollbarVariant};
+        use crate::widgets::TextArea;
+        let long = "line\n".repeat(50);
+        for (variant, scrollbar_x) in [
+            (ScrollbarVariant::Integrated, 39),
+            (ScrollbarVariant::Standalone, 38),
+        ] {
+            let area = TextArea::new(long.as_str())
+                .border(true)
+                .line_numbers(true)
+                .scrollbar(true)
+                .scrollbar_config(ScrollbarConfig {
+                    variant,
+                    ..ScrollbarConfig::default()
+                })
+                .on_change(Callback::new(|_| {}));
+            let tree = tree(area);
+            let node = tree
+                .iter()
+                .find(|node| matches!(node.kind, NodeKind::TextArea(_)));
+            let NodeKind::TextArea(area) = &node.unwrap().kind else {
+                unreachable!()
+            };
+            let text = area.content_rect(node.unwrap().rect);
+            assert!(text.x > 1, "{variant:?}: the line numbers must take cells");
+            let y = 3;
+            let shape = |x, y| tree.pointer_shape_at(x, y);
+            assert_eq!(shape(5, 0), None, "{variant:?}: top border");
+            assert_eq!(shape(0, y), None, "{variant:?}: left border");
+            assert_eq!(shape(text.x - 1, y), None, "{variant:?}: gutter");
+            assert_eq!(
+                shape(text.x, y),
+                Some(PointerShape::Text),
+                "{variant:?}: text"
+            );
+            assert_eq!(shape(scrollbar_x, y), None, "{variant:?}: scrollbar");
+            assert_eq!(
+                pointer_at(&tree, scrollbar_x, y, PointerMode::Interactive),
+                Some(PointerShape::Pointer),
+                "{variant:?}: interactive mode reaches the scrollbar hand"
+            );
+        }
+    }
+
+    #[test]
     fn tab_pointer_opt_in_excludes_dividers_and_unused_strip_space() {
         use crate::widgets::{Tab, Tabs};
         let tree = tree(
@@ -382,7 +507,11 @@ mod tests {
 
     #[test]
     fn masks_and_disabled_regions_do_not_override_a_child_pointer() {
-        let tree = tree(MouseRegion::new().enabled(false).child(Input::new("text")));
+        let tree = tree(
+            MouseRegion::new()
+                .enabled(false)
+                .child(Input::new("text").border(false).read_only(true)),
+        );
         assert_eq!(tree.pointer_shape_at(0, 0), Some(PointerShape::Text));
     }
 

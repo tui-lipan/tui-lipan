@@ -1,9 +1,13 @@
 use std::sync::Arc;
 
+use unicode_width::UnicodeWidthStr;
+
 use crate::callback::{Callback, KeyHandler};
 use crate::core::event::MouseEvent;
 use crate::core::node::WidgetNode;
-use crate::style::{BorderStyle, CaretShape, Color, Padding, Style, StyleSlot, Theme, ThemeRole};
+use crate::style::{
+    BorderStyle, CaretShape, Color, Padding, Rect, Style, StyleSlot, Theme, ThemeRole,
+};
 use crate::text::edit::TextEditEvent;
 use crate::widgets::InputEvent;
 
@@ -55,6 +59,37 @@ pub struct InputNode {
     pub on_focus: Option<Callback<()>>,
     pub on_blur: Option<Callback<()>>,
     pub history_scope: Option<Arc<str>>,
+}
+
+impl InputNode {
+    /// Whether a mouse press can place a caret or start a selection in this input.
+    pub(crate) fn accepts_pointer_text(&self) -> bool {
+        !self.disabled && (self.on_change.is_some() || self.read_only)
+    }
+
+    /// The cells of the field that take text: inside the border, between any prefix and suffix.
+    ///
+    /// Padding counts unless an affix stands between it and the value, as in a browser's input box.
+    pub(crate) fn pointer_text_rect(&self, rect: Rect) -> Rect {
+        let field = rect.inner(self.border, Padding::default());
+        let inner = rect.inner(self.border, self.padding);
+        let width = |text: &Option<Arc<str>>| {
+            text.as_deref()
+                .filter(|text| !text.is_empty())
+                .map(|text| UnicodeWidthStr::width(text).min(u16::MAX as usize) as i16)
+        };
+        let inner_right = inner.x.saturating_add(inner.w as i16);
+        let left = width(&self.prefix).map_or(field.x, |w| inner.x.saturating_add(w));
+        let right = width(&self.suffix).map_or_else(
+            || field.x.saturating_add(field.w as i16),
+            |w| inner_right.saturating_sub(w),
+        );
+        Rect {
+            x: left,
+            w: right.saturating_sub(left).max(0) as u16,
+            ..field
+        }
+    }
 }
 
 impl WidgetNode for InputNode {

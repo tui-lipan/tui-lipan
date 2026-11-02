@@ -661,7 +661,7 @@ pub(crate) fn gather_hit_actions(
 
     let input_change = match &node.kind {
         NodeKind::Input(input_node) => {
-            if !input_node.disabled && (input_node.on_change.is_some() || input_node.read_only) {
+            if input_node.accepts_pointer_text() {
                 Some(InputChange {
                     on_change: input_node.on_change.clone(),
                     value: input_node.value.clone(),
@@ -893,9 +893,7 @@ pub(crate) fn gather_hit_actions(
                 && matches!(ta.h_scrollbar_variant, ScrollbarVariant::Integrated)
                 && (ta.border || parent_h_edge);
 
-            if !ta.disabled
-                && (ta.on_change.is_some() || ta.read_only || ta.on_sentinel_click.is_some())
-            {
+            if ta.accepts_pointer_text() {
                 let inner_w = node.rect.inner(ta.border, ta.padding).w;
                 let sentinel_for_key = crate::widgets::sentinel_info_for(
                     ta.image_mode,

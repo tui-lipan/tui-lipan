@@ -980,10 +980,12 @@ ProgressBar::new(0.7).filled_gradient(gradient)
 
 ## Mouse pointer shapes
 
-The framework requests a text pointer over text inputs and terminals that do not report mouse
-input, a pointing hand over modifier-hovered terminal links, and each terminal application's
-requested pointer over its own pane. In the default `PointerMode::Explicit`, click handlers do not
-change the pointer automatically.
+The framework requests a text pointer over the text of an `Input` or `TextArea` that takes mouse
+presses (one with `on_change`, or `read_only`) and over terminals that do not report mouse input,
+a pointing hand over modifier-hovered terminal links, and each terminal application's requested
+pointer over its own pane. Borders, prefixes, suffixes, line-number gutters and scrollbars do not
+show the text pointer. In the default `PointerMode::Explicit`, click handlers do not change the
+pointer automatically.
 Opt in with `.pointer_shape(PointerShape::Pointer)` on a clickable control, or
 `Tab::pointer_shape(...)` on individual tabs. Tab pointers exclude dividers and unused strip space.
 These shapes require a host terminal with OSC 22 support. Unsupported terminals keep their usual
