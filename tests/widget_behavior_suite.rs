@@ -84,6 +84,8 @@ mod table_styles_render;
 mod tabs_caps_render;
 #[path = "suites/widget_behavior/text_edit_actions.rs"]
 mod text_edit_actions;
+#[path = "suites/widget_behavior/tooltip_trigger_gestures.rs"]
+mod tooltip_trigger_gestures;
 
 #[path = "suites/widget_behavior/modal_animation.rs"]
 mod modal_animation;

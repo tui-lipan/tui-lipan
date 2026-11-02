@@ -82,6 +82,7 @@ pub struct Popover {
     pub(crate) max_width: Option<Length>,
     pub(crate) anchor: Option<(u16, u16)>,
     pub(crate) capture_focus: bool,
+    pub(crate) capture_pointer: bool,
     pub(crate) auto_focus: bool,
 }
 
@@ -117,6 +118,7 @@ impl Popover {
             max_width: None,
             anchor: None,
             capture_focus: true,
+            capture_pointer: true,
             auto_focus: true,
         }
     }
@@ -152,6 +154,16 @@ impl Popover {
     /// This has no effect on local popovers.
     pub fn capture_focus(mut self, capture_focus: bool) -> Self {
         self.capture_focus = capture_focus;
+        self
+    }
+
+    /// Whether unhandled pointer events inside root-portal content are blocked.
+    ///
+    /// Disable for passive popup content that may overlap its trigger after clamping.
+    /// Interactive descendants still receive events. Focus capture and outside-click
+    /// dismissal are controlled separately. Has no effect on local popovers.
+    pub fn capture_pointer(mut self, capture_pointer: bool) -> Self {
+        self.capture_pointer = capture_pointer;
         self
     }
 
@@ -252,6 +264,7 @@ impl crate::layout::hash::LayoutHash for Popover {
         self.max_width.hash(hasher);
         self.anchor.hash(hasher);
         self.capture_focus.hash(hasher);
+        self.capture_pointer.hash(hasher);
         self.auto_focus.hash(hasher);
         recurse(self.trigger.as_ref())?.hash(hasher);
         Some(())
@@ -273,6 +286,7 @@ mod tests {
 
         assert_eq!(popover.scope, OverlayScope::RootPortal);
         assert!(popover.capture_focus);
+        assert!(popover.capture_pointer);
     }
 
     #[test]

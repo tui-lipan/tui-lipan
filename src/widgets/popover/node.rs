@@ -16,6 +16,8 @@ pub struct PopoverNode {
     pub scope: OverlayScope,
     /// Whether the root overlay captures and traps focus.
     pub capture_focus: bool,
+    /// Whether unhandled pointer events are blocked by the popup rectangle.
+    pub capture_pointer: bool,
     /// Whether the root overlay establishes focus automatically.
     pub auto_focus: bool,
 }

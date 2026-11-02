@@ -669,6 +669,7 @@ Source: `src/widgets/popover/mod.rs` (`Popover`).
 | `max_width` | `None` |
 | `anchor` | `None` |
 | `capture_focus` | `true` |
+| `capture_pointer` | `true` |
 | `auto_focus` | `true` |
 
 ## HexArea

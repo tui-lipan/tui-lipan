@@ -440,7 +440,7 @@ fn collect_popover_overlay_root(
             .map(|_| OverlayAnimationSource::Node(id)),
         captures_focus: popover_node.open && popover_node.capture_focus,
         auto_focus: popover_node.open && popover_node.auto_focus,
-        captures_pointer: if popover_node.open {
+        captures_pointer: if popover_node.open && popover_node.capture_pointer {
             crate::overlay::PointerCapture::RectOnly
         } else {
             crate::overlay::PointerCapture::None

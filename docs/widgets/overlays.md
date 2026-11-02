@@ -297,6 +297,7 @@ inherit ScrollView clipping from the overlay's declaration site.
 | `scope` | `OverlayScope` | `RootPortal` (default) or `Local` |
 | `animation` | `impl Into<Option<VisibilityAnimation>>` | Opt-in popup lifecycle timing and custom effects; keep the widget mounted and change `open` |
 | `capture_focus` | `bool` | Capture and trap focus in a root-portal popover (`true` by default); disable for passive overlays whose trigger retains keyboard focus |
+| `capture_pointer` | `bool` | Block unhandled pointer events inside root-portal content (`true` by default); `false` lets non-interactive popup space pass through while interactive descendants still receive events |
 | `auto_focus` | `bool` | Focus the first focusable descendant (`true` by default); `false` suspends focus while retaining capture/trapping |
 | `on_close` | `Callback<()>` | Close callback |
 | `placement` | `PopoverPlacement` | `Above`, `Below`, `Left`, `Right` + start/center/end variants |
@@ -340,6 +341,9 @@ phase, and can restore live backdrop cells for portal, scan, or wipe reveals.
 ---
 
 ## Tooltip
+
+Tooltips do not capture focus or block pointer events. If viewport clamping places
+a tooltip over its trigger, the trigger remains hoverable and clickable.
 
 Help text on hover or focus.
 
