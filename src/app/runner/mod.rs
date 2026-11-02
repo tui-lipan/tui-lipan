@@ -713,6 +713,8 @@ pub struct AppRunner<C: Component> {
     pub(crate) exit_view_fn: Option<Box<ExitViewFn<C>>>,
     #[cfg(debug_assertions)]
     debug_paint_claim_root: bool,
+    /// A render-time update arrived on the final bounded reconciliation pass.
+    render_stability_pending: bool,
 }
 
 impl<C: Component> AppRunner<C> {
@@ -1002,6 +1004,7 @@ impl<C: Component> AppRunner<C> {
             exit_view_fn: None,
             #[cfg(debug_assertions)]
             debug_paint_claim_root: false,
+            render_stability_pending: false,
         }
     }
 
@@ -2395,6 +2398,9 @@ impl<C: Component> AppRunner<C> {
                 let frame_start = Instant::now();
 
                 let mut dirty = DirtyTracker::default();
+                if std::mem::take(&mut self.render_stability_pending) {
+                    dirty.merge_continuous_level(DirtyLevel::Full);
+                }
                 // Whether this pass handled nothing but pointer motion, a drag, or the wheel.
                 let mut pointer_motion_only = false;
                 let modifier_reporting = self.core.ctx.modifier_key_reporting_enabled();

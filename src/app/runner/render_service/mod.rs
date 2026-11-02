@@ -109,6 +109,7 @@ impl<C: Component> AppRunner<C> {
     }
 
     pub(super) fn render_element_until_scroll_stable(&mut self, bounds: Rect) -> Result<()> {
+        self.render_stability_pending = false;
         let text_area_drag_snapshot = self.active_text_area_drag_snapshot();
         for _pass in 0..RENDER_STABILITY_MAX_PASSES {
             let scroll_generations = self.core.scroll.view_generations();
@@ -134,8 +135,11 @@ impl<C: Component> AppRunner<C> {
                 break;
             }
 
-            #[cfg(debug_assertions)]
             if _pass + 1 == RENDER_STABILITY_MAX_PASSES {
+                // The last drain may have changed state after the final view.
+                // Keep work bounded, but rebuild on the next paced frame.
+                self.render_stability_pending = true;
+                #[cfg(debug_assertions)]
                 crate::debug::internal_log!(
                     "[tui-lipan] render stability cap reached: scroll_stable={} render_time_dirty={:?}",
                     scroll_stable,
@@ -1623,6 +1627,7 @@ impl<C: Component> AppRunner<C> {
 
 #[cfg(test)]
 mod tests {
+    use super::RENDER_STABILITY_MAX_PASSES;
     use std::cell::Cell;
     use std::rc::Rc;
     #[cfg(feature = "devtools")]
@@ -1882,6 +1887,68 @@ mod tests {
                 .iter()
                 .any(|span| span.content.as_ref() == expected)
         })
+    }
+
+    struct ChainedRenderMessages;
+    impl Component for ChainedRenderMessages {
+        type Properties = ();
+        type State = usize;
+        type Message = ();
+        fn create_state(&self, _: &()) -> usize {
+            0
+        }
+        fn update(&mut self, _: (), ctx: &mut Context<Self>) -> Update {
+            ctx.state += 1;
+            Update::full()
+        }
+        fn view(&self, ctx: &Context<Self>) -> crate::core::element::Element {
+            if ctx.state < RENDER_STABILITY_MAX_PASSES + 1 {
+                ctx.link().send(());
+            }
+            Text::new(format!("state:{}", ctx.state)).into()
+        }
+    }
+
+    #[test]
+    fn capped_render_schedules_followup_for_the_last_state_change() {
+        let viewport = Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 8,
+        };
+        let mut runner = AppRunner::new(App::new().mouse(false), ChainedRenderMessages, ());
+        runner.core = RuntimeCore::new_test(
+            ChainedRenderMessages,
+            (),
+            viewport,
+            Theme::default(),
+            SurfaceMode::Fullscreen,
+            Rc::new(Cell::new(false)),
+        )
+        .into();
+        runner.core.init();
+        runner.render_element_until_scroll_stable(viewport).unwrap();
+        assert_eq!(runner.core.ctx.state, RENDER_STABILITY_MAX_PASSES);
+        assert!(
+            runner.render_stability_pending,
+            "last-pass messages must schedule another frame"
+        );
+        runner.render_element_until_scroll_stable(viewport).unwrap();
+        assert!(
+            !runner.render_stability_pending,
+            "settled renders must stop requesting frames"
+        );
+        let text = runner
+            .core
+            .tree
+            .iter()
+            .find_map(|node| match &node.kind {
+                crate::core::node::NodeKind::Text(text) => Some(text.spans[0].content.as_ref()),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(text, format!("state:{}", RENDER_STABILITY_MAX_PASSES + 1));
     }
 
     #[test]

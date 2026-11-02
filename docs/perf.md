@@ -386,6 +386,10 @@ and no live terminal the loop waits on events and wakes on a 50 ms idle timeout.
 A message a background command sends through `CommandLink` wakes the loop at
 once, so it never waits for that timeout.
 
+Callbacks that change state during layout can require several reconciliation
+passes. If the bounded pass limit is reached, the runtime schedules another
+frame at this cadence so the last update appears without further input.
+
 The same cadence caps continuous pointer input. Motion, drags, and the wheel can
 report hundreds of times a second, far more often than any display shows a frame.
 When such a report only needs a repaint, it draws in the next frame-rate slot
