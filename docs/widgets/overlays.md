@@ -297,6 +297,7 @@ inherit ScrollView clipping from the overlay's declaration site.
 | `scope` | `OverlayScope` | `RootPortal` (default) or `Local` |
 | `animation` | `impl Into<Option<VisibilityAnimation>>` | Opt-in popup lifecycle timing and custom effects; keep the widget mounted and change `open` |
 | `capture_focus` | `bool` | Capture and trap focus in a root-portal popover (`true` by default); disable for passive overlays whose trigger retains keyboard focus |
+| `capture_pointer` | `bool` | Block unhandled pointer events inside root-portal content (`true` by default); `false` lets non-interactive popup space pass through while interactive descendants still receive events |
 | `auto_focus` | `bool` | Focus the first focusable descendant (`true` by default); `false` suspends focus while retaining capture/trapping |
 | `on_close` | `Callback<()>` | Close callback |
 | `placement` | `PopoverPlacement` | `Above`, `Below`, `Left`, `Right` + start/center/end variants |
@@ -309,6 +310,11 @@ inherit ScrollView clipping from the overlay's declaration site.
 | `anchor` | `Option<(u16, u16)>` | Absolute content-coordinate anchor instead of trigger rect |
 
 `Popover` renders through the root overlay pipeline by default, so it appears above normal in-tree content and captures focus while open. Auto-focus and trapping remain active under `FocusPolicy::Manual`. Use `.capture_focus(false)` for passive root-portal overlays, such as autocomplete suggestions, that must render above the tree while the trigger retains keyboard focus. Use `.scope(OverlayScope::Local)` when the content should stay inside parent stacking order. Use `.auto_focus(false)` for a capturing popover that must suspend focus while retaining its trap.
+
+With `.capture_pointer(false)` and `.capture_focus(false)`, unhandled clicks inside
+passive content continue through lower overlays before reaching background controls.
+A lower popover can still consume or dismiss an outside click. Interactive descendants
+in the upper popup receive their clicks before those lower-overlay policies run.
 
 By default, `Popover` uses `.min_trigger_width(true)`: the overlay is at least as wide as its trigger but can grow wider for long content. Use `.fit_trigger_width(true)` for exact trigger width, or `.max_width(...)` to cap content-driven growth.
 
@@ -340,6 +346,9 @@ phase, and can restore live backdrop cells for portal, scan, or wipe reveals.
 ---
 
 ## Tooltip
+
+Tooltips do not capture focus or block pointer events. If viewport clamping places
+a tooltip over its trigger, the trigger remains hoverable and clickable.
 
 Help text on hover or focus.
 

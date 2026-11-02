@@ -54,6 +54,13 @@ impl<C: Component> AppRunner<C> {
                 if button == MouseButton::Left && overlay.dismiss_policy.dismiss_on_click_inside() {
                     return self.dismiss_overlay(overlay);
                 }
+                if self
+                    .core
+                    .tree
+                    .overlay_allows_pointer_passthrough(overlay, x as i16, y as i16)
+                {
+                    continue;
+                }
                 return false;
             }
 

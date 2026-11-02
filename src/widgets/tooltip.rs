@@ -260,6 +260,7 @@ impl Component for TooltipComponent {
             .content(content)
             .open(open)
             .capture_focus(false)
+            .capture_pointer(false)
             .auto_focus(false)
             .min_trigger_width(false)
             .placement(ctx.props.placement)

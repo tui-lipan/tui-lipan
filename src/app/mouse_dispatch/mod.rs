@@ -946,6 +946,13 @@ impl<C: Component> MouseDispatchCtx<C> for TestBackend<C> {
                         return self.dismiss_overlay(overlay);
                     }
                 }
+                if self
+                    .core
+                    .tree
+                    .overlay_allows_pointer_passthrough(overlay, x as i16, y as i16)
+                {
+                    continue;
+                }
                 return false;
             }
             if button == crate::core::event::MouseButton::Left
