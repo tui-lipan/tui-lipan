@@ -7,7 +7,7 @@ use crate::core::node::{NodeId, NodeKind, NodeTree};
 
 use super::{
     MouseDispatchCtx, SelectionOwner, find_ancestor_mouse_region_drag_target,
-    mouse_region_local_position,
+    pending_mouse_region_drag,
 };
 
 pub(crate) fn transition_overlay_click<C: Component, T: MouseDispatchCtx<C>>(
@@ -185,17 +185,8 @@ pub(crate) fn transition_right_click<C: Component, T: MouseDispatchCtx<C>>(
             true,
         );
         if let Some(target) = drag_target {
-            let origin_local =
-                mouse_region_local_position(ctx.tree(), target, x, y).unwrap_or((0, 0));
-            ctx.mouse_state().mouse_region_drag =
-                Some(crate::app::interaction_state::MouseRegionDragState {
-                    node_id: target,
-                    button: MouseButton::Right,
-                    origin: (x, y),
-                    origin_local,
-                    last_pos: (x, y),
-                    started: false,
-                });
+            let drag = pending_mouse_region_drag(ctx.tree(), target, MouseButton::Right, x, y);
+            ctx.mouse_state().mouse_region_drag = drag;
         }
 
         if ctx.forward_terminal_mouse(adjusted_mouse) {

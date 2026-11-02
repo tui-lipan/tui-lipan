@@ -1,6 +1,7 @@
+use crate::app::interaction_state::{MouseRegionDragState, MouseRegionDragTarget};
 use crate::core::component::Component;
 use crate::core::event::{KeyMods, MouseButton, MouseDragEvent, MouseEvent, MouseKind};
-use crate::core::node::{NodeId, NodeKind};
+use crate::core::node::{NodeId, NodeKind, NodeTree};
 use crate::widgets::DEFAULT_DRAG_THRESHOLD;
 
 use super::MouseDispatchCtx;
@@ -108,40 +109,27 @@ fn suspend_image_rendering_for_pan() {
 }
 
 pub(crate) fn mouse_region_drag_event(
-    tree: &crate::core::node::NodeTree,
-    state: crate::app::interaction_state::MouseRegionDragState,
+    state: &MouseRegionDragState,
     x: u16,
     y: u16,
     mods: KeyMods,
-) -> Option<MouseDragEvent> {
-    if !tree.is_valid(state.node_id) {
-        return None;
-    }
-    let node = tree.node(state.node_id);
-    let NodeKind::MouseRegion(region) = &node.kind else {
-        return None;
-    };
-    if !region.enabled {
-        return None;
-    }
-
-    let local_x = ((x as i32) - (node.rect.x as i32)).max(0) as u16;
-    let local_y = ((y as i32) - (node.rect.y as i32)).max(0) as u16;
-    Some(MouseDragEvent {
+) -> MouseDragEvent {
+    let rect = state.target.rect;
+    MouseDragEvent {
         from_x: state.origin.0,
         from_y: state.origin.1,
         from_local_x: state.origin_local.0,
         from_local_y: state.origin_local.1,
         x,
         y,
-        local_x,
-        local_y,
+        local_x: ((x as i32) - (rect.x as i32)).max(0) as u16,
+        local_y: ((y as i32) - (rect.y as i32)).max(0) as u16,
         delta_x: drag_delta(x, state.last_pos.0),
         delta_y: drag_delta(y, state.last_pos.1),
-        target_w: node.rect.w,
-        target_h: node.rect.h,
+        target_w: rect.w,
+        target_h: rect.h,
         mods,
-    })
+    }
 }
 
 pub(crate) fn mouse_region_local_position(
@@ -163,11 +151,91 @@ pub(crate) fn mouse_region_local_position(
     ))
 }
 
-type MouseDragCallbacks = (
-    Option<crate::callback::Callback<MouseDragEvent>>,
-    Option<crate::callback::Callback<MouseDragEvent>>,
-    Option<crate::callback::Callback<MouseDragEvent>>,
-);
+/// Track a press on `node_id`, an enabled mouse region, as a drag that has not started yet.
+pub(crate) fn pending_mouse_region_drag(
+    tree: &NodeTree,
+    node_id: NodeId,
+    button: MouseButton,
+    x: u16,
+    y: u16,
+) -> Option<MouseRegionDragState> {
+    let origin_local = mouse_region_local_position(tree, node_id, x, y)?;
+    let RegionLookup::Alive(target) = mouse_region_drag_target(tree, node_id, button) else {
+        return None;
+    };
+    Some(MouseRegionDragState {
+        node_id,
+        button,
+        origin: (x, y),
+        origin_local,
+        last_pos: (x, y),
+        started: false,
+        target,
+    })
+}
+
+enum RegionLookup {
+    Alive(MouseRegionDragTarget),
+    Disabled,
+    Gone,
+}
+
+/// Whether `node_id` is still a mouse region the application describes. A region retained inert for
+/// an exit animation, or suppressed by a portal, is still in the tree but has already left the view.
+pub(crate) fn mouse_region_is_live(tree: &NodeTree, node_id: NodeId) -> bool {
+    tree.is_valid(node_id) && {
+        let node = tree.node(node_id);
+        matches!(node.kind, NodeKind::MouseRegion(_)) && !node.inert && !node.portal_suppressed
+    }
+}
+
+fn mouse_region_drag_target(tree: &NodeTree, node_id: NodeId, button: MouseButton) -> RegionLookup {
+    if !mouse_region_is_live(tree, node_id) {
+        return RegionLookup::Gone;
+    }
+    let node = tree.node(node_id);
+    let NodeKind::MouseRegion(region) = &node.kind else {
+        return RegionLookup::Gone;
+    };
+    if !region.enabled {
+        return RegionLookup::Disabled;
+    }
+    let (on_drag_start, on_drag, on_drag_end) = match button {
+        MouseButton::Left => (
+            region.on_drag_start.clone(),
+            region.on_drag.clone(),
+            region.on_drag_end.clone(),
+        ),
+        MouseButton::Right => (
+            region.on_right_drag_start.clone(),
+            region.on_right_drag.clone(),
+            region.on_right_drag_end.clone(),
+        ),
+        MouseButton::Middle => (None, None, None),
+    };
+    RegionLookup::Alive(MouseRegionDragTarget {
+        rect: node.rect,
+        pointer: tree.pointer_override(node_id),
+        on_drag_start,
+        on_drag,
+        on_drag_end,
+    })
+}
+
+/// Bring a drag up to date with the tree, or `None` when it no longer has anything to deliver: its
+/// region was disabled, or it went away before the gesture started. A started drag whose region
+/// went away carries on with the region as it last saw it.
+fn refreshed_mouse_region_drag(
+    tree: &NodeTree,
+    mut state: MouseRegionDragState,
+) -> Option<MouseRegionDragState> {
+    match mouse_region_drag_target(tree, state.node_id, state.button) {
+        RegionLookup::Alive(target) => state.target = target,
+        RegionLookup::Gone if state.started => {}
+        RegionLookup::Gone | RegionLookup::Disabled => return None,
+    }
+    Some(state)
+}
 
 fn mods_satisfy_required(required: Option<KeyMods>, actual: KeyMods) -> bool {
     required.is_none_or(|required| {
@@ -203,36 +271,6 @@ pub(crate) fn mouse_region_drag_target_accepts_mods(
         return false;
     };
     region.enabled && mods_satisfy_required(drag_required_mods_for(region, button), mods)
-}
-
-pub(crate) fn mouse_region_drag_callbacks(
-    tree: &crate::core::node::NodeTree,
-    node_id: crate::core::node::NodeId,
-    button: MouseButton,
-) -> Option<MouseDragCallbacks> {
-    if !tree.is_valid(node_id) {
-        return None;
-    }
-    let node = tree.node(node_id);
-    let NodeKind::MouseRegion(region) = &node.kind else {
-        return None;
-    };
-    if !region.enabled {
-        return None;
-    }
-    Some(match button {
-        MouseButton::Left => (
-            region.on_drag_start.clone(),
-            region.on_drag.clone(),
-            region.on_drag_end.clone(),
-        ),
-        MouseButton::Right => (
-            region.on_right_drag_start.clone(),
-            region.on_right_drag.clone(),
-            region.on_right_drag_end.clone(),
-        ),
-        MouseButton::Middle => (None, None, None),
-    })
 }
 
 pub(crate) fn find_ancestor_mouse_region_drag_target(
@@ -450,7 +488,7 @@ pub(crate) fn transition_mouse_region_drag<C: Component, T: MouseDispatchCtx<C>>
 ) -> Option<bool> {
     match mouse.kind {
         MouseKind::Drag(button @ (MouseButton::Left | MouseButton::Right)) => {
-            let state = ctx.mouse_state().mouse_region_drag?;
+            let state = ctx.mouse_state().mouse_region_drag.clone()?;
             if state.button != button {
                 return None;
             }
@@ -458,45 +496,37 @@ pub(crate) fn transition_mouse_region_drag<C: Component, T: MouseDispatchCtx<C>>
                 return None;
             }
 
-            let Some((on_drag_start, on_drag, _)) =
-                mouse_region_drag_callbacks(ctx.tree(), state.node_id, state.button)
-            else {
+            let Some(state) = refreshed_mouse_region_drag(ctx.tree(), state) else {
                 ctx.mouse_state().mouse_region_drag = None;
                 return None;
             };
-            let Some(event) = mouse_region_drag_event(ctx.tree(), state, x, y, mouse.mods) else {
-                ctx.mouse_state().mouse_region_drag = None;
-                return None;
-            };
+            let event = mouse_region_drag_event(&state, x, y, mouse.mods);
 
             if !state.started
-                && let Some(cb) = on_drag_start
+                && let Some(cb) = &state.target.on_drag_start
             {
                 cb.emit(event);
             }
-            if let Some(cb) = on_drag {
+            if let Some(cb) = &state.target.on_drag {
                 cb.emit(event);
             }
-            ctx.mouse_state().mouse_region_drag =
-                Some(crate::app::interaction_state::MouseRegionDragState {
-                    last_pos: (x, y),
-                    started: true,
-                    ..state
-                });
+            ctx.mouse_state().mouse_region_drag = Some(MouseRegionDragState {
+                last_pos: (x, y),
+                started: true,
+                ..state
+            });
             Some(true)
         }
         MouseKind::Up(button @ (MouseButton::Left | MouseButton::Right)) => {
-            let state = ctx.mouse_state().mouse_region_drag?;
+            let state = ctx.mouse_state().mouse_region_drag.clone()?;
             if state.button != button {
                 return None;
             }
             if state.started {
-                if let Some((_, _, Some(cb))) =
-                    mouse_region_drag_callbacks(ctx.tree(), state.node_id, state.button)
-                    && let Some(event) =
-                        mouse_region_drag_event(ctx.tree(), state, x, y, mouse.mods)
+                if let Some(state) = refreshed_mouse_region_drag(ctx.tree(), state)
+                    && let Some(cb) = &state.target.on_drag_end
                 {
-                    cb.emit(event);
+                    cb.emit(mouse_region_drag_event(&state, x, y, mouse.mods));
                 }
                 clear_mouse_region_drag(ctx);
                 Some(true)

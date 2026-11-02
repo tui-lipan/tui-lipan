@@ -507,7 +507,7 @@ impl MouseTrackingState {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone)]
 pub(crate) struct MouseRegionDragState {
     pub node_id: NodeId,
     pub button: MouseButton,
@@ -515,6 +515,19 @@ pub(crate) struct MouseRegionDragState {
     pub origin_local: (u16, u16),
     pub last_pos: (u16, u16),
     pub started: bool,
+    /// The region as last seen in the tree. A started gesture belongs to the pointer, not to the
+    /// node it began on, so this keeps delivering it if a re-render removes that node.
+    pub target: MouseRegionDragTarget,
+}
+
+/// What a mouse-region drag needs from its region, for the button that started it.
+#[derive(Clone)]
+pub(crate) struct MouseRegionDragTarget {
+    pub rect: crate::Rect,
+    pub pointer: Option<crate::style::PointerShape>,
+    pub on_drag_start: Option<crate::callback::Callback<crate::core::event::MouseDragEvent>>,
+    pub on_drag: Option<crate::callback::Callback<crate::core::event::MouseDragEvent>>,
+    pub on_drag_end: Option<crate::callback::Callback<crate::core::event::MouseDragEvent>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
