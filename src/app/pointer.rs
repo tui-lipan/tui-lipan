@@ -1,4 +1,5 @@
 //! Pointer policy shared by the real runtime and headless tests.
+use crate::app::mouse_dispatch::mouse_region_is_live;
 use crate::core::node::{Node, NodeId, NodeKind, NodeTree, WidgetNode};
 use crate::style::{PointerMode, PointerShape};
 
@@ -61,7 +62,7 @@ pub(crate) fn interaction_pointer(
         .and_then(|id| {
             captured_pointer(tree, id)
                 .or_else(|| interactive_capture(tree, id, mode))
-                .or_else(|| removed_mouse_region_pointer(tree, mouse, id))
+                .or_else(|| departed_mouse_region_pointer(tree, mouse, id, mode))
         })
         .or_else(|| {
             let (x, y) = mouse.last_mouse.get()?;
@@ -69,18 +70,21 @@ pub(crate) fn interaction_pointer(
         })
 }
 
-/// The pointer of a started mouse-region drag whose region a re-render removed.
-fn removed_mouse_region_pointer(
+/// The pointer of a started mouse-region drag whose region has left the view: what the region
+/// showed while it was live, including the shape interactive mode infers for a captured drag.
+fn departed_mouse_region_pointer(
     tree: &NodeTree,
     mouse: &crate::app::interaction_state::MouseTrackingState,
     owner: NodeId,
+    mode: PointerMode,
 ) -> Option<PointerShape> {
     let drag = mouse.mouse_region_drag.as_ref()?;
-    let removed =
-        !tree.is_valid(owner) || !matches!(tree.node(owner).kind, NodeKind::MouseRegion(_));
-    (drag.node_id == owner && removed)
-        .then_some(drag.target.pointer)
-        .flatten()
+    if drag.node_id != owner || mouse_region_is_live(tree, owner) {
+        return None;
+    }
+    drag.target
+        .pointer
+        .or((mode == PointerMode::Interactive).then_some(PointerShape::Grabbing))
 }
 
 fn drag_owner(

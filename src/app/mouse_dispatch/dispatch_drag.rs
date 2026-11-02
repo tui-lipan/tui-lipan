@@ -180,8 +180,17 @@ enum RegionLookup {
     Gone,
 }
 
+/// Whether `node_id` is still a mouse region the application describes. A region retained inert for
+/// an exit animation, or suppressed by a portal, is still in the tree but has already left the view.
+pub(crate) fn mouse_region_is_live(tree: &NodeTree, node_id: NodeId) -> bool {
+    tree.is_valid(node_id) && {
+        let node = tree.node(node_id);
+        matches!(node.kind, NodeKind::MouseRegion(_)) && !node.inert && !node.portal_suppressed
+    }
+}
+
 fn mouse_region_drag_target(tree: &NodeTree, node_id: NodeId, button: MouseButton) -> RegionLookup {
-    if !tree.is_valid(node_id) {
+    if !mouse_region_is_live(tree, node_id) {
         return RegionLookup::Gone;
     }
     let node = tree.node(node_id);

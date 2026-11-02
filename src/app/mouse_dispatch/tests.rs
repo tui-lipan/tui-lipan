@@ -16,11 +16,11 @@ use crate::core::element::{Element, IntoElement, Key};
 use crate::core::event::{
     KeyCode, KeyEvent, KeyMods, MouseButton, MouseDragEvent, MouseEvent, MouseKind, MouseMoveEvent,
 };
-use crate::core::node::{NodeId, NodeKind, NodeTree, ScrollbarTarget};
-use crate::style::{Align, Color, Length, PointerShape, Rect, Span};
+use crate::core::node::{Node, NodeId, NodeKind, NodeTree, ScrollbarTarget};
+use crate::style::{Align, Color, Length, PointerMode, PointerShape, Rect, Span};
 use crate::widgets::document_view::FormattedLink;
 use crate::widgets::{
-    AsciiCanvas, Button, CenterPin, ContentFormatter, DocumentClickEvent, DocumentView,
+    Animated, AsciiCanvas, Button, CenterPin, ContentFormatter, DocumentClickEvent, DocumentView,
     DraggableTab, DraggableTabBar, DraggableTabCloseEvent, EffectScope, FormatInput,
     FormattedBlock, FormattedDocument, FormattedLine, Frame, HStack, List, ListItem, MouseRegion,
     ScrollEvent, ScrollView, Spacer, StatusBar, Table, TableRow, TabsEvent, Text, TextArea,
@@ -865,11 +865,16 @@ fn mouse_drag_event_keeps_captured_local_origin_after_rect_shift() {
     assert_eq!(event.from_local_y, 1);
 }
 
-/// A region that a message can take out of the tree, recording the drag events it receives.
+/// A region that a message can take out of the view, recording the drag events it receives.
 struct RemovableRegionRoot {
     log: Rc<RefCell<Vec<String>>>,
     /// The pointer column at which a drag tick removes the region.
     remove_at_x: u16,
+    mode: PointerMode,
+    /// The region's explicit pointer shape.
+    pointer: Option<PointerShape>,
+    /// Keep the removed region in the tree, inert, for an exit animation.
+    auto_exit: bool,
 }
 
 #[derive(Clone)]
@@ -888,24 +893,30 @@ impl Component for RemovableRegionRoot {
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {
+        ctx.set_pointer_mode(self.mode);
         let log = |name: &'static str| {
             ctx.link()
                 .callback(move |event: MouseDragEvent| RemovableRegionMsg::Log(name, event))
         };
         let mut root = VStack::new();
         if ctx.state {
-            root = root.child(
-                MouseRegion::new()
-                    .drag_threshold(1, 1)
-                    .on_drag_start(log("start"))
-                    .on_drag(log("drag"))
-                    .on_drag_end(log("end"))
-                    .on_right_drag_start(log("start"))
-                    .on_right_drag(log("drag"))
-                    .on_right_drag_end(log("end"))
-                    .child(Text::new("region"))
-                    .pointer_shape(PointerShape::Move),
-            );
+            let mut region: Element = MouseRegion::new()
+                .drag_threshold(1, 1)
+                .on_drag_start(log("start"))
+                .on_drag(log("drag"))
+                .on_drag_end(log("end"))
+                .on_right_drag_start(log("start"))
+                .on_right_drag(log("drag"))
+                .on_right_drag_end(log("end"))
+                .child(Text::new("region"))
+                .into();
+            if let Some(pointer) = self.pointer {
+                region = region.pointer_shape(pointer);
+            }
+            if self.auto_exit {
+                region = Animated::new(region).auto_exit(200).key("region");
+            }
+            root = root.child(region);
         }
         root.into()
     }
@@ -935,83 +946,124 @@ fn region_mouse(backend: &mut TestBackend<RemovableRegionRoot>, kind: MouseKind,
         .expect("mouse event");
 }
 
+fn mouse_regions(backend: &TestBackend<RemovableRegionRoot>) -> impl Iterator<Item = &Node> {
+    backend
+        .core
+        .tree
+        .iter()
+        .filter(|node| matches!(node.kind, NodeKind::MouseRegion(_)))
+}
+
 /// A started gesture belongs to the pointer: a re-render that removes the region must not end it
-/// silently, because the application is holding state open until the release arrives.
+/// silently, because the application is holding state open until the release arrives. That holds
+/// for the callbacks and the pointer alike, whether the region leaves the tree at once or lingers
+/// inert through an exit animation.
 #[test]
 fn mouse_region_drag_outlives_its_region() {
+    let cases = [
+        (PointerMode::Explicit, Some(PointerShape::Move), false),
+        (PointerMode::Explicit, Some(PointerShape::Move), true),
+        (PointerMode::Interactive, Some(PointerShape::Move), false),
+        (PointerMode::Interactive, Some(PointerShape::Move), true),
+        (PointerMode::Interactive, None, false),
+        (PointerMode::Interactive, None, true),
+    ];
     for button in [MouseButton::Left, MouseButton::Right] {
-        let log = Rc::new(RefCell::new(Vec::new()));
-        let mut backend = TestBackend::new(RemovableRegionRoot {
-            log: Rc::clone(&log),
-            remove_at_x: 2,
-        });
-        backend.render();
+        for (mode, pointer, auto_exit) in cases {
+            let case = format!("{button:?} {mode:?} {pointer:?} auto_exit={auto_exit}");
+            let log = Rc::new(RefCell::new(Vec::new()));
+            let mut backend = TestBackend::new(RemovableRegionRoot {
+                log: Rc::clone(&log),
+                remove_at_x: 2,
+                mode,
+                pointer,
+                auto_exit,
+            });
+            backend.render();
+            let captured = pointer.or(Some(PointerShape::Grabbing));
 
-        for (kind, x) in [
-            (MouseKind::Down(button), 0),
-            (MouseKind::Drag(button), 1),
-            (MouseKind::Drag(button), 2),
-            (MouseKind::Drag(button), 3),
-            (MouseKind::Drag(button), 4),
-        ] {
-            region_mouse(&mut backend, kind, x);
+            for (kind, x) in [
+                (MouseKind::Down(button), 0),
+                (MouseKind::Drag(button), 1),
+                (MouseKind::Drag(button), 2),
+                (MouseKind::Drag(button), 3),
+            ] {
+                region_mouse(&mut backend, kind, x);
+            }
+            if auto_exit {
+                assert!(
+                    mouse_regions(&backend).all(|node| node.inert)
+                        && mouse_regions(&backend).count() > 0,
+                    "{case}: the region must be retained, inert, for this to prove anything"
+                );
+                assert_eq!(backend.pointer_shape(), captured, "{case}: during the exit");
+                for _ in 0..8 {
+                    backend.advance_frame(std::time::Duration::from_millis(50));
+                }
+                backend.render();
+            }
+            assert_eq!(
+                mouse_regions(&backend).count(),
+                0,
+                "{case}: the region must be gone for this to prove anything"
+            );
+            assert_eq!(
+                backend.pointer_shape(),
+                captured,
+                "{case}: the drag keeps its pointer without its region"
+            );
+
+            region_mouse(&mut backend, MouseKind::Drag(button), 4);
+            region_mouse(&mut backend, MouseKind::Up(button), 5);
+            assert_eq!(
+                *log.borrow(),
+                ["start 1", "drag 1", "drag 2", "drag 3", "drag 4", "end 5"],
+                "{case}: every move and the release must arrive"
+            );
+            assert_eq!(
+                backend.pointer_shape(),
+                None,
+                "{case}: the release ends the capture"
+            );
+
+            // The ended gesture leaves nothing behind for later input to reach.
+            region_mouse(&mut backend, MouseKind::Drag(button), 6);
+            region_mouse(&mut backend, MouseKind::Up(button), 6);
+            assert_eq!(log.borrow().len(), 6, "{case}: nothing after the release");
         }
-        assert!(
-            backend
-                .core
-                .tree
-                .iter()
-                .all(|node| !matches!(node.kind, NodeKind::MouseRegion(_))),
-            "{button:?}: the region must be gone for this to prove anything"
-        );
-        assert_eq!(
-            backend.pointer_shape(),
-            Some(PointerShape::Move),
-            "{button:?}: the drag keeps its pointer without its region"
-        );
-
-        region_mouse(&mut backend, MouseKind::Up(button), 5);
-        assert_eq!(
-            *log.borrow(),
-            ["start 1", "drag 1", "drag 2", "drag 3", "drag 4", "end 5"],
-            "{button:?}: every move and the release must arrive"
-        );
-        assert_ne!(
-            backend.pointer_shape(),
-            Some(PointerShape::Move),
-            "{button:?}: the release ends the capture"
-        );
-
-        // The ended gesture leaves nothing behind for later input to reach.
-        region_mouse(&mut backend, MouseKind::Drag(button), 6);
-        region_mouse(&mut backend, MouseKind::Up(button), 6);
-        assert_eq!(
-            log.borrow().len(),
-            6,
-            "{button:?}: nothing after the release"
-        );
     }
 }
 
-/// Before the threshold nothing has started, so there is no gesture to keep alive.
+/// Before the threshold nothing has started, so there is no gesture to keep alive - including when
+/// the departed region is still in the tree for its exit animation.
 #[test]
 fn mouse_region_drag_never_starts_if_its_region_goes_first() {
-    let log = Rc::new(RefCell::new(Vec::new()));
-    let mut backend = TestBackend::new(RemovableRegionRoot {
-        log: Rc::clone(&log),
-        remove_at_x: u16::MAX,
-    });
-    backend.render();
-    let button = MouseButton::Left;
+    for auto_exit in [false, true] {
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let mut backend = TestBackend::new(RemovableRegionRoot {
+            log: Rc::clone(&log),
+            remove_at_x: u16::MAX,
+            mode: PointerMode::Explicit,
+            pointer: Some(PointerShape::Move),
+            auto_exit,
+        });
+        backend.render();
+        let button = MouseButton::Left;
 
-    region_mouse(&mut backend, MouseKind::Down(button), 0);
-    backend
-        .dispatch(RemovableRegionMsg::Remove)
-        .expect("remove the region");
-    region_mouse(&mut backend, MouseKind::Drag(button), 2);
-    region_mouse(&mut backend, MouseKind::Up(button), 2);
+        region_mouse(&mut backend, MouseKind::Down(button), 0);
+        backend
+            .dispatch(RemovableRegionMsg::Remove)
+            .expect("remove the region");
+        assert_eq!(mouse_regions(&backend).count() > 0, auto_exit);
+        region_mouse(&mut backend, MouseKind::Drag(button), 2);
+        region_mouse(&mut backend, MouseKind::Up(button), 2);
 
-    assert!(log.borrow().is_empty(), "got {:?}", log.borrow());
+        assert!(
+            log.borrow().is_empty(),
+            "auto_exit={auto_exit}: got {:?}",
+            log.borrow()
+        );
+    }
 }
 
 #[test]
