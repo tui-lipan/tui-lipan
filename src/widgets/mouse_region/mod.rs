@@ -85,6 +85,9 @@ impl MouseRegion {
     }
 
     /// Set drag-end callback (fires on left-button release after a drag started).
+    ///
+    /// A started drag belongs to the pointer rather than to the region: if a re-render removes the
+    /// region, its last `on_drag` and `on_drag_end` keep receiving the gesture until the release.
     pub fn on_drag_end(mut self, cb: Callback<MouseDragEvent>) -> Self {
         self.on_drag_end = Some(cb);
         self

@@ -417,17 +417,8 @@ fn dispatch_mouse_inner<C: Component, T: MouseDispatchCtx<C>>(
                 false,
             )
         {
-            let origin_local =
-                mouse_region_local_position(ctx.tree(), target, x, y).unwrap_or((0, 0));
-            ctx.mouse_state().mouse_region_drag =
-                Some(crate::app::interaction_state::MouseRegionDragState {
-                    node_id: target,
-                    button: MouseButton::Left,
-                    origin: (x, y),
-                    origin_local,
-                    last_pos: (x, y),
-                    started: false,
-                });
+            let drag = pending_mouse_region_drag(ctx.tree(), target, MouseButton::Left, x, y);
+            ctx.mouse_state().mouse_region_drag = drag;
         }
     }
 
@@ -496,17 +487,8 @@ fn dispatch_mouse_inner<C: Component, T: MouseDispatchCtx<C>>(
             )
         };
         if let Some(target) = drag_target {
-            let origin_local =
-                mouse_region_local_position(ctx.tree(), target, x, y).unwrap_or((0, 0));
-            ctx.mouse_state().mouse_region_drag =
-                Some(crate::app::interaction_state::MouseRegionDragState {
-                    node_id: target,
-                    button: MouseButton::Left,
-                    origin: (x, y),
-                    origin_local,
-                    last_pos: (x, y),
-                    started: false,
-                });
+            let drag = pending_mouse_region_drag(ctx.tree(), target, MouseButton::Left, x, y);
+            ctx.mouse_state().mouse_region_drag = drag;
         }
         if let Some(pan_id) = nearest_pan_view(ctx.tree(), hit) {
             ctx.mouse_state().pan_view_drag =

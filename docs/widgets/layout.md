@@ -643,7 +643,7 @@ Wraps any subtree to handle pointer movement, clicks, and hover visuals.
 | `on_middle_click` | `Callback<MouseRegionEvent>` | Middle-button press; nearest accepting region owns drag/release before built-in tab closing, terminal forwarding or clipboard paste, without moving focus |
 | `on_context_menu` | `Callback<MouseRegionEvent>` | Right-button press; nearest accepting handler owns the gesture through drag/release before clipboard/ancestor drag behavior, without moving focus |
 | `on_mouse_move` | `Callback<MouseMoveEvent>` | Emits on pointer movement |
-| `on_drag_start` / `on_drag` / `on_drag_end` | `Callback<MouseDragEvent>` | Left-button drag lifecycle after threshold |
+| `on_drag_start` / `on_drag` / `on_drag_end` | `Callback<MouseDragEvent>` | Left-button drag lifecycle after threshold; a started drag continues until release even if a re-render removes the region |
 | `drag_requires_mods` | `KeyMods` | Require modifiers before left-button drag callbacks can start |
 | `drag_threshold` | `u16, u16` | Pointer travel in cells before drag callbacks start; default `(3, 1)` |
 | `on_right_drag_start` / `on_right_drag` / `on_right_drag_end` | `Callback<MouseDragEvent>` | Right-button drag lifecycle after threshold |

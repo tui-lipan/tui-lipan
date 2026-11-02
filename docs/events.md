@@ -1021,7 +1021,11 @@ Use `drag_requires_mods(...)` and `right_drag_requires_mods(...)` to require
 modifiers before drag callbacks can start. The threshold above is
 `DEFAULT_DRAG_THRESHOLD` — 3 columns or 1 row of pointer travel from the press;
 override it per region with `drag_threshold(columns, rows)`, and use `(1, 1)` for
-handles that exist only to be dragged. Use `bubble_mouse_down(true)` when an
+handles that exist only to be dragged. A started drag belongs to the pointer rather
+than to the region: if a re-render removes the region, its last `on_drag` and
+`on_drag_end` (or the right-button pair) keep receiving the gesture until the release,
+and the region's pointer shape stays in effect. A drag whose region goes away before
+the threshold never starts. Use `bubble_mouse_down(true)` when an
 ancestor should receive `on_mouse_down` for descendant presses without consuming
 the descendant's click. Use `capture_requires_mods(...)` when modifier-owned
 gestures must be fully consumed before a terminal/input descendant can select text

@@ -58,11 +58,29 @@ pub(crate) fn interaction_pointer(
         return pointer_at(tree, x as i16, y as i16, mode);
     }
     drag_owner(mouse, drag, mode)
-        .and_then(|id| captured_pointer(tree, id).or_else(|| interactive_capture(tree, id, mode)))
+        .and_then(|id| {
+            captured_pointer(tree, id)
+                .or_else(|| interactive_capture(tree, id, mode))
+                .or_else(|| removed_mouse_region_pointer(tree, mouse, id))
+        })
         .or_else(|| {
             let (x, y) = mouse.last_mouse.get()?;
             pointer_at(tree, x as i16, y as i16, mode)
         })
+}
+
+/// The pointer of a started mouse-region drag whose region a re-render removed.
+fn removed_mouse_region_pointer(
+    tree: &NodeTree,
+    mouse: &crate::app::interaction_state::MouseTrackingState,
+    owner: NodeId,
+) -> Option<PointerShape> {
+    let drag = mouse.mouse_region_drag.as_ref()?;
+    let removed =
+        !tree.is_valid(owner) || !matches!(tree.node(owner).kind, NodeKind::MouseRegion(_));
+    (drag.node_id == owner && removed)
+        .then_some(drag.target.pointer)
+        .flatten()
 }
 
 fn drag_owner(
