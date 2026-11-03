@@ -638,6 +638,7 @@ Wraps any subtree to handle pointer movement, clicks, and hover visuals.
 
 | Prop | Type | Description |
 |------|------|-------------|
+| `wheel_passthrough` | `bool` | Skip this region and its children for wheel input so a lower layer can scroll; clicks and hover still use the guard. Default `false` |
 | `on_click` | `Callback<MouseRegionEvent>` | Left-button release after a press on the same region; `kind` is `MouseKind::Up(Left)` |
 | `on_mouse_down` / `on_mouse_up` | `Callback<MouseRegionEvent>` | Left-button press / release over the region |
 | `on_middle_click` | `Callback<MouseRegionEvent>` | Middle-button press; nearest accepting region owns drag/release before built-in tab closing, terminal forwarding or clipboard paste, without moving focus |

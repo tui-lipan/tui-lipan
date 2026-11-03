@@ -45,6 +45,7 @@ pub struct MouseRegion {
     pub(crate) on_hover_change: Option<Callback<bool>>,
     pub(crate) hit_test: Option<Arc<dyn Fn(u16, u16) -> bool + Send + Sync>>,
     pub(crate) capture_click: bool,
+    pub(crate) wheel_passthrough: bool,
     pub(crate) capture_required_mods: Option<KeyMods>,
     pub(crate) hover_style: StyleSlot,
     pub(crate) hover_effects: Vec<VisualEffect>,
@@ -217,6 +218,13 @@ impl MouseRegion {
         self
     }
 
+    /// Let wheel events reach a lower layer while retaining this region's click and hover guard.
+    /// The whole region subtree is transparent to wheel hit testing. Defaults to false.
+    pub fn wheel_passthrough(mut self, passthrough: bool) -> Self {
+        self.wheel_passthrough = passthrough;
+        self
+    }
+
     /// Control whether this region captures left-clicks over interactive children.
     pub fn capture_click(mut self, capture: bool) -> Self {
         self.capture_click = capture;
@@ -312,6 +320,7 @@ impl crate::layout::hash::LayoutHash for MouseRegion {
         self.right_drag_required_mods.hash(hasher);
         self.on_hover_change.is_some().hash(hasher);
         self.capture_click.hash(hasher);
+        self.wheel_passthrough.hash(hasher);
         self.capture_required_mods.hash(hasher);
         self.hover_style.hash(hasher);
         self.hover_effects.hash(hasher);

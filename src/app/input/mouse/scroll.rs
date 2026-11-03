@@ -39,7 +39,7 @@ pub(crate) fn scroll_wheel_n(
     scroll_ticks: usize,
     fallback_multiplier: u16,
 ) -> WheelScroll {
-    let Some(hit) = tree.hit_test(event.x as i16, event.y as i16) else {
+    let Some(hit) = tree.wheel_test(event.x as i16, event.y as i16) else {
         return WheelScroll::None;
     };
 
@@ -228,6 +228,49 @@ mod tests {
             panic!("expected scroll view");
         };
         (sv.offset, sv.h_offset)
+    }
+
+    #[test]
+    fn wheel_passthrough_guard_keeps_clicks_and_hover_but_scrolls_the_lower_layer() {
+        use crate::Callback;
+        use crate::widgets::{MouseRegion, ZStack};
+        for passthrough in [false, true] {
+            let rows = (0..30).fold(VStack::new().gap(0), |column, i| {
+                column.child(Text::new(format!("row {i}")).height(Length::Px(1)))
+            });
+            let root: crate::Element = ZStack::new()
+                .child(ScrollView::new().child(rows))
+                .child(
+                    MouseRegion::new()
+                        .wheel_passthrough(passthrough)
+                        .capture_click(true)
+                        .on_click(Callback::new(|_| {}))
+                        .on_hover_change(Callback::new(|_| {}))
+                        .child(Text::new("").width(Length::Flex(1)).height(Length::Flex(1))),
+                )
+                .into();
+            let mut tree = NodeTree::new();
+            LayoutEngine::reconcile_with_focus(
+                &mut tree,
+                &root,
+                Rect {
+                    x: 0,
+                    y: 0,
+                    w: 20,
+                    h: 8,
+                },
+                None,
+            );
+            let hit = tree.hit_test(2, 2).unwrap();
+            assert!(matches!(tree.node(hit).kind, NodeKind::MouseRegion(_)));
+            let hover = tree.hover_test(2, 2).unwrap();
+            assert_eq!(hit, hover);
+            assert_eq!(
+                handle_scroll_wheel_n(&mut tree, wheel_down(2, 2), 1, 1),
+                passthrough
+            );
+            assert_eq!(offsets(&tree, 0).0 > 0, passthrough);
+        }
     }
 
     const OUTER: usize = 0;
