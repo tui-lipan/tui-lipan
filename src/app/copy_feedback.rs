@@ -152,10 +152,12 @@ impl SelectionSnapshot {
     }
 }
 
-/// Where a `DocumentView` sits under its nearest `ScrollView`, in terms that outlive its node.
+/// Where a `DocumentView` sits under one of its `ScrollView` ancestors, in terms that outlive its
+/// node.
 ///
 /// A virtualized scroll view sweeps a child that scrolls out of view and stashes its documents'
-/// selections under the child's key, in subtree order, until it scrolls back as a new node.
+/// selections under the child's key, in subtree order, until it scrolls back as a new node. Any
+/// ancestor scroll view can do this, including one that sweeps a nested scroll view whole.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ScrolledDocument {
     scroll_view: NodeId,
@@ -168,7 +170,8 @@ struct ScrolledDocument {
 pub(crate) struct CopiedSelection {
     id: NodeId,
     snapshot: SelectionSnapshot,
-    scrolled: Option<ScrolledDocument>,
+    /// Where the document sits under each `ScrollView` above it, nearest first.
+    scrolled: Vec<ScrolledDocument>,
 }
 
 /// What `id` has selected right now, or `None` when it has no selection to clear.
@@ -215,9 +218,11 @@ pub(crate) fn copied_selection(
     id: NodeId,
 ) -> Option<CopiedSelection> {
     let snapshot = selection_snapshot(tree, read_only_selection, id)?;
-    let scrolled = matches!(snapshot, SelectionSnapshot::Document { .. })
-        .then(|| scrolled_document(tree, id))
-        .flatten();
+    let scrolled = if matches!(snapshot, SelectionSnapshot::Document { .. }) {
+        scrolled_document(tree, id)
+    } else {
+        Vec::new()
+    };
     Some(CopiedSelection {
         id,
         snapshot,
@@ -225,15 +230,19 @@ pub(crate) fn copied_selection(
     })
 }
 
-fn scrolled_document(tree: &NodeTree, id: NodeId) -> Option<ScrolledDocument> {
+/// Where `id` sits under every `ScrollView` above it, nearest first. A level whose scroll-view
+/// child has no key is left out: such a child is never stashed.
+fn scrolled_document(tree: &NodeTree, id: NodeId) -> Vec<ScrolledDocument> {
+    let mut found = Vec::new();
     let mut child = id;
     while let Some(parent) = tree.node(child).parent {
-        if matches!(tree.node(parent).kind, NodeKind::ScrollView(_)) {
-            let child_key = tree.node(child).key.clone()?;
-            let index = documents_in_subtree(tree, child)
+        if matches!(tree.node(parent).kind, NodeKind::ScrollView(_))
+            && let Some(child_key) = tree.node(child).key.clone()
+            && let Some(index) = documents_in_subtree(tree, child)
                 .iter()
-                .position(|doc| *doc == id)?;
-            return Some(ScrolledDocument {
+                .position(|doc| *doc == id)
+        {
+            found.push(ScrolledDocument {
                 scroll_view: parent,
                 child_key,
                 index,
@@ -241,7 +250,7 @@ fn scrolled_document(tree: &NodeTree, id: NodeId) -> Option<ScrolledDocument> {
         }
         child = parent;
     }
-    None
+    found
 }
 
 /// The `DocumentView`s under `root`, in the order a scroll view stashes their selections.
@@ -266,20 +275,36 @@ fn documents_in_subtree(tree: &NodeTree, root: NodeId) -> Vec<NodeId> {
 /// Clear a copied selection, provided it is still what was copied. Returns whether anything
 /// changed.
 ///
-/// A document that a scroll view swept since the copy is found where it went: in the scroll
-/// view's stash, or as the new node it was restored to.
+/// A document that a scroll view swept since the copy is found where it went: in a scroll view's
+/// stash, or as the new node it was restored to. Each recorded scroll view that still exists is
+/// asked in turn, nearest first, so a document swept with a whole nested scroll view is found in
+/// the outer one.
 pub(crate) fn clear_copied_selection(
     tree: &mut NodeTree,
     read_only_selection: &mut HashMap<NodeId, (usize, Option<usize>)>,
     copied: &CopiedSelection,
 ) -> bool {
     let expected = &copied.snapshot;
-    let id = match (&copied.scrolled, tree.is_valid(copied.id)) {
-        (Some(scrolled), false) => match remounted_document(tree, scrolled) {
-            Some(id) => id,
-            None => return clear_stashed_document(tree, scrolled, expected),
-        },
-        _ => copied.id,
+    let id = if tree.is_valid(copied.id) {
+        copied.id
+    } else {
+        let mut remounted = None;
+        for scrolled in &copied.scrolled {
+            if !tree.is_valid(scrolled.scroll_view) {
+                continue;
+            }
+            if let Some(id) = remounted_document(tree, scrolled) {
+                remounted = Some(id);
+                break;
+            }
+            if let Some(cleared) = clear_stashed_document(tree, scrolled, expected) {
+                return cleared;
+            }
+        }
+        let Some(id) = remounted else {
+            return false;
+        };
+        id
     };
     if selection_snapshot(tree, read_only_selection, id).as_ref() != Some(expected) {
         return false;
@@ -309,35 +334,33 @@ fn remounted_document(tree: &NodeTree, scrolled: &ScrolledDocument) -> Option<No
 }
 
 /// Clear a document selection a scroll view is holding for a child that is out of view.
+///
+/// `None` when this scroll view holds nothing for the document, so another one may; otherwise
+/// whether the stashed selection was still the copied one and got cleared.
 fn clear_stashed_document(
     tree: &mut NodeTree,
     scrolled: &ScrolledDocument,
     expected: &SelectionSnapshot,
-) -> bool {
-    if !tree.is_valid(scrolled.scroll_view) {
-        return false;
-    }
+) -> Option<bool> {
     let NodeKind::ScrollView(sv) = &mut tree.node_mut(scrolled.scroll_view).kind else {
-        return false;
+        return None;
     };
-    let Some(doc) = sv
+    let doc = sv
         .offscreen_doc_selections
-        .get_mut(&scrolled.child_key)
-        .and_then(|stash| stash.docs.get_mut(scrolled.index))
-    else {
-        return false;
-    };
+        .get_mut(&scrolled.child_key)?
+        .docs
+        .get_mut(scrolled.index)?;
     let stashed = SelectionSnapshot::document(
         doc.selection_cursor,
         doc.selection_anchor,
         doc.table_rect_selection.as_ref(),
     );
     if stashed.as_ref() != Some(expected) {
-        return false;
+        return Some(false);
     }
     doc.selection_anchor = None;
     doc.table_rect_selection = None;
-    true
+    Some(true)
 }
 
 /// The effect one flash shows on the frame being painted.
@@ -814,7 +837,7 @@ mod tests {
                 cursor: 5,
                 anchor: 0,
             },
-            scrolled: None,
+            scrolled: Vec::new(),
         }
     }
 

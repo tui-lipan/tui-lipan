@@ -3557,8 +3557,11 @@ fn middle_click_pastes_primary_selection_into_focused_editor() {
 }
 
 /// Six keyed document rows in a two-row scroll view, which sweeps rows that scroll out of view
-/// and stashes their selections until they come back.
-struct ScrolledDocuments;
+/// and stashes their selections until they come back. `nested` puts each document in a
+/// one-row scroll view of its own, which the outer one then sweeps whole.
+struct ScrolledDocuments {
+    nested: bool,
+}
 
 impl Component for ScrolledDocuments {
     type Message = usize;
@@ -3570,18 +3573,29 @@ impl Component for ScrolledDocuments {
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {
+        let nested = self.nested;
         ScrollView::new()
             .scrollbar(false)
             .gap(0)
             .offset(ctx.state)
-            .children((0..6).map(|i| {
-                DocumentView::new(format!("row {i}"))
+            .children((0..6).map(move |i| {
+                let document = DocumentView::new(format!("row {i}"))
                     .border(false)
                     .scrollbar(false)
                     .h_scrollbar(false)
                     .wrap(false)
                     .height(Length::Auto)
-                    .key(format!("row-{i}"))
+                    .key(format!("row-{i}"));
+                if nested {
+                    ScrollView::new()
+                        .scrollbar(false)
+                        .gap(0)
+                        .height(Length::Px(1))
+                        .children([document])
+                        .key(format!("row-{i}"))
+                } else {
+                    document
+                }
             }))
             .into()
     }
@@ -3594,6 +3608,7 @@ impl Component for ScrolledDocuments {
 
 fn scrolled_documents_backend(
     clipboard: Rc<RefCell<MouseClipboardState>>,
+    nested: bool,
 ) -> TestBackend<ScrolledDocuments> {
     let app = crate::App::new()
         .clipboard_provider(MouseClipboardProvider(clipboard))
@@ -3605,7 +3620,7 @@ fn scrolled_documents_backend(
             .clear_selection(true),
             ..ClipboardConfig::default()
         });
-    let mut backend = TestBackend::new_with_app(app, ScrolledDocuments, ());
+    let mut backend = TestBackend::new_with_app(app, ScrolledDocuments { nested }, ());
     backend.set_viewport(Rect {
         x: 0,
         y: 0,
@@ -3653,26 +3668,32 @@ fn document_selection(backend: &TestBackend<ScrolledDocuments>, id: NodeId) -> O
 
 #[test]
 fn a_copied_document_that_scrolls_away_comes_back_cleared() {
-    let clipboard = Rc::new(RefCell::new(MouseClipboardState::default()));
-    let mut backend = scrolled_documents_backend(Rc::clone(&clipboard));
-    let row = document_row(&backend, "row-0").expect("row-0 is in view");
+    // Directly in the scroll view, and inside a nested scroll view the outer one sweeps whole.
+    for nested in [false, true] {
+        let clipboard = Rc::new(RefCell::new(MouseClipboardState::default()));
+        let mut backend = scrolled_documents_backend(Rc::clone(&clipboard), nested);
+        let row = document_row(&backend, "row-0").expect("row-0 is in view");
 
-    select_and_copy_document(&mut backend, row);
-    assert_eq!(clipboard.borrow().clipboard, "row 0");
+        select_and_copy_document(&mut backend, row);
+        assert_eq!(clipboard.borrow().clipboard, "row 0", "nested: {nested}");
 
-    backend.dispatch(2).unwrap();
-    assert!(document_row(&backend, "row-0").is_none(), "row-0 is swept");
-    backend.advance(Duration::from_secs(1));
-    backend.dispatch(0).unwrap();
+        backend.dispatch(2).unwrap();
+        assert!(
+            document_row(&backend, "row-0").is_none(),
+            "nested: {nested}: row-0 is swept"
+        );
+        backend.advance(Duration::from_secs(1));
+        backend.dispatch(0).unwrap();
 
-    let row = document_row(&backend, "row-0").expect("row-0 is back in view");
-    assert_eq!(document_selection(&backend, row), None);
+        let row = document_row(&backend, "row-0").expect("row-0 is back in view");
+        assert_eq!(document_selection(&backend, row), None, "nested: {nested}");
+    }
 }
 
 #[test]
 fn a_copied_document_remounted_before_the_highlight_ends_is_cleared() {
     let clipboard = Rc::new(RefCell::new(MouseClipboardState::default()));
-    let mut backend = scrolled_documents_backend(Rc::clone(&clipboard));
+    let mut backend = scrolled_documents_backend(Rc::clone(&clipboard), false);
     let row = document_row(&backend, "row-0").expect("row-0 is in view");
 
     select_and_copy_document(&mut backend, row);
