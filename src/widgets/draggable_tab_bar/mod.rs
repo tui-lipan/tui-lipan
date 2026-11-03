@@ -209,6 +209,9 @@ pub struct DraggableTab {
     pub(crate) path: Option<Arc<str>>,
     pub(crate) right_badge: Option<Span>,
     pub(crate) capped: bool,
+    /// The label the app gave this tab, kept when [`DraggableTabBar::position_label`] replaced
+    /// `label` with its formatted text, so a previewed position can be formatted again.
+    pub(crate) base_label: Option<Arc<str>>,
 }
 
 impl DraggableTab {
@@ -229,6 +232,7 @@ impl DraggableTab {
             path: None,
             right_badge: None,
             capped: false,
+            base_label: None,
         }
     }
 
@@ -388,6 +392,9 @@ pub(crate) struct OverflowControl {
 /// Builds the label rendered on an overflow control from the hidden tab count.
 pub(crate) type OverflowLabelFormatter = Arc<dyn Fn(usize) -> Arc<str>>;
 
+/// Builds the label a tab draws from its position in the strip and its own label.
+pub(crate) type PositionLabelFormatter = Arc<dyn Fn(usize, &str) -> Arc<str>>;
+
 /// Label formatters for the left/right overflow controls.
 ///
 /// `None` on a side keeps the default Nerd Font label for that side.
@@ -507,6 +514,7 @@ pub struct DraggableTabBar {
     pub(crate) overflow_style: Style,
     pub(crate) overflow_hover_style: Style,
     pub(crate) overflow_labels: OverflowLabels,
+    pub(crate) position_label: Option<PositionLabelFormatter>,
     pub(crate) empty_text: Option<Arc<str>>,
     pub(crate) empty_text_style: Style,
     pub(crate) scroll_offset: usize,
@@ -571,6 +579,7 @@ impl Default for DraggableTabBar {
             overflow_style: Style::default(),
             overflow_hover_style: Style::default(),
             overflow_labels: OverflowLabels::default(),
+            position_label: None,
             empty_text: None,
             empty_text_style: Style::default(),
             scroll_offset: 0,
@@ -906,6 +915,21 @@ impl DraggableTabBar {
         F: Fn(usize) -> Arc<str> + 'static,
     {
         self.overflow_labels.right = Some(Arc::new(formatter));
+        self
+    }
+
+    /// Draw each tab's label from its position in the strip.
+    ///
+    /// The formatter receives a tab's zero-based position and the label it was created with, and
+    /// returns the text the tab draws, which is also what the bar measures and hit-tests. Use it
+    /// for labels that name a slot rather than the tab, such as a number. While a
+    /// [`DragReorderMode::OnDrop`] drag previews a new order, each tab is formatted again at the
+    /// position the preview draws it in, so slot labels follow the preview.
+    pub fn position_label<F>(mut self, formatter: F) -> Self
+    where
+        F: Fn(usize, &str) -> Arc<str> + 'static,
+    {
+        self.position_label = Some(Arc::new(formatter));
         self
     }
 
@@ -2226,7 +2250,23 @@ pub(crate) fn resolve_tab_icon(
 }
 
 impl From<DraggableTabBar> for Element {
-    fn from(value: DraggableTabBar) -> Self {
+    fn from(mut value: DraggableTabBar) -> Self {
+        // Formatted once the builder is complete, so every later consumer - measurement, layout,
+        // hit-testing, and rendering - reads the same drawn text.
+        if let Some(format) = value.position_label.clone() {
+            value.tabs = value
+                .tabs
+                .iter()
+                .enumerate()
+                .map(|(position, tab)| {
+                    let base = tab.base_label.clone().unwrap_or_else(|| tab.label.clone());
+                    let mut tab = tab.clone();
+                    tab.label = format(position, &base);
+                    tab.base_label = Some(base);
+                    tab
+                })
+                .collect();
+        }
         Element::new(ElementKind::DraggableTabBar(Box::new(value)))
     }
 }
@@ -2255,6 +2295,7 @@ impl crate::layout::hash::LayoutHash for DraggableTabBar {
         self.show_overflow_controls.hash(hasher);
         self.overflow_labels.left.is_some().hash(hasher);
         self.overflow_labels.right.is_some().hash(hasher);
+        self.position_label.is_some().hash(hasher);
         self.empty_text.hash(hasher);
         self.scroll_offset.hash(hasher);
         self.show_file_icons.hash(hasher);

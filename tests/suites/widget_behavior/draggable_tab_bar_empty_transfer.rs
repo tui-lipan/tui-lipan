@@ -412,6 +412,7 @@ struct OnDropSwapPreviewState {
     tabs: Vec<String>,
     active: usize,
     reorders: Vec<(usize, usize)>,
+    numbered: bool,
 }
 
 #[derive(Clone)]
@@ -430,6 +431,7 @@ impl Component for OnDropSwapPreviewApp {
             tabs: vec!["one".into(), "two".into(), "three".into(), "four".into()],
             active: 0,
             reorders: Vec::new(),
+            numbered: false,
         }
     }
 
@@ -461,23 +463,26 @@ impl Component for OnDropSwapPreviewApp {
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {
-        DraggableTabBar::new()
-            .tabs(
-                ctx.state
-                    .tabs
-                    .iter()
-                    .map(|label| DraggableTab::new(label.as_str())),
-            )
-            .active(ctx.state.active)
-            .reorder_mode(DragReorderMode::OnDrop)
-            .divider(' ')
-            .show_close_buttons(false)
-            .show_overflow_controls(false)
-            .active_style(Style::new().bg(Color::Blue))
-            .height(Length::Px(1))
-            .on_change(ctx.link().callback(OnDropSwapPreviewMsg::Select))
-            .on_reorder(ctx.link().callback(OnDropSwapPreviewMsg::Reorder))
-            .into()
+        let mut bar = DraggableTabBar::new();
+        if ctx.state.numbered {
+            bar = bar.position_label(|position, label| format!("{}:{label}", position + 1).into());
+        }
+        bar.tabs(
+            ctx.state
+                .tabs
+                .iter()
+                .map(|label| DraggableTab::new(label.as_str())),
+        )
+        .active(ctx.state.active)
+        .reorder_mode(DragReorderMode::OnDrop)
+        .divider(' ')
+        .show_close_buttons(false)
+        .show_overflow_controls(false)
+        .active_style(Style::new().bg(Color::Blue))
+        .height(Length::Px(1))
+        .on_change(ctx.link().callback(OnDropSwapPreviewMsg::Select))
+        .on_reorder(ctx.link().callback(OnDropSwapPreviewMsg::Reorder))
+        .into()
     }
 }
 
@@ -583,4 +588,56 @@ fn on_drop_reorder_previews_the_moved_tabs_before_release_and_clears_when_return
         .unwrap();
     assert_eq!(b.state().active, 0);
     assert_eq!(row_text(&mut b), shifted_preview);
+}
+
+/// A slot number belongs to where a tab is drawn, so the tabs an `OnDrop` preview moves name the
+/// slots they move into, and the committed order then reads the same.
+#[test]
+fn on_drop_preview_formats_position_labels_at_the_previewed_slots() {
+    let mut b = TestBackend::new(OnDropSwapPreviewApp);
+    b.state_mut().numbered = true;
+    b.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 40,
+        h: 1,
+    });
+    let row_text = |b: &mut TestBackend<OnDropSwapPreviewApp>| -> String {
+        b.render();
+        b.capture_frame().to_fixed_grid_lines()[0].clone()
+    };
+
+    let initial = row_text(&mut b);
+    for label in ["1:one", "2:two", "3:three", "4:four"] {
+        assert!(initial.contains(label), "{label} missing from {initial:?}");
+    }
+    let one_x = initial.find("1:one").expect("first tab") as u16;
+    let four_x = initial.find("4:four").expect("fourth tab") as u16;
+
+    b.send_mouse(mouse(one_x, 0, MouseKind::Down(MouseButton::Left)))
+        .unwrap();
+    b.send_mouse(mouse(four_x, 0, MouseKind::Drag(MouseButton::Left)))
+        .unwrap();
+    let preview = row_text(&mut b);
+    let slots: Vec<usize> = ["1:two", "2:three", "3:four", "4:one"]
+        .iter()
+        .map(|label| {
+            preview
+                .find(label)
+                .unwrap_or_else(|| panic!("{label} missing from preview {preview:?}"))
+        })
+        .collect();
+    assert!(
+        slots.windows(2).all(|pair| pair[0] < pair[1]),
+        "every tab names the slot the preview draws it in, got {preview:?}"
+    );
+
+    b.send_mouse(mouse(four_x, 0, MouseKind::Up(MouseButton::Left)))
+        .unwrap();
+    assert_eq!(b.state().reorders, vec![(0, 3)]);
+    assert_eq!(
+        row_text(&mut b),
+        preview,
+        "the committed order reads exactly as previewed"
+    );
 }

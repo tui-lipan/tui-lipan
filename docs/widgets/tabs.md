@@ -122,6 +122,7 @@ symbol still appears when nothing else about the bar reacts to the pointer.
 | `overflow_hover_style` | `Style` | Overflow button hover style |
 | `overflow_left_label` | `Fn(usize) -> Arc<str>` | Custom left overflow label from the hidden count |
 | `overflow_right_label` | `Fn(usize) -> Arc<str>` | Custom right overflow label from the hidden count |
+| `position_label` | `Fn(usize, &str) -> Arc<str>` | Draw each tab's label from its position and own label; follows the `OnDrop` preview |
 | `empty_text` | `impl Into<Arc<str>>` | Placeholder when the bar has no tabs |
 | `empty_text_style` | `Style` | Empty-placeholder style |
 | `scroll_offset` | `usize` | Controlled scroll offset |
@@ -328,6 +329,23 @@ DraggableTabBar::new()
 Each formatter receives the number of tabs hidden on that side. Padding is part
 of the returned string, and the control's width and hit target are measured from
 it, so a wider label shrinks the visible tab area by the same amount.
+
+### Slot labels
+
+A label that names a slot rather than the tab, such as a number, belongs to the
+position a tab is drawn in. `position_label` formats every label from the tab's
+zero-based position and the label it was created with:
+
+```rust
+DraggableTabBar::new()
+    .tabs(names.iter().map(|name| DraggableTab::new(name.as_str())))
+    .reorder_mode(DragReorderMode::OnDrop)
+    .position_label(|position, label| Arc::from(format!("{}:{label}", position + 1)))
+```
+
+The formatted text is what the bar draws, measures, and hit-tests. While an
+`OnDrop` drag previews a new order, each tab is formatted again at the position
+the preview draws it in, so the numbers follow the tabs as they make room.
 
 When the bar has no tabs, it stays blank by default (border/background still
 paint). Set a left-aligned placeholder with `empty_text` — useful for editor
