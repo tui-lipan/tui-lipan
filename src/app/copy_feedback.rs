@@ -189,7 +189,7 @@ pub(crate) fn clear_copied_selection(
     if matches!(expected, SelectionSnapshot::ReadOnly { .. }) {
         return read_only_selection.remove(&id).is_some();
     }
-    crate::app::runner::events::clear_node_selection(tree, id)
+    crate::app::selection_clear::clear_node_selection(tree, id)
 }
 
 /// The effect one flash shows on the frame being painted.
