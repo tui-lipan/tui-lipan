@@ -35,6 +35,9 @@ struct StyledSegment<'a> {
     style: Style,
     start: usize,
     end: usize,
+    /// Render-only chrome (blockquote rails, code-block insets) has no
+    /// position in the document text and must never take selection styling.
+    selectable: bool,
 }
 
 pub(crate) struct DocumentViewRenderCtx<'a> {
@@ -1260,6 +1263,7 @@ fn segments_to_spans<'a>(
                     style,
                     start: 0,
                     end: 0,
+                    selectable: false,
                 });
                 offset = offset.saturating_add(chrome_len);
                 prefix_skipped = prefix_skipped.saturating_add(chrome_len);
@@ -1278,6 +1282,7 @@ fn segments_to_spans<'a>(
                 style,
                 start: content_cursor,
                 end: content_cursor.saturating_add(remainder_len),
+                selectable: true,
             });
             content_cursor = content_cursor.saturating_add(remainder_len);
         }
@@ -1287,6 +1292,10 @@ fn segments_to_spans<'a>(
     }
     let mut out = Vec::new();
     for seg in with_offsets {
+        if !seg.selectable {
+            out.push(Span::styled(seg.text, to_ratatui_style(seg.style)));
+            continue;
+        }
         let mut cuts = vec![0usize, seg.text.len()];
         for (sel_start, sel_end) in selection_ranges {
             if *sel_end <= seg.start || *sel_start >= seg.end {
@@ -1339,7 +1348,8 @@ mod tests {
     use super::{
         blank_gutter_spans_with_inset, built_in_line_number_gutter_text,
         built_in_line_number_style, full_row_bg_style, gutter_spans_with_inset, h_scroll_segments,
-        is_source_mode_continuation, render_single_line_spans, table_selection_ranges_for_line,
+        is_source_mode_continuation, render_single_line_spans, segments_to_spans,
+        table_selection_ranges_for_line,
     };
     use crate::backend::ratatui_backend::common::to_ratatui_style;
     use crate::style::{Color, Style};
@@ -1348,6 +1358,29 @@ mod tests {
         DocumentTableRectSelection, DocumentVisualLine, VisualLineKind,
     };
     use std::sync::Arc;
+
+    #[test]
+    fn selection_from_document_start_skips_render_only_prefix_chrome() {
+        let selection = Style::new().bg(Color::Blue);
+        let selected = to_ratatui_style(selection);
+        let segments = vec![
+            (Cow::Borrowed("│ "), Style::new()),
+            (Cow::Borrowed("Mark"), Style::new()),
+            (Cow::Borrowed("down"), Style::new()),
+        ];
+        let prefix = "│ ".len();
+
+        let spans = segments_to_spans(segments, 0, 8, &[(0, 4)], selection, prefix);
+
+        let rendered: Vec<(&str, bool)> = spans
+            .iter()
+            .map(|span| (span.content.as_ref(), span.style == selected))
+            .collect();
+        assert_eq!(
+            rendered,
+            vec![("│ ", false), ("Mark", true), ("down", false)]
+        );
+    }
 
     #[test]
     fn render_single_line_spans_skips_zero_width_style_anchors() {
