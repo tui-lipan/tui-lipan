@@ -142,7 +142,7 @@ pub(crate) fn try_activate_drag_drop(
 
     let dx = x.abs_diff(start_x);
     let dy = y.abs_diff(start_y);
-    if dx < threshold && dy < threshold {
+    if dx < threshold.0 && dy < threshold.1 {
         return false;
     }
 

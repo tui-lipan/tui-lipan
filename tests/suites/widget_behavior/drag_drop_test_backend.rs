@@ -488,3 +488,95 @@ fn send<C: Component>(backend: &mut TestBackend<C>, kind: MouseKind, x: u16, y: 
         })
         .unwrap();
 }
+
+#[derive(Clone, PartialEq)]
+enum ActivationThreshold {
+    Same(u16),
+    Axes(u16, u16),
+}
+
+struct ThresholdApp;
+
+impl Component for ThresholdApp {
+    type Properties = ActivationThreshold;
+    type State = usize;
+    type Message = ();
+
+    fn create_state(&self, _: &Self::Properties) -> usize {
+        0
+    }
+
+    fn update(&mut self, _: (), ctx: &mut Context<Self>) -> Update {
+        ctx.state += 1;
+        Update::none()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        let source = DragSource::new()
+            .child(
+                Text::new("drag me")
+                    .width(Length::Px(20))
+                    .height(Length::Px(8)),
+            )
+            .on_drag_start(|_| Some(Box::new("item")))
+            .on_drag_started(ctx.link().callback(|_| ()));
+        match ctx.props {
+            ActivationThreshold::Same(cells) => source.threshold(cells),
+            ActivationThreshold::Axes(columns, rows) => source.drag_threshold(columns, rows),
+        }
+        .into()
+    }
+}
+
+#[test]
+fn separate_thresholds_start_after_one_row_but_still_require_three_columns() {
+    for (x, y, expected) in [
+        (5, 2, 0),
+        (5, 1, 1),
+        (5, 3, 1),
+        (3, 2, 0),
+        (7, 2, 0),
+        (2, 2, 1),
+        (8, 2, 1),
+    ] {
+        let mut backend =
+            TestBackend::new_with_props(ThresholdApp, ActivationThreshold::Axes(3, 1));
+        backend.render();
+        for (kind, x, y) in [
+            (MouseKind::Down(MouseButton::Left), 5, 2),
+            (MouseKind::Drag(MouseButton::Left), x, y),
+        ] {
+            backend
+                .send_mouse(MouseEvent {
+                    kind,
+                    x,
+                    y,
+                    mods: KeyMods::NONE,
+                })
+                .unwrap();
+        }
+        assert_eq!(*backend.state(), expected, "movement to {x},{y}");
+    }
+}
+
+#[test]
+fn symmetric_threshold_still_requires_three_cells_on_either_axis() {
+    for (x, y, expected) in [(5, 3, 0), (5, 4, 0), (5, 5, 1), (7, 2, 0), (8, 2, 1)] {
+        let mut backend = TestBackend::new_with_props(ThresholdApp, ActivationThreshold::Same(3));
+        backend.render();
+        for (kind, x, y) in [
+            (MouseKind::Down(MouseButton::Left), 5, 2),
+            (MouseKind::Drag(MouseButton::Left), x, y),
+        ] {
+            backend
+                .send_mouse(MouseEvent {
+                    kind,
+                    x,
+                    y,
+                    mods: KeyMods::NONE,
+                })
+                .unwrap();
+        }
+        assert_eq!(*backend.state(), expected, "movement to {x},{y}");
+    }
+}

@@ -18,7 +18,7 @@ pub struct DragSourceNode {
     pub drag_slot: DragSlot,
     pub preview_max_width: Option<u16>,
     pub preview_max_height: Option<u16>,
-    pub threshold: u16,
+    pub threshold: (u16, u16),
     pub enabled: bool,
     pub is_dragging: bool,
 }
@@ -35,7 +35,7 @@ impl Default for DragSourceNode {
             drag_slot: DragSlot::Collapse,
             preview_max_width: None,
             preview_max_height: None,
-            threshold: 3,
+            threshold: (3, 3),
             enabled: true,
             is_dragging: false,
         }
