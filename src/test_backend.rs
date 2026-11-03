@@ -1170,16 +1170,15 @@ where
             let tree = &self.core.tree;
             let read_only = &self.widgets.read_only_selection;
             self.copy_feedback.record_selections(|id| {
-                crate::app::copy_feedback::selection_snapshot(tree, read_only, id)
+                crate::app::copy_feedback::copied_selection(tree, read_only, id)
             });
         }
         let mut selection_cleared = false;
-        for (id, snapshot) in self.copy_feedback.tick_at(now).clear {
+        for copied in self.copy_feedback.tick_at(now).clear {
             selection_cleared |= crate::app::copy_feedback::clear_copied_selection(
                 &mut self.core.tree,
                 &mut self.widgets.read_only_selection,
-                id,
-                &snapshot,
+                &copied,
             );
         }
         if selection_cleared {

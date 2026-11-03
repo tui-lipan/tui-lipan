@@ -270,16 +270,15 @@ impl<C: Component> AppRunner<C> {
             let tree = &self.core.tree;
             let read_only = &self.widgets.read_only_selection;
             self.copy_feedback.record_selections(|id| {
-                crate::app::copy_feedback::selection_snapshot(tree, read_only, id)
+                crate::app::copy_feedback::copied_selection(tree, read_only, id)
             });
         }
         let copy_feedback_tick = self.copy_feedback.tick_at(self.clock_now());
-        for (id, snapshot) in &copy_feedback_tick.clear {
+        for copied in &copy_feedback_tick.clear {
             if crate::app::copy_feedback::clear_copied_selection(
                 &mut self.core.tree,
                 &mut self.widgets.read_only_selection,
-                *id,
-                snapshot,
+                copied,
             ) {
                 crate::debug::internal_log!("[tui-lipan] dirty: copied selection cleared");
                 // Clearing can run a widget's change callback, which may queue an app update.

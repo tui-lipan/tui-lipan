@@ -15,12 +15,14 @@ use web_time::Instant;
 use crate::app::input::keymap::Keymap;
 use crate::app::interaction_state::DirtyLevel;
 use crate::clipboard::{ClipboardConfig, ClipboardService, CopyFeedback, CopyFeedbackEffect};
+use crate::core::element::Key;
 use crate::core::event::KeyEvent;
 use crate::core::node::{NodeId, NodeKind, NodeTree};
 use crate::style::{ColorTransform, Span, Style};
 use crate::ui::capabilities::ClipboardContext;
 use crate::ui::router::{self, ClipboardDispatchOutcome};
 use crate::utils::GridSelection;
+use crate::widgets::document_view::node::DocumentTableRectSelection;
 
 /// How often an animated effect repaints. Smooth enough for a sweep, and the effect lasts well
 /// under half a second, so the cost is a handful of paint-only frames.
@@ -53,7 +55,7 @@ enum ClearOnEnd {
     Never,
     /// Not yet known what the selection was: the backend records it on its next pass.
     Unrecorded,
-    Recorded(SelectionSnapshot),
+    Recorded(CopiedSelection),
 }
 
 #[derive(Clone)]
@@ -124,13 +126,49 @@ pub(crate) enum SelectionSnapshot {
     Text { cursor: usize, anchor: usize },
     /// A read-only input whose selection the runtime keeps on the app's behalf.
     ReadOnly { cursor: usize, anchor: usize },
+    /// A document's text range and table rectangle. A table drag moves only the rectangle, so the
+    /// rectangle itself is compared, not just whether there is one.
     Document {
         cursor: usize,
         anchor: Option<usize>,
-        table: bool,
+        table: Option<DocumentTableRectSelection>,
     },
     #[cfg(feature = "terminal")]
     Terminal(crate::widgets::TerminalSelection),
+}
+
+impl SelectionSnapshot {
+    fn document(
+        cursor: usize,
+        anchor: Option<usize>,
+        table: Option<&DocumentTableRectSelection>,
+    ) -> Option<Self> {
+        let ranged = anchor.is_some_and(|anchor| anchor != cursor);
+        (ranged || table.is_some()).then(|| Self::Document {
+            cursor,
+            anchor,
+            table: table.cloned(),
+        })
+    }
+}
+
+/// Where a `DocumentView` sits under its nearest `ScrollView`, in terms that outlive its node.
+///
+/// A virtualized scroll view sweeps a child that scrolls out of view and stashes its documents'
+/// selections under the child's key, in subtree order, until it scrolls back as a new node.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ScrolledDocument {
+    scroll_view: NodeId,
+    child_key: Key,
+    index: usize,
+}
+
+/// A copied selection a flash will clear when it ends.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CopiedSelection {
+    id: NodeId,
+    snapshot: SelectionSnapshot,
+    scrolled: Option<ScrolledDocument>,
 }
 
 /// What `id` has selected right now, or `None` when it has no selection to clear.
@@ -156,17 +194,11 @@ pub(crate) fn selection_snapshot(
         NodeKind::Input(node) => text(node.cursor, node.anchor),
         NodeKind::TextArea(node) => text(node.cursor, node.anchor),
         NodeKind::HexArea(node) => text(node.cursor, node.anchor),
-        NodeKind::DocumentView(node) => {
-            let table = node.table_rect_selection.is_some();
-            let ranged = node
-                .selection_anchor
-                .is_some_and(|anchor| anchor != node.selection_cursor);
-            (table || ranged).then_some(SelectionSnapshot::Document {
-                cursor: node.selection_cursor,
-                anchor: node.selection_anchor,
-                table,
-            })
-        }
+        NodeKind::DocumentView(node) => SelectionSnapshot::document(
+            node.selection_cursor,
+            node.selection_anchor,
+            node.table_rect_selection.as_ref(),
+        ),
         #[cfg(feature = "terminal")]
         NodeKind::Terminal(node) => node
             .selection
@@ -176,13 +208,79 @@ pub(crate) fn selection_snapshot(
     }
 }
 
-/// Clear what `id` has selected, provided it is still `expected`. Returns whether anything changed.
+/// Record what `id` has selected, and where to find it again if a scroll view sweeps its node.
+pub(crate) fn copied_selection(
+    tree: &NodeTree,
+    read_only_selection: &HashMap<NodeId, (usize, Option<usize>)>,
+    id: NodeId,
+) -> Option<CopiedSelection> {
+    let snapshot = selection_snapshot(tree, read_only_selection, id)?;
+    let scrolled = matches!(snapshot, SelectionSnapshot::Document { .. })
+        .then(|| scrolled_document(tree, id))
+        .flatten();
+    Some(CopiedSelection {
+        id,
+        snapshot,
+        scrolled,
+    })
+}
+
+fn scrolled_document(tree: &NodeTree, id: NodeId) -> Option<ScrolledDocument> {
+    let mut child = id;
+    while let Some(parent) = tree.node(child).parent {
+        if matches!(tree.node(parent).kind, NodeKind::ScrollView(_)) {
+            let child_key = tree.node(child).key.clone()?;
+            let index = documents_in_subtree(tree, child)
+                .iter()
+                .position(|doc| *doc == id)?;
+            return Some(ScrolledDocument {
+                scroll_view: parent,
+                child_key,
+                index,
+            });
+        }
+        child = parent;
+    }
+    None
+}
+
+/// The `DocumentView`s under `root`, in the order a scroll view stashes their selections.
+fn documents_in_subtree(tree: &NodeTree, root: NodeId) -> Vec<NodeId> {
+    fn walk(tree: &NodeTree, id: NodeId, out: &mut Vec<NodeId>) {
+        if !tree.is_valid(id) {
+            return;
+        }
+        if matches!(tree.node(id).kind, NodeKind::DocumentView(_)) {
+            out.push(id);
+            return;
+        }
+        for child in &tree.node(id).children {
+            walk(tree, *child, out);
+        }
+    }
+    let mut out = Vec::new();
+    walk(tree, root, &mut out);
+    out
+}
+
+/// Clear a copied selection, provided it is still what was copied. Returns whether anything
+/// changed.
+///
+/// A document that a scroll view swept since the copy is found where it went: in the scroll
+/// view's stash, or as the new node it was restored to.
 pub(crate) fn clear_copied_selection(
     tree: &mut NodeTree,
     read_only_selection: &mut HashMap<NodeId, (usize, Option<usize>)>,
-    id: NodeId,
-    expected: &SelectionSnapshot,
+    copied: &CopiedSelection,
 ) -> bool {
+    let expected = &copied.snapshot;
+    let id = match (&copied.scrolled, tree.is_valid(copied.id)) {
+        (Some(scrolled), false) => match remounted_document(tree, scrolled) {
+            Some(id) => id,
+            None => return clear_stashed_document(tree, scrolled, expected),
+        },
+        _ => copied.id,
+    };
     if selection_snapshot(tree, read_only_selection, id).as_ref() != Some(expected) {
         return false;
     }
@@ -190,6 +288,56 @@ pub(crate) fn clear_copied_selection(
         return read_only_selection.remove(&id).is_some();
     }
     crate::app::selection_clear::clear_node_selection(tree, id)
+}
+
+/// The node a swept document was restored to, if its scroll-view child is mounted again.
+fn remounted_document(tree: &NodeTree, scrolled: &ScrolledDocument) -> Option<NodeId> {
+    if !tree.is_valid(scrolled.scroll_view) {
+        return None;
+    }
+    let child = tree
+        .node(scrolled.scroll_view)
+        .children
+        .iter()
+        .copied()
+        .find(|child| {
+            tree.is_valid(*child) && tree.node(*child).key.as_ref() == Some(&scrolled.child_key)
+        })?;
+    documents_in_subtree(tree, child)
+        .get(scrolled.index)
+        .copied()
+}
+
+/// Clear a document selection a scroll view is holding for a child that is out of view.
+fn clear_stashed_document(
+    tree: &mut NodeTree,
+    scrolled: &ScrolledDocument,
+    expected: &SelectionSnapshot,
+) -> bool {
+    if !tree.is_valid(scrolled.scroll_view) {
+        return false;
+    }
+    let NodeKind::ScrollView(sv) = &mut tree.node_mut(scrolled.scroll_view).kind else {
+        return false;
+    };
+    let Some(doc) = sv
+        .offscreen_doc_selections
+        .get_mut(&scrolled.child_key)
+        .and_then(|stash| stash.docs.get_mut(scrolled.index))
+    else {
+        return false;
+    };
+    let stashed = SelectionSnapshot::document(
+        doc.selection_cursor,
+        doc.selection_anchor,
+        doc.table_rect_selection.as_ref(),
+    );
+    if stashed.as_ref() != Some(expected) {
+        return false;
+    }
+    doc.selection_anchor = None;
+    doc.table_rect_selection = None;
+    true
 }
 
 /// The effect one flash shows on the frame being painted.
@@ -294,7 +442,7 @@ pub(crate) struct CopyFeedbackTick {
     pub(crate) needs_paint: bool,
     pub(crate) next_due: Option<Duration>,
     /// Selections whose flash just ended and asked for them to be cleared.
-    pub(crate) clear: Vec<(NodeId, SelectionSnapshot)>,
+    pub(crate) clear: Vec<CopiedSelection>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -374,7 +522,7 @@ impl CopyFeedbackState {
     /// the selection exactly as it was copied.
     pub(crate) fn record_selections(
         &mut self,
-        mut snapshot: impl FnMut(NodeId) -> Option<SelectionSnapshot>,
+        mut snapshot: impl FnMut(NodeId) -> Option<CopiedSelection>,
     ) {
         for (id, flash) in &mut self.flashes {
             if matches!(flash.clear, ClearOnEnd::Unrecorded) {
@@ -436,11 +584,11 @@ impl CopyFeedbackState {
         let mut tick = CopyFeedbackTick::default();
         let mut animating = false;
 
-        self.flashes.retain(|id, flash| match flash.phase {
+        self.flashes.retain(|_, flash| match flash.phase {
             // Nothing to show: the flash only exists to clear the selection, which it can do now.
             CopyFeedbackPhase::Pending if !flash.feedback.is_visible() => {
-                if let ClearOnEnd::Recorded(snapshot) = &flash.clear {
-                    tick.clear.push((*id, snapshot.clone()));
+                if let ClearOnEnd::Recorded(copied) = &flash.clear {
+                    tick.clear.push(copied.clone());
                 }
                 false
             }
@@ -461,8 +609,8 @@ impl CopyFeedbackState {
             }
             CopyFeedbackPhase::Active { .. } => {
                 tick.needs_paint |= flash.feedback.is_visible();
-                if let ClearOnEnd::Recorded(snapshot) = &flash.clear {
-                    tick.clear.push((*id, snapshot.clone()));
+                if let ClearOnEnd::Recorded(copied) = &flash.clear {
+                    tick.clear.push(copied.clone());
                 }
                 false
             }
@@ -659,24 +807,32 @@ mod tests {
         assert_eq!(tick.next_due, Some(Duration::from_millis(150)));
     }
 
+    fn text_selection(id: NodeId) -> CopiedSelection {
+        CopiedSelection {
+            id,
+            snapshot: SelectionSnapshot::Text {
+                cursor: 5,
+                anchor: 0,
+            },
+            scrolled: None,
+        }
+    }
+
     #[test]
     fn a_recorded_selection_is_handed_back_when_the_flash_ends() {
         let mut feedback = CopyFeedbackState::default();
         let id = NodeId::new(1, 0);
         let other = NodeId::new(2, 0);
-        let snapshot = SelectionSnapshot::Text {
-            cursor: 5,
-            anchor: 0,
-        };
+        let copied = text_selection(id);
         let clearing = CopyFeedback::default().clear_selection(true);
         feedback.trigger(id, clearing);
         feedback.trigger(other, clearing);
-        feedback.record_selections(|node| (node == id).then(|| snapshot.clone()));
+        feedback.record_selections(|node| (node == id).then(|| copied.clone()));
 
         let start = Instant::now();
         assert!(feedback.tick_at(start).clear.is_empty());
         let end = feedback.tick_at(start + Duration::from_secs(1));
-        assert_eq!(end.clear, vec![(id, snapshot)]);
+        assert_eq!(end.clear, vec![copied]);
     }
 
     #[test]
@@ -684,12 +840,7 @@ mod tests {
         let mut feedback = CopyFeedbackState::default();
         let id = NodeId::new(1, 0);
         feedback.trigger_range(id, CopyFeedback::default().clear_selection(true), None);
-        feedback.record_selections(|_| {
-            Some(SelectionSnapshot::Text {
-                cursor: 1,
-                anchor: 0,
-            })
-        });
+        feedback.record_selections(|node| Some(text_selection(node)));
         let start = Instant::now();
         feedback.tick_at(start);
         assert!(

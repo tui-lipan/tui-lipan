@@ -140,7 +140,9 @@ effect except `Off`.
 
 With `clear_selection`, the copied selection is cleared once the highlight ends, or straight away
 when there is no highlight. Clearing goes through the widget's change callback, as a click
-elsewhere does. A selection the user has changed since the copy is left alone. Copies made with
+elsewhere does. A selection the user has changed since the copy is left alone. A `DocumentView`
+that scrolls out of a `ScrollView` before the highlight ends is cleared all the same, so it does
+not come back selected. Copies made with
 `flash_copy_feedback_range` never clear anything, because that range is not the widget's selection.
 
 Mouse clipboard gestures act on the widget under the pointer, never on whatever happens to hold

@@ -3556,6 +3556,235 @@ fn middle_click_pastes_primary_selection_into_focused_editor() {
     assert_eq!(backend.state().text(), "unix");
 }
 
+/// Six keyed document rows in a two-row scroll view, which sweeps rows that scroll out of view
+/// and stashes their selections until they come back.
+struct ScrolledDocuments;
+
+impl Component for ScrolledDocuments {
+    type Message = usize;
+    type Properties = ();
+    type State = usize;
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {
+        0
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        ScrollView::new()
+            .scrollbar(false)
+            .gap(0)
+            .offset(ctx.state)
+            .children((0..6).map(|i| {
+                DocumentView::new(format!("row {i}"))
+                    .border(false)
+                    .scrollbar(false)
+                    .h_scrollbar(false)
+                    .wrap(false)
+                    .height(Length::Auto)
+                    .key(format!("row-{i}"))
+            }))
+            .into()
+    }
+
+    fn update(&mut self, offset: Self::Message, ctx: &mut Context<Self>) -> Update {
+        ctx.state = offset;
+        Update::full()
+    }
+}
+
+fn scrolled_documents_backend(
+    clipboard: Rc<RefCell<MouseClipboardState>>,
+) -> TestBackend<ScrolledDocuments> {
+    let app = crate::App::new()
+        .clipboard_provider(MouseClipboardProvider(clipboard))
+        .clipboard_config(ClipboardConfig {
+            enable_osc52: false,
+            copy_feedback: crate::clipboard::CopyFeedback::new(
+                crate::clipboard::CopyFeedbackEffect::Fade,
+            )
+            .clear_selection(true),
+            ..ClipboardConfig::default()
+        });
+    let mut backend = TestBackend::new_with_app(app, ScrolledDocuments, ());
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 2,
+    });
+    backend.render();
+    backend
+}
+
+fn document_row(backend: &TestBackend<ScrolledDocuments>, row: &str) -> Option<NodeId> {
+    let key = Key::from(row.to_string());
+    backend
+        .core
+        .tree
+        .iter()
+        .find(|node| {
+            matches!(node.kind, NodeKind::DocumentView(_)) && node.key.as_ref() == Some(&key)
+        })
+        .map(|node| node.id)
+}
+
+/// Select all of document `id` and copy it with the keyboard.
+fn select_and_copy_document(backend: &mut TestBackend<ScrolledDocuments>, id: NodeId) {
+    if let NodeKind::DocumentView(doc) = &mut backend.core.tree.node_mut(id).kind {
+        doc.selection_cursor = doc.visual_cache.flat_text.len();
+        doc.selection_anchor = Some(0);
+    }
+    backend
+        .send_key(KeyEvent {
+            code: KeyCode::Insert,
+            mods: KeyMods::CTRL,
+        })
+        .unwrap();
+    // The first frame arms the flash and records what was copied.
+    backend.advance_frame(Duration::from_millis(1));
+}
+
+fn document_selection(backend: &TestBackend<ScrolledDocuments>, id: NodeId) -> Option<usize> {
+    match &backend.core.tree.node(id).kind {
+        NodeKind::DocumentView(doc) => doc.selection_anchor,
+        _ => unreachable!("expected a DocumentView"),
+    }
+}
+
+#[test]
+fn a_copied_document_that_scrolls_away_comes_back_cleared() {
+    let clipboard = Rc::new(RefCell::new(MouseClipboardState::default()));
+    let mut backend = scrolled_documents_backend(Rc::clone(&clipboard));
+    let row = document_row(&backend, "row-0").expect("row-0 is in view");
+
+    select_and_copy_document(&mut backend, row);
+    assert_eq!(clipboard.borrow().clipboard, "row 0");
+
+    backend.dispatch(2).unwrap();
+    assert!(document_row(&backend, "row-0").is_none(), "row-0 is swept");
+    backend.advance(Duration::from_secs(1));
+    backend.dispatch(0).unwrap();
+
+    let row = document_row(&backend, "row-0").expect("row-0 is back in view");
+    assert_eq!(document_selection(&backend, row), None);
+}
+
+#[test]
+fn a_copied_document_remounted_before_the_highlight_ends_is_cleared() {
+    let clipboard = Rc::new(RefCell::new(MouseClipboardState::default()));
+    let mut backend = scrolled_documents_backend(Rc::clone(&clipboard));
+    let row = document_row(&backend, "row-0").expect("row-0 is in view");
+
+    select_and_copy_document(&mut backend, row);
+    backend.dispatch(2).unwrap();
+    backend.dispatch(0).unwrap();
+    let remounted = document_row(&backend, "row-0").expect("row-0 is back in view");
+    assert_ne!(remounted, row, "row-0 came back as a new node");
+    assert_eq!(
+        document_selection(&backend, remounted),
+        Some(0),
+        "the stash restored the selection"
+    );
+
+    backend.advance(Duration::from_secs(1));
+    assert_eq!(document_selection(&backend, remounted), None);
+}
+
+#[cfg(feature = "markdown")]
+#[test]
+fn a_different_table_rectangle_made_after_the_copy_is_not_cleared() {
+    use crate::widgets::document_view::node::DocumentTableRectSelection;
+
+    struct TableDocument;
+
+    impl Component for TableDocument {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            DocumentView::new("| a | b |\n|---|---|\n| c | d |\n| e | f |\n")
+                .markdown()
+                .border(false)
+                .scrollbar(false)
+                .into()
+        }
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+    }
+
+    let rectangle = |row_end: usize| DocumentTableRectSelection {
+        table_id: 0,
+        row_start: 0,
+        row_end,
+        col_start: 0,
+        col_end: 1,
+        anchor_row_index: 0,
+        anchor_col_index: 0,
+        anchor_row_line_index: 0,
+        anchor_cell_line_anchor_byte: 0,
+        cursor_row_index: row_end,
+        cursor_col_index: 1,
+        cursor_row_line_index: 0,
+        cursor_cell_line_anchor_byte: 0,
+        tsv_text: Arc::from("a\tb"),
+    };
+    let clipboard = Rc::new(RefCell::new(MouseClipboardState::default()));
+    let app = crate::App::new()
+        .clipboard_provider(MouseClipboardProvider(Rc::clone(&clipboard)))
+        .clipboard_config(ClipboardConfig {
+            enable_osc52: false,
+            copy_feedback: crate::clipboard::CopyFeedback::new(
+                crate::clipboard::CopyFeedbackEffect::Fade,
+            )
+            .clear_selection(true),
+            ..ClipboardConfig::default()
+        });
+    let mut backend = TestBackend::new_with_app(app, TableDocument, ());
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 30,
+        h: 10,
+    });
+    backend.render();
+    let row = backend
+        .core
+        .tree
+        .iter()
+        .find(|node| matches!(node.kind, NodeKind::DocumentView(_)))
+        .map(|node| node.id)
+        .expect("expected a DocumentView");
+    let set_rectangle = |backend: &mut TestBackend<TableDocument>, rect| {
+        if let NodeKind::DocumentView(doc) = &mut backend.core.tree.node_mut(row).kind {
+            doc.table_rect_selection = Some(rect);
+        }
+    };
+
+    set_rectangle(&mut backend, rectangle(1));
+    backend
+        .send_key(KeyEvent {
+            code: KeyCode::Insert,
+            mods: KeyMods::CTRL,
+        })
+        .unwrap();
+    assert_eq!(clipboard.borrow().clipboard, "a\tb");
+    backend.advance_frame(Duration::from_millis(1));
+
+    // A table drag moves only the rectangle: the text cursor and anchor stay where they were.
+    set_rectangle(&mut backend, rectangle(2));
+    backend.advance(Duration::from_secs(1));
+
+    let NodeKind::DocumentView(doc) = &backend.core.tree.node(row).kind else {
+        unreachable!("expected a DocumentView")
+    };
+    assert_eq!(doc.table_rect_selection, Some(rectangle(2)));
+}
+
 #[cfg(feature = "terminal")]
 #[test]
 fn scan_feedback_sweeps_a_copied_terminal_selection() {
