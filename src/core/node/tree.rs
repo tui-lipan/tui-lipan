@@ -1117,6 +1117,11 @@ impl NodeTree {
         self.do_test(x, y, TestKind::Hit)
     }
 
+    /// Hit-test wheel input, skipping regions that explicitly forward it to lower layers.
+    pub(crate) fn wheel_test(&self, x: i16, y: i16) -> Option<NodeId> {
+        self.do_test(x, y, TestKind::Wheel)
+    }
+
     /// Hit-test additional drop surfaces without making them clickable or focusable.
     pub(crate) fn drop_target_test(&self, x: i16, y: i16, targets: &[NodeId]) -> Option<NodeId> {
         self.do_test(x, y, TestKind::DropTarget(targets))
@@ -1650,7 +1655,11 @@ impl NodeTree {
                 }
 
                 let node = self.node(frame.id);
-                if node.inert || node.portal_suppressed || !node.rect.contains(x, y) {
+                if node.inert
+                    || node.portal_suppressed
+                    || !node.rect.contains(x, y)
+                    || kind.skips(&node.kind)
+                {
                     stack.pop();
                     continue;
                 }
@@ -1663,7 +1672,9 @@ impl NodeTree {
                         .rev()
                         .copied()
                         .filter(|child| {
-                            self.is_valid(*child) && self.node(*child).rect.contains(x, y)
+                            self.is_valid(*child)
+                                && self.node(*child).rect.contains(x, y)
+                                && !kind.skips(&self.node(*child).kind)
                         })
                         .collect();
                     if frame.blocks_self_on_child_miss {
@@ -1712,7 +1723,7 @@ impl NodeTree {
 
             let node = self.node(done.id);
             let is_match = match kind {
-                TestKind::Hit | TestKind::DropTarget(_) => {
+                TestKind::Hit | TestKind::Wheel | TestKind::DropTarget(_) => {
                     if matches!(kind, TestKind::DropTarget(targets) if targets.contains(&done.id)) {
                         true
                     } else if let Some(hit) = node.kind.hit_test_refinement(x, y, node.rect) {
@@ -1999,10 +2010,18 @@ impl NodeTree {
 #[derive(Clone, Copy)]
 enum TestKind<'a> {
     Hit,
+    Wheel,
     DropTarget(&'a [NodeId]),
     Hover,
     MouseMove,
     Pointer,
+}
+
+impl TestKind<'_> {
+    fn skips(self, kind: &NodeKind) -> bool {
+        matches!(self, Self::Wheel)
+            && matches!(kind, NodeKind::MouseRegion(region) if region.enabled && region.wheel_passthrough)
+    }
 }
 
 #[derive(Clone, Copy)]

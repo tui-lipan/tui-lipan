@@ -39,6 +39,7 @@ pub(crate) fn reconcile_mouse_region(
             on_hover_change: region.on_hover_change.clone(),
             hit_test: region.hit_test.clone(),
             capture_click: region.capture_click,
+            wheel_passthrough: region.wheel_passthrough,
             capture_required_mods: region.capture_required_mods,
             hover_style: region.hover_style,
             hover_effects: region.hover_effects.clone(),
