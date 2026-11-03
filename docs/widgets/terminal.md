@@ -383,6 +383,21 @@ let config = TerminalPtyConfig::new("/bin/zsh")
 Pass `inherit_multiplexer_env(true)` only when the host genuinely wants the
 enclosing multiplexer to own clipboard and image passthrough for its children.
 
+### Flow control
+
+A new PTY honours XON/XOFF flow control: `Ctrl+S` pauses everything the child
+writes until `Ctrl+Q` resumes it. With the legacy key encoding, `Ctrl+Shift+S`
+sends the same byte. To a user, a paused pane looks frozen. A host that embeds
+interactive shells can turn flow control off:
+
+```rust
+let config = TerminalPtyConfig::new("/bin/bash").flow_control(false);
+```
+
+The child then receives `Ctrl+S` as an ordinary key, which readline uses for
+forward history search. A child can turn flow control back on with `stty ixon`.
+The setting has no effect on Windows.
+
 ```rust
 
 // Spawn the PTY with an event callback

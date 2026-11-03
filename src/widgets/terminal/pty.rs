@@ -126,6 +126,7 @@ pub struct TerminalPtyConfig {
     pub(crate) env: Vec<(Arc<str>, Arc<str>)>,
     pub(crate) env_remove: Vec<Arc<str>>,
     pub(crate) cell: TerminalCellSize,
+    pub(crate) flow_control: bool,
 }
 
 impl Default for TerminalPtyConfig {
@@ -142,6 +143,7 @@ impl Default for TerminalPtyConfig {
             env: vec![(Arc::from("COLORTERM"), Arc::from("truecolor"))],
             env_remove: MULTIPLEXER_ENV.iter().copied().map(Arc::from).collect(),
             cell: TerminalCellSize::default(),
+            flow_control: true,
         }
     }
 }
@@ -212,6 +214,19 @@ impl TerminalPtyConfig {
     /// still wins.
     pub fn env_remove(mut self, key: impl Into<Arc<str>>) -> Self {
         self.env_remove.push(key.into());
+        self
+    }
+
+    /// Whether the PTY honours XON/XOFF output flow control (`IXON`). On by default, as in a fresh
+    /// PTY.
+    ///
+    /// With it on, `Ctrl+S` (`0x13`) pauses everything the child writes until `Ctrl+Q` resumes it,
+    /// so a stray keypress leaves the pane looking frozen. A legacy keyboard encoding also sends
+    /// `Ctrl+Shift+S` as `0x13`. Pass `false` to clear `IXON` before the child starts: the byte then
+    /// reaches the child like any other key, and readline's forward history search works. A child
+    /// can still turn flow control back on with `stty ixon`. Has no effect on Windows.
+    pub fn flow_control(mut self, enabled: bool) -> Self {
+        self.flow_control = enabled;
         self
     }
 
@@ -433,6 +448,12 @@ impl TerminalPty {
         let pair = pty_system
             .openpty(pty_size(config.cols, config.rows, config.cell))
             .map_err(|err| TerminalPtyError::Setup(err.to_string()))?;
+
+        #[cfg(unix)]
+        if !config.flow_control {
+            unix_disable_flow_control(&*pair.master)
+                .map_err(|err| TerminalPtyError::Setup(err.to_string()))?;
+        }
 
         #[cfg(unix)]
         let reader = File::from(
@@ -768,6 +789,28 @@ fn unix_dup_master_fd(master: &dyn portable_pty::MasterPty) -> std::io::Result<O
     unix_dup_raw_fd(fd)
 }
 
+/// Clear `IXON` on the PTY so `0x13` and `0x11` reach the child instead of pausing and resuming
+/// its output. The master and slave share one line discipline, so setting it through the master
+/// before the child spawns is what the child's shell inherits.
+#[cfg(unix)]
+fn unix_disable_flow_control(master: &dyn portable_pty::MasterPty) -> std::io::Result<()> {
+    let fd = master
+        .as_raw_fd()
+        .ok_or_else(|| std::io::Error::other("pty master fd unavailable"))?;
+    // SAFETY: an all-zero termios is valid storage for `tcgetattr` to fill.
+    let mut termios = unsafe { std::mem::zeroed::<libc::termios>() };
+    // SAFETY: `fd` is the live master fd and `termios` points to writable storage.
+    if unsafe { libc::tcgetattr(fd, &mut termios) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    termios.c_iflag &= !libc::IXON;
+    // SAFETY: `termios` was filled by `tcgetattr` for this fd.
+    if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &termios) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 #[cfg(unix)]
 fn unix_dup_raw_fd(fd: RawFd) -> std::io::Result<OwnedFd> {
     let dup = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0) };
@@ -892,6 +935,63 @@ impl Drop for TerminalPty {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use std::sync::mpsc;
+
+    /// Spawn `script`, wait for it to print `READY`, write `input`, and collect what it prints
+    /// until it exits or goes quiet for `quiet`.
+    fn output_after_input(
+        config: TerminalPtyConfig,
+        script: &str,
+        input: &[u8],
+        quiet: Duration,
+    ) -> String {
+        let (sender, receiver) = mpsc::channel();
+        let pty = TerminalPty::spawn(config.args(["-c", script].map(Arc::from)), move |event| {
+            let _ = sender.send(event);
+        })
+        .unwrap();
+        let mut bytes = Vec::new();
+        while !bytes.windows(5).any(|window| window == b"READY") {
+            match receiver.recv_timeout(Duration::from_secs(5)).unwrap() {
+                TerminalPtyEvent::Output(output) => bytes.extend_from_slice(&output),
+                other => panic!("child ended before READY: {other:?}"),
+            }
+        }
+        pty.write(input).unwrap();
+        while let Ok(event) = receiver.recv_timeout(quiet) {
+            match event {
+                TerminalPtyEvent::Output(output) => bytes.extend_from_slice(&output),
+                TerminalPtyEvent::Exited(_) => break,
+                TerminalPtyEvent::Error(error) => panic!("{error}"),
+            }
+        }
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+
+    #[test]
+    fn without_flow_control_ctrl_s_reaches_the_child_and_output_keeps_flowing() {
+        let output = output_after_input(
+            TerminalPtyConfig::new("/bin/sh").flow_control(false),
+            "printf READY; read line; printf AFTER",
+            b"\x13go\n",
+            Duration::from_secs(5),
+        );
+        assert!(output.contains("AFTER"), "output stopped: {output:?}");
+    }
+
+    #[test]
+    fn flow_control_is_on_unless_disabled() {
+        let output = output_after_input(
+            TerminalPtyConfig::new("/bin/sh"),
+            "printf READY; stty -a",
+            b"",
+            Duration::from_secs(5),
+        );
+        assert!(
+            output.split_whitespace().any(|flag| flag == "ixon"),
+            "stty -a: {output:?}"
+        );
+    }
 
     fn removes(config: &TerminalPtyConfig, key: &str) -> bool {
         config.env_remove.iter().any(|k| k.as_ref() == key)
