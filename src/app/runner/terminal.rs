@@ -29,7 +29,10 @@ impl PointerManager {
             return Ok(());
         }
         match desired {
-            Some(shape) => execute!(backend, Print(format!("\x1b]22;{}\x1b\\", shape.as_str())))?,
+            Some(shape) => execute!(
+                backend,
+                Print(format!("\x1b]22;{}\x1b\\", shape.host_name()))
+            )?,
             // Named fallback handles older hosts; the empty reset then releases ownership on
             // conforming hosts, which may use a different default after mouse capture ends.
             None => execute!(backend, Print("\x1b]22;default\x1b\\\x1b]22;\x1b\\"))?,
@@ -541,6 +544,16 @@ mod pointer_tests {
             bytes,
             b"\x1b]22;grab\x1b\\\x1b]22;text\x1b\\\x1b]22;default\x1b\\\x1b]22;\x1b\\"
         );
+    }
+
+    #[test]
+    fn all_scroll_reaches_the_host_by_its_x11_name() {
+        let mut pointer = PointerManager::default();
+        let mut bytes = Vec::new();
+        pointer
+            .update(&mut bytes, Some(PointerShape::AllScroll))
+            .unwrap();
+        assert_eq!(bytes, b"\x1b]22;fleur\x1b\\");
     }
 
     #[test]

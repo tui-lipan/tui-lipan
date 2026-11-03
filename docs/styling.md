@@ -1001,7 +1001,8 @@ let handle = Text::new("Drag here").pointer_shape(PointerShape::Grab);
 
 An explicit shape applies to descendants unless a descendant declares its own override.
 Setting a shape does not make an element clickable or focusable. Use `EwResize` or `NsResize`
-for resize handles and `Grabbing` during a move gesture. Pointer changes do not require repainting
+for resize handles, `AllScroll` for a handle that drags along both axes, and `Grabbing` during a
+move gesture. Pointer changes do not require repainting
 terminal cells. Leaving the application, suspending it, or handing the terminal to another program
 resets the pointer.
 

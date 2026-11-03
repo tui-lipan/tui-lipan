@@ -8,6 +8,9 @@
 pub enum PointerShape {
     /// The `alias` pointer.
     Alias,
+    /// The `all-scroll` pointer, for a drag in any direction. Hosts receive its X11 name `fleur`,
+    /// which kitty, lacking `all-scroll`, shows as `move`.
+    AllScroll,
     /// The `cell` pointer.
     Cell,
     /// The `copy` pointer.
@@ -72,6 +75,7 @@ pub enum PointerShape {
 impl PointerShape {
     const NAMES: &'static [(Self, &'static str)] = &[
         (Self::Alias, "alias"),
+        (Self::AllScroll, "all-scroll"),
         (Self::Cell, "cell"),
         (Self::Copy, "copy"),
         (Self::Crosshair, "crosshair"),
@@ -108,8 +112,22 @@ impl PointerShape {
         Self::NAMES[self as usize].1
     }
 
-    /// Parse a standard OSC 22 shape name. Unknown names are ignored.
+    /// The name written to the host terminal, which differs from [`Self::as_str`] only where a
+    /// widely supported host lacks the standard name and would otherwise drop the request.
+    pub(crate) fn host_name(self) -> &'static str {
+        match self {
+            Self::AllScroll => "fleur",
+            _ => self.as_str(),
+        }
+    }
+
+    /// Parse a standard OSC 22 shape name. `fleur`, the name hosts receive for
+    /// [`Self::AllScroll`], also parses, so a nested application keeps its shape. Unknown names
+    /// are ignored.
     pub fn from_name(name: &str) -> Option<Self> {
+        if name == "fleur" {
+            return Some(Self::AllScroll);
+        }
         Self::NAMES
             .iter()
             .find_map(|&(shape, value)| (name == value).then_some(shape))
@@ -128,4 +146,26 @@ pub enum PointerMode {
     Explicit,
     /// Also infer pointers for actionable controls and captured drags.
     Interactive,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_shape_names_itself_and_parses_back() {
+        for (index, &(shape, name)) in PointerShape::NAMES.iter().enumerate() {
+            assert_eq!(
+                shape as usize, index,
+                "`{name}` is out of declaration order"
+            );
+            assert_eq!(shape.as_str(), name);
+            assert_eq!(PointerShape::from_name(name), Some(shape));
+        }
+        assert_eq!(
+            PointerShape::from_name(PointerShape::AllScroll.host_name()),
+            Some(PointerShape::AllScroll),
+            "a nested application's host name must parse back"
+        );
+    }
 }

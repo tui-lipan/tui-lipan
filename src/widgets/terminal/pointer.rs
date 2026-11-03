@@ -130,11 +130,13 @@ mod tests {
             screen.render_snapshot().pointer_shape,
             Some(PointerShape::Pointer)
         );
-        screen.process_bytes(b"\x1b]22;?text,grab,bogus\x1b\\\x1b[5n\x1b]22;?__current__\x07");
+        screen.process_bytes(
+            b"\x1b]22;?text,grab,all-scroll,bogus\x1b\\\x1b[5n\x1b]22;?__current__\x07",
+        );
         assert_eq!(
             screen.drain_responses(),
             vec![
-                b"\x1b]22;1,1,0\x1b\\".to_vec(),
+                b"\x1b]22;1,1,1,0\x1b\\".to_vec(),
                 b"\x1b[0n".to_vec(),
                 b"\x1b]22;pointer\x1b\\".to_vec(),
             ]
