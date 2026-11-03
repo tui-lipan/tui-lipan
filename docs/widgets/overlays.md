@@ -235,6 +235,7 @@ let toast = Toast::new("Saved")
 | Prop | Type | Description |
 |------|------|-------------|
 | `message` | `impl Into<String>` | **Constructor** - toast text |
+| `Toast::rich` | `impl Into<RichText>` | **Constructor** - toast text with per-span styles |
 | `duration` | `f32` | Auto-dismiss seconds (0 = permanent) |
 | `copyable` | `bool` | Allow copying text by right-clicking the toast; bordered toasts also show a copy glyph by default |
 | `copy_text` | `impl Into<Arc<str>>` | Copy this text instead of the displayed message; enables copying |
@@ -257,6 +258,21 @@ let toast = Toast::new("Saved")
 | `animation` | `VisibilityAnimation` | Entry and exit timing, slide, and custom effects |
 | `restack` | `TransitionConfig` | Glide to a new stack position; zero duration (the default) jumps |
 | `decoration` / `decorations` | `FrameDecoration` | Edge decorations |
+
+Use `Toast::rich(...)` when part of the message needs its own style, such as a highlighted name or
+a dimmed hint line. Each span's style is laid over `message_style`, so a span only sets what differs:
+
+```rust
+let toast = Toast::rich(vec![
+    Span::new("vim").style(Style::new().fg(Color::Cyan).bold()),
+    Span::new(" is not available\n"),
+    Span::new("set $EDITOR").style(Style::new().dim()),
+])
+.message_style(Style::new().fg(Color::White));
+```
+
+The toast's `message` is the plain text of the spans, which is what copying takes unless
+`.copy_text(...)` is set.
 
 Use `Toast::new("...").copyable(true)` for error strings, paths, command output, or IDs that
 users may need to paste elsewhere. The copied text is the toast message by default. Use

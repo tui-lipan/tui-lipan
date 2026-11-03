@@ -104,6 +104,8 @@ mod tree_composed_rows;
 #[path = "suites/widget_behavior/tree_ctrl_activation.rs"]
 mod tree_ctrl_activation;
 
+#[path = "suites/widget_behavior/toast_rich_message.rs"]
+mod toast_rich_message;
 #[path = "suites/widget_behavior/toast_width.rs"]
 mod toast_width;
 #[path = "suites/widget_behavior/tree_expansion_mode.rs"]

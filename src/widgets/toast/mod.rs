@@ -38,8 +38,10 @@ pub(crate) fn copy_zone_with_right_padding(rect: Rect, right_padding: u16) -> Re
 pub struct Toast {
     pub(crate) animation: VisibilityAnimation,
     pub(crate) restack: Option<TransitionConfig>,
-    /// Message content.
+    /// Message content. For a toast built with [`Self::rich`], the plain text of its spans.
     pub message: Arc<str>,
+    /// Styled message spans, shown instead of [`Self::message`] when set.
+    pub(crate) rich_message: Option<RichText>,
     /// Duration in seconds.
     pub duration: f64,
     /// Dismiss when clicked on.
@@ -101,6 +103,7 @@ impl Toast {
     pub fn new(message: impl Into<Arc<str>>) -> Self {
         Self {
             message: message.into(),
+            rich_message: None,
             duration: 3.0,
             animation: VisibilityAnimation::new(),
             restack: None,
@@ -127,6 +130,18 @@ impl Toast {
             max_width: None,
             wrap: true,
         }
+    }
+
+    /// Create a toast whose message mixes styles, such as a bold name or a dimmed hint line.
+    ///
+    /// Each span's style is laid over [`Self::message_style`], so a span sets only what differs
+    /// from the rest of the message. The plain text of the spans becomes [`Self::message`]: it is
+    /// what a copy takes when no [`Self::copy_text`] is set, and the toast's accessible name.
+    pub fn rich(message: impl Into<RichText>) -> Self {
+        let message = message.into();
+        let mut toast = Self::new(message.plain_content().into_owned());
+        toast.rich_message = Some(message);
+        toast
     }
 
     /// Set duration in seconds.
@@ -308,6 +323,10 @@ impl Toast {
             Overflow::Auto
         };
 
+        let text = match self.rich_message {
+            Some(rich) => Text::from_spans(rich.spans),
+            None => Text::new(self.message.clone()),
+        };
         let render_copy_affordance = self.copyable
             && self.border
             && matches!(self.copy_affordance, ToastCopyAffordance::BorderGlyph);
@@ -316,11 +335,7 @@ impl Toast {
             .border_style(self.border_style)
             .padding(self.padding)
             .style(self.frame_style)
-            .child(
-                Text::new(self.message.clone())
-                    .style(message_style)
-                    .overflow(overflow),
-            )
+            .child(text.style(message_style).overflow(overflow))
             .width(self.width)
             .height(self.height);
 
@@ -441,6 +456,17 @@ mod tests {
         assert_eq!(zone.y, 5);
         assert_eq!(zone.w, 1);
         assert_eq!(zone.h, 1);
+    }
+
+    #[test]
+    fn rich_toast_keeps_the_plain_text_as_its_message() {
+        let toast = Toast::rich(vec![
+            Span::new("`"),
+            Span::new("vim").style(Style::new().bold()),
+            Span::new("` is not available"),
+        ]);
+
+        assert_eq!(&*toast.message, "`vim` is not available");
     }
 
     #[test]
