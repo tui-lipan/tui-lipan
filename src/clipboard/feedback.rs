@@ -21,10 +21,10 @@ pub enum CopyFeedbackEffect {
     Flash,
     /// The whole selection lights up at once, then eases back to the plain selection.
     Fade,
-    /// A bright band runs through the selection in reading order, leaving a short trail.
+    /// A soft vertical line sweeps across the selection from left to right.
     ///
-    /// Terminals sweep cell by cell. Widgets that wrap or reflow text, such as inputs, text areas,
-    /// and document views, fade instead.
+    /// Terminals sweep column by column. Widgets that wrap or reflow text, such as inputs, text
+    /// areas, and document views, fade instead.
     Scan,
     /// The selection lights up twice.
     Pulse,
@@ -54,7 +54,7 @@ impl CopyFeedbackEffect {
             Self::Off => Duration::ZERO,
             Self::Flash => Duration::from_millis(150),
             Self::Fade => Duration::from_millis(300),
-            Self::Scan => Duration::from_millis(350),
+            Self::Scan => Duration::from_millis(450),
             Self::Pulse => Duration::from_millis(420),
         }
     }

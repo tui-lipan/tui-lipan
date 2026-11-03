@@ -819,9 +819,10 @@ pub(crate) fn render_terminal(
 /// The selection styles for one row while a positional copy effect runs: runs of neighbouring
 /// cells that share a strength, each the plain selection with the effect merged on top.
 ///
-/// A cell's place in the effect is how far through the selection it falls in reading order, with
-/// every row counted at the full content width so the sweep moves at one speed down a block of
-/// lines.
+/// A cell's place in the effect is how far across the selection its column falls, so every row
+/// lights the same column at once and the sweep reads as one vertical line moving left to right.
+/// A selection within one row spans its own columns; one over several rows spans the full content
+/// width, which its middle rows cover.
 fn scan_ranges(
     scan: FeedbackFrame,
     selection: &GridSelection,
@@ -838,14 +839,17 @@ fn scan_ranges(
         return Vec::new();
     };
     let (start, end) = selection.normalized();
-    let width = usize::from(content_w).max(1);
-    let linear = |row: usize, col: usize| (row * width + col) as f32;
-    let first = linear(start.row, start.col);
-    let span = (linear(end.row, end.col) - first).max(1.0);
+    let (left, right) = if start.row == end.row {
+        (start.col, end.col)
+    } else {
+        (0, usize::from(content_w))
+    };
+    let left = left as f32;
+    let span = (right as f32 - left).max(1.0);
 
     let mut ranges: Vec<(std::ops::Range<usize>, Style)> = Vec::new();
     for col in col_start..col_end {
-        let position = (linear(row, col) + 0.5 - first) / span;
+        let position = (col as f32 + 0.5 - left) / span;
         let style = scan
             .style_at(Some(position))
             .map_or(selection_style, |feedback| selection_style.patch(feedback));

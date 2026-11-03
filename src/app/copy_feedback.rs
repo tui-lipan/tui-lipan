@@ -28,9 +28,15 @@ use crate::widgets::document_view::node::DocumentTableRectSelection;
 /// under half a second, so the cost is a handful of paint-only frames.
 const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 
-/// How far behind the head of a [`CopyFeedbackEffect::Scan`] its trail reaches, as a share of
-/// the selection.
-const SCAN_TRAIL: f32 = 0.35;
+/// How far a [`CopyFeedbackEffect::Scan`] line glows to each side of its centre, as a share of the
+/// selection's width.
+const SCAN_HALF_WIDTH: f32 = 0.18;
+
+/// Where the centre of a scan line is at `t`: it enters fully off the left edge and leaves fully
+/// off the right one, so the sweep starts and ends with nothing lit.
+fn scan_centre(t: f32) -> f32 {
+    -SCAN_HALF_WIDTH + t * (1.0 + 2.0 * SCAN_HALF_WIDTH)
+}
 
 /// How many strengths an effect is rounded to. Neighbouring cells at the same strength then share
 /// one style, so a sweep splits a row into a few runs instead of one per cell.
@@ -403,10 +409,11 @@ impl FeedbackFrame {
             CopyFeedbackEffect::Scan => match position {
                 None => fade(),
                 Some(position) => {
-                    let head = t * (1.0 + SCAN_TRAIL);
-                    let behind = head - position.clamp(0.0, 1.0);
-                    if (0.0..=SCAN_TRAIL).contains(&behind) {
-                        1.0 - behind / SCAN_TRAIL
+                    // A raised cosine: brightest at the centre, easing to nothing at either side
+                    // with no hard edge, so the line glides rather than steps.
+                    let distance = (position - scan_centre(t)).abs() / SCAN_HALF_WIDTH;
+                    if distance < 1.0 {
+                        0.5 + 0.5 * (PI * distance).cos()
                     } else {
                         0.0
                     }
@@ -892,21 +899,34 @@ mod tests {
     }
 
     #[test]
-    fn scan_sweeps_in_reading_order() {
+    fn scan_sweeps_a_soft_line_left_to_right() {
         let scan = frame(CopyFeedbackEffect::Scan, 0.4);
-        let head = 0.4 * (1.0 + SCAN_TRAIL);
-        assert_eq!(scan.intensity(Some(head + 0.05)), 0.0, "ahead of the head");
-        assert!(scan.intensity(Some(head)) > 0.99, "at the head");
+        let centre = scan_centre(0.4);
         assert!(
-            scan.intensity(Some(head - SCAN_TRAIL / 2.0)) < 0.6,
-            "in the trail"
+            scan.intensity(Some(centre)) > 0.99,
+            "brightest at the centre"
         );
-        assert_eq!(scan.intensity(Some(0.0)), 0.0, "behind the trail");
-        assert!(
-            frame(CopyFeedbackEffect::Scan, 1.0)
-                .style_at(Some(1.0))
-                .is_none()
+        let left = scan.intensity(Some(centre - SCAN_HALF_WIDTH / 2.0));
+        let right = scan.intensity(Some(centre + SCAN_HALF_WIDTH / 2.0));
+        assert!((left - right).abs() < 1e-5, "symmetric: {left} vs {right}");
+        assert!((0.4..0.6).contains(&left), "eases off to the sides: {left}");
+        assert_eq!(scan.intensity(Some(centre + SCAN_HALF_WIDTH)), 0.0, "ahead");
+        assert_eq!(
+            scan.intensity(Some(centre - SCAN_HALF_WIDTH)),
+            0.0,
+            "behind"
         );
+
+        let later = frame(CopyFeedbackEffect::Scan, 0.6);
+        assert!(scan_centre(0.6) > centre, "moves right");
+        assert!(later.intensity(Some(scan_centre(0.6))) > 0.99);
+        for t in [0.0, 1.0] {
+            let edge = frame(CopyFeedbackEffect::Scan, t);
+            assert!(
+                (0..=10).all(|i| edge.style_at(Some(i as f32 / 10.0)).is_none()),
+                "nothing lit at t = {t}"
+            );
+        }
         assert!(scan.is_positional());
         assert_eq!(
             scan.intensity(None),

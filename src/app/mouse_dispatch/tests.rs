@@ -3820,7 +3820,7 @@ fn scan_feedback_sweeps_a_copied_terminal_selection() {
 
         fn view(&self, _ctx: &Context<Self>) -> Element {
             Terminal::new()
-                .content("abcdefghijklmnopqrst")
+                .content("abcdefghijklmnopqrst\r\nabcdefghijklmnopqrst")
                 .border(false)
                 .padding(0)
                 .scrollbar(false)
@@ -3828,10 +3828,10 @@ fn scan_feedback_sweeps_a_copied_terminal_selection() {
                 .selection_style(crate::style::Style::new().bg(Color::Rgb(40, 40, 80)))
                 .selection(Some(crate::widgets::TerminalSelection {
                     anchor: crate::widgets::TerminalPos { line: 0, col: 0 },
-                    cursor: crate::widgets::TerminalPos { line: 0, col: 19 },
+                    cursor: crate::widgets::TerminalPos { line: 1, col: 19 },
                 }))
                 .width(Length::Px(20))
-                .height(Length::Px(1))
+                .height(Length::Px(2))
                 .into()
         }
 
@@ -3857,7 +3857,7 @@ fn scan_feedback_sweeps_a_copied_terminal_selection() {
         x: 0,
         y: 0,
         w: 20,
-        h: 1,
+        h: 2,
     });
     backend.render();
     let terminal_id = backend
@@ -3891,19 +3891,23 @@ fn scan_feedback_sweeps_a_copied_terminal_selection() {
         other => panic!("expected an RGB background, got {other:?}"),
     };
 
-    // Halfway through, the head sits about two thirds of the way along, its trail behind it.
-    assert_eq!(bg(1), PLAIN, "the trail has passed the start");
-    assert_ne!(bg(12), PLAIN, "the head lights the cells it reaches");
-    assert_eq!(bg(17), PLAIN, "cells ahead of the head wait their turn");
+    // Halfway through, the line is centred on the middle of the selection and glows to each side.
+    assert_ne!(bg(9), PLAIN, "the line lights the middle");
+    assert_eq!(bg(2), PLAIN, "the line has passed the start");
+    assert_eq!(bg(16), PLAIN, "cells to the right wait their turn");
     assert!(
-        lightness(12) > lightness(9),
-        "the trail fades behind the head"
+        lightness(9) > lightness(7) && lightness(9) > lightness(11),
+        "the line is brightest at its centre and eases off to either side"
+    );
+    assert!(
+        (0..19).all(|x| frame.cell(x, 0).bg == frame.cell(x, 1).bg),
+        "the line is vertical: both rows light the same columns"
     );
 
     backend.advance(Duration::from_millis(400));
     let frame = backend.capture_frame();
     assert!(
-        (0..19).all(|x| frame.cell(x, 0).bg == PLAIN),
+        (0..19).all(|x| frame.cell(x, 0).bg == PLAIN && frame.cell(x, 1).bg == PLAIN),
         "the selection is plain once the sweep ends"
     );
 }

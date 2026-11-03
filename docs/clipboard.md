@@ -121,7 +121,7 @@ let feedback = CopyFeedback::new(CopyFeedbackEffect::Scan) // default duration f
 | `Off` | Nothing |
 | `Flash` | Lights up at once and goes back when the time is up (150 ms) |
 | `Fade` | Lights up at once, then eases back to the plain selection (300 ms) |
-| `Scan` | A bright band runs through it in reading order, leaving a short trail (350 ms) |
+| `Scan` | A soft vertical line sweeps across it from left to right (450 ms) |
 | `Pulse` | Lights up twice (420 ms) |
 
 `CopyFeedbackEffect::default_duration` gives the times in brackets, which `CopyFeedback::new`
@@ -134,7 +134,7 @@ it by `0.35`. `Fade`, `Scan`, and `Pulse` scale its color transforms (`lighten_b
 they stay on for the brighter half of the effect. Animated effects repaint on their own, at about
 60 frames per second, only while they run.
 
-`Scan` sweeps cell by cell in a `Terminal`. Widgets that wrap or reflow text, such as `Input`,
+`Scan` sweeps column by column in a `Terminal`. Widgets that wrap or reflow text, such as `Input`,
 `TextArea`, and `DocumentView`, fade instead. Toasts show the full `style` for `duration` with every
 effect except `Off`.
 
