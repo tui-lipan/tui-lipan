@@ -110,7 +110,8 @@ Wrapper that turns a single child into a generic drag source.
 | `preview_max_width` | `Option<u16>` | Optional width cap for the floating `SourceSnapshot` (`None` = full source width) |
 | `preview_max_height` | `Option<u16>` | Optional height cap for the floating preview (`None` = full source height) |
 | `preview_max_size` | `(Option<u16>, Option<u16>)` | Set both optional caps (`None` per axis = uncapped) |
-| `threshold` | `u16` | Pointer movement threshold before drag starts (default: `3`) |
+| `threshold` | `u16` | Set the same movement threshold on both axes (default: `3` cells) |
+| `drag_threshold` | `(columns: u16, rows: u16)` | Set axes separately; reaching either starts the drag. Use `(3, 1)` for three columns or one row. A zero threshold starts on the first drag event. |
 | `enabled` | `bool` | Enable/disable drag behavior |
 
 ```rust

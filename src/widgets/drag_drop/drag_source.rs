@@ -30,7 +30,7 @@ pub struct DragSource {
     pub(crate) drag_slot_axis: DragSlotAxis,
     pub(crate) preview_max_width: Option<u16>,
     pub(crate) preview_max_height: Option<u16>,
-    pub(crate) threshold: u16,
+    pub(crate) threshold: (u16, u16),
     pub(crate) enabled: bool,
 }
 
@@ -48,7 +48,7 @@ impl Default for DragSource {
             drag_slot_axis: DragSlotAxis::default(),
             preview_max_width: None,
             preview_max_height: None,
-            threshold: 3,
+            threshold: (3, 3),
             enabled: true,
         }
     }
@@ -190,9 +190,20 @@ impl DragSource {
         self
     }
 
-    /// Set pointer movement threshold (cells) before drag starts.
-    pub fn threshold(mut self, threshold: u16) -> Self {
-        self.threshold = threshold;
+    /// Set the same pointer movement threshold on both axes before drag starts.
+    ///
+    /// The default is three cells. Use [`Self::drag_threshold`] to set columns and rows separately.
+    pub fn threshold(self, threshold: u16) -> Self {
+        self.drag_threshold(threshold, threshold)
+    }
+
+    /// Set horizontal (columns) and vertical (rows) movement needed to start a drag.
+    ///
+    /// Reaching either threshold activates the drag. For example, `(3, 1)` starts after three
+    /// columns or one row, accounting for terminal cells being taller than they are wide.
+    /// A zero threshold activates on the first drag event, as with [`Self::threshold`].
+    pub fn drag_threshold(mut self, columns: u16, rows: u16) -> Self {
+        self.threshold = (columns, rows);
         self
     }
 

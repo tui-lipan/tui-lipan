@@ -86,7 +86,7 @@ pub(crate) struct DragDropDrag {
     pub scroll_view_id: Option<NodeId>,
     pub start_x: u16,
     pub start_y: u16,
-    pub threshold: u16,
+    pub threshold: (u16, u16),
     pub started: bool,
     /// Last laid-out `DragSource` rect before this drag (used to collapse layout on the
     /// first frame while seeding `DragPreview::SourceSnapshot` pixels from the previous frame).
