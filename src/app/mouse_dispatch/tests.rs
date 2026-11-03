@@ -2,6 +2,7 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 
 use super::*;
 
@@ -3557,6 +3558,108 @@ fn middle_click_pastes_primary_selection_into_focused_editor() {
 
 #[cfg(feature = "terminal")]
 #[test]
+fn scan_feedback_sweeps_a_copied_terminal_selection() {
+    struct ScanTerminal;
+
+    impl Component for ScanTerminal {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            Terminal::new()
+                .content("abcdefghijklmnopqrst")
+                .border(false)
+                .padding(0)
+                .scrollbar(false)
+                .show_cursor(false)
+                .selection_style(crate::style::Style::new().bg(Color::Rgb(40, 40, 80)))
+                .selection(Some(crate::widgets::TerminalSelection {
+                    anchor: crate::widgets::TerminalPos { line: 0, col: 0 },
+                    cursor: crate::widgets::TerminalPos { line: 0, col: 19 },
+                }))
+                .width(Length::Px(20))
+                .height(Length::Px(1))
+                .into()
+        }
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+    }
+
+    const PLAIN: Color = Color::Rgb(40, 40, 80);
+    let clipboard = Rc::new(RefCell::new(MouseClipboardState::default()));
+    let app = crate::App::new()
+        .clipboard_provider(MouseClipboardProvider(Rc::clone(&clipboard)))
+        .clipboard_config(ClipboardConfig {
+            enable_osc52: false,
+            copy_feedback: crate::clipboard::CopyFeedback::new(
+                crate::clipboard::CopyFeedbackEffect::Scan,
+            )
+            .duration(Duration::from_millis(400)),
+            ..ClipboardConfig::default()
+        });
+    let mut backend = TestBackend::new_with_app(app, ScanTerminal, ());
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 1,
+    });
+    backend.render();
+    let terminal_id = backend
+        .core
+        .tree
+        .iter()
+        .find(|node| matches!(node.kind, NodeKind::Terminal(_)))
+        .map(|node| node.id)
+        .expect("expected Terminal");
+    backend.set_focused(terminal_id);
+    backend
+        .send_key(KeyEvent {
+            code: KeyCode::Insert,
+            mods: KeyMods::CTRL,
+        })
+        .unwrap();
+    assert!(
+        clipboard
+            .borrow()
+            .clipboard
+            .starts_with("abcdefghijklmnopqrs")
+    );
+
+    // Arm the flash on its first frame, then stop halfway through.
+    backend.advance_frame(Duration::from_millis(1));
+    backend.advance(Duration::from_millis(199));
+    let frame = backend.capture_frame();
+    let bg = |x: u16| frame.cell(x, 0).bg;
+    let lightness = |x: u16| match bg(x) {
+        Color::Rgb(r, g, b) => u16::from(r) + u16::from(g) + u16::from(b),
+        other => panic!("expected an RGB background, got {other:?}"),
+    };
+
+    // Halfway through, the head sits about two thirds of the way along, its trail behind it.
+    assert_eq!(bg(1), PLAIN, "the trail has passed the start");
+    assert_ne!(bg(12), PLAIN, "the head lights the cells it reaches");
+    assert_eq!(bg(17), PLAIN, "cells ahead of the head wait their turn");
+    assert!(
+        lightness(12) > lightness(9),
+        "the trail fades behind the head"
+    );
+
+    backend.advance(Duration::from_millis(400));
+    let frame = backend.capture_frame();
+    assert!(
+        (0..19).all(|x| frame.cell(x, 0).bg == PLAIN),
+        "the selection is plain once the sweep ends"
+    );
+}
+
+#[cfg(feature = "terminal")]
+#[test]
 fn tracked_terminal_middle_click_is_forwarded_instead_of_locally_pasted() {
     struct TrackedTerminal {
         forwarded: Rc<RefCell<Vec<Vec<u8>>>>,
@@ -3685,24 +3788,13 @@ fn right_click_copy_flashes_like_a_copy_shortcut() {
     assert!(backend.copy_feedback.is_active(id));
 }
 
-#[test]
-fn copy_on_select_stays_silent() {
-    let clipboard = Rc::new(RefCell::new(MouseClipboardState::default()));
-    let config = ClipboardConfig {
-        enable_osc52: false,
-        copy_on_mouse_select: CopyOnSelect::Clipboard,
-        ..ClipboardConfig::default()
-    };
-    let mut backend = mouse_clipboard_backend("alpha beta", Rc::clone(&clipboard), config);
-    let id = text_area_id(&backend);
-    let rect = backend.core.tree.node(id).rect;
-    let x = rect.x.max(0) as u16;
-    let y = rect.y.max(0) as u16;
-
+/// Drag-select editor columns `from..to`, releasing the button at the end.
+fn drag_select(backend: &mut TestBackend<ClipboardEditor>, from: u16, to: u16) {
+    let (x, y) = node_origin(backend, text_area_id(backend));
     for (event_x, kind) in [
-        (x, MouseKind::Down(MouseButton::Left)),
-        (x + 5, MouseKind::Drag(MouseButton::Left)),
-        (x + 5, MouseKind::Up(MouseButton::Left)),
+        (x + from, MouseKind::Down(MouseButton::Left)),
+        (x + to, MouseKind::Drag(MouseButton::Left)),
+        (x + to, MouseKind::Up(MouseButton::Left)),
     ] {
         backend
             .send_mouse(MouseEvent {
@@ -3713,9 +3805,132 @@ fn copy_on_select_stays_silent() {
             })
             .unwrap();
     }
+}
+
+fn editor_selection(backend: &TestBackend<ClipboardEditor>) -> Option<(usize, usize)> {
+    let NodeKind::TextArea(node) = &backend.core.tree.node(text_area_id(backend)).kind else {
+        unreachable!("text_area_id names a TextArea")
+    };
+    node.anchor
+        .filter(|anchor| *anchor != node.cursor)
+        .map(|anchor| (anchor.min(node.cursor), anchor.max(node.cursor)))
+}
+
+fn copy_on_select_config(feedback: crate::clipboard::CopyFeedback) -> ClipboardConfig {
+    ClipboardConfig {
+        enable_osc52: false,
+        copy_on_mouse_select: CopyOnSelect::Clipboard,
+        copy_feedback: feedback,
+        ..ClipboardConfig::default()
+    }
+}
+
+#[test]
+fn copy_on_select_stays_silent() {
+    let clipboard = Rc::new(RefCell::new(MouseClipboardState::default()));
+    let config = copy_on_select_config(crate::clipboard::CopyFeedback::default());
+    let mut backend = mouse_clipboard_backend("alpha beta", Rc::clone(&clipboard), config);
+    let id = text_area_id(&backend);
+
+    drag_select(&mut backend, 0, 5);
 
     assert_eq!(clipboard.borrow().clipboard, "alpha");
     assert!(!backend.copy_feedback.is_active(id));
+}
+
+#[test]
+fn copy_on_select_highlights_when_asked() {
+    let clipboard = Rc::new(RefCell::new(MouseClipboardState::default()));
+    let config = copy_on_select_config(
+        crate::clipboard::CopyFeedback::new(crate::clipboard::CopyFeedbackEffect::Scan)
+            .on_select(true),
+    );
+    let mut backend = mouse_clipboard_backend("alpha beta", Rc::clone(&clipboard), config);
+    let id = text_area_id(&backend);
+
+    drag_select(&mut backend, 0, 5);
+
+    assert_eq!(clipboard.borrow().clipboard, "alpha");
+    assert!(backend.copy_feedback.is_active(id));
+    assert_eq!(editor_selection(&backend), Some((0, 5)), "kept by default");
+    backend.advance(Duration::from_secs(1));
+    assert!(!backend.copy_feedback.is_active(id));
+    assert_eq!(editor_selection(&backend), Some((0, 5)));
+}
+
+#[test]
+fn a_copied_selection_clears_once_its_highlight_ends() {
+    let clipboard = Rc::new(RefCell::new(MouseClipboardState::default()));
+    let config = ClipboardConfig {
+        enable_osc52: false,
+        copy_on_mouse_select: CopyOnSelect::Disabled,
+        right_click_action: RightClickAction::CopyOrPaste,
+        copy_feedback: crate::clipboard::CopyFeedback::default().clear_selection(true),
+        ..ClipboardConfig::default()
+    };
+    let mut backend = mouse_clipboard_backend("alpha beta", Rc::clone(&clipboard), config);
+    let id = text_area_id(&backend);
+
+    select_then_right_click(&mut backend);
+    assert_eq!(clipboard.borrow().clipboard, "alpha");
+    assert!(backend.copy_feedback.is_active(id));
+    assert_eq!(
+        editor_selection(&backend),
+        Some((0, 5)),
+        "visible while it flashes"
+    );
+
+    backend.advance(Duration::from_secs(1));
+    assert_eq!(editor_selection(&backend), None);
+    assert_eq!(backend.state().text(), "alpha beta");
+}
+
+#[test]
+fn copy_on_select_clears_without_a_highlight() {
+    let clipboard = Rc::new(RefCell::new(MouseClipboardState::default()));
+    let config =
+        copy_on_select_config(crate::clipboard::CopyFeedback::default().clear_selection(true));
+    let mut backend = mouse_clipboard_backend("alpha beta", Rc::clone(&clipboard), config);
+    let id = text_area_id(&backend);
+
+    drag_select(&mut backend, 0, 5);
+    assert_eq!(clipboard.borrow().clipboard, "alpha");
+    assert!(!backend.copy_feedback.is_active(id), "on_select is off");
+
+    backend.advance(Duration::from_millis(50));
+    assert_eq!(editor_selection(&backend), None);
+}
+
+#[test]
+fn a_selection_made_after_the_copy_is_not_cleared() {
+    let clipboard = Rc::new(RefCell::new(MouseClipboardState::default()));
+    let config = copy_on_select_config(
+        crate::clipboard::CopyFeedback::new(crate::clipboard::CopyFeedbackEffect::Fade)
+            .on_select(true)
+            .clear_selection(true),
+    );
+    let mut backend = mouse_clipboard_backend("alpha beta", Rc::clone(&clipboard), config);
+
+    drag_select(&mut backend, 0, 5);
+    backend.advance_frame(Duration::from_millis(16));
+    // A new copy-on-select replaces the first flash, so drag without the button-up copy.
+    let (x, y) = node_origin(&backend, text_area_id(&backend));
+    for (event_x, kind) in [
+        (x + 6, MouseKind::Down(MouseButton::Left)),
+        (x + 10, MouseKind::Drag(MouseButton::Left)),
+    ] {
+        backend
+            .send_mouse(MouseEvent {
+                x: event_x,
+                y,
+                kind,
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+    }
+    backend.advance(Duration::from_secs(1));
+
+    assert_eq!(editor_selection(&backend), Some((6, 10)));
 }
 
 #[test]

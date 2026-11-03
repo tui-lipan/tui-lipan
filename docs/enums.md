@@ -31,6 +31,7 @@ as `click`, `focus`, `resize`, `advance`, `wait_for`, and `checkpoint`.
 | `PasteSource` | `Disabled`, `PrimarySelection`, `Clipboard` |
 | `RightClickAction` | `Disabled`, `PasteClipboard`, `CopyOrPaste`, `CopyOnly` |
 | `PasteShiftInsertBehavior` | `PrimarySelection`, `Clipboard` |
+| `CopyFeedbackEffect` | `Off`, `Flash`, `Fade`, `Scan`, `Pulse`; see [Copy feedback](clipboard.md#copy-feedback) |
 
 `PrimarySelection` is the Linux select-to-copy buffer normally pasted with the middle mouse
 button. It is separate from the regular clipboard used by `Ctrl+C` and `Ctrl+V`.

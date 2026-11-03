@@ -893,17 +893,12 @@ impl<C: Component> MouseDispatchCtx<C> for TestBackend<C> {
                         std::rc::Rc::clone(&self.core.ctx.env().clipboard),
                         std::rc::Rc::clone(&self.core.ctx.env().clipboard_config),
                     );
+                    let feedback = self.core.ctx.env().clipboard_config.borrow().copy_feedback;
                     if clipboard.copy(text).is_ok()
+                        && feedback.is_visible()
                         && let Some(id) = overlay.overlay_id
                     {
-                        let duration = std::time::Duration::from_millis(
-                            self.core
-                                .ctx
-                                .env()
-                                .clipboard_config
-                                .borrow()
-                                .copy_feedback_duration_ms as u64,
-                        );
+                        let duration = feedback.duration;
                         self.core
                             .overlay_manager
                             .borrow_mut()

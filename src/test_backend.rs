@@ -1166,10 +1166,34 @@ where
             .tick(dt, self.core.ctx.env().clock.elapsed());
         let now = self.core.ctx.env().now();
         let overlay_dirty = self.core.overlay_manager.borrow_mut().tick_at(now).dirty;
-        self.copy_feedback.tick_at(now);
+        {
+            let tree = &self.core.tree;
+            let read_only = &self.widgets.read_only_selection;
+            self.copy_feedback.record_selections(|id| {
+                crate::app::copy_feedback::selection_snapshot(tree, read_only, id)
+            });
+        }
+        let mut selection_cleared = false;
+        for (id, snapshot) in self.copy_feedback.tick_at(now).clear {
+            selection_cleared |= crate::app::copy_feedback::clear_copied_selection(
+                &mut self.core.tree,
+                &mut self.widgets.read_only_selection,
+                id,
+                &snapshot,
+            );
+        }
+        if selection_cleared {
+            // Clearing runs the widget's change callback, as the runner does; let the app see it.
+            let _ = self.pump();
+        }
 
         let revealed = self.core.ctx.command_chord_revealed();
-        if needs_layout || transitions.view_changed || overlay_dirty || revealed != was_revealed {
+        if selection_cleared
+            || needs_layout
+            || transitions.view_changed
+            || overlay_dirty
+            || revealed != was_revealed
+        {
             self.render();
         }
     }
@@ -1271,15 +1295,8 @@ where
             return false;
         }
 
-        let duration = Duration::from_millis(
-            self.core
-                .ctx
-                .env()
-                .clipboard_config
-                .borrow()
-                .copy_feedback_duration_ms as u64,
-        );
-        if duration.is_zero() {
+        let feedback = self.core.ctx.env().clipboard_config.borrow().copy_feedback;
+        if !feedback.is_visible() {
             return false;
         }
 
@@ -1293,7 +1310,7 @@ where
                         selection,
                     )
                 });
-                self.copy_feedback.trigger_range(id, duration, range);
+                self.copy_feedback.trigger_range(id, feedback, range);
                 dirty = true;
             }
         }
@@ -1395,8 +1412,9 @@ where
 
     fn capture_interaction(
         &self,
-    ) -> crate::backend::ratatui_backend::capture_render::CaptureInteraction {
+    ) -> crate::backend::ratatui_backend::capture_render::CaptureInteraction<'_> {
         crate::backend::ratatui_backend::capture_render::CaptureInteraction {
+            copy_feedback: Some(&self.copy_feedback),
             focused: self.focused,
             hovered: self.mouse.hovered,
             mouse_pos: self.mouse.last_mouse.get(),

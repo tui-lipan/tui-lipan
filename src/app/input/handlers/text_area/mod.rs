@@ -1,7 +1,6 @@
 //! TextArea keyboard and scroll-wheel handlers.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use crate::app::context::TextAreaNewlineBinding;
 use crate::app::input::handlers::KeyCtx;
@@ -93,11 +92,11 @@ fn sync_text_area_vim_after_key(
         ta.anchor = editor.anchor();
     }
 
-    if clipboard_config.copy_feedback_duration_ms > 0 {
-        copy_feedback.trigger(
-            id,
-            Duration::from_millis(clipboard_config.copy_feedback_duration_ms as u64),
-        );
+    // A yank already leaves visual mode on its own terms, so it never asks for the selection to
+    // be cleared as well.
+    let feedback = clipboard_config.copy_feedback.clear_selection(false);
+    if feedback.is_visible() {
+        copy_feedback.trigger(id, feedback);
         *dirty_override = Some(DirtyLevel::PaintOnly);
     }
 }

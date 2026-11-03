@@ -211,8 +211,9 @@ pub use crate::capture::{
 pub use crate::capture::{PngOptions, PngTextRenderer};
 pub use crate::clipboard::{
     ClipboardConfig, ClipboardContent, ClipboardError, ClipboardHandle, ClipboardPasteContent,
-    ClipboardProvider, CopyOnSelect, ImageContent, ImageFormat, PasteOrigin,
-    PasteShiftInsertBehavior, PasteSource, RightClickAction,
+    ClipboardProvider, CopyFeedback, CopyFeedbackEffect, CopyOnSelect, ImageContent, ImageFormat,
+    PasteOrigin, PasteShiftInsertBehavior, PasteSource, RightClickAction,
+    UnknownCopyFeedbackEffect,
 };
 pub use crate::core::component::{
     Breakpoint, Command, Component, Context, KeyUpdate, ScrollbarVisibility, TaskPolicy, Update,

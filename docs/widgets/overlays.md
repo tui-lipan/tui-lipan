@@ -266,8 +266,8 @@ to run an action on left click. The toast still dismisses unless `.dismiss_on_cl
 Bordered toasts also render a copy glyph by default. Use
 `.copy_affordance(ToastCopyAffordance::None)` to keep the
 right-click copy behavior without showing the glyph. Successful toast copies briefly apply
-`ClipboardConfig::copy_feedback_style` for `copy_feedback_duration_ms`, matching selection-copy
-feedback.
+`ClipboardConfig::copy_feedback.style` for its `duration`, matching selection-copy feedback, unless
+the effect is `CopyFeedbackEffect::Off`.
 
 Hovering a toast pauses its auto-dismiss countdown without resetting it. If the pointer catches a
 toast during its automatic fade-out, the toast fades back in and remains paused; after the pointer

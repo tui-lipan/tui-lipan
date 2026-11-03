@@ -21,8 +21,9 @@ use crate::widgets::internal::terminal_node_selection_text;
 /// Whether the user asked for a selection copy or it happened as a side effect.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CopyIntent {
-    /// Copy-on-select after a mouse selection completes. Stays silent because it runs on
-    /// every release, not only when the user means to copy.
+    /// Copy-on-select after a mouse selection completes. Silent unless
+    /// [`CopyFeedback::on_select`](crate::clipboard::CopyFeedback::on_select) asks for the
+    /// highlight, because it runs on every release, not only when the user means to copy.
     Implicit,
     /// A deliberate copy gesture, such as right-click copy. Flashes like a copy shortcut.
     Explicit,
@@ -151,12 +152,18 @@ fn dispatch_selection_context(
                 ctx.clipboard,
                 ctx.clipboard_config,
             );
-            if intent == CopyIntent::Implicit {
-                return true;
+            let mut config = std::borrow::Cow::Borrowed(ctx.clipboard_config);
+            if intent == CopyIntent::Implicit && !config.copy_feedback.on_select {
+                // The selection still clears when asked to: clearing follows the copy, not the
+                // highlight.
+                if !config.copy_feedback.clear_selection {
+                    return true;
+                }
+                config.to_mut().copy_feedback.effect = crate::clipboard::CopyFeedbackEffect::Off;
             }
             let dispatch = crate::app::copy_feedback::dispatch_result_from_outcome(
                 ctx.copy_feedback,
-                ctx.clipboard_config,
+                &config,
                 id,
                 crate::ui::router::ClipboardDispatchOutcome {
                     handled: true,

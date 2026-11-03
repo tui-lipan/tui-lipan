@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use crate::app::focus_service::{self, OverlayKey};
 use crate::app::input::focus::FocusDirection;
 use crate::clipboard::ClipboardHandle;
@@ -85,9 +83,10 @@ impl<C: Component> AppRunner<C> {
             self.clipboard.report_error(err);
             return;
         }
-        if let Some(id) = overlay.overlay_id {
-            let duration =
-                Duration::from_millis(self.clipboard_config.copy_feedback_duration_ms as u64);
+        if let Some(id) = overlay.overlay_id
+            && self.clipboard_config.copy_feedback.is_visible()
+        {
+            let duration = self.clipboard_config.copy_feedback.duration;
             self.core
                 .overlay_manager
                 .borrow_mut()
