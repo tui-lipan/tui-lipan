@@ -1517,7 +1517,7 @@ impl<C: Component> AppRunner<C> {
             drop_slot_source_preview_rect,
             paint_glyph_caches: Some(self.paint_glyph_caches.clone()),
             copy_feedback: Some(&self.copy_feedback),
-            copy_feedback_style: self.clipboard_config.copy_feedback_style,
+            copy_feedback_style: self.clipboard_config.copy_feedback.style,
         };
 
         self.paint_glyph_caches.borrow_mut().clear();

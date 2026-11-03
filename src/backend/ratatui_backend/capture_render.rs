@@ -32,12 +32,14 @@ fn convert_modifiers(modifier: Modifier) -> CellModifiers {
 
 /// Focus and pointer state for a headless capture.
 #[derive(Clone, Copy, Default)]
-pub(crate) struct CaptureInteraction {
+pub(crate) struct CaptureInteraction<'a> {
     pub focused: Option<NodeId>,
     pub hovered: Option<NodeId>,
     pub mouse_pos: Option<(u16, u16)>,
     /// The focused text area's Vim mode, which decides its caret shape.
     pub vim_mode: Option<TextAreaVimMode>,
+    /// Copy highlights in flight, so a capture shows them as the next frame would.
+    pub copy_feedback: Option<&'a crate::app::copy_feedback::CopyFeedbackState>,
 }
 
 /// A headless render, kept as the renderer left it.
@@ -86,6 +88,7 @@ fn render_headless(
         focused,
         hovered,
         mouse_pos,
+        copy_feedback,
         ..
     } = interaction;
     let join_index = build_join_index(tree);
@@ -119,7 +122,7 @@ fn render_headless(
         drag_preview_grab_offset: None,
         drop_slot_source_preview_rect: None,
         paint_glyph_caches: None,
-        copy_feedback: None,
+        copy_feedback,
         copy_feedback_style: Style::default(),
     };
 

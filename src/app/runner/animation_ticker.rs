@@ -248,15 +248,8 @@ impl<C: Component> AppRunner<C> {
 
         let copy_feedback_requests = self.core.ctx.take_copy_feedback_requests();
         if !copy_feedback_requests.is_empty() {
-            let duration = Duration::from_millis(
-                self.core
-                    .ctx
-                    .env()
-                    .clipboard_config
-                    .borrow()
-                    .copy_feedback_duration_ms as u64,
-            );
-            if !duration.is_zero() {
+            let feedback = self.core.ctx.env().clipboard_config.borrow().copy_feedback;
+            if feedback.is_visible() {
                 for (id, range) in copy_feedback_requests {
                     if self.core.tree.is_valid(id) {
                         let range = range.and_then(|selection| {
@@ -266,14 +259,32 @@ impl<C: Component> AppRunner<C> {
                                 selection,
                             )
                         });
-                        self.copy_feedback.trigger_range(id, duration, range);
+                        self.copy_feedback.trigger_range(id, feedback, range);
                         dirty.mark_paint();
                     }
                 }
             }
         }
 
+        {
+            let tree = &self.core.tree;
+            let read_only = &self.widgets.read_only_selection;
+            self.copy_feedback.record_selections(|id| {
+                crate::app::copy_feedback::copied_selection(tree, read_only, id)
+            });
+        }
         let copy_feedback_tick = self.copy_feedback.tick_at(self.clock_now());
+        for copied in &copy_feedback_tick.clear {
+            if crate::app::copy_feedback::clear_copied_selection(
+                &mut self.core.tree,
+                &mut self.widgets.read_only_selection,
+                copied,
+            ) {
+                crate::debug::internal_log!("[tui-lipan] dirty: copied selection cleared");
+                // Clearing can run a widget's change callback, which may queue an app update.
+                dirty.mark_full();
+            }
+        }
         if let Some(next_due) = copy_feedback_tick.next_due {
             poll_timeout = poll_timeout.min(next_due);
         }

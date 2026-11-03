@@ -12,6 +12,7 @@ pub(crate) mod mouse_dispatch;
 pub(crate) mod pointer;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod runner;
+pub(crate) mod selection_clear;
 #[cfg(all(target_arch = "wasm32", feature = "web"))]
 pub mod web_runner;
 

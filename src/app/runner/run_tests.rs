@@ -4382,9 +4382,10 @@ fn copy_feedback_expiry_marks_paint_only() {
     };
     let mut runner = AppRunner::new(App::new().mouse(false), RunnerKeymapSmoke, ());
     init_runner(&mut runner, RunnerKeymapSmoke, viewport);
-    runner
-        .copy_feedback
-        .trigger(runner.core.tree.root, Duration::from_millis(2));
+    runner.copy_feedback.trigger(
+        runner.core.tree.root,
+        crate::clipboard::CopyFeedback::default().duration(Duration::from_millis(2)),
+    );
 
     let mut dirty = DirtyTracker::default();
     let poll_timeout = runner.update_animation_cycle(&mut dirty);

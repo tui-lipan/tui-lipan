@@ -53,12 +53,13 @@ fn viewport() -> Rect {
     }
 }
 
-fn interaction() -> CaptureInteraction {
+fn interaction() -> CaptureInteraction<'static> {
     CaptureInteraction {
         focused: None,
         hovered: None,
         mouse_pos: None,
         vim_mode: None,
+        copy_feedback: None,
     }
 }
 

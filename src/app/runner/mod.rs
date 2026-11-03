@@ -1817,8 +1817,9 @@ impl<C: Component> AppRunner<C> {
     /// Focus and pointer state for an off-screen capture.
     fn headless_interaction(
         &self,
-    ) -> crate::backend::ratatui_backend::capture_render::CaptureInteraction {
+    ) -> crate::backend::ratatui_backend::capture_render::CaptureInteraction<'_> {
         crate::backend::ratatui_backend::capture_render::CaptureInteraction {
+            copy_feedback: Some(&self.copy_feedback),
             focused: self.focus.focused,
             hovered: self.mouse.hovered,
             mouse_pos: self.mouse.last_mouse.get(),

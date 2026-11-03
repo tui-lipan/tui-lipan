@@ -23,7 +23,6 @@ Configure clipboard behavior via `App::clipboard_config(...)`:
 
 ```rust
 use tui_lipan::prelude::*;
-use tui_lipan::style::Style;
 
 App::new()
     .clipboard_config(ClipboardConfig {
@@ -36,8 +35,7 @@ App::new()
         paste_max_bytes: 1_000_000,            // Clamp large text pastes
         enable_osc52: true,                    // OSC52 for SSH clipboard
         paste_max_image_bytes: 10_000_000,     // Clamp large image pastes (default 10MB)
-        copy_feedback_duration_ms: 150,          // Selection flash after copy (0 disables)
-        copy_feedback_style: Style::new().lighten_by(0.35),
+        copy_feedback: CopyFeedback::new(CopyFeedbackEffect::Flash), // Highlight after a copy
     })
     .mount(Root)
     .run()
@@ -74,8 +72,7 @@ mutable context, so call it from lifecycle methods such as `init()` or `update()
 | `paste_max_bytes` | `usize` | unbounded | Clamp large text pastes to avoid stalls |
 | `enable_osc52` | `bool` | `true` | Emit OSC52 escape on copy/cut (useful over SSH) |
 | `paste_max_image_bytes` | `usize` | 10MB | Clamp large image pastes |
-| `copy_feedback_duration_ms` | `u16` | `150` | Brief paint-only selection flash after successful copy (`0` disables) |
-| `copy_feedback_style` | `Style` | lighten | Style merged onto the selection during the flash |
+| `copy_feedback` | `CopyFeedback` | 150 ms flash | How a successful selection copy is highlighted, and whether the selection is cleared afterwards. See [Copy feedback](#copy-feedback) |
 
 On local Linux desktops, `copy_on_mouse_select` and `middle_click_paste` default to
 `PrimarySelection`. This restores the traditional Unix workflow that terminal mouse reporting
@@ -97,12 +94,56 @@ mouse copy and middle-click paste default to disabled.
 and right-drag handlers take precedence; the configured action is only a fallback for an
 otherwise-unhandled right-button press.
 
-The copy flash follows intent, not input device. A deliberate copy, whether a copy shortcut, a
-`CopyOrPaste` right click, or a `CopyOnly` right click, flashes the copied selection once the write
-succeeds, so users can tell a right-click copy from a right-click paste. Copy-on-select stays
-silent because it fires on every completed selection. A failed right-click copy reports the
-clipboard error and does not fall through to a paste. `CopyOnly` never pastes, whether or not the
-copy succeeds.
+The copy highlight follows intent, not input device. A deliberate copy, whether a copy shortcut, a
+`CopyOrPaste` right click, or a `CopyOnly` right click, highlights the copied selection once the
+write succeeds, so users can tell a right-click copy from a right-click paste. Copy-on-select stays
+silent by default because it fires on every completed selection; set `CopyFeedback::on_select` to
+highlight it too. A failed right-click copy reports the clipboard error and does not fall through
+to a paste. `CopyOnly` never pastes, whether or not the copy succeeds.
+
+### Copy feedback
+
+`ClipboardConfig::copy_feedback` decides what a successful selection copy looks like:
+
+```rust
+use std::time::Duration;
+use tui_lipan::prelude::*;
+
+let feedback = CopyFeedback::new(CopyFeedbackEffect::Scan) // default duration for the effect
+    .duration(Duration::from_millis(400))
+    .style(Style::new().lighten_by(0.4))
+    .on_select(true)        // also highlight copy-on-select
+    .clear_selection(true); // drop the selection once the highlight ends
+```
+
+| Effect | What the copied selection does |
+|--------|--------------------------------|
+| `Off` | Nothing |
+| `Flash` | Lights up at once and goes back when the time is up (150 ms) |
+| `Fade` | Lights up at once, then eases back to the plain selection (300 ms) |
+| `Scan` | A soft vertical line sweeps across it from left to right (450 ms) |
+| `Pulse` | Lights up twice (420 ms) |
+
+`CopyFeedbackEffect::default_duration` gives the times in brackets, which `CopyFeedback::new`
+uses. A zero `duration` turns the highlight off. `CopyFeedbackEffect` parses from and displays as
+its lowercase name, so a config file can name it directly.
+
+`style` is the strongest highlight, merged onto the widget's selection style; the default lightens
+it by `0.35`. `Fade`, `Scan`, and `Pulse` scale its color transforms (`lighten_by`, `dim_by`,
+`tint_by`, opacity) toward nothing. Absolute colors and text modifiers cannot be partly applied, so
+they stay on for the brighter half of the effect. Animated effects repaint on their own, at about
+60 frames per second, only while they run.
+
+`Scan` sweeps column by column in a `Terminal`. Widgets that wrap or reflow text, such as `Input`,
+`TextArea`, and `DocumentView`, fade instead. Toasts show the full `style` for `duration` with every
+effect except `Off`.
+
+With `clear_selection`, the copied selection is cleared once the highlight ends, or straight away
+when there is no highlight. Clearing goes through the widget's change callback, as a click
+elsewhere does. A selection the user has changed since the copy is left alone. A `DocumentView`
+that scrolls out of a `ScrollView` before the highlight ends is cleared all the same, so it does
+not come back selected. Copies made with
+`flash_copy_feedback_range` never clear anything, because that range is not the widget's selection.
 
 Mouse clipboard gestures act on the widget under the pointer, never on whatever happens to hold
 focus:
@@ -224,7 +265,7 @@ parses a child's bare OSC 52 into a `TerminalClipboardEvent` directly. Such a ho
 leaking an outer `$TMUX` into its panes' environment, since that would make children emit the tmux
 framing for a multiplexer that is not tmux.
 Call `ctx.flash_copy_feedback(node_id)` after a successful programmatic copy to reuse the
-configured selection flash on that exact widget. For the focused widget, obtain `node_id` with
+configured copy highlight on that exact widget. For the focused widget, obtain `node_id` with
 `ctx.focused_node_id()` before requesting the flash.
 
 `flash_copy_feedback` paints whatever the widget currently has selected. If your app copies and

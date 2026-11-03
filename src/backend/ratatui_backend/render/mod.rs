@@ -127,18 +127,23 @@ pub(crate) struct RenderContext<'a> {
     pub paint_glyph_caches: Option<Rc<RefCell<PaintGlyphCaches>>>,
 }
 
+/// The copy-feedback style `node_id` merges onto its whole selection this frame.
+///
+/// Widgets that cannot place a cell within the selection get positional effects as a fade.
+pub(crate) fn copy_feedback_style_for(ctx: &RenderContext<'_>, node_id: NodeId) -> Option<Style> {
+    ctx.copy_feedback
+        .and_then(|feedback| feedback.frame(node_id))
+        .and_then(|frame| frame.style_at(None))
+}
+
 pub(crate) fn apply_copy_feedback_to_selection_style(
     ctx: &RenderContext<'_>,
     node_id: NodeId,
     selection_style: Style,
 ) -> Style {
-    if ctx
-        .copy_feedback
-        .is_some_and(|feedback| feedback.is_active(node_id))
-    {
-        selection_style.patch(ctx.copy_feedback_style)
-    } else {
-        selection_style
+    match copy_feedback_style_for(ctx, node_id) {
+        Some(feedback) => selection_style.patch(feedback),
+        None => selection_style,
     }
 }
 
@@ -1684,11 +1689,7 @@ fn render_node(
                     .is_some_and(|hstack_id| state.focus_chain.contains(&hstack_id));
             #[cfg(not(feature = "diff-view"))]
             let scrollbar_focus_override = false;
-            let copy_feedback_style = state
-                .ctx
-                .copy_feedback
-                .filter(|feedback| feedback.is_active(node_id))
-                .map(|_| state.ctx.copy_feedback_style);
+            let copy_feedback_style = copy_feedback_style_for(state.ctx, node_id);
             // A borderless DocumentView hangs its integrated scrollbars on the
             // first ancestor `Frame` that exposes an edge, same as List/Table/
             // TextArea.

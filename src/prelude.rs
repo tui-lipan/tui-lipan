@@ -138,8 +138,8 @@ pub use crate::input::{KeyBinding, KeyBindings};
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub use crate::clipboard::{
-    ClipboardConfig, ClipboardContent, ClipboardPasteContent, CopyOnSelect, PasteOrigin,
-    PasteShiftInsertBehavior, PasteSource, RightClickAction,
+    ClipboardConfig, ClipboardContent, ClipboardPasteContent, CopyFeedback, CopyFeedbackEffect,
+    CopyOnSelect, PasteOrigin, PasteShiftInsertBehavior, PasteSource, RightClickAction,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

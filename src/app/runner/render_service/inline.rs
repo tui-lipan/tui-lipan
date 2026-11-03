@@ -224,7 +224,7 @@ impl<C: Component> AppRunner<C> {
             drop_slot_source_preview_rect: None,
             paint_glyph_caches: Some(self.paint_glyph_caches.clone()),
             copy_feedback: None,
-            copy_feedback_style: self.clipboard_config.copy_feedback_style,
+            copy_feedback_style: self.clipboard_config.copy_feedback.style,
         };
 
         let _host_palette_scope = crate::backend::ratatui_backend::common::push_render_host_palette(

@@ -5,7 +5,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::copy_feedback::CopyFeedbackRange;
+use crate::app::copy_feedback::{CopyFeedbackRange, FeedbackFrame};
 use crate::backend::ratatui_backend::common::{
     CursorPlacement, DEFAULT_SCROLLBAR_THUMB, IntegratedScrollbarAppearance, ScrollbarAppearance,
     ScrollbarScrollState, calculate_visible_borders, integrated_vscrollbar_track_char,
@@ -388,6 +388,9 @@ pub(crate) struct TerminalRenderCtx<'a> {
     /// Range painted with `selection_style` for a copy flash that carries its own
     /// range, so the flash stays visible after the node's selection is cleared.
     pub flash_range: Option<CopyFeedbackRange>,
+    /// A positional copy effect, styled cell by cell over the selection. `selection_style` is the
+    /// plain selection while it runs.
+    pub scan: Option<FeedbackFrame>,
 }
 
 /// Everything one terminal row needs in order to be painted, so the full and partial paths share
@@ -395,6 +398,7 @@ pub(crate) struct TerminalRenderCtx<'a> {
 struct TerminalRowPaint<'a> {
     node: &'a crate::widgets::internal::TerminalNode,
     flash_range: &'a Option<CopyFeedbackRange>,
+    scan: Option<FeedbackFrame>,
     paint_selection: &'a Option<GridSelection>,
     link_hover_style: Style,
     selection_style: Style,
@@ -421,6 +425,7 @@ fn paint_terminal_rows(
     let TerminalRowPaint {
         node,
         flash_range,
+        scan,
         paint_selection,
         link_hover_style,
         selection_style,
@@ -450,17 +455,30 @@ fn paint_terminal_rows(
                 Some(range) if range.selection.columns_for_row(row, 0).is_some() => range.line(row),
                 _ => node.lines.get(row).map(Vec::as_slice),
             };
-            let hovered_source = node.link_hover.as_ref().and_then(|hover| {
-                let mut row_spans = hover.spans.iter().filter(|span| span.row == row);
-                let first = row_spans.next()?;
-                let line = source?;
-                let mut ranges = vec![(first.start_col..first.end_col, link_hover_style)];
-                ranges
-                    .extend(row_spans.map(|span| (span.start_col..span.end_col, link_hover_style)));
-                Some(restyle_columns(line, &ranges))
-            });
-            if let Some(line) = hovered_source.as_deref() {
-                apply_selection_to_row(line, row, paint_selection, selection_style, content_style)
+            let mut ranges: Vec<(std::ops::Range<usize>, Style)> = node
+                .link_hover
+                .iter()
+                .flat_map(|hover| hover.spans.iter().filter(|span| span.row == row))
+                .map(|span| (span.start_col..span.end_col, link_hover_style))
+                .collect();
+            let hovered = !ranges.is_empty();
+            let scanned = match (scan, paint_selection, source) {
+                (Some(scan), Some(selection), Some(line)) => {
+                    let scan_ranges =
+                        scan_ranges(scan, selection, row, line, content_w, selection_style);
+                    let scanned = !scan_ranges.is_empty();
+                    ranges.extend(scan_ranges);
+                    scanned
+                }
+                _ => false,
+            };
+            let restyled = source
+                .filter(|_| hovered || scanned)
+                .map(|line| restyle_columns(line, &ranges));
+            // A scanned row already carries its selection styles, cell by cell.
+            let row_selection = if scanned { &None } else { paint_selection };
+            if let Some(line) = restyled.as_deref() {
+                apply_selection_to_row(line, row, row_selection, selection_style, content_style)
                     .into_iter()
                     .map(|span| ratatui::text::Span::styled(span.content.into_owned(), span.style))
                     .collect()
@@ -538,6 +556,7 @@ pub(crate) fn render_terminal(
         node_theme,
         selection_style,
         flash_range,
+        scan,
     } = ctx;
     let theme = node_theme;
     let style = resolve_base_style(theme, node.style);
@@ -656,6 +675,7 @@ pub(crate) fn render_terminal(
         let paint = TerminalRowPaint {
             node,
             flash_range: &flash_range,
+            scan,
             paint_selection,
             link_hover_style,
             selection_style,
@@ -794,6 +814,51 @@ pub(crate) fn render_terminal(
             );
         }
     }
+}
+
+/// The selection styles for one row while a positional copy effect runs: runs of neighbouring
+/// cells that share a strength, each the plain selection with the effect merged on top.
+///
+/// A cell's place in the effect is how far across the selection its column falls, so every row
+/// lights the same column at once and the sweep reads as one vertical line moving left to right.
+/// A selection within one row spans its own columns; one over several rows spans the full content
+/// width, which its middle rows cover.
+fn scan_ranges(
+    scan: FeedbackFrame,
+    selection: &GridSelection,
+    row: usize,
+    line: &[Span],
+    content_w: u16,
+    selection_style: Style,
+) -> Vec<(std::ops::Range<usize>, Style)> {
+    if selection.is_empty() {
+        return Vec::new();
+    }
+    let line_width = crate::utils::spans::line_width(line);
+    let Some((col_start, col_end)) = selection.columns_for_row(row, line_width) else {
+        return Vec::new();
+    };
+    let (start, end) = selection.normalized();
+    let (left, right) = if start.row == end.row {
+        (start.col, end.col)
+    } else {
+        (0, usize::from(content_w))
+    };
+    let left = left as f32;
+    let span = (right as f32 - left).max(1.0);
+
+    let mut ranges: Vec<(std::ops::Range<usize>, Style)> = Vec::new();
+    for col in col_start..col_end {
+        let position = (col as f32 + 0.5 - left) / span;
+        let style = scan
+            .style_at(Some(position))
+            .map_or(selection_style, |feedback| selection_style.patch(feedback));
+        match ranges.last_mut() {
+            Some((range, last)) if range.end == col && *last == style => range.end = col + 1,
+            _ => ranges.push((col..col + 1, style)),
+        }
+    }
+    ranges
 }
 
 fn apply_selection_to_row<'a>(
@@ -987,11 +1052,20 @@ pub(crate) fn render_terminal_node(
 
     let scrollbar_cache = &state.ctx.scrollbar_metrics_cache;
     let theme = node.active_theme();
-    let selection_style = apply_copy_feedback_to_selection_style(
-        state.ctx,
-        node_id,
-        resolve_slot(theme, ThemeRole::TextSelection, &term.selection_style),
-    );
+    let plain_selection_style =
+        resolve_slot(theme, ThemeRole::TextSelection, &term.selection_style);
+    // A terminal is a grid, so it can place every cell within the selection and sweep a positional
+    // effect across it. Anything else lands on the whole selection at once.
+    let scan = state
+        .ctx
+        .copy_feedback
+        .and_then(|feedback| feedback.frame(node_id))
+        .filter(|frame| frame.is_positional());
+    let selection_style = if scan.is_some() {
+        plain_selection_style
+    } else {
+        apply_copy_feedback_to_selection_style(state.ctx, node_id, plain_selection_style)
+    };
     let flash_range = state
         .ctx
         .copy_feedback
@@ -1033,6 +1107,7 @@ pub(crate) fn render_terminal_node(
             node_theme: theme,
             selection_style,
             flash_range,
+            scan,
         },
     );
 }

@@ -2,11 +2,11 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use crate::clipboard::CopyFeedback;
 use crate::clipboard::error::ClipboardError;
 #[cfg(feature = "terminal")]
 use crate::clipboard::provider::ClipboardPasteContent;
 use crate::clipboard::provider::{ClipboardProvider, ImageContent};
-use crate::style::Style;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Determines what Shift+Insert should paste.
@@ -78,10 +78,9 @@ pub struct ClipboardConfig {
     pub enable_osc52: bool,
     /// Maximum number of bytes for image paste (0 disables clamping).
     pub paste_max_image_bytes: usize,
-    /// Duration in milliseconds for the selection copy flash (0 disables).
-    pub copy_feedback_duration_ms: u16,
-    /// Style merged onto the active text selection during the copy flash.
-    pub copy_feedback_style: Style,
+    /// How a successful selection copy is highlighted, and whether the selection is cleared
+    /// afterwards.
+    pub copy_feedback: CopyFeedback,
 }
 
 impl Default for ClipboardConfig {
@@ -114,8 +113,7 @@ impl Default for ClipboardConfig {
             paste_max_bytes: 1_000_000,
             enable_osc52: true,
             paste_max_image_bytes: 10_000_000,
-            copy_feedback_duration_ms: 150,
-            copy_feedback_style: Style::new().lighten_by(0.35),
+            copy_feedback: CopyFeedback::default(),
         }
     }
 }
