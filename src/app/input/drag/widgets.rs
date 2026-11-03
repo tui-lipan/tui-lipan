@@ -298,6 +298,10 @@ fn compute_tab_snapshot_anchor(
     let NodeKind::DraggableTabBar(bar) = &node.kind else {
         return None;
     };
+    // A bar that turned its drag preview off draws no floating copy of the dragged tab.
+    if !bar.drag_preview {
+        return None;
+    }
     let inner = node.rect.inner(bar.border, bar.padding);
     if inner.w == 0 || inner.h == 0 {
         return None;
