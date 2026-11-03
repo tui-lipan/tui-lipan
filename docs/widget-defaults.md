@@ -923,6 +923,7 @@ Source: `src/widgets/draggable_tab_bar/mod.rs` (`DraggableTabBar`).
 | `overflow_style` | `Style::default()` |
 | `overflow_hover_style` | `Style::default()` |
 | `overflow_labels` | `OverflowLabels::default()` |
+| `position_label` | `None` |
 | `empty_text` | `None` |
 | `empty_text_style` | `Style::default()` |
 | `scroll_offset` | `0` |

@@ -804,6 +804,15 @@ pub(crate) fn render_draggable_tab_bar_node(
         } else {
             active
         };
+        // A slot label names where a tab is, so the tabs the preview moved name their new slots.
+        if let Some(format) = &node.position_label {
+            let (first, last) = (from.min(to), from.max(to));
+            for (position, tab) in tabs.iter_mut().enumerate().take(last + 1).skip(first) {
+                if let Some(base) = &tab.base_label {
+                    tab.label = format(position, base);
+                }
+            }
+        }
     }
     for tab in &mut tabs {
         if let Some(spinner) = tab
