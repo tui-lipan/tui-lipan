@@ -66,8 +66,9 @@ pub(crate) struct Hull {
 }
 
 impl Hull {
-    /// The convex hull of up to eight points: the smear's corners at two moments, which is the
-    /// shape it swept between them, even when spring motion has twisted the corners out of order.
+    /// The convex hull of up to eight points: the smear's corners, even when spring motion has
+    /// twisted them out of order, or its corners at two moments, which is the shape it swept
+    /// between them.
     pub(crate) fn of(corners: &[Vec2]) -> Self {
         let mut points: Vec<Vec2> = corners.iter().copied().take(MAX_VERTICES).collect();
         points.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
@@ -101,6 +102,38 @@ impl Hull {
     #[cfg(test)]
     pub(crate) fn vertices_for_tests(&self) -> &[Vec2] {
         self.vertices()
+    }
+
+    /// Whether the two hulls touch: no edge of either separates them.
+    pub(crate) fn overlaps(&self, other: &Hull) -> bool {
+        let separates = |axis: Vec2| {
+            let span = |hull: &Hull| {
+                hull.vertices()
+                    .iter()
+                    .map(|point| point.dot(axis))
+                    .fold((f32::INFINITY, f32::NEG_INFINITY), |(low, high), value| {
+                        (low.min(value), high.max(value))
+                    })
+            };
+            let (a, b) = (span(self), span(other));
+            a.1 < b.0 - 1e-4 || b.1 < a.0 - 1e-4
+        };
+        let edges = |hull: &Hull| {
+            let vertices = hull.vertices();
+            (0..vertices.len())
+                .map(|index| vertices[(index + 1) % vertices.len()] - vertices[index])
+                .collect::<Vec<_>>()
+        };
+        if self.len == 0 || other.len == 0 {
+            return false;
+        }
+        edges(self)
+            .into_iter()
+            .chain(edges(other))
+            .filter(|edge| edge.dot(*edge) > f32::EPSILON)
+            // An edge's normal, and the edge itself for a hull that is only a segment.
+            .flat_map(|edge| [Vec2::new(-edge.y, edge.x), edge])
+            .all(|axis| !separates(axis))
     }
 
     fn contains(&self, point: Vec2) -> bool {

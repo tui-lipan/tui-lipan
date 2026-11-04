@@ -485,8 +485,9 @@ struct Landing {
 #[derive(Clone, Debug)]
 struct Running {
     smear: Smear,
-    /// The corners the last drawn frame showed. The next frame draws everything swept since,
-    /// however many physics steps a slow frame let pass, so the streak never breaks.
+    /// The corners the last drawn frame showed. A smear that has left them behind entirely,
+    /// however many physics steps a slow frame let pass, reaches back to them, so the streak
+    /// never breaks.
     drawn: Option<Corners>,
     color: Option<Color>,
     /// The smear draws the caret itself, so the host caret stays hidden.
@@ -817,11 +818,16 @@ fn held_shape(corners: &Corners) -> SmearShape {
 
 fn shape_of(smear: &Smear, drawn: Option<Corners>) -> SmearShape {
     let shown = smear.shown();
-    // Everything between what the last frame showed and what this one shows; before the first
-    // frame, the last two physics steps.
-    let swept: Vec<Vec2> = match drawn {
-        Some(drawn) => drawn.iter().chain(shown.iter()).copied().collect(),
-        None => smear.swept().to_vec(),
+    // The smear as it is now. Where it has moved further than its own length since the last frame
+    // (before the first frame, the last physics step), it also reaches back to where that frame
+    // showed it, so a fast smear reads as one streak rather than a shape hopping from place to
+    // place. Where the two still touch, the smear alone is drawn: sweeping across the space
+    // between them would blur a smear that turns into a wide wedge.
+    let before = drawn.unwrap_or_else(|| smear.previous());
+    let swept: Vec<Vec2> = if Hull::of(&before).overlaps(&Hull::of(&shown)) {
+        shown.to_vec()
+    } else {
+        before.iter().chain(shown.iter()).copied().collect()
     };
     let target = smear.target();
     let head = target
@@ -1164,6 +1170,55 @@ mod tests {
                          then {b:?}"
                     );
                 }
+            }
+        }
+    }
+
+    /// A smear sent somewhere else mid-flight bends into a streak toward its new target; what a
+    /// frame draws is the smear itself, not a wedge swept across everywhere it passed since the
+    /// last frame. Each frame still touches the one before, so the streak never hops.
+    #[test]
+    fn a_turning_smear_stays_a_streak() {
+        let area = |hull: &Hull| {
+            let vertices = hull.vertices_for_tests();
+            let twice: f32 = (0..vertices.len())
+                .map(|index| vertices[index].cross(vertices[(index + 1) % vertices.len()]))
+                .sum();
+            twice.abs() / 2.0
+        };
+        let block = |x, y| motion::caret_rect(x, y, crate::CaretShape::Block);
+        for steps_per_frame in [1, 2, 4] {
+            let mut smear = motion::Smear::new_for_tests(block(5, 20), block(70, 4));
+            let mut drawn: Option<Corners> = None;
+            let mut last: Option<Hull> = None;
+            for frame in 0..30 {
+                if frame == 3 {
+                    smear.retarget(block(10, 30));
+                }
+                smear.advance(
+                    motion::STEP * steps_per_frame,
+                    CursorTrailMotion::default(),
+                    0.0,
+                    |_| {},
+                );
+                let shape = shape_of(&smear, drawn);
+                let alone = area(&Hull::of(&shape.shown));
+                if let Some(last) = last {
+                    assert!(
+                        shape.hull.overlaps(&last),
+                        "{steps_per_frame} steps per frame, frame {frame}: the streak hops"
+                    );
+                    if Hull::of(&drawn.unwrap()).overlaps(&Hull::of(&shape.shown)) {
+                        assert!(
+                            area(&shape.hull) <= alone + 1e-3,
+                            "{steps_per_frame} steps per frame, frame {frame}: drew {} for a \
+                             smear of {alone}",
+                            area(&shape.hull)
+                        );
+                    }
+                }
+                drawn = Some(shape.shown);
+                last = Some(shape.hull);
             }
         }
     }
