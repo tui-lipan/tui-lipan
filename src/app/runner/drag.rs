@@ -1616,9 +1616,19 @@ impl<C: Component> AppRunner<C> {
             },
         };
 
-        if selection.as_ref() == Some(&next) {
+        let unchanged = if selection_controlled {
+            drag.proposed == Some(next)
+        } else {
+            selection.as_ref() == Some(&next)
+        };
+        if unchanged {
             crate::debug::internal_log!("[terminal_drag] selection unchanged");
             return false;
+        }
+        if let ActiveDrag::Terminal(active) = &mut self.drag.active
+            && active.id == drag.id
+        {
+            active.proposed = Some(next);
         }
 
         crate::debug::internal_log!(

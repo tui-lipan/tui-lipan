@@ -294,12 +294,29 @@ impl TerminalCopyMode {
             return CopyModeAction::Ignored;
         };
         let cols = viewport.cols.max(1);
-        let clamp = |pos: TerminalPos| TerminalPos {
-            line: pos.line,
-            col: pos.col.min(cols - 1),
+        // Selection endpoints are boundaries between cells. Below the last row the widget reports
+        // one column past the right edge, which is the boundary at the start of the next row.
+        let boundary = |pos: TerminalPos| {
+            if pos.col >= cols {
+                TerminalPos {
+                    line: pos.line.saturating_add(1),
+                    col: 0,
+                }
+            } else {
+                pos
+            }
         };
-        let (anchor, cursor) = match event.selection.filter(|sel| !sel.is_empty()) {
+        let selection = event
+            .selection
+            .map(|sel| TerminalSelection {
+                anchor: boundary(sel.anchor),
+                cursor: boundary(sel.cursor),
+            })
+            .filter(|sel| !sel.is_empty());
+        let (anchor, cursor) = match selection {
             Some(selection) => {
+                let reversed = (selection.cursor.line, selection.cursor.col)
+                    < (selection.anchor.line, selection.anchor.col);
                 let (start, end) = selection.normalized();
                 // The exclusive end's cell is not selected, so step back one cell; an end at a
                 // row's first column ends the selection at the end of the row above.
@@ -314,14 +331,13 @@ impl TerminalCopyMode {
                         col: end.col - 1,
                     }
                 };
-                let (start, last) = (clamp(start), clamp(last));
-                if selection.cursor == start {
+                if reversed {
                     (Some(last), start)
                 } else {
                     (Some(start), last)
                 }
             }
-            None => (None, clamp(pointer)),
+            None => (None, boundary(pointer)),
         };
 
         let before = self.clone();
@@ -817,6 +833,44 @@ mod tests {
                 cursor: pos(13, GRID.cols - 1)
             })
         );
+    }
+
+    #[test]
+    fn a_reversed_drag_from_past_the_right_edge_starts_at_the_next_row() {
+        // An autoscrolled drag below the view reports one column past the edge; reversing above
+        // the anchor makes that boundary the start, which is the next row's first cell.
+        let mut mode = TerminalCopyMode::new(0, 0, 0);
+        let reversed = TerminalSelection {
+            anchor: pos(12, 5),
+            cursor: pos(10, GRID.cols),
+        };
+        assert_eq!(
+            mode.handle_pointer(
+                &pointer_event(Some(reversed), pos(10, GRID.cols)),
+                viewport(0)
+            ),
+            CopyModeAction::SelectionChanged
+        );
+        assert_eq!(
+            mode.selection(GRID.total_scrollback_rows),
+            Some(TerminalSelection {
+                anchor: pos(12, 4),
+                cursor: pos(11, 0),
+            })
+        );
+        assert_eq!(mode.cursor(), (1, 0));
+
+        // A drag that collapses onto that boundary from the next row selects nothing.
+        let collapsed = TerminalSelection {
+            anchor: pos(11, 0),
+            cursor: pos(10, GRID.cols),
+        };
+        mode.handle_pointer(
+            &pointer_event(Some(collapsed), pos(10, GRID.cols)),
+            viewport(0),
+        );
+        assert_eq!(mode.anchor(), None);
+        assert_eq!(mode.cursor(), (1, 0));
     }
 
     #[test]

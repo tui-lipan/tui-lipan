@@ -793,6 +793,7 @@ impl<C: Component> AppRunner<C> {
                     id: hit,
                     anchor,
                     lineage,
+                    proposed: selection,
                 });
                 return true;
             }

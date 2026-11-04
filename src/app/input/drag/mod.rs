@@ -439,6 +439,10 @@ pub(crate) struct TerminalDrag {
     pub anchor: crate::widgets::TerminalPos,
     /// Scrollback lineage `anchor` was measured against, so evicted history can rebase it.
     pub lineage: crate::widgets::ScrollbackLineage,
+    /// The selection this gesture last proposed. A controlled terminal renders parent state, which
+    /// can match a real proposal (a copy-mode cursor cell) or hold a selection the mouse never made,
+    /// so the gesture's own proposal decides what changed and whether release copies.
+    pub proposed: Option<crate::widgets::TerminalSelection>,
 }
 
 /// Tracks click state for double/triple-click detection.

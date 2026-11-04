@@ -612,7 +612,12 @@ fn active_selection_drag_id(active: &crate::app::interaction_state::ActiveDrag) 
         crate::app::interaction_state::ActiveDrag::DocumentView(drag) => Some(drag.id),
         crate::app::interaction_state::ActiveDrag::Input(drag) => Some(drag.id),
         #[cfg(feature = "terminal")]
-        crate::app::interaction_state::ActiveDrag::Terminal(drag) => Some(drag.id),
+        // Only a selection this gesture made is copied: a click that just moves a controlled
+        // terminal's cursor leaves the parent's highlight in place, and that is not a selection.
+        crate::app::interaction_state::ActiveDrag::Terminal(drag) => drag
+            .proposed
+            .is_some_and(|selection| !selection.is_empty())
+            .then_some(drag.id),
         _ => None,
     }
 }
