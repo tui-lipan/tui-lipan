@@ -59,7 +59,7 @@ impl CursorTrailTrigger {
 /// The spring that pulls each corner of the smear into the caret.
 ///
 /// Every value is applied once per sixtieth of a second, whatever the frame rate, and means what
-/// the same-named setting of smear-cursor.nvim means; the defaults are its defaults.
+/// the same-named setting of smear-cursor.nvim means.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CursorTrailSpring {
     /// How hard the corners facing the direction of travel are pulled, from 0 (not at all) to 1.
@@ -75,8 +75,20 @@ pub struct CursorTrailSpring {
 }
 
 impl CursorTrailSpring {
-    /// smear-cursor.nvim's defaults.
+    /// The default spring: the front lands on the caret in about three steps, overshooting by
+    /// under a cell even on a long jump, while the tail takes about ten steps to close in, so the
+    /// smear visibly stretches and shrinks rather than flashing past.
     pub const DEFAULT: Self = Self {
+        stiffness: 0.5,
+        trailing_stiffness: 0.16,
+        trailing_exponent: 3.0,
+        damping: 0.82,
+        stop_distance: 0.1,
+    };
+
+    /// smear-cursor.nvim's own defaults: a quicker, more compact smear that is over in about
+    /// five steps.
+    pub const SMEAR_CURSOR: Self = Self {
         stiffness: 0.6,
         trailing_stiffness: 0.45,
         trailing_exponent: 3.0,

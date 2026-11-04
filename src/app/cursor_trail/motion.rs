@@ -19,6 +19,10 @@ pub(crate) const STEP: Duration = Duration::from_nanos(16_666_667);
 /// A stall longer than this (a suspended process, a debugger) settles the smear at once rather
 /// than replaying every step it missed.
 const MAX_STEPS_PER_ADVANCE: u32 = 120;
+/// The furthest a corner may fly past its target along the direction of travel, in cells. A
+/// spring's overshoot grows with the jump, so a long one would otherwise land the smear on text
+/// beyond the caret; capped, a long jump still snaps, and a short one keeps its own bounce.
+const MAX_OVERSHOOT: f32 = 0.5;
 
 /// A rectangle as its four corners, clockwise from the top left, in cell coordinates.
 pub(crate) type Corners = [Vec2; 4];
@@ -44,6 +48,17 @@ pub(crate) fn center(corners: &Corners) -> Vec2 {
         .iter()
         .fold(Vec2::ZERO, |sum, corner| sum + *corner)
         .scale(0.25)
+}
+
+/// The unit direction from one rectangle's centre to another's, or zero for no move.
+fn direction(from: &Corners, to: &Corners) -> Vec2 {
+    let along = center(to) - center(from);
+    let length = along.length();
+    if length < f32::EPSILON {
+        Vec2::ZERO
+    } else {
+        along.scale(1.0 / length)
+    }
 }
 
 /// How far each corner leads the motion, from 0 (trailing) to 1 (leading).
@@ -77,6 +92,8 @@ pub(crate) struct Smear {
     /// Per-corner spring constants (Spring) or progress offsets (Glide), from the corners'
     /// leadership toward the current target.
     lead: [f32; 4],
+    /// Unit direction of travel toward the current target, for the overshoot cap.
+    direction: Vec2,
     /// Time integrated but not yet a whole step: the interpolation fraction between `previous`
     /// and `current`.
     pending: Duration,
@@ -91,6 +108,7 @@ impl Smear {
     pub(crate) fn new(from: Corners, to: Corners) -> Self {
         Self {
             lead: leadership(&from, &to),
+            direction: direction(&from, &to),
             target: to,
             current: from,
             previous: from,
@@ -109,6 +127,7 @@ impl Smear {
         }
         let shown = self.shown();
         self.lead = leadership(&shown, &to);
+        self.direction = direction(&shown, &to);
         self.glide_from = shown;
         self.glide_elapsed = Duration::ZERO;
         self.target = to;
@@ -198,6 +217,16 @@ impl Smear {
             self.velocity[index] = self.velocity[index] + pull;
             self.current[index] = self.current[index] + self.velocity[index];
             self.velocity[index] = self.velocity[index].scale(keep);
+            let past = (self.current[index] - self.target[index]).dot(self.direction);
+            if past > MAX_OVERSHOOT {
+                // Pull the corner back to the cap and take away the speed carrying it further.
+                self.current[index] =
+                    self.current[index] - self.direction.scale(past - MAX_OVERSHOOT);
+                let onward = self.velocity[index].dot(self.direction);
+                if onward > 0.0 {
+                    self.velocity[index] = self.velocity[index] - self.direction.scale(onward);
+                }
+            }
             at_rest &= (self.target[index] - self.current[index]).length() < spring.stop_distance
                 && self.velocity[index].length() < spring.stop_distance;
         }
@@ -276,6 +305,44 @@ mod tests {
         run(&mut smear, spring(), Duration::from_secs(2), STEP);
         assert!(smear.settled());
         assert_eq!(smear.shown(), caret_rect(30, 4, CaretShape::Block));
+    }
+
+    /// The default spring is a smear you can see: on a long jump it stretches well past the
+    /// caret's own size and takes a good number of frames to shrink back, where smear-cursor's
+    /// preset is over in a few.
+    #[test]
+    fn the_default_spring_stretches_and_lingers() {
+        let run = |spring: CursorTrailSpring| {
+            let mut smear = Smear::new(
+                caret_rect(0, 0, CaretShape::Block),
+                caret_rect(60, 0, CaretShape::Block),
+            );
+            let (mut longest, mut overshoot, mut frames) = (0.0f32, 0.0f32, 0);
+            while !smear.settled() {
+                smear.advance(STEP, CursorTrailMotion::Spring(spring), 25.0, |_| {});
+                let shown = smear.shown();
+                let xs = shown.iter().map(|corner| corner.x);
+                let right = xs.clone().fold(f32::MIN, f32::max);
+                longest = longest.max(right - xs.fold(f32::MAX, f32::min));
+                // The caret's right edge is column 61.
+                overshoot = overshoot.max(right - 61.0);
+                frames += 1;
+                assert!(frames < 120, "never settled");
+            }
+            (longest, overshoot, frames)
+        };
+        let (longest, overshoot, frames) = run(CursorTrailSpring::DEFAULT);
+        assert!(longest >= 10.0, "stretches to {longest} cells");
+        assert!(frames >= 8, "visible for {frames} frames");
+        assert!(
+            overshoot <= MAX_OVERSHOOT + 1e-3,
+            "the front lands without flying onto the text past the caret: {overshoot} cells"
+        );
+        let (_, _, quick) = run(CursorTrailSpring::SMEAR_CURSOR);
+        assert!(
+            quick < frames,
+            "smear-cursor's preset is the quicker one: {quick} vs {frames}"
+        );
     }
 
     #[test]

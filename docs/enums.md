@@ -136,16 +136,18 @@ How a [`CursorTrail`](quick-start.md#app-configuration) moves.
 | `Glide { duration }` | The front sits on the caret at once and the tail eases in over `duration`; `CursorTrail::glide()` is 160 ms. Zero turns trails off |
 
 `CursorTrailSpring` holds the spring, applied once per sixtieth of a second whatever the frame rate.
-Its fields mean what the same-named settings of smear-cursor.nvim mean, and
-`CursorTrailSpring::DEFAULT` is its defaults:
+Its fields mean what the same-named settings of smear-cursor.nvim mean.
+`CursorTrailSpring::DEFAULT` stretches the smear out behind the caret and lands the front with a
+slight snap; `CursorTrailSpring::SMEAR_CURSOR` is smear-cursor.nvim's own, quicker and more
+compact.
 
-| Field | Default | Notes |
-|-------|---------|-------|
-| `stiffness` | `0.6` | Pull on the corners leading the motion, 0 to 1 |
-| `trailing_stiffness` | `0.45` | Pull on the trailing corners; lower stretches the smear |
-| `trailing_exponent` | `3.0` | How quickly corners between leading and trailing fall back to the trailing pull |
-| `damping` | `0.85` | Velocity lost each step, 0 (bouncy) to 1 (no momentum) |
-| `stop_distance` | `0.1` | The smear stops once every corner is this close to the caret, in cells |
+| Field | Default | smear-cursor | Notes |
+|-------|---------|--------------|-------|
+| `stiffness` | `0.5` | `0.6` | Pull on the corners leading the motion, 0 to 1 |
+| `trailing_stiffness` | `0.16` | `0.45` | Pull on the trailing corners; lower stretches the smear |
+| `trailing_exponent` | `3.0` | `3.0` | How quickly corners between leading and trailing fall back to the trailing pull |
+| `damping` | `0.82` | `0.85` | Velocity lost each step, 0 (bouncy) to 1 (no momentum) |
+| `stop_distance` | `0.1` | `0.1` | The smear stops once every corner is this close to the caret, in cells |
 
 ### `CursorTrailFill`
 
