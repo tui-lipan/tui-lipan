@@ -175,9 +175,10 @@ pub(crate) fn expand_tabs<'a>(s: &'a str, start_col: usize, tab_stop: usize) -> 
 
 /// Drop the blank lines at the start and end of copied text, keeping those in between.
 ///
-/// A line is blank when it holds only whitespace. Terminal copies use this: a drag past the end of
-/// the output selects the empty rows below it, and a trailing line break pasted into a shell runs
-/// the command. Text of only blank lines becomes empty, so there is nothing to copy.
+/// A line is blank when it holds only whitespace, and a line ends at `\n` or `\r\n`. Terminal
+/// copies use this: a drag past the end of the output selects the empty rows below it, and a
+/// trailing line break pasted into a shell runs the command. Text of only blank lines becomes
+/// empty, so there is nothing to copy.
 ///
 /// ```
 /// use tui_lipan::utils::trim_blank_edge_lines;
@@ -202,8 +203,11 @@ pub fn trim_blank_edge_lines(text: &str) -> &str {
         if !blank(&text[line_start..end]) {
             break;
         }
-        // Drop the blank line and the break before it.
+        // Drop the blank line and the break before it, `\n` or `\r\n`.
         end = line_start.saturating_sub(1).max(start);
+        if end > start && text.as_bytes()[end - 1] == b'\r' {
+            end -= 1;
+        }
     }
     &text[start..end]
 }
@@ -938,7 +942,9 @@ mod tests {
             ("\n\nfoo", "foo"),
             ("  \n\t\n  foo  \n \n", "  foo  "),
             ("foo\n\nbar", "foo\n\nbar"),
-            ("foo\r\n\r\n", "foo\r"),
+            ("foo\r\n", "foo"),
+            ("foo\r\n\r\n", "foo"),
+            ("\r\n\r\nfoo\r\n\r\nbar\r\n", "foo\r\n\r\nbar"),
             ("", ""),
             ("\n", ""),
             ("\n\n\n", ""),

@@ -580,11 +580,13 @@ fn dispatch_selection_clipboard_request(
                     continue;
                 };
                 let text = terminal_node_copy_text(node, selection);
+                // A selection of only blank lines has nothing to copy, but it is still a selection:
+                // the copy shortcut is spent on it rather than passed on to the program.
                 let mut context = ReadOnlyClipboardContext::new(
                     text.as_str(),
                     Some((0, text.len())),
                     true,
-                    false,
+                    text.is_empty(),
                 );
                 dispatch_selection_context(&mut context, request, ctx, id)
             }
@@ -1893,7 +1895,7 @@ mod tests {
 
     #[cfg(feature = "terminal")]
     #[test]
-    fn ctrl_c_copies_terminal_selection_without_blank_edge_lines() {
+    fn copy_shortcut_copies_terminal_selection_without_blank_edge_lines() {
         let row = |text: &str| vec![crate::style::Span::new(text.to_string())];
         // (rows, selection end, what lands on the clipboard)
         let cases: [(&[&str], crate::widgets::TerminalPos, &[&str]); 4] = [
@@ -1960,12 +1962,14 @@ mod tests {
                 Rc::new(|_| {}),
             );
             let keymap = keymap_for_test(vec![binding_for_test(
-                "ctrl-c",
+                "ctrl-insert",
                 Action::Copy,
                 BindingMode::Performable,
             )]);
 
-            dispatch_selection_shortcut(
+            // Every case is a selection, so the shortcut is spent on it, even with nothing to copy:
+            // passed on, it would reach the program in the terminal.
+            let handled = dispatch_selection_shortcut(
                 &mut tree,
                 None,
                 &keymap,
@@ -1974,8 +1978,12 @@ mod tests {
                     enable_osc52: false,
                     ..Default::default()
                 },
-                ctrl_c(),
+                KeyEvent {
+                    code: KeyCode::Insert,
+                    mods: KeyMods::CTRL,
+                },
             );
+            assert!(handled, "rows {rows:?}");
             assert_eq!(writes.borrow().as_slice(), copied, "rows {rows:?}");
         }
     }
