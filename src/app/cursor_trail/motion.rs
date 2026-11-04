@@ -123,6 +123,19 @@ impl Smear {
         self.settled
     }
 
+    /// The corners at the last two physics steps. Their hull is what the smear swept between
+    /// them, so a frame drawn from it always reaches back to the one before: a fast smear reads
+    /// as one streak rather than a shape hopping from place to place.
+    pub(crate) fn swept(&self) -> [Vec2; 8] {
+        std::array::from_fn(|index| {
+            if index < 4 {
+                self.previous[index]
+            } else {
+                self.current[index - 4]
+            }
+        })
+    }
+
     /// The centre of the smear as of the latest physics step.
     pub(crate) fn current_center(&self) -> Vec2 {
         center(&self.current)

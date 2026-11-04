@@ -747,7 +747,7 @@ fn shape_of(smear: &Smear) -> SmearShape {
         .max_by(|a, b| (*a - head).length().total_cmp(&(*b - head).length()))
         .unwrap_or(head);
     SmearShape {
-        hull: Hull::of(&shown),
+        hull: Hull::of(&smear.swept()),
         head,
         tail,
         target: Position::new(target[0].x.max(0.0) as u16, target[0].y.max(0.0) as u16),
@@ -1018,6 +1018,49 @@ mod tests {
             "a solid smear draws the caret"
         );
         assert!(!state.requires_full_draw(), "the clearing frame went out");
+    }
+
+    /// A fast smear reads as one streak: every frame overlaps the one before, and the first one
+    /// that moves reaches back to where the caret was.
+    #[test]
+    fn a_long_jump_is_one_unbroken_streak_over_time() {
+        fn bounds(frame: &CursorTrailFrame) -> (f32, f32, f32, f32) {
+            let hull = frame.smear.expect("smear").hull;
+            hull.vertices_for_tests().iter().fold(
+                (f32::MAX, f32::MAX, f32::MIN, f32::MIN),
+                |(left, top, right, bottom), p| {
+                    (left.min(p.x), top.min(p.y), right.max(p.x), bottom.max(p.y))
+                },
+            )
+        }
+        for motion in [CursorTrailMotion::default(), CursorTrail::glide()] {
+            let config = trail().map(|trail| trail.motion(motion));
+            let start = Instant::now();
+            let mut state = CursorTrailState::default();
+            see(&mut state, config, 2, 1, 1, start);
+            see(&mut state, config, 70, 20, 2, start);
+            let frames: Vec<_> = play(&mut state, config, start)
+                .into_iter()
+                .filter(|frame| frame.smear.is_some())
+                .collect();
+            assert!(frames.len() > 2, "{motion:?}");
+            let moving = frames
+                .iter()
+                .find(|frame| bounds(frame).2 > 4.0)
+                .expect("a frame that moved");
+            assert!(
+                bounds(moving).0 <= 3.0 && bounds(moving).1 <= 2.0,
+                "{motion:?}: the first moving frame reaches back to the origin: {:?}",
+                bounds(moving)
+            );
+            for pair in frames.windows(2) {
+                let (a, b) = (bounds(&pair[0]), bounds(&pair[1]));
+                assert!(
+                    a.0 <= b.2 && b.0 <= a.2 && a.1 <= b.3 && b.1 <= a.3,
+                    "{motion:?}: consecutive frames do not overlap: {a:?} then {b:?}"
+                );
+            }
+        }
     }
 
     #[test]

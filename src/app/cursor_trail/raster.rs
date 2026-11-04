@@ -23,24 +23,36 @@ const FULL: u64 = u64::MAX;
 const TINT_MAX: f32 = 0.75;
 /// Without RGB to blend, a cell at least this strong takes the trail color outright.
 const SOLID_THRESHOLD: f32 = 0.45;
+/// A sample this close to the smear's edge counts as covered, so a shape thinner than the sample
+/// pitch (a bar caret's 1/8-cell smear on a diagonal) is still at least one sample thick
+/// everywhere. Just under half the pitch: a settled caret's neighbours, whose nearest samples sit
+/// exactly half a pitch from its edge, stay untouched.
+const EDGE_MARGIN: f32 = 0.5 / SAMPLES as f32 - 0.0025;
+/// A cell the smear touches with more samples than this always gets a glyph, even where none
+/// matches the sliver well, so the smear never breaks into pieces. Fewer are a corner it clips.
+const EMPTY_MAX: u32 = 4;
+
+/// The most vertices a hull keeps: the corners of the smear at two physics steps.
+const MAX_VERTICES: usize = 8;
 
 /// A convex polygon, its vertices in order.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Hull {
-    points: [Vec2; 4],
+    points: [Vec2; MAX_VERTICES],
     len: usize,
 }
 
 impl Hull {
-    /// The convex hull of four corners, which is the smear even when spring motion has twisted
-    /// the corners out of order.
-    pub(crate) fn of(corners: &[Vec2; 4]) -> Self {
-        let mut points = *corners;
+    /// The convex hull of up to eight points: the smear's corners at two physics steps, which is
+    /// the shape it swept between them, even when spring motion has twisted the corners out of
+    /// order.
+    pub(crate) fn of(corners: &[Vec2]) -> Self {
+        let mut points: Vec<Vec2> = corners.iter().copied().take(MAX_VERTICES).collect();
         points.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
         // Andrew's monotone chain: a lower and an upper chain, each without its last point.
         let cross = |o: Vec2, a: Vec2, b: Vec2| (a - o).cross(b - o);
         let chain = |points: &mut dyn Iterator<Item = Vec2>| {
-            let mut chain: Vec<Vec2> = Vec::with_capacity(4);
+            let mut chain: Vec<Vec2> = Vec::with_capacity(MAX_VERTICES);
             for point in points {
                 while chain.len() >= 2
                     && cross(chain[chain.len() - 2], chain[chain.len() - 1], point) <= 0.0
@@ -54,8 +66,8 @@ impl Hull {
         };
         let mut hull = chain(&mut points.iter().copied());
         hull.extend(chain(&mut points.iter().rev().copied()));
-        let mut out = [Vec2::ZERO; 4];
-        let len = hull.len().min(4);
+        let mut out = [Vec2::ZERO; MAX_VERTICES];
+        let len = hull.len().min(MAX_VERTICES);
         out[..len].copy_from_slice(&hull[..len]);
         Self { points: out, len }
     }
@@ -88,6 +100,27 @@ impl Hull {
         }
     }
 
+    /// How far `point` lies outside the hull, or zero inside it.
+    fn distance(&self, point: Vec2) -> f32 {
+        if self.contains(point) {
+            return 0.0;
+        }
+        let vertices = self.vertices();
+        let segment = |a: Vec2, b: Vec2| {
+            let along = b - a;
+            let length_squared = along.dot(along);
+            let t = if length_squared < f32::EPSILON {
+                0.0
+            } else {
+                ((point - a).dot(along) / length_squared).clamp(0.0, 1.0)
+            };
+            (a + along.scale(t) - point).length()
+        };
+        (0..vertices.len())
+            .map(|index| segment(vertices[index], vertices[(index + 1) % vertices.len()]))
+            .fold(f32::INFINITY, f32::min)
+    }
+
     /// The cells the hull touches, as an inclusive range of columns and rows.
     fn cell_bounds(&self) -> Option<(i32, i32, i32, i32)> {
         let vertices = self.vertices();
@@ -110,7 +143,8 @@ impl Hull {
         ))
     }
 
-    /// Which of the cell's 8x8 samples fall inside, bit `row * 8 + column`.
+    /// Which of the cell's 8x8 samples fall inside, or within [`EDGE_MARGIN`] of the edge, bit
+    /// `row * 8 + column`.
     fn coverage(&self, column: i32, row: i32) -> u64 {
         let mut mask = 0;
         for sample_row in 0..SAMPLES {
@@ -119,7 +153,7 @@ impl Hull {
                     column as f32 + (sample_column as f32 + 0.5) / SAMPLES as f32,
                     row as f32 + (sample_row as f32 + 0.5) / SAMPLES as f32,
                 );
-                if self.contains(point) {
+                if self.distance(point) < EDGE_MARGIN {
                     mask |= 1 << (sample_row * SAMPLES + sample_column);
                 }
             }
@@ -286,7 +320,11 @@ enum Match {
 }
 
 fn best_match(mask: u64, allow_inverted: bool, sextants: bool) -> Match {
-    let mut best = (mask.count_ones(), Match::Empty);
+    if mask.count_ones() <= EMPTY_MAX {
+        return Match::Empty;
+    }
+    // Leaving a touched cell empty is never the answer: that is what breaks a smear into pieces.
+    let mut best = (u32::MAX, Match::Empty);
     let mut consider = |cost: u32, candidate: Match| {
         if cost < best.0 {
             best = (cost, candidate);
@@ -500,6 +538,88 @@ mod tests {
             Vec2::new(right, bottom),
             Vec2::new(left, bottom),
         ])
+    }
+
+    /// A diagonal smear, as thick as a block caret or as thin as a bar caret, paints every row it
+    /// crosses as one unbroken run of cells, and each row's run touches the next: no gaps.
+    #[test]
+    fn diagonal_smears_have_no_gaps() {
+        for (name, corners) in [
+            (
+                "block",
+                [
+                    Vec2::new(2.0, 1.0),
+                    Vec2::new(3.0, 1.0),
+                    Vec2::new(23.0, 9.0),
+                    Vec2::new(22.0, 9.0),
+                ],
+            ),
+            (
+                "bar",
+                [
+                    Vec2::new(2.0, 1.0),
+                    Vec2::new(2.125, 1.0),
+                    Vec2::new(23.125, 9.0),
+                    Vec2::new(23.0, 9.0),
+                ],
+            ),
+            (
+                "steep bar",
+                [
+                    Vec2::new(3.0, 0.0),
+                    Vec2::new(3.125, 0.0),
+                    Vec2::new(9.125, 10.0),
+                    Vec2::new(9.0, 10.0),
+                ],
+            ),
+        ] {
+            let mut buffer = Buffer::empty(Rect::new(0, 0, 26, 11));
+            for cell in buffer.content.iter_mut() {
+                cell.bg = RColor::Rgb(0, 0, 0);
+                cell.set_char('.');
+            }
+            SmearPaint {
+                hull: Hull::of(&corners),
+                head: corners[2],
+                tail: corners[0],
+                fill: CursorTrailFill::Solid,
+                color: Color::Rgb(255, 0, 0),
+                opacity: 1.0,
+                taper: 0.0,
+                sextants: false,
+            }
+            .paint(&mut buffer, None);
+            let picture = (0..11)
+                .map(|y| (0..26).map(|x| buffer[(x, y)].symbol()).collect::<String>())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let painted = |y: u16| -> Vec<u16> {
+                (0..26)
+                    .filter(|&x| buffer[(x, y)].symbol() != ".")
+                    .collect()
+            };
+            let top = corners[0].y as u16;
+            let bottom = corners[2].y.ceil() as u16;
+            let mut previous: Option<(u16, u16)> = None;
+            for y in top..bottom {
+                let columns = painted(y);
+                assert!(!columns.is_empty(), "{name}: row {y} is empty\n{picture}");
+                let (first, last) = (columns[0], *columns.last().unwrap());
+                assert_eq!(
+                    usize::from(last - first) + 1,
+                    columns.len(),
+                    "{name}: row {y} has a gap\n{picture}"
+                );
+                if let Some((before_first, before_last)) = previous {
+                    assert!(
+                        first <= before_last + 1 && last + 1 >= before_first,
+                        "{name}: rows {} and {y} do not touch\n{picture}",
+                        y - 1
+                    );
+                }
+                previous = Some((first, last));
+            }
+        }
     }
 
     #[test]
