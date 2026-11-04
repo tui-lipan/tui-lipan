@@ -7945,6 +7945,101 @@ fn ordinary_terminal_clicks_forward_after_the_focus_gesture() {
 }
 
 #[cfg(feature = "terminal")]
+struct ControlledTerminalSelectionSmoke {
+    selection: crate::widgets::TerminalSelection,
+    events: Rc<RefCell<Vec<crate::widgets::TerminalSelectionEvent>>>,
+}
+
+#[cfg(feature = "terminal")]
+impl Component for ControlledTerminalSelectionSmoke {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        let events = self.events.clone();
+        Terminal::new()
+            .content("one two three four")
+            .focusable(true)
+            .border(false)
+            .padding(0)
+            .scrollbar(false)
+            .width(Length::Flex(1))
+            .height(Length::Flex(1))
+            .selection(Some(self.selection))
+            .on_selection(Callback::new(
+                move |event: crate::widgets::TerminalSelectionEvent| {
+                    events.borrow_mut().push(event);
+                },
+            ))
+            .into()
+    }
+}
+
+/// A controlled selection is whatever the parent last rendered (a copy-mode cursor cell, say),
+/// so a drag must grow from where the button went down and report the pointer on each event.
+#[cfg(feature = "terminal")]
+#[test]
+fn controlled_terminal_drag_anchors_at_the_press_and_reports_the_pointer() {
+    use crate::widgets::{TerminalPos, TerminalSelection};
+
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let rendered = TerminalSelection {
+        anchor: TerminalPos { line: 0, col: 0 },
+        cursor: TerminalPos { line: 0, col: 2 },
+    };
+    let component = || ControlledTerminalSelectionSmoke {
+        selection: rendered,
+        events: events.clone(),
+    };
+    let mut runner = AppRunner::new(App::new().mouse(false), component(), ());
+    init_runner(
+        &mut runner,
+        component(),
+        Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 3,
+        },
+    );
+
+    for (x, kind) in [
+        (8, MouseKind::Down(MouseButton::Left)),
+        (4, MouseKind::Drag(MouseButton::Left)),
+        (4, MouseKind::Up(MouseButton::Left)),
+    ] {
+        runner.dispatch_mouse(MouseEvent {
+            x,
+            y: 0,
+            kind,
+            mods: KeyMods::NONE,
+        });
+    }
+
+    let events = events.borrow();
+    let press = events.first().expect("press event");
+    assert_eq!(press.selection, None);
+    assert_eq!(press.pointer, Some(TerminalPos { line: 0, col: 8 }));
+    let drag = events.last().expect("drag event");
+    assert_eq!(
+        drag.selection,
+        Some(TerminalSelection {
+            anchor: TerminalPos { line: 0, col: 8 },
+            cursor: TerminalPos { line: 0, col: 4 },
+        }),
+        "events: {events:?}"
+    );
+    assert_eq!(drag.pointer, Some(TerminalPos { line: 0, col: 4 }));
+}
+
+#[cfg(feature = "terminal")]
 #[test]
 fn dragging_cancels_terminal_link_activation_without_leaking_to_the_child() {
     let activated = Rc::new(RefCell::new(Vec::new()));

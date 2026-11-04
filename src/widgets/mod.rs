@@ -300,10 +300,10 @@ pub(crate) use tabs::{tab_divider_width, tab_segment_width, tab_width_budgets};
 pub use terminal::TerminalPtyHandoff;
 #[cfg(feature = "terminal")]
 pub use terminal::{
-    CopyModeAction, CopyModeGrid, ForwardedMouseEvent, KittyKeyboardFlags, MouseEncoding,
-    MouseMode, MouseModeState, MouseReportGeometry, ProgramStatusCause, ProgramStatusEvent,
-    ProgramStatusRecord, ProgramStatusSnapshot, ProgramStatusState, ScrollbackLineage,
-    SemanticMark, SemanticMarkKind, Terminal, TerminalBuffer, TerminalCellSize,
+    CopyModeAction, CopyModeGrid, CopyModeViewport, ForwardedMouseEvent, KittyKeyboardFlags,
+    MouseEncoding, MouseMode, MouseModeState, MouseReportGeometry, ProgramStatusCause,
+    ProgramStatusEvent, ProgramStatusRecord, ProgramStatusSnapshot, ProgramStatusState,
+    ScrollbackLineage, SemanticMark, SemanticMarkKind, Terminal, TerminalBuffer, TerminalCellSize,
     TerminalClipboardEvent, TerminalClipboardTarget, TerminalColorPalette, TerminalCommandPhase,
     TerminalCopyMode, TerminalDecoration, TerminalHyperlink, TerminalInputEvent, TerminalInputKind,
     TerminalKeyModes, TerminalLinkEvent, TerminalLogicalLine, TerminalPasteEvent,

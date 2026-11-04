@@ -437,6 +437,8 @@ pub(crate) struct TerminalDrag {
     pub id: NodeId,
     /// The anchor position (where the drag started).
     pub anchor: crate::widgets::TerminalPos,
+    /// Scrollback lineage `anchor` was measured against, so evicted history can rebase it.
+    pub lineage: crate::widgets::ScrollbackLineage,
 }
 
 /// Tracks click state for double/triple-click detection.

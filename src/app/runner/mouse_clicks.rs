@@ -766,15 +766,34 @@ impl<C: Component> AppRunner<C> {
                         };
                         terminal_node_selection_text(term, sel, SelectionEnd::Exclusive, false)
                     });
-                    cb.emit(crate::widgets::TerminalSelectionEvent { selection, text });
+                    let pointer = Some(TerminalPos {
+                        line: crate::widgets::absolute_line(
+                            total_scrollback_rows,
+                            scrollback_offset,
+                            grid_row,
+                        ),
+                        col: grid_col,
+                    });
+                    cb.emit(crate::widgets::TerminalSelectionEvent {
+                        selection,
+                        text,
+                        pointer,
+                    });
                 }
                 // Only start drag tracking if we have a selection (double/triple click)
                 // or if the user starts dragging (handled in Drag events)
                 self.drag.last_pointer_pos = None;
                 self.drag.last_autoscroll_tick = None;
                 self.drag.autoscroll_layout_dirty = false;
-                self.drag.active =
-                    ActiveDrag::Terminal(crate::app::input::drag::TerminalDrag { id: hit, anchor });
+                let lineage = match &self.core.tree.node(hit).kind {
+                    NodeKind::Terminal(term) => term.lineage,
+                    _ => Default::default(),
+                };
+                self.drag.active = ActiveDrag::Terminal(crate::app::input::drag::TerminalDrag {
+                    id: hit,
+                    anchor,
+                    lineage,
+                });
                 return true;
             }
         }

@@ -135,7 +135,11 @@ same live screen does not repeat the report. Paint-only updates also synchronize
 
 Calling `selection(...)` makes the selection controlled. Mouse clicks and drags
 still emit `on_selection`, but they do not transiently overwrite the rendered
-selection while the parent remains authoritative.
+selection while the parent remains authoritative. A drag over a controlled
+selection grows from the cell where the button went down, whatever the parent
+rendered. `TerminalSelectionEvent::pointer` holds the cell under the pointer for
+a press or drag, and is `None` when the selection changed without the pointer,
+such as a key clearing it.
 
 Use `scrollbar_config` to configure layout variant, gap, and thumb for the vertical scrollbar.
 
@@ -665,6 +669,27 @@ match mode.handle_key(key, grid) {
         }
     }
     CopyModeAction::Cancel | CopyModeAction::Ignored => {}
+}
+```
+
+To let the mouse select in copy mode, pass the widget's `on_selection` events to
+`handle_pointer` with the widget's viewport. A press moves the copy cursor and
+drops the anchor; a drag becomes an anchored selection over the same cells the
+widget's own mouse selection covers. Events without a pointer are ignored, so a
+key clearing the widget's selection leaves copy mode alone. Leave
+`on_mouse_forward` unset while copy mode is active, or a program that tracks the
+mouse receives the press instead.
+
+```rust
+// `size` is the `TerminalViewport` the widget last reported through `on_resize`.
+let viewport = CopyModeViewport {
+    rows: usize::from(size.rows),
+    cols: usize::from(size.cols),
+    total_scrollback_rows: screen.total_scrollback_rows(),
+    scrollback_offset: screen.scrollback_offset(),
+};
+if mode.handle_pointer(&event, viewport) != CopyModeAction::Ignored {
+    screen.set_scrollback(mode.scrollback_offset());
 }
 ```
 

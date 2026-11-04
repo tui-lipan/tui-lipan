@@ -114,6 +114,7 @@ pub(crate) fn clear_node_selection(tree: &mut NodeTree, id: NodeId) -> bool {
             cb.emit(crate::widgets::TerminalSelectionEvent {
                 selection: None,
                 text: None,
+                pointer: None,
             });
         }
         dirty = true;

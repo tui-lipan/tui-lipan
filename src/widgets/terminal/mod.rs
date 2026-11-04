@@ -48,7 +48,7 @@ pub use buffer::TerminalBuffer;
 pub use damage::{DamagedRow, GraphicsDamage, TerminalDamage, TerminalMutation};
 
 #[cfg(feature = "terminal")]
-pub use copy_mode::{CopyModeAction, CopyModeGrid, TerminalCopyMode};
+pub use copy_mode::{CopyModeAction, CopyModeGrid, CopyModeViewport, TerminalCopyMode};
 pub use events::{
     ForwardedMouseEvent, KittyKeyboardFlags, MouseEncoding, MouseMode, MouseModeState,
     MouseReportGeometry, TerminalInputEvent, TerminalInputKind, TerminalKeyModes,
@@ -93,6 +93,8 @@ pub use selection::{
 pub(crate) use layout::{measure_terminal, terminal_content_layout, terminal_mouse_content_rect};
 pub(crate) use node::{TerminalLinkHover, TerminalNode, apply_terminal_selection_input};
 pub(crate) use reconcile::reconcile_terminal;
+#[cfg(feature = "terminal")]
+pub(crate) use selection::rebase_selection;
 
 #[cfg(feature = "terminal")]
 pub(crate) fn terminal_node_selection_text(

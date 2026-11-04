@@ -4,7 +4,7 @@
 //! scrollback application, runtime updates, or copy feedback. Applications compose it with a
 //! [`crate::widgets::TerminalScreen`] and [`crate::widgets::TerminalRenderSnapshot`].
 
-use super::{TerminalPos, TerminalSelection};
+use super::{TerminalPos, TerminalSelection, TerminalSelectionEvent};
 use crate::core::event::{KeyCode, KeyEvent, KeyMods};
 use crate::text_motion::{
     byte_to_char_col, cell_big_word_backward_start, cell_big_word_end, cell_big_word_forward_start,
@@ -31,6 +31,22 @@ pub struct CopyModeGrid<'a> {
     pub cursor_row_text: &'a str,
     /// Absolute retained-line positions of semantic prompts, oldest first.
     pub prompt_lines: &'a [usize],
+}
+
+/// The viewport a terminal widget reported a pointer selection in.
+///
+/// `scrollback_offset` is the widget's offset when it reported the event, which can differ from
+/// the copy-mode offset after the wheel or a drag past an edge scrolled the view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CopyModeViewport {
+    /// Number of visible rows.
+    pub rows: usize,
+    /// Number of visible display columns.
+    pub cols: usize,
+    /// Maximum scrollback offset (the number of retained history rows).
+    pub total_scrollback_rows: usize,
+    /// The widget's scrollback offset.
+    pub scrollback_offset: usize,
 }
 
 /// Result of handling a copy-mode key.
@@ -257,6 +273,84 @@ impl TerminalCopyMode {
                 col: self.cursor_col,
             },
         })
+    }
+
+    /// Adopt a mouse press or drag reported by the terminal widget's `on_selection`.
+    ///
+    /// A drag becomes an anchored selection over the same cells the widget's own mouse selection
+    /// covers: the widget's end is exclusive and copy mode's is inclusive, so the copy cursor lands
+    /// on the last selected cell at the pointer's side. A press, or a drag back to where it began,
+    /// drops the anchor and moves the cursor to the pointer. Events without a pointer, such as a
+    /// key clearing the widget's selection, are ignored, because copy mode owns its selection.
+    ///
+    /// The cursor is kept on screen at `viewport.scrollback_offset`, scrolling only when the
+    /// selection ends outside it. Returns [`CopyModeAction::Ignored`] when nothing changed.
+    pub fn handle_pointer(
+        &mut self,
+        event: &TerminalSelectionEvent,
+        viewport: CopyModeViewport,
+    ) -> CopyModeAction {
+        let Some(pointer) = event.pointer else {
+            return CopyModeAction::Ignored;
+        };
+        let cols = viewport.cols.max(1);
+        let clamp = |pos: TerminalPos| TerminalPos {
+            line: pos.line,
+            col: pos.col.min(cols - 1),
+        };
+        let (anchor, cursor) = match event.selection.filter(|sel| !sel.is_empty()) {
+            Some(selection) => {
+                let (start, end) = selection.normalized();
+                // The exclusive end's cell is not selected, so step back one cell; an end at a
+                // row's first column ends the selection at the end of the row above.
+                let last = if end.col == 0 {
+                    TerminalPos {
+                        line: end.line.saturating_sub(1),
+                        col: cols - 1,
+                    }
+                } else {
+                    TerminalPos {
+                        line: end.line,
+                        col: end.col - 1,
+                    }
+                };
+                let (start, last) = (clamp(start), clamp(last));
+                if selection.cursor == start {
+                    (Some(last), start)
+                } else {
+                    (Some(start), last)
+                }
+            }
+            None => (None, clamp(pointer)),
+        };
+
+        let before = self.clone();
+        self.anchor = anchor;
+        self.place_cursor(cursor, viewport);
+        if before == *self {
+            CopyModeAction::Ignored
+        } else if self.anchor.is_some() || before.anchor.is_some() {
+            CopyModeAction::SelectionChanged
+        } else {
+            CopyModeAction::Moved
+        }
+    }
+
+    /// Put the cursor on an absolute cell, scrolling `viewport` the least needed to show it.
+    fn place_cursor(&mut self, pos: TerminalPos, viewport: CopyModeViewport) {
+        let rows = viewport.rows.max(1);
+        let total = viewport.total_scrollback_rows;
+        let line = pos.line.min(total.saturating_add(rows - 1));
+        let mut offset = viewport.scrollback_offset.min(total);
+        let top = total - offset;
+        if line < top {
+            offset = total - line;
+        } else if line >= top + rows {
+            offset = (total + rows - 1).saturating_sub(line).min(total);
+        }
+        self.scrollback_offset = offset;
+        self.cursor_row = line - (total - offset);
+        self.cursor_col = pos.col;
     }
 
     /// Move the copy cursor and scrollback offset to an application-selected location.
@@ -648,5 +742,138 @@ mod tests {
             mode.handle_key(key(KeyCode::Char(']')), grid),
             CopyModeAction::Ignored
         );
+    }
+
+    fn viewport(scrollback_offset: usize) -> CopyModeViewport {
+        CopyModeViewport {
+            rows: GRID.rows,
+            cols: GRID.cols,
+            total_scrollback_rows: GRID.total_scrollback_rows,
+            scrollback_offset,
+        }
+    }
+
+    fn pointer_event(
+        selection: Option<TerminalSelection>,
+        pointer: TerminalPos,
+    ) -> TerminalSelectionEvent {
+        TerminalSelectionEvent {
+            selection,
+            text: None,
+            pointer: Some(pointer),
+        }
+    }
+
+    fn pos(line: usize, col: usize) -> TerminalPos {
+        TerminalPos { line, col }
+    }
+
+    #[test]
+    fn pointer_drags_select_the_same_cells_as_a_mouse_selection() {
+        // Forward: the widget's end cell is exclusive, so the cursor stops one cell short.
+        let mut mode = TerminalCopyMode::new(0, 0, 0);
+        let forward = TerminalSelection {
+            anchor: pos(10, 2),
+            cursor: pos(11, 6),
+        };
+        assert_eq!(
+            mode.handle_pointer(&pointer_event(Some(forward), pos(11, 6)), viewport(0)),
+            CopyModeAction::SelectionChanged
+        );
+        assert_eq!(mode.anchor(), Some(pos(10, 2)));
+        assert_eq!(mode.cursor(), (1, 5));
+
+        // Backward: the pointer side is the start, so the anchor moves in by the excluded cell.
+        let backward = TerminalSelection {
+            anchor: pos(11, 6),
+            cursor: pos(10, 2),
+        };
+        mode.handle_pointer(&pointer_event(Some(backward), pos(10, 2)), viewport(0));
+        assert_eq!(mode.anchor(), Some(pos(11, 5)));
+        assert_eq!(mode.cursor(), (0, 2));
+
+        // An end at a row's first column ends the selection at the end of the row above.
+        let to_row_start = TerminalSelection {
+            anchor: pos(10, 2),
+            cursor: pos(11, 0),
+        };
+        mode.handle_pointer(&pointer_event(Some(to_row_start), pos(11, 0)), viewport(0));
+        assert_eq!(mode.cursor(), (0, GRID.cols - 1));
+
+        // Below the last row the widget reports one column past the edge.
+        let past_edge = TerminalSelection {
+            anchor: pos(10, 2),
+            cursor: pos(13, GRID.cols),
+        };
+        mode.handle_pointer(
+            &pointer_event(Some(past_edge), pos(13, GRID.cols)),
+            viewport(0),
+        );
+        assert_eq!(mode.cursor(), (3, GRID.cols - 1));
+        assert_eq!(
+            mode.selection(GRID.total_scrollback_rows),
+            Some(TerminalSelection {
+                anchor: pos(10, 2),
+                cursor: pos(13, GRID.cols - 1)
+            })
+        );
+    }
+
+    #[test]
+    fn a_press_or_an_empty_drag_moves_the_cursor_and_drops_the_anchor() {
+        let mut mode = TerminalCopyMode::new(0, 0, 0);
+        mode.handle_key(key(KeyCode::Char('v')), GRID);
+        assert_eq!(
+            mode.handle_pointer(&pointer_event(None, pos(12, 7)), viewport(0)),
+            CopyModeAction::SelectionChanged
+        );
+        assert_eq!(mode.anchor(), None);
+        assert_eq!(mode.cursor(), (2, 7));
+
+        let empty = TerminalSelection::new(pos(12, 3));
+        assert_eq!(
+            mode.handle_pointer(&pointer_event(Some(empty), pos(12, 3)), viewport(0)),
+            CopyModeAction::Moved
+        );
+        assert_eq!(mode.cursor(), (2, 3));
+        assert_eq!(
+            mode.handle_pointer(&pointer_event(Some(empty), pos(12, 3)), viewport(0)),
+            CopyModeAction::Ignored
+        );
+    }
+
+    #[test]
+    fn selection_events_without_a_pointer_leave_copy_mode_alone() {
+        let mut mode = TerminalCopyMode::new(1, 4, 0);
+        mode.handle_key(key(KeyCode::Char('v')), GRID);
+        let before = mode.clone();
+        let cleared = TerminalSelectionEvent {
+            selection: None,
+            text: None,
+            pointer: None,
+        };
+        assert_eq!(
+            mode.handle_pointer(&cleared, viewport(0)),
+            CopyModeAction::Ignored
+        );
+        assert_eq!(mode, before);
+    }
+
+    #[test]
+    fn pointer_cursor_follows_the_widget_offset_and_stays_on_screen() {
+        // The wheel scrolled the widget three rows up; the pointer's row is in that view.
+        let mut mode = TerminalCopyMode::new(0, 0, 0);
+        mode.handle_pointer(&pointer_event(None, pos(8, 1)), viewport(3));
+        assert_eq!(mode.scrollback_offset(), 3);
+        assert_eq!(mode.cursor(), (1, 1));
+
+        // A selection ending above the view scrolls just far enough to show its cursor.
+        let above = TerminalSelection {
+            anchor: pos(9, 0),
+            cursor: pos(2, 0),
+        };
+        mode.handle_pointer(&pointer_event(Some(above), pos(2, 0)), viewport(3));
+        assert_eq!(mode.scrollback_offset(), 8);
+        assert_eq!(mode.cursor(), (0, 0));
     }
 }
