@@ -223,7 +223,17 @@ impl CursorTrailState {
             self.active = None;
             return;
         };
-        if config.triggers(last, caret) {
+        let settling = self
+            .active
+            .is_some_and(|active| now.saturating_duration_since(active.started) < SETTLE);
+        if settling {
+            // A caret that lands in steps (a shell's newline, then its prompt, in two writes)
+            // gets one straight trail from where it started to where it settles, not a bend
+            // through every cell it stopped at for a frame.
+            if let Some(active) = self.active.as_mut() {
+                active.to = position;
+            }
+        } else if config.triggers(last, caret) {
             // A jump during a running trail starts the new one from the old one's tail, so the
             // smear never snaps back to a cell the eye has already left.
             let from = self
@@ -313,6 +323,10 @@ impl CursorTrailState {
         self.painted
     }
 }
+
+/// How soon after a trail starts a further move retargets it instead of starting another: a few
+/// frames, enough for a program that moves the caret in more than one write.
+const SETTLE: Duration = Duration::from_millis(50);
 
 /// Strongest tint, right behind the caret.
 const HEAD_ALPHA: f32 = 0.8;
@@ -457,6 +471,37 @@ mod tests {
         assert!(state.frame(start).is_none(), "7 columns and 1 row");
         state.observe(jump, Some(Position::new(7, 3)), node(1), None, start);
         assert!(state.frame(start).is_some(), "2 rows");
+    }
+
+    #[test]
+    fn a_caret_that_lands_in_steps_gets_one_straight_trail() {
+        let start = Instant::now();
+        let jump = Some(CursorTrail::new().trigger(CursorTrailTrigger::jump()));
+        let mut state = CursorTrailState::default();
+        // A command typed out to column 40, then Enter: the newline lands the caret at column 0,
+        // and the prompt arrives a frame later and moves it to column 25.
+        state.observe(jump, Some(Position::new(40, 3)), node(1), None, start);
+        state.observe(jump, Some(Position::new(0, 4)), node(1), None, start);
+        let frame = start + Duration::from_millis(16);
+        state.observe(jump, Some(Position::new(25, 4)), node(1), None, frame);
+        let trail = state.frame(frame).expect("trail");
+        assert_eq!(trail.head, Position::new(25, 4));
+        assert!(
+            trail.tail.0 > 25.0,
+            "the tail runs from column 40, not back through column 0: {:?}",
+            trail.tail
+        );
+
+        // Once the trail has settled, a further jump starts a trail of its own from its tail.
+        let later = start + SETTLE + Duration::from_millis(10);
+        state.observe(jump, Some(Position::new(25, 9)), node(1), None, later);
+        let trail = state.frame(later).expect("trail");
+        assert_eq!(trail.head, Position::new(25, 9));
+        assert!(
+            trail.tail.1 < 5.0,
+            "starts where the last trail was: {:?}",
+            trail.tail
+        );
     }
 
     #[test]
