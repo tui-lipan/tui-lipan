@@ -66,7 +66,8 @@ pub struct CursorTrailSpring {
     pub stiffness: f32,
     /// How hard the trailing corners are pulled. Lower than `stiffness` stretches the smear.
     pub trailing_stiffness: f32,
-    /// How quickly the corners between leading and trailing fall back to the trailing pull.
+    /// Where the corners between leading and trailing sit: below 1 they follow the front, so a
+    /// diagonal smear tapers to a point; above 1 they hang back with the tail.
     pub trailing_exponent: f32,
     /// How much velocity is lost each step, from 0 (bouncy) to 1 (no momentum).
     pub damping: f32,
@@ -75,13 +76,15 @@ pub struct CursorTrailSpring {
 }
 
 impl CursorTrailSpring {
-    /// The default spring: the front lands on the caret in about three steps, overshooting by
-    /// under a cell even on a long jump, while the tail takes about ten steps to close in, so the
-    /// smear visibly stretches and shrinks rather than flashing past.
+    /// The default spring: the front lands on the caret in about three steps while the tail
+    /// closes in over about six, so the smear visibly stretches and shrinks rather than flashing
+    /// past, and is gone in about a quarter of a second. The corners between front and tail
+    /// follow the front, so a diagonal smear tapers to a point instead of dragging the caret's
+    /// full height behind it.
     pub const DEFAULT: Self = Self {
         stiffness: 0.5,
-        trailing_stiffness: 0.16,
-        trailing_exponent: 3.0,
+        trailing_stiffness: 0.28,
+        trailing_exponent: 0.3,
         damping: 0.82,
         stop_distance: 0.1,
     };

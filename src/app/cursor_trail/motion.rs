@@ -346,7 +346,7 @@ mod tests {
             (longest, overshoot, frames)
         };
         let (longest, overshoot, frames) = run(CursorTrailSpring::DEFAULT);
-        assert!(longest >= 10.0, "stretches to {longest} cells");
+        assert!(longest >= 8.0, "stretches to {longest} cells");
         assert!(frames >= 8, "visible for {frames} frames");
         assert!(
             overshoot <= MAX_OVERSHOOT + 1e-3,
@@ -357,6 +357,25 @@ mod tests {
             quick < frames,
             "smear-cursor's preset is the quicker one: {quick} vs {frames}"
         );
+    }
+
+    /// On a diagonal the corners between front and tail follow the front, so the smear tapers to
+    /// a point at its tail rather than dragging the caret's full height behind it.
+    #[test]
+    fn a_diagonal_smear_tapers_to_its_tail() {
+        let mut smear = Smear::new_for_tests(
+            caret_rect(0, 0, CaretShape::Block),
+            caret_rect(60, 20, CaretShape::Block),
+        );
+        smear.advance(STEP * 3, spring(), 0.0, |_| {});
+        // Down and to the right: bottom-right leads, top-left trails.
+        let [top_left, top_right, bottom_right, bottom_left] = smear.shown();
+        for middle in [top_right, bottom_left] {
+            assert!(
+                (middle - bottom_right).length() * 2.0 < (middle - top_left).length(),
+                "{middle:?} sits with the front {bottom_right:?}, not the tail {top_left:?}"
+            );
+        }
     }
 
     #[test]
