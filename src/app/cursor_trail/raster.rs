@@ -675,6 +675,20 @@ impl SmearPaint {
                 };
                 let under = under(cell, host_bg);
                 match (self.fill, trail_rgb, under) {
+                    // There is no character to keep in a blank cell, so a tint draws its edges as
+                    // smoothly as a solid smear does, only fainter.
+                    (CursorTrailFill::Tint, Some(trail), Some(under))
+                        if single_width(cell) && cell.symbol().trim().is_empty() =>
+                    {
+                        smooth(
+                            cell,
+                            coverage,
+                            under,
+                            trail,
+                            strength * TINT_MAX,
+                            self.glyphs,
+                        );
+                    }
                     (CursorTrailFill::Tint, _, _) => {
                         let alpha = coverage.total() as f32 / 256.0 * strength * TINT_MAX;
                         tint(cell, under, trail, trail_rgb, alpha);
@@ -1230,6 +1244,42 @@ mod tests {
             "rows outside the smear are untouched"
         );
         assert_eq!(buffer[(10, 1)].symbol(), "x");
+    }
+
+    /// Where there is no text to keep, a tint's edges are as smooth as a solid smear's, only
+    /// fainter; text keeps its character.
+    #[test]
+    fn a_tint_draws_smooth_edges_over_blank_cells() {
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 12, 3));
+        for (index, cell) in buffer.content.iter_mut().enumerate() {
+            if index % 12 < 6 {
+                cell.set_char('x');
+            }
+            cell.bg = RColor::Rgb(0, 0, 0);
+            cell.fg = RColor::Rgb(200, 200, 200);
+        }
+        SmearPaint {
+            hull: rect(2.5, 1.0, 10.5, 2.0),
+            head: Vec2::new(10.0, 1.5),
+            tail: Vec2::new(2.5, 1.5),
+            fill: CursorTrailFill::Tint,
+            color: Color::Rgb(255, 0, 0),
+            opacity: 1.0,
+            taper: 0.0,
+            glyphs: GlyphSet::Blocks,
+        }
+        .paint(&mut buffer, None);
+        for column in 0..6 {
+            assert_eq!(buffer[(column, 1)].symbol(), "x", "text stays");
+        }
+        assert!(matches!(buffer[(2, 1)].bg, RColor::Rgb(r, 0, 0) if r > 0 && r < 128));
+        let edge = &buffer[(10, 1)];
+        assert_eq!(edge.symbol(), "▌", "a blank edge cell is drawn as a glyph");
+        assert!(matches!(edge.fg, RColor::Rgb(r, 0, 0) if r > 128 && r < 255));
+        assert_eq!(edge.bg, RColor::Rgb(0, 0, 0));
+        let covered = &buffer[(8, 1)];
+        assert_eq!(covered.symbol(), " ");
+        assert!(matches!(covered.bg, RColor::Rgb(r, 0, 0) if r > 128 && r < 255));
     }
 
     #[test]

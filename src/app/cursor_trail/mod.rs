@@ -130,12 +130,14 @@ impl Default for CursorTrailMotion {
 /// How a [`CursorTrail`] is drawn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum CursorTrailFill {
-    /// In the trail color, with block glyphs for sub-cell edges. Cells the smear covers wholly
-    /// keep their text in inverse colors. The smear draws the caret itself while it moves, so the
-    /// host caret is hidden until it settles.
+    /// In the trail color, anti-aliased with the glyphs [`CursorTrailGlyphs`] allows. Cells the
+    /// smear covers evenly keep their text in inverse colors. The smear draws the caret itself
+    /// while it moves, so the host caret is hidden until it settles.
     #[default]
     Solid,
-    /// As a tint of cell backgrounds, leaving every character and the host caret in place.
+    /// As a fainter tint that leaves every character and the host caret in place: cells with
+    /// text take it in their background, and blank cells are drawn anti-aliased like
+    /// [`Solid`](Self::Solid).
     Tint,
 }
 

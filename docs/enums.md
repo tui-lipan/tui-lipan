@@ -156,7 +156,7 @@ How a [`CursorTrail`](quick-start.md#app-configuration) is drawn.
 | Variant | Notes |
 |---------|-------|
 | `Solid` (default) | The trail color, anti-aliased: each cell the smear touches is drawn as the glyph and pair of shades (between the cell's background and the trail color) that reproduce its coverage best, from an 8x8 sample of the cell. Cells it covers evenly keep their character and turn to inverse video as it covers them, and a character it only clips keeps its shape under a faint tint. Draws the caret itself while it moves, so the host caret is hidden until it settles |
-| `Tint` | Tints cell backgrounds, at most three quarters of the way to the trail color; text and the host caret stay |
+| `Tint` | Fainter, at most three quarters of the way to the trail color, and every character and the host caret stay: cells with text take it in their background, and blank cells are drawn anti-aliased like `Solid` |
 
 Blending needs RGB. Where the trail or the background is a palette color, `Solid` draws the nearest
 glyph in the trail color or inverted instead of shades.
