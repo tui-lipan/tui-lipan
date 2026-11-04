@@ -3912,6 +3912,94 @@ fn scan_feedback_sweeps_a_copied_terminal_selection() {
     );
 }
 
+/// The scan crosses the terminal at one speed: a short selection near the left edge lights early in
+/// the sweep and has gone plain by the middle, instead of stretching the sweep over its own width.
+#[cfg(feature = "terminal")]
+#[test]
+fn scan_feedback_crosses_a_short_selection_at_the_terminal_speed() {
+    struct ShortScanTerminal;
+
+    impl Component for ShortScanTerminal {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            Terminal::new()
+                .content("abcdefghijklmnopqrst")
+                .border(false)
+                .padding(0)
+                .scrollbar(false)
+                .show_cursor(false)
+                .selection_style(crate::style::Style::new().bg(Color::Rgb(40, 40, 80)))
+                .selection(Some(crate::widgets::TerminalSelection {
+                    anchor: crate::widgets::TerminalPos { line: 0, col: 0 },
+                    cursor: crate::widgets::TerminalPos { line: 0, col: 3 },
+                }))
+                .width(Length::Px(20))
+                .height(Length::Px(1))
+                .into()
+        }
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+    }
+
+    const PLAIN: Color = Color::Rgb(40, 40, 80);
+    let clipboard = Rc::new(RefCell::new(MouseClipboardState::default()));
+    let app = crate::App::new()
+        .clipboard_provider(MouseClipboardProvider(Rc::clone(&clipboard)))
+        .clipboard_config(ClipboardConfig {
+            enable_osc52: false,
+            copy_feedback: crate::clipboard::CopyFeedback::new(
+                crate::clipboard::CopyFeedbackEffect::Scan,
+            )
+            .duration(Duration::from_millis(400)),
+            ..ClipboardConfig::default()
+        });
+    let mut backend = TestBackend::new_with_app(app, ShortScanTerminal, ());
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 1,
+    });
+    backend.render();
+    let terminal_id = backend
+        .core
+        .tree
+        .iter()
+        .find(|node| matches!(node.kind, NodeKind::Terminal(_)))
+        .map(|node| node.id)
+        .expect("expected Terminal");
+    backend.set_focused(terminal_id);
+    backend
+        .send_key(KeyEvent {
+            code: KeyCode::Insert,
+            mods: KeyMods::CTRL,
+        })
+        .unwrap();
+    assert_eq!(clipboard.borrow().clipboard, "abc");
+
+    backend.advance_frame(Duration::from_millis(1));
+    let mut lit_at = Vec::new();
+    for step in 1..=40 {
+        backend.advance(Duration::from_millis(10));
+        let frame = backend.capture_frame();
+        if (0..3).any(|x| frame.cell(x, 0).bg != PLAIN) {
+            lit_at.push(step * 10);
+        }
+    }
+    assert!(!lit_at.is_empty(), "the line passes the selection");
+    assert!(
+        lit_at.iter().all(|ms| *ms < 200),
+        "a selection at the left edge is lit only early in the sweep: {lit_at:?} ms"
+    );
+}
+
 #[cfg(feature = "terminal")]
 #[test]
 fn tracked_terminal_middle_click_is_forwarded_instead_of_locally_pasted() {

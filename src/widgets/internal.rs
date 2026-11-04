@@ -109,7 +109,7 @@ pub(crate) use super::tabs::{TabsNode, measure_tabs, reconcile_tabs};
 pub(crate) use super::terminal::{
     TerminalLinkHover, TerminalNode, apply_terminal_selection_input, measure_terminal,
     rebase_selection, reconcile_terminal, terminal_content_layout, terminal_mouse_content_rect,
-    terminal_node_selection_text,
+    terminal_node_copy_text, terminal_node_selection_text,
 };
 pub(crate) use super::text::{
     TextNode, measure_text_constrained, reconcile_text, split_spans_on_newlines,

@@ -636,6 +636,11 @@ across scrollback, including rows containing CJK or emoji. Snapshot-only hosts c
 `TerminalScreen::export_selection_text` is intentionally different: it reads
 pre-trimmed scrollback text and therefore takes character-indexed positions.
 
+A copy from the terminal, with a copy shortcut or `copy_on_mouse_select`, leaves out blank lines at
+the start and end of the selection and keeps the ones in between. A selection of only blank lines
+copies nothing and leaves the clipboard as it was. `utils::trim_blank_edge_lines` applies the same
+rule to text an app copies itself, such as a copy mode's selection.
+
 `snapshot.decorated(&decorations)` applies batched `TerminalDecoration::highlight`,
 `TerminalDecoration::label`, and `TerminalDecoration::overlay` values to
 `color_lines`. It deliberately leaves the snapshot's plain `text` untouched, so

@@ -173,6 +173,41 @@ pub(crate) fn expand_tabs<'a>(s: &'a str, start_col: usize, tab_stop: usize) -> 
     Cow::Owned(out)
 }
 
+/// Drop the blank lines at the start and end of copied text, keeping those in between.
+///
+/// A line is blank when it holds only whitespace. Terminal copies use this: a drag past the end of
+/// the output selects the empty rows below it, and a trailing line break pasted into a shell runs
+/// the command. Text of only blank lines becomes empty, so there is nothing to copy.
+///
+/// ```
+/// use tui_lipan::utils::trim_blank_edge_lines;
+///
+/// assert_eq!(trim_blank_edge_lines("\n  \nfoo\n\nbar\n\n"), "foo\n\nbar");
+/// assert_eq!(trim_blank_edge_lines("\n\n"), "");
+/// ```
+pub fn trim_blank_edge_lines(text: &str) -> &str {
+    let blank = |line: &str| line.trim().is_empty();
+    let mut start = 0;
+    for line in text.split_inclusive('\n') {
+        if !blank(line) {
+            break;
+        }
+        start += line.len();
+    }
+    let mut end = text.len();
+    while end > start {
+        let line_start = text[start..end]
+            .rfind('\n')
+            .map_or(start, |nl| start + nl + 1);
+        if !blank(&text[line_start..end]) {
+            break;
+        }
+        // Drop the blank line and the break before it.
+        end = line_start.saturating_sub(1).max(start);
+    }
+    &text[start..end]
+}
+
 /// Remove control characters for a paint path without allocating for normal
 /// display text. This intentionally does not parse escape sequences; callers
 /// that need terminal escape removal should use [`crate::utils::sanitize`].
@@ -889,10 +924,29 @@ mod tests {
     use super::{
         VirtualTextInsertion, byte_at_col, byte_at_col_sentinel_tabs_virtual, clamp_cursor,
         count_wrapped_lines_for_budgets, end_at_width, expand_tabs, input_viewport_start,
-        is_wrap_break, next_char_boundary, str_visual_width, str_visual_width_with_tabs, viewport,
-        visual_col_with_virtual, word_boundary_left, word_boundary_right, wrap_spans_for_budgets,
+        is_wrap_break, next_char_boundary, str_visual_width, str_visual_width_with_tabs,
+        trim_blank_edge_lines, viewport, visual_col_with_virtual, word_boundary_left,
+        word_boundary_right, wrap_spans_for_budgets,
     };
     use crate::style::{Color, Span};
+
+    #[test]
+    fn trim_blank_edge_lines_keeps_interior_blank_lines() {
+        for (text, copied) in [
+            ("foo", "foo"),
+            ("foo\n\n\n", "foo"),
+            ("\n\nfoo", "foo"),
+            ("  \n\t\n  foo  \n \n", "  foo  "),
+            ("foo\n\nbar", "foo\n\nbar"),
+            ("foo\r\n\r\n", "foo\r"),
+            ("", ""),
+            ("\n", ""),
+            ("\n\n\n", ""),
+            ("   ", ""),
+        ] {
+            assert_eq!(trim_blank_edge_lines(text), copied, "{text:?}");
+        }
+    }
 
     #[test]
     fn clamp_cursor_snaps_to_char_boundary() {
