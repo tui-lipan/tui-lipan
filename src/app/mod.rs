@@ -4,6 +4,7 @@ pub(crate) mod animation;
 pub(crate) mod caret;
 pub mod context;
 pub(crate) mod copy_feedback;
+pub mod cursor_trail;
 pub(crate) mod focus_service;
 pub mod input;
 pub(crate) mod interaction_state;
@@ -23,5 +24,6 @@ pub use context::{
     FocusChanged, FocusEntry, FocusPolicy, InlineHeight, InlineStartupPolicy, ScreenBackground,
     SurfaceMode, TextAreaNewlineBinding,
 };
+pub use cursor_trail::{CursorTrail, CursorTrailTrigger};
 #[cfg(not(target_arch = "wasm32"))]
 pub use runner::AppRunner;

@@ -117,6 +117,15 @@ asks for, this is what a capture found.
 | `Underline` | Line under the cell |
 | `Bar` | Vertical line at the cell's left edge |
 
+### `CursorTrailTrigger`
+
+What makes a [`CursorTrail`](quick-start.md#app-configuration) appear.
+
+| Variant | Notes |
+|---------|-------|
+| `FocusChange` (default) | Focus moves to another widget and the caret moves with it |
+| `Jump { columns, rows }` | A focus change, or a caret move inside one widget of at least `columns` columns or `rows` rows; `CursorTrailTrigger::jump()` is `columns: 8, rows: 2` |
+
 ### `PngOptions` (`ui-snapshot-png`)
 
 Options for `CapturedFrame::to_png(&PngOptions)` and `UiSnapshot::to_png(&PngOptions)`.

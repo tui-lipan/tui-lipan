@@ -176,6 +176,8 @@ struct PaneCfg {
     transparent_modal: bool,
     terminal_portal: bool,
     spinner: bool,
+    /// Run the runtime on a controlled clock, so a test steps time itself.
+    controlled_clock: bool,
 }
 
 impl PaneCfg {
@@ -500,13 +502,18 @@ fn build(cfg: PaneCfg, setup: &[u8]) -> Harness {
         App::new().mouse(false)
     };
     let mut runner = AppRunner::new(app, component(), ());
-    runner.core = RuntimeCore::new_test(
+    runner.core = RuntimeCore::new_test_with_clock(
         component(),
         (),
         viewport(),
         Theme::default(),
         SurfaceMode::Fullscreen,
         Rc::new(StdCell::new(false)),
+        if cfg.controlled_clock {
+            crate::automation::ClockMode::Controlled
+        } else {
+            crate::automation::ClockMode::Realtime
+        },
     )
     .into();
     runner.core.init();
@@ -2475,4 +2482,104 @@ fn a_partial_paint_elsewhere_keeps_an_effect_hiding_native_picture_fragments() {
         !commands.contains("w=120"),
         "a partial paint must not put back the fragments the effect hides: {commands:?}"
     );
+}
+
+/// The production trail, end to end: a focus change between two terminals starts it, the next
+/// frame paints it over a full draw, terminal output during it takes the full draw instead of a
+/// row patch, a capture shows what the host shows, and one frame after it ends puts every cell
+/// back.
+#[test]
+fn a_cursor_trail_paints_over_full_draws_and_clears_after_its_duration() {
+    use crate::app::interaction_state::{DirtyLevel, DirtyTracker};
+    use crate::app::{CursorTrail, CursorTrailTrigger};
+
+    const TRAIL: (u8, u8, u8) = (255, 0, 0);
+    let mut harness = build(
+        PaneCfg {
+            second_terminal: true,
+            grid_rows: ROWS / 2,
+            focused: true,
+            controlled_clock: true,
+            ..PaneCfg::new()
+        },
+        b"stable",
+    );
+    let env = harness.runner.core.ctx.env().clone();
+    env.cursor_trail.set(Some(
+        CursorTrail::new()
+            .trigger(CursorTrailTrigger::FocusChange)
+            .color(Color::Rgb(TRAIL.0, TRAIL.1, TRAIL.2)),
+    ));
+    let mut terminal = crate::backend::ratatui_backend::create_test_terminal(COLS, ROWS).unwrap();
+    let dirty_level = |runner: &mut AppRunner<Pane>| {
+        let mut dirty = DirtyTracker::default();
+        runner.update_animation_cycle(&mut dirty);
+        dirty.level()
+    };
+
+    harness.runner.render_paint_only(&mut terminal).unwrap();
+    assert_eq!(dirty_level(&mut harness.runner), DirtyLevel::None);
+
+    let second = terminal_ids(&harness.runner.core.tree)[1];
+    harness.runner.focus.focused = Some(second);
+    harness.runner.render_paint_only(&mut terminal).unwrap();
+    let (clean, caret) = full_paint(&harness.runner, &mut harness.term);
+    let caret = caret.expect("the second terminal shows its caret");
+    assert_eq!(caret, Position::new(6, ROWS / 2));
+
+    // The jump is seen on the frame that landed the caret; the trail is the next frame's.
+    assert_eq!(dirty_level(&mut harness.runner), DirtyLevel::PaintOnly);
+    harness.runner.render_paint_only(&mut terminal).unwrap();
+    let trailed = harness
+        .runner
+        .last_frame_snapshot
+        .clone()
+        .expect("retained frame");
+    let tinted: Vec<u16> = (0..ROWS)
+        .filter(|&y| {
+            trailed[(caret.x, y)].bg == ratatui::style::Color::Rgb(TRAIL.0, TRAIL.1, TRAIL.2)
+        })
+        .collect();
+    assert!(
+        !tinted.is_empty() && tinted.iter().all(|&y| y < caret.y),
+        "the trail runs up the caret's column toward it: rows {tinted:?}"
+    );
+    assert_eq!(trailed[caret], clean[caret], "the caret cell is left alone");
+    assert_eq!(
+        changed_rows(&clean, &trailed),
+        tinted,
+        "nothing but the trail differs from a clean paint"
+    );
+    let captured = harness.runner.capture_painted_frame();
+    assert_eq!(
+        captured.cell(caret.x, tinted[0]).bg,
+        Color::Rgb(TRAIL.0, TRAIL.1, TRAIL.2),
+        "a capture shows the trail the host shows"
+    );
+
+    // Output while the trail runs repaints through the full draw, never a row patch over it.
+    harness.screen.borrow_mut().process_bytes(b"\r\nmore");
+    harness
+        .runner
+        .render_terminal_paint_only(&mut terminal)
+        .unwrap();
+    assert!(
+        harness.runner.host_patched_rows.is_empty(),
+        "a row patch ran while the trail was on screen"
+    );
+
+    env.advance_clock(CursorTrail::DEFAULT_DURATION);
+    assert_eq!(
+        dirty_level(&mut harness.runner),
+        DirtyLevel::PaintOnly,
+        "one frame clears the trail"
+    );
+    harness.runner.render_paint_only(&mut terminal).unwrap();
+    let (clean, _) = full_paint(&harness.runner, &mut harness.term);
+    assert_eq!(
+        harness.runner.last_frame_snapshot.as_ref(),
+        Some(&clean),
+        "the cleared frame matches a paint with no trail"
+    );
+    assert_eq!(dirty_level(&mut harness.runner), DirtyLevel::None);
 }

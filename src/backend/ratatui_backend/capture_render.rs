@@ -177,6 +177,7 @@ pub(crate) fn capture_live_frame(
     viewport: Rect,
     ctx: &RenderContext<'_>,
     vim_mode: Option<TextAreaVimMode>,
+    overlay: impl FnOnce(&mut ratatui::buffer::Buffer),
 ) -> CapturedFrame {
     let ctx = RenderContext {
         images_enabled: false,
@@ -184,7 +185,9 @@ pub(crate) fn capture_live_frame(
         ..*ctx
     };
     captured_frame(ctx.tree, viewport, ctx.focused, vim_mode, || {
-        draw_offscreen(viewport, &ctx, None, None)
+        let mut rendered = draw_offscreen(viewport, &ctx, None, None);
+        overlay(&mut rendered.buffer);
+        rendered
     })
 }
 

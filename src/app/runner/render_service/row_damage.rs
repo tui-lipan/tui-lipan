@@ -377,6 +377,7 @@ where
         }
         result?;
         self.frame_rendered = true;
+        self.observe_cursor_trail(cursor_position.get());
 
         self.terminal.update_cursor(
             terminal.backend_mut(),

@@ -279,6 +279,48 @@ impl<C: Component> AppRunner<C> {
     }
 
     /// Where the focused widget's caret sits, read from widget state rather than from a paint.
+    /// Hand the caret a presented frame left on the host to the cursor trail.
+    pub(super) fn observe_cursor_trail(&mut self, position: Option<Position>) {
+        if self.surface.is_inline() {
+            return;
+        }
+        let env = self.core.ctx.env();
+        let config = env.cursor_trail.get();
+        let now = env.now();
+        let caret_color = config
+            .filter(|config| config.color.is_none())
+            .and_then(|_| {
+                crate::app::caret::focused_caret(&self.core.tree, self.focus.focused, None)
+            })
+            .and_then(|caret| caret.color);
+        self.cursor_trail
+            .observe(config, position, self.focus.focused, caret_color, now);
+    }
+
+    /// The trail frame the next full draw paints over the tree, if a trail is running.
+    fn cursor_trail_frame(&self) -> Option<crate::app::cursor_trail::CursorTrailFrame> {
+        if self.surface.is_inline() {
+            return None;
+        }
+        self.cursor_trail.frame(self.core.ctx.env().now())
+    }
+
+    /// The host terminal's (foreground, background), which a trail blends against.
+    fn cursor_trail_host_colors(&self) -> Option<(crate::style::Color, crate::style::Color)> {
+        self.core
+            .ctx
+            .env()
+            .host_terminal_colors
+            .get()
+            .map(|colors| (colors.fg, colors.bg))
+    }
+
+    /// Whether a fast path that patches the host from the retained frame must stand down: the
+    /// host shows trail cells only a full draw paints and clears.
+    pub(super) fn cursor_trail_requires_full_draw(&self) -> bool {
+        self.cursor_trail.requires_full_draw()
+    }
+
     fn focused_cursor_position(&self, id: NodeId) -> Option<Position> {
         if !self.core.tree.is_valid(id) {
             return None;
@@ -978,7 +1020,12 @@ impl<C: Component> AppRunner<C> {
         }
         let graphics_only = !refresh.graphics_only.is_empty() && refresh.text_damage.is_empty();
         let frame_area = terminal.get_frame().area();
-        if let Some(plan) = self.prepare_terminal_damage_plan(&refresh, frame_area) {
+        let damage_plan = if self.cursor_trail_requires_full_draw() {
+            None
+        } else {
+            self.prepare_terminal_damage_plan(&refresh, frame_area)
+        };
+        if let Some(plan) = damage_plan {
             if graphics_only {
                 crate::core::terminal_metrics::update(|metrics| {
                     metrics.graphics_widened_terminal += 1
@@ -1020,7 +1067,7 @@ impl<C: Component> AppRunner<C> {
     ) -> Result<()> {
         #[cfg(feature = "profiling-tracing")]
         let _render_span = trace_span!("app.render_spinner_paint_only").entered();
-        if self.surface.is_inline() {
+        if self.surface.is_inline() || self.cursor_trail_requires_full_draw() {
             return self.render_paint_only(terminal);
         }
         #[cfg(feature = "devtools")]
@@ -1226,6 +1273,15 @@ impl<C: Component> AppRunner<C> {
         // ordinary draw below diffs against Ratatui's previous buffer, which never saw them.
         let host_patched_rows =
             row_damage::take_host_patched_rows(&mut self.host_patched_rows, last_snapshot.as_ref());
+        // The fast scroll path never paints a trail; `prepare_incremental_scroll_plan` declines
+        // whenever one is on screen, so only the full draw below needs it.
+        let trail = self.cursor_trail_frame();
+        let host_colors = self.cursor_trail_host_colors();
+        let paint_trail = |f: &mut ratatui::Frame<'_>| {
+            if let Some(trail) = trail.as_ref() {
+                trail.paint(f.buffer_mut(), host_colors);
+            }
+        };
         let draw_result = self.with_render_context(&cursor_position, |ctx| {
             if let Some(plan) = scroll_plan.as_ref() {
                 let previous_snapshot = last_snapshot.as_ref().expect("snapshot exists");
@@ -1249,14 +1305,20 @@ impl<C: Component> AppRunner<C> {
                 {
                     // The whole tree paints: every slot with a reader on screen is read now.
                     self.core.ctx.env().animations.begin_paint();
-                    match terminal.draw(|f| render(f, ctx)) {
+                    match terminal.draw(|f| {
+                        render(f, ctx);
+                        paint_trail(f);
+                    }) {
                         Ok(completed) => replace_buffer_snapshot(&mut last_snapshot, completed.buffer),
                         #[cfg(feature = "terminal-images")]
                         Err(error) if crate::backend::ratatui_backend::renderers::image::native_source_unavailable(&error) => {
                             // Preparation failed before any native commands were written. Retry
                             // the retained scene through composition for this whole frame.
                             let _native_scope = crate::backend::ratatui_backend::renderers::image::native_layer_scope(false);
-                            let completed = terminal.draw(|f| render(f, ctx))?;
+                            let completed = terminal.draw(|f| {
+                                render(f, ctx);
+                                paint_trail(f);
+                            })?;
                             replace_buffer_snapshot(&mut last_snapshot, completed.buffer);
                         }
                         Err(error) => return Err(error.into()),
@@ -1280,6 +1342,11 @@ impl<C: Component> AppRunner<C> {
         self.scroll_diff_snapshot = diff_snapshot;
         draw_result?;
         self.frame_rendered = true;
+        if scroll_plan.is_none() {
+            let now = self.core.ctx.env().now();
+            self.cursor_trail.record_full_draw(trail, now);
+        }
+        self.observe_cursor_trail(cursor_position.get());
 
         #[cfg(any(feature = "devtools", feature = "profiling-tracing"))]
         let draw_duration = draw_start.elapsed();
@@ -1344,11 +1411,18 @@ impl<C: Component> AppRunner<C> {
         );
         let vim_mode = self.headless_interaction().vim_mode;
         let cursor_position = StdCell::new(None);
+        let trail = self.cursor_trail.painted();
+        let host_colors = self.cursor_trail_host_colors();
         self.with_render_context(&cursor_position, |ctx| {
             crate::backend::ratatui_backend::capture_render::capture_live_frame(
                 self.core.ctx.viewport(),
                 ctx,
                 vim_mode,
+                |buffer| {
+                    if let Some(trail) = trail.as_ref() {
+                        trail.paint(buffer, host_colors);
+                    }
+                },
             )
         })
     }

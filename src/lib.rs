@@ -185,8 +185,9 @@ pub use crate::app::input::keymap::{FrameworkAction, FrameworkKeymap, UserKeymap
 #[cfg(all(target_arch = "wasm32", feature = "web"))]
 pub use crate::app::web_runner::{WebTerminal, mount_web};
 pub use crate::app::{
-    App, ContrastPolicy, DevToolsMetric, FocusChanged, FocusEntry, FocusPolicy, InlineHeight,
-    InlineStartupPolicy, ScreenBackground, SurfaceMode, TextAreaNewlineBinding,
+    App, ContrastPolicy, CursorTrail, CursorTrailTrigger, DevToolsMetric, FocusChanged, FocusEntry,
+    FocusPolicy, InlineHeight, InlineStartupPolicy, ScreenBackground, SurfaceMode,
+    TextAreaNewlineBinding,
 };
 pub use crate::mockup::Mockup;
 

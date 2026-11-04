@@ -41,6 +41,7 @@ impl<C: Component> AppRunner<C> {
             || frame_area.height == 0
             || !self.core.tree.overlay_roots().is_empty()
             || self.active_selection_drag_requires_full_repaint()
+            || self.cursor_trail_requires_full_draw()
             || {
                 #[cfg(feature = "devtools")]
                 {

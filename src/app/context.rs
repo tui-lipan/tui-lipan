@@ -421,6 +421,7 @@ pub struct App {
     pub(crate) command_conflict_policy: CommandConflictPolicy,
     pub(crate) chord_mismatch_policy: ChordMismatchPolicy,
     pub(crate) command_chord_reveal_delay: Duration,
+    pub(crate) cursor_trail: Option<crate::app::CursorTrail>,
     pub(crate) text_area_newline_binding: TextAreaNewlineBinding,
     pub(crate) contrast_policy: ContrastPolicy,
     pub(crate) clipboard_provider: Option<Box<dyn ClipboardProvider>>,
@@ -459,6 +460,7 @@ impl Default for App {
             command_conflict_policy: CommandConflictPolicy::default(),
             chord_mismatch_policy: ChordMismatchPolicy::default(),
             command_chord_reveal_delay: Duration::ZERO,
+            cursor_trail: None,
             text_area_newline_binding: TextAreaNewlineBinding::default(),
             contrast_policy: ContrastPolicy::default(),
             clipboard_provider: None,
@@ -683,6 +685,15 @@ impl App {
     /// its own. The default is [`Duration::ZERO`] - revealed as soon as it is pending.
     pub fn command_chord_reveal_delay(mut self, delay: Duration) -> Self {
         self.command_chord_reveal_delay = delay;
+        self
+    }
+
+    /// Draw a [`CursorTrail`](crate::CursorTrail) behind the host caret when it jumps.
+    ///
+    /// Off by default. Change it while running with
+    /// [`Context::set_cursor_trail`](crate::Context::set_cursor_trail).
+    pub fn cursor_trail(mut self, trail: crate::app::CursorTrail) -> Self {
+        self.cursor_trail = Some(trail);
         self
     }
 

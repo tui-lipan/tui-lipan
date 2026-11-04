@@ -293,6 +293,19 @@ impl<C: Component> AppRunner<C> {
             dirty.mark_paint();
         }
 
+        let trail = self.cursor_trail.tick(
+            self.core.ctx.env().cursor_trail.get(),
+            self.frame_interval,
+            self.clock_now(),
+        );
+        if let Some(next_due) = trail.next_due {
+            poll_timeout = poll_timeout.min(next_due);
+        }
+        if trail.needs_paint {
+            crate::debug::internal_log!("[tui-lipan] dirty: cursor trail");
+            dirty.mark_paint();
+        }
+
         // Advance the shared 50 ms clock directly to the next frame any spinner needs.
         if self.core.tree.has_spinners()
             && self.clock_elapsed(self.animation.last_spinner_tick)
