@@ -1209,6 +1209,9 @@ impl<C: Component> AppRunner<C> {
     }
 
     /// Copy the selection a terminal drag made, measured against `lineage`, on release.
+    ///
+    /// A controlled terminal holds its parent's selection, so the drag's own selection is copied
+    /// and flashed; an uncontrolled one holds the drag's selection and takes the usual path.
     #[cfg(feature = "terminal")]
     pub(crate) fn copy_terminal_drag_selection(
         &mut self,
@@ -1222,12 +1225,23 @@ impl<C: Component> AppRunner<C> {
         let crate::core::node::NodeKind::Terminal(node) = &self.core.tree.node(id).kind else {
             return false;
         };
+        let target = self.clipboard_config.copy_on_mouse_select;
+        if !node.selection_controlled {
+            // The widget holds this selection itself, so the usual path copies, flashes, and
+            // clears it.
+            return self.copy_active_selection(
+                target,
+                keyboard::CopyIntent::Implicit,
+                keyboard::SelectionScope::Anywhere {
+                    preferred: Some(id),
+                },
+            );
+        }
         let Some(selection) =
             crate::widgets::internal::rebase_selection(Some(selection), lineage, node.lineage)
         else {
             return false;
         };
-        let target = self.clipboard_config.copy_on_mouse_select;
         let mut key_ctx = crate::app::input::handlers::KeyCtx {
             read_only_selection: Some(&self.widgets.read_only_selection),
             input_history: &mut self.widgets.input_history,

@@ -231,8 +231,9 @@ pub(crate) fn copy_active_selection(
     )
 }
 
-/// Copy `selection` from terminal `id` the way a finished mouse selection is copied. A terminal drag
-/// passes the selection it made, which a controlled terminal does not hold in its node.
+/// Copy `selection`, which a mouse gesture made on controlled terminal `id`, as a finished mouse
+/// selection is copied. The terminal's own selection belongs to its parent, so the copy flash
+/// paints the copied cells instead and never clears the parent's selection.
 #[cfg(feature = "terminal")]
 pub(crate) fn copy_terminal_selection(
     tree: &NodeTree,
@@ -249,14 +250,33 @@ pub(crate) fn copy_terminal_selection(
         return false;
     };
     let text = terminal_node_selection_text(node, selection, SelectionEnd::Exclusive, false);
-    let mut context =
-        ReadOnlyClipboardContext::new(text.as_str(), Some((0, text.len())), true, false);
-    dispatch_selection_context(
-        &mut context,
-        SelectionClipboardRequest::Write { target, intent },
-        ctx,
-        id,
+    if text.is_empty()
+        || !crate::ui::router::write_mouse_selection(
+            &text,
+            target,
+            ctx.clipboard,
+            ctx.clipboard_config,
+        )
+    {
+        return false;
+    }
+    let feedback = ctx.clipboard_config.copy_feedback;
+    if intent == CopyIntent::Implicit && !feedback.on_select {
+        return true;
+    }
+    // A copied range scrolled out of view has nothing to flash; an unranged flash would paint the
+    // parent's selection instead.
+    let range = crate::widgets::to_viewport(
+        selection,
+        node.scrollback_offset,
+        node.total_scrollback_rows,
+        node.lines.len(),
     )
+    .and_then(|grid| crate::app::copy_feedback::capture_terminal_range(tree, id, grid));
+    if let Some(range) = range {
+        ctx.copy_feedback.trigger_range(id, feedback, Some(range));
+    }
+    true
 }
 
 fn dispatch_selection_clipboard_request(

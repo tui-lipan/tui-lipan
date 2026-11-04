@@ -8133,6 +8133,58 @@ fn controlled_terminal_click_does_not_copy_the_rendered_selection() {
     assert_eq!(writes.borrow().as_slice(), ["three"]);
 }
 
+/// The copy flash follows the copied range, not the parent's `[8, 9)`, and a ranged flash leaves
+/// that unrelated parent selection alone even when copies clear their selection.
+#[cfg(feature = "terminal")]
+#[test]
+fn controlled_terminal_drag_flashes_the_copied_range() {
+    use crate::utils::{GridPos, GridSelection};
+
+    for clear_selection in [false, true] {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let app = App::new()
+            .mouse(false)
+            .clipboard_provider(RecordingClipboardProvider {
+                writes: Rc::new(RefCell::new(Vec::new())),
+            });
+        let mut runner = copy_cursor_runner(app, &events);
+        runner.core.ctx.set_clipboard_config(ClipboardConfig {
+            copy_on_mouse_select: crate::CopyOnSelect::Clipboard,
+            copy_feedback: crate::clipboard::CopyFeedback::new(
+                crate::clipboard::CopyFeedbackEffect::Pulse,
+            )
+            .on_select(true)
+            .clear_selection(clear_selection),
+            ..ClipboardConfig::default()
+        });
+        runner.sync_clipboard_config();
+        let terminal = runner
+            .core
+            .tree
+            .iter()
+            .find(|node| matches!(node.kind, NodeKind::Terminal(_)))
+            .map(|node| node.id)
+            .expect("terminal node");
+
+        left_mouse_at(&mut runner, 8, MouseKind::Down(MouseButton::Left));
+        left_mouse_at(&mut runner, 12, MouseKind::Drag(MouseButton::Left));
+        left_mouse_at(&mut runner, 12, MouseKind::Up(MouseButton::Left));
+
+        let range = runner
+            .copy_feedback
+            .active_range(terminal)
+            .unwrap_or_else(|| panic!("a ranged flash (clear_selection: {clear_selection})"));
+        assert_eq!(
+            range.selection,
+            GridSelection {
+                anchor: GridPos { row: 0, col: 8 },
+                cursor: GridPos { row: 0, col: 12 },
+            },
+            "clear_selection: {clear_selection}"
+        );
+    }
+}
+
 /// Dragging one cell right from the cursor proposes exactly the cell the parent already renders;
 /// that is still a new selection and must be reported.
 #[cfg(feature = "terminal")]

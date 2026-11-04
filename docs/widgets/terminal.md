@@ -138,8 +138,9 @@ still emit `on_selection`, but they do not transiently overwrite the rendered
 selection while the parent remains authoritative. A drag over a controlled
 selection grows from the cell where the button went down, whatever the parent
 rendered. Copy-on-select runs on release only when the drag or a double- or
-triple-click selected something, and it copies that selection rather than the
-rendered one, so a click that leaves the parent's highlight in place copies
+triple-click selected something. It copies and flashes that selection rather
+than the rendered one, and leaves the parent's selection in place even when
+copy feedback clears selections, so a click that only moves a highlight copies
 nothing. `TerminalSelectionEvent::pointer` holds the cell under the pointer for
 a press or drag, and is `None` when the selection changed without the pointer,
 such as a key clearing it.
