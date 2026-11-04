@@ -78,7 +78,16 @@ fn direction(from: &Corners, to: &Corners) -> Vec2 {
 }
 
 /// How far each corner leads the motion, from 0 (trailing) to 1 (leading).
-fn leadership(from: &Corners, to: &Corners) -> [f32; 4] {
+///
+/// A corner leads by how much nearer it already is than the others to its target and, for a smear
+/// sent somewhere else mid-flight, to where it was heading before (`was_heading`), then by how far
+/// its target lies on the leading side of the caret it is heading for. Leaving a caret, every
+/// corner is as far from its target as the next, so the side of the caret facing the motion
+/// leads, as in smear-cursor.nvim. A smear sent off mid-flight is stretched out along its old
+/// path, though: its front, the end that was nearly there, keeps leading and its tail keeps
+/// trailing, so it bends toward the new target instead of its whole length swinging sideways as
+/// one wide edge.
+fn leadership(from: &Corners, to: &Corners, was_heading: Option<&Corners>) -> [f32; 4] {
     let direction = center(to) - center(from);
     let length = direction.length();
     if length < f32::EPSILON {
@@ -86,16 +95,23 @@ fn leadership(from: &Corners, to: &Corners) -> [f32; 4] {
     }
     let direction = direction.scale(1.0 / length);
     let target_center = center(to);
-    let projections = to.map(|corner| (corner - target_center).dot(direction));
-    let min = projections.iter().copied().fold(f32::INFINITY, f32::min);
-    let max = projections
-        .iter()
-        .copied()
-        .fold(f32::NEG_INFINITY, f32::max);
+    let behind = |targets: &Corners| -> [f32; 4] {
+        let distances: [f32; 4] =
+            std::array::from_fn(|index| (targets[index] - from[index]).length());
+        let nearest = distances.iter().copied().fold(f32::INFINITY, f32::min);
+        distances.map(|distance| distance - nearest)
+    };
+    let behind_new = behind(to);
+    let behind_old = was_heading.map_or([0.0; 4], behind);
+    let scores: [f32; 4] = std::array::from_fn(|index| {
+        (to[index] - target_center).dot(direction) - behind_new[index] - behind_old[index]
+    });
+    let min = scores.iter().copied().fold(f32::INFINITY, f32::min);
+    let max = scores.iter().copied().fold(f32::NEG_INFINITY, f32::max);
     if (max - min).abs() < f32::EPSILON {
         return [1.0; 4];
     }
-    projections.map(|projection| (projection - min) / (max - min))
+    scores.map(|score| (score - min) / (max - min))
 }
 
 /// A smear in flight.
@@ -125,7 +141,7 @@ impl Smear {
     pub(crate) fn new(from: Corners, to: Corners, max_length: f32) -> Self {
         let from = clamp_to(from, &to, max_length);
         Self {
-            lead: leadership(&from, &to),
+            lead: leadership(&from, &to, None),
             direction: direction(&from, &to),
             target: to,
             current: from,
@@ -149,7 +165,7 @@ impl Smear {
             return;
         }
         let shown = self.shown();
-        self.lead = leadership(&shown, &to);
+        self.lead = leadership(&shown, &to, Some(&self.target));
         self.direction = direction(&shown, &to);
         self.glide_from = shown;
         self.glide_elapsed = Duration::ZERO;

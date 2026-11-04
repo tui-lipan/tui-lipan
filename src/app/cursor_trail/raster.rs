@@ -242,6 +242,60 @@ impl Hull {
     }
 }
 
+/// The cells any of `hulls` touches, as an inclusive range of columns and rows.
+fn union_bounds(hulls: &[Hull]) -> Option<(i32, i32, i32, i32)> {
+    hulls
+        .iter()
+        .filter_map(Hull::cell_bounds)
+        .reduce(|a, b| (a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3)))
+}
+
+/// How much of each of the cell's 8x8 samples any of `hulls` covers.
+fn union_coverage(hulls: &[Hull], column: i32, row: i32) -> Coverage {
+    let mut across = [None; 2];
+    let mut count = 0;
+    for hull in hulls {
+        match hull.classify(column, row) {
+            Overlap::Inside => {
+                return Coverage {
+                    planes: [0, 0, FULL],
+                };
+            }
+            Overlap::Outside => {}
+            Overlap::Edge if count < across.len() => {
+                across[count] = Some(hull);
+                count += 1;
+            }
+            Overlap::Edge => {}
+        }
+    }
+    match across {
+        [None, _] => Coverage::default(),
+        [Some(hull), None] => hull.coverage(column, row),
+        [Some(a), Some(b)] => {
+            let pitch = 1.0 / (SAMPLES * SUB) as f32;
+            let mut coverage = Coverage::default();
+            for sample_row in 0..SAMPLES {
+                for sample_column in 0..SAMPLES {
+                    let mut quarters = 0u32;
+                    for sub_row in 0..SUB {
+                        for sub_column in 0..SUB {
+                            let point = Vec2::new(
+                                column as f32
+                                    + ((sample_column * SUB + sub_column) as f32 + 0.5) * pitch,
+                                row as f32 + ((sample_row * SUB + sub_row) as f32 + 0.5) * pitch,
+                            );
+                            quarters += u32::from(a.contains(point) || b.contains(point));
+                        }
+                    }
+                    coverage.set(sample_row * SAMPLES + sample_column, quarters);
+                }
+            }
+            coverage
+        }
+    }
+}
+
 /// Where a cell lies against the hull.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Overlap {
@@ -615,6 +669,8 @@ fn best_match(mask: u64, allow_inverted: bool, set: GlyphSet) -> Match {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct SmearPaint {
     pub(crate) hull: Hull,
+    /// What joins the smear to where the last frame showed it, when it has left that behind.
+    pub(crate) bridge: Option<Hull>,
     /// Where the smear is strongest (the caret) and where it fades from, for `taper`.
     pub(crate) head: Vec2,
     pub(crate) tail: Vec2,
@@ -676,16 +732,24 @@ impl SmearPaint {
         self.opacity.clamp(0.0, 1.0) * (1.0 - self.taper.clamp(0.0, 1.0) * (1.0 - along))
     }
 
+    fn pieces(&self) -> ([Hull; 2], usize) {
+        match self.bridge {
+            Some(bridge) => ([self.hull, bridge], 2),
+            None => ([self.hull, self.hull], 1),
+        }
+    }
+
     /// Whether the smear covers the centre of the cell at `position`.
     pub(crate) fn covers(&self, position: Position) -> bool {
-        self.hull.contains(Vec2::new(
-            f32::from(position.x) + 0.5,
-            f32::from(position.y) + 0.5,
-        ))
+        let (pieces, count) = self.pieces();
+        let centre = Vec2::new(f32::from(position.x) + 0.5, f32::from(position.y) + 0.5);
+        pieces[..count].iter().any(|hull| hull.contains(centre))
     }
 
     pub(crate) fn paint(&self, buffer: &mut Buffer, host_bg: Option<(u8, u8, u8)>) {
-        let Some((left, top, right, bottom)) = self.hull.cell_bounds() else {
+        let (pieces, count) = self.pieces();
+        let pieces = &pieces[..count];
+        let Some((left, top, right, bottom)) = union_bounds(pieces) else {
             return;
         };
         let area = buffer.area;
@@ -694,7 +758,7 @@ impl SmearPaint {
         for row in top.max(i32::from(area.top()))..=bottom.min(i32::from(area.bottom()) - 1) {
             for column in left.max(i32::from(area.left()))..=right.min(i32::from(area.right()) - 1)
             {
-                let coverage = self.hull.coverage(column, row);
+                let coverage = union_coverage(pieces, column, row);
                 if coverage.total() == 0 {
                     continue;
                 }
@@ -1047,6 +1111,7 @@ mod tests {
             }
             SmearPaint {
                 hull: Hull::of(&points),
+                bridge: None,
                 head: Vec2::new(22.5, 1.5),
                 tail: Vec2::new(2.5, 9.5),
                 fill: CursorTrailFill::Solid,
@@ -1122,6 +1187,7 @@ mod tests {
             }
             SmearPaint {
                 hull: Hull::of(&corners),
+                bridge: None,
                 head: corners[2],
                 tail: corners[0],
                 fill: CursorTrailFill::Solid,
@@ -1247,6 +1313,7 @@ mod tests {
         }
         SmearPaint {
             hull,
+            bridge: None,
             head: Vec2::new(9.5, 1.5),
             tail: Vec2::new(2.0, 1.5),
             fill,
@@ -1293,6 +1360,7 @@ mod tests {
         }
         SmearPaint {
             hull: rect(2.5, 1.0, 10.5, 2.0),
+            bridge: None,
             head: Vec2::new(10.0, 1.5),
             tail: Vec2::new(2.5, 1.5),
             fill: CursorTrailFill::Tint,
@@ -1339,6 +1407,7 @@ mod tests {
         }
         SmearPaint {
             hull: rect(2.0, 1.0, 10.0, 2.0),
+            bridge: None,
             head: Vec2::new(9.5, 1.5),
             tail: Vec2::new(2.0, 1.5),
             fill: CursorTrailFill::Solid,

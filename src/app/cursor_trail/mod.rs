@@ -519,7 +519,10 @@ pub(crate) struct CursorTrailFrame {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct SmearShape {
+    /// The smear itself.
     hull: Hull,
+    /// What joins it to where the last frame showed it, when it has left that behind.
+    bridge: Option<Hull>,
     /// The smear's corners as this frame shows them.
     shown: Corners,
     head: Vec2,
@@ -809,6 +812,7 @@ fn held_shape(corners: &Corners) -> SmearShape {
     let center = motion::center(corners);
     SmearShape {
         hull: Hull::of(corners),
+        bridge: None,
         shown: *corners,
         head: center,
         tail: center,
@@ -818,17 +822,6 @@ fn held_shape(corners: &Corners) -> SmearShape {
 
 fn shape_of(smear: &Smear, drawn: Option<Corners>) -> SmearShape {
     let shown = smear.shown();
-    // The smear as it is now. Where it has moved further than its own length since the last frame
-    // (before the first frame, the last physics step), it also reaches back to where that frame
-    // showed it, so a fast smear reads as one streak rather than a shape hopping from place to
-    // place. Where the two still touch, the smear alone is drawn: sweeping across the space
-    // between them would blur a smear that turns into a wide wedge.
-    let before = drawn.unwrap_or_else(|| smear.previous());
-    let swept: Vec<Vec2> = if Hull::of(&before).overlaps(&Hull::of(&shown)) {
-        shown.to_vec()
-    } else {
-        before.iter().chain(shown.iter()).copied().collect()
-    };
     let target = smear.target();
     let head = target
         .iter()
@@ -840,13 +833,36 @@ fn shape_of(smear: &Smear, drawn: Option<Corners>) -> SmearShape {
         .copied()
         .max_by(|a, b| (*a - head).length().total_cmp(&(*b - head).length()))
         .unwrap_or(head);
+    let hull = Hull::of(&shown);
+    // What a frame draws is the smear as it is now. Where it has moved further than its own length
+    // since the last frame (before the first frame, the last physics step), a bridge joins its
+    // tail to where that frame left its front, so a fast smear reads as one streak rather than a
+    // shape hopping from place to place. The bridge only spans the gap: sweeping the smear across
+    // everything it passed would fill the inside of a turn with a wide wedge.
+    let before = drawn.unwrap_or_else(|| smear.previous());
+    let bridge = (!Hull::of(&before).overlaps(&hull)).then(|| bridge(&before, &shown, head));
     SmearShape {
-        hull: Hull::of(&swept),
+        hull,
+        bridge,
         shown,
         head,
         tail,
         target: Position::new(target[0].x.max(0.0) as u16, target[0].y.max(0.0) as u16),
     }
+}
+
+/// The path the smear's tail took since the last frame showed it (`before`): its two corners
+/// furthest from the caret, from where they were then to where they are now. That joins the two
+/// frames along the way the smear went, as wide as the caret, without filling the inside of a turn.
+fn bridge(before: &Corners, shown: &Corners, head: Vec2) -> Hull {
+    let mut order = [0, 1, 2, 3];
+    order.sort_by(|a, b| {
+        (shown[*b] - head)
+            .length()
+            .total_cmp(&(shown[*a] - head).length())
+    });
+    let [a, b, ..] = order;
+    Hull::of(&[before[a], before[b], shown[a], shown[b]])
 }
 
 impl CursorTrailFrame {
@@ -877,6 +893,7 @@ impl CursorTrailFrame {
         });
         let smear = self.smear.map(|shape| SmearPaint {
             hull: shape.hull,
+            bridge: shape.bridge,
             head: shape.head,
             tail: shape.tail,
             fill: self.fill,
@@ -1122,9 +1139,15 @@ mod tests {
     /// and when slow frames let several physics steps pass between two of them.
     #[test]
     fn a_long_jump_is_one_unbroken_streak_over_time() {
+        // Everything the frame draws: the smear and any bridge back to the frame before.
         fn bounds(frame: &CursorTrailFrame) -> (f32, f32, f32, f32) {
-            let hull = frame.smear.expect("smear").hull;
-            hull.vertices_for_tests().iter().fold(
+            let shape = frame.smear.expect("smear");
+            let pieces: Vec<Hull> = std::iter::once(shape.hull).chain(shape.bridge).collect();
+            let points: Vec<Vec2> = pieces
+                .iter()
+                .flat_map(|piece| piece.vertices_for_tests().to_vec())
+                .collect();
+            points.iter().fold(
                 (f32::MAX, f32::MAX, f32::MIN, f32::MIN),
                 |(left, top, right, bottom), p| {
                     (left.min(p.x), top.min(p.y), right.max(p.x), bottom.max(p.y))
@@ -1174,9 +1197,65 @@ mod tests {
         }
     }
 
+    /// A smear stretched out along one jump and sent off sideways by another bends toward its new
+    /// target, no wider than the caret: its far end trails rather than swinging across with the
+    /// near one, which would turn the streak into a slab as tall as it was long.
+    #[test]
+    fn a_smear_sent_sideways_mid_flight_stays_caret_wide() {
+        let area = |corners: &Corners| {
+            let hull = Hull::of(corners);
+            let vertices = hull.vertices_for_tests();
+            let twice: f32 = (0..vertices.len())
+                .map(|index| vertices[index].cross(vertices[(index + 1) % vertices.len()]))
+                .sum();
+            twice.abs() / 2.0
+        };
+        let length = |corners: &Corners| {
+            corners
+                .iter()
+                .flat_map(|a| corners.iter().map(move |b| (*a - *b).length()))
+                .fold(0.0, f32::max)
+        };
+        for shape in [crate::CaretShape::Bar, crate::CaretShape::Block] {
+            let caret = |x, y| motion::caret_rect(x, y, shape);
+            // Down a column, then off to the left, straight sideways, or back up and over.
+            for (second, label) in [
+                (caret(30, 36), "down and left"),
+                (caret(30, 32), "sideways"),
+                (caret(60, 4), "back and over"),
+            ] {
+                // The same move made from rest is the measure: at most a caret wide.
+                for mid_flight in [false, true] {
+                    let mut smear = if mid_flight {
+                        motion::Smear::new_for_tests(caret(100, 2), caret(100, 32))
+                    } else {
+                        motion::Smear::new_for_tests(caret(100, 32), second)
+                    };
+                    for step in 0..40 {
+                        if mid_flight && step == 4 {
+                            smear.retarget(second);
+                        }
+                        smear.advance(motion::STEP, CursorTrailMotion::default(), 0.0, |_| {});
+                        let shown = smear.shown();
+                        let long = length(&shown);
+                        if long > 2.0 {
+                            let width = area(&shown) / long;
+                            assert!(
+                                width <= 1.25,
+                                "{shape:?} {label} (mid-flight: {mid_flight}), step {step}: \
+                                 {width} cells wide over {long}: {shown:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// A smear sent somewhere else mid-flight bends into a streak toward its new target; what a
     /// frame draws is the smear itself, not a wedge swept across everywhere it passed since the
-    /// last frame. Each frame still touches the one before, so the streak never hops.
+    /// last frame. Each frame still touches the one before, so the streak never hops: where the
+    /// smear has outrun the last frame, a bridge no wider than the caret joins them.
     #[test]
     fn a_turning_smear_stays_a_streak() {
         let area = |hull: &Hull| {
@@ -1186,39 +1265,76 @@ mod tests {
                 .sum();
             twice.abs() / 2.0
         };
+        let length = |hull: &Hull| {
+            let vertices = hull.vertices_for_tests();
+            vertices
+                .iter()
+                .flat_map(|a| vertices.iter().map(move |b| (*a - *b).length()))
+                .fold(0.0, f32::max)
+        };
         let block = |x, y| motion::caret_rect(x, y, crate::CaretShape::Block);
-        for steps_per_frame in [1, 2, 4] {
-            let mut smear = motion::Smear::new_for_tests(block(5, 20), block(70, 4));
-            let mut drawn: Option<Corners> = None;
-            let mut last: Option<Hull> = None;
-            for frame in 0..30 {
-                if frame == 3 {
-                    smear.retarget(block(10, 30));
-                }
-                smear.advance(
-                    motion::STEP * steps_per_frame,
-                    CursorTrailMotion::default(),
-                    0.0,
-                    |_| {},
-                );
-                let shape = shape_of(&smear, drawn);
-                let alone = area(&Hull::of(&shape.shown));
-                if let Some(last) = last {
-                    assert!(
-                        shape.hull.overlaps(&last),
-                        "{steps_per_frame} steps per frame, frame {frame}: the streak hops"
+        let bar = |x, y| motion::caret_rect(x, y, crate::CaretShape::Bar);
+        let moves = [
+            // A long diagonal, then back down and to the left.
+            (block(5, 20), block(70, 4), block(10, 30)),
+            // Down a column, then off to the left: two focus changes in quick succession.
+            (bar(100, 2), bar(100, 32), bar(30, 36)),
+            (block(100, 2), block(100, 32), block(30, 32)),
+        ];
+        for (from, first, second) in moves {
+            for steps_per_frame in [1, 2, 4] {
+                let mut smear = motion::Smear::new_for_tests(from, first);
+                let mut drawn: Option<Corners> = None;
+                let mut last: Vec<Hull> = Vec::new();
+                let mut bridged = false;
+                for frame in 0..30 {
+                    if frame == 3 {
+                        smear.retarget(second);
+                    }
+                    smear.advance(
+                        motion::STEP * steps_per_frame,
+                        CursorTrailMotion::default(),
+                        0.0,
+                        |_| {},
                     );
-                    if Hull::of(&drawn.unwrap()).overlaps(&Hull::of(&shape.shown)) {
+                    let shape = shape_of(&smear, drawn);
+                    let pieces: Vec<Hull> =
+                        std::iter::once(shape.hull).chain(shape.bridge).collect();
+                    let at = format!(
+                        "{first:?} then {second:?}, {steps_per_frame} steps per frame, frame {frame}"
+                    );
+                    if !last.is_empty() {
                         assert!(
-                            area(&shape.hull) <= alone + 1e-3,
-                            "{steps_per_frame} steps per frame, frame {frame}: drew {} for a \
-                             smear of {alone}",
-                            area(&shape.hull)
+                            pieces
+                                .iter()
+                                .any(|piece| last.iter().any(|old| piece.overlaps(old))),
+                            "{at}: the streak hops"
                         );
                     }
+                    assert_eq!(
+                        shape.hull,
+                        Hull::of(&shape.shown),
+                        "{at}: the smear is drawn as it is"
+                    );
+                    if let Some(bridge) = shape.bridge {
+                        bridged = true;
+                        let width = area(&bridge) / length(&bridge).max(1.0);
+                        assert!(
+                            width <= 1.75,
+                            "{at}: a bridge {width} cells wide: {:?} from {drawn:?} to {:?}",
+                            bridge.vertices_for_tests(),
+                            shape.shown
+                        );
+                    }
+                    drawn = Some(shape.shown);
+                    last = pieces;
                 }
-                drawn = Some(shape.shown);
-                last = Some(shape.hull);
+                if steps_per_frame == 4 {
+                    assert!(
+                        bridged,
+                        "{first:?} then {second:?}: slow frames outrun the last one"
+                    );
+                }
             }
         }
     }
