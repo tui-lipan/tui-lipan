@@ -25,9 +25,10 @@ pub use crate::core::memo::Memo;
 
 pub use crate::Tag;
 pub use crate::app::{
-    App, ContrastPolicy, CursorTrail, CursorTrailTrigger, DEFAULT_COLOR_ANIMATION_FRAME_RATE,
-    DEFAULT_FRAME_RATE, DevToolsMetric, FocusChanged, FocusEntry, FocusPolicy, InlineHeight,
-    InlineStartupPolicy, ScreenBackground, SurfaceMode, TextAreaNewlineBinding,
+    App, ContrastPolicy, CursorTrail, CursorTrailFill, CursorTrailMotion, CursorTrailParticles,
+    CursorTrailSpring, CursorTrailTrigger, DEFAULT_COLOR_ANIMATION_FRAME_RATE, DEFAULT_FRAME_RATE,
+    DevToolsMetric, FocusChanged, FocusEntry, FocusPolicy, InlineHeight, InlineStartupPolicy,
+    ScreenBackground, SurfaceMode, TextAreaNewlineBinding,
 };
 pub use crate::automation::{
     AutomationError, AutomationId, AutomationIdError, AutomationOptions, AutomationScrollDirection,

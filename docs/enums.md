@@ -126,6 +126,54 @@ What makes a [`CursorTrail`](quick-start.md#app-configuration) appear.
 | `FocusChange` (default) | Focus moves to another widget and the caret moves with it |
 | `Jump { columns, rows }` | A focus change, or a caret move inside one widget of at least `columns` columns or `rows` rows; `CursorTrailTrigger::jump()` is `columns: 8, rows: 2` |
 
+### `CursorTrailMotion`
+
+How a [`CursorTrail`](quick-start.md#app-configuration) moves.
+
+| Variant | Notes |
+|---------|-------|
+| `Spring(CursorTrailSpring)` (default) | Each corner of the smear is pulled into the caret by a damped spring; the smear stretches, snaps, and keeps its momentum through a jump mid-flight |
+| `Glide { duration }` | The front sits on the caret at once and the tail eases in over `duration`; `CursorTrail::glide()` is 160 ms. Zero turns trails off |
+
+`CursorTrailSpring` holds the spring, applied once per sixtieth of a second whatever the frame rate.
+Its fields mean what the same-named settings of smear-cursor.nvim mean, and
+`CursorTrailSpring::DEFAULT` is its defaults:
+
+| Field | Default | Notes |
+|-------|---------|-------|
+| `stiffness` | `0.6` | Pull on the corners leading the motion, 0 to 1 |
+| `trailing_stiffness` | `0.45` | Pull on the trailing corners; lower stretches the smear |
+| `trailing_exponent` | `3.0` | How quickly corners between leading and trailing fall back to the trailing pull |
+| `damping` | `0.85` | Velocity lost each step, 0 (bouncy) to 1 (no momentum) |
+| `stop_distance` | `0.1` | The smear stops once every corner is this close to the caret, in cells |
+
+### `CursorTrailFill`
+
+How a [`CursorTrail`](quick-start.md#app-configuration) is drawn.
+
+| Variant | Notes |
+|---------|-------|
+| `Solid` (default) | Trail color with block glyphs (eighths, halves, quadrants, and optionally sextants, normal or inverted) for sub-cell edges. Wholly covered cells keep their text in inverse colors. Draws the caret itself while it moves, so the host caret is hidden until it settles |
+| `Tint` | Tints cell backgrounds, at most three quarters of the way to the trail color; text and the host caret stay |
+
+### `CursorTrailParticles`
+
+Sparks a moving smear throws off, drawn as braille dots that never cover text or the caret.
+
+| Field | Default | Notes |
+|-------|---------|-------|
+| `per_cell` | `1.5` | Sparks per cell the smear travels |
+| `max` | `100` | Most sparks alive at once |
+| `lifetime` | 300 ms | Longest life; each spark lives 60% to 100% of it |
+| `spread` | `6.0` | Fastest random speed, in cells per second |
+| `inherit` | `0.25` | Share of the smear's velocity a spark keeps |
+| `gravity` | `20.0` | Downward pull in cells per second squared; negative rises |
+| `drag` | `3.0` | Slowdown per second |
+
+`CursorTrail` itself also carries `opacity` (strength at the caret, default 1), `taper` (fade toward
+the tail, default 0), `max_length` (longest stretch in cells, default 25; zero or less unbounded),
+and `sextants` (allow Symbols for Legacy Computing sextant glyphs, default off).
+
 ### `PngOptions` (`ui-snapshot-png`)
 
 Options for `CapturedFrame::to_png(&PngOptions)` and `UiSnapshot::to_png(&PngOptions)`.

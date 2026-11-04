@@ -141,6 +141,7 @@ fn host_colors(bg: Color) -> HostTerminalColors {
         fg: Color::White,
         bg,
         ansi_reported: HostTerminalColors::ALL_ANSI_REPORTED,
+        cursor: None,
     }
 }
 

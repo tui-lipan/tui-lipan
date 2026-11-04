@@ -38,6 +38,8 @@ pub struct HostTerminalColors {
     pub fg: Color,
     /// Default background from OSC 11.
     pub bg: Color,
+    /// Cursor color from OSC 12, or `None` when the terminal did not report one.
+    pub cursor: Option<Color>,
 }
 
 impl HostTerminalColors {
@@ -883,6 +885,7 @@ struct Parsed {
     ansi: [Option<Color>; 16],
     fg: Option<Color>,
     bg: Option<Color>,
+    cursor: Option<Color>,
 }
 
 #[cfg(unix)]
@@ -909,6 +912,9 @@ fn resolve_host_colors(
         ansi_reported,
         fg,
         bg,
+        cursor: parsed
+            .cursor
+            .or_else(|| previous.and_then(|colors| colors.cursor)),
     })
 }
 
@@ -918,7 +924,10 @@ pub(crate) fn build_live_color_query_batch() -> Vec<u8> {
     for i in 0..16 {
         out.extend_from_slice(format!("\x1b]4;{i};?\x1b\\").as_bytes());
     }
-    out.extend_from_slice(b"\x1b]10;?\x1b\\\x1b]11;?\x1b\\");
+    // OSC 12 goes before 10 and 11: a query is complete once those two have answered, and a
+    // terminal answers in order, so a cursor reply never arrives after collection has stopped.
+    // A terminal that ignores OSC 12 simply sends nothing for it.
+    out.extend_from_slice(b"\x1b]12;?\x1b\\\x1b]10;?\x1b\\\x1b]11;?\x1b\\");
     out
 }
 
@@ -1157,6 +1166,12 @@ fn parse_body(body: &[u8], parsed: &mut Parsed) {
     if let Some(rest) = text.strip_prefix("10;") {
         if let Some(color) = parse_rgb(rest) {
             parsed.fg = Some(color);
+        }
+        return;
+    }
+    if let Some(rest) = text.strip_prefix("12;") {
+        if let Some(color) = parse_rgb(rest) {
+            parsed.cursor = Some(color);
         }
         return;
     }
@@ -1446,6 +1461,7 @@ mod tests {
             fg: Color::Rgb(230, 230, 230),
             bg: Color::Rgb(20, 20, 20),
             ansi_reported: HostTerminalColors::ALL_ANSI_REPORTED,
+            cursor: None,
         };
         let mut parsed = Parsed::default();
         parsed.ansi[4] = Some(Color::Rgb(80, 120, 240));
@@ -1491,6 +1507,7 @@ mod tests {
             ansi_reported: 1 << 3,
             fg: Color::Rgb(230, 230, 230),
             bg: Color::Rgb(20, 20, 20),
+            cursor: None,
         };
         let mut parsed = Parsed::default();
         parsed.ansi[4] = Some(Color::Rgb(80, 120, 240));
@@ -1587,6 +1604,7 @@ mod tests {
             fg: Color::Rgb(230, 230, 230),
             bg: Color::Rgb(20, 20, 20),
             ansi_reported: HostTerminalColors::ALL_ANSI_REPORTED,
+            cursor: None,
         };
         let mut parser = HostColorResponseParser::default();
         parser.start_query();
@@ -1595,6 +1613,42 @@ mod tests {
         let colors = parser.finish_query(Some(&previous)).unwrap();
         assert_eq!(colors.ansi[1], previous.ansi[1]);
         assert!(parser.at_input_boundary());
+    }
+
+    /// The cursor color is asked for ahead of OSC 10 and 11, whose replies complete a query, and
+    /// is kept from an earlier query when a terminal stops answering it.
+    #[test]
+    fn the_cursor_color_is_read_from_osc_12_and_kept_across_queries() {
+        let batch = super::build_live_color_query_batch();
+        let position = |needle: &[u8]| {
+            batch
+                .windows(needle.len())
+                .position(|window| window == needle)
+                .expect("query in the batch")
+        };
+        assert!(position(b"\x1b]12;?") < position(b"\x1b]10;?"));
+        assert!(position(b"\x1b]12;?") < position(b"\x1b]11;?"));
+
+        let mut parser = HostColorResponseParser::default();
+        parser.start_query();
+        parser.push(
+            b"\x1b]12;rgb:ffff/8080/0000\x1b\\\x1b]10;rgb:e6e6/e6e6/e6e6\x1b\\\
+              \x1b]11;rgb:1414/1414/1414\x1b\\",
+        );
+        let first = parser.finish_query(None).expect("colors");
+        assert_eq!(first.cursor, Some(Color::Rgb(255, 128, 0)));
+
+        parser.start_query();
+        parser.push(b"\x1b]10;rgb:e6e6/e6e6/e6e6\x1b\\\x1b]11;rgb:1414/1414/1414\x1b\\");
+        let second = parser.finish_query(Some(&first)).expect("colors");
+        assert_eq!(
+            second.cursor, first.cursor,
+            "a missing reply keeps the last one"
+        );
+
+        parser.start_query();
+        parser.push(b"\x1b]10;rgb:e6e6/e6e6/e6e6\x1b\\\x1b]11;rgb:1414/1414/1414\x1b\\");
+        assert_eq!(parser.finish_query(None).expect("colors").cursor, None);
     }
 
     #[test]

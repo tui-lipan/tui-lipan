@@ -362,6 +362,13 @@ where
             place_caret(terminal, cursor_position.get())?;
             Ok(())
         });
+        // Seen before the frame closes: a jump a solid trail will draw hides the caret in this
+        // frame, rather than showing it at its destination until the next full draw paints the
+        // trail.
+        self.observe_cursor_trail(cursor_position.get());
+        if self.cursor_trail.hides_caret() {
+            terminal.hide_cursor()?;
+        }
         crossterm::execute!(
             terminal.backend_mut(),
             crossterm::style::Print("\x1b[?2026l")
@@ -377,7 +384,6 @@ where
         }
         result?;
         self.frame_rendered = true;
-        self.observe_cursor_trail(cursor_position.get());
 
         self.terminal.update_cursor(
             terminal.backend_mut(),
