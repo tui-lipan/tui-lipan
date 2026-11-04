@@ -155,8 +155,23 @@ How a [`CursorTrail`](quick-start.md#app-configuration) is drawn.
 
 | Variant | Notes |
 |---------|-------|
-| `Solid` (default) | Trail color with block glyphs (eighths, halves, quadrants, and optionally sextants, normal or inverted) for sub-cell edges. Wholly covered cells keep their text in inverse colors. Draws the caret itself while it moves, so the host caret is hidden until it settles |
+| `Solid` (default) | The trail color, anti-aliased: each cell the smear touches is drawn as the glyph and pair of shades (between the cell's background and the trail color) that reproduce its coverage best, from an 8x8 sample of the cell. Cells it covers evenly keep their character and turn to inverse video as it covers them, and a character it only clips keeps its shape under a faint tint. Draws the caret itself while it moves, so the host caret is hidden until it settles |
 | `Tint` | Tints cell backgrounds, at most three quarters of the way to the trail color; text and the host caret stay |
+
+Blending needs RGB. Where the trail or the background is a palette color, `Solid` draws the nearest
+glyph in the trail color or inverted instead of shades.
+
+### `CursorTrailGlyphs`
+
+Which glyphs a [`CursorTrail`](quick-start.md#app-configuration) draws its edges with. Richer sets
+follow a diagonal more closely.
+
+| Variant | Notes |
+|---------|-------|
+| `Auto` (default) | The richest set the host terminal draws itself, judged from its environment: `Octants` in Ghostty, `Sextants` in Kitty, WezTerm, and foot, `Blocks` anywhere else |
+| `Blocks` | Block Elements (U+2580): halves, eighths, and quadrants. Every terminal draws them |
+| `Sextants` | Also the sextants (U+1FB00), diagonal wedges (U+1FB3C), and triangular blocks (U+1FB68) of Symbols for Legacy Computing |
+| `Octants` | Also its octants (U+1CD00, Unicode 16) and the half-cell triangles `◢◣◤◥` |
 
 ### `CursorTrailParticles`
 
@@ -174,7 +189,7 @@ Sparks a moving smear throws off, drawn as braille dots that never cover text or
 
 `CursorTrail` itself also carries `opacity` (strength at the caret, default 1), `taper` (fade toward
 the tail, default 0), `max_length` (longest stretch in cells, held from the first frame; default 0, unbounded),
-and `sextants` (allow Symbols for Legacy Computing sextant glyphs, default off).
+and `glyphs` (a `CursorTrailGlyphs`, default `Auto`).
 
 ### `PngOptions` (`ui-snapshot-png`)
 

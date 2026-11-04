@@ -12,6 +12,7 @@
 //! the runner routes every frame through the full draw while a smear or a spark is on screen and
 //! for the one frame that clears it.
 
+mod legacy_glyphs;
 mod motion;
 mod particles;
 mod raster;
@@ -28,7 +29,7 @@ use crate::style::{Color, HostTerminalColors};
 
 use motion::{Corners, Smear, caret_rect};
 use particles::{Spark, Sparks};
-use raster::{Hull, SmearPaint};
+use raster::{GlyphSet, Hull, SmearPaint};
 
 /// What makes a [`CursorTrail`] appear.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -138,6 +139,58 @@ pub enum CursorTrailFill {
     Tint,
 }
 
+/// Which glyphs a [`CursorTrail`] draws its edges with.
+///
+/// Richer sets follow a diagonal more closely, but only look right where the terminal draws the
+/// glyphs itself or the font has them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum CursorTrailGlyphs {
+    /// The richest set the host terminal is known to draw itself: octants on Ghostty, sextants on
+    /// Kitty, WezTerm, and foot, block elements anywhere else.
+    #[default]
+    Auto,
+    /// Block Elements (U+2580): halves, eighths, and quadrants. Every terminal draws them.
+    Blocks,
+    /// Also the sextants, diagonal wedges, and triangles of Symbols for Legacy Computing
+    /// (U+1FB00, Unicode 13).
+    Sextants,
+    /// Also its octants (U+1CD00, Unicode 16) and the half-cell triangles (U+25E2).
+    Octants,
+}
+
+impl CursorTrailGlyphs {
+    fn resolve(self) -> GlyphSet {
+        match self {
+            Self::Blocks => GlyphSet::Blocks,
+            Self::Sextants => GlyphSet::Sextants,
+            Self::Octants => GlyphSet::Octants,
+            Self::Auto => {
+                static DETECTED: std::sync::OnceLock<GlyphSet> = std::sync::OnceLock::new();
+                *DETECTED.get_or_init(|| detect_glyphs(|name| std::env::var(name).ok()))
+            }
+        }
+    }
+}
+
+/// The richest glyph set the host terminal draws itself, judged from its environment.
+fn detect_glyphs(var: impl Fn(&str) -> Option<String>) -> GlyphSet {
+    let term = var("TERM").unwrap_or_default().to_ascii_lowercase();
+    let program = var("TERM_PROGRAM").unwrap_or_default().to_ascii_lowercase();
+    let set = |name: &str| var(name).is_some_and(|value| !value.is_empty());
+    if program == "ghostty" || term.contains("ghostty") || set("GHOSTTY_RESOURCES_DIR") {
+        GlyphSet::Octants
+    } else if term.contains("kitty")
+        || set("KITTY_WINDOW_ID")
+        || program == "wezterm"
+        || set("WEZTERM_PANE")
+        || term.starts_with("foot")
+    {
+        GlyphSet::Sextants
+    } else {
+        GlyphSet::Blocks
+    }
+}
+
 /// Sparks thrown off by a moving smear, drawn as braille dots.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CursorTrailParticles {
@@ -213,9 +266,8 @@ pub struct CursorTrail {
     pub max_length: f32,
     /// Sparks thrown off the smear, or `None` (the default) for none.
     pub particles: Option<CursorTrailParticles>,
-    /// Also draw edges with the sextants of Symbols for Legacy Computing (U+1FB00), for smoother
-    /// diagonals in fonts that have them. Off by default, since many fonts do not.
-    pub sextants: bool,
+    /// Which glyphs the smear's edges are drawn with.
+    pub glyphs: CursorTrailGlyphs,
 }
 
 impl CursorTrail {
@@ -236,7 +288,7 @@ impl CursorTrail {
             taper: 0.0,
             max_length: Self::DEFAULT_MAX_LENGTH,
             particles: None,
-            sextants: false,
+            glyphs: CursorTrailGlyphs::Auto,
         }
     }
 
@@ -303,10 +355,10 @@ impl CursorTrail {
         self
     }
 
-    /// Set whether edges may use sextant glyphs.
+    /// Set which glyphs the smear's edges are drawn with.
     #[must_use]
-    pub const fn sextants(mut self, sextants: bool) -> Self {
-        self.sextants = sextants;
+    pub const fn glyphs(mut self, glyphs: CursorTrailGlyphs) -> Self {
+        self.glyphs = glyphs;
         self
     }
 
@@ -459,7 +511,7 @@ pub(crate) struct CursorTrailFrame {
     color: Option<Color>,
     opacity: f32,
     taper: f32,
-    sextants: bool,
+    glyphs: GlyphSet,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -726,7 +778,7 @@ impl CursorTrailState {
                 .or(config.color),
             opacity: config.opacity,
             taper: config.taper,
-            sextants: config.sextants,
+            glyphs: config.glyphs.resolve(),
         })
     }
 
@@ -823,7 +875,7 @@ impl CursorTrailFrame {
             color,
             opacity: self.opacity,
             taper: self.taper,
-            sextants: self.sextants,
+            glyphs: self.glyphs,
         });
         if !self.sparks.is_empty() {
             particles::paint(
@@ -1112,6 +1164,24 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn the_richest_glyphs_the_terminal_draws_itself_are_chosen() {
+        let detect = |vars: &[(&str, &str)]| {
+            detect_glyphs(|name| {
+                vars.iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| (*value).to_string())
+            })
+        };
+        assert_eq!(detect(&[("TERM_PROGRAM", "ghostty")]), GlyphSet::Octants);
+        assert_eq!(detect(&[("TERM", "xterm-ghostty")]), GlyphSet::Octants);
+        assert_eq!(detect(&[("TERM", "xterm-kitty")]), GlyphSet::Sextants);
+        assert_eq!(detect(&[("TERM_PROGRAM", "WezTerm")]), GlyphSet::Sextants);
+        assert_eq!(detect(&[("TERM", "foot")]), GlyphSet::Sextants);
+        assert_eq!(detect(&[("TERM", "xterm-256color")]), GlyphSet::Blocks);
+        assert_eq!(detect(&[]), GlyphSet::Blocks);
     }
 
     #[test]

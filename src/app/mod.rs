@@ -25,8 +25,8 @@ pub use context::{
     SurfaceMode, TextAreaNewlineBinding,
 };
 pub use cursor_trail::{
-    CursorTrail, CursorTrailFill, CursorTrailMotion, CursorTrailParticles, CursorTrailSpring,
-    CursorTrailTrigger,
+    CursorTrail, CursorTrailFill, CursorTrailGlyphs, CursorTrailMotion, CursorTrailParticles,
+    CursorTrailSpring, CursorTrailTrigger,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use runner::AppRunner;
