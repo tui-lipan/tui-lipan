@@ -580,15 +580,27 @@ fn dispatch_selection_clipboard_request(
                     continue;
                 };
                 let text = terminal_node_copy_text(node, selection);
-                // A selection of only blank lines has nothing to copy, but it is still a selection:
-                // the copy shortcut is spent on it rather than passed on to the program.
-                let mut context = ReadOnlyClipboardContext::new(
-                    text.as_str(),
-                    Some((0, text.len())),
-                    true,
-                    text.is_empty(),
-                );
-                dispatch_selection_context(&mut context, request, ctx, id)
+                if text.is_empty() {
+                    // A selection of only blank lines has nothing to copy, but it is still a
+                    // selection: a copy shortcut is spent on it rather than passed on to the
+                    // program. A terminal never cuts, so a cut key goes on as it always does, and
+                    // a copy on select writes nothing.
+                    matches!(
+                        request,
+                        SelectionClipboardRequest::Shortcut {
+                            cut_requested: false,
+                            ..
+                        }
+                    )
+                } else {
+                    let mut context = ReadOnlyClipboardContext::new(
+                        text.as_str(),
+                        Some((0, text.len())),
+                        true,
+                        false,
+                    );
+                    dispatch_selection_context(&mut context, request, ctx, id)
+                }
             }
             _ => false,
         };
@@ -1961,11 +1973,10 @@ mod tests {
                 }),
                 Rc::new(|_| {}),
             );
-            let keymap = keymap_for_test(vec![binding_for_test(
-                "ctrl-insert",
-                Action::Copy,
-                BindingMode::Performable,
-            )]);
+            let keymap = keymap_for_test(vec![
+                binding_for_test("ctrl-insert", Action::Copy, BindingMode::Performable),
+                binding_for_test("ctrl-x", Action::Cut, BindingMode::Performable),
+            ]);
 
             // Every case is a selection, so the shortcut is spent on it, even with nothing to copy:
             // passed on, it would reach the program in the terminal.
@@ -1984,6 +1995,22 @@ mod tests {
                 },
             );
             assert!(handled, "rows {rows:?}");
+            // A terminal cannot cut, so the cut key reaches the program even over a selection.
+            let cut = dispatch_selection_shortcut(
+                &mut tree,
+                None,
+                &keymap,
+                &clipboard,
+                &ClipboardConfig {
+                    enable_osc52: false,
+                    ..Default::default()
+                },
+                KeyEvent {
+                    code: KeyCode::Char('x'),
+                    mods: KeyMods::CTRL,
+                },
+            );
+            assert!(!cut, "Ctrl+X was consumed over rows {rows:?}");
             assert_eq!(writes.borrow().as_slice(), copied, "rows {rows:?}");
         }
     }
