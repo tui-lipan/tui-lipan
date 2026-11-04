@@ -6,11 +6,9 @@ use crate::callback::KeyHandler;
 use crate::clipboard::{ClipboardConfig, ClipboardPasteContent, ClipboardService, write_osc52};
 use crate::core::event::{KeyCode, KeyEvent, KeyMods, MouseEvent};
 use crate::core::node::{NodeId, NodeKind, NodeTree};
-use crate::utils::SelectionEnd;
 use crate::utils::hints::{HintScan, HintSpan};
 use crate::widgets::internal::{
-    TerminalLinkHover, apply_scroll_action, terminal_mouse_content_rect,
-    terminal_node_selection_text,
+    TerminalLinkHover, apply_scroll_action, terminal_mouse_content_rect, terminal_node_copy_text,
 };
 use crate::widgets::{ScrollEvent, ScrollMetrics, TerminalLinkEvent};
 use crate::widgets::{TerminalInputKind, TerminalPasteShortcutBehavior, encode_paste};
@@ -258,7 +256,7 @@ pub(crate) fn preflight_key(
         if let Some(sel) = node.selection.as_ref()
             && !sel.is_empty()
         {
-            let text = terminal_node_selection_text(node, sel, SelectionEnd::Exclusive, false);
+            let text = terminal_node_copy_text(node, sel);
             if !text.is_empty() {
                 if let Err(err) = clipboard.write_clipboard_text(&text) {
                     clipboard.report_error(err);

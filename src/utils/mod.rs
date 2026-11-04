@@ -30,3 +30,4 @@ pub use file_icons::{
 pub use open_url::{OpenUrlError, open_url};
 pub use sanitize::{sanitize_display_span, sanitize_display_spans, sanitize_display_text};
 pub use selection::{GridPos, GridSelection, GridSelectionEvent, SelectionEnd};
+pub use text::trim_blank_edge_lines;

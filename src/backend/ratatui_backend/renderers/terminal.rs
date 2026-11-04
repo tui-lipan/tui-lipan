@@ -838,18 +838,13 @@ fn scan_ranges(
     let Some((col_start, col_end)) = selection.columns_for_row(row, line_width) else {
         return Vec::new();
     };
-    let (start, end) = selection.normalized();
-    let (left, right) = if start.row == end.row {
-        (start.col, end.col)
-    } else {
-        (0, usize::from(content_w))
-    };
-    let left = left as f32;
-    let span = (right as f32 - left).max(1.0);
+    // Sweep across the whole content width rather than the selection's own, so the line moves at
+    // one speed whatever was selected and lights the selected cells as it passes them.
+    let span = f32::from(content_w).max(1.0);
 
     let mut ranges: Vec<(std::ops::Range<usize>, Style)> = Vec::new();
     for col in col_start..col_end {
-        let position = (col as f32 + 0.5 - left) / span;
+        let position = (col as f32 + 0.5) / span;
         let style = scan
             .style_at(Some(position))
             .map_or(selection_style, |feedback| selection_style.patch(feedback));

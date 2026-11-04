@@ -134,7 +134,9 @@ it by `0.35`. `Fade`, `Scan`, and `Pulse` scale its color transforms (`lighten_b
 they stay on for the brighter half of the effect. Animated effects repaint on their own, at about
 60 frames per second, only while they run.
 
-`Scan` sweeps column by column in a `Terminal`. Widgets that wrap or reflow text, such as `Input`,
+`Scan` sweeps across the full width of a `Terminal` at one speed, lighting the copied cells as it
+passes, so a short selection lights briefly rather than slowing the line down. Widgets that wrap
+or reflow text, such as `Input`,
 `TextArea`, and `DocumentView`, fade instead. Toasts show the full `style` for `duration` with every
 effect except `Off`.
 

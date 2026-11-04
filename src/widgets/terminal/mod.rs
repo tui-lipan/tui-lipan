@@ -97,6 +97,15 @@ pub(crate) use reconcile::reconcile_terminal;
 pub(crate) use selection::rebase_selection;
 
 #[cfg(feature = "terminal")]
+/// The text a copy of `sel` puts on the clipboard: the selection without the blank lines at its
+/// start and end. See [`crate::utils::trim_blank_edge_lines`].
+#[cfg(feature = "terminal")]
+pub(crate) fn terminal_node_copy_text(node: &TerminalNode, sel: &TerminalSelection) -> String {
+    let text =
+        terminal_node_selection_text(node, sel, crate::utils::SelectionEnd::Exclusive, false);
+    crate::utils::trim_blank_edge_lines(&text).to_owned()
+}
+
 pub(crate) fn terminal_node_selection_text(
     node: &TerminalNode,
     sel: &TerminalSelection,

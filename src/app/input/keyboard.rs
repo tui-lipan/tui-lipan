@@ -14,9 +14,7 @@ use crate::ui::capabilities::{
     TextAreaClipboardParams, selection_range,
 };
 #[cfg(feature = "terminal")]
-use crate::utils::SelectionEnd;
-#[cfg(feature = "terminal")]
-use crate::widgets::internal::terminal_node_selection_text;
+use crate::widgets::internal::terminal_node_copy_text;
 
 /// Whether the user asked for a selection copy or it happened as a side effect.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -249,7 +247,7 @@ pub(crate) fn copy_terminal_selection(
     let NodeKind::Terminal(node) = &tree.node(id).kind else {
         return false;
     };
-    let text = terminal_node_selection_text(node, selection, SelectionEnd::Exclusive, false);
+    let text = terminal_node_copy_text(node, selection);
     if text.is_empty()
         || !crate::ui::router::write_mouse_selection(
             &text,
@@ -581,15 +579,28 @@ fn dispatch_selection_clipboard_request(
                 else {
                     continue;
                 };
-                let text =
-                    terminal_node_selection_text(node, selection, SelectionEnd::Exclusive, false);
-                let mut context = ReadOnlyClipboardContext::new(
-                    text.as_str(),
-                    Some((0, text.len())),
-                    true,
-                    false,
-                );
-                dispatch_selection_context(&mut context, request, ctx, id)
+                let text = terminal_node_copy_text(node, selection);
+                if text.is_empty() {
+                    // A selection of only blank lines has nothing to copy, but it is still a
+                    // selection: a copy shortcut is spent on it rather than passed on to the
+                    // program. A terminal never cuts, so a cut key goes on as it always does, and
+                    // a copy on select writes nothing.
+                    matches!(
+                        request,
+                        SelectionClipboardRequest::Shortcut {
+                            cut_requested: false,
+                            ..
+                        }
+                    )
+                } else {
+                    let mut context = ReadOnlyClipboardContext::new(
+                        text.as_str(),
+                        Some((0, text.len())),
+                        true,
+                        false,
+                    );
+                    dispatch_selection_context(&mut context, request, ctx, id)
+                }
             }
             _ => false,
         };
@@ -1896,62 +1907,112 @@ mod tests {
 
     #[cfg(feature = "terminal")]
     #[test]
-    fn ctrl_c_copies_terminal_selection() {
-        let root = crate::widgets::Terminal::new().focusable(false).into();
-        let mut tree = NodeTree::new();
-        LayoutEngine::reconcile_with_focus(
-            &mut tree,
-            &root,
-            Rect {
-                x: 0,
-                y: 0,
-                w: 20,
-                h: 4,
-            },
-            None,
-        );
+    fn copy_shortcut_copies_terminal_selection_without_blank_edge_lines() {
+        let row = |text: &str| vec![crate::style::Span::new(text.to_string())];
+        // (rows, selection end, what lands on the clipboard)
+        let cases: [(&[&str], crate::widgets::TerminalPos, &[&str]); 4] = [
+            (
+                &["hello"],
+                crate::widgets::TerminalPos { line: 0, col: 5 },
+                &["hello"],
+            ),
+            // Dragging past the output selects blank rows on either side; they stay behind.
+            (
+                &["", "hello", "", ""],
+                crate::widgets::TerminalPos { line: 3, col: 0 },
+                &["hello"],
+            ),
+            // A blank row between text is part of it.
+            (
+                &["one", "", "two"],
+                crate::widgets::TerminalPos { line: 2, col: 3 },
+                &["one\n\ntwo"],
+            ),
+            // Only blank rows: nothing to copy, so the clipboard keeps what it had.
+            (
+                &["", "", ""],
+                crate::widgets::TerminalPos { line: 2, col: 0 },
+                &[],
+            ),
+        ];
+        for (rows, end, copied) in cases {
+            let root = crate::widgets::Terminal::new().focusable(false).into();
+            let mut tree = NodeTree::new();
+            LayoutEngine::reconcile_with_focus(
+                &mut tree,
+                &root,
+                Rect {
+                    x: 0,
+                    y: 0,
+                    w: 20,
+                    h: 4,
+                },
+                None,
+            );
 
-        let terminal_id = tree
-            .iter()
-            .find(|node| matches!(node.kind, NodeKind::Terminal(_)))
-            .map(|node| node.id)
-            .expect("terminal exists");
-        if let NodeKind::Terminal(term) = &mut tree.node_mut(terminal_id).kind {
-            term.lines = vec![vec![crate::style::Span::new("hello")]].into();
-            let mut selection =
-                crate::widgets::TerminalSelection::new(crate::widgets::TerminalPos {
-                    line: 0,
-                    col: 0,
-                });
-            selection.extend_to(crate::widgets::TerminalPos { line: 0, col: 5 });
-            term.selection = Some(selection);
+            let terminal_id = tree
+                .iter()
+                .find(|node| matches!(node.kind, NodeKind::Terminal(_)))
+                .map(|node| node.id)
+                .expect("terminal exists");
+            if let NodeKind::Terminal(term) = &mut tree.node_mut(terminal_id).kind {
+                term.lines = rows.iter().map(|text| row(text)).collect::<Vec<_>>().into();
+                let mut selection =
+                    crate::widgets::TerminalSelection::new(crate::widgets::TerminalPos {
+                        line: 0,
+                        col: 0,
+                    });
+                selection.extend_to(end);
+                term.selection = Some(selection);
+            }
+
+            let writes = Rc::new(RefCell::new(Vec::new()));
+            let clipboard = ClipboardService::new(
+                Box::new(RecordingClipboard {
+                    writes: writes.clone(),
+                }),
+                Rc::new(|_| {}),
+            );
+            let keymap = keymap_for_test(vec![
+                binding_for_test("ctrl-insert", Action::Copy, BindingMode::Performable),
+                binding_for_test("ctrl-x", Action::Cut, BindingMode::Performable),
+            ]);
+
+            // Every case is a selection, so the shortcut is spent on it, even with nothing to copy:
+            // passed on, it would reach the program in the terminal.
+            let handled = dispatch_selection_shortcut(
+                &mut tree,
+                None,
+                &keymap,
+                &clipboard,
+                &ClipboardConfig {
+                    enable_osc52: false,
+                    ..Default::default()
+                },
+                KeyEvent {
+                    code: KeyCode::Insert,
+                    mods: KeyMods::CTRL,
+                },
+            );
+            assert!(handled, "rows {rows:?}");
+            // A terminal cannot cut, so the cut key reaches the program even over a selection.
+            let cut = dispatch_selection_shortcut(
+                &mut tree,
+                None,
+                &keymap,
+                &clipboard,
+                &ClipboardConfig {
+                    enable_osc52: false,
+                    ..Default::default()
+                },
+                KeyEvent {
+                    code: KeyCode::Char('x'),
+                    mods: KeyMods::CTRL,
+                },
+            );
+            assert!(!cut, "Ctrl+X was consumed over rows {rows:?}");
+            assert_eq!(writes.borrow().as_slice(), copied, "rows {rows:?}");
         }
-
-        let writes = Rc::new(RefCell::new(Vec::new()));
-        let clipboard = ClipboardService::new(
-            Box::new(RecordingClipboard {
-                writes: writes.clone(),
-            }),
-            Rc::new(|_| {}),
-        );
-        let keymap = keymap_for_test(vec![binding_for_test(
-            "ctrl-c",
-            Action::Copy,
-            BindingMode::Performable,
-        )]);
-
-        assert!(dispatch_selection_shortcut(
-            &mut tree,
-            None,
-            &keymap,
-            &clipboard,
-            &ClipboardConfig {
-                enable_osc52: false,
-                ..Default::default()
-            },
-            ctrl_c(),
-        ));
-        assert_eq!(writes.borrow().as_slice(), &["hello"]);
     }
 
     #[test]
