@@ -1625,9 +1625,12 @@ impl<C: Component> AppRunner<C> {
             crate::debug::internal_log!("[terminal_drag] selection unchanged");
             return false;
         }
+        // `next` is measured against the terminal's current lineage, so the drag moves to it.
         if let ActiveDrag::Terminal(active) = &mut self.drag.active
             && active.id == drag.id
         {
+            active.anchor = anchor;
+            active.lineage = lineage;
             active.proposed = Some(next);
         }
 

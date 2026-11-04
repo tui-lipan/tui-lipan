@@ -437,7 +437,8 @@ pub(crate) struct TerminalDrag {
     pub id: NodeId,
     /// The anchor position (where the drag started).
     pub anchor: crate::widgets::TerminalPos,
-    /// Scrollback lineage `anchor` was measured against, so evicted history can rebase it.
+    /// Scrollback lineage `anchor` and `proposed` were measured against, so evicted history can
+    /// rebase them.
     pub lineage: crate::widgets::ScrollbackLineage,
     /// The selection this gesture last proposed. A controlled terminal renders parent state, which
     /// can match a real proposal (a copy-mode cursor cell) or hold a selection the mouse never made,

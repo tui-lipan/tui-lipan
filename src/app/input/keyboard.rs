@@ -231,6 +231,34 @@ pub(crate) fn copy_active_selection(
     )
 }
 
+/// Copy `selection` from terminal `id` the way a finished mouse selection is copied. A terminal drag
+/// passes the selection it made, which a controlled terminal does not hold in its node.
+#[cfg(feature = "terminal")]
+pub(crate) fn copy_terminal_selection(
+    tree: &NodeTree,
+    id: NodeId,
+    selection: &crate::widgets::TerminalSelection,
+    target: crate::clipboard::CopyOnSelect,
+    intent: CopyIntent,
+    ctx: &mut KeyCtx<'_>,
+) -> bool {
+    if matches!(target, crate::clipboard::CopyOnSelect::Disabled) || !tree.is_valid(id) {
+        return false;
+    }
+    let NodeKind::Terminal(node) = &tree.node(id).kind else {
+        return false;
+    };
+    let text = terminal_node_selection_text(node, selection, SelectionEnd::Exclusive, false);
+    let mut context =
+        ReadOnlyClipboardContext::new(text.as_str(), Some((0, text.len())), true, false);
+    dispatch_selection_context(
+        &mut context,
+        SelectionClipboardRequest::Write { target, intent },
+        ctx,
+        id,
+    )
+}
+
 fn dispatch_selection_clipboard_request(
     tree: &mut NodeTree,
     request: SelectionClipboardRequest,

@@ -1208,6 +1208,51 @@ impl<C: Component> AppRunner<C> {
         keyboard::copy_active_selection(&mut self.core.tree, scope, target, intent, &mut key_ctx)
     }
 
+    /// Copy the selection a terminal drag made, measured against `lineage`, on release.
+    #[cfg(feature = "terminal")]
+    pub(crate) fn copy_terminal_drag_selection(
+        &mut self,
+        id: crate::core::node::NodeId,
+        selection: crate::widgets::TerminalSelection,
+        lineage: crate::widgets::ScrollbackLineage,
+    ) -> bool {
+        if !self.core.tree.is_valid(id) {
+            return false;
+        }
+        let crate::core::node::NodeKind::Terminal(node) = &self.core.tree.node(id).kind else {
+            return false;
+        };
+        let Some(selection) =
+            crate::widgets::internal::rebase_selection(Some(selection), lineage, node.lineage)
+        else {
+            return false;
+        };
+        let target = self.clipboard_config.copy_on_mouse_select;
+        let mut key_ctx = crate::app::input::handlers::KeyCtx {
+            read_only_selection: Some(&self.widgets.read_only_selection),
+            input_history: &mut self.widgets.input_history,
+            textarea_history: &mut self.widgets.textarea_history,
+            text_area_vim_state: &mut self.widgets.text_area_vim_state,
+            hex_history: &mut self.widgets.hex_history,
+            hex_pending_edit: &mut self.widgets.hex_pending_edit,
+            keymap: &self.keymap,
+            text_area_newline_binding: self.text_area_newline_binding,
+            clipboard: &self.clipboard,
+            clipboard_config: &self.clipboard_config,
+            copy_feedback: &mut self.copy_feedback,
+            dirty_override: None,
+            chord_action: None,
+        };
+        keyboard::copy_terminal_selection(
+            &self.core.tree,
+            id,
+            &selection,
+            target,
+            keyboard::CopyIntent::Implicit,
+            &mut key_ctx,
+        )
+    }
+
     #[cfg(feature = "devtools")]
     fn setup_devtools_log_sink(&mut self) {
         let queue = Arc::clone(&self.devtools_log_queue);

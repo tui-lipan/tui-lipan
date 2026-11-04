@@ -8112,7 +8112,25 @@ fn controlled_terminal_click_does_not_copy_the_rendered_selection() {
     left_mouse_at(&mut runner, 8, MouseKind::Down(MouseButton::Left));
     left_mouse_at(&mut runner, 12, MouseKind::Drag(MouseButton::Left));
     left_mouse_at(&mut runner, 12, MouseKind::Up(MouseButton::Left));
-    assert_eq!(writes.borrow().len(), 1, "a drag copies on release");
+    // The parent still renders `[8, 9)` ("t"); release copies what the drag selected.
+    assert_eq!(writes.borrow().as_slice(), ["thre"]);
+
+    // A double-click selects the word under the pointer and copies it the same way.
+    writes.borrow_mut().clear();
+    for kind in [
+        MouseKind::Down(MouseButton::Left),
+        MouseKind::Up(MouseButton::Left),
+    ] {
+        left_mouse_at(&mut runner, 10, kind);
+    }
+    writes.borrow_mut().clear();
+    for kind in [
+        MouseKind::Down(MouseButton::Left),
+        MouseKind::Up(MouseButton::Left),
+    ] {
+        left_mouse_at(&mut runner, 10, kind);
+    }
+    assert_eq!(writes.borrow().as_slice(), ["three"]);
 }
 
 /// Dragging one cell right from the cursor proposes exactly the cell the parent already renders;
