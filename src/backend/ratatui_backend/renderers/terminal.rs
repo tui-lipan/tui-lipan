@@ -794,16 +794,18 @@ pub(crate) fn render_terminal(
     // drives blinking here, but only when the child asked for a blinking
     // cursor. A steady cursor stays lit so the child's request is honored.
     //
-    // Only show cursor when at live view (scrollback_offset == 0).
-    // Hide cursor when there's an active selection.
+    // Only show the child's cursor when at live view (scrollback_offset == 0), and hide it when
+    // there's an active selection. An app-placed caret (`cursor_override`) is already in viewport
+    // coordinates and is the cursor of whatever the app drives over the content, such as a copy
+    // mode's, which scrolls and selects by design.
     let has_selection = projected.as_ref().is_some_and(|sel| !sel.is_empty());
     let cursor_lit = !node.cursor_blinking || blink_visible;
+    let app_placed = node.cursor_position_override.is_some();
     if rendered_content
         && is_focused
         && node.cursor_visible
         && cursor_lit
-        && node.scrollback_offset == 0
-        && !has_selection
+        && (app_placed || (node.scrollback_offset == 0 && !has_selection))
     {
         let cursor_x = content_rect.x.saturating_add(node.cursor_col as i16);
         let cursor_y = content_rect.y.saturating_add(node.cursor_row as i16);

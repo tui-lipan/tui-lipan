@@ -8834,6 +8834,122 @@ fn live_cursor_blink_override_survives_child_requests_and_paint_only_refreshes()
     }
 }
 
+/// An app-placed caret wins over the child's on bind and on every paint-only refresh, shows while
+/// the child hides its own, still yields to `show_cursor(false)`, and leaves the child's state alone.
+#[cfg(feature = "terminal")]
+#[test]
+fn live_cursor_override_places_and_shows_the_caret_over_the_childs() {
+    use crate::core::node::NodeKind;
+    use crate::layout::LayoutEngine;
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 4,
+    };
+    let screen = Rc::new(RefCell::new(crate::widgets::TerminalScreen::new(
+        4, 20, 100,
+    )));
+    // The child parks its cursor at (0, 6) and hides it.
+    screen.borrow_mut().process_bytes(b"prompt\x1b[?25l");
+    let caret = |override_at: Option<(u16, u16)>, shown: bool| {
+        let widget: Element = Terminal::new()
+            .screen(crate::widgets::TerminalScreenHandle::new(screen.clone()))
+            .cursor_override(override_at)
+            .show_cursor(shown)
+            .into();
+        let mut tree = crate::core::node::NodeTree::new();
+        LayoutEngine::reconcile_with_focus(&mut tree, &widget, viewport, None);
+        let read = |tree: &crate::core::node::NodeTree| {
+            let NodeKind::Terminal(node) = &tree.node(tree.root).kind else {
+                panic!("terminal")
+            };
+            (node.cursor_row, node.cursor_col, node.cursor_visible)
+        };
+        let bound = read(&tree);
+        screen.borrow_mut().process_bytes(b"!");
+        let NodeKind::Terminal(node) = &mut tree.node_mut(tree.root).kind else {
+            panic!("terminal")
+        };
+        node.refresh_from_live_screen(None);
+        (bound, read(&tree))
+    };
+
+    let (bound, refreshed) = caret(Some((2, 3)), true);
+    assert_eq!(bound, (2, 3, true));
+    assert_eq!(
+        refreshed,
+        (2, 3, true),
+        "a paint-only refresh keeps the app's caret"
+    );
+    assert_eq!(caret(Some((2, 3)), false).1, (2, 3, false));
+    let (_, child) = caret(None, true);
+    assert_eq!(
+        (child.0, child.2),
+        (0, false),
+        "without an override the child decides"
+    );
+    let snapshot = screen.borrow_mut().render_snapshot();
+    assert!(
+        !snapshot.cursor_visible,
+        "the child's own cursor state is untouched"
+    );
+}
+
+/// A selection hides the child's caret but not an app-placed one, which is drawn where the app put
+/// it: a copy mode selects and keeps its cursor.
+#[cfg(feature = "terminal")]
+#[test]
+fn an_app_placed_caret_is_drawn_over_a_selection() {
+    struct Selecting {
+        screen: Rc<RefCell<crate::widgets::TerminalScreen>>,
+        placed: Option<(u16, u16)>,
+    }
+    impl Component for Selecting {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+        fn create_state(&self, _: &()) {}
+        fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+        fn view(&self, _: &Context<Self>) -> Element {
+            Terminal::new()
+                .screen(crate::widgets::TerminalScreenHandle::new(
+                    self.screen.clone(),
+                ))
+                .selection(Some(crate::widgets::TerminalSelection {
+                    anchor: crate::widgets::TerminalPos { line: 0, col: 0 },
+                    cursor: crate::widgets::TerminalPos { line: 0, col: 2 },
+                }))
+                .cursor_override(self.placed)
+                .key("terminal")
+        }
+    }
+
+    for (placed, expected) in [(None, None), (Some((1, 2)), Some((2, 1)))] {
+        let screen = Rc::new(RefCell::new(crate::widgets::TerminalScreen::new(
+            4, 20, 100,
+        )));
+        screen.borrow_mut().process_bytes(b"one\r\ntwo");
+        let mut backend = crate::TestBackend::new(Selecting { screen, placed });
+        backend.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 4,
+        });
+        backend.render();
+        backend.focus_key(&"terminal".into());
+        backend.render();
+        let cursor = backend
+            .capture_frame()
+            .cursor
+            .map(|cursor| (cursor.x, cursor.y));
+        assert_eq!(cursor, expected, "override {placed:?}");
+    }
+}
+
 /// Host state belongs to the runtime, and applies to screens bound before or after startup.
 #[cfg(feature = "terminal")]
 #[test]

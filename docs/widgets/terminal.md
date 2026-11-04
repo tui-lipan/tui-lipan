@@ -101,6 +101,7 @@ same live screen does not repeat the report. Paint-only updates also synchronize
 | `show_cursor` | `bool` | Show the hardware caret |
 | `cursor_shape` | `CaretShape` | Hardware caret shape |
 | `cursor_blinking` | `bool` | Override blinking, including child requests on live screens |
+| `cursor_override` | `Option<(u16, u16)>` | Put the caret at a viewport `(row, col)` over a live screen's own and show it even while the child hides its cursor, a selection is active, or the view is scrolled back, for an app-driven cursor such as copy mode; `show_cursor(false)` still hides it. `None` (default) follows the screen |
 | `caret_color` | `Color` | Hardware caret color via OSC 12 (terminal support required) |
 | `style` | `Style` | Container style |
 | `hover_style` | `Style` | Hover style |

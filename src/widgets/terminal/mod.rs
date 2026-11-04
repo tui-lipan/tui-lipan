@@ -138,6 +138,7 @@ impl Default for Terminal {
             pointer_shape: None,
             cursor_blinking: true,
             cursor_blinking_override: None,
+            cursor_position_override: None,
             caret_color: None,
             color_lines: None,
             color_cache_key: 0,
@@ -215,9 +216,27 @@ impl Terminal {
     }
 
     /// Set cursor row/column in the visible viewport.
+    ///
+    /// A live screen reports its own cursor and replaces this; use
+    /// [`Self::cursor_override`] to place the caret over one.
     pub fn cursor_position(mut self, row: u16, col: u16) -> Self {
         self.cursor_row = row;
         self.cursor_col = col;
+        self
+    }
+
+    /// Put the caret at `(row, col)` in the visible viewport, including on live screens, and show
+    /// it there even while the child program hides its own cursor, a selection is active, or the
+    /// view is scrolled back, all of which hide the child's caret.
+    ///
+    /// For a cursor the app drives over the child's output, such as a copy-mode cursor.
+    /// [`Self::show_cursor`]`(false)` still hides it. `None` (the default) follows the screen.
+    pub fn cursor_override(mut self, position: Option<(u16, u16)>) -> Self {
+        self.cursor_position_override = position;
+        if let Some((row, col)) = position {
+            self.cursor_row = row;
+            self.cursor_col = col;
+        }
         self
     }
 

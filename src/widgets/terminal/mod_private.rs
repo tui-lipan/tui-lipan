@@ -28,6 +28,7 @@ pub struct Terminal {
     pub(crate) pointer_shape: Option<crate::style::PointerShape>,
     pub(crate) cursor_blinking: bool,
     pub(crate) cursor_blinking_override: Option<bool>,
+    pub(crate) cursor_position_override: Option<(u16, u16)>,
     pub(crate) caret_color: Option<Color>,
     pub(crate) color_lines: Option<Arc<[Vec<Span>]>>,
     pub(crate) color_cache_key: u64,

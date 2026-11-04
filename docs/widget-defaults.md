@@ -1324,6 +1324,7 @@ Source: `src/widgets/terminal/mod.rs` (`Terminal`).
 | `pointer_shape` | `None` |
 | `cursor_blinking` | `true` |
 | `cursor_blinking_override` | `None` |
+| `cursor_position_override` | `None` |
 | `caret_color` | `None` |
 | `color_lines` | `None` |
 | `color_cache_key` | `0` |

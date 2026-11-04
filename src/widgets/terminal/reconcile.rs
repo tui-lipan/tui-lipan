@@ -172,11 +172,19 @@ pub(crate) fn reconcile_terminal(
         wrapped_rows,
         hyperlinks,
         link_hover: old_link_hover,
-        cursor_row: live.as_ref().map_or(terminal.cursor_row, |s| s.cursor_row),
-        cursor_col: live.as_ref().map_or(terminal.cursor_col, |s| s.cursor_col),
+        cursor_row: match (terminal.cursor_position_override, live.as_ref()) {
+            (Some((row, _)), _) => row,
+            (None, live) => live.map_or(terminal.cursor_row, |s| s.cursor_row),
+        },
+        cursor_col: match (terminal.cursor_position_override, live.as_ref()) {
+            (Some((_, col)), _) => col,
+            (None, live) => live.map_or(terminal.cursor_col, |s| s.cursor_col),
+        },
         // A live screen reports what the child program wants; `show_cursor` is what the app allows.
+        // An app-placed caret shows whatever the child wants.
         cursor_visible: live.as_ref().map_or(terminal.show_cursor, |s| {
-            s.cursor_visible && terminal.show_cursor
+            (s.cursor_visible || terminal.cursor_position_override.is_some())
+                && terminal.show_cursor
         }),
         pointer_shape: live
             .as_ref()
@@ -189,6 +197,7 @@ pub(crate) fn reconcile_terminal(
                 .map_or(terminal.cursor_blinking, |s| s.cursor_blinking)
         }),
         cursor_blinking_override: terminal.cursor_blinking_override,
+        cursor_position_override: terminal.cursor_position_override,
         caret_color: terminal.caret_color,
         selection,
         selection_controlled: terminal.selection_controlled,
