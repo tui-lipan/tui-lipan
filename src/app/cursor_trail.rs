@@ -155,9 +155,24 @@ struct ActiveTrail {
     started: Instant,
     duration: Duration,
     color: Option<Color>,
+    /// Set while a jump inside one widget waits for the caret to come to rest before it draws.
+    landing: Option<Landing>,
+}
+
+/// A jump whose trail is not drawn yet, because the caret may still be on its way.
+#[derive(Clone, Copy, Debug)]
+struct Landing {
+    since: Instant,
+    last_move: Instant,
 }
 
 impl ActiveTrail {
+    /// Stop waiting: the trail draws from now, over its whole duration.
+    fn land(&mut self, now: Instant) {
+        self.landing = None;
+        self.started = now;
+    }
+
     fn progress(&self, now: Instant) -> f32 {
         let elapsed = now.saturating_duration_since(self.started);
         (elapsed.as_secs_f32() / self.duration.as_secs_f32()).clamp(0.0, 1.0)
@@ -223,30 +238,49 @@ impl CursorTrailState {
             self.active = None;
             return;
         };
-        let settling = self
-            .active
-            .is_some_and(|active| now.saturating_duration_since(active.started) < SETTLE);
-        if settling {
-            // A caret that lands in steps (a shell's newline, then its prompt, in two writes)
-            // gets one straight trail from where it started to where it settles, not a bend
-            // through every cell it stopped at for a frame.
-            if let Some(active) = self.active.as_mut() {
-                active.to = position;
+        if let Some(active) = self.active.as_mut() {
+            if let Some(landing) = active.landing.as_mut() {
+                // A caret that lands in steps (a shell's newline, then its prompt, in separate
+                // writes) is followed to where it comes to rest, and the trail is drawn once,
+                // straight from where it started: never through a cell it held for a frame.
+                if active.to != position {
+                    active.to = position;
+                    landing.last_move = now;
+                }
+                if last.owner != owner {
+                    active.land(now);
+                    self.last_frame = None;
+                }
+                return;
             }
-        } else if config.triggers(last, caret) {
+            if now.saturating_duration_since(active.started) < SETTLE {
+                // A drawn trail that the caret leaves again at once bends with it rather than
+                // starting over.
+                active.to = position;
+                return;
+            }
+        }
+        if config.triggers(last, caret) {
             // A jump during a running trail starts the new one from the old one's tail, so the
             // smear never snaps back to a cell the eye has already left.
             let from = self
                 .active
-                .filter(|active| active.progress(now) < 1.0)
+                .filter(|active| active.landing.is_none() && active.progress(now) < 1.0)
                 .map(|active| active.tail(active.progress(now)))
                 .unwrap_or((f32::from(last.position.x), f32::from(last.position.y)));
+            // A focus change lands in one step and draws at once; a jump inside one widget may be
+            // the first of several writes, so it waits for the caret to settle.
+            let landing = (last.owner == owner).then_some(Landing {
+                since: now,
+                last_move: now,
+            });
             self.active = Some(ActiveTrail {
                 from,
                 to: position,
                 started: now,
                 duration: config.duration,
                 color: config.color.or(caret_color),
+                landing,
             });
             self.last_frame = None;
         } else if let Some(active) = self.active.as_mut() {
@@ -264,6 +298,22 @@ impl CursorTrailState {
     ) -> CursorTrailTick {
         if config.is_none_or(|config| !config.is_visible()) {
             self.active = None;
+        }
+        if let Some(active) = self.active.as_mut()
+            && let Some(landing) = active.landing
+        {
+            let still = now.saturating_duration_since(landing.last_move);
+            let waited = now.saturating_duration_since(landing.since);
+            if still >= LANDING_QUIET || waited >= LANDING_MAX {
+                active.land(now);
+                self.last_frame = None;
+            } else {
+                return CursorTrailTick {
+                    // A trail an earlier frame painted still has to be cleared meanwhile.
+                    needs_paint: self.painted.is_some(),
+                    next_due: Some((LANDING_QUIET - still).min(LANDING_MAX - waited)),
+                };
+            }
         }
         if self
             .active
@@ -292,12 +342,12 @@ impl CursorTrailState {
 
     /// Whether this frame must be a full draw: a trail is running, or the host still shows one.
     pub(crate) fn requires_full_draw(&self) -> bool {
-        self.active.is_some() || self.painted.is_some()
+        self.active.is_some_and(|active| active.landing.is_none()) || self.painted.is_some()
     }
 
     /// The trail to paint over a full draw at `now`, if one is running.
     pub(crate) fn frame(&self, now: Instant) -> Option<CursorTrailFrame> {
-        let active = self.active?;
+        let active = self.active.filter(|active| active.landing.is_none())?;
         let progress = active.progress(now);
         if progress >= 1.0 {
             return None;
@@ -324,9 +374,13 @@ impl CursorTrailState {
     }
 }
 
-/// How soon after a trail starts a further move retargets it instead of starting another: a few
-/// frames, enough for a program that moves the caret in more than one write.
+/// How soon after a drawn trail starts a further move retargets it instead of starting another.
 const SETTLE: Duration = Duration::from_millis(50);
+/// How long the caret must hold still after a jump inside one widget before its trail draws:
+/// longer than the gap between a shell's newline and its prompt.
+const LANDING_QUIET: Duration = Duration::from_millis(50);
+/// The longest a jump waits for a caret that keeps moving before it draws anyway.
+const LANDING_MAX: Duration = Duration::from_millis(200);
 
 /// Strongest tint, right behind the caret.
 const HEAD_ALPHA: f32 = 0.8;
@@ -470,38 +524,80 @@ mod tests {
         state.observe(jump, Some(Position::new(7, 1)), node(1), None, start);
         assert!(state.frame(start).is_none(), "7 columns and 1 row");
         state.observe(jump, Some(Position::new(7, 3)), node(1), None, start);
-        assert!(state.frame(start).is_some(), "2 rows");
+        let interval = Duration::from_millis(16);
+        state.tick(jump, interval, start + LANDING_QUIET);
+        assert!(state.frame(start + LANDING_QUIET).is_some(), "2 rows");
     }
 
     #[test]
     fn a_caret_that_lands_in_steps_gets_one_straight_trail() {
         let start = Instant::now();
+        let interval = Duration::from_millis(16);
         let jump = Some(CursorTrail::new().trigger(CursorTrailTrigger::jump()));
         let mut state = CursorTrailState::default();
-        // A command typed out to column 40, then Enter: the newline lands the caret at column 0,
-        // and the prompt arrives a frame later and moves it to column 25.
+        // A command typed out to column 40, then Enter: the newline lands the caret at column 0
+        // of a blank line, and the prompt arrives two frames later, two rows down at column 40.
         state.observe(jump, Some(Position::new(40, 3)), node(1), None, start);
         state.observe(jump, Some(Position::new(0, 4)), node(1), None, start);
-        let frame = start + Duration::from_millis(16);
-        state.observe(jump, Some(Position::new(25, 4)), node(1), None, frame);
-        let trail = state.frame(frame).expect("trail");
-        assert_eq!(trail.head, Position::new(25, 4));
-        assert!(
-            trail.tail.0 > 25.0,
-            "the tail runs from column 40, not back through column 0: {:?}",
-            trail.tail
+        let prompt = start + Duration::from_millis(33);
+        for at in [start, start + interval] {
+            assert!(!state.tick(jump, interval, at).needs_paint);
+            assert!(
+                state.frame(at).is_none(),
+                "nothing draws while the caret may still move"
+            );
+            assert!(
+                !state.requires_full_draw(),
+                "the fast paths keep running meanwhile"
+            );
+        }
+        state.observe(jump, Some(Position::new(40, 6)), node(1), None, prompt);
+        let tick = state.tick(jump, interval, prompt);
+        assert!(!tick.needs_paint);
+        assert_eq!(
+            tick.next_due,
+            Some(LANDING_QUIET),
+            "waits for the caret to hold still"
         );
 
-        // Once the trail has settled, a further jump starts a trail of its own from its tail.
-        let later = start + SETTLE + Duration::from_millis(10);
-        state.observe(jump, Some(Position::new(25, 9)), node(1), None, later);
-        let trail = state.frame(later).expect("trail");
-        assert_eq!(trail.head, Position::new(25, 9));
-        assert!(
-            trail.tail.1 < 5.0,
-            "starts where the last trail was: {:?}",
-            trail.tail
+        let settled = prompt + LANDING_QUIET;
+        assert!(state.tick(jump, interval, settled).needs_paint);
+        let trail = state
+            .frame(settled)
+            .expect("the trail draws once the caret settles");
+        assert_eq!(trail.head, Position::new(40, 6));
+        assert_eq!(
+            trail.tail,
+            (40.0, 3.0),
+            "straight from where the caret was, at full length"
         );
+
+        // A caret that never holds still draws after the longest wait, to where it is then.
+        let mut state = CursorTrailState::default();
+        state.observe(jump, Some(Position::new(0, 0)), node(1), None, start);
+        let mut at = start;
+        let mut column = 10;
+        while state.frame(at).is_none() {
+            assert!(at < start + LANDING_MAX * 2, "never drew");
+            at += Duration::from_millis(20);
+            column += 1;
+            state.observe(jump, Some(Position::new(column, 9)), node(1), None, at);
+            state.tick(jump, interval, at);
+        }
+        let first_jump = start + Duration::from_millis(20);
+        assert!(at >= first_jump + LANDING_MAX && at < first_jump + LANDING_MAX + interval * 2);
+        let trail = state.frame(at).expect("drawn");
+        assert_eq!(trail.tail, (0.0, 0.0), "from where the caret first was");
+        assert_eq!(trail.head, Position::new(column, 9));
+    }
+
+    #[test]
+    fn a_focus_change_draws_at_once() {
+        let start = Instant::now();
+        let mut state = CursorTrailState::default();
+        state.observe(trail(), Some(Position::new(1, 1)), node(1), None, start);
+        state.observe(trail(), Some(Position::new(30, 9)), node(2), None, start);
+        assert!(state.frame(start).is_some());
     }
 
     #[test]
