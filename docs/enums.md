@@ -306,11 +306,11 @@ Behavior when a key fails to complete a pending app command chord.
 
 ### `CopyModeAction`
 
-Result of `TerminalCopyMode::handle_key`:
+Result of `TerminalCopyMode::handle_key` and `TerminalCopyMode::handle_pointer`:
 
 | Variant | Meaning |
 |---------|---------|
-| `Ignored` | No copy-mode binding handled the key, or a motion was already at its boundary |
+| `Ignored` | No copy-mode binding handled the key, a motion was already at its boundary, or a pointer event changed nothing |
 | `Moved` | Cursor or scrollback position changed without an active selection |
 | `SelectionChanged` | Selection anchor or anchored cursor position changed |
 | `RequestCopy` | Copy the current selection |

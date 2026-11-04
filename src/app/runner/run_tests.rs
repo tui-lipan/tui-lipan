@@ -7945,6 +7945,271 @@ fn ordinary_terminal_clicks_forward_after_the_focus_gesture() {
 }
 
 #[cfg(feature = "terminal")]
+struct ControlledTerminalSelectionSmoke {
+    selection: crate::widgets::TerminalSelection,
+    events: Rc<RefCell<Vec<crate::widgets::TerminalSelectionEvent>>>,
+}
+
+#[cfg(feature = "terminal")]
+impl Component for ControlledTerminalSelectionSmoke {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        let events = self.events.clone();
+        Terminal::new()
+            .content("one two three four")
+            .focusable(true)
+            .border(false)
+            .padding(0)
+            .scrollbar(false)
+            .width(Length::Flex(1))
+            .height(Length::Flex(1))
+            .selection(Some(self.selection))
+            .on_selection(Callback::new(
+                move |event: crate::widgets::TerminalSelectionEvent| {
+                    events.borrow_mut().push(event);
+                },
+            ))
+            .into()
+    }
+}
+
+/// A controlled selection is whatever the parent last rendered (a copy-mode cursor cell, say),
+/// so a drag must grow from where the button went down and report the pointer on each event.
+#[cfg(feature = "terminal")]
+#[test]
+fn controlled_terminal_drag_anchors_at_the_press_and_reports_the_pointer() {
+    use crate::widgets::{TerminalPos, TerminalSelection};
+
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let rendered = TerminalSelection {
+        anchor: TerminalPos { line: 0, col: 0 },
+        cursor: TerminalPos { line: 0, col: 2 },
+    };
+    let component = || ControlledTerminalSelectionSmoke {
+        selection: rendered,
+        events: events.clone(),
+    };
+    let mut runner = AppRunner::new(App::new().mouse(false), component(), ());
+    init_runner(
+        &mut runner,
+        component(),
+        Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 3,
+        },
+    );
+
+    for (x, kind) in [
+        (8, MouseKind::Down(MouseButton::Left)),
+        (4, MouseKind::Drag(MouseButton::Left)),
+        (4, MouseKind::Up(MouseButton::Left)),
+    ] {
+        runner.dispatch_mouse(MouseEvent {
+            x,
+            y: 0,
+            kind,
+            mods: KeyMods::NONE,
+        });
+    }
+
+    let events = events.borrow();
+    let press = events.first().expect("press event");
+    assert_eq!(press.selection, None);
+    assert_eq!(press.pointer, Some(TerminalPos { line: 0, col: 8 }));
+    let drag = events.last().expect("drag event");
+    assert_eq!(
+        drag.selection,
+        Some(TerminalSelection {
+            anchor: TerminalPos { line: 0, col: 8 },
+            cursor: TerminalPos { line: 0, col: 4 },
+        }),
+        "events: {events:?}"
+    );
+    assert_eq!(drag.pointer, Some(TerminalPos { line: 0, col: 4 }));
+}
+
+/// A controlled terminal rendering a copy-mode cursor cell at column 8, as `[8, 9)`.
+#[cfg(feature = "terminal")]
+fn copy_cursor_runner(
+    app: App,
+    events: &Rc<RefCell<Vec<crate::widgets::TerminalSelectionEvent>>>,
+) -> AppRunner<ControlledTerminalSelectionSmoke> {
+    use crate::widgets::{TerminalPos, TerminalSelection};
+
+    let component = || ControlledTerminalSelectionSmoke {
+        selection: TerminalSelection {
+            anchor: TerminalPos { line: 0, col: 8 },
+            cursor: TerminalPos { line: 0, col: 9 },
+        },
+        events: events.clone(),
+    };
+    let mut runner = AppRunner::new(app, component(), ());
+    init_runner(
+        &mut runner,
+        component(),
+        Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 3,
+        },
+    );
+    runner
+}
+
+#[cfg(feature = "terminal")]
+fn left_mouse_at(
+    runner: &mut AppRunner<ControlledTerminalSelectionSmoke>,
+    x: u16,
+    kind: MouseKind,
+) {
+    runner.dispatch_mouse(MouseEvent {
+        x,
+        y: 0,
+        kind,
+        mods: KeyMods::NONE,
+    });
+}
+
+/// The rendered cursor cell is parent state, not a selection the mouse made: a click that only
+/// moves the cursor must not copy it, while a real drag still does.
+#[cfg(feature = "terminal")]
+#[test]
+fn controlled_terminal_click_does_not_copy_the_rendered_selection() {
+    let writes = Rc::new(RefCell::new(Vec::new()));
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let app = App::new()
+        .mouse(false)
+        .clipboard_provider(RecordingClipboardProvider {
+            writes: writes.clone(),
+        });
+    let mut runner = copy_cursor_runner(app, &events);
+    runner.core.ctx.set_clipboard_config(ClipboardConfig {
+        copy_on_mouse_select: crate::CopyOnSelect::Clipboard,
+        ..ClipboardConfig::default()
+    });
+    runner.sync_clipboard_config();
+
+    left_mouse_at(&mut runner, 8, MouseKind::Down(MouseButton::Left));
+    left_mouse_at(&mut runner, 8, MouseKind::Up(MouseButton::Left));
+    assert!(
+        writes.borrow().is_empty(),
+        "a click copied {:?}",
+        writes.borrow()
+    );
+
+    left_mouse_at(&mut runner, 8, MouseKind::Down(MouseButton::Left));
+    left_mouse_at(&mut runner, 12, MouseKind::Drag(MouseButton::Left));
+    left_mouse_at(&mut runner, 12, MouseKind::Up(MouseButton::Left));
+    // The parent still renders `[8, 9)` ("t"); release copies what the drag selected.
+    assert_eq!(writes.borrow().as_slice(), ["thre"]);
+
+    // A double-click selects the word under the pointer and copies it the same way.
+    writes.borrow_mut().clear();
+    for kind in [
+        MouseKind::Down(MouseButton::Left),
+        MouseKind::Up(MouseButton::Left),
+    ] {
+        left_mouse_at(&mut runner, 10, kind);
+    }
+    writes.borrow_mut().clear();
+    for kind in [
+        MouseKind::Down(MouseButton::Left),
+        MouseKind::Up(MouseButton::Left),
+    ] {
+        left_mouse_at(&mut runner, 10, kind);
+    }
+    assert_eq!(writes.borrow().as_slice(), ["three"]);
+}
+
+/// The copy flash follows the copied range, not the parent's `[8, 9)`, and a ranged flash leaves
+/// that unrelated parent selection alone even when copies clear their selection.
+#[cfg(feature = "terminal")]
+#[test]
+fn controlled_terminal_drag_flashes_the_copied_range() {
+    use crate::utils::{GridPos, GridSelection};
+
+    for clear_selection in [false, true] {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let app = App::new()
+            .mouse(false)
+            .clipboard_provider(RecordingClipboardProvider {
+                writes: Rc::new(RefCell::new(Vec::new())),
+            });
+        let mut runner = copy_cursor_runner(app, &events);
+        runner.core.ctx.set_clipboard_config(ClipboardConfig {
+            copy_on_mouse_select: crate::CopyOnSelect::Clipboard,
+            copy_feedback: crate::clipboard::CopyFeedback::new(
+                crate::clipboard::CopyFeedbackEffect::Pulse,
+            )
+            .on_select(true)
+            .clear_selection(clear_selection),
+            ..ClipboardConfig::default()
+        });
+        runner.sync_clipboard_config();
+        let terminal = runner
+            .core
+            .tree
+            .iter()
+            .find(|node| matches!(node.kind, NodeKind::Terminal(_)))
+            .map(|node| node.id)
+            .expect("terminal node");
+
+        left_mouse_at(&mut runner, 8, MouseKind::Down(MouseButton::Left));
+        left_mouse_at(&mut runner, 12, MouseKind::Drag(MouseButton::Left));
+        left_mouse_at(&mut runner, 12, MouseKind::Up(MouseButton::Left));
+
+        let range = runner
+            .copy_feedback
+            .active_range(terminal)
+            .unwrap_or_else(|| panic!("a ranged flash (clear_selection: {clear_selection})"));
+        assert_eq!(
+            range.selection,
+            GridSelection {
+                anchor: GridPos { row: 0, col: 8 },
+                cursor: GridPos { row: 0, col: 12 },
+            },
+            "clear_selection: {clear_selection}"
+        );
+    }
+}
+
+/// Dragging one cell right from the cursor proposes exactly the cell the parent already renders;
+/// that is still a new selection and must be reported.
+#[cfg(feature = "terminal")]
+#[test]
+fn controlled_terminal_reports_a_drag_matching_the_rendered_selection() {
+    use crate::widgets::{TerminalPos, TerminalSelection};
+
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let mut runner = copy_cursor_runner(App::new().mouse(false), &events);
+
+    left_mouse_at(&mut runner, 8, MouseKind::Down(MouseButton::Left));
+    left_mouse_at(&mut runner, 9, MouseKind::Drag(MouseButton::Left));
+
+    let events = events.borrow();
+    assert_eq!(
+        events.last().and_then(|event| event.selection),
+        Some(TerminalSelection {
+            anchor: TerminalPos { line: 0, col: 8 },
+            cursor: TerminalPos { line: 0, col: 9 },
+        }),
+        "events: {events:?}"
+    );
+}
+
+#[cfg(feature = "terminal")]
 #[test]
 fn dragging_cancels_terminal_link_activation_without_leaking_to_the_child() {
     let activated = Rc::new(RefCell::new(Vec::new()));

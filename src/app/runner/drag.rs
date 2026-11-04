@@ -8,7 +8,8 @@ use crate::widgets::internal::{ScrollAction, apply_scroll_action, scroll_metrics
 
 #[cfg(feature = "terminal")]
 use crate::widgets::internal::{
-    apply_terminal_selection_input, terminal_mouse_content_rect, terminal_node_selection_text,
+    apply_terminal_selection_input, rebase_selection, terminal_mouse_content_rect,
+    terminal_node_selection_text,
 };
 use crate::widgets::{
     DocumentSelectEvent, DragCancelEvent, DragOverEvent, DraggableTabTransferEvent, InputEvent,
@@ -1521,7 +1522,15 @@ impl<C: Component> AppRunner<C> {
             return false;
         }
 
-        let (content_rect, selection, on_selection, scrollback_offset, total_scrollback_rows) = {
+        let (
+            content_rect,
+            selection,
+            selection_controlled,
+            lineage,
+            on_selection,
+            scrollback_offset,
+            total_scrollback_rows,
+        ) = {
             let node = self.core.tree.node(drag.id);
             let NodeKind::Terminal(term) = &node.kind else {
                 crate::debug::internal_log!("[terminal_drag] not a terminal node");
@@ -1536,6 +1545,8 @@ impl<C: Component> AppRunner<C> {
             (
                 content_rect,
                 term.selection,
+                term.selection_controlled,
+                term.lineage,
                 term.on_selection.clone(),
                 term.scrollback_offset,
                 term.total_scrollback_rows,
@@ -1580,7 +1591,23 @@ impl<C: Component> AppRunner<C> {
             grid_row
         );
 
-        let anchor = selection.as_ref().map_or(drag.anchor, |sel| sel.anchor);
+        // An uncontrolled selection is the widget's own, kept rebased and anchored where the press
+        // (or a double-click's word) put it. A controlled one is whatever the parent rendered last,
+        // which need not be in anchor order, so the press itself stays the anchor.
+        let anchor = if selection_controlled {
+            let Some(anchor) = rebase_selection(
+                Some(TerminalSelection::new(drag.anchor)),
+                drag.lineage,
+                lineage,
+            )
+            .map(|sel| sel.anchor) else {
+                crate::debug::internal_log!("[terminal_drag] anchor left retained history");
+                return false;
+            };
+            anchor
+        } else {
+            selection.as_ref().map_or(drag.anchor, |sel| sel.anchor)
+        };
         let next = TerminalSelection {
             anchor,
             cursor: TerminalPos {
@@ -1589,9 +1616,22 @@ impl<C: Component> AppRunner<C> {
             },
         };
 
-        if selection.as_ref() == Some(&next) {
+        let unchanged = if selection_controlled {
+            drag.proposed == Some(next)
+        } else {
+            selection.as_ref() == Some(&next)
+        };
+        if unchanged {
             crate::debug::internal_log!("[terminal_drag] selection unchanged");
             return false;
+        }
+        // `next` is measured against the terminal's current lineage, so the drag moves to it.
+        if let ActiveDrag::Terminal(active) = &mut self.drag.active
+            && active.id == drag.id
+        {
+            active.anchor = anchor;
+            active.lineage = lineage;
+            active.proposed = Some(next);
         }
 
         crate::debug::internal_log!(
@@ -1617,6 +1657,7 @@ impl<C: Component> AppRunner<C> {
             cb.emit(crate::widgets::TerminalSelectionEvent {
                 selection: Some(next),
                 text: Some(text),
+                pointer: Some(next.cursor),
             });
         }
         true

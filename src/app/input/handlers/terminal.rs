@@ -375,6 +375,7 @@ pub(crate) fn forward_key(tree: &mut NodeTree, id: NodeId, key: KeyEvent) -> Ter
             cb.emit(crate::widgets::TerminalSelectionEvent {
                 selection: None,
                 text: None,
+                pointer: None,
             });
         }
     }

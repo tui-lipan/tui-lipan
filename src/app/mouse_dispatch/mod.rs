@@ -170,6 +170,14 @@ pub(crate) trait MouseDispatchCtx<C: Component> {
         false
     }
     fn copy_selection_on_release(&mut self, _id: crate::core::node::NodeId) {}
+    #[cfg(feature = "terminal")]
+    fn copy_terminal_selection_on_release(
+        &mut self,
+        _id: crate::core::node::NodeId,
+        _selection: crate::widgets::TerminalSelection,
+        _lineage: crate::widgets::ScrollbackLineage,
+    ) {
+    }
 
     fn selection_owner_for_node(&self, start: crate::core::node::NodeId) -> Option<SelectionOwner>;
     fn clear_selectable_widget_selections(&mut self, keep: Option<SelectionOwner>) -> bool;
@@ -653,6 +661,16 @@ impl<C: Component> MouseDispatchCtx<C> for AppRunner<C> {
         scope: crate::app::input::keyboard::SelectionScope,
     ) -> bool {
         self.copy_active_selection(target, intent, scope)
+    }
+
+    #[cfg(feature = "terminal")]
+    fn copy_terminal_selection_on_release(
+        &mut self,
+        id: crate::core::node::NodeId,
+        selection: crate::widgets::TerminalSelection,
+        lineage: crate::widgets::ScrollbackLineage,
+    ) {
+        self.copy_terminal_drag_selection(id, selection, lineage);
     }
 
     fn copy_selection_on_release(&mut self, id: crate::core::node::NodeId) {

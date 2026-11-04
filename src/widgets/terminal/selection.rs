@@ -20,13 +20,17 @@ pub struct TerminalSelection {
 }
 
 /// Terminal selection change payload.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct TerminalSelectionEvent {
     /// The new selection, if any.
     pub selection: Option<TerminalSelection>,
     /// Selected text extracted for convenience.
     pub text: Option<String>,
+    /// The cell under the pointer, in absolute scrollback coordinates, when a mouse press or
+    /// drag produced this event. It is `None` when the selection changed without the pointer,
+    /// such as a key clearing it. A drag below the last row reports one column past the right edge.
+    pub pointer: Option<TerminalPos>,
 }
 
 /// Scrollback lineage counters used to rebase or invalidate absolute selections.

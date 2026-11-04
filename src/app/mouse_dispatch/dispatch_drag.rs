@@ -589,7 +589,7 @@ pub(crate) fn transition_drag_release<C: Component, T: MouseDispatchCtx<C>>(
     let mut drag_consumed_up = false;
 
     if is_up {
-        let selection_id = active_selection_drag_id(&ctx.active_drag());
+        let release_copy = release_copy(&ctx.active_drag());
         if let Some(result) = ctx.handle_drag_release(x, y) {
             drag_dirty = result;
             if ctx.mouse_state().drag_threshold_exceeded {
@@ -598,21 +598,46 @@ pub(crate) fn transition_drag_release<C: Component, T: MouseDispatchCtx<C>>(
         }
         ctx.mouse_state().pending_drag_source = None;
         ctx.drag_state().autoscroll_layout_dirty = false;
-        if let Some(id) = selection_id {
-            ctx.copy_selection_on_release(id);
+        match release_copy {
+            Some(ReleaseCopy::Node(id)) => ctx.copy_selection_on_release(id),
+            #[cfg(feature = "terminal")]
+            Some(ReleaseCopy::Terminal(drag)) => {
+                if let Some(selection) = drag.proposed {
+                    ctx.copy_terminal_selection_on_release(drag.id, selection, drag.lineage);
+                }
+            }
+            None => {}
         }
     }
 
     (drag_dirty, drag_consumed_up)
 }
 
-fn active_selection_drag_id(active: &crate::app::interaction_state::ActiveDrag) -> Option<NodeId> {
+/// What a released selection drag copies.
+enum ReleaseCopy {
+    /// The node's own selection.
+    Node(NodeId),
+    /// The selection a terminal drag made. A controlled terminal holds its parent's selection, not
+    /// the mouse's, so the drag carries what it selected.
+    #[cfg(feature = "terminal")]
+    Terminal(crate::app::input::drag::TerminalDrag),
+}
+
+fn release_copy(active: &crate::app::interaction_state::ActiveDrag) -> Option<ReleaseCopy> {
     match active {
-        crate::app::interaction_state::ActiveDrag::TextArea(drag) => Some(drag.id),
-        crate::app::interaction_state::ActiveDrag::DocumentView(drag) => Some(drag.id),
-        crate::app::interaction_state::ActiveDrag::Input(drag) => Some(drag.id),
+        crate::app::interaction_state::ActiveDrag::TextArea(drag) => {
+            Some(ReleaseCopy::Node(drag.id))
+        }
+        crate::app::interaction_state::ActiveDrag::DocumentView(drag) => {
+            Some(ReleaseCopy::Node(drag.id))
+        }
+        crate::app::interaction_state::ActiveDrag::Input(drag) => Some(ReleaseCopy::Node(drag.id)),
+        // A click that only moves a controlled terminal's cursor made no selection to copy.
         #[cfg(feature = "terminal")]
-        crate::app::interaction_state::ActiveDrag::Terminal(drag) => Some(drag.id),
+        crate::app::interaction_state::ActiveDrag::Terminal(drag) => drag
+            .proposed
+            .is_some_and(|selection| !selection.is_empty())
+            .then_some(ReleaseCopy::Terminal(*drag)),
         _ => None,
     }
 }
