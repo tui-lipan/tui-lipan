@@ -205,8 +205,8 @@ pub struct CursorTrail {
     pub opacity: f32,
     /// How much the smear fades toward its tail, from 0 (evenly) to 1 (to nothing).
     pub taper: f32,
-    /// No part of the smear trails the caret by more than this many cells. Zero or less leaves it
-    /// unbounded.
+    /// No part of the smear trails the caret by more than this many cells, from the very first
+    /// frame. Zero or less (the default) leaves it unbounded.
     pub max_length: f32,
     /// Sparks thrown off the smear, or `None` (the default) for none.
     pub particles: Option<CursorTrailParticles>,
@@ -218,8 +218,9 @@ pub struct CursorTrail {
 impl CursorTrail {
     /// The duration of [`CursorTrail::glide`].
     pub const DEFAULT_DURATION: Duration = Duration::from_millis(160);
-    /// The default [`Self::max_length`], in cells.
-    pub const DEFAULT_MAX_LENGTH: f32 = 25.0;
+    /// The default [`Self::max_length`]: unbounded, so a long jump's streak starts at the cell
+    /// the caret left and shrinks smoothly, rather than having its tail pulled forward.
+    pub const DEFAULT_MAX_LENGTH: f32 = 0.0;
 
     /// A solid, spring-driven smear on focus changes, in the caret's own color.
     pub const fn new() -> Self {
@@ -427,6 +428,9 @@ struct Landing {
 #[derive(Clone, Debug)]
 struct Running {
     smear: Smear,
+    /// The corners the last drawn frame showed. The next frame draws everything swept since,
+    /// however many physics steps a slow frame let pass, so the streak never breaks.
+    drawn: Option<Corners>,
     color: Option<Color>,
     /// The smear draws the caret itself, so the host caret stays hidden.
     hides: bool,
@@ -458,6 +462,8 @@ pub(crate) struct CursorTrailFrame {
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct SmearShape {
     hull: Hull,
+    /// The smear's corners as this frame shows them.
+    shown: Corners,
     head: Vec2,
     tail: Vec2,
     target: Position,
@@ -527,7 +533,7 @@ impl CursorTrailState {
                 landing.last_move = now;
             }
             if last.owner != owner {
-                self.launch(now);
+                self.launch(now, config.max_length);
             }
             return;
         }
@@ -543,15 +549,16 @@ impl CursorTrailState {
             // A focus change lands in one step and starts at once; a jump inside one widget may be
             // the first of several writes, so it waits for the caret to settle.
             if last.owner != owner {
-                self.launch(now);
+                self.launch(now, config.max_length);
             }
         }
     }
 
-    fn launch(&mut self, now: Instant) {
+    fn launch(&mut self, now: Instant, max_length: f32) {
         if let Some(landing) = self.landing.take() {
             self.running = Some(Running {
-                smear: Smear::new(landing.from, landing.to),
+                smear: Smear::new(landing.from, landing.to, max_length),
+                drawn: None,
                 color: landing.color,
                 hides: landing.hold,
             });
@@ -577,7 +584,7 @@ impl CursorTrailState {
             let still = now.saturating_duration_since(landing.last_move);
             let waited = now.saturating_duration_since(landing.since);
             if still >= LANDING_QUIET || waited >= LANDING_MAX {
-                self.launch(now);
+                self.launch(now, config.max_length);
             }
         }
         let dt = self
@@ -595,7 +602,7 @@ impl CursorTrailState {
                     let travelled = (center - previous).length();
                     previous = center;
                     if let Some(particles) = particles.as_ref() {
-                        let shape = shape_of(smear);
+                        let shape = shape_of(smear, None);
                         sparks.emit(
                             particles,
                             shape.tail,
@@ -684,7 +691,7 @@ impl CursorTrailState {
         let smear = self
             .running
             .as_ref()
-            .map(|running| shape_of(&running.smear))
+            .map(|running| shape_of(&running.smear, running.drawn))
             .or_else(|| {
                 self.landing
                     .filter(|landing| landing.hold)
@@ -725,6 +732,11 @@ impl CursorTrailState {
         if painted.is_some() {
             self.last_frame = Some(now);
         }
+        if let Some(running) = self.running.as_mut()
+            && let Some(shape) = painted.as_ref().and_then(|frame| frame.smear)
+        {
+            running.drawn = Some(shape.shown);
+        }
         self.painted = painted;
     }
 
@@ -739,14 +751,21 @@ fn held_shape(corners: &Corners) -> SmearShape {
     let center = motion::center(corners);
     SmearShape {
         hull: Hull::of(corners),
+        shown: *corners,
         head: center,
         tail: center,
         target: Position::new(corners[0].x.max(0.0) as u16, corners[0].y.max(0.0) as u16),
     }
 }
 
-fn shape_of(smear: &Smear) -> SmearShape {
+fn shape_of(smear: &Smear, drawn: Option<Corners>) -> SmearShape {
     let shown = smear.shown();
+    // Everything between what the last frame showed and what this one shows; before the first
+    // frame, the last two physics steps.
+    let swept: Vec<Vec2> = match drawn {
+        Some(drawn) => drawn.iter().chain(shown.iter()).copied().collect(),
+        None => smear.swept().to_vec(),
+    };
     let target = smear.target();
     let head = target
         .iter()
@@ -759,7 +778,8 @@ fn shape_of(smear: &Smear) -> SmearShape {
         .max_by(|a, b| (*a - head).length().total_cmp(&(*b - head).length()))
         .unwrap_or(head);
     SmearShape {
-        hull: Hull::of(&smear.swept()),
+        hull: Hull::of(&swept),
+        shown,
         head,
         tail,
         target: Position::new(target[0].x.max(0.0) as u16, target[0].y.max(0.0) as u16),
@@ -1034,6 +1054,9 @@ mod tests {
 
     /// A fast smear reads as one streak: every frame overlaps the one before, and the first one
     /// that moves reaches back to where the caret was.
+    /// A fast smear reads as one streak: every frame overlaps the one before, and the first one
+    /// that moves reaches back to where the caret was. That holds at a steady 60 frames a second
+    /// and when slow frames let several physics steps pass between two of them.
     #[test]
     fn a_long_jump_is_one_unbroken_streak_over_time() {
         fn bounds(frame: &CursorTrailFrame) -> (f32, f32, f32, f32) {
@@ -1046,31 +1069,44 @@ mod tests {
             )
         }
         for motion in [CursorTrailMotion::default(), CursorTrail::glide()] {
-            let config = trail().map(|trail| trail.motion(motion));
-            let start = Instant::now();
-            let mut state = CursorTrailState::default();
-            see(&mut state, config, 2, 1, 1, start);
-            see(&mut state, config, 70, 20, 2, start);
-            let frames: Vec<_> = play(&mut state, config, start)
-                .into_iter()
-                .filter(|frame| frame.smear.is_some())
-                .collect();
-            assert!(frames.len() > 2, "{motion:?}");
-            let moving = frames
-                .iter()
-                .find(|frame| bounds(frame).2 > 4.0)
-                .expect("a frame that moved");
-            assert!(
-                bounds(moving).0 <= 3.0 && bounds(moving).1 <= 2.0,
-                "{motion:?}: the first moving frame reaches back to the origin: {:?}",
-                bounds(moving)
-            );
-            for pair in frames.windows(2) {
-                let (a, b) = (bounds(&pair[0]), bounds(&pair[1]));
+            for interval in [INTERVAL, Duration::from_millis(50)] {
+                let config = trail().map(|trail| trail.motion(motion));
+                let start = Instant::now();
+                let mut state = CursorTrailState::default();
+                see(&mut state, config, 2, 1, 1, start);
+                see(&mut state, config, 120, 30, 2, start);
+                let mut frames = Vec::new();
+                let mut at = start;
+                for _ in 0..200 {
+                    state.tick(config, interval, at);
+                    let frame = state.frame(config);
+                    state.record_full_draw(frame.clone(), at);
+                    match frame {
+                        Some(frame) if frame.smear.is_some() => frames.push(frame),
+                        _ if !state.requires_full_draw() => break,
+                        _ => {}
+                    }
+                    at += interval;
+                }
+                assert!(frames.len() > 2, "{motion:?} at {interval:?}");
+                let moving = frames
+                    .iter()
+                    .find(|frame| bounds(frame).2 > 4.0)
+                    .expect("a frame that moved");
                 assert!(
-                    a.0 <= b.2 && b.0 <= a.2 && a.1 <= b.3 && b.1 <= a.3,
-                    "{motion:?}: consecutive frames do not overlap: {a:?} then {b:?}"
+                    bounds(moving).0 <= 3.0 && bounds(moving).1 <= 2.0,
+                    "{motion:?} at {interval:?}: the first moving frame reaches back to the \
+                     origin: {:?}",
+                    bounds(moving)
                 );
+                for pair in frames.windows(2) {
+                    let (a, b) = (bounds(&pair[0]), bounds(&pair[1]));
+                    assert!(
+                        a.0 <= b.2 && b.0 <= a.2 && a.1 <= b.3 && b.1 <= a.3,
+                        "{motion:?} at {interval:?}: consecutive frames do not overlap: {a:?} \
+                         then {b:?}"
+                    );
+                }
             }
         }
     }

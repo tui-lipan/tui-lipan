@@ -1326,8 +1326,7 @@ impl<C: Component> AppRunner<C> {
                     // The whole tree paints: every slot with a reader on screen is read now.
                     self.core.ctx.env().animations.begin_paint();
                     match terminal.draw(|f| {
-                        render(f, ctx);
-                        trail.paint(f, cursor_position.get());
+                        trail.draw(f, ctx, &cursor_position);
                     }) {
                         Ok(completed) => replace_buffer_snapshot(&mut last_snapshot, completed.buffer),
                         #[cfg(feature = "terminal-images")]
@@ -1336,8 +1335,7 @@ impl<C: Component> AppRunner<C> {
                             // the retained scene through composition for this whole frame.
                             let _native_scope = crate::backend::ratatui_backend::renderers::image::native_layer_scope(false);
                             let completed = terminal.draw(|f| {
-                                render(f, ctx);
-                                trail.paint(f, cursor_position.get());
+                                trail.draw(f, ctx, &cursor_position);
                             })?;
                             replace_buffer_snapshot(&mut last_snapshot, completed.buffer);
                         }
@@ -1352,13 +1350,8 @@ impl<C: Component> AppRunner<C> {
                         terminal,
                         &host_patched_rows,
                         frame,
-                        cursor_position.get(),
+                        cursor_position.get().filter(|_| !trail.hides_caret()),
                     )?;
-                }
-                if trail.hides_caret() {
-                    // A solid smear draws the caret itself while it moves. Still inside the
-                    // synchronized update, so the host never shows the caret and the smear apart.
-                    terminal.hide_cursor()?;
                 }
                 Ok(())
             }
@@ -1738,6 +1731,27 @@ struct TrailPass {
 }
 
 impl TrailPass {
+    /// The full paint: the tree, then the trail over it, then the caret, which goes to the host
+    /// only when the trail is not drawing it. Placements during the tree's paint are deferred,
+    /// so a frame that hides the caret never shows it first.
+    fn draw(
+        &mut self,
+        f: &mut ratatui::Frame<'_>,
+        ctx: &RenderContext<'_>,
+        cursor_position: &StdCell<Option<Position>>,
+    ) {
+        {
+            let _deferred = crate::backend::ratatui_backend::common::defer_host_caret();
+            render(f, ctx);
+        }
+        self.paint(f, cursor_position.get());
+        if let Some(position) = cursor_position.get()
+            && !self.hides_caret()
+        {
+            f.set_cursor_position(position);
+        }
+    }
+
     /// After the tree has painted and placed the caret: see where it went, move the trail on, and
     /// paint it over the frame.
     fn paint(&mut self, f: &mut ratatui::Frame<'_>, caret: Option<Position>) {

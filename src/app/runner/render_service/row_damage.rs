@@ -355,20 +355,23 @@ where
                 patch_row(terminal, ctx, &mut snapshot, frame_area, row)?;
                 painted.push(row);
             }
-            // Where the paint above asked for the caret, which is the whole answer because the
-            // plan guaranteed the caret's own row was painted. Inside the synchronized update and
-            // inside the render context, for the same reason `Terminal::draw` does it before
-            // returning: the host must not be left showing a caret from a half-finished frame.
-            place_caret(terminal, cursor_position.get())?;
             Ok(())
         });
-        // Seen before the frame closes: a jump a solid trail will draw hides the caret in this
-        // frame, rather than showing it at its destination until the next full draw paints the
-        // trail.
-        self.observe_cursor_trail(cursor_position.get());
-        if self.cursor_trail.hides_caret() {
-            terminal.hide_cursor()?;
-        }
+        // Where the paint above asked for the caret, which is the whole answer because the plan
+        // guaranteed the caret's own row was painted. The cursor trail sees it first: a jump a
+        // solid trail will draw keeps the caret hidden in this frame rather than showing it at its
+        // destination until the next full draw paints the trail. Inside the synchronized update,
+        // for the same reason `Terminal::draw` places it before returning: the host must not be
+        // left showing a caret from a half-finished frame.
+        let placed = if result.is_ok() {
+            self.observe_cursor_trail(cursor_position.get());
+            let caret = cursor_position
+                .get()
+                .filter(|_| !self.cursor_trail.hides_caret());
+            place_caret(terminal, caret)
+        } else {
+            Ok(())
+        };
         crossterm::execute!(
             terminal.backend_mut(),
             crossterm::style::Print("\x1b[?2026l")
@@ -383,6 +386,7 @@ where
             }
         }
         result?;
+        placed?;
         self.frame_rendered = true;
 
         self.terminal.update_cursor(

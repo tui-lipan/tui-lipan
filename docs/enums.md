@@ -173,7 +173,7 @@ Sparks a moving smear throws off, drawn as braille dots that never cover text or
 | `drag` | `3.0` | Slowdown per second |
 
 `CursorTrail` itself also carries `opacity` (strength at the caret, default 1), `taper` (fade toward
-the tail, default 0), `max_length` (longest stretch in cells, default 25; zero or less unbounded),
+the tail, default 0), `max_length` (longest stretch in cells, held from the first frame; default 0, unbounded),
 and `sextants` (allow Symbols for Legacy Computing sextant glyphs, default off).
 
 ### `PngOptions` (`ui-snapshot-png`)

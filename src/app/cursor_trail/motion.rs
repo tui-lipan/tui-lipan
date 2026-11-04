@@ -50,6 +50,22 @@ pub(crate) fn center(corners: &Corners) -> Vec2 {
         .scale(0.25)
 }
 
+/// `corners`, each pulled to within `max_length` of its target; zero or less leaves them.
+fn clamp_to(corners: Corners, target: &Corners, max_length: f32) -> Corners {
+    if max_length <= 0.0 {
+        return corners;
+    }
+    std::array::from_fn(|index| {
+        let offset = corners[index] - target[index];
+        let length = offset.length();
+        if length > max_length {
+            target[index] + offset.scale(max_length / length)
+        } else {
+            corners[index]
+        }
+    })
+}
+
 /// The unit direction from one rectangle's centre to another's, or zero for no move.
 fn direction(from: &Corners, to: &Corners) -> Vec2 {
     let along = center(to) - center(from);
@@ -104,8 +120,10 @@ pub(crate) struct Smear {
 }
 
 impl Smear {
-    /// A smear that leaves `from` for `to`.
-    pub(crate) fn new(from: Corners, to: Corners) -> Self {
+    /// A smear that leaves `from` for `to`, starting no more than `max_length` cells behind it so
+    /// a cap never pulls the tail forward mid-flight.
+    pub(crate) fn new(from: Corners, to: Corners, max_length: f32) -> Self {
+        let from = clamp_to(from, &to, max_length);
         Self {
             lead: leadership(&from, &to),
             direction: direction(&from, &to),
@@ -118,6 +136,11 @@ impl Smear {
             glide_elapsed: Duration::ZERO,
             settled: false,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_for_tests(from: Corners, to: Corners) -> Self {
+        Self::new(from, to, 0.0)
     }
 
     /// Send the smear somewhere else mid-flight. It keeps its shape and its momentum.
@@ -257,16 +280,7 @@ impl Smear {
 
     /// No corner may trail its target by more than `max_length` cells.
     fn clamp_length(&mut self, max_length: f32) {
-        if max_length <= 0.0 {
-            return;
-        }
-        for index in 0..4 {
-            let offset = self.current[index] - self.target[index];
-            let length = offset.length();
-            if length > max_length {
-                self.current[index] = self.target[index] + offset.scale(max_length / length);
-            }
-        }
+        self.current = clamp_to(self.current, &self.target, max_length);
     }
 
     fn settle(&mut self) {
@@ -298,7 +312,7 @@ mod tests {
 
     #[test]
     fn a_spring_smear_settles_onto_the_caret() {
-        let mut smear = Smear::new(
+        let mut smear = Smear::new_for_tests(
             caret_rect(0, 0, CaretShape::Block),
             caret_rect(30, 4, CaretShape::Block),
         );
@@ -313,7 +327,7 @@ mod tests {
     #[test]
     fn the_default_spring_stretches_and_lingers() {
         let run = |spring: CursorTrailSpring| {
-            let mut smear = Smear::new(
+            let mut smear = Smear::new_for_tests(
                 caret_rect(0, 0, CaretShape::Block),
                 caret_rect(60, 0, CaretShape::Block),
             );
@@ -347,7 +361,7 @@ mod tests {
 
     #[test]
     fn leading_corners_outrun_trailing_ones() {
-        let mut smear = Smear::new(
+        let mut smear = Smear::new_for_tests(
             caret_rect(0, 0, CaretShape::Block),
             caret_rect(20, 0, CaretShape::Block),
         );
@@ -373,7 +387,7 @@ mod tests {
             },
         ] {
             let at = |frame: Duration| {
-                let mut smear = Smear::new(
+                let mut smear = Smear::new_for_tests(
                     caret_rect(0, 0, CaretShape::Block),
                     caret_rect(40, 10, CaretShape::Block),
                 );
@@ -391,9 +405,19 @@ mod tests {
         }
     }
 
+    /// A capped smear starts within its cap, so the cap never pulls the tail forward mid-flight.
+    #[test]
+    fn a_length_cap_holds_from_the_first_frame() {
+        let target = caret_rect(100, 0, CaretShape::Block);
+        let smear = Smear::new(caret_rect(0, 0, CaretShape::Block), target, 10.0);
+        for (corner, target) in smear.shown().iter().zip(target.iter()) {
+            assert!((*corner - *target).length() <= 10.0 + 1e-3);
+        }
+    }
+
     #[test]
     fn no_corner_trails_further_than_the_maximum_length() {
-        let mut smear = Smear::new(
+        let mut smear = Smear::new_for_tests(
             caret_rect(0, 0, CaretShape::Block),
             caret_rect(100, 0, CaretShape::Block),
         );
@@ -406,7 +430,7 @@ mod tests {
 
     #[test]
     fn a_retarget_keeps_the_momentum() {
-        let mut smear = Smear::new(
+        let mut smear = Smear::new_for_tests(
             caret_rect(0, 0, CaretShape::Block),
             caret_rect(20, 0, CaretShape::Block),
         );
@@ -422,7 +446,7 @@ mod tests {
 
     #[test]
     fn a_glide_puts_the_head_on_the_caret_at_once() {
-        let mut smear = Smear::new(
+        let mut smear = Smear::new_for_tests(
             caret_rect(0, 0, CaretShape::Block),
             caret_rect(20, 0, CaretShape::Block),
         );

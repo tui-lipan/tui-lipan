@@ -2566,6 +2566,12 @@ fn a_cursor_trail_paints_over_full_draws_and_clears_once_it_settles() {
             let caret_hidden = sent.rfind("\x1b[?25l") > sent.rfind("\x1b[?25h");
             match fill {
                 CursorTrailFill::Solid => {
+                    // Never shown and hidden again: a terminal that renders partway through the
+                    // frame would catch the caret at its destination.
+                    assert!(
+                        !sent.contains("\x1b[?25h"),
+                        "a frame that draws the caret itself never shows the host's: {sent:?}"
+                    );
                     assert!(
                         caret_hidden,
                         "a solid smear draws the caret itself: {sent:?}"
