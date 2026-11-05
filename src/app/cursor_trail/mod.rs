@@ -679,11 +679,9 @@ impl CursorTrailState {
                     let travelled = (center - previous).length();
                     previous = center;
                     if let Some(particles) = particles.as_ref() {
-                        let shape = shape_of(smear, None);
                         sparks.emit(
                             particles,
-                            shape.tail,
-                            shape.head,
+                            |along| smear.body_point(along),
                             smear.velocity(),
                             travelled,
                         );
@@ -1304,6 +1302,68 @@ mod tests {
             "the sparks fade after the smear"
         );
         assert!(!state.requires_full_draw());
+    }
+
+    /// Sparks start on the smear itself: on a jump sent elsewhere mid-flight, every spark appears
+    /// on the bent path the smear has covered by then, never ahead of it on a straight line toward
+    /// where the caret lands.
+    #[test]
+    fn sparks_start_along_the_bent_smear() {
+        let still = Some(CursorTrail::new().particles(Some(CursorTrailParticles {
+            spread: 0.0,
+            inherit: 0.0,
+            gravity: 0.0,
+            drag: 0.0,
+            ..CursorTrailParticles::default()
+        })));
+        let start = Instant::now();
+        let mut state = CursorTrailState::default();
+        // Down a column, then off to the lower left, as a focus change does across four panes.
+        see(&mut state, still, 100, 2, 1, start);
+        see(&mut state, still, 100, 32, 2, start);
+        // What the smear has covered so far, and the sparks on screen, frame by frame.
+        let mut frames: Vec<(Vec<Vec2>, Vec<Vec2>)> = Vec::new();
+        let mut at = start;
+        for frame in 0..240 {
+            if frame == 4 {
+                see(&mut state, still, 30, 36, 3, at);
+            }
+            let tick = state.tick(still, INTERVAL, at);
+            let shown = state.frame(still);
+            state.record_full_draw(shown.clone(), at);
+            match shown {
+                Some(shown) => {
+                    let mut covered = frames.last().map(|(c, _)| c.clone()).unwrap_or_default();
+                    if let Some(smear) = shown.smear.as_ref() {
+                        covered.extend(vertices(smear));
+                    }
+                    let sparks = shown.sparks.iter().map(|spark| spark.position).collect();
+                    frames.push((covered, sparks));
+                }
+                None if !tick.needs_paint => break,
+                None => {}
+            }
+            at += INTERVAL;
+        }
+        assert!(
+            frames.iter().any(|(_, sparks)| !sparks.is_empty()),
+            "sparks fly"
+        );
+        for (index, (_, sparks)) in frames.iter().enumerate() {
+            // A frame draws the smear up to one physics step behind the sparks it emitted, so
+            // the next frame's smear may be the one that reaches them.
+            let covered = &frames[(index + 1).min(frames.len() - 1)].0;
+            for spark in sparks {
+                let nearest = covered
+                    .iter()
+                    .map(|corner| (*corner - *spark).length())
+                    .fold(f32::MAX, f32::min);
+                assert!(
+                    nearest <= 2.0,
+                    "frame {index}: a spark at {spark:?} is {nearest} cells off the smear's path"
+                );
+            }
+        }
     }
 
     #[test]

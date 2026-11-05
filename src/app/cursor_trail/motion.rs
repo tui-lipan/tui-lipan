@@ -295,6 +295,14 @@ impl Smear {
         self.path.last().map_or(0.0, |&(_, arc)| arc)
     }
 
+    /// The point a fraction `along` of the way from the tail to the head, following the path
+    /// the head took, as of the latest physics step, in cells.
+    pub(crate) fn body_point(&self, along: f32) -> Vec2 {
+        let head = self.head_arc();
+        let tail = self.tail.min(head);
+        self.in_cells(self.point_at(tail + (head - tail) * along.clamp(0.0, 1.0)))
+    }
+
     /// The point `arc` along the path.
     fn point_at(&self, arc: f32) -> Vec2 {
         let index = self.path.partition_point(|&(_, at)| at <= arc);
