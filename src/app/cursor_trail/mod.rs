@@ -586,15 +586,20 @@ impl CursorTrailState {
             return;
         };
         let target = caret.rect();
+        // The trail takes the color of the caret it is following now, so one sent on to another
+        // widget mid-flight does not keep the color of the widget it passed through.
+        let color = config.color.or(look.color);
         if let Some(running) = self.running.as_mut() {
             // A smear in flight follows the caret wherever it goes next, keeping its momentum.
             running.smear.retarget(target);
+            running.color = color;
             return;
         }
         if let Some(landing) = self.landing.as_mut() {
             // A caret that lands in steps (a shell's newline, then its prompt, in separate
             // writes) is followed to where it comes to rest, and the smear starts once, straight
             // from where it was: never through a cell it held for a frame.
+            landing.color = color;
             if landing.to != target {
                 landing.to = target;
                 landing.last_move = now;
@@ -610,7 +615,7 @@ impl CursorTrailState {
                 to: target,
                 since: now,
                 last_move: now,
-                color: config.color.or(look.color),
+                color,
                 hold: config.fill == CursorTrailFill::Solid,
             });
             // A focus change lands in one step and starts at once; a jump inside one widget may be
@@ -1329,6 +1334,55 @@ mod tests {
             (0..20).all(|x| buffer[(x, 1)].symbol() == "x"),
             "text stays"
         );
+    }
+
+    /// A trail with no color of its own takes the color of the caret it follows now: sent on from
+    /// one widget to another mid-flight, or while it waits for a caret to settle, it does not keep
+    /// the color of the caret it left, and where the new caret has none it falls back to the host
+    /// cursor's.
+    #[test]
+    fn a_retargeted_trail_takes_the_color_of_the_caret_it_follows() {
+        let start = Instant::now();
+        let green = Color::Rgb(0, 200, 0);
+        let look = |color| CaretLook {
+            shape: CaretShape::Block,
+            color,
+        };
+        let at = |x, y| Some(Position::new(x, y));
+        let frame_color =
+            |state: &CursorTrailState, config| state.frame(config).expect("a frame").color;
+
+        // A focus change from 1 to a green caret in 2, then on to an uncolored caret in 3.
+        let plain = Some(CursorTrail::new());
+        let mut state = CursorTrailState::default();
+        state.observe(plain, at(1, 1), node(1), look(None), start);
+        state.observe(plain, at(30, 1), node(2), look(Some(green)), start);
+        state.advance(plain, start + INTERVAL);
+        assert_eq!(frame_color(&state, plain), Some(green));
+        state.observe(plain, at(30, 20), node(3), look(None), start + INTERVAL);
+        state.advance(plain, start + INTERVAL * 2);
+        assert_eq!(
+            frame_color(&state, plain),
+            None,
+            "the uncolored caret leaves the trail to the host cursor color"
+        );
+
+        // A jump inside one widget that waits to settle, the caret taking a color meanwhile.
+        let jump = Some(CursorTrail::new().trigger(CursorTrailTrigger::jump()));
+        let mut state = CursorTrailState::default();
+        state.observe(jump, at(0, 0), node(1), look(None), start);
+        state.observe(jump, at(40, 3), node(1), look(None), start);
+        state.observe(
+            jump,
+            at(40, 6),
+            node(1),
+            look(Some(green)),
+            start + INTERVAL,
+        );
+        assert_eq!(frame_color(&state, jump), Some(green), "while it waits");
+        state.advance(jump, start + INTERVAL + LANDING_QUIET);
+        assert!(state.running.is_some(), "the smear started");
+        assert_eq!(frame_color(&state, jump), Some(green), "once it runs");
     }
 
     #[test]
