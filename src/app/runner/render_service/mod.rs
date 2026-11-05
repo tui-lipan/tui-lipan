@@ -296,8 +296,7 @@ impl<C: Component> AppRunner<C> {
         let env = self.core.ctx.env();
         let (config, now) = (env.cursor_trail.get(), env.now());
         let look = self.caret_look();
-        self.cursor_trail
-            .set_cell_size(crate::app::input::pixel_mouse::cell_size());
+        self.cursor_trail.set_cell_size(host_cell_size());
         self.cursor_trail
             .observe(config, position, self.focus.focused, look, now);
     }
@@ -305,8 +304,7 @@ impl<C: Component> AppRunner<C> {
     /// Take the trail state out of the runner for the length of a draw, so the paint inside the
     /// frame can watch the caret the tree just placed and draw the trail over it in that frame.
     fn begin_trail_pass(&mut self) -> TrailPass {
-        self.cursor_trail
-            .set_cell_size(crate::app::input::pixel_mouse::cell_size());
+        self.cursor_trail.set_cell_size(host_cell_size());
         let env = self.core.ctx.env();
         TrailPass {
             config: env.cursor_trail.get(),
@@ -1718,6 +1716,18 @@ impl<C: Component> AppRunner<C> {
             _ => false,
         }
     }
+}
+
+/// The host's cell size in pixels, where the input layer has learned it, for the cursor trail to
+/// measure on screen. Elsewhere the trail assumes typical cell proportions.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn host_cell_size() -> Option<(u16, u16)> {
+    crate::app::input::pixel_mouse::cell_size()
+}
+
+#[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+fn host_cell_size() -> Option<(u16, u16)> {
+    None
 }
 
 /// The cursor trail's part in one full draw, holding the trail state while the frame is painted.
