@@ -239,6 +239,7 @@ where
             .env()
             .command_chord_reveal_delay
             .set(app.command_chord_reveal_delay);
+        core.ctx.env().cursor_trail.set(app.cursor_trail);
         core.ctx
             .env()
             .scroll_wheel_multiplier
@@ -310,6 +311,13 @@ where
     /// `init()` is already here when construction returns.
     pub fn host_title(&self) -> Option<&str> {
         self.host_title.as_deref()
+    }
+
+    /// The [`CursorTrail`](crate::CursorTrail) the runner would draw, as set by
+    /// [`App::cursor_trail`] or [`Context::set_cursor_trail`](crate::Context::set_cursor_trail).
+    /// Headless rendering draws no trail; this reports what the app asked for.
+    pub fn cursor_trail(&self) -> Option<crate::CursorTrail> {
+        self.core.ctx.env().cursor_trail.get()
     }
 
     /// Returns the current viewport used for layout.
@@ -4401,6 +4409,33 @@ mod tests {
         assert_eq!(backend.core.ctx.scroll_wheel_multiplier(), 1);
         assert!(backend.send_mouse(wheel_down).expect("wheel down"));
         assert_eq!(list_offset(&backend), 9);
+    }
+
+    #[test]
+    fn cursor_trail_reports_the_app_setting_and_runtime_changes() {
+        struct Trailing;
+        impl Component for Trailing {
+            type Message = bool;
+            type Properties = ();
+            type State = ();
+            fn create_state(&self, _: &()) {}
+            fn update(&mut self, enable: bool, ctx: &mut Context<Self>) -> Update {
+                ctx.set_cursor_trail(enable.then(crate::CursorTrail::new));
+                Update::none()
+            }
+            fn view(&self, _: &Context<Self>) -> Element {
+                Text::new("trail").into()
+            }
+        }
+
+        let trail = crate::CursorTrail::new().trigger(crate::CursorTrailTrigger::jump());
+        let mut backend =
+            TestBackend::new_with_app(crate::App::new().cursor_trail(trail), Trailing, ());
+        assert_eq!(backend.cursor_trail(), Some(trail));
+        backend.dispatch(false).expect("update runs");
+        assert_eq!(backend.cursor_trail(), None);
+        backend.dispatch(true).expect("update runs");
+        assert_eq!(backend.cursor_trail(), Some(crate::CursorTrail::new()));
     }
 
     #[test]

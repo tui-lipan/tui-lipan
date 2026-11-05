@@ -1557,6 +1557,7 @@ mod tests {
             fg: crate::style::Color::Rgb(230, 230, 230),
             bg: crate::style::Color::Rgb(20, 20, 20),
             ansi_reported: HostTerminalColors::ALL_ANSI_REPORTED,
+            cursor: None,
         };
         let colors = input.colors.finish_query(Some(&previous)).unwrap();
         assert_eq!(
@@ -1695,12 +1696,14 @@ mod tests {
             fg: crate::style::Color::Rgb(230, 230, 230),
             bg: crate::style::Color::Rgb(20, 20, 20),
             ansi_reported: HostTerminalColors::ALL_ANSI_REPORTED,
+            cursor: None,
         };
         let newer_baseline = HostTerminalColors {
             ansi: std::array::from_fn(|index| crate::style::Color::Rgb(index as u8, 3, 4)),
             fg: crate::style::Color::Rgb(240, 240, 240),
             bg: crate::style::Color::Rgb(10, 10, 10),
             ansi_reported: HostTerminalColors::ALL_ANSI_REPORTED,
+            cursor: None,
         };
         let mut input = WorkerInput::default();
         input.colors.start_query();

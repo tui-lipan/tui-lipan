@@ -278,6 +278,76 @@ impl<C: Component> AppRunner<C> {
         (!caret_occluded(&self.core.tree, id, position)).then_some(position)
     }
 
+    /// The focused widget's caret shape and color, for the cursor trail.
+    fn caret_look(&self) -> crate::app::cursor_trail::CaretLook {
+        crate::app::caret::focused_caret(&self.core.tree, self.focus.focused, None)
+            .map(|caret| crate::app::cursor_trail::CaretLook {
+                shape: caret.shape,
+                color: caret.color,
+            })
+            .unwrap_or_default()
+    }
+
+    /// Hand the caret a presented frame left on the host to the cursor trail.
+    pub(super) fn observe_cursor_trail(&mut self, position: Option<Position>) {
+        if self.surface.is_inline() {
+            return;
+        }
+        let env = self.core.ctx.env();
+        let (config, now) = (env.cursor_trail.get(), env.now());
+        let look = self.caret_look();
+        self.cursor_trail.set_cell_size(host_cell_size());
+        self.cursor_trail
+            .observe(config, position, self.focus.focused, look, now);
+    }
+
+    /// Take the trail state out of the runner for the length of a draw, so the paint inside the
+    /// frame can watch the caret the tree just placed and draw the trail over it in that frame.
+    fn begin_trail_pass(&mut self) -> TrailPass {
+        self.cursor_trail.set_cell_size(host_cell_size());
+        let env = self.core.ctx.env();
+        TrailPass {
+            config: env.cursor_trail.get(),
+            now: env.now(),
+            host: self.cursor_trail_host_colors(),
+            look: self.caret_look(),
+            owner: self.focus.focused,
+            enabled: !self.surface.is_inline(),
+            state: std::mem::take(&mut self.cursor_trail),
+            painted: None,
+            ran: false,
+        }
+    }
+
+    /// Put the trail state back. A draw that never reached the full paint (the incremental
+    /// scroll path) still reports where it left the caret.
+    fn finish_trail_pass(&mut self, pass: TrailPass, caret: Option<Position>) {
+        let TrailPass {
+            state,
+            painted,
+            ran,
+            now,
+            ..
+        } = pass;
+        self.cursor_trail = state;
+        if ran {
+            self.cursor_trail.record_full_draw(painted, now);
+        } else {
+            self.observe_cursor_trail(caret);
+        }
+    }
+
+    /// What the host terminal reported about its colors, which a trail blends against.
+    fn cursor_trail_host_colors(&self) -> Option<crate::style::HostTerminalColors> {
+        self.core.ctx.env().host_terminal_colors.get()
+    }
+
+    /// Whether a fast path that patches the host from the retained frame must stand down: the
+    /// host shows trail cells only a full draw paints and clears.
+    pub(super) fn cursor_trail_requires_full_draw(&self) -> bool {
+        self.cursor_trail.requires_full_draw()
+    }
+
     /// Where the focused widget's caret sits, read from widget state rather than from a paint.
     fn focused_cursor_position(&self, id: NodeId) -> Option<Position> {
         if !self.core.tree.is_valid(id) {
@@ -978,7 +1048,12 @@ impl<C: Component> AppRunner<C> {
         }
         let graphics_only = !refresh.graphics_only.is_empty() && refresh.text_damage.is_empty();
         let frame_area = terminal.get_frame().area();
-        if let Some(plan) = self.prepare_terminal_damage_plan(&refresh, frame_area) {
+        let damage_plan = if self.cursor_trail_requires_full_draw() {
+            None
+        } else {
+            self.prepare_terminal_damage_plan(&refresh, frame_area)
+        };
+        if let Some(plan) = damage_plan {
             if graphics_only {
                 crate::core::terminal_metrics::update(|metrics| {
                     metrics.graphics_widened_terminal += 1
@@ -1020,7 +1095,7 @@ impl<C: Component> AppRunner<C> {
     ) -> Result<()> {
         #[cfg(feature = "profiling-tracing")]
         let _render_span = trace_span!("app.render_spinner_paint_only").entered();
-        if self.surface.is_inline() {
+        if self.surface.is_inline() || self.cursor_trail_requires_full_draw() {
             return self.render_paint_only(terminal);
         }
         #[cfg(feature = "devtools")]
@@ -1226,6 +1301,9 @@ impl<C: Component> AppRunner<C> {
         // ordinary draw below diffs against Ratatui's previous buffer, which never saw them.
         let host_patched_rows =
             row_damage::take_host_patched_rows(&mut self.host_patched_rows, last_snapshot.as_ref());
+        // The fast scroll path never paints a trail; `prepare_incremental_scroll_plan` declines
+        // whenever one is on screen, so only the full draw below needs it.
+        let mut trail = self.begin_trail_pass();
         let draw_result = self.with_render_context(&cursor_position, |ctx| {
             if let Some(plan) = scroll_plan.as_ref() {
                 let previous_snapshot = last_snapshot.as_ref().expect("snapshot exists");
@@ -1249,14 +1327,18 @@ impl<C: Component> AppRunner<C> {
                 {
                     // The whole tree paints: every slot with a reader on screen is read now.
                     self.core.ctx.env().animations.begin_paint();
-                    match terminal.draw(|f| render(f, ctx)) {
+                    match terminal.draw(|f| {
+                        trail.draw(f, ctx, &cursor_position);
+                    }) {
                         Ok(completed) => replace_buffer_snapshot(&mut last_snapshot, completed.buffer),
                         #[cfg(feature = "terminal-images")]
                         Err(error) if crate::backend::ratatui_backend::renderers::image::native_source_unavailable(&error) => {
                             // Preparation failed before any native commands were written. Retry
                             // the retained scene through composition for this whole frame.
                             let _native_scope = crate::backend::ratatui_backend::renderers::image::native_layer_scope(false);
-                            let completed = terminal.draw(|f| render(f, ctx))?;
+                            let completed = terminal.draw(|f| {
+                                trail.draw(f, ctx, &cursor_position);
+                            })?;
                             replace_buffer_snapshot(&mut last_snapshot, completed.buffer);
                         }
                         Err(error) => return Err(error.into()),
@@ -1270,7 +1352,7 @@ impl<C: Component> AppRunner<C> {
                         terminal,
                         &host_patched_rows,
                         frame,
-                        cursor_position.get(),
+                        cursor_position.get().filter(|_| !trail.hides_caret()),
                     )?;
                 }
                 Ok(())
@@ -1280,6 +1362,7 @@ impl<C: Component> AppRunner<C> {
         self.scroll_diff_snapshot = diff_snapshot;
         draw_result?;
         self.frame_rendered = true;
+        self.finish_trail_pass(trail, cursor_position.get());
 
         #[cfg(any(feature = "devtools", feature = "profiling-tracing"))]
         let draw_duration = draw_start.elapsed();
@@ -1344,11 +1427,21 @@ impl<C: Component> AppRunner<C> {
         );
         let vim_mode = self.headless_interaction().vim_mode;
         let cursor_position = StdCell::new(None);
+        let trail = self.cursor_trail.painted().cloned();
+        let host_colors = self.cursor_trail_host_colors();
         self.with_render_context(&cursor_position, |ctx| {
             crate::backend::ratatui_backend::capture_render::capture_live_frame(
                 self.core.ctx.viewport(),
                 ctx,
                 vim_mode,
+                |rendered| {
+                    if let Some(trail) = trail.as_ref() {
+                        trail.paint(&mut rendered.buffer, host_colors);
+                        if trail.hides_caret() {
+                            rendered.cursor = None;
+                        }
+                    }
+                },
             )
         })
     }
@@ -1622,6 +1715,77 @@ impl<C: Component> AppRunner<C> {
             }
             _ => false,
         }
+    }
+}
+
+/// The host's cell size in pixels, where the input layer has learned it, for the cursor trail to
+/// measure on screen. Elsewhere the trail assumes typical cell proportions.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn host_cell_size() -> Option<(u16, u16)> {
+    crate::app::input::pixel_mouse::cell_size()
+}
+
+#[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+fn host_cell_size() -> Option<(u16, u16)> {
+    None
+}
+
+/// The cursor trail's part in one full draw, holding the trail state while the frame is painted.
+struct TrailPass {
+    state: crate::app::cursor_trail::CursorTrailState,
+    config: Option<crate::app::CursorTrail>,
+    look: crate::app::cursor_trail::CaretLook,
+    owner: Option<NodeId>,
+    now: web_time::Instant,
+    host: Option<crate::style::HostTerminalColors>,
+    enabled: bool,
+    painted: Option<crate::app::cursor_trail::CursorTrailFrame>,
+    /// Whether the full paint ran, which is what watched the caret.
+    ran: bool,
+}
+
+impl TrailPass {
+    /// The full paint: the tree, then the trail over it, then the caret, which goes to the host
+    /// only when the trail is not drawing it. Placements during the tree's paint are deferred,
+    /// so a frame that hides the caret never shows it first.
+    fn draw(
+        &mut self,
+        f: &mut ratatui::Frame<'_>,
+        ctx: &RenderContext<'_>,
+        cursor_position: &StdCell<Option<Position>>,
+    ) {
+        {
+            let _deferred = crate::backend::ratatui_backend::common::defer_host_caret();
+            render(f, ctx);
+        }
+        self.paint(f, cursor_position.get());
+        if let Some(position) = cursor_position.get()
+            && !self.hides_caret()
+        {
+            f.set_cursor_position(position);
+        }
+    }
+
+    /// After the tree has painted and placed the caret: see where it went, move the trail on, and
+    /// paint it over the frame.
+    fn paint(&mut self, f: &mut ratatui::Frame<'_>, caret: Option<Position>) {
+        if !self.enabled {
+            return;
+        }
+        self.ran = true;
+        self.state
+            .observe(self.config, caret, self.owner, self.look, self.now);
+        self.state.advance(self.config, self.now);
+        self.painted = self.state.frame(self.config);
+        if let Some(frame) = self.painted.as_ref() {
+            frame.paint(f.buffer_mut(), self.host);
+        }
+    }
+
+    fn hides_caret(&self) -> bool {
+        self.painted
+            .as_ref()
+            .is_some_and(crate::app::cursor_trail::CursorTrailFrame::hides_caret)
     }
 }
 

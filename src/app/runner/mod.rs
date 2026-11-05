@@ -597,6 +597,8 @@ pub struct AppRunner<C: Component> {
     pub(crate) mouse: MouseTrackingState,
     pub(crate) animation: AnimationState,
     pub(crate) copy_feedback: crate::app::copy_feedback::CopyFeedbackState,
+    /// The trail drawn behind the host caret when it jumps.
+    pub(crate) cursor_trail: crate::app::cursor_trail::CursorTrailState,
     pub(crate) widgets: WidgetState,
     pub(crate) terminal: TerminalManager,
     pub(crate) clipboard: Rc<ClipboardService>,
@@ -817,6 +819,7 @@ impl<C: Component> AppRunner<C> {
             .env()
             .command_chord_reveal_delay
             .set(app.command_chord_reveal_delay);
+        core.ctx.env().cursor_trail.set(app.cursor_trail);
         core.ctx
             .env()
             .scroll_wheel_multiplier
@@ -941,6 +944,7 @@ impl<C: Component> AppRunner<C> {
             mouse: MouseTrackingState::with_pointer_cell(last_mouse),
             animation,
             copy_feedback,
+            cursor_trail: Default::default(),
             widgets: WidgetState::default(),
             terminal: TerminalManager::default(),
             clipboard,

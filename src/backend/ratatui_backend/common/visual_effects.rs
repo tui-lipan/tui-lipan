@@ -1741,6 +1741,7 @@ mod palette_fidelity_tests {
             ansi_reported: reported.iter().fold(0, |mask, slot| mask | (1 << slot)),
             fg: Color::Rgb(230, 230, 230),
             bg: Color::Rgb(0x13, 0x14, 0x1a),
+            cursor: None,
         }
     }
 

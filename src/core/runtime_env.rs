@@ -397,6 +397,9 @@ pub(crate) struct RuntimeEnv {
     /// How long a chord must stay pending before [`Context::command_chord_revealed`] reports it.
     /// Zero (the default) reveals immediately.
     pub command_chord_reveal_delay: Rc<std::cell::Cell<Duration>>,
+    /// The trail drawn behind the host caret when it jumps, from [`crate::App::cursor_trail`] and
+    /// [`crate::Context::set_cursor_trail`]. `None` draws none.
+    pub cursor_trail: Rc<Cell<Option<crate::app::CursorTrail>>>,
     /// App-wide mouse wheel step multiplier, initialized from [`crate::App::scroll_wheel_multiplier`]
     /// and adjustable at runtime through [`crate::Context::set_scroll_wheel_multiplier`].
     pub scroll_wheel_multiplier: Rc<Cell<u16>>,

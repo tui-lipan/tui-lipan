@@ -269,6 +269,7 @@ where
             copy_feedback_request,
             command_chord_pending_since,
             command_chord_reveal_delay,
+            cursor_trail: Rc::new(Cell::new(None)),
             scroll_wheel_multiplier,
             clock,
             activity: std::sync::Arc::new(crate::core::runtime_env::RuntimeActivity::new(

@@ -654,6 +654,8 @@ of the slots that really came from the terminal (bit `i` for slot `i`), and
 `reported_ansi(slot)` returns a slot only when it was reported. Code that builds
 `HostTerminalColors` itself sets `ansi_reported`, usually to
 `HostTerminalColors::ALL_ANSI_REPORTED` when every slot is meant to be authoritative.
+`cursor` is the terminal's cursor color from OSC 12, or `None` when it did not report one; a later
+query that gets no answer keeps the last one reported.
 
 `preset_by_name("system")` is intentionally unsupported: preset lookup stays
 pure and non-blocking, while host color probing remains an opt-in app/runner

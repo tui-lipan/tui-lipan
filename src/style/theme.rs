@@ -1103,6 +1103,7 @@ mod tests {
             bg: Color::rgb(10, 11, 12),
             ansi,
             ansi_reported: HostTerminalColors::ALL_ANSI_REPORTED,
+            cursor: None,
         };
 
         let theme = Theme::from_host_colors(colors);

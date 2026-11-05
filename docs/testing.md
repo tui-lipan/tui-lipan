@@ -66,6 +66,12 @@ frame: the latest `Context::set_title` a render picked up, else `App::title`, el
 mount's own first render counts, so a title set from `init()` is visible as soon as construction
 returns. A title set from a message handler shows up after the next `render()`.
 
+### Cursor trail
+
+`cursor_trail() -> Option<CursorTrail>` is the trail the runner would draw: `App::cursor_trail`, as
+changed since by `Context::set_cursor_trail`. A change made in a message handler shows up as soon as
+the handler returns. Headless rendering never draws the trail itself.
+
 ### Per-cell style assertions
 
 ```rust

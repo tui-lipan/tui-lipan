@@ -1295,6 +1295,18 @@ impl<C: Component> Context<C> {
         self.env.command_chord_reveal_delay.set(delay);
     }
 
+    /// The trail drawn behind the host caret when it jumps, or `None` when there is none.
+    pub fn cursor_trail(&self) -> Option<crate::app::CursorTrail> {
+        self.env.cursor_trail.get()
+    }
+
+    /// Change the trail set by [`App::cursor_trail`](crate::App::cursor_trail) at runtime, for an
+    /// app whose setting comes from a config file it reloads while running. `None` turns trails
+    /// off; a trail already on screen stops with the next frame.
+    pub fn set_cursor_trail(&self, trail: Option<crate::app::CursorTrail>) {
+        self.env.cursor_trail.set(trail);
+    }
+
     /// Current app-wide mouse wheel step multiplier.
     pub fn scroll_wheel_multiplier(&self) -> u16 {
         self.env.scroll_wheel_multiplier.get()

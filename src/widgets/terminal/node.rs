@@ -41,6 +41,8 @@ pub(crate) struct TerminalNode {
     pub pointer_shape: Option<crate::style::PointerShape>,
     pub cursor_blinking: bool,
     pub cursor_blinking_override: Option<bool>,
+    /// Caret the app placed over the live screen's own, from [`crate::widgets::Terminal::cursor_override`].
+    pub cursor_position_override: Option<(u16, u16)>,
     pub caret_color: Option<Color>,
     pub selection: Option<TerminalSelection>,
     pub selection_controlled: bool,
@@ -193,9 +195,11 @@ impl TerminalNode {
         self.lines = snapshot.color_lines.clone();
         self.wrapped_rows = snapshot.wrapped_rows.clone();
         self.hyperlinks = snapshot.hyperlinks.clone();
-        self.cursor_row = snapshot.cursor_row;
-        self.cursor_col = snapshot.cursor_col;
-        self.cursor_visible = snapshot.cursor_visible && self.show_cursor_requested;
+        (self.cursor_row, self.cursor_col) = self
+            .cursor_position_override
+            .unwrap_or((snapshot.cursor_row, snapshot.cursor_col));
+        self.cursor_visible = (snapshot.cursor_visible || self.cursor_position_override.is_some())
+            && self.show_cursor_requested;
         self.cursor_shape = snapshot.cursor_shape;
         self.pointer_shape = snapshot.pointer_shape;
         self.cursor_blinking = self

@@ -150,6 +150,8 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
 | `ctx.command_chord_pending_since()` | When the pending chord started, or `None` when none is pending |
 | `ctx.command_chord_revealed()` | Whether the pending chord has been held for at least [`App::command_chord_reveal_delay`](#deferring-chord-chrome); the signal for a which-key panel |
 | `ctx.set_command_chord_reveal_delay(d)` | Retime the reveal delay at runtime (config reload) |
+| `ctx.cursor_trail()` | The [`App::cursor_trail`](quick-start.md#app-configuration) in effect, or `None` |
+| `ctx.set_cursor_trail(trail)` | Change or (with `None`) remove the cursor trail at runtime (config reload); a trail on screen stops with the next frame |
 | `ctx.scroll_wheel_multiplier()` | Current app-wide mouse wheel step multiplier |
 | `ctx.set_scroll_wheel_multiplier(n)` | Change the app-wide mouse wheel step multiplier at runtime (clamped to `>= 1`) |
 | `ctx.last_mouse()` | Last pointer in terminal content coordinates, or `None` until a mouse event has been seen. Updated even when motion is forwarded to a tracking terminal. |

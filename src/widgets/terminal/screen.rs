@@ -6218,6 +6218,7 @@ mod tests {
             fg: UiColor::Rgb(230, 231, 232),
             bg: UiColor::Rgb(10, 11, 12),
             ansi_reported: HostTerminalColors::ALL_ANSI_REPORTED,
+            cursor: None,
         };
         let pane_background = UiColor::Rgb(1, 2, 3);
 
@@ -6236,6 +6237,7 @@ mod tests {
             fg: UiColor::Rgb(230, 231, 232),
             bg: UiColor::Rgb(10, 11, 12),
             ansi_reported: HostTerminalColors::ALL_ANSI_REPORTED,
+            cursor: None,
         };
         let theme = Theme::from_host_colors(colors);
         let palette = TerminalColorPalette::from_theme(&theme, UiColor::Rgb(1, 2, 3));

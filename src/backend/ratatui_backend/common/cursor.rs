@@ -6,6 +6,31 @@ use ratatui::layout::Position;
 
 use crate::core::node::{NodeId, NodeTree};
 
+thread_local! {
+    static DEFERRED: StdCell<bool> = const { StdCell::new(false) };
+}
+
+/// While alive, placements only record where the caret goes and leave the frame's cursor unset,
+/// so whoever draws decides afterwards whether the host shows it. The cursor trail needs this:
+/// a frame it draws the caret into must never tell the host to show the caret, not even for a
+/// moment before hiding it again, because a terminal that renders partway through a frame (an
+/// outer multiplexer, one without synchronized output) would show it.
+pub(crate) struct DeferredCaret {
+    previous: bool,
+}
+
+pub(crate) fn defer_host_caret() -> DeferredCaret {
+    DeferredCaret {
+        previous: DEFERRED.replace(true),
+    }
+}
+
+impl Drop for DeferredCaret {
+    fn drop(&mut self) {
+        DEFERRED.set(self.previous);
+    }
+}
+
 /// Where a focused widget asks the host terminal to put its caret.
 ///
 /// The caret is the terminal's own cursor rather than a cell in the frame buffer, so nothing
@@ -45,7 +70,9 @@ impl<'a> CursorPlacement<'a> {
         if self.occluded(position) {
             return;
         }
-        f.set_cursor_position(position);
+        if !DEFERRED.get() {
+            f.set_cursor_position(position);
+        }
         if let Some(sink) = self.sink {
             sink.set(Some(position));
         }

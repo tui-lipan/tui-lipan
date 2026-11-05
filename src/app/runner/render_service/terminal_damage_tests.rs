@@ -176,6 +176,8 @@ struct PaneCfg {
     transparent_modal: bool,
     terminal_portal: bool,
     spinner: bool,
+    /// Run the runtime on a controlled clock, so a test steps time itself.
+    controlled_clock: bool,
 }
 
 impl PaneCfg {
@@ -500,13 +502,18 @@ fn build(cfg: PaneCfg, setup: &[u8]) -> Harness {
         App::new().mouse(false)
     };
     let mut runner = AppRunner::new(app, component(), ());
-    runner.core = RuntimeCore::new_test(
+    runner.core = RuntimeCore::new_test_with_clock(
         component(),
         (),
         viewport(),
         Theme::default(),
         SurfaceMode::Fullscreen,
         Rc::new(StdCell::new(false)),
+        if cfg.controlled_clock {
+            crate::automation::ClockMode::Controlled
+        } else {
+            crate::automation::ClockMode::Realtime
+        },
     )
     .into();
     runner.core.init();
@@ -2475,4 +2482,164 @@ fn a_partial_paint_elsewhere_keeps_an_effect_hiding_native_picture_fragments() {
         !commands.contains("w=120"),
         "a partial paint must not put back the fragments the effect hides: {commands:?}"
     );
+}
+
+/// The production trail, end to end, for both fills: a focus change between two terminals starts
+/// it, full draws paint it frame by frame as it moves, terminal output during it takes the full
+/// draw instead of a row patch, a capture shows what the host shows, a solid smear hides the host
+/// caret while it draws its own, and the frame after it settles puts every cell and the caret back.
+#[test]
+fn a_cursor_trail_paints_over_full_draws_and_clears_once_it_settles() {
+    use crate::app::interaction_state::{DirtyLevel, DirtyTracker};
+    use crate::app::{CursorTrail, CursorTrailFill, CursorTrailTrigger};
+
+    const TRAIL: ratatui::style::Color = ratatui::style::Color::Rgb(255, 0, 0);
+    const FRAME: std::time::Duration = std::time::Duration::from_millis(16);
+    for fill in [CursorTrailFill::Solid, CursorTrailFill::Tint] {
+        let mut harness = build(
+            PaneCfg {
+                second_terminal: true,
+                grid_rows: ROWS / 2,
+                focused: true,
+                controlled_clock: true,
+                ..PaneCfg::new()
+            },
+            b"stable",
+        );
+        let env = harness.runner.core.ctx.env().clone();
+        env.cursor_trail.set(Some(
+            CursorTrail::new()
+                .trigger(CursorTrailTrigger::FocusChange)
+                .fill(fill)
+                .color(Color::Rgb(255, 0, 0)),
+        ));
+        let mut terminal =
+            crate::backend::ratatui_backend::create_test_terminal(COLS, ROWS).unwrap();
+        let dirty_level = |runner: &mut AppRunner<Pane>| {
+            let mut dirty = DirtyTracker::default();
+            runner.update_animation_cycle(&mut dirty);
+            dirty.level()
+        };
+
+        harness.runner.render_paint_only(&mut terminal).unwrap();
+        assert_eq!(dirty_level(&mut harness.runner), DirtyLevel::None);
+
+        let second = terminal_ids(&harness.runner.core.tree)[1];
+        harness.runner.focus.focused = Some(second);
+        harness.runner.render_paint_only(&mut terminal).unwrap();
+        let (_, caret) = full_paint(&harness.runner, &mut harness.term);
+        let caret = caret.expect("the second terminal shows its caret");
+        assert_eq!(caret, Position::new(6, ROWS / 2));
+
+        let mut trail_rows = std::collections::BTreeSet::new();
+        let mut hidden_frames = 0;
+        let mut frames = 0;
+        let mut output_checked = false;
+        loop {
+            env.advance_clock(FRAME);
+            if dirty_level(&mut harness.runner) == DirtyLevel::None {
+                break;
+            }
+            frames += 1;
+            assert!(frames < 120, "{fill:?}: the trail never settled");
+            let before = terminal.backend().test_output().len();
+            harness.runner.render_paint_only(&mut terminal).unwrap();
+            let sent =
+                String::from_utf8_lossy(&terminal.backend().test_output()[before..]).into_owned();
+            let painted = harness
+                .runner
+                .last_frame_snapshot
+                .clone()
+                .expect("retained frame");
+            let trailed: Vec<u16> = (0..ROWS)
+                .filter(|&y| {
+                    (caret.x.saturating_sub(1)..=caret.x + 1).any(|x| {
+                        let cell = &painted[(x, y)];
+                        cell.fg == TRAIL || cell.bg == TRAIL
+                    })
+                })
+                .collect();
+            if trailed.is_empty() {
+                continue;
+            }
+            trail_rows.extend(trailed);
+            let caret_hidden = sent.rfind("\x1b[?25l") > sent.rfind("\x1b[?25h");
+            match fill {
+                CursorTrailFill::Solid => {
+                    // Never shown and hidden again: a terminal that renders partway through the
+                    // frame would catch the caret at its destination.
+                    assert!(
+                        !sent.contains("\x1b[?25h"),
+                        "a frame that draws the caret itself never shows the host's: {sent:?}"
+                    );
+                    assert!(
+                        caret_hidden,
+                        "a solid smear draws the caret itself: {sent:?}"
+                    );
+                    hidden_frames += 1;
+                    assert!(
+                        harness.runner.capture_painted_frame().cursor.is_none(),
+                        "a capture shows the caret hidden, as the host does"
+                    );
+                }
+                CursorTrailFill::Tint => {
+                    assert!(!caret_hidden, "a tint leaves the caret where it is");
+                    let (untrailed, _) = full_paint(&harness.runner, &mut harness.term);
+                    for y in 0..ROWS {
+                        for x in 0..COLS {
+                            assert_eq!(
+                                painted[(x, y)].symbol(),
+                                untrailed[(x, y)].symbol(),
+                                "a tint keeps the text at ({x}, {y})"
+                            );
+                        }
+                    }
+                }
+            }
+            let captured = harness.runner.capture_painted_frame();
+            let (x, y) = (0..ROWS)
+                .flat_map(|y| (0..COLS).map(move |x| (x, y)))
+                .find(|&(x, y)| painted[(x, y)].fg == TRAIL || painted[(x, y)].bg == TRAIL)
+                .expect("a trail cell");
+            let cell = captured.cell(x, y);
+            assert!(
+                cell.fg == Color::Rgb(255, 0, 0) || cell.bg == Color::Rgb(255, 0, 0),
+                "a capture shows the trail the host shows"
+            );
+
+            if !output_checked {
+                // Output while the trail runs repaints through the full draw, never a row patch
+                // over it.
+                output_checked = true;
+                harness.screen.borrow_mut().process_bytes(b"\r\nmore");
+                harness
+                    .runner
+                    .render_terminal_paint_only(&mut terminal)
+                    .unwrap();
+                assert!(
+                    harness.runner.host_patched_rows.is_empty(),
+                    "a row patch ran while the trail was on screen"
+                );
+            }
+        }
+        assert!(output_checked, "{fill:?}: a trail was painted");
+        assert!(
+            trail_rows.iter().any(|&y| y > 0 && y < caret.y),
+            "{fill:?}: the smear crossed the rows between the carets: {trail_rows:?}"
+        );
+        if fill == CursorTrailFill::Solid {
+            assert!(hidden_frames > 1);
+        }
+        let (clean, _) = full_paint(&harness.runner, &mut harness.term);
+        assert_eq!(
+            harness.runner.last_frame_snapshot.as_ref(),
+            Some(&clean),
+            "{fill:?}: the cleared frame matches a paint with no trail"
+        );
+        let sent = String::from_utf8_lossy(&terminal.backend().test_output()).into_owned();
+        assert!(
+            sent.rfind("\x1b[?25h") > sent.rfind("\x1b[?25l"),
+            "{fill:?}: the caret is back once the trail settles"
+        );
+    }
 }
