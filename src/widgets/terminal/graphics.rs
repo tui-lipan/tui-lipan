@@ -1177,9 +1177,6 @@ impl GraphicsCommand {
         if self.malformed {
             return Err("EINVAL:payload is not base64");
         }
-        if self.more {
-            return Err("EINVAL:chunked out-of-band transmission");
-        }
         if !policy.allows(self.medium) {
             return Err("ENOTSUPP:file transmission");
         }
@@ -1327,6 +1324,11 @@ impl GraphicsCommand {
             command.coalescing_safe &= !repeated && Self::safe_pair(*key, value);
             command.delete_safe &= !repeated && Self::delete_pair(*key, value);
             command.apply_key(*key, value);
+        }
+        // Only direct data is chunked. Kitty ignores `m=1` on a named medium and loads it whole,
+        // and mpv's shared-memory output sends exactly that.
+        if command.medium.is_out_of_band() {
+            command.more = false;
         }
 
         // An out-of-band payload is a name, not pixels, and it is short: decode it even on a
@@ -2807,6 +2809,13 @@ impl TerminalGraphics {
         ctx: GraphicsContext,
     ) -> GraphicsOutcome {
         self.clock = self.clock.wrapping_add(1);
+        // A named medium is never a continuation chunk. Kitty starts it as a new transmission,
+        // abandoning a direct run its sender never finished, such as one cut off by a killed
+        // program, rather than appending the name to that run's data.
+        if command.medium.is_out_of_band() && command.action.carries_data() {
+            self.pending = None;
+            self.discarding_run = false;
+        }
         if self.discarding_run && command.action.carries_data() {
             self.discarding_run = command.more;
             return GraphicsOutcome::default();
@@ -5302,6 +5311,95 @@ mod tests {
         assert_eq!((placement.cols, placement.rows), (6, 2));
         let crop = placement.source_crop.expect("a source region");
         assert_eq!((crop.x, crop.y, crop.width, crop.height), (0, 0, 4, 3));
+    }
+
+    /// A named frame is never a continuation chunk: one arriving after a direct run whose sender
+    /// was killed mid-frame is a new transmission, as in kitty, not data appended to that run.
+    #[cfg(all(unix, feature = "terminal-images", not(target_arch = "wasm32")))]
+    #[test]
+    fn an_out_of_band_transmission_abandons_an_unfinished_direct_run() {
+        use crate::backend::ratatui_backend::shared_frame::SharedFrame;
+
+        let mut graphics = TerminalGraphics::default();
+        let mut scanner = GraphicsScanner::default();
+        // The first chunk of a direct frame whose sender was killed before the rest.
+        let (_, commands) = scan_all(
+            &mut scanner,
+            b"\x1b_Ga=T,f=24,s=2,v=1,C=1,q=2,m=1;AAAA\x1b\\",
+        );
+        graphics.apply(commands[0].clone(), context());
+        assert!(graphics.pending.is_some());
+
+        let mut frame = SharedFrame::write(&[0x40u8; 3 * 4 * 2]).expect("frame");
+        let name = BASE64.encode(frame.name());
+        frame.handed_over();
+        let escape = format!("\x1b_Ga=T,t=s,f=24,s=4,v=2,C=1,q=2,m=1;{name}\x1b\\");
+        let (_, commands) = scan_all(&mut scanner, escape.as_bytes());
+        graphics.apply(commands[0].clone(), context());
+
+        assert!(graphics.pending.is_none(), "the cut-off run is gone");
+        let stored: Vec<_> = graphics.images.values().collect();
+        assert_eq!(stored.len(), 1, "only the shared-memory frame is stored");
+        assert_eq!((stored[0].image.width(), stored[0].image.height()), (4, 2));
+        let pixels = stored[0].image.pixels().expect("the frame decodes");
+        assert!(pixels.to_rgb8().pixels().all(|px| px.0 == [0x40; 3]));
+    }
+
+    /// Nor does a run already poisoned by a malformed chunk swallow the next named frame.
+    #[cfg(all(unix, feature = "terminal-images", not(target_arch = "wasm32")))]
+    #[test]
+    fn an_out_of_band_transmission_ends_a_discarded_run() {
+        use crate::backend::ratatui_backend::shared_frame::SharedFrame;
+
+        let mut graphics = TerminalGraphics::default();
+        let mut scanner = GraphicsScanner::default();
+        let (_, commands) = scan_all(&mut scanner, b"\x1b_Ga=T,f=24,s=4,v=2,q=2,m=1;!!!!\x1b\\");
+        graphics.apply(commands[0].clone(), context());
+        assert!(graphics.discarding_run);
+
+        let mut frame = SharedFrame::write(&[0x40u8; 3 * 4 * 2]).expect("frame");
+        let name = BASE64.encode(frame.name());
+        frame.handed_over();
+        let escape = format!("\x1b_Ga=T,t=s,f=24,s=4,v=2,C=1,q=2;{name}\x1b\\");
+        let (_, commands) = scan_all(&mut scanner, escape.as_bytes());
+        graphics.apply(commands[0].clone(), context());
+
+        assert!(!graphics.discarding_run);
+        assert_eq!(
+            graphics.images.len(),
+            1,
+            "the shared-memory frame is stored"
+        );
+    }
+
+    /// `m=1` only chunks a direct transmission. mpv's `--vo-kitty-use-shm=yes` names each frame in
+    /// one escape that still carries `m=1`; kitty ignores the flag for every other medium and loads
+    /// the frame, so treating it as the start of a run would leave the pane blank, silently under
+    /// `q=2`.
+    #[cfg(all(unix, feature = "terminal-images", not(target_arch = "wasm32")))]
+    #[test]
+    fn an_out_of_band_transmission_ignores_the_chunking_flag() {
+        use crate::backend::ratatui_backend::shared_frame::SharedFrame;
+
+        let mut frame = SharedFrame::write(&[0x40u8; 3 * 4 * 2]).expect("frame");
+        let name = BASE64.encode(frame.name());
+        frame.handed_over();
+        let mut graphics = TerminalGraphics::default();
+        let mut scanner = GraphicsScanner::default();
+        let escape = format!("\x1b_Ga=T,t=s,f=24,s=4,v=2,C=1,q=2,m=1;{name}\x1b\\");
+        let (_, commands) = scan_all(&mut scanner, escape.as_bytes());
+        graphics.apply(commands[0].clone(), context());
+
+        assert!(
+            graphics.pending.is_none(),
+            "no run is waiting for more chunks"
+        );
+        let stored = graphics
+            .images
+            .values()
+            .next()
+            .expect("the frame is stored");
+        assert_eq!((stored.image.width(), stored.image.height()), (4, 2));
     }
 
     /// The placement a full box of placeholder cells resolves to, which is what a host showing the
