@@ -68,12 +68,12 @@ impl Sparks {
     }
 
     /// Emit for one physics step in which the smear's head moved `travelled` cells. New sparks
-    /// start between `tail` and `head`, the length of the smear.
+    /// start on the smear's body: `body(t)` is the point a fraction `t` of the way along it, from
+    /// the tail at 0 to the head at 1, so they follow its bends.
     pub(crate) fn emit(
         &mut self,
         config: &CursorTrailParticles,
-        tail: Vec2,
-        head: Vec2,
+        body: impl Fn(f32) -> Vec2,
         velocity: Vec2,
         travelled: f32,
     ) {
@@ -90,7 +90,7 @@ impl Sparks {
             let jitter = Vec2::new(self.random() - 0.5, self.random() - 0.5);
             let lifetime = config.lifetime.as_secs_f32() * (0.6 + 0.4 * self.random());
             self.particles.push(Particle {
-                position: tail.lerp(head, along) + jitter,
+                position: body(along) + jitter,
                 velocity: velocity.scale(config.inherit)
                     + Vec2::new(angle.cos(), angle.sin()).scale(speed),
                 age: 0.0,
@@ -215,8 +215,7 @@ mod tests {
         let config = config();
         sparks.emit(
             &config,
-            Vec2::new(0.0, 0.0),
-            Vec2::new(10.0, 0.0),
+            |t| Vec2::new(10.0 * t, 0.0),
             Vec2::new(60.0, 0.0),
             10.0,
         );
@@ -238,13 +237,7 @@ mod tests {
         };
         let run = || {
             let mut sparks = Sparks::default();
-            sparks.emit(
-                &config,
-                Vec2::new(5.0, 5.0),
-                Vec2::new(5.0, 5.0),
-                Vec2::ZERO,
-                4.0,
-            );
+            sparks.emit(&config, |_| Vec2::new(5.0, 5.0), Vec2::ZERO, 4.0);
             let before = sparks.snapshot();
             sparks.step(&config, Duration::from_millis(100));
             (before, sparks.snapshot())
@@ -261,7 +254,7 @@ mod tests {
     fn the_cap_bounds_the_live_sparks() {
         let config = CursorTrailParticles { max: 5, ..config() };
         let mut sparks = Sparks::default();
-        sparks.emit(&config, Vec2::ZERO, Vec2::new(50.0, 0.0), Vec2::ZERO, 50.0);
+        sparks.emit(&config, |t| Vec2::new(50.0 * t, 0.0), Vec2::ZERO, 50.0);
         assert_eq!(sparks.snapshot().len(), 5);
     }
 
