@@ -297,12 +297,16 @@ impl<C: Component> AppRunner<C> {
         let (config, now) = (env.cursor_trail.get(), env.now());
         let look = self.caret_look();
         self.cursor_trail
+            .set_cell_size(crate::app::input::pixel_mouse::cell_size());
+        self.cursor_trail
             .observe(config, position, self.focus.focused, look, now);
     }
 
     /// Take the trail state out of the runner for the length of a draw, so the paint inside the
     /// frame can watch the caret the tree just placed and draw the trail over it in that frame.
     fn begin_trail_pass(&mut self) -> TrailPass {
+        self.cursor_trail
+            .set_cell_size(crate::app::input::pixel_mouse::cell_size());
         let env = self.core.ctx.env();
         TrailPass {
             config: env.cursor_trail.get(),

@@ -8,7 +8,14 @@
 //!
 //! Following the path keeps the smear a ribbon whatever the caret does: sent somewhere else
 //! mid-flight, the head swings round with its momentum and the tail follows the bend, so the
-//! smear curves rather than turning into a slab. The spring values mean what smear-cursor.nvim's
+//! smear curves rather than turning into a slab. The path is drawn as a centripetal Catmull-Rom
+//! curve through the points the head passed, so a bend is a smooth arc rather than the few
+//! straight steps one sixtieth of a second apart that a fast turn leaves. The width narrows
+//! toward the tail on an ease, so the smear stays full near the caret and thins out at its end.
+//!
+//! Distances are measured on screen, not in cells: a row is as many cell widths tall as the
+//! cell's aspect ratio says (from the host's cell size, about two where it is unknown), so a
+//! bend, a taper, and a length cap look the same whichever way the caret goes. The spring values mean what smear-cursor.nvim's
 //! do for the caret's leading and trailing edges: a spring constant and a velocity damping, both
 //! applied once per sixtieth of a second.
 //!
@@ -30,9 +37,15 @@ const MAX_STEPS_PER_ADVANCE: u32 = 120;
 const MAX_OVERSHOOT: f32 = 0.5;
 /// Path points closer together than this, in cells, are one point.
 const MIN_SEGMENT: f32 = 0.05;
-/// How much of the path behind the tail is kept, in cells: more than the head travels between
-/// two frames, however slow, so a frame can always reach back to the one before.
+/// How much of the path behind the tail is kept, in cell widths: more than the head travels
+/// between two frames, however slow, so a frame can always reach back to the one before.
 const KEPT_BEHIND: f32 = 64.0;
+/// The smoothed path is drawn in pieces about this long, in cell widths.
+const PIECE: f32 = 0.5;
+/// No stretch between two path points is drawn in more pieces than this.
+const MAX_PIECES_PER_SEGMENT: usize = 24;
+/// A cell's height over its width where the host has not said: most terminal fonts are close.
+pub(crate) const DEFAULT_CELL_ASPECT: f32 = 2.0;
 
 /// A rectangle as its four corners, clockwise from the top left, in cell coordinates.
 pub(crate) type Corners = [Vec2; 4];
@@ -91,12 +104,60 @@ fn tail_width(spring: Option<CursorTrailSpring>) -> f32 {
     exponent / (1.0 + exponent)
 }
 
+/// The point `t` of the way from `p1` to `p2` on the centripetal Catmull-Rom curve through
+/// `p0`, `p1`, `p2`, and `p3`, which never loops or cusps however sharp the turn.
+fn catmull_rom(p0: Vec2, p1: Vec2, p2: Vec2, p3: Vec2, t: f32) -> Vec2 {
+    let knot = |a: Vec2, b: Vec2| (b - a).length().sqrt().max(1e-4);
+    let t0 = 0.0;
+    let t1 = t0 + knot(p0, p1);
+    let t2 = t1 + knot(p1, p2);
+    let t3 = t2 + knot(p2, p3);
+    let at = t1 + (t2 - t1) * t;
+    let mix = |a: Vec2, b: Vec2, from: f32, to: f32| a.lerp(b, (at - from) / (to - from));
+    let a1 = mix(p0, p1, t0, t1);
+    let a2 = mix(p1, p2, t1, t2);
+    let a3 = mix(p2, p3, t2, t3);
+    let b1 = mix(a1, a2, t0, t2);
+    let b2 = mix(a2, a3, t1, t3);
+    mix(b1, b2, t1, t2)
+}
+
+/// `points` as a smooth curve through them, in pieces about [`PIECE`] long. The ends continue
+/// straight, so a straight path stays straight.
+fn smooth(points: &[Vec2]) -> Vec<Vec2> {
+    let mut curve = vec![points[0]];
+    for index in 0..points.len().saturating_sub(1) {
+        let (p1, p2) = (points[index], points[index + 1]);
+        let p0 = if index == 0 {
+            p1 + (p1 - p2)
+        } else {
+            points[index - 1]
+        };
+        let p3 = points.get(index + 2).copied().unwrap_or(p2 + (p2 - p1));
+        let pieces =
+            (((p2 - p1).length() / PIECE).ceil() as usize).clamp(1, MAX_PIECES_PER_SEGMENT);
+        curve.extend(
+            (1..=pieces).map(|step| catmull_rom(p0, p1, p2, p3, step as f32 / pieces as f32)),
+        );
+    }
+    curve
+}
+
+/// How wide the ribbon is `along` of the way from its tail (0) to its head (1), next to the caret:
+/// it eases out, staying full near the head and thinning toward the tail like a comet's.
+fn width_at(along: f32, tail_width: f32) -> f32 {
+    let eased = 1.0 - (1.0 - along.clamp(0.0, 1.0)).powi(2);
+    tail_width + (1.0 - tail_width) * eased
+}
+
 /// One frame of the smear, as pieces to draw.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Ribbon {
     /// Each piece is the corners of the caret's rectangle at two neighbouring points of the path:
     /// their convex hull is that stretch of the ribbon.
     pub(crate) pieces: Vec<[Vec2; 8]>,
+    /// How far each piece is from the tail (0) to the head (1), for fading the smear along it.
+    pub(crate) along: Vec<f32>,
     /// The centre of the ribbon's tail end.
     pub(crate) tail: Vec2,
     /// How far along the path the head is, for the next frame to reach back to.
@@ -107,6 +168,9 @@ pub(crate) struct Ribbon {
 #[derive(Clone, Debug)]
 pub(crate) struct Smear {
     target: Corners,
+    /// A cell's height over its width. Everything below is measured in cell widths, with rows
+    /// that many cell widths tall, so distances are what they are on screen.
+    aspect: f32,
     /// The caret's size, which the ribbon is as wide as.
     size: Vec2,
     /// The head's centre at the latest physics step and at the one before, and its velocity.
@@ -135,18 +199,26 @@ pub(crate) struct Smear {
 }
 
 impl Smear {
-    /// A smear that leaves `from` for `to`, starting no more than `max_length` cells behind it so
-    /// a cap never pulls the tail forward mid-flight.
-    pub(crate) fn new(from: Corners, to: Corners, max_length: f32) -> Self {
-        let target = center(&to);
-        let mut start = center(&from);
+    /// A smear that leaves `from` for `to`, starting no more than `max_length` cell widths behind
+    /// it so a cap never pulls the tail forward mid-flight, on cells `aspect` times as tall as
+    /// they are wide.
+    pub(crate) fn new(from: Corners, to: Corners, max_length: f32, aspect: f32) -> Self {
+        let aspect = if aspect.is_finite() && aspect > 0.0 {
+            aspect
+        } else {
+            DEFAULT_CELL_ASPECT
+        };
+        let on_screen = |point: Vec2| Vec2::new(point.x, point.y * aspect);
+        let target = on_screen(center(&to));
+        let mut start = on_screen(center(&from));
         let offset = start - target;
         if max_length > 0.0 && offset.length() > max_length {
             start = target + offset.scale(max_length / offset.length());
         }
         Self {
             target: to,
-            size: to[2] - to[0],
+            aspect,
+            size: on_screen(to[2] - to[0]),
             head: start,
             head_before: start,
             velocity: Vec2::ZERO,
@@ -166,7 +238,22 @@ impl Smear {
 
     #[cfg(test)]
     pub(crate) fn new_for_tests(from: Corners, to: Corners) -> Self {
-        Self::new(from, to, 0.0)
+        Self::new(from, to, 0.0, 1.0)
+    }
+
+    /// `point`, in cells, on screen.
+    fn on_screen(&self, point: Vec2) -> Vec2 {
+        Vec2::new(point.x, point.y * self.aspect)
+    }
+
+    /// `point`, on screen, in cells.
+    fn in_cells(&self, point: Vec2) -> Vec2 {
+        Vec2::new(point.x, point.y / self.aspect)
+    }
+
+    /// The centre of the caret, on screen.
+    fn goal(&self) -> Vec2 {
+        self.on_screen(center(&self.target))
     }
 
     /// Send the smear somewhere else mid-flight. It keeps its shape and its momentum.
@@ -174,8 +261,8 @@ impl Smear {
         if to == self.target {
             return;
         }
-        self.size = to[2] - to[0];
-        self.direction = unit(center(&to) - self.head);
+        self.size = self.on_screen(to[2] - to[0]);
+        self.direction = unit(self.on_screen(center(&to)) - self.head);
         self.glide_from = self.tail;
         self.glide_elapsed = Duration::ZERO;
         self.target = to;
@@ -190,14 +277,14 @@ impl Smear {
         self.settled
     }
 
-    /// The centre of the head as of the latest physics step.
+    /// The centre of the head as of the latest physics step, in cells.
     pub(crate) fn current_center(&self) -> Vec2 {
-        self.head
+        self.in_cells(self.head)
     }
 
     /// Velocity of the head, in cells per second.
     pub(crate) fn velocity(&self) -> Vec2 {
-        self.velocity.scale(1.0 / STEP.as_secs_f32())
+        self.in_cells(self.velocity.scale(1.0 / STEP.as_secs_f32()))
     }
 
     fn alpha(&self) -> f32 {
@@ -228,8 +315,8 @@ impl Smear {
     #[cfg(test)]
     pub(crate) fn shown_head(&self) -> Corners {
         rect_at(
-            self.head_before.lerp(self.head, self.alpha()),
-            self.size,
+            self.in_cells(self.head_before.lerp(self.head, self.alpha())),
+            self.in_cells(self.size),
             1.0,
         )
     }
@@ -247,42 +334,55 @@ impl Smear {
         let start = reach_back
             .map_or(tail_arc, |arc| tail_arc.min(arc))
             .max(self.path.first().map_or(0.0, |&(_, arc)| arc));
-        let mut points = vec![(self.point_at(start), start)];
+        let mut points = vec![self.point_at(start)];
         points.extend(
             self.path
                 .iter()
-                .copied()
-                .filter(|&(_, arc)| arc > start + MIN_SEGMENT && arc < head_arc - MIN_SEGMENT),
+                .filter(|&&(_, arc)| arc > start + MIN_SEGMENT && arc < head_arc - MIN_SEGMENT)
+                .map(|&(point, _)| point),
         );
-        points.push((head, head_arc));
-        let span = head_arc - start;
-        let width = |arc: f32| {
-            if span < MIN_SEGMENT {
-                1.0
-            } else {
-                self.tail_width + (1.0 - self.tail_width) * ((arc - start) / span)
+        points.push(head);
+        let rect = |centre: Vec2, scale: f32| {
+            rect_at(self.in_cells(centre), self.in_cells(self.size), scale)
+        };
+        if head_arc - start < MIN_SEGMENT {
+            let caret = rect(head, 1.0);
+            return Ribbon {
+                pieces: vec![[
+                    caret[0], caret[1], caret[2], caret[3], caret[0], caret[1], caret[2], caret[3],
+                ]],
+                along: vec![1.0],
+                tail: self.in_cells(head),
+                head_arc,
+            };
+        }
+        let curve = smooth(&points);
+        let mut arcs = Vec::with_capacity(curve.len());
+        let mut total = 0.0;
+        for (index, point) in curve.iter().enumerate() {
+            if index > 0 {
+                total += (*point - curve[index - 1]).length();
             }
-        };
-        let pieces = if points.len() < 2 || span < MIN_SEGMENT {
-            let rect = rect_at(head, self.size, 1.0);
-            vec![[
-                rect[0], rect[1], rect[2], rect[3], rect[0], rect[1], rect[2], rect[3],
-            ]]
-        } else {
-            points
-                .windows(2)
-                .map(|pair| {
-                    let (a, b) = (
-                        rect_at(pair[0].0, self.size, width(pair[0].1)),
-                        rect_at(pair[1].0, self.size, width(pair[1].1)),
-                    );
-                    [a[0], a[1], a[2], a[3], b[0], b[1], b[2], b[3]]
-                })
-                .collect()
-        };
+            arcs.push(total);
+        }
+        let along = |index: usize| arcs[index] / total.max(f32::EPSILON);
+        let mut pieces = Vec::with_capacity(curve.len());
+        let mut alongs = Vec::with_capacity(curve.len());
+        for index in 1..curve.len() {
+            let (a, b) = (index - 1, index);
+            let (from, to) = (
+                rect(curve[a], width_at(along(a), self.tail_width)),
+                rect(curve[b], width_at(along(b), self.tail_width)),
+            );
+            pieces.push([
+                from[0], from[1], from[2], from[3], to[0], to[1], to[2], to[3],
+            ]);
+            alongs.push((along(a) + along(b)) / 2.0);
+        }
         Ribbon {
             pieces,
-            tail: points[0].0,
+            along: alongs,
+            tail: self.in_cells(curve[0]),
             head_arc,
         }
     }
@@ -346,7 +446,7 @@ impl Smear {
 
     fn spring_step(&mut self, spring: CursorTrailSpring) {
         let keep = (1.0 - spring.damping).clamp(0.0, 1.0);
-        let target = center(&self.target);
+        let target = self.goal();
         let mut velocity = self.velocity + (target - self.head).scale(spring.stiffness);
         let mut head = self.head + velocity;
         let past = (head - target).dot(self.direction);
@@ -381,7 +481,7 @@ impl Smear {
     fn glide_step(&mut self, duration: Duration) {
         // The head is on the caret at once; the tail takes the whole glide.
         self.velocity = Vec2::ZERO;
-        self.move_head(center(&self.target));
+        self.move_head(self.goal());
         self.glide_elapsed += STEP;
         let progress = if duration.is_zero() {
             1.0
@@ -406,7 +506,7 @@ impl Smear {
     }
 
     fn settle(&mut self) {
-        let target = center(&self.target);
+        let target = self.goal();
         let arc = self.head_arc() + (target - self.head).length();
         self.head = target;
         self.head_before = target;
@@ -561,7 +661,7 @@ mod tests {
     #[test]
     fn a_length_cap_holds_from_the_first_frame() {
         let target = caret_rect(100, 0, CaretShape::Block);
-        let smear = Smear::new(caret_rect(0, 0, CaretShape::Block), target, 10.0);
+        let smear = Smear::new(caret_rect(0, 0, CaretShape::Block), target, 10.0, 1.0);
         for point in points(&smear.ribbon(None)) {
             assert!((point - center(&target)).length() <= 10.0 + 1.0);
         }
@@ -650,6 +750,94 @@ mod tests {
                 "a piece {width} cells wide: {piece:?}"
             );
         }
+    }
+
+    /// The centre line of a ribbon: the middle of each piece's two ends, tail first.
+    fn spine(ribbon: &Ribbon) -> Vec<Vec2> {
+        let mut spine = vec![center(&[
+            ribbon.pieces[0][0],
+            ribbon.pieces[0][1],
+            ribbon.pieces[0][2],
+            ribbon.pieces[0][3],
+        ])];
+        spine.extend(
+            ribbon
+                .pieces
+                .iter()
+                .map(|piece| center(&[piece[4], piece[5], piece[6], piece[7]])),
+        );
+        spine
+    }
+
+    /// A smear sent off at a right angle bends in a smooth arc: no two neighbouring pieces turn
+    /// sharply against each other, where the raw path turns a corner in a step or two.
+    #[test]
+    fn a_bend_is_a_smooth_arc() {
+        let mut smear = Smear::new_for_tests(
+            caret_rect(40, 0, CaretShape::Block),
+            caret_rect(40, 30, CaretShape::Block),
+        );
+        smear.advance(STEP * 3, spring(), 0.0, |_| {});
+        smear.retarget(caret_rect(0, 30, CaretShape::Block));
+        for _ in 0..3 {
+            smear.advance(STEP, spring(), 0.0, |_| {});
+            let spine = spine(&smear.ribbon(None));
+            let mut turned = 0.0f32;
+            for window in spine.windows(3) {
+                let (a, b) = (window[1] - window[0], window[2] - window[1]);
+                if a.length() < 1e-3 || b.length() < 1e-3 {
+                    continue;
+                }
+                let turn = (a.dot(b) / (a.length() * b.length()))
+                    .clamp(-1.0, 1.0)
+                    .acos();
+                turned = turned.max(turn.to_degrees());
+            }
+            assert!(
+                turned < 30.0,
+                "a piece turns {turned} degrees against the next"
+            );
+        }
+    }
+
+    /// The ribbon narrows on an ease: halfway along it is much wider than a straight taper from
+    /// head to tail would make it, so the body stays full and the tail thins out at its end.
+    #[test]
+    fn the_smear_thins_out_like_a_comet() {
+        let tail = tail_width(None);
+        let linear = tail + (1.0 - tail) * 0.5;
+        assert!(
+            width_at(0.5, tail) > linear + 0.1,
+            "{} vs {linear}",
+            width_at(0.5, tail)
+        );
+        assert!((width_at(0.0, tail) - tail).abs() < 1e-6);
+        assert!((width_at(1.0, tail) - 1.0).abs() < 1e-6);
+    }
+
+    /// On cells twice as tall as they are wide, the smear measures on screen: a row counts for
+    /// two cell widths against the length cap, and the caret it lands on is still the caret.
+    #[test]
+    fn distances_are_measured_on_screen() {
+        let to = caret_rect(10, 40, CaretShape::Block);
+        let mut smear = Smear::new(caret_rect(10, 0, CaretShape::Block), to, 10.0, 2.0);
+        assert_eq!(
+            smear.shown_head(),
+            caret_rect(10, 35, CaretShape::Block),
+            "a cap of 10 cell widths starts the jump 5 rows above the caret"
+        );
+        for _ in 0..4 {
+            smear.advance(STEP, spring(), 10.0, |_| {});
+            let ribbon = smear.ribbon(None);
+            let head = center(&smear.shown_head());
+            assert!(
+                head.y - ribbon.tail.y <= 5.0 + 1e-3,
+                "10 cell widths are 5 rows: tail {:?} head {head:?}",
+                ribbon.tail
+            );
+        }
+        run(&mut smear, spring(), Duration::from_secs(2), STEP);
+        assert_eq!(smear.shown_head(), to);
     }
 
     #[test]

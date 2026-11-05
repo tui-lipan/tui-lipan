@@ -145,7 +145,7 @@ tail; `CursorTrailSpring::SMEAR_CURSOR` is smear-cursor.nvim's own, quicker and 
 |-------|---------|--------------|-------|
 | `stiffness` | `0.5` | `0.6` | Pull on the smear's head toward the caret, 0 to 1 |
 | `trailing_stiffness` | `0.28` | `0.45` | Pull on its tail after the head; lower stretches the smear |
-| `trailing_exponent` | `0.3` | `3.0` | How full the smear stays toward its tail: the tail is `e / (1 + e)` of the caret's size, so `0.3` tapers to about a quarter and `3.0` keeps three quarters |
+| `trailing_exponent` | `0.3` | `3.0` | How full the smear stays toward its tail: the tail is `e / (1 + e)` of the caret's size, so `0.3` tapers to about a quarter and `3.0` keeps three quarters, easing out so the body stays full near the caret |
 | `damping` | `0.82` | `0.85` | Velocity lost each step, 0 (bouncy) to 1 (no momentum) |
 | `stop_distance` | `0.1` | `0.1` | The smear stops once its head and tail are this close to the caret, in cells |
 
@@ -188,7 +188,7 @@ Sparks a moving smear throws off, drawn as braille dots that never cover text or
 | `drag` | `3.0` | Slowdown per second |
 
 `CursorTrail` itself also carries `opacity` (strength at the caret, default 1), `taper` (fade toward
-the tail, default 0), `max_length` (longest stretch in cells, held from the first frame; default 0, unbounded),
+the tail, default 0), `max_length` (longest stretch, in cell widths measured on screen, held from the first frame; default 0, unbounded),
 and `glyphs` (a `CursorTrailGlyphs`, default `Auto`).
 
 ### `PngOptions` (`ui-snapshot-png`)

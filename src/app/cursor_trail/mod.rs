@@ -70,7 +70,8 @@ pub struct CursorTrailSpring {
     /// How hard the tail is pulled after the head. Lower than `stiffness` stretches the smear.
     pub trailing_stiffness: f32,
     /// How full the smear stays toward its tail: its tail is `e / (1 + e)` of the caret's size,
-    /// so `0.3` tapers to about a quarter and `3.0` keeps three quarters.
+    /// so `0.3` tapers to about a quarter and `3.0` keeps three quarters. The width eases out
+    /// toward that, so the smear stays full near the caret and thins mostly at its end.
     pub trailing_exponent: f32,
     /// How much velocity is lost each step, from 0 (bouncy) to 1 (no momentum).
     pub damping: f32,
@@ -265,8 +266,9 @@ pub struct CursorTrail {
     pub opacity: f32,
     /// How much the smear fades toward its tail, from 0 (evenly) to 1 (to nothing).
     pub taper: f32,
-    /// No part of the smear trails the caret by more than this many cells, from the very first
-    /// frame. Zero or less (the default) leaves it unbounded.
+    /// The smear's tail trails the caret by no more than this along its way, from the very first
+    /// frame, in cell widths measured on screen (a row counts for as many as a cell is taller
+    /// than wide). Zero or less (the default) leaves it unbounded.
     pub max_length: f32,
     /// Sparks thrown off the smear, or `None` (the default) for none.
     pub particles: Option<CursorTrailParticles>,
@@ -345,7 +347,7 @@ impl CursorTrail {
         self
     }
 
-    /// Set the longest the smear may stretch, in cells.
+    /// Set the longest the smear may stretch, in cell widths measured on screen.
     #[must_use]
     pub const fn max_length(mut self, cells: f32) -> Self {
         self.max_length = cells;
@@ -523,6 +525,8 @@ pub(crate) struct CursorTrailFrame {
 struct SmearShape {
     /// The smear as convex pieces along its path, each at most the caret's width.
     pieces: Vec<Hull>,
+    /// How far each piece is from the tail (0) to the head (1).
+    along: Vec<f32>,
     head: Vec2,
     tail: Vec2,
     /// How far along its path the head is, for the next frame to reach back to.
@@ -546,6 +550,8 @@ pub(crate) struct CursorTrailState {
     /// The trail the last full draw painted, which the host still shows.
     painted: Option<CursorTrailFrame>,
     last_frame: Option<Instant>,
+    /// The host's cell height over its width, when known, so the smear measures on screen.
+    cell_aspect: Option<f32>,
 }
 
 /// How soon after a jump inside one widget the caret must hold still before the smear starts:
@@ -618,7 +624,12 @@ impl CursorTrailState {
     fn launch(&mut self, now: Instant, max_length: f32) {
         if let Some(landing) = self.landing.take() {
             self.running = Some(Running {
-                smear: Smear::new(landing.from, landing.to, max_length),
+                smear: Smear::new(
+                    landing.from,
+                    landing.to,
+                    max_length,
+                    self.cell_aspect.unwrap_or(motion::DEFAULT_CELL_ASPECT),
+                ),
                 drawn: None,
                 color: landing.color,
                 hides: landing.hold,
@@ -788,6 +799,14 @@ impl CursorTrailState {
         })
     }
 
+    /// The host's cell size in pixels, when known, so a smear's bends and taper are measured on
+    /// screen rather than in cells, which are taller than they are wide.
+    pub(crate) fn set_cell_size(&mut self, cell: Option<(u16, u16)>) {
+        self.cell_aspect = cell
+            .filter(|&(width, height)| width > 0 && height > 0)
+            .map(|(width, height)| f32::from(height) / f32::from(width));
+    }
+
     /// Record that a full draw went out, with the trail it painted.
     pub(crate) fn record_full_draw(&mut self, painted: Option<CursorTrailFrame>, now: Instant) {
         if painted.is_some() {
@@ -812,6 +831,7 @@ fn held_shape(corners: &Corners) -> SmearShape {
     let center = motion::center(corners);
     SmearShape {
         pieces: vec![Hull::of(corners)],
+        along: vec![1.0],
         head: center,
         tail: center,
         head_arc: 0.0,
@@ -824,6 +844,7 @@ fn shape_of(smear: &Smear, drawn: Option<f32>) -> SmearShape {
     let target = smear.target();
     SmearShape {
         pieces: ribbon.pieces.iter().map(|piece| Hull::of(piece)).collect(),
+        along: ribbon.along,
         head: motion::center(target),
         tail: ribbon.tail,
         head_arc: ribbon.head_arc,
@@ -859,6 +880,7 @@ impl CursorTrailFrame {
         });
         let smear = self.smear.as_ref().map(|shape| SmearPaint {
             pieces: shape.pieces.clone(),
+            along: shape.along.clone(),
             head: shape.head,
             tail: shape.tail,
             fill: self.fill,

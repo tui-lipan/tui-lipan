@@ -268,21 +268,40 @@ fn union_bounds(hulls: &[Hull]) -> Option<(i32, i32, i32, i32)> {
         .reduce(|a, b| (a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3)))
 }
 
-/// How much of each of the cell's 8x8 samples any of `hulls` covers.
-fn union_coverage(hulls: &[Hull], column: i32, row: i32) -> Coverage {
+/// How much of each of the cell's 8x8 samples the pieces `candidates` of `hulls` cover, and the
+/// furthest `along` the smear of the pieces that touch the cell (1 where `along` is empty).
+fn union_coverage(
+    hulls: &[Hull],
+    along: &[f32],
+    candidates: &[u32],
+    column: i32,
+    row: i32,
+) -> (Coverage, f32) {
     let mut across: Vec<&Hull> = Vec::new();
-    for hull in hulls {
-        match hull.classify(column, row) {
-            Overlap::Inside => {
-                return Coverage {
-                    planes: [0, 0, FULL],
-                };
-            }
-            Overlap::Outside => {}
-            Overlap::Edge => across.push(hull),
+    let mut inside = false;
+    let mut furthest = 0.0f32;
+    for &index in candidates {
+        let index = index as usize;
+        let hull = &hulls[index];
+        let overlap = hull.classify(column, row);
+        if overlap == Overlap::Outside {
+            continue;
+        }
+        furthest = furthest.max(along.get(index).copied().unwrap_or(1.0));
+        match overlap {
+            Overlap::Inside => inside = true,
+            _ => across.push(hull),
         }
     }
-    match across.as_slice() {
+    if inside {
+        return (
+            Coverage {
+                planes: [0, 0, FULL],
+            },
+            furthest,
+        );
+    }
+    let coverage = match across.as_slice() {
         [] => Coverage::default(),
         [hull] => hull.coverage(column, row),
         across => {
@@ -306,7 +325,8 @@ fn union_coverage(hulls: &[Hull], column: i32, row: i32) -> Coverage {
             }
             coverage
         }
-    }
+    };
+    (coverage, furthest)
 }
 
 /// Where a cell lies against the hull.
@@ -683,6 +703,9 @@ fn best_match(mask: u64, allow_inverted: bool, set: GlyphSet) -> Match {
 pub(crate) struct SmearPaint {
     /// The smear as convex pieces, drawn as one shape.
     pub(crate) pieces: Vec<Hull>,
+    /// How far each piece is from the tail (0) to the head (1), which `taper` fades along. Left
+    /// empty, the smear fades along the straight line from `tail` to `head`.
+    pub(crate) along: Vec<f32>,
     /// Where the smear is strongest (the caret) and where it fades from, for `taper`.
     pub(crate) head: Vec2,
     pub(crate) tail: Vec2,
@@ -732,10 +755,14 @@ fn single_width(cell: &Cell) -> bool {
 }
 
 impl SmearPaint {
-    fn strength(&self, column: i32, row: i32) -> f32 {
+    /// How strongly the cell at `column`, `row` is drawn: `along` of the way from the tail to the
+    /// head where the pieces say, else as far as the cell lies on the line from tail to head.
+    fn strength(&self, column: i32, row: i32, along: Option<f32>) -> f32 {
         let axis = self.head - self.tail;
         let length_squared = axis.dot(axis);
-        let along = if length_squared < f32::EPSILON {
+        let along = if let Some(along) = along {
+            along
+        } else if length_squared < f32::EPSILON {
             1.0
         } else {
             let point = Vec2::new(column as f32 + 0.5, row as f32 + 0.5);
@@ -756,16 +783,46 @@ impl SmearPaint {
             return;
         };
         let area = buffer.area;
+        let (left, top) = (
+            left.max(i32::from(area.left())),
+            top.max(i32::from(area.top())),
+        );
+        let (right, bottom) = (
+            right.min(i32::from(area.right()) - 1),
+            bottom.min(i32::from(area.bottom()) - 1),
+        );
+        if left > right || top > bottom {
+            return;
+        }
+        // Which pieces each cell's bounds can meet, so a cell tests a few pieces, not all of them.
+        let columns = (right - left + 1) as usize;
+        let mut candidates: Vec<Vec<u32>> = vec![Vec::new(); columns * (bottom - top + 1) as usize];
+        for (index, piece) in pieces.iter().enumerate() {
+            let Some((from_x, from_y, to_x, to_y)) = piece.cell_bounds() else {
+                continue;
+            };
+            for row in from_y.max(top)..=to_y.min(bottom) {
+                for column in from_x.max(left)..=to_x.min(right) {
+                    let cell = (row - top) as usize * columns + (column - left) as usize;
+                    candidates[cell].push(index as u32);
+                }
+            }
+        }
+        let along = (self.along.len() == pieces.len()).then_some(self.along.as_slice());
         let trail = crate::backend::ratatui_backend::common::to_ratatui_color(self.color);
         let trail_rgb = rgb(trail);
-        for row in top.max(i32::from(area.top()))..=bottom.min(i32::from(area.bottom()) - 1) {
-            for column in left.max(i32::from(area.left()))..=right.min(i32::from(area.right()) - 1)
-            {
-                let coverage = union_coverage(pieces, column, row);
+        for row in top..=bottom {
+            for column in left..=right {
+                let cell = (row - top) as usize * columns + (column - left) as usize;
+                if candidates[cell].is_empty() {
+                    continue;
+                }
+                let (coverage, furthest) =
+                    union_coverage(pieces, along.unwrap_or(&[]), &candidates[cell], column, row);
                 if coverage.total() == 0 {
                     continue;
                 }
-                let strength = self.strength(column, row);
+                let strength = self.strength(column, row, along.map(|_| furthest));
                 if strength <= 0.0 {
                     continue;
                 }
@@ -1113,6 +1170,7 @@ mod tests {
                 cell.bg = RColor::Rgb(under.0, under.1, under.2);
             }
             SmearPaint {
+                along: Vec::new(),
                 pieces: vec![Hull::of(&points)],
                 head: Vec2::new(22.5, 1.5),
                 tail: Vec2::new(2.5, 9.5),
@@ -1188,6 +1246,7 @@ mod tests {
                 cell.set_char('.');
             }
             SmearPaint {
+                along: Vec::new(),
                 pieces: vec![Hull::of(&corners)],
                 head: corners[2],
                 tail: corners[0],
@@ -1313,6 +1372,7 @@ mod tests {
             cell.fg = RColor::Rgb(200, 200, 200);
         }
         SmearPaint {
+            along: Vec::new(),
             pieces: vec![hull],
             head: Vec2::new(9.5, 1.5),
             tail: Vec2::new(2.0, 1.5),
@@ -1359,6 +1419,7 @@ mod tests {
             cell.fg = RColor::Rgb(200, 200, 200);
         }
         SmearPaint {
+            along: Vec::new(),
             pieces: vec![rect(2.5, 1.0, 10.5, 2.0)],
             head: Vec2::new(10.0, 1.5),
             tail: Vec2::new(2.5, 1.5),
@@ -1398,6 +1459,36 @@ mod tests {
         assert_eq!(buffer[(4, 1)].symbol(), "▏");
     }
 
+    /// A smear fades along its own path, not a straight line: a piece near the tail is fainter
+    /// than one near the head even where a curve brings it closer to the caret.
+    #[test]
+    fn taper_fades_along_the_pieces() {
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 12, 3));
+        for cell in buffer.content.iter_mut() {
+            cell.bg = RColor::Rgb(0, 0, 0);
+        }
+        SmearPaint {
+            // The tail's piece sits right of the head's, as a smear that has curled back does.
+            pieces: vec![rect(8.0, 1.0, 10.0, 2.0), rect(2.0, 1.0, 4.0, 2.0)],
+            along: vec![0.0, 1.0],
+            head: Vec2::new(9.5, 1.5),
+            tail: Vec2::new(2.0, 1.5),
+            fill: CursorTrailFill::Solid,
+            color: Color::Rgb(255, 0, 0),
+            opacity: 1.0,
+            taper: 1.0,
+            glyphs: GlyphSet::Blocks,
+        }
+        .paint(&mut buffer, None);
+        let red = |x: u16| rgb(buffer[(x, 1)].bg).map_or(0, |(r, _, _)| r);
+        assert!(
+            red(9) < red(3),
+            "tail piece {} vs head piece {}",
+            red(9),
+            red(3)
+        );
+    }
+
     #[test]
     fn taper_fades_the_tail() {
         let mut buffer = Buffer::empty(Rect::new(0, 0, 12, 3));
@@ -1405,6 +1496,7 @@ mod tests {
             cell.bg = RColor::Rgb(0, 0, 0);
         }
         SmearPaint {
+            along: Vec::new(),
             pieces: vec![rect(2.0, 1.0, 10.0, 2.0)],
             head: Vec2::new(9.5, 1.5),
             tail: Vec2::new(2.0, 1.5),
