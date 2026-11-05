@@ -55,7 +55,7 @@ const EVEN_MIN: f32 = 0.5;
 /// glyph, so the smear never breaks into pieces. Fewer are a corner it clips.
 const EMPTY_MAX: u32 = 4;
 
-/// The most vertices a hull keeps: the smear's corners at two moments.
+/// The most vertices a hull keeps: the caret's rectangle at two points of the smear's path.
 const MAX_VERTICES: usize = 8;
 
 /// A convex polygon, its vertices in order.
@@ -66,9 +66,8 @@ pub(crate) struct Hull {
 }
 
 impl Hull {
-    /// The convex hull of up to eight points: the smear's corners, even when spring motion has
-    /// twisted them out of order, or its corners at two moments, which is the shape it swept
-    /// between them.
+    /// The convex hull of up to eight points, in any order: a piece of the smear is the hull of
+    /// the caret's rectangle at two points of its path.
     pub(crate) fn of(corners: &[Vec2]) -> Self {
         let mut points: Vec<Vec2> = corners.iter().copied().take(MAX_VERTICES).collect();
         points.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
@@ -104,7 +103,26 @@ impl Hull {
         self.vertices()
     }
 
+    /// The hull's narrowest extent across all of its edge directions: how wide it is across its
+    /// length.
+    #[cfg(test)]
+    pub(crate) fn width_for_tests(&self) -> f32 {
+        let vertices = self.vertices();
+        (0..vertices.len())
+            .filter_map(|index| {
+                let edge = vertices[(index + 1) % vertices.len()] - vertices[index];
+                let length = edge.length();
+                (length > 1e-4).then(|| {
+                    let normal = Vec2::new(-edge.y / length, edge.x / length);
+                    let spread = vertices.iter().map(|point| point.dot(normal));
+                    spread.clone().fold(f32::MIN, f32::max) - spread.fold(f32::MAX, f32::min)
+                })
+            })
+            .fold(f32::INFINITY, f32::min)
+    }
+
     /// Whether the two hulls touch: no edge of either separates them.
+    #[cfg(test)]
     pub(crate) fn overlaps(&self, other: &Hull) -> bool {
         let separates = |axis: Vec2| {
             let span = |hull: &Hull| {
@@ -252,8 +270,7 @@ fn union_bounds(hulls: &[Hull]) -> Option<(i32, i32, i32, i32)> {
 
 /// How much of each of the cell's 8x8 samples any of `hulls` covers.
 fn union_coverage(hulls: &[Hull], column: i32, row: i32) -> Coverage {
-    let mut across = [None; 2];
-    let mut count = 0;
+    let mut across: Vec<&Hull> = Vec::new();
     for hull in hulls {
         match hull.classify(column, row) {
             Overlap::Inside => {
@@ -262,17 +279,13 @@ fn union_coverage(hulls: &[Hull], column: i32, row: i32) -> Coverage {
                 };
             }
             Overlap::Outside => {}
-            Overlap::Edge if count < across.len() => {
-                across[count] = Some(hull);
-                count += 1;
-            }
-            Overlap::Edge => {}
+            Overlap::Edge => across.push(hull),
         }
     }
-    match across {
-        [None, _] => Coverage::default(),
-        [Some(hull), None] => hull.coverage(column, row),
-        [Some(a), Some(b)] => {
+    match across.as_slice() {
+        [] => Coverage::default(),
+        [hull] => hull.coverage(column, row),
+        across => {
             let pitch = 1.0 / (SAMPLES * SUB) as f32;
             let mut coverage = Coverage::default();
             for sample_row in 0..SAMPLES {
@@ -285,7 +298,7 @@ fn union_coverage(hulls: &[Hull], column: i32, row: i32) -> Coverage {
                                     + ((sample_column * SUB + sub_column) as f32 + 0.5) * pitch,
                                 row as f32 + ((sample_row * SUB + sub_row) as f32 + 0.5) * pitch,
                             );
-                            quarters += u32::from(a.contains(point) || b.contains(point));
+                            quarters += u32::from(across.iter().any(|hull| hull.contains(point)));
                         }
                     }
                     coverage.set(sample_row * SAMPLES + sample_column, quarters);
@@ -666,11 +679,10 @@ fn best_match(mask: u64, allow_inverted: bool, set: GlyphSet) -> Match {
 }
 
 /// Everything one frame of the smear needs to be painted.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct SmearPaint {
-    pub(crate) hull: Hull,
-    /// What joins the smear to where the last frame showed it, when it has left that behind.
-    pub(crate) bridge: Option<Hull>,
+    /// The smear as convex pieces, drawn as one shape.
+    pub(crate) pieces: Vec<Hull>,
     /// Where the smear is strongest (the caret) and where it fades from, for `taper`.
     pub(crate) head: Vec2,
     pub(crate) tail: Vec2,
@@ -732,23 +744,14 @@ impl SmearPaint {
         self.opacity.clamp(0.0, 1.0) * (1.0 - self.taper.clamp(0.0, 1.0) * (1.0 - along))
     }
 
-    fn pieces(&self) -> ([Hull; 2], usize) {
-        match self.bridge {
-            Some(bridge) => ([self.hull, bridge], 2),
-            None => ([self.hull, self.hull], 1),
-        }
-    }
-
     /// Whether the smear covers the centre of the cell at `position`.
     pub(crate) fn covers(&self, position: Position) -> bool {
-        let (pieces, count) = self.pieces();
         let centre = Vec2::new(f32::from(position.x) + 0.5, f32::from(position.y) + 0.5);
-        pieces[..count].iter().any(|hull| hull.contains(centre))
+        self.pieces.iter().any(|hull| hull.contains(centre))
     }
 
     pub(crate) fn paint(&self, buffer: &mut Buffer, host_bg: Option<(u8, u8, u8)>) {
-        let (pieces, count) = self.pieces();
-        let pieces = &pieces[..count];
+        let pieces = self.pieces.as_slice();
         let Some((left, top, right, bottom)) = union_bounds(pieces) else {
             return;
         };
@@ -1110,8 +1113,7 @@ mod tests {
                 cell.bg = RColor::Rgb(under.0, under.1, under.2);
             }
             SmearPaint {
-                hull: Hull::of(&points),
-                bridge: None,
+                pieces: vec![Hull::of(&points)],
                 head: Vec2::new(22.5, 1.5),
                 tail: Vec2::new(2.5, 9.5),
                 fill: CursorTrailFill::Solid,
@@ -1186,8 +1188,7 @@ mod tests {
                 cell.set_char('.');
             }
             SmearPaint {
-                hull: Hull::of(&corners),
-                bridge: None,
+                pieces: vec![Hull::of(&corners)],
                 head: corners[2],
                 tail: corners[0],
                 fill: CursorTrailFill::Solid,
@@ -1312,8 +1313,7 @@ mod tests {
             cell.fg = RColor::Rgb(200, 200, 200);
         }
         SmearPaint {
-            hull,
-            bridge: None,
+            pieces: vec![hull],
             head: Vec2::new(9.5, 1.5),
             tail: Vec2::new(2.0, 1.5),
             fill,
@@ -1359,8 +1359,7 @@ mod tests {
             cell.fg = RColor::Rgb(200, 200, 200);
         }
         SmearPaint {
-            hull: rect(2.5, 1.0, 10.5, 2.0),
-            bridge: None,
+            pieces: vec![rect(2.5, 1.0, 10.5, 2.0)],
             head: Vec2::new(10.0, 1.5),
             tail: Vec2::new(2.5, 1.5),
             fill: CursorTrailFill::Tint,
@@ -1406,8 +1405,7 @@ mod tests {
             cell.bg = RColor::Rgb(0, 0, 0);
         }
         SmearPaint {
-            hull: rect(2.0, 1.0, 10.0, 2.0),
-            bridge: None,
+            pieces: vec![rect(2.0, 1.0, 10.0, 2.0)],
             head: Vec2::new(9.5, 1.5),
             tail: Vec2::new(2.0, 1.5),
             fill: CursorTrailFill::Solid,

@@ -57,31 +57,32 @@ impl CursorTrailTrigger {
     }
 }
 
-/// The spring that pulls each corner of the smear into the caret.
+/// The springs that pull the smear into the caret: its head after the caret, and its tail after
+/// the head along the path the head took.
 ///
-/// Every value is applied once per sixtieth of a second, whatever the frame rate, and means what
-/// the same-named setting of smear-cursor.nvim means.
+/// Every value is applied once per sixtieth of a second, whatever the frame rate. `stiffness`,
+/// `trailing_stiffness`, and `damping` work as smear-cursor.nvim's settings of the same name do
+/// for its leading and trailing corners, so a spring tuned for it feels the same here.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CursorTrailSpring {
-    /// How hard the corners facing the direction of travel are pulled, from 0 (not at all) to 1.
+    /// How hard the head is pulled toward the caret, from 0 (not at all) to 1.
     pub stiffness: f32,
-    /// How hard the trailing corners are pulled. Lower than `stiffness` stretches the smear.
+    /// How hard the tail is pulled after the head. Lower than `stiffness` stretches the smear.
     pub trailing_stiffness: f32,
-    /// Where the corners between leading and trailing sit: below 1 they follow the front, so a
-    /// diagonal smear tapers to a point; above 1 they hang back with the tail.
+    /// How full the smear stays toward its tail: its tail is `e / (1 + e)` of the caret's size,
+    /// so `0.3` tapers to about a quarter and `3.0` keeps three quarters.
     pub trailing_exponent: f32,
     /// How much velocity is lost each step, from 0 (bouncy) to 1 (no momentum).
     pub damping: f32,
-    /// The smear stops once every corner is this close to the caret, in cells.
+    /// The smear stops once its head and tail are this close to the caret, in cells.
     pub stop_distance: f32,
 }
 
 impl CursorTrailSpring {
-    /// The default spring: the front lands on the caret in about three steps while the tail
+    /// The default spring: the head lands on the caret in about three steps while the tail
     /// closes in over about six, so the smear visibly stretches and shrinks rather than flashing
-    /// past, and is gone in about a quarter of a second. The corners between front and tail
-    /// follow the front, so a diagonal smear tapers to a point instead of dragging the caret's
-    /// full height behind it.
+    /// past, and is gone in about a quarter of a second. It tapers to a quarter of the caret at
+    /// its tail, so a diagonal smear is a streak rather than a band the caret's full height.
     pub const DEFAULT: Self = Self {
         stiffness: 0.5,
         trailing_stiffness: 0.28,
@@ -91,7 +92,7 @@ impl CursorTrailSpring {
     };
 
     /// smear-cursor.nvim's own defaults: a quicker, more compact smear that is over in about
-    /// five steps.
+    /// five steps and keeps most of the caret's size to its tail.
     pub const SMEAR_CURSOR: Self = Self {
         stiffness: 0.6,
         trailing_stiffness: 0.45,
@@ -110,8 +111,9 @@ impl Default for CursorTrailSpring {
 /// How a [`CursorTrail`] moves.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum CursorTrailMotion {
-    /// Each corner is pulled into the caret by a damped spring: the smear stretches out behind a
-    /// jump and snaps into the caret, and a jump mid-flight bends it with its momentum.
+    /// The head is pulled after the caret by a damped spring, and the tail after the head along
+    /// the path it took: the smear stretches out behind a jump and snaps into the caret, and a
+    /// jump mid-flight swings the head round with its momentum, the smear bending after it.
     Spring(CursorTrailSpring),
     /// The leading edge sits on the caret at once and the trailing edge eases into it over
     /// `duration`.
@@ -485,10 +487,10 @@ struct Landing {
 #[derive(Clone, Debug)]
 struct Running {
     smear: Smear,
-    /// The corners the last drawn frame showed. A smear that has left them behind entirely,
-    /// however many physics steps a slow frame let pass, reaches back to them, so the streak
-    /// never breaks.
-    drawn: Option<Corners>,
+    /// How far along its path the smear's head was in the last drawn frame. A smear whose tail
+    /// has passed that, however many physics steps a slow frame let pass, reaches back to it, so
+    /// the streak never breaks.
+    drawn: Option<f32>,
     color: Option<Color>,
     /// The smear draws the caret itself, so the host caret stays hidden.
     hides: bool,
@@ -517,16 +519,14 @@ pub(crate) struct CursorTrailFrame {
     glyphs: GlyphSet,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 struct SmearShape {
-    /// The smear itself.
-    hull: Hull,
-    /// What joins it to where the last frame showed it, when it has left that behind.
-    bridge: Option<Hull>,
-    /// The smear's corners as this frame shows them.
-    shown: Corners,
+    /// The smear as convex pieces along its path, each at most the caret's width.
+    pieces: Vec<Hull>,
     head: Vec2,
     tail: Vec2,
+    /// How far along its path the head is, for the next frame to reach back to.
+    head_arc: f32,
     target: Position,
 }
 
@@ -794,9 +794,9 @@ impl CursorTrailState {
             self.last_frame = Some(now);
         }
         if let Some(running) = self.running.as_mut()
-            && let Some(shape) = painted.as_ref().and_then(|frame| frame.smear)
+            && let Some(shape) = painted.as_ref().and_then(|frame| frame.smear.as_ref())
         {
-            running.drawn = Some(shape.shown);
+            running.drawn = Some(shape.head_arc);
         }
         self.painted = painted;
     }
@@ -811,58 +811,24 @@ impl CursorTrailState {
 fn held_shape(corners: &Corners) -> SmearShape {
     let center = motion::center(corners);
     SmearShape {
-        hull: Hull::of(corners),
-        bridge: None,
-        shown: *corners,
+        pieces: vec![Hull::of(corners)],
         head: center,
         tail: center,
+        head_arc: 0.0,
         target: Position::new(corners[0].x.max(0.0) as u16, corners[0].y.max(0.0) as u16),
     }
 }
 
-fn shape_of(smear: &Smear, drawn: Option<Corners>) -> SmearShape {
-    let shown = smear.shown();
+fn shape_of(smear: &Smear, drawn: Option<f32>) -> SmearShape {
+    let ribbon = smear.ribbon(drawn);
     let target = smear.target();
-    let head = target
-        .iter()
-        .fold(Vec2::ZERO, |sum, corner| sum + *corner)
-        .scale(0.25);
-    // The tail is the corner furthest from the caret.
-    let tail = shown
-        .iter()
-        .copied()
-        .max_by(|a, b| (*a - head).length().total_cmp(&(*b - head).length()))
-        .unwrap_or(head);
-    let hull = Hull::of(&shown);
-    // What a frame draws is the smear as it is now. Where it has moved further than its own length
-    // since the last frame (before the first frame, the last physics step), a bridge joins its
-    // tail to where that frame left its front, so a fast smear reads as one streak rather than a
-    // shape hopping from place to place. The bridge only spans the gap: sweeping the smear across
-    // everything it passed would fill the inside of a turn with a wide wedge.
-    let before = drawn.unwrap_or_else(|| smear.previous());
-    let bridge = (!Hull::of(&before).overlaps(&hull)).then(|| bridge(&before, &shown, head));
     SmearShape {
-        hull,
-        bridge,
-        shown,
-        head,
-        tail,
+        pieces: ribbon.pieces.iter().map(|piece| Hull::of(piece)).collect(),
+        head: motion::center(target),
+        tail: ribbon.tail,
+        head_arc: ribbon.head_arc,
         target: Position::new(target[0].x.max(0.0) as u16, target[0].y.max(0.0) as u16),
     }
-}
-
-/// The path the smear's tail took since the last frame showed it (`before`): its two corners
-/// furthest from the caret, from where they were then to where they are now. That joins the two
-/// frames along the way the smear went, as wide as the caret, without filling the inside of a turn.
-fn bridge(before: &Corners, shown: &Corners, head: Vec2) -> Hull {
-    let mut order = [0, 1, 2, 3];
-    order.sort_by(|a, b| {
-        (shown[*b] - head)
-            .length()
-            .total_cmp(&(shown[*a] - head).length())
-    });
-    let [a, b, ..] = order;
-    Hull::of(&[before[a], before[b], shown[a], shown[b]])
 }
 
 impl CursorTrailFrame {
@@ -880,7 +846,7 @@ impl CursorTrailFrame {
             .or(host.and_then(|host| host.cursor))
             .or(host.map(|host| host.fg))
             .or_else(|| {
-                let target = self.smear?.target;
+                let target = self.smear.as_ref()?.target;
                 buffer.cell(target).and_then(|cell| match cell.fg {
                     ratatui::style::Color::Rgb(r, g, b) => Some(Color::Rgb(r, g, b)),
                     _ => None,
@@ -891,9 +857,8 @@ impl CursorTrailFrame {
             Color::Rgb(r, g, b) => Some((r, g, b)),
             _ => None,
         });
-        let smear = self.smear.map(|shape| SmearPaint {
-            hull: shape.hull,
-            bridge: shape.bridge,
+        let smear = self.smear.as_ref().map(|shape| SmearPaint {
+            pieces: shape.pieces.clone(),
             head: shape.head,
             tail: shape.tail,
             fill: self.fill,
@@ -1036,12 +1001,12 @@ mod tests {
             state.tick(jump, INTERVAL, at);
             let held = state.frame(jump).expect("the held caret");
             assert!(held.hides_caret() && state.hides_caret());
-            let hull = held.smear.expect("shape").hull;
+            let points = vertices(held.smear.as_ref().expect("shape"));
             assert!(
-                hull.vertices_for_tests()
+                points
                     .iter()
                     .all(|p| p.x >= 40.0 && p.x <= 41.0 && p.y >= 3.0 && p.y <= 4.0),
-                "held on the old cell: {hull:?}"
+                "held on the old cell: {points:?}"
             );
             state.record_full_draw(Some(held), at);
         }
@@ -1060,16 +1025,14 @@ mod tests {
         let frame = state
             .frame(jump)
             .expect("the smear starts once the caret settles");
-        let smear = frame.smear.expect("smear");
+        let smear = frame.smear.as_ref().expect("smear");
         assert_eq!(smear.target, Position::new(40, 6));
+        let points = vertices(smear);
         assert!(
-            smear
-                .hull
-                .vertices_for_tests()
+            points
                 .iter()
                 .all(|point| point.x >= 40.0 && point.x <= 41.0),
-            "straight down from column 40, never toward column 0: {:?}",
-            smear.hull
+            "straight down from column 40, never toward column 0: {points:?}"
         );
 
         // A caret that never holds still starts after the longest wait.
@@ -1099,11 +1062,7 @@ mod tests {
             .frame(trail())
             .expect("trail after the caret came back");
         assert!(
-            frame
-                .smear
-                .expect("smear")
-                .hull
-                .vertices_for_tests()
+            vertices(frame.smear.as_ref().expect("smear"))
                 .iter()
                 .any(|p| p.x <= 2.0)
         );
@@ -1139,15 +1098,8 @@ mod tests {
     /// and when slow frames let several physics steps pass between two of them.
     #[test]
     fn a_long_jump_is_one_unbroken_streak_over_time() {
-        // Everything the frame draws: the smear and any bridge back to the frame before.
         fn bounds(frame: &CursorTrailFrame) -> (f32, f32, f32, f32) {
-            let shape = frame.smear.expect("smear");
-            let pieces: Vec<Hull> = std::iter::once(shape.hull).chain(shape.bridge).collect();
-            let points: Vec<Vec2> = pieces
-                .iter()
-                .flat_map(|piece| piece.vertices_for_tests().to_vec())
-                .collect();
-            points.iter().fold(
+            vertices(frame.smear.as_ref().expect("smear")).iter().fold(
                 (f32::MAX, f32::MAX, f32::MIN, f32::MIN),
                 |(left, top, right, bottom), p| {
                     (left.min(p.x), top.min(p.y), right.max(p.x), bottom.max(p.y))
@@ -1197,97 +1149,39 @@ mod tests {
         }
     }
 
-    /// A smear stretched out along one jump and sent off sideways by another bends toward its new
-    /// target, no wider than the caret: its far end trails rather than swinging across with the
-    /// near one, which would turn the streak into a slab as tall as it was long.
-    #[test]
-    fn a_smear_sent_sideways_mid_flight_stays_caret_wide() {
-        let area = |corners: &Corners| {
-            let hull = Hull::of(corners);
-            let vertices = hull.vertices_for_tests();
-            let twice: f32 = (0..vertices.len())
-                .map(|index| vertices[index].cross(vertices[(index + 1) % vertices.len()]))
-                .sum();
-            twice.abs() / 2.0
-        };
-        let length = |corners: &Corners| {
-            corners
-                .iter()
-                .flat_map(|a| corners.iter().map(move |b| (*a - *b).length()))
-                .fold(0.0, f32::max)
-        };
-        for shape in [crate::CaretShape::Bar, crate::CaretShape::Block] {
-            let caret = |x, y| motion::caret_rect(x, y, shape);
-            // Down a column, then off to the left, straight sideways, or back up and over.
-            for (second, label) in [
-                (caret(30, 36), "down and left"),
-                (caret(30, 32), "sideways"),
-                (caret(60, 4), "back and over"),
-            ] {
-                // The same move made from rest is the measure: at most a caret wide.
-                for mid_flight in [false, true] {
-                    let mut smear = if mid_flight {
-                        motion::Smear::new_for_tests(caret(100, 2), caret(100, 32))
-                    } else {
-                        motion::Smear::new_for_tests(caret(100, 32), second)
-                    };
-                    for step in 0..40 {
-                        if mid_flight && step == 4 {
-                            smear.retarget(second);
-                        }
-                        smear.advance(motion::STEP, CursorTrailMotion::default(), 0.0, |_| {});
-                        let shown = smear.shown();
-                        let long = length(&shown);
-                        if long > 2.0 {
-                            let width = area(&shown) / long;
-                            assert!(
-                                width <= 1.25,
-                                "{shape:?} {label} (mid-flight: {mid_flight}), step {step}: \
-                                 {width} cells wide over {long}: {shown:?}"
-                            );
-                        }
-                    }
-                }
-            }
-        }
+    /// Every corner of every piece the smear is drawn as.
+    fn vertices(shape: &SmearShape) -> Vec<Vec2> {
+        shape
+            .pieces
+            .iter()
+            .flat_map(|piece| piece.vertices_for_tests().to_vec())
+            .collect()
     }
 
-    /// A smear sent somewhere else mid-flight bends into a streak toward its new target; what a
-    /// frame draws is the smear itself, not a wedge swept across everywhere it passed since the
-    /// last frame. Each frame still touches the one before, so the streak never hops: where the
-    /// smear has outrun the last frame, a bridge no wider than the caret joins them.
+    /// A smear sent somewhere else mid-flight, as by two focus changes in quick succession,
+    /// bends along the way its head went: every piece of it is at most the caret's width across,
+    /// so it never turns into a slab or a wedge, and each frame touches the one before, so it
+    /// never hops. That holds at 60 frames a second and when slow frames let steps pass.
     #[test]
-    fn a_turning_smear_stays_a_streak() {
-        let area = |hull: &Hull| {
-            let vertices = hull.vertices_for_tests();
-            let twice: f32 = (0..vertices.len())
-                .map(|index| vertices[index].cross(vertices[(index + 1) % vertices.len()]))
-                .sum();
-            twice.abs() / 2.0
-        };
-        let length = |hull: &Hull| {
-            let vertices = hull.vertices_for_tests();
-            vertices
-                .iter()
-                .flat_map(|a| vertices.iter().map(move |b| (*a - *b).length()))
-                .fold(0.0, f32::max)
-        };
+    fn a_smear_sent_elsewhere_mid_flight_stays_a_ribbon() {
         let block = |x, y| motion::caret_rect(x, y, crate::CaretShape::Block);
         let bar = |x, y| motion::caret_rect(x, y, crate::CaretShape::Bar);
         let moves = [
-            // A long diagonal, then back down and to the left.
-            (block(5, 20), block(70, 4), block(10, 30)),
-            // Down a column, then off to the left: two focus changes in quick succession.
+            // Down a column, then off to the left, straight sideways, or back up and over.
             (bar(100, 2), bar(100, 32), bar(30, 36)),
             (block(100, 2), block(100, 32), block(30, 32)),
+            (block(100, 2), block(100, 32), block(60, 4)),
+            // A long diagonal, then back down and to the left.
+            (block(5, 20), block(70, 4), block(10, 30)),
         ];
         for (from, first, second) in moves {
+            let caret = first[2] - first[0];
+            let widest = caret.length() + 1e-3;
             for steps_per_frame in [1, 2, 4] {
                 let mut smear = motion::Smear::new_for_tests(from, first);
-                let mut drawn: Option<Corners> = None;
+                let mut drawn: Option<f32> = None;
                 let mut last: Vec<Hull> = Vec::new();
-                let mut bridged = false;
-                for frame in 0..30 {
+                for frame in 0..40 {
                     if frame == 3 {
                         smear.retarget(second);
                     }
@@ -1298,43 +1192,32 @@ mod tests {
                         |_| {},
                     );
                     let shape = shape_of(&smear, drawn);
-                    let pieces: Vec<Hull> =
-                        std::iter::once(shape.hull).chain(shape.bridge).collect();
                     let at = format!(
-                        "{first:?} then {second:?}, {steps_per_frame} steps per frame, frame {frame}"
+                        "{:?} then {:?}, {steps_per_frame} steps per frame, frame {frame}",
+                        first[0], second[0]
                     );
+                    for piece in &shape.pieces {
+                        let width = piece.width_for_tests();
+                        assert!(width <= widest, "{at}: a piece {width} cells across");
+                    }
                     if !last.is_empty() {
                         assert!(
-                            pieces
+                            shape
+                                .pieces
                                 .iter()
                                 .any(|piece| last.iter().any(|old| piece.overlaps(old))),
                             "{at}: the streak hops"
                         );
                     }
-                    assert_eq!(
-                        shape.hull,
-                        Hull::of(&shape.shown),
-                        "{at}: the smear is drawn as it is"
-                    );
-                    if let Some(bridge) = shape.bridge {
-                        bridged = true;
-                        let width = area(&bridge) / length(&bridge).max(1.0);
-                        assert!(
-                            width <= 1.75,
-                            "{at}: a bridge {width} cells wide: {:?} from {drawn:?} to {:?}",
-                            bridge.vertices_for_tests(),
-                            shape.shown
-                        );
-                    }
-                    drawn = Some(shape.shown);
-                    last = pieces;
+                    drawn = Some(shape.head_arc);
+                    last = shape.pieces;
                 }
-                if steps_per_frame == 4 {
-                    assert!(
-                        bridged,
-                        "{first:?} then {second:?}: slow frames outrun the last one"
-                    );
-                }
+                assert!(
+                    smear.settled(),
+                    "{:?} then {:?}: settles",
+                    first[0],
+                    second[0]
+                );
             }
         }
     }

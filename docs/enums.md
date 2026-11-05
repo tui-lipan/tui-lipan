@@ -132,22 +132,22 @@ How a [`CursorTrail`](quick-start.md#app-configuration) moves.
 
 | Variant | Notes |
 |---------|-------|
-| `Spring(CursorTrailSpring)` (default) | Each corner of the smear is pulled into the caret by a damped spring; the smear stretches, snaps, and keeps its momentum through a jump mid-flight |
+| `Spring(CursorTrailSpring)` (default) | The smear's head is pulled after the caret by a damped spring and its tail after the head along the path it took; the smear stretches, snaps, and keeps its momentum through a jump mid-flight, bending along the turn |
 | `Glide { duration }` | The front sits on the caret at once and the tail eases in over `duration`; `CursorTrail::glide()` is 160 ms. Zero turns trails off |
 
 `CursorTrailSpring` holds the spring, applied once per sixtieth of a second whatever the frame rate.
-Its fields mean what the same-named settings of smear-cursor.nvim mean.
-`CursorTrailSpring::DEFAULT` stretches the smear out behind the caret, lands the front with a
-slight snap, and tapers diagonal smears to a point; `CursorTrailSpring::SMEAR_CURSOR` is smear-cursor.nvim's own, quicker and more
-compact.
+`stiffness`, `trailing_stiffness`, and `damping` work as the same-named settings of
+smear-cursor.nvim do for its leading and trailing corners. `CursorTrailSpring::DEFAULT` stretches
+the smear out behind the caret, lands the front with a slight snap, and tapers the smear toward its
+tail; `CursorTrailSpring::SMEAR_CURSOR` is smear-cursor.nvim's own, quicker and more compact.
 
 | Field | Default | smear-cursor | Notes |
 |-------|---------|--------------|-------|
-| `stiffness` | `0.5` | `0.6` | Pull on the corners leading the motion, 0 to 1 |
-| `trailing_stiffness` | `0.28` | `0.45` | Pull on the trailing corners; lower stretches the smear |
-| `trailing_exponent` | `0.3` | `3.0` | Where the corners between leading and trailing sit: below 1 they follow the front, so a diagonal smear tapers to a point; above 1 they hang back with the tail |
+| `stiffness` | `0.5` | `0.6` | Pull on the smear's head toward the caret, 0 to 1 |
+| `trailing_stiffness` | `0.28` | `0.45` | Pull on its tail after the head; lower stretches the smear |
+| `trailing_exponent` | `0.3` | `3.0` | How full the smear stays toward its tail: the tail is `e / (1 + e)` of the caret's size, so `0.3` tapers to about a quarter and `3.0` keeps three quarters |
 | `damping` | `0.82` | `0.85` | Velocity lost each step, 0 (bouncy) to 1 (no momentum) |
-| `stop_distance` | `0.1` | `0.1` | The smear stops once every corner is this close to the caret, in cells |
+| `stop_distance` | `0.1` | `0.1` | The smear stops once its head and tail are this close to the caret, in cells |
 
 ### `CursorTrailFill`
 

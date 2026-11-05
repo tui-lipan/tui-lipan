@@ -1,11 +1,16 @@
-//! How the smear moves: four corners chasing the caret's rectangle.
+//! How the smear moves: a head chasing the caret and a tail chasing the head along its path.
 //!
-//! The smear is the caret's own rectangle with each corner free to lag behind. When the caret
-//! jumps, every corner is pulled toward the matching corner of the new rectangle. The corners
-//! facing the direction of travel are pulled hardest, so the shape stretches out behind the caret
-//! and snaps back into it. That is the model smear-cursor.nvim made popular, and its parameters
-//! mean the same here: a spring constant per corner and a velocity damping, both applied once per
-//! sixtieth of a second.
+//! The head is the caret's own rectangle. When the caret jumps, a damped spring pulls the head
+//! after it, and every physics step adds where the head got to onto a path. The tail follows the
+//! head along that path on a slower spring, so the smear stretches out behind the caret and
+//! shrinks back into it. What is drawn is a ribbon along the path from the tail to the head, the
+//! caret's rectangle narrowing toward the tail.
+//!
+//! Following the path keeps the smear a ribbon whatever the caret does: sent somewhere else
+//! mid-flight, the head swings round with its momentum and the tail follows the bend, so the
+//! smear curves rather than turning into a slab. The spring values mean what smear-cursor.nvim's
+//! do for the caret's leading and trailing edges: a spring constant and a velocity damping, both
+//! applied once per sixtieth of a second.
 //!
 //! Integration runs on that fixed step whatever the frame rate, and a frame between two steps is
 //! interpolated, so the same jump moves identically at 30 and 144 frames a second.
@@ -19,10 +24,15 @@ pub(crate) const STEP: Duration = Duration::from_nanos(16_666_667);
 /// A stall longer than this (a suspended process, a debugger) settles the smear at once rather
 /// than replaying every step it missed.
 const MAX_STEPS_PER_ADVANCE: u32 = 120;
-/// The furthest a corner may fly past its target along the direction of travel, in cells. A
+/// The furthest the head may fly past the caret along the direction of travel, in cells. A
 /// spring's overshoot grows with the jump, so a long one would otherwise land the smear on text
 /// beyond the caret; capped, a long jump still snaps, and a short one keeps its own bounce.
 const MAX_OVERSHOOT: f32 = 0.5;
+/// Path points closer together than this, in cells, are one point.
+const MIN_SEGMENT: f32 = 0.05;
+/// How much of the path behind the tail is kept, in cells: more than the head travels between
+/// two frames, however slow, so a frame can always reach back to the one before.
+const KEPT_BEHIND: f32 = 64.0;
 
 /// A rectangle as its four corners, clockwise from the top left, in cell coordinates.
 pub(crate) type Corners = [Vec2; 4];
@@ -50,88 +60,77 @@ pub(crate) fn center(corners: &Corners) -> Vec2 {
         .scale(0.25)
 }
 
-/// `corners`, each pulled to within `max_length` of its target; zero or less leaves them.
-fn clamp_to(corners: Corners, target: &Corners, max_length: f32) -> Corners {
-    if max_length <= 0.0 {
-        return corners;
-    }
-    std::array::from_fn(|index| {
-        let offset = corners[index] - target[index];
-        let length = offset.length();
-        if length > max_length {
-            target[index] + offset.scale(max_length / length)
-        } else {
-            corners[index]
-        }
-    })
+/// A rectangle of `size` centred on `centre`, shrunk to `scale` of it.
+fn rect_at(centre: Vec2, size: Vec2, scale: f32) -> Corners {
+    let half = size.scale(0.5 * scale);
+    [
+        Vec2::new(centre.x - half.x, centre.y - half.y),
+        Vec2::new(centre.x + half.x, centre.y - half.y),
+        Vec2::new(centre.x + half.x, centre.y + half.y),
+        Vec2::new(centre.x - half.x, centre.y + half.y),
+    ]
 }
 
-/// The unit direction from one rectangle's centre to another's, or zero for no move.
-fn direction(from: &Corners, to: &Corners) -> Vec2 {
-    let along = center(to) - center(from);
-    let length = along.length();
+fn unit(vector: Vec2) -> Vec2 {
+    let length = vector.length();
     if length < f32::EPSILON {
         Vec2::ZERO
     } else {
-        along.scale(1.0 / length)
+        vector.scale(1.0 / length)
     }
 }
 
-/// How far each corner leads the motion, from 0 (trailing) to 1 (leading).
-///
-/// A corner leads by how much nearer it already is than the others to its target and, for a smear
-/// sent somewhere else mid-flight, to where it was heading before (`was_heading`), then by how far
-/// its target lies on the leading side of the caret it is heading for. Leaving a caret, every
-/// corner is as far from its target as the next, so the side of the caret facing the motion
-/// leads, as in smear-cursor.nvim. A smear sent off mid-flight is stretched out along its old
-/// path, though: its front, the end that was nearly there, keeps leading and its tail keeps
-/// trailing, so it bends toward the new target instead of its whole length swinging sideways as
-/// one wide edge.
-fn leadership(from: &Corners, to: &Corners, was_heading: Option<&Corners>) -> [f32; 4] {
-    let direction = center(to) - center(from);
-    let length = direction.length();
-    if length < f32::EPSILON {
-        return [1.0; 4];
-    }
-    let direction = direction.scale(1.0 / length);
-    let target_center = center(to);
-    let behind = |targets: &Corners| -> [f32; 4] {
-        let distances: [f32; 4] =
-            std::array::from_fn(|index| (targets[index] - from[index]).length());
-        let nearest = distances.iter().copied().fold(f32::INFINITY, f32::min);
-        distances.map(|distance| distance - nearest)
-    };
-    let behind_new = behind(to);
-    let behind_old = was_heading.map_or([0.0; 4], behind);
-    let scores: [f32; 4] = std::array::from_fn(|index| {
-        (to[index] - target_center).dot(direction) - behind_new[index] - behind_old[index]
-    });
-    let min = scores.iter().copied().fold(f32::INFINITY, f32::min);
-    let max = scores.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-    if (max - min).abs() < f32::EPSILON {
-        return [1.0; 4];
-    }
-    scores.map(|score| (score - min) / (max - min))
+/// How wide the smear's tail is next to its head, from the spring's trailing exponent: higher
+/// keeps the tail fuller, as smear-cursor's does with its trailing corners.
+fn tail_width(spring: Option<CursorTrailSpring>) -> f32 {
+    let exponent = spring
+        .map_or(CursorTrailSpring::DEFAULT.trailing_exponent, |spring| {
+            spring.trailing_exponent
+        })
+        .max(0.0);
+    exponent / (1.0 + exponent)
+}
+
+/// One frame of the smear, as pieces to draw.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Ribbon {
+    /// Each piece is the corners of the caret's rectangle at two neighbouring points of the path:
+    /// their convex hull is that stretch of the ribbon.
+    pub(crate) pieces: Vec<[Vec2; 8]>,
+    /// The centre of the ribbon's tail end.
+    pub(crate) tail: Vec2,
+    /// How far along the path the head is, for the next frame to reach back to.
+    pub(crate) head_arc: f32,
 }
 
 /// A smear in flight.
 #[derive(Clone, Debug)]
 pub(crate) struct Smear {
     target: Corners,
-    current: Corners,
-    previous: Corners,
-    velocity: Corners,
-    /// Per-corner spring constants (Spring) or progress offsets (Glide), from the corners'
-    /// leadership toward the current target.
-    lead: [f32; 4],
+    /// The caret's size, which the ribbon is as wide as.
+    size: Vec2,
+    /// The head's centre at the latest physics step and at the one before, and its velocity.
+    head: Vec2,
+    head_before: Vec2,
+    velocity: Vec2,
+    /// Where the head has been, oldest first, with each point's distance along the path. The last
+    /// point is the head at the latest step.
+    path: Vec<(Vec2, f32)>,
+    /// How far along the path the head was at the step before the latest.
+    head_arc_before: f32,
+    /// How far along the path the tail is, at the latest step and at the one before.
+    tail: f32,
+    tail_before: f32,
+    tail_velocity: f32,
     /// Unit direction of travel toward the current target, for the overshoot cap.
     direction: Vec2,
-    /// Time integrated but not yet a whole step: the interpolation fraction between `previous`
-    /// and `current`.
+    /// Time integrated but not yet a whole step: the interpolation fraction between the last two.
     pending: Duration,
-    /// Glide only: where the corners started and how long they have been moving.
-    glide_from: Corners,
+    /// Glide only: where the tail started and how long it has been moving.
+    glide_from: f32,
     glide_elapsed: Duration,
+    /// How wide the tail is next to the head, from the last spring seen.
+    tail_width: f32,
     settled: bool,
 }
 
@@ -139,17 +138,28 @@ impl Smear {
     /// A smear that leaves `from` for `to`, starting no more than `max_length` cells behind it so
     /// a cap never pulls the tail forward mid-flight.
     pub(crate) fn new(from: Corners, to: Corners, max_length: f32) -> Self {
-        let from = clamp_to(from, &to, max_length);
+        let target = center(&to);
+        let mut start = center(&from);
+        let offset = start - target;
+        if max_length > 0.0 && offset.length() > max_length {
+            start = target + offset.scale(max_length / offset.length());
+        }
         Self {
-            lead: leadership(&from, &to, None),
-            direction: direction(&from, &to),
             target: to,
-            current: from,
-            previous: from,
-            velocity: [Vec2::ZERO; 4],
+            size: to[2] - to[0],
+            head: start,
+            head_before: start,
+            velocity: Vec2::ZERO,
+            path: vec![(start, 0.0)],
+            head_arc_before: 0.0,
+            tail: 0.0,
+            tail_before: 0.0,
+            tail_velocity: 0.0,
+            direction: unit(target - start),
             pending: Duration::ZERO,
-            glide_from: from,
+            glide_from: 0.0,
             glide_elapsed: Duration::ZERO,
+            tail_width: tail_width(None),
             settled: false,
         }
     }
@@ -164,10 +174,9 @@ impl Smear {
         if to == self.target {
             return;
         }
-        let shown = self.shown();
-        self.lead = leadership(&shown, &to, Some(&self.target));
-        self.direction = direction(&shown, &to);
-        self.glide_from = shown;
+        self.size = to[2] - to[0];
+        self.direction = unit(center(&to) - self.head);
+        self.glide_from = self.tail;
         self.glide_elapsed = Duration::ZERO;
         self.target = to;
         self.settled = false;
@@ -181,26 +190,101 @@ impl Smear {
         self.settled
     }
 
-    /// The corners one physics step before the latest.
-    pub(crate) fn previous(&self) -> Corners {
-        self.previous
-    }
-
-    /// The centre of the smear as of the latest physics step.
+    /// The centre of the head as of the latest physics step.
     pub(crate) fn current_center(&self) -> Vec2 {
-        center(&self.current)
+        self.head
     }
 
-    /// The corners as of the last advance: between the last two physics steps, so a frame
-    /// between steps is smooth at the cost of trailing the integration by up to one step.
-    pub(crate) fn shown(&self) -> Corners {
-        let alpha = self.pending.as_secs_f32() / STEP.as_secs_f32();
-        std::array::from_fn(|index| self.previous[index].lerp(self.current[index], alpha))
-    }
-
-    /// Velocity of the smear's centre, in cells per second.
+    /// Velocity of the head, in cells per second.
     pub(crate) fn velocity(&self) -> Vec2 {
-        center(&self.velocity).scale(1.0 / STEP.as_secs_f32())
+        self.velocity.scale(1.0 / STEP.as_secs_f32())
+    }
+
+    fn alpha(&self) -> f32 {
+        self.pending.as_secs_f32() / STEP.as_secs_f32()
+    }
+
+    fn head_arc(&self) -> f32 {
+        self.path.last().map_or(0.0, |&(_, arc)| arc)
+    }
+
+    /// The point `arc` along the path.
+    fn point_at(&self, arc: f32) -> Vec2 {
+        let index = self.path.partition_point(|&(_, at)| at <= arc);
+        match (
+            index.checked_sub(1).map(|i| self.path[i]),
+            self.path.get(index),
+        ) {
+            (Some((a, at_a)), Some(&(b, at_b))) if at_b > at_a => {
+                a.lerp(b, (arc - at_a) / (at_b - at_a))
+            }
+            (Some((a, _)), _) => a,
+            (None, Some(&(b, _))) => b,
+            (None, None) => self.head,
+        }
+    }
+
+    /// The caret's rectangle where the head is as of the last advance.
+    #[cfg(test)]
+    pub(crate) fn shown_head(&self) -> Corners {
+        rect_at(
+            self.head_before.lerp(self.head, self.alpha()),
+            self.size,
+            1.0,
+        )
+    }
+
+    /// The smear as of the last advance, between the last two physics steps, so a frame between
+    /// steps is smooth at the cost of trailing the integration by up to one step. It reaches back
+    /// along the path to `reach_back` (where the last drawn frame's head was) if its tail has
+    /// already passed that, so consecutive frames always touch and a fast smear reads as one
+    /// streak rather than a shape hopping from place to place.
+    pub(crate) fn ribbon(&self, reach_back: Option<f32>) -> Ribbon {
+        let alpha = self.alpha();
+        let head_arc = self.head_arc_before + (self.head_arc() - self.head_arc_before) * alpha;
+        let head = self.head_before.lerp(self.head, alpha);
+        let tail_arc = (self.tail_before + (self.tail - self.tail_before) * alpha).min(head_arc);
+        let start = reach_back
+            .map_or(tail_arc, |arc| tail_arc.min(arc))
+            .max(self.path.first().map_or(0.0, |&(_, arc)| arc));
+        let mut points = vec![(self.point_at(start), start)];
+        points.extend(
+            self.path
+                .iter()
+                .copied()
+                .filter(|&(_, arc)| arc > start + MIN_SEGMENT && arc < head_arc - MIN_SEGMENT),
+        );
+        points.push((head, head_arc));
+        let span = head_arc - start;
+        let width = |arc: f32| {
+            if span < MIN_SEGMENT {
+                1.0
+            } else {
+                self.tail_width + (1.0 - self.tail_width) * ((arc - start) / span)
+            }
+        };
+        let pieces = if points.len() < 2 || span < MIN_SEGMENT {
+            let rect = rect_at(head, self.size, 1.0);
+            vec![[
+                rect[0], rect[1], rect[2], rect[3], rect[0], rect[1], rect[2], rect[3],
+            ]]
+        } else {
+            points
+                .windows(2)
+                .map(|pair| {
+                    let (a, b) = (
+                        rect_at(pair[0].0, self.size, width(pair[0].1)),
+                        rect_at(pair[1].0, self.size, width(pair[1].1)),
+                    );
+                    [a[0], a[1], a[2], a[3], b[0], b[1], b[2], b[3]]
+                })
+                .collect()
+        };
+        Ribbon {
+            pieces,
+            tail: points[0].0,
+            head_arc,
+        }
     }
 
     /// Integrate `dt`, calling `on_step` after each whole physics step, for anything that is
@@ -215,6 +299,10 @@ impl Smear {
         if self.settled {
             return;
         }
+        self.tail_width = tail_width(match motion {
+            CursorTrailMotion::Spring(spring) => Some(spring),
+            CursorTrailMotion::Glide { .. } => None,
+        });
         self.pending += dt;
         let mut steps = 0;
         while self.pending >= STEP {
@@ -224,12 +312,18 @@ impl Smear {
                 self.settle();
                 return;
             }
-            self.previous = self.current;
+            self.head_before = self.head;
+            self.head_arc_before = self.head_arc();
+            self.tail_before = self.tail;
             match motion {
                 CursorTrailMotion::Spring(spring) => self.spring_step(spring),
                 CursorTrailMotion::Glide { duration } => self.glide_step(duration),
             }
-            self.clamp_length(max_length);
+            let length = self.head_arc() - self.tail;
+            if max_length > 0.0 && length > max_length {
+                self.tail = self.head_arc() - max_length;
+            }
+            self.prune();
             on_step(self);
             if self.settled {
                 return;
@@ -237,64 +331,91 @@ impl Smear {
         }
     }
 
-    fn spring_step(&mut self, spring: CursorTrailSpring) {
-        let exponent = spring.trailing_exponent.max(f32::EPSILON);
-        let keep = (1.0 - spring.damping).clamp(0.0, 1.0);
-        let mut at_rest = true;
-        for index in 0..4 {
-            let stiffness = spring.trailing_stiffness
-                + (spring.stiffness - spring.trailing_stiffness) * self.lead[index].powf(exponent);
-            let pull = (self.target[index] - self.current[index]).scale(stiffness);
-            self.velocity[index] = self.velocity[index] + pull;
-            self.current[index] = self.current[index] + self.velocity[index];
-            self.velocity[index] = self.velocity[index].scale(keep);
-            let past = (self.current[index] - self.target[index]).dot(self.direction);
-            if past > MAX_OVERSHOOT {
-                // Pull the corner back to the cap and take away the speed carrying it further.
-                self.current[index] =
-                    self.current[index] - self.direction.scale(past - MAX_OVERSHOOT);
-                let onward = self.velocity[index].dot(self.direction);
-                if onward > 0.0 {
-                    self.velocity[index] = self.velocity[index] - self.direction.scale(onward);
-                }
-            }
-            at_rest &= (self.target[index] - self.current[index]).length() < spring.stop_distance
-                && self.velocity[index].length() < spring.stop_distance;
+    /// Move the head to `to`, extending the path.
+    fn move_head(&mut self, to: Vec2) {
+        let (last, arc) = self.path.last().copied().unwrap_or((self.head, 0.0));
+        let step = (to - last).length();
+        if step >= MIN_SEGMENT {
+            self.path.push((to, arc + step));
+        } else if let Some(point) = self.path.last_mut() {
+            // Too short a step for a point of its own: the head moves, the path keeps its shape.
+            point.0 = to;
         }
+        self.head = to;
+    }
+
+    fn spring_step(&mut self, spring: CursorTrailSpring) {
+        let keep = (1.0 - spring.damping).clamp(0.0, 1.0);
+        let target = center(&self.target);
+        let mut velocity = self.velocity + (target - self.head).scale(spring.stiffness);
+        let mut head = self.head + velocity;
+        let past = (head - target).dot(self.direction);
+        if past > MAX_OVERSHOOT {
+            // Pull the head back to the cap and take away the speed carrying it further.
+            head = head - self.direction.scale(past - MAX_OVERSHOOT);
+            let onward = velocity.dot(self.direction);
+            if onward > 0.0 {
+                velocity = velocity - self.direction.scale(onward);
+            }
+        }
+        self.velocity = velocity.scale(keep);
+        self.move_head(head);
+
+        let behind = self.head_arc() - self.tail;
+        self.tail_velocity += behind * spring.trailing_stiffness;
+        self.tail += self.tail_velocity;
+        self.tail_velocity *= keep;
+        if self.tail > self.head_arc() {
+            self.tail = self.head_arc();
+            self.tail_velocity = 0.0;
+        }
+
+        let at_rest = (target - self.head).length() < spring.stop_distance
+            && self.velocity.length() < spring.stop_distance
+            && self.head_arc() - self.tail < spring.stop_distance;
         if at_rest {
             self.settle();
         }
     }
 
     fn glide_step(&mut self, duration: Duration) {
+        // The head is on the caret at once; the tail takes the whole glide.
+        self.velocity = Vec2::ZERO;
+        self.move_head(center(&self.target));
         self.glide_elapsed += STEP;
         let progress = if duration.is_zero() {
             1.0
         } else {
             (self.glide_elapsed.as_secs_f32() / duration.as_secs_f32()).min(1.0)
         };
-        let eased = ease_out_cubic(progress);
-        for index in 0..4 {
-            // Leading corners are on the caret at once; trailing ones take the whole glide.
-            let local = eased + (1.0 - eased) * self.lead[index];
-            let next = self.glide_from[index].lerp(self.target[index], local);
-            self.velocity[index] = next - self.current[index];
-            self.current[index] = next;
-        }
+        self.tail =
+            self.glide_from + (self.head_arc() - self.glide_from) * ease_out_cubic(progress);
         if progress >= 1.0 {
             self.settle();
         }
     }
 
-    /// No corner may trail its target by more than `max_length` cells.
-    fn clamp_length(&mut self, max_length: f32) {
-        self.current = clamp_to(self.current, &self.target, max_length);
+    /// Drop the path more than [`KEPT_BEHIND`] behind the tail, but for the point that lies on.
+    /// The stretch kept is what a frame may reach back into, to touch the frame before it.
+    fn prune(&mut self) {
+        let keep_from = self.tail.min(self.tail_before) - KEPT_BEHIND;
+        let behind = self.path.partition_point(|&(_, arc)| arc <= keep_from);
+        if behind > 1 {
+            self.path.drain(..behind - 1);
+        }
     }
 
     fn settle(&mut self) {
-        self.current = self.target;
-        self.previous = self.target;
-        self.velocity = [Vec2::ZERO; 4];
+        let target = center(&self.target);
+        let arc = self.head_arc() + (target - self.head).length();
+        self.head = target;
+        self.head_before = target;
+        self.velocity = Vec2::ZERO;
+        self.path = vec![(target, arc)];
+        self.head_arc_before = arc;
+        self.tail = arc;
+        self.tail_before = arc;
+        self.tail_velocity = 0.0;
         self.pending = Duration::ZERO;
         self.settled = true;
     }
@@ -318,6 +439,11 @@ mod tests {
         }
     }
 
+    /// Every corner of every piece of the ribbon.
+    fn points(ribbon: &Ribbon) -> Vec<Vec2> {
+        ribbon.pieces.iter().flatten().copied().collect()
+    }
+
     #[test]
     fn a_spring_smear_settles_onto_the_caret() {
         let mut smear = Smear::new_for_tests(
@@ -326,7 +452,9 @@ mod tests {
         );
         run(&mut smear, spring(), Duration::from_secs(2), STEP);
         assert!(smear.settled());
-        assert_eq!(smear.shown(), caret_rect(30, 4, CaretShape::Block));
+        assert_eq!(smear.shown_head(), caret_rect(30, 4, CaretShape::Block));
+        let ribbon = smear.ribbon(None);
+        assert_eq!(ribbon.pieces.len(), 1, "only the caret is left");
     }
 
     /// The default spring is a smear you can see: on a long jump it stretches well past the
@@ -342,8 +470,8 @@ mod tests {
             let (mut longest, mut overshoot, mut frames) = (0.0f32, 0.0f32, 0);
             while !smear.settled() {
                 smear.advance(STEP, CursorTrailMotion::Spring(spring), 25.0, |_| {});
-                let shown = smear.shown();
-                let xs = shown.iter().map(|corner| corner.x);
+                let points = points(&smear.ribbon(None));
+                let xs = points.iter().map(|corner| corner.x);
                 let right = xs.clone().fold(f32::MIN, f32::max);
                 longest = longest.max(right - xs.fold(f32::MAX, f32::min));
                 // The caret's right edge is column 61.
@@ -367,41 +495,38 @@ mod tests {
         );
     }
 
-    /// On a diagonal the corners between front and tail follow the front, so the smear tapers to
-    /// a point at its tail rather than dragging the caret's full height behind it.
+    /// The smear narrows toward its tail, so a diagonal one is a tapering streak rather than a
+    /// band the caret's full height.
     #[test]
-    fn a_diagonal_smear_tapers_to_its_tail() {
+    fn a_smear_tapers_to_its_tail() {
         let mut smear = Smear::new_for_tests(
             caret_rect(0, 0, CaretShape::Block),
             caret_rect(60, 20, CaretShape::Block),
         );
         smear.advance(STEP * 3, spring(), 0.0, |_| {});
-        // Down and to the right: bottom-right leads, top-left trails.
-        let [top_left, top_right, bottom_right, bottom_left] = smear.shown();
-        for middle in [top_right, bottom_left] {
-            assert!(
-                (middle - bottom_right).length() * 2.0 < (middle - top_left).length(),
-                "{middle:?} sits with the front {bottom_right:?}, not the tail {top_left:?}"
-            );
-        }
+        let ribbon = smear.ribbon(None);
+        let size = |rect: &[Vec2]| (rect[2] - rect[0]).length();
+        let tail_end = &ribbon.pieces[0][..4];
+        let head_end = &ribbon.pieces[ribbon.pieces.len() - 1][4..];
+        assert!(
+            size(tail_end) * 2.0 < size(head_end),
+            "the tail {tail_end:?} is narrower than the head {head_end:?}"
+        );
     }
 
     #[test]
-    fn leading_corners_outrun_trailing_ones() {
+    fn the_head_outruns_the_tail() {
         let mut smear = Smear::new_for_tests(
             caret_rect(0, 0, CaretShape::Block),
             caret_rect(20, 0, CaretShape::Block),
         );
         smear.advance(STEP * 3, spring(), 25.0, |_| {});
-        let shown = smear.shown();
-        // Moving right: the right-hand corners (1, 2) lead.
+        let ribbon = smear.ribbon(None);
+        let head = smear.shown_head();
         assert!(
-            shown[1].x > shown[0].x + 1.5,
-            "the smear stretches: {shown:?}"
-        );
-        assert!(
-            shown[2].x > shown[3].x + 1.5,
-            "the smear stretches: {shown:?}"
+            head[0].x > ribbon.tail.x + 1.5,
+            "the smear stretches: tail {:?}, head {head:?}",
+            ribbon.tail
         );
     }
 
@@ -419,13 +544,13 @@ mod tests {
                     caret_rect(40, 10, CaretShape::Block),
                 );
                 run(&mut smear, motion, Duration::from_millis(100), frame);
-                smear.shown()
+                (smear.shown_head(), smear.ribbon(None).tail)
             };
-            let slow = at(Duration::from_millis(33));
-            let fast = at(Duration::from_nanos(6_944_444));
-            for (slow, fast) in slow.iter().zip(fast.iter()) {
+            let (slow_head, slow_tail) = at(Duration::from_millis(33));
+            let (fast_head, fast_tail) = at(Duration::from_nanos(6_944_444));
+            for (slow, fast) in [(slow_head[0], fast_head[0]), (slow_tail, fast_tail)] {
                 assert!(
-                    (*slow - *fast).length() < 0.75,
+                    (slow - fast).length() < 0.75,
                     "{motion:?}: 30 fps {slow:?} vs 144 fps {fast:?}"
                 );
             }
@@ -437,21 +562,26 @@ mod tests {
     fn a_length_cap_holds_from_the_first_frame() {
         let target = caret_rect(100, 0, CaretShape::Block);
         let smear = Smear::new(caret_rect(0, 0, CaretShape::Block), target, 10.0);
-        for (corner, target) in smear.shown().iter().zip(target.iter()) {
-            assert!((*corner - *target).length() <= 10.0 + 1e-3);
+        for point in points(&smear.ribbon(None)) {
+            assert!((point - center(&target)).length() <= 10.0 + 1.0);
         }
     }
 
     #[test]
-    fn no_corner_trails_further_than_the_maximum_length() {
+    fn the_tail_trails_no_further_than_the_maximum_length() {
         let mut smear = Smear::new_for_tests(
             caret_rect(0, 0, CaretShape::Block),
             caret_rect(100, 0, CaretShape::Block),
         );
-        // Shown corners are a step behind the integration, so look after two.
-        smear.advance(STEP * 2, spring(), 10.0, |_| {});
-        for (corner, target) in smear.shown().iter().zip(smear.target().iter()) {
-            assert!((*corner - *target).length() <= 10.0 + 1e-3);
+        for _ in 0..6 {
+            smear.advance(STEP, spring(), 10.0, |_| {});
+            let ribbon = smear.ribbon(None);
+            let head = center(&smear.shown_head());
+            assert!(
+                (head - ribbon.tail).length() <= 10.0 + 1e-3,
+                "tail {:?} head {head:?}",
+                ribbon.tail
+            );
         }
     }
 
@@ -462,13 +592,13 @@ mod tests {
             caret_rect(20, 0, CaretShape::Block),
         );
         smear.advance(STEP * 2, spring(), 25.0, |_| {});
-        let before = smear.shown();
+        let before = smear.ribbon(None);
         smear.retarget(caret_rect(20, 10, CaretShape::Block));
-        assert_eq!(smear.shown(), before, "no jump on retarget");
+        assert_eq!(smear.ribbon(None), before, "no jump on retarget");
         smear.advance(STEP, spring(), 25.0, |_| {});
         assert!(smear.velocity().x > 0.0, "still travelling right");
         run(&mut smear, spring(), Duration::from_secs(2), STEP);
-        assert_eq!(smear.shown(), caret_rect(20, 10, CaretShape::Block));
+        assert_eq!(smear.shown_head(), caret_rect(20, 10, CaretShape::Block));
     }
 
     #[test]
@@ -481,18 +611,45 @@ mod tests {
             duration: Duration::from_millis(160),
         };
         smear.advance(STEP * 2, glide, 25.0, |_| {});
-        let shown = smear.shown();
         let target = caret_rect(20, 0, CaretShape::Block);
         assert!(
-            (shown[1] - target[1]).length() < 1e-3,
-            "leading corner on the caret"
+            (smear.shown_head()[0] - target[0]).length() < 1e-3,
+            "head on the caret"
         );
-        assert!(
-            shown[0].x < 10.0,
-            "trailing corner still far behind: {shown:?}"
-        );
+        let tail = smear.ribbon(None).tail;
+        assert!(tail.x < 10.0, "tail still far behind: {tail:?}");
         run(&mut smear, glide, Duration::from_millis(200), STEP);
         assert!(smear.settled());
+    }
+
+    /// The ribbon follows the head's path: sent off sideways mid-flight, the smear bends along
+    /// the way the head went instead of cutting the corner.
+    #[test]
+    fn a_smear_sent_elsewhere_follows_the_bend() {
+        let mut smear = Smear::new_for_tests(
+            caret_rect(40, 0, CaretShape::Block),
+            caret_rect(40, 30, CaretShape::Block),
+        );
+        smear.advance(STEP * 3, spring(), 0.0, |_| {});
+        smear.retarget(caret_rect(0, 30, CaretShape::Block));
+        smear.advance(STEP * 2, spring(), 0.0, |_| {});
+        let ribbon = smear.ribbon(None);
+        assert!(ribbon.pieces.len() >= 2, "{} pieces", ribbon.pieces.len());
+        // Every piece hugs the path: no wider than the caret's diagonal.
+        for piece in &ribbon.pieces {
+            let (a, b) = (
+                center(&[piece[0], piece[1], piece[2], piece[3]]),
+                center(&[piece[4], piece[5], piece[6], piece[7]]),
+            );
+            let along = unit(b - a);
+            let across = Vec2::new(-along.y, along.x);
+            let spread = piece.iter().map(|point| (*point - a).dot(across));
+            let width = spread.clone().fold(f32::MIN, f32::max) - spread.fold(f32::MAX, f32::min);
+            assert!(
+                width <= 2f32.sqrt() + 1e-3,
+                "a piece {width} cells wide: {piece:?}"
+            );
+        }
     }
 
     #[test]
