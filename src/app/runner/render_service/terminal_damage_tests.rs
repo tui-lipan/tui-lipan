@@ -2643,3 +2643,49 @@ fn a_cursor_trail_paints_over_full_draws_and_clears_once_it_settles() {
         );
     }
 }
+
+/// Video streamed as anonymous frames, the way mpv's `--vo=kitty` sends it, stacks every frame
+/// over the last at the same cell. Only the newest can show, so it reaches a Kitty host natively,
+/// as one placement, instead of the whole stack being composed into tiles for every frame.
+#[cfg(feature = "terminal-images")]
+#[test]
+fn stacked_video_frames_reach_the_host_natively() {
+    use base64::Engine as _;
+
+    let _host = crate::backend::ratatui_backend::image_support::test_kitty_host((10, 20), true);
+    let mut harness = build(PaneCfg::new(), b"\x1b[?25l\x1b[H");
+    harness
+        .screen
+        .borrow_mut()
+        .set_cell_size(crate::widgets::TerminalCellSize::new(10, 20));
+    for shade in 0..10u8 {
+        let payload =
+            base64::engine::general_purpose::STANDARD.encode([shade, 0, 0].repeat(105 * 45));
+        harness.screen.borrow_mut().process_bytes(
+            format!("\x1b[H\x1b_Ga=T,f=24,s=105,v=45,C=1,q=2;{payload}\x1b\\").as_bytes(),
+        );
+    }
+    harness.runner.core.tree.refresh_live_terminals_detailed();
+    let mut terminal = crate::backend::ratatui_backend::create_test_terminal(COLS, ROWS).unwrap();
+    harness.runner.render_paint_only(&mut terminal).unwrap();
+    let output = String::from_utf8_lossy(&terminal.backend().test_output()).into_owned();
+    let headers: Vec<_> = output
+        .split("\x1b_G")
+        .skip(1)
+        .map(|command| command.split(';').next().unwrap().to_owned())
+        .collect();
+    let placements: Vec<_> = headers.iter().filter(|h| h.starts_with("a=p,")).collect();
+    assert_eq!(
+        placements.len(),
+        1,
+        "one placement for the newest frame: {headers:#?}"
+    );
+    assert!(
+        placements[0].contains("w=105,h=45"),
+        "the frame itself, uncomposed: {headers:#?}"
+    );
+    assert!(
+        headers.iter().all(|h| !h.contains("a=T")),
+        "no composed tile: {headers:#?}"
+    );
+}

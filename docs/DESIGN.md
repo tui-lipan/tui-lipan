@@ -305,6 +305,9 @@ The retained terminal graphics store remains the source for replay, composition,
 capture. Native Kitty rendering stages a desired scene identified by terminal node, logical image
 incarnation, logical placement, and compacted region. Uncovered scanline intervals merge vertically
 when their host and source pixels are contiguous. More than 512 regions selects composition.
+Before either presentation is chosen, a placement that one opaque placement above it covers
+completely is left out. Video streamed as anonymous frames stacks each frame over the last, so only
+the newest is presented, natively when it qualifies, instead of composing the whole stack.
 
 `HostBackend` owns the committed sources and placements. Sources retain client-local image IDs
 across revision changes. Placements retain `p=` IDs and only emit commands for changed geometry or

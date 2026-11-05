@@ -45,7 +45,9 @@
 
 mod composite;
 
-pub(crate) use composite::{composite_terminal_images, terminal_images_use_placements};
+pub(crate) use composite::{
+    composite_terminal_images, terminal_images_use_placements, unoccluded_terminal_images,
+};
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -303,6 +305,16 @@ impl TerminalImage {
             ImageSource::Deferred { input, decoded } => decoded
                 .get_or_init(|| decode_deferred(input).map(Arc::new))
                 .as_ref(),
+        }
+    }
+
+    /// Whether every pixel is opaque, known without decoding: an RGB transmission has no alpha.
+    pub(crate) fn is_opaque(&self) -> bool {
+        match &self.source {
+            ImageSource::File { input, .. } => input.format == 24,
+            ImageSource::Decoded(pixels) => !pixels.color().has_alpha(),
+            // A compressed payload can still fail to inflate, and then draws nothing.
+            ImageSource::Deferred { input, .. } => input.format == 24 && !input.compressed,
         }
     }
 

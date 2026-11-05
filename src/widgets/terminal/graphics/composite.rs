@@ -195,6 +195,8 @@ pub(crate) fn composite_terminal_images(
         return placements.to_vec();
     };
     let cell = geometry.cell;
+    let visible = unoccluded(placements, cell);
+    let placements = visible.as_slice();
     if placements
         .iter()
         .all(|placement| cell_aligned(placement, cell))
@@ -355,6 +357,48 @@ fn compose_tile(
     CachedTile { inputs, image }
 }
 
+/// [`unoccluded`] at the cell size the placements were laid out with. The renderer takes this
+/// before choosing a presentation, since the host is handed stacked placements only when they do
+/// not overlap.
+pub(crate) fn unoccluded_terminal_images(
+    placements: &[TerminalImagePlacement],
+) -> Vec<TerminalImagePlacement> {
+    match placements.first().and_then(|first| first.image.geometry) {
+        Some(geometry) => unoccluded(placements, geometry.cell),
+        None => placements.to_vec(),
+    }
+}
+
+/// The placements of which some pixel can show, in their original order.
+///
+/// A program that streams video as anonymous images, as mpv's `--vo=kitty` does, leaves every
+/// earlier frame placed beneath the newest until the image budget evicts it. A terminal drawing on
+/// the GPU barely notices, but composing would repaint that whole stack for every frame. A
+/// placement drops out only when one opaque placement stacked above it covers all of it.
+fn unoccluded(
+    placements: &[TerminalImagePlacement],
+    cell: (u16, u16),
+) -> Vec<TerminalImagePlacement> {
+    let layers: Vec<_> = placements.iter().map(|p| Layer::new(p, cell)).collect();
+    let order = |layer: &Layer<'_>| (layer.placement.z, layer.placement.image_id);
+    let hidden = |layer: &Layer<'_>| {
+        layers.iter().any(|over| {
+            order(over) > order(layer)
+                && over.placement.image.is_opaque()
+                && over.x <= layer.x
+                && over.y <= layer.y
+                && over.x + i64::from(over.width) >= layer.x + i64::from(layer.width)
+                && over.y + i64::from(over.height) >= layer.y + i64::from(layer.height)
+        })
+    };
+    placements
+        .iter()
+        .zip(&layers)
+        .filter(|(_, layer)| !hidden(layer))
+        .map(|(placement, _)| placement.clone())
+        .collect()
+}
+
 fn cell_aligned(placement: &TerminalImagePlacement, cell: (u16, u16)) -> bool {
     placement.image.geometry.is_some_and(|geometry| {
         geometry.offset == (0, 0)
@@ -478,6 +522,54 @@ mod tests {
             format!("\x1b_Ga=T,f=32,s={width},v={height},C=1,q=2,{keys};{payload}\x1b\\")
                 .as_bytes(),
         );
+    }
+
+    /// A frame the way mpv's `--vo=kitty` sends one: anonymous RGB at the cursor, which stays put.
+    fn video_frame(screen: &mut TerminalScreen, width: u32, height: u32, color: [u8; 3]) {
+        let payload = base64::engine::general_purpose::STANDARD
+            .encode(color.repeat((width * height) as usize));
+        screen.process_bytes(
+            format!("\x1b[H\x1b_Ga=T,f=24,s={width},v={height},C=1,q=2;{payload}\x1b\\").as_bytes(),
+        );
+    }
+
+    /// Streamed video leaves each earlier frame placed beneath the newest. Only the newest can
+    /// show, so it is the only one composed, and the result is what it alone would compose to.
+    #[test]
+    fn frames_hidden_under_an_opaque_frame_are_not_composed() {
+        let mut screen = TerminalScreen::new(16, 32, 0);
+        screen.set_cell_size(TerminalCellSize::new(10, 20));
+        for shade in 0..20 {
+            video_frame(&mut screen, 105, 105, [shade, 0, 0]);
+        }
+        video_frame(&mut screen, 105, 105, [0, 200, 0]);
+        let snapshot = screen.render_snapshot();
+        assert_eq!(snapshot.images.len(), 21, "every frame is still placed");
+        assert_eq!(unoccluded(&snapshot.images, (10, 20)).len(), 1);
+
+        let (_, pixels) = canvas(&mut screen);
+        assert_eq!(pixels.get_pixel(0, 0).0, [0, 200, 0, 255]);
+        assert_eq!(pixels.get_pixel(104, 104).0, [0, 200, 0, 255]);
+        assert_eq!(pixels.get_pixel(105, 0).0, [0, 0, 0, 0]);
+    }
+
+    /// Only a placement covered entirely, by one opaque placement above it, drops out.
+    #[test]
+    fn partly_covered_or_translucent_frames_still_show() {
+        let mut screen = TerminalScreen::new(16, 32, 0);
+        screen.set_cell_size(TerminalCellSize::new(10, 20));
+        video_frame(&mut screen, 105, 105, [0, 0, 200]);
+        video_frame(&mut screen, 50, 50, [200, 0, 0]);
+        screen.process_bytes(b"\x1b[H");
+        transmit(&mut screen, "z=0", 105, 105, [0, 200, 0, 128]);
+        let snapshot = screen.render_snapshot();
+        assert_eq!(unoccluded(&snapshot.images, (10, 20)).len(), 3);
+
+        let (_, pixels) = canvas(&mut screen);
+        let [red, green, blue, alpha] = pixels.get_pixel(10, 10).0;
+        assert!(red > 50 && green > 50 && blue == 0 && alpha == 255);
+        let [red, green, blue, _] = pixels.get_pixel(80, 80).0;
+        assert!(red == 0 && green > 50 && blue > 50);
     }
 
     fn canvas(screen: &mut TerminalScreen) -> (Vec<TerminalImagePlacement>, RgbaImage) {
