@@ -111,6 +111,10 @@ impl TableNode {
 }
 
 impl WidgetNode for TableNode {
+    fn has_secondary_click(&self) -> bool {
+        !self.disabled && self.on_context_menu.is_some()
+    }
+
     fn dispatch_context_menu(
         &self,
         mouse: crate::core::event::MouseEvent,
@@ -175,8 +179,7 @@ impl WidgetNode for TableNode {
 
     fn has_on_click(&self) -> bool {
         !self.disabled
-            && (self.on_context_menu.is_some()
-                || self.on_click.is_some()
+            && (self.on_click.is_some()
                 || self.on_select.is_some()
                 || self.on_activate.is_some()
                 || self.on_scroll_to.is_some()

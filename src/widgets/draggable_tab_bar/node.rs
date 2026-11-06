@@ -155,6 +155,10 @@ impl DraggableTabBarNode {
 }
 
 impl WidgetNode for DraggableTabBarNode {
+    fn has_secondary_click(&self) -> bool {
+        !self.disabled && self.on_context_menu.is_some()
+    }
+
     fn dispatch_context_menu(
         &self,
         mouse: MouseEvent,
@@ -234,7 +238,6 @@ impl WidgetNode for DraggableTabBarNode {
     fn has_on_click(&self) -> bool {
         !self.disabled
             && (self.on_click.is_some()
-                || self.on_context_menu.is_some()
                 || self.on_change.is_some()
                 || self.on_action.is_some()
                 || self.on_close.is_some()

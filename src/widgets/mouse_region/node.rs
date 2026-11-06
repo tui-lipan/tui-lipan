@@ -38,6 +38,22 @@ pub struct MouseRegionNode {
 }
 
 impl WidgetNode for MouseRegionNode {
+    fn primary_hit_test_refinement(&self, x: i16, y: i16, rect: Rect) -> Option<bool> {
+        if !self.has_on_click() {
+            return Some(false);
+        }
+        self.hit_test_refinement(x, y, rect)
+    }
+
+    fn has_secondary_click(&self) -> bool {
+        self.enabled
+            && (self.on_context_menu.is_some()
+                || self.on_middle_click.is_some()
+                || self.on_right_drag_start.is_some()
+                || self.on_right_drag.is_some()
+                || self.on_right_drag_end.is_some())
+    }
+
     fn interactive_pointer_shape_at(
         &self,
         x: i16,
@@ -51,16 +67,11 @@ impl WidgetNode for MouseRegionNode {
     fn has_on_click(&self) -> bool {
         self.enabled
             && (self.on_click.is_some()
-                || self.on_middle_click.is_some()
-                || self.on_context_menu.is_some()
                 || self.on_mouse_down.is_some()
                 || self.on_mouse_up.is_some()
                 || self.on_drag_start.is_some()
                 || self.on_drag.is_some()
-                || self.on_drag_end.is_some()
-                || self.on_right_drag_start.is_some()
-                || self.on_right_drag.is_some()
-                || self.on_right_drag_end.is_some())
+                || self.on_drag_end.is_some())
     }
 
     fn has_on_mouse_move(&self) -> bool {

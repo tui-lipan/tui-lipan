@@ -193,9 +193,28 @@ impl Node {
         self.kind.on_blur_callback()
     }
 
-    /// Returns true if this node has a mouse handler.
+    /// Returns true if this node has primary-button behavior.
     pub fn has_on_click(&self) -> bool {
         self.kind.has_on_click()
+    }
+
+    fn matches_hit_test(&self, x: i16, y: i16, primary: bool) -> bool {
+        let refinement = if primary {
+            self.kind.primary_hit_test_refinement(x, y, self.rect)
+        } else {
+            self.kind.hit_test_refinement(x, y, self.rect)
+        };
+        refinement.unwrap_or_else(|| self.is_interactive())
+    }
+
+    fn matches_secondary_hit_test(&self, x: i16, y: i16) -> bool {
+        if self.kind.has_secondary_click() {
+            return self
+                .kind
+                .secondary_hit_test_refinement(x, y, self.rect)
+                .unwrap_or(true);
+        }
+        self.matches_hit_test(x, y, true)
     }
 
     /// Returns true if this node has a pointer-move handler.
@@ -1104,17 +1123,26 @@ impl NodeTree {
         root: &OverlayRoot,
         x: i16,
         y: i16,
+        button: crate::core::event::MouseButton,
     ) -> bool {
+        let kind = if button == crate::core::event::MouseButton::Left {
+            TestKind::Hit
+        } else {
+            TestKind::SecondaryHit
+        };
         !root.captures_focus
             && !self.overlay_captures_pointer(root, x, y)
-            && self
-                .depth_first_test(root.id, x, y, TestKind::Hit)
-                .is_none()
+            && self.depth_first_test(root.id, x, y, kind).is_none()
     }
 
     /// Return the deepest interactive node at `(x, y)`, respecting overlay layering.
     pub fn hit_test(&self, x: i16, y: i16) -> Option<NodeId> {
         self.do_test(x, y, TestKind::Hit)
+    }
+
+    /// Pick right/middle-button targets without adding them to primary-click participation.
+    pub(crate) fn secondary_hit_test(&self, x: i16, y: i16) -> Option<NodeId> {
+        self.do_test(x, y, TestKind::SecondaryHit)
     }
 
     /// Hit-test wheel input, skipping regions that explicitly forward it to lower layers.
@@ -1726,12 +1754,11 @@ impl NodeTree {
                 TestKind::Hit | TestKind::Wheel | TestKind::DropTarget(_) => {
                     if matches!(kind, TestKind::DropTarget(targets) if targets.contains(&done.id)) {
                         true
-                    } else if let Some(hit) = node.kind.hit_test_refinement(x, y, node.rect) {
-                        hit
                     } else {
-                        node.is_interactive()
+                        node.matches_hit_test(x, y, matches!(kind, TestKind::Hit))
                     }
                 }
+                TestKind::SecondaryHit => node.matches_secondary_hit_test(x, y),
                 TestKind::Hover => {
                     if let Some(hit) = node.kind.hover_test_refinement(x, y, node.rect) {
                         hit && node.is_hoverable()
@@ -2010,6 +2037,7 @@ impl NodeTree {
 #[derive(Clone, Copy)]
 enum TestKind<'a> {
     Hit,
+    SecondaryHit,
     Wheel,
     DropTarget(&'a [NodeId]),
     Hover,

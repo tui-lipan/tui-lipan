@@ -52,7 +52,12 @@ pub(crate) trait WidgetNode {
     fn on_blur_callback(&self) -> Option<&Callback<()>> {
         None
     }
+    /// Whether primary-button input has widget behavior. Secondary callbacks do not count.
     fn has_on_click(&self) -> bool {
+        false
+    }
+    /// Whether right/middle-button input has widget behavior, independently of primary clicks.
+    fn has_secondary_click(&self) -> bool {
         false
     }
     /// Resolve and emit an opt-in context menu without changing widget state.
@@ -110,6 +115,14 @@ pub(crate) trait WidgetNode {
     /// Refine hit-testing. Returns Some(true/false) to override default interactive check.
     fn hit_test_refinement(&self, _x: i16, _y: i16, _rect: Rect) -> Option<bool> {
         None
+    }
+    /// Refine primary picking separately when a geometric mask alone must not create a target.
+    fn primary_hit_test_refinement(&self, x: i16, y: i16, rect: Rect) -> Option<bool> {
+        self.hit_test_refinement(x, y, rect)
+    }
+    /// Refine secondary picking without requiring a primary callback or moving focus.
+    fn secondary_hit_test_refinement(&self, x: i16, y: i16, rect: Rect) -> Option<bool> {
+        self.hit_test_refinement(x, y, rect)
     }
     /// Refine hover-testing. Defaults to the hit-test refinement for widgets whose
     /// pointer target shape is the same for clicks and hover.
@@ -388,6 +401,10 @@ impl WidgetNode for NodeKind {
         node_kind_delegate_match!(self, has_on_click())
     }
 
+    fn has_secondary_click(&self) -> bool {
+        node_kind_delegate_match!(self, has_secondary_click())
+    }
+
     fn dispatch_context_menu(
         &self,
         mouse: crate::core::event::MouseEvent,
@@ -433,6 +450,14 @@ impl WidgetNode for NodeKind {
 
     fn hit_test_refinement(&self, x: i16, y: i16, rect: Rect) -> Option<bool> {
         node_kind_delegate_match!(self, hit_test_refinement(x, y, rect))
+    }
+
+    fn primary_hit_test_refinement(&self, x: i16, y: i16, rect: Rect) -> Option<bool> {
+        node_kind_delegate_match!(self, primary_hit_test_refinement(x, y, rect))
+    }
+
+    fn secondary_hit_test_refinement(&self, x: i16, y: i16, rect: Rect) -> Option<bool> {
+        node_kind_delegate_match!(self, secondary_hit_test_refinement(x, y, rect))
     }
 
     fn hover_test_refinement(&self, x: i16, y: i16, rect: Rect) -> Option<bool> {

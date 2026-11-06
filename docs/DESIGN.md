@@ -158,6 +158,12 @@ Mouse flow:
 - Click, drag, scroll, move, and scrollbar thumb drags use explicit routed state.
 - Motion and scroll streams may be coalesced for render efficiency.
 
+Primary and secondary pointer picking share traversal, clipping and overlay ordering, but
+use separate widget capabilities. `has_on_click` describes primary-button behavior;
+`has_secondary_click` describes context menus, middle clicks and right drags. Secondary-only
+widgets cannot become ordinary click targets or advertise semantic Click actions.
+Secondary hit refinements keep diagram item geometry independent of primary callbacks.
+
 Context-menu routing walks the hit node's ancestors once. `WidgetNode::dispatch_context_menu`
 resolves typed targets in each primitive; a shared emitter combines the target with the
 original `MouseEvent`. List-based composites forward and translate that event into their

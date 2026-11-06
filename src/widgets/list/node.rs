@@ -117,6 +117,10 @@ impl ListNode {
 }
 
 impl WidgetNode for ListNode {
+    fn has_secondary_click(&self) -> bool {
+        !self.disabled && self.on_context_menu.is_some()
+    }
+
     fn dispatch_context_menu(
         &self,
         mouse: MouseEvent,
@@ -186,7 +190,6 @@ impl WidgetNode for ListNode {
                 || self.on_item_click.is_some()
                 || self.on_activate.is_some()
                 || self.on_ctrl_activate.is_some()
-                || self.on_context_menu.is_some()
                 || self.on_scroll_to.is_some()
                 || self.scrollbar
                 || self.show_scroll_indicators

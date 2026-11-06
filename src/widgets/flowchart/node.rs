@@ -182,6 +182,12 @@ impl From<Flowchart> for FlowchartNode {
 }
 
 impl FlowchartNode {
+    fn contains_item_at(&self, rect: Rect, x: i16, y: i16) -> bool {
+        self.local_content_point(rect, x, y)
+            .and_then(|(local_x, local_y)| self.hit_test(local_x, local_y))
+            .is_some()
+    }
+
     pub(crate) fn content_rect(&self, rect: Rect) -> Rect {
         flowchart_content_rect(rect, self.border, self.padding)
     }
@@ -287,6 +293,14 @@ impl FlowchartNode {
 }
 
 impl WidgetNode for FlowchartNode {
+    fn secondary_hit_test_refinement(&self, x: i16, y: i16, rect: Rect) -> Option<bool> {
+        Some(self.contains_item_at(rect, x, y))
+    }
+
+    fn has_secondary_click(&self) -> bool {
+        self.on_context_menu.is_some()
+    }
+
     fn dispatch_context_menu(
         &self,
         mouse: crate::core::event::MouseEvent,
@@ -305,8 +319,7 @@ impl WidgetNode for FlowchartNode {
     }
 
     fn has_on_click(&self) -> bool {
-        self.on_context_menu.is_some()
-            || self.on_node_click.is_some()
+        self.on_node_click.is_some()
             || self.on_edge_click.is_some()
             || self.on_subgraph_click.is_some()
     }
@@ -330,11 +343,8 @@ impl WidgetNode for FlowchartNode {
     }
 
     fn hit_test_refinement(&self, x: i16, y: i16, rect: Rect) -> Option<bool> {
-        self.has_on_click().then(|| {
-            self.local_content_point(rect, x, y)
-                .and_then(|(local_x, local_y)| self.hit_test(local_x, local_y))
-                .is_some()
-        })
+        self.has_on_click()
+            .then(|| self.contains_item_at(rect, x, y))
     }
 
     fn hover_test_refinement(&self, x: i16, y: i16, rect: Rect) -> Option<bool> {
@@ -342,11 +352,7 @@ impl WidgetNode for FlowchartNode {
             return Some(false);
         }
 
-        Some(
-            self.local_content_point(rect, x, y)
-                .and_then(|(local_x, local_y)| self.hit_test(local_x, local_y))
-                .is_some(),
-        )
+        Some(self.contains_item_at(rect, x, y))
     }
 }
 

@@ -94,6 +94,10 @@ impl InputNode {
 }
 
 impl WidgetNode for InputNode {
+    fn has_secondary_click(&self) -> bool {
+        !self.disabled && self.on_context_menu.is_some()
+    }
+
     fn dispatch_context_menu(
         &self,
         mouse: crate::core::event::MouseEvent,
@@ -127,10 +131,7 @@ impl WidgetNode for InputNode {
     }
     fn has_on_click(&self) -> bool {
         !self.disabled
-            && (self.on_context_menu.is_some()
-                || self.on_click.is_some()
-                || self.on_change.is_some()
-                || self.on_key.is_some())
+            && (self.on_click.is_some() || self.on_change.is_some() || self.on_key.is_some())
     }
     fn is_hoverable_for_theme(&self, theme: &Theme) -> bool {
         // Only hoverable if explicitly styled for hover, or has an on_click handler.

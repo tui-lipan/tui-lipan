@@ -143,6 +143,12 @@ impl From<Graph> for GraphRenderNode {
 }
 
 impl GraphRenderNode {
+    fn contains_item_at(&self, rect: Rect, x: i16, y: i16) -> bool {
+        self.local_content_point(rect, x, y)
+            .and_then(|(local_x, local_y)| self.hit_test(local_x, local_y))
+            .is_some()
+    }
+
     pub(crate) fn content_rect(&self, rect: Rect) -> Rect {
         graph_content_rect(rect, self.border, self.padding)
     }
@@ -272,6 +278,14 @@ impl GraphRenderNode {
 }
 
 impl WidgetNode for GraphRenderNode {
+    fn secondary_hit_test_refinement(&self, x: i16, y: i16, rect: Rect) -> Option<bool> {
+        Some(self.contains_item_at(rect, x, y))
+    }
+
+    fn has_secondary_click(&self) -> bool {
+        self.on_context_menu.is_some()
+    }
+
     fn dispatch_context_menu(
         &self,
         mouse: crate::core::event::MouseEvent,
@@ -298,9 +312,7 @@ impl WidgetNode for GraphRenderNode {
     }
 
     fn has_on_click(&self) -> bool {
-        self.on_context_menu.is_some()
-            || self.on_node_click.is_some()
-            || self.on_node_focus.is_some()
+        self.on_node_click.is_some() || self.on_node_focus.is_some()
     }
 
     fn is_hoverable(&self) -> bool {
@@ -323,11 +335,7 @@ impl WidgetNode for GraphRenderNode {
             return None;
         }
 
-        Some(
-            self.local_content_point(rect, x, y)
-                .and_then(|(local_x, local_y)| self.hit_test(local_x, local_y))
-                .is_some(),
-        )
+        Some(self.contains_item_at(rect, x, y))
     }
 
     fn hover_test_refinement(&self, x: i16, y: i16, rect: Rect) -> Option<bool> {
@@ -335,11 +343,7 @@ impl WidgetNode for GraphRenderNode {
             return Some(false);
         }
 
-        Some(
-            self.local_content_point(rect, x, y)
-                .and_then(|(local_x, local_y)| self.hit_test(local_x, local_y))
-                .is_some(),
-        )
+        Some(self.contains_item_at(rect, x, y))
     }
 }
 

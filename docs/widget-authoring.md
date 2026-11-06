@@ -290,9 +290,13 @@ The `WidgetNode` trait hooks control input behavior:
 | `is_focusable()` | Can this node receive keyboard focus? |
 | `is_tab_stop()` | Should next/previous traversal include this focusable node? |
 | `on_focus_callback()` / `on_blur_callback()` | Optional post-reconcile focus transition callbacks |
-| `has_on_click()` | Is this node a click target? |
+| `has_on_click()` | Does this node have primary-button behavior? Do not count context menus or other secondary handlers |
+| `has_secondary_click()` | Does this node accept right/middle-button input? |
+| `dispatch_context_menu(mouse, rect, parent_border_x)` | Resolve and emit a typed context-menu request without changing focus or selection |
 | `is_hoverable()` | Should hover state be tracked? |
-| `hit_test_refinement(x, y, rect)` | Override hit-test for partial-area widgets |
+| `hit_test_refinement(x, y, rect)` | Refine shared pointer geometry for partial-area widgets |
+| `primary_hit_test_refinement(x, y, rect)` | Refine primary picking; defaults to shared geometry |
+| `secondary_hit_test_refinement(x, y, rect)` | Refine right/middle picking independently of primary callbacks |
 | `scrollbar_zones(...)` | Expose scrollbar hit zones |
 
 ### Reconcile (`reconcile.rs`)
@@ -584,6 +588,14 @@ invoke them from the renderer or reconcile function. Stable element keys dedupli
 across remounts.
 
 ### Hit-testing
+
+Right and middle clicks use a separate picking mode. Set `has_secondary_click()`
+for context menus or other secondary-button behavior; keep those callbacks out
+of `has_on_click()`, which also controls semantic Click support. If a widget's
+primary hit refinement depends on primary callbacks, implement
+`secondary_hit_test_refinement()` using its item geometry so a menu-only widget
+remains reachable. Primary and secondary picking share clipping, layering and
+overlay capture rules.
 
 By default, any node with `has_on_click() == true` or `is_focusable() == true`
 is a click target within its full rect. Override `hit_test_refinement()` to restrict

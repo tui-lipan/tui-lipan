@@ -232,6 +232,10 @@ pub(crate) fn apply_terminal_selection_input(
 }
 
 impl WidgetNode for TerminalNode {
+    fn has_secondary_click(&self) -> bool {
+        self.on_context_menu.is_some()
+    }
+
     fn dispatch_context_menu(
         &self,
         mouse: crate::core::event::MouseEvent,
@@ -271,8 +275,7 @@ impl WidgetNode for TerminalNode {
     }
 
     fn has_on_click(&self) -> bool {
-        self.on_context_menu.is_some()
-            || self.on_scroll.is_some()
+        self.on_scroll.is_some()
             || self.on_scroll_to.is_some()
             || self.scrollbar
             || self.scroll_wheel

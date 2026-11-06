@@ -112,7 +112,10 @@ the active tab. Document and diff callbacks resolve the clicked source position
 through wrapping and scrolling. Diff menus also accept the source-line gutter;
 separators and synthetic wrap-padding rows have no source target. Diagram callbacks
 exclude empty canvas cells. A context-menu callback alone does not request a
-hand cursor in Interactive pointer mode.
+hand cursor in Interactive pointer mode. Adding a context menu also preserves
+ordinary left-click routing and does not advertise a semantic `Click` action by itself.
+For example, a context-menu-only diagram inside `MouseRegion::on_click` still lets
+left clicks reach that enclosing region, while right clicks target the diagram item.
 
 For a menu applying to an entire panel, wrap it with
 `MouseRegion::on_context_menu`. It provides local coordinates and target size

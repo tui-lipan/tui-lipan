@@ -640,3 +640,203 @@ fn context_menu_diff_ignores_synthetic_wrap_alignment_rows() {
         );
     }
 }
+
+fn secondary_only_diagram(kind: u8, menus: Rc<std::cell::Cell<usize>>) -> Element {
+    fn callback<T: 'static>(menus: Rc<std::cell::Cell<usize>>) -> Callback<(T, MouseEvent)> {
+        Callback::new(move |_| menus.set(menus.get() + 1))
+    }
+    match kind {
+        0 => Graph::new()
+            .root(GraphNode::new("root"))
+            .padding((1, 2))
+            .width(Length::Px(40))
+            .height(Length::Px(12))
+            .on_context_menu(callback(menus))
+            .into(),
+        1 => Flowchart::new(FlowDirection::TopDown)
+            .node("root", "root", NodeShape::Rect)
+            .padding((1, 2))
+            .width(Length::Px(40))
+            .height(Length::Px(12))
+            .on_context_menu(callback(menus))
+            .into(),
+        _ => SequenceDiagram::new()
+            .participant("Alice")
+            .participant("Bob")
+            .message(SequenceMessage::new("Alice", "Bob", "hello"))
+            .padding((1, 2))
+            .width(Length::Px(40))
+            .height(Length::Px(12))
+            .on_context_menu(callback(menus))
+            .into(),
+    }
+}
+
+fn diagram_cell(backend: &TestBackend<View>) -> (u16, u16) {
+    backend
+        .core
+        .tree
+        .iter()
+        .find_map(|node| {
+            (node.rect.y..node.rect.y.saturating_add(node.rect.h as i16)).find_map(|y| {
+                (node.rect.x..node.rect.x.saturating_add(node.rect.w as i16)).find_map(|x| {
+                    let hit = match &node.kind {
+                        NodeKind::Graph(graph) => graph
+                            .local_content_point(node.rect, x, y)
+                            .and_then(|(x, y)| graph.hit_test(x, y))
+                            .is_some(),
+                        NodeKind::Flowchart(flow) => flow
+                            .local_content_point(node.rect, x, y)
+                            .and_then(|(x, y)| flow.hit_test(x, y))
+                            .is_some(),
+                        NodeKind::SequenceDiagram(sequence) => sequence
+                            .local_content_point(node.rect, x, y)
+                            .and_then(|(x, y)| sequence.hit_test(x, y))
+                            .is_some(),
+                        _ => false,
+                    };
+                    hit.then_some((x as u16, y as u16))
+                })
+            })
+        })
+        .expect("diagram has a rendered item")
+}
+
+#[test]
+fn context_menu_only_diagrams_preserve_ancestor_primary_clicks() {
+    for kind in 0..3 {
+        let menus = Rc::new(std::cell::Cell::new(0));
+        let (clicks, on_click) = capture();
+        let mut backend = mount(
+            MouseRegion::new()
+                .child(secondary_only_diagram(kind, menus.clone()))
+                .on_click(on_click),
+        );
+        let (x, y) = diagram_cell(&backend);
+        for mouse_kind in [
+            MouseKind::Down(MouseButton::Left),
+            MouseKind::Up(MouseButton::Left),
+        ] {
+            backend
+                .send_mouse(MouseEvent {
+                    x,
+                    y,
+                    kind: mouse_kind,
+                    mods: KeyMods::NONE,
+                })
+                .unwrap();
+        }
+        assert_eq!(
+            clicks.borrow().len(),
+            1,
+            "diagram {kind}: parent receives plain left click"
+        );
+        assert_eq!(menus.get(), 0);
+        right_click(&mut backend, x, y);
+        assert_eq!(
+            menus.get(),
+            1,
+            "diagram {kind}: right click reaches item menu"
+        );
+        assert_eq!(clicks.borrow().len(), 1);
+    }
+}
+
+#[test]
+fn context_menu_only_diagrams_do_not_advertise_semantic_click() {
+    use crate::automation::{AutomationId, SemanticAction};
+    for kind in 0..3 {
+        let element = secondary_only_diagram(kind, Default::default()).automation_id("diagram");
+        let backend = mount(element);
+        let tree = backend.core.semantic_tree(backend.focused());
+        let targets = tree.by_id(&AutomationId::new("diagram"));
+        assert_eq!(targets.len(), 1);
+        assert!(
+            !targets[0].actions.contains(&SemanticAction::Click),
+            "diagram {kind}: a secondary action is not a semantic Click"
+        );
+    }
+}
+
+#[test]
+fn context_menu_only_diagrams_do_not_occlude_primary_targets_in_passthrough_layers() {
+    for kind in 0..3 {
+        let menus = Rc::new(std::cell::Cell::new(0));
+        let (clicks, on_click) = capture();
+        let mut backend = mount(
+            ZStack::new()
+                .passthrough(true)
+                .child(
+                    Button::new("underlying button")
+                        .width(Length::Px(40))
+                        .height(Length::Px(12))
+                        .on_click(on_click),
+                )
+                .child(secondary_only_diagram(kind, menus.clone())),
+        );
+        let (x, y) = diagram_cell(&backend);
+        for kind in [
+            MouseKind::Down(MouseButton::Left),
+            MouseKind::Up(MouseButton::Left),
+        ] {
+            backend
+                .send_mouse(MouseEvent {
+                    x,
+                    y,
+                    kind,
+                    mods: KeyMods::NONE,
+                })
+                .unwrap();
+        }
+        assert_eq!(
+            clicks.borrow().len(),
+            1,
+            "diagram {kind}: ordinary picking passes through"
+        );
+        right_click(&mut backend, x, y);
+        assert_eq!(
+            menus.get(),
+            1,
+            "diagram {kind}: secondary picking hits the upper layer"
+        );
+        assert_eq!(clicks.borrow().len(), 1);
+    }
+}
+
+#[test]
+fn context_menu_only_regions_preserve_primary_routing_and_custom_hit_masks() {
+    let (clicks, on_click) = capture();
+    let (menus, on_context_menu) = capture();
+    let (ancestor_menus, on_ancestor_menu) = capture();
+    let mut backend = mount(
+        MouseRegion::new()
+            .on_click(on_click)
+            .on_context_menu(on_ancestor_menu)
+            .child(
+                MouseRegion::new()
+                    .hit_test(|x, _| x == 0)
+                    .on_context_menu(on_context_menu)
+                    .child(Text::new("row").width(Length::Px(4)).height(Length::Px(1))),
+            ),
+    );
+    for kind in [
+        MouseKind::Down(MouseButton::Left),
+        MouseKind::Up(MouseButton::Left),
+    ] {
+        backend
+            .send_mouse(MouseEvent {
+                x: 0,
+                y: 0,
+                kind,
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+    }
+    assert_eq!(clicks.borrow().len(), 1);
+    right_click(&mut backend, 0, 0);
+    assert_eq!(menus.borrow().len(), 1);
+    assert!(ancestor_menus.borrow().is_empty());
+    right_click(&mut backend, 1, 0);
+    assert_eq!(menus.borrow().len(), 1);
+    assert_eq!(ancestor_menus.borrow().len(), 1);
+}

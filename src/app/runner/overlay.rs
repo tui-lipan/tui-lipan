@@ -55,7 +55,7 @@ impl<C: Component> AppRunner<C> {
                 if self
                     .core
                     .tree
-                    .overlay_allows_pointer_passthrough(overlay, x as i16, y as i16)
+                    .overlay_allows_pointer_passthrough(overlay, x as i16, y as i16, button)
                 {
                     continue;
                 }

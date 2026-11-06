@@ -361,6 +361,17 @@ pub(crate) struct DocumentViewNode {
 }
 
 impl WidgetNode for DocumentViewNode {
+    fn has_secondary_click(&self) -> bool {
+        let secondary = self.on_context_menu.is_some();
+        #[cfg(feature = "diff-view")]
+        let secondary = secondary
+            || self
+                .diff_line_click
+                .as_ref()
+                .is_some_and(|config| config.on_context_menu.is_some());
+        secondary
+    }
+
     fn dispatch_context_menu(
         &self,
         mouse: crate::core::event::MouseEvent,
@@ -415,8 +426,7 @@ impl WidgetNode for DocumentViewNode {
     }
 
     fn has_on_click(&self) -> bool {
-        self.on_context_menu.is_some()
-            || self.on_click.is_some()
+        self.on_click.is_some()
             || self.has_diff_context_separator_click()
             || self.has_diff_line_click()
             || self.on_scroll.is_some()
@@ -553,7 +563,9 @@ impl DocumentViewNode {
     fn has_diff_line_click(&self) -> bool {
         #[cfg(feature = "diff-view")]
         {
-            self.diff_line_click.is_some()
+            self.diff_line_click
+                .as_ref()
+                .is_some_and(|config| config.on_click.is_some() || config.on_range_select.is_some())
         }
         #[cfg(not(feature = "diff-view"))]
         {
