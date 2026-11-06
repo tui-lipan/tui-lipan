@@ -2689,3 +2689,64 @@ fn stacked_video_frames_reach_the_host_natively() {
         "no composed tile: {headers:#?}"
     );
 }
+
+/// After the first paint, each new video frame is a graphics-only update. It stacks on the frames
+/// before it, and still reaches the host as one native placement without repainting cells.
+#[cfg(feature = "terminal-images")]
+#[test]
+fn a_new_video_frame_presents_natively_without_a_repaint() {
+    use base64::Engine as _;
+
+    let _host = crate::backend::ratatui_backend::image_support::test_kitty_host((10, 20), true);
+    let mut harness = build(PaneCfg::new(), b"stable\x1b[?25l\x1b[H");
+    harness
+        .screen
+        .borrow_mut()
+        .set_cell_size(crate::widgets::TerminalCellSize::new(10, 20));
+    let frame = |shade: u8| {
+        let payload =
+            base64::engine::general_purpose::STANDARD.encode([shade, 0, 0].repeat(105 * 45));
+        format!("\x1b_Ga=T,f=24,s=105,v=45,C=1,q=2;{payload}\x1b\\")
+    };
+    for shade in 0..5u8 {
+        harness
+            .screen
+            .borrow_mut()
+            .process_bytes(frame(shade).as_bytes());
+    }
+    harness.runner.core.tree.refresh_live_terminals_detailed();
+    let mut terminal = crate::backend::ratatui_backend::create_test_terminal(COLS, ROWS).unwrap();
+    harness.runner.render_paint_only(&mut terminal).unwrap();
+    let retained = harness.runner.last_frame_snapshot.clone();
+
+    for shade in 5..8u8 {
+        let start = terminal.backend().test_output().len();
+        let mutation = harness
+            .screen
+            .borrow_mut()
+            .process_bytes(frame(shade).as_bytes());
+        assert_eq!(mutation.cells, crate::widgets::TerminalDamage::None);
+        let refresh = harness.runner.core.tree.refresh_live_terminals_detailed();
+        assert_eq!(refresh.graphics_only.len(), 1);
+        assert!(
+            harness
+                .runner
+                .try_present_terminal_graphics(&mut terminal, &refresh)
+                .unwrap(),
+            "the graphics-only path takes the frame"
+        );
+        assert_eq!(harness.runner.last_frame_snapshot, retained);
+        let output = terminal.backend().test_output();
+        let update = String::from_utf8_lossy(&output[start..]).into_owned();
+        assert!(!update.contains("stable"), "no cell repaint: {update:?}");
+        let headers: Vec<_> = update
+            .split("\x1b_G")
+            .skip(1)
+            .map(|command| command.split(';').next().unwrap().to_owned())
+            .collect();
+        let placements: Vec<_> = headers.iter().filter(|h| h.starts_with("a=p,")).collect();
+        assert_eq!(placements.len(), 1, "{headers:#?}");
+        assert!(placements[0].contains("w=105,h=45"), "{headers:#?}");
+        assert!(headers.iter().all(|h| !h.contains("a=T")), "{headers:#?}");
+    }
+}

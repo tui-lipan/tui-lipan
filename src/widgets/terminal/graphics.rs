@@ -203,6 +203,8 @@ pub(crate) struct ImageGeometry {
 #[derive(Debug)]
 struct DeferredDecode {
     payload: std::sync::Mutex<Option<Vec<u8>>>,
+    /// Uncompressed RGB with every pixel's bytes present, so it is known to draw opaque.
+    opaque: bool,
     compressed: bool,
     format: u32,
     width: u32,
@@ -309,12 +311,18 @@ impl TerminalImage {
     }
 
     /// Whether every pixel is opaque, known without decoding: an RGB transmission has no alpha.
+    ///
+    /// Only a payload certain to decode qualifies, because one that fails draws nothing and must
+    /// not hide what is under it. A compressed payload can fail to inflate, so it never qualifies.
     pub(crate) fn is_opaque(&self) -> bool {
         match &self.source {
-            ImageSource::File { input, .. } => input.format == 24,
+            ImageSource::File { input, decoded } => {
+                input.format == 24 && !matches!(decoded.get(), Some(None))
+            }
             ImageSource::Decoded(pixels) => !pixels.color().has_alpha(),
-            // A compressed payload can still fail to inflate, and then draws nothing.
-            ImageSource::Deferred { input, .. } => input.format == 24 && !input.compressed,
+            ImageSource::Deferred { input, decoded } => {
+                input.opaque && !matches!(decoded.get(), Some(None))
+            }
         }
     }
 
@@ -3114,6 +3122,9 @@ impl TerminalGraphics {
                         native: Arc::default(),
                         source: ImageSource::Deferred {
                             input: Arc::new(DeferredDecode {
+                                opaque: channels == 3
+                                    && !command.compressed
+                                    && payload.len() >= bytes,
                                 payload: std::sync::Mutex::new(Some(payload)),
                                 compressed: command.compressed,
                                 format: command.format,

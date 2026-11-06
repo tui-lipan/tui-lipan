@@ -553,6 +553,24 @@ mod tests {
         assert_eq!(pixels.get_pixel(105, 0).0, [0, 0, 0, 0]);
     }
 
+    /// A frame whose payload is short decodes to nothing, so it must not hide the frame under it.
+    #[test]
+    fn a_truncated_frame_does_not_hide_the_frame_below() {
+        let mut screen = TerminalScreen::new(16, 32, 0);
+        screen.set_cell_size(TerminalCellSize::new(10, 20));
+        video_frame(&mut screen, 105, 105, [0, 200, 0]);
+        let short = base64::engine::general_purpose::STANDARD.encode([200u8, 0, 0].repeat(105));
+        screen.process_bytes(
+            format!("\x1b[H\x1b_Ga=T,f=24,s=105,v=105,C=1,q=2;{short}\x1b\\").as_bytes(),
+        );
+        let snapshot = screen.render_snapshot();
+        assert_eq!(unoccluded(&snapshot.images, (10, 20)).len(), 2);
+
+        let (_, pixels) = canvas(&mut screen);
+        assert_eq!(pixels.get_pixel(0, 0).0, [0, 200, 0, 255]);
+        assert_eq!(pixels.get_pixel(104, 104).0, [0, 200, 0, 255]);
+    }
+
     /// Only a placement covered entirely, by one opaque placement above it, drops out.
     #[test]
     fn partly_covered_or_translucent_frames_still_show() {
