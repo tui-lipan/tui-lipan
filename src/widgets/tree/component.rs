@@ -28,6 +28,7 @@ pub(crate) enum TreeMsg {
     Select(usize),
     Activate(usize),
     CtrlActivate(usize),
+    ContextMenu(usize, crate::core::event::MouseEvent),
     Action(TreeAction),
     Toggle(usize),
     /// A mouse click on a row, beyond its selection and activation.
@@ -111,6 +112,21 @@ impl Component for TreeComponent {
                 Some(entry) if click.toggles(entry.node, &ctx.props) => rich::toggle(ctx, index),
                 _ => Update::none(),
             },
+            TreeMsg::ContextMenu(index, mouse) => {
+                if let Some(cb) = &ctx.props.on_context_menu
+                    && let Some(entry) = entry_at_index(&ctx.props, &ctx.state, index)
+                    && entry.node.item.is_selectable()
+                {
+                    cb.emit((
+                        TreeEvent {
+                            index,
+                            path: entry.path.clone(),
+                        },
+                        mouse,
+                    ));
+                }
+                Update::none()
+            }
             TreeMsg::CtrlActivate(index) => {
                 if let Some(entry) = entry_at_index(&ctx.props, &ctx.state, index)
                     .filter(|entry| entry.node.item.is_selectable())
@@ -254,6 +270,14 @@ impl Component for TreeComponent {
             .on_item_click(on_item_click)
             .on_activate(on_activate)
             .on_key(on_key);
+        if ctx.props.on_context_menu.is_some() {
+            let rows = rows.clone();
+            list = list.on_context_menu(ctx.link().callback(
+                move |(event, mouse): (crate::widgets::ListEvent, _)| {
+                    TreeMsg::ContextMenu(rows.row(event.index), mouse)
+                },
+            ));
+        }
         if ctx.props.on_ctrl_activate.is_some() {
             list = list.on_ctrl_activate(ctx.link().callback(
                 move |event: crate::widgets::ListEvent| {

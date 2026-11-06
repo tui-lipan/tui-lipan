@@ -76,6 +76,28 @@ pub struct ListEvent {
 }
 ```
 
+### Row context menus
+
+`List::on_context_menu`, `Tree::on_context_menu`, and `FileTree::on_context_menu`
+receive `(ListEvent, MouseEvent)`, `(TreeEvent, MouseEvent)`, and
+`(FileTreeEvent, MouseEvent)` respectively. The first event identifies the clicked
+row in its own model; `MouseEvent` supplies the popup anchor in terminal content
+coordinates. Right-clicking preserves selection and expansion. The runtime
+consumes the full right-button gesture, so its release cannot activate a new
+popup or fall through to terminal clipboard handling. Non-selectable rows,
+borders, scroll indicators, and scrollbar tracks do not emit a row event.
+
+For example, keep the popup's file path and anchor in application state:
+
+```rust,ignore
+FileTree::new("/repo").on_context_menu(ctx.link().callback(
+    |(file, mouse): (FileTreeEvent, MouseEvent)| Message::OpenFileMenu {
+        path: file.path,
+        anchor: (mouse.x, mouse.y),
+    },
+))
+```
+
 ### `FileTreeEntryRequest`
 
 Emitted by: `FileTree::on_entry_request` when an expanded directory is absent from

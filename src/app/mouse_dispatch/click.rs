@@ -242,6 +242,11 @@ fn dispatch_secondary_click(
                     return true;
                 }
             }
+            NodeKind::List(list) if !middle => {
+                if dispatch_list_context_menu(list, node, mouse) {
+                    return true;
+                }
+            }
             NodeKind::DraggableTabBar(bar) if !middle && !bar.disabled => {
                 if let Some(callback) = &bar.on_context_menu {
                     let index = context_menu_tab_index(bar, node.rect, mouse);
@@ -256,6 +261,33 @@ fn dispatch_secondary_click(
         };
         hit = parent;
     }
+}
+
+fn dispatch_list_context_menu(
+    list: &crate::widgets::internal::ListNode,
+    node: &crate::core::node::Node,
+    mouse: MouseEvent,
+) -> bool {
+    use crate::core::node::WidgetNode;
+    let Some(callback) = &list.on_context_menu else {
+        return false;
+    };
+    if list.disabled
+        || list
+            .scrollbar_zones(node.id, node.rect, None, None)
+            .iter()
+            .any(|zone| zone.contains(mouse.x as i16, mouse.y as i16))
+    {
+        return false;
+    }
+    let Some(index) = list.context_menu_item_at(mouse.x as i16, mouse.y as i16, node.rect) else {
+        return false;
+    };
+    callback.emit((
+        crate::widgets::ListEvent::click(index, mouse.mods, 1),
+        mouse,
+    ));
+    true
 }
 
 fn context_menu_tab_index(

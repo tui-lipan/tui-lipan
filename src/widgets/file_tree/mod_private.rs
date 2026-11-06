@@ -132,6 +132,7 @@ pub(crate) struct FileTreeProps {
     pub(crate) on_select: Option<Callback<FileTreeEvent>>,
     pub(crate) on_activate: Option<Callback<FileTreeEvent>>,
     pub(crate) on_ctrl_activate: Option<Callback<FileTreeEvent>>,
+    pub(crate) on_context_menu: Option<Callback<(FileTreeEvent, crate::core::event::MouseEvent)>>,
     pub(crate) on_toggle: Option<Callback<FileTreeToggleEvent>>,
     pub(crate) on_entry_request: Option<Callback<super::events::FileTreeEntryRequest>>,
 }

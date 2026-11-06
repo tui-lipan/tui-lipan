@@ -505,6 +505,7 @@ impl FileTree {
                 on_select: None,
                 on_activate: None,
                 on_ctrl_activate: None,
+                on_context_menu: None,
                 on_toggle: None,
                 on_entry_request: None,
             },
@@ -1486,6 +1487,17 @@ impl FileTree {
     /// selection callbacks still run for pointer selection.
     pub fn on_ctrl_activate(mut self, cb: Callback<FileTreeEvent>) -> Self {
         self.props.on_ctrl_activate = Some(cb);
+        self
+    }
+
+    /// Handle a right-button press on a visible entry without selecting, activating,
+    /// or toggling it. The file event carries its full path and kind; the mouse
+    /// event provides a terminal-content-space anchor for a context menu.
+    pub fn on_context_menu(
+        mut self,
+        cb: Callback<(FileTreeEvent, crate::core::event::MouseEvent)>,
+    ) -> Self {
+        self.props.on_context_menu = Some(cb);
         self
     }
 

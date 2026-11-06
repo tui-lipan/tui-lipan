@@ -102,6 +102,10 @@ pub(crate) enum FileTreeMsg {
     TreeSelected {
         entry: Option<VisibleFileTreeEntry>,
     },
+    TreeContextMenu {
+        entry: Option<VisibleFileTreeEntry>,
+        mouse: crate::core::event::MouseEvent,
+    },
     TreeActivated {
         entry: Option<VisibleFileTreeEntry>,
     },
@@ -416,6 +420,16 @@ impl Component for FileTreeComponent {
                     expanded: event.expanded,
                 }
             }));
+        if ctx.props.on_context_menu.is_some() {
+            let lookup = projection.lookup.clone();
+            tree =
+                tree.on_context_menu(ctx.link().callback(move |(event, mouse): (TreeEvent, _)| {
+                    FileTreeMsg::TreeContextMenu {
+                        entry: lookup.get(&event.path).cloned(),
+                        mouse,
+                    }
+                }));
+        }
         if ctx.props.on_ctrl_activate.is_some() {
             let lookup = projection.lookup.clone();
             tree = tree.on_ctrl_activate(ctx.link().callback(move |event: TreeEvent| {
@@ -862,6 +876,20 @@ fn update_file_tree(msg: FileTreeMsg, ctx: &mut Context<FileTreeComponent>) -> U
             } else {
                 Update::none()
             }
+        }
+        FileTreeMsg::TreeContextMenu { entry, mouse } => {
+            if let Some(entry) = entry
+                && let Some(cb) = &ctx.props.on_context_menu
+            {
+                cb.emit((
+                    FileTreeEvent {
+                        path: entry.path,
+                        kind: entry.kind,
+                    },
+                    mouse,
+                ));
+            }
+            Update::none()
         }
         FileTreeMsg::TreeActivated { entry } => {
             if let Some(entry) = entry

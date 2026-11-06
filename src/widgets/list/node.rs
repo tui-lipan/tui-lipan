@@ -64,6 +64,7 @@ pub struct ListNode {
     pub on_item_click: Option<Callback<ListEvent>>,
     pub on_activate: Option<Callback<ListEvent>>,
     pub on_ctrl_activate: Option<Callback<ListEvent>>,
+    pub on_context_menu: Option<Callback<(ListEvent, MouseEvent)>>,
     pub on_click: Option<Callback<MouseEvent>>,
     pub activate_on_click: bool,
     pub on_scroll_to: Option<Callback<usize>>,
@@ -73,6 +74,36 @@ pub struct ListNode {
     pub navigation_wrap: bool,
     pub on_focus: Option<Callback<()>>,
     pub on_blur: Option<Callback<()>>,
+}
+
+impl ListNode {
+    pub(crate) fn context_menu_item_at(&self, x: i16, y: i16, rect: Rect) -> Option<usize> {
+        if self.disabled {
+            return None;
+        }
+        let inner = rect.inner(self.border, self.padding);
+        if !inner.contains(x, y) {
+            return None;
+        }
+        let (start, end, top, bottom) = super::utils::calc_list_window_for_items_with_indicators(
+            self.offset,
+            &self.items,
+            inner.h as usize,
+            self.show_scroll_indicators,
+        );
+        let row = usize::try_from(y - inner.y).ok()?;
+        if bottom && row + 1 == inner.h as usize {
+            return None;
+        }
+        let row = row.checked_sub(usize::from(top))?;
+        let index = super::utils::item_index_at_visual_line(
+            &self.items,
+            start,
+            row,
+            end.saturating_sub(start),
+        )?;
+        self.items[index].is_selectable().then_some(index)
+    }
 }
 
 impl WidgetNode for ListNode {
@@ -87,7 +118,8 @@ impl WidgetNode for ListNode {
                 || self.on_activate.is_some()
                 || self.on_click.is_some()
                 || self.on_item_click.is_some()
-                || self.on_ctrl_activate.is_some())
+                || self.on_ctrl_activate.is_some()
+                || self.on_context_menu.is_some())
         {
             return None;
         }
@@ -143,6 +175,7 @@ impl WidgetNode for ListNode {
                 || self.on_item_click.is_some()
                 || self.on_activate.is_some()
                 || self.on_ctrl_activate.is_some()
+                || self.on_context_menu.is_some()
                 || self.on_scroll_to.is_some()
                 || self.scrollbar
                 || self.show_scroll_indicators

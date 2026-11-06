@@ -364,6 +364,19 @@ fn row(
                 .callback(move |hovered| TreeMsg::Hover(index, hovered)),
         )
         .on_mouse_move(ctx.link().callback(move |_| TreeMsg::PointerMove(index)));
+    if entry.node.item.is_selectable() && ctx.props.on_context_menu.is_some() {
+        region = region.on_context_menu(ctx.link().callback(move |mouse: MouseRegionEvent| {
+            TreeMsg::ContextMenu(
+                index,
+                crate::core::event::MouseEvent {
+                    x: mouse.x,
+                    y: mouse.y,
+                    kind: mouse.kind,
+                    mods: mouse.mods,
+                },
+            )
+        }));
+    }
     if entry.node.item.is_selectable() {
         let link = ctx.link().clone();
         let activate = ctx.props.activate_on_click;
