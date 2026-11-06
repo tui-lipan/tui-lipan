@@ -237,26 +237,6 @@ fn refreshed_mouse_region_drag(
     Some(state)
 }
 
-fn mods_satisfy_required(required: Option<KeyMods>, actual: KeyMods) -> bool {
-    required.is_none_or(|required| {
-        (!required.ctrl || actual.ctrl)
-            && (!required.alt || actual.alt)
-            && (!required.shift || actual.shift)
-            && (!required.super_key || actual.super_key)
-    })
-}
-
-fn drag_required_mods_for(
-    region: &crate::widgets::internal::MouseRegionNode,
-    button: MouseButton,
-) -> Option<KeyMods> {
-    match button {
-        MouseButton::Left => region.drag_required_mods,
-        MouseButton::Right => region.right_drag_required_mods,
-        MouseButton::Middle => None,
-    }
-}
-
 pub(crate) fn mouse_region_drag_target_accepts_mods(
     tree: &crate::core::node::NodeTree,
     node_id: crate::core::node::NodeId,
@@ -270,7 +250,7 @@ pub(crate) fn mouse_region_drag_target_accepts_mods(
     let NodeKind::MouseRegion(region) = &node.kind else {
         return false;
     };
-    region.enabled && mods_satisfy_required(drag_required_mods_for(region, button), mods)
+    region.drag_accepts_mods(button, mods)
 }
 
 pub(crate) fn find_ancestor_mouse_region_drag_target(
@@ -288,28 +268,12 @@ pub(crate) fn find_ancestor_mouse_region_drag_target(
         }
         let node = tree.node(id);
         if let NodeKind::MouseRegion(region) = &node.kind
-            && region.enabled
+            && region.accepts_drag_press(button, mods)
+            && (is_start
+                || region.drag_required_mods_for(button).is_some()
+                || allow_ungated_ancestors)
         {
-            let has_callbacks = match button {
-                MouseButton::Left => {
-                    region.on_drag_start.is_some()
-                        || region.on_drag.is_some()
-                        || region.on_drag_end.is_some()
-                }
-                MouseButton::Right => {
-                    region.on_right_drag_start.is_some()
-                        || region.on_right_drag.is_some()
-                        || region.on_right_drag_end.is_some()
-                }
-                MouseButton::Middle => false,
-            };
-            let required_mods = drag_required_mods_for(region, button);
-            if has_callbacks
-                && mods_satisfy_required(required_mods, mods)
-                && (is_start || required_mods.is_some() || allow_ungated_ancestors)
-            {
-                return Some(id);
-            }
+            return Some(id);
         }
         is_start = false;
         current = node.parent;

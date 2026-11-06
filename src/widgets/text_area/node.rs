@@ -383,7 +383,11 @@ impl TextAreaNode {
 }
 
 impl WidgetNode for TextAreaNode {
-    fn has_secondary_click(&self, button: crate::core::event::MouseButton) -> bool {
+    fn has_secondary_click(
+        &self,
+        button: crate::core::event::MouseButton,
+        _mods: crate::core::event::KeyMods,
+    ) -> bool {
         let secondary = self.on_context_menu.is_some();
         #[cfg(feature = "diff-view")]
         let secondary = secondary

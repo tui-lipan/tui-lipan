@@ -2,13 +2,19 @@ use crate::app::focus_service::{self, OverlayKey};
 use crate::app::input::focus::FocusDirection;
 use crate::clipboard::ClipboardHandle;
 use crate::core::component::Component;
-use crate::core::event::MouseButton;
+use crate::core::event::{KeyMods, MouseButton};
 use crate::core::node::OverlayRoot;
 
 use super::AppRunner;
 
 impl<C: Component> AppRunner<C> {
-    pub(crate) fn handle_overlay_click(&mut self, button: MouseButton, x: u16, y: u16) -> bool {
+    pub(crate) fn handle_overlay_click(
+        &mut self,
+        button: MouseButton,
+        x: u16,
+        y: u16,
+        mods: KeyMods,
+    ) -> bool {
         let overlays: Vec<_> = self.core.tree.overlay_roots().to_vec();
         for overlay in overlays.iter().rev() {
             if !self.core.tree.is_valid(overlay.id) {
@@ -55,7 +61,7 @@ impl<C: Component> AppRunner<C> {
                 if self
                     .core
                     .tree
-                    .overlay_allows_pointer_passthrough(overlay, x as i16, y as i16, button)
+                    .overlay_allows_pointer_passthrough(overlay, x as i16, y as i16, button, mods)
                 {
                     continue;
                 }

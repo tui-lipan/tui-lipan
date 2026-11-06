@@ -37,6 +37,55 @@ pub struct MouseRegionNode {
     pub enabled: bool,
 }
 
+impl MouseRegionNode {
+    pub(crate) fn drag_required_mods_for(
+        &self,
+        button: crate::core::event::MouseButton,
+    ) -> Option<KeyMods> {
+        match button {
+            crate::core::event::MouseButton::Left => self.drag_required_mods,
+            crate::core::event::MouseButton::Right => self.right_drag_required_mods,
+            crate::core::event::MouseButton::Middle => None,
+        }
+    }
+
+    pub(crate) fn drag_accepts_mods(
+        &self,
+        button: crate::core::event::MouseButton,
+        mods: KeyMods,
+    ) -> bool {
+        self.enabled && mods_satisfy_required(self.drag_required_mods_for(button), mods)
+    }
+
+    pub(crate) fn accepts_drag_press(
+        &self,
+        button: crate::core::event::MouseButton,
+        mods: KeyMods,
+    ) -> bool {
+        let has_callbacks = match button {
+            crate::core::event::MouseButton::Left => {
+                self.on_drag_start.is_some() || self.on_drag.is_some() || self.on_drag_end.is_some()
+            }
+            crate::core::event::MouseButton::Right => {
+                self.on_right_drag_start.is_some()
+                    || self.on_right_drag.is_some()
+                    || self.on_right_drag_end.is_some()
+            }
+            crate::core::event::MouseButton::Middle => false,
+        };
+        has_callbacks && self.drag_accepts_mods(button, mods)
+    }
+}
+
+fn mods_satisfy_required(required: Option<KeyMods>, actual: KeyMods) -> bool {
+    required.is_none_or(|required| {
+        (!required.ctrl || actual.ctrl)
+            && (!required.alt || actual.alt)
+            && (!required.shift || actual.shift)
+            && (!required.super_key || actual.super_key)
+    })
+}
+
 impl WidgetNode for MouseRegionNode {
     fn primary_hit_test_refinement(&self, x: i16, y: i16, rect: Rect) -> Option<bool> {
         if !self.has_on_click() {
@@ -45,14 +94,15 @@ impl WidgetNode for MouseRegionNode {
         self.hit_test_refinement(x, y, rect)
     }
 
-    fn has_secondary_click(&self, button: crate::core::event::MouseButton) -> bool {
+    fn has_secondary_click(
+        &self,
+        button: crate::core::event::MouseButton,
+        mods: crate::core::event::KeyMods,
+    ) -> bool {
         self.enabled
             && match button {
                 crate::core::event::MouseButton::Right => {
-                    self.on_context_menu.is_some()
-                        || self.on_right_drag_start.is_some()
-                        || self.on_right_drag.is_some()
-                        || self.on_right_drag_end.is_some()
+                    self.on_context_menu.is_some() || self.accepts_drag_press(button, mods)
                 }
                 crate::core::event::MouseButton::Middle => self.on_middle_click.is_some(),
                 crate::core::event::MouseButton::Left => false,

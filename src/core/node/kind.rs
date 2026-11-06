@@ -57,7 +57,11 @@ pub(crate) trait WidgetNode {
         false
     }
     /// Whether this specific secondary button has widget behavior, independently of primary clicks.
-    fn has_secondary_click(&self, _button: crate::core::event::MouseButton) -> bool {
+    fn has_secondary_click(
+        &self,
+        _button: crate::core::event::MouseButton,
+        _mods: crate::core::event::KeyMods,
+    ) -> bool {
         false
     }
     /// Resolve and emit an opt-in context menu without changing widget state.
@@ -127,6 +131,7 @@ pub(crate) trait WidgetNode {
         y: i16,
         rect: Rect,
         _button: crate::core::event::MouseButton,
+        _mods: crate::core::event::KeyMods,
     ) -> Option<bool> {
         self.hit_test_refinement(x, y, rect)
     }
@@ -407,8 +412,12 @@ impl WidgetNode for NodeKind {
         node_kind_delegate_match!(self, has_on_click())
     }
 
-    fn has_secondary_click(&self, button: crate::core::event::MouseButton) -> bool {
-        node_kind_delegate_match!(self, has_secondary_click(button))
+    fn has_secondary_click(
+        &self,
+        button: crate::core::event::MouseButton,
+        mods: crate::core::event::KeyMods,
+    ) -> bool {
+        node_kind_delegate_match!(self, has_secondary_click(button, mods))
     }
 
     fn dispatch_context_menu(
@@ -468,8 +477,12 @@ impl WidgetNode for NodeKind {
         y: i16,
         rect: Rect,
         button: crate::core::event::MouseButton,
+        mods: crate::core::event::KeyMods,
     ) -> Option<bool> {
-        node_kind_delegate_match!(self, secondary_hit_test_refinement(x, y, rect, button))
+        node_kind_delegate_match!(
+            self,
+            secondary_hit_test_refinement(x, y, rect, button, mods)
+        )
     }
 
     fn hover_test_refinement(&self, x: i16, y: i16, rect: Rect) -> Option<bool> {

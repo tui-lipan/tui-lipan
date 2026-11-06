@@ -111,7 +111,11 @@ impl TableNode {
 }
 
 impl WidgetNode for TableNode {
-    fn has_secondary_click(&self, button: crate::core::event::MouseButton) -> bool {
+    fn has_secondary_click(
+        &self,
+        button: crate::core::event::MouseButton,
+        _mods: crate::core::event::KeyMods,
+    ) -> bool {
         button == crate::core::event::MouseButton::Right
             && !self.disabled
             && self.on_context_menu.is_some()

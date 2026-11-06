@@ -648,7 +648,7 @@ Wraps any subtree to handle pointer movement, clicks, and hover visuals.
 | `drag_requires_mods` | `KeyMods` | Require modifiers before left-button drag callbacks can start |
 | `drag_threshold` | `u16, u16` | Pointer travel in cells before drag callbacks start; default `(3, 1)` |
 | `on_right_drag_start` / `on_right_drag` / `on_right_drag_end` | `Callback<MouseDragEvent>` | Right-button drag lifecycle after threshold |
-| `right_drag_requires_mods` | `KeyMods` | Require modifiers before right-button drag callbacks can start |
+| `right_drag_requires_mods` | `KeyMods` | Require modifiers at right-button press, allowing extras; an ineligible drag-only region lets lower right-button targets through passthrough layers/overlays. Does not gate its own context-menu callback |
 | `bubble_mouse_down` | `bool` | Also emit `on_mouse_down` for descendant presses without consuming them |
 | `capture_click` | `bool` | If `true`, captures left-clicks before interactive children |
 | `capture_requires_mods` | `KeyMods` | Capture pointer handling over descendants while modifiers are held |

@@ -299,11 +299,16 @@ impl WidgetNode for FlowchartNode {
         y: i16,
         rect: Rect,
         _button: crate::core::event::MouseButton,
+        _mods: crate::core::event::KeyMods,
     ) -> Option<bool> {
         Some(self.contains_item_at(rect, x, y))
     }
 
-    fn has_secondary_click(&self, button: crate::core::event::MouseButton) -> bool {
+    fn has_secondary_click(
+        &self,
+        button: crate::core::event::MouseButton,
+        _mods: crate::core::event::KeyMods,
+    ) -> bool {
         button == crate::core::event::MouseButton::Right && self.on_context_menu.is_some()
     }
 

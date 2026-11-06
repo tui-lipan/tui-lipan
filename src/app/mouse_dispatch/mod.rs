@@ -126,6 +126,7 @@ pub(crate) trait MouseDispatchCtx<C: Component> {
         _button: crate::core::event::MouseButton,
         _x: u16,
         _y: u16,
+        _mods: crate::core::event::KeyMods,
     ) -> bool {
         false
     }
@@ -602,8 +603,9 @@ impl<C: Component> MouseDispatchCtx<C> for AppRunner<C> {
         button: crate::core::event::MouseButton,
         x: u16,
         y: u16,
+        mods: crate::core::event::KeyMods,
     ) -> bool {
-        AppRunner::<C>::handle_overlay_click(self, button, x, y)
+        AppRunner::<C>::handle_overlay_click(self, button, x, y, mods)
     }
 
     fn scroll_wheel_multiplier(&self) -> u16 {
@@ -882,6 +884,7 @@ impl<C: Component> MouseDispatchCtx<C> for TestBackend<C> {
         button: crate::core::event::MouseButton,
         x: u16,
         y: u16,
+        mods: crate::core::event::KeyMods,
     ) -> bool {
         let overlays = self.core.tree.overlay_roots().to_vec();
         for overlay in overlays.iter().rev() {
@@ -944,7 +947,7 @@ impl<C: Component> MouseDispatchCtx<C> for TestBackend<C> {
                 if self
                     .core
                     .tree
-                    .overlay_allows_pointer_passthrough(overlay, x as i16, y as i16, button)
+                    .overlay_allows_pointer_passthrough(overlay, x as i16, y as i16, button, mods)
                 {
                     continue;
                 }

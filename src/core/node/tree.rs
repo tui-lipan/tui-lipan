@@ -212,11 +212,12 @@ impl Node {
         x: i16,
         y: i16,
         button: crate::core::event::MouseButton,
+        mods: crate::core::event::KeyMods,
     ) -> bool {
-        if self.kind.has_secondary_click(button) {
+        if self.kind.has_secondary_click(button, mods) {
             return self
                 .kind
-                .secondary_hit_test_refinement(x, y, self.rect, button)
+                .secondary_hit_test_refinement(x, y, self.rect, button, mods)
                 .unwrap_or(true);
         }
         self.matches_hit_test(x, y, true)
@@ -1129,11 +1130,12 @@ impl NodeTree {
         x: i16,
         y: i16,
         button: crate::core::event::MouseButton,
+        mods: crate::core::event::KeyMods,
     ) -> bool {
         let kind = if button == crate::core::event::MouseButton::Left {
             TestKind::Hit
         } else {
-            TestKind::SecondaryHit(button)
+            TestKind::SecondaryHit(button, mods)
         };
         !root.captures_focus
             && !self.overlay_captures_pointer(root, x, y)
@@ -1151,8 +1153,9 @@ impl NodeTree {
         x: i16,
         y: i16,
         button: crate::core::event::MouseButton,
+        mods: crate::core::event::KeyMods,
     ) -> Option<NodeId> {
-        self.do_test(x, y, TestKind::SecondaryHit(button))
+        self.do_test(x, y, TestKind::SecondaryHit(button, mods))
     }
 
     /// Hit-test wheel input, skipping regions that explicitly forward it to lower layers.
@@ -1768,7 +1771,9 @@ impl NodeTree {
                         node.matches_hit_test(x, y, matches!(kind, TestKind::Hit))
                     }
                 }
-                TestKind::SecondaryHit(button) => node.matches_secondary_hit_test(x, y, button),
+                TestKind::SecondaryHit(button, mods) => {
+                    node.matches_secondary_hit_test(x, y, button, mods)
+                }
                 TestKind::Hover => {
                     if let Some(hit) = node.kind.hover_test_refinement(x, y, node.rect) {
                         hit && node.is_hoverable()
@@ -2047,7 +2052,7 @@ impl NodeTree {
 #[derive(Clone, Copy)]
 enum TestKind<'a> {
     Hit,
-    SecondaryHit(crate::core::event::MouseButton),
+    SecondaryHit(crate::core::event::MouseButton, crate::core::event::KeyMods),
     Wheel,
     DropTarget(&'a [NodeId]),
     Hover,
@@ -2193,8 +2198,56 @@ mod tests {
             } else {
                 MouseButton::Right
             };
-            assert!(tree.overlay_allows_pointer_passthrough(&overlay, 1, 0, other));
-            assert!(!tree.overlay_allows_pointer_passthrough(&overlay, 1, 0, button));
+            assert!(tree.overlay_allows_pointer_passthrough(
+                &overlay,
+                1,
+                0,
+                other,
+                crate::core::event::KeyMods::NONE
+            ));
+            assert!(!tree.overlay_allows_pointer_passthrough(
+                &overlay,
+                1,
+                0,
+                button,
+                crate::core::event::KeyMods::NONE
+            ));
+        }
+    }
+
+    #[test]
+    fn context_menu_gated_drag_overlay_passes_through_without_required_modifiers() {
+        use crate::callback::Callback;
+        use crate::core::event::{KeyMods, MouseButton};
+        let (mut tree, _) = build_base_tree();
+        let id = tree.alloc();
+        tree.node_mut(id).kind = MouseRegion::new()
+            .on_right_drag_start(Callback::new(|_| {}))
+            .right_drag_requires_mods(KeyMods::ALT)
+            .into();
+        tree.node_mut(id).rect = Rect {
+            x: 0,
+            y: 0,
+            w: 12,
+            h: 2,
+        };
+        let overlay = overlay_root(id, 1, PointerCapture::None);
+        for (mods, passthrough) in [
+            (KeyMods::NONE, true),
+            (KeyMods::CTRL, true),
+            (KeyMods::ALT, false),
+            (
+                KeyMods {
+                    ctrl: true,
+                    ..KeyMods::ALT
+                },
+                false,
+            ),
+        ] {
+            assert_eq!(
+                tree.overlay_allows_pointer_passthrough(&overlay, 1, 0, MouseButton::Right, mods),
+                passthrough
+            );
         }
     }
 

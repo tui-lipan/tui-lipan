@@ -118,7 +118,10 @@ For example, a context-menu-only diagram inside `MouseRegion::on_click` still le
 left clicks reach that enclosing region, while right clicks target the diagram item. A
 right-only menu or drag handler also leaves middle-button picking unchanged, including
 through passthrough layers and overlays. A middle-click-only region likewise does not
-block a right-button target in a lower passthrough layer.
+block a right-button target in a lower passthrough layer. A right-drag-only region
+also lets a lower menu receive the right press when its required modifiers are
+absent. A region with its own context-menu callback still accepts that press
+regardless of its drag modifier requirement.
 
 For a menu applying to an entire panel, wrap it with
 `MouseRegion::on_context_menu`. It provides local coordinates and target size

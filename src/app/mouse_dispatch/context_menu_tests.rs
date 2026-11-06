@@ -973,3 +973,150 @@ fn context_menu_right_drag_regions_do_not_occlude_middle_clicks() {
     assert_eq!(drags.borrow().len(), 1);
     assert_eq!(middle_clicks.borrow().len(), 1);
 }
+
+struct GatedDragHarness {
+    backend: TestBackend<View>,
+    menus: Captured<crate::core::event::MouseRegionEvent>,
+    drags: Captured<crate::core::event::MouseDragEvent>,
+    x: u16,
+    y: u16,
+}
+
+fn gated_drag_harness(overlay: bool) -> GatedDragHarness {
+    let (menus, on_menu) = capture();
+    let (drags, on_drag) = capture();
+    let lower = MouseRegion::new().on_context_menu(on_menu).child(
+        Text::new("lower")
+            .width(Length::Px(40))
+            .height(Length::Px(12)),
+    );
+    let upper = MouseRegion::new()
+        .on_right_drag_start(on_drag)
+        .right_drag_requires_mods(KeyMods::ALT)
+        .drag_threshold(1, 1)
+        .child(
+            Text::new("upper")
+                .width(Length::Px(12))
+                .height(Length::Px(2)),
+        );
+    let upper: Element = if overlay {
+        Popover::new()
+            .open(true)
+            .capture_focus(false)
+            .capture_pointer(false)
+            .anchor(Some((0, 0)))
+            .content(upper)
+            .into()
+    } else {
+        upper.into()
+    };
+    let backend = mount(ZStack::new().passthrough(true).child(lower).child(upper));
+    let rect = backend
+        .core
+        .tree
+        .iter()
+        .find_map(|node| match &node.kind {
+            NodeKind::MouseRegion(region)
+                if region.right_drag_required_mods == Some(KeyMods::ALT) =>
+            {
+                Some(node.rect)
+            }
+            _ => None,
+        })
+        .expect("gated drag has a realized target");
+    GatedDragHarness {
+        backend,
+        menus,
+        drags,
+        x: rect.x as u16 + 1,
+        y: rect.y as u16,
+    }
+}
+
+#[test]
+fn context_menu_modifier_gated_drags_preserve_layer_and_overlay_passthrough() {
+    for overlay in [false, true] {
+        let mut probe = gated_drag_harness(overlay);
+        for mods in [KeyMods::NONE, KeyMods::CTRL] {
+            for kind in [
+                MouseKind::Down(MouseButton::Right),
+                MouseKind::Up(MouseButton::Right),
+            ] {
+                probe
+                    .backend
+                    .send_mouse(MouseEvent {
+                        x: probe.x,
+                        y: probe.y,
+                        kind,
+                        mods,
+                    })
+                    .unwrap();
+            }
+            assert_eq!(
+                probe.menus.borrow().len(),
+                if mods == KeyMods::NONE { 1 } else { 2 },
+                "overlay={overlay}: an ineligible drag must not hide the lower menu"
+            );
+            assert!(probe.drags.borrow().is_empty());
+        }
+        for mods in [
+            KeyMods::ALT,
+            KeyMods {
+                ctrl: true,
+                ..KeyMods::ALT
+            },
+        ] {
+            for (kind, x) in [
+                (MouseKind::Down(MouseButton::Right), probe.x),
+                (MouseKind::Drag(MouseButton::Right), probe.x + 2),
+                (MouseKind::Up(MouseButton::Right), probe.x + 2),
+            ] {
+                probe
+                    .backend
+                    .send_mouse(MouseEvent {
+                        x,
+                        y: probe.y,
+                        kind,
+                        mods,
+                    })
+                    .unwrap();
+            }
+        }
+        assert_eq!(
+            probe.drags.borrow().len(),
+            2,
+            "overlay={overlay}: Alt and extra modifiers allow the upper drag"
+        );
+        assert_eq!(probe.menus.borrow().len(), 2);
+    }
+}
+
+#[test]
+fn context_menu_on_a_gated_drag_region_does_not_require_drag_modifiers() {
+    let (menus, on_menu) = capture();
+    let (drags, on_drag) = capture();
+    let mut backend = mount(
+        MouseRegion::new()
+            .on_context_menu(on_menu)
+            .on_right_drag_start(on_drag)
+            .right_drag_requires_mods(KeyMods::ALT)
+            .child(Text::new("row").width(Length::Px(12)).height(Length::Px(2))),
+    );
+    for mods in [KeyMods::NONE, KeyMods::ALT] {
+        for kind in [
+            MouseKind::Down(MouseButton::Right),
+            MouseKind::Up(MouseButton::Right),
+        ] {
+            backend
+                .send_mouse(MouseEvent {
+                    x: 1,
+                    y: 0,
+                    kind,
+                    mods,
+                })
+                .unwrap();
+        }
+    }
+    assert_eq!(menus.borrow().len(), 2);
+    assert!(drags.borrow().is_empty());
+}

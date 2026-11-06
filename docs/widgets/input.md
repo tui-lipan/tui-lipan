@@ -187,7 +187,7 @@ Wrapper that adds pointer callbacks to an arbitrary child subtree.
 | `on_right_drag_start` | `Callback<MouseDragEvent>` | First right-button drag tick after the click threshold is exceeded |
 | `on_right_drag` | `Callback<MouseDragEvent>` | Every right-button drag tick after drag start |
 | `on_right_drag_end` | `Callback<MouseDragEvent>` | Right-button release after a drag started |
-| `right_drag_requires_mods` | `KeyMods` | Require modifiers before right-button drag callbacks can start |
+| `right_drag_requires_mods` | `KeyMods` | Require modifiers at right-button press, allowing extras; an ineligible drag-only region lets lower right-button targets through passthrough layers/overlays. Does not gate its own context-menu callback |
 | `bubble_mouse_down` | `bool` | Also emit `on_mouse_down` for descendant presses without consuming them |
 | `capture_click` | `bool` | Capture clicks over interactive descendants |
 | `capture_requires_mods` | `KeyMods` | Capture pointer handling over descendants while modifiers are held |

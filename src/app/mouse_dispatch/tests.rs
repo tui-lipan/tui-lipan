@@ -346,7 +346,13 @@ impl MouseDispatchCtx<MockComponent> for MockCtx {
         self.drag_release_result
     }
 
-    fn handle_overlay_click(&mut self, _button: MouseButton, _x: u16, _y: u16) -> bool {
+    fn handle_overlay_click(
+        &mut self,
+        _button: MouseButton,
+        _x: u16,
+        _y: u16,
+        _mods: KeyMods,
+    ) -> bool {
         self.overlay_click_result
     }
 
