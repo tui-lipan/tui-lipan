@@ -171,6 +171,12 @@ An ineligible modifier-gated drag does not block a lower context menu in a
 passthrough layer or overlay. A region's own context menu remains independent
 of its drag modifier requirement.
 
+`SecondaryPress` carries the original mouse event, candidate node rect and ancestor
+integrated-scrollbar edge. Picking and dispatch share non-emitting target resolvers:
+a row index, document event, mapped diff source row, or exact content viewport. A
+rejected point stays transparent to lower passthrough layers and non-capturing overlays.
+Tab bars intentionally accept background targets and report a `None` item index.
+
 Context-menu routing walks the hit node's ancestors once. `WidgetNode::dispatch_context_menu`
 resolves typed targets in each primitive; a shared emitter combines the target with the
 original `MouseEvent`. List-based composites forward and translate that event into their

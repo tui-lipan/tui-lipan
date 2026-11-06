@@ -363,6 +363,13 @@ impl crate::Component for MenuList {
     }
 }
 
+/// Non-emitting target resolution shared by document/editor picking and dispatch.
+pub(crate) enum ContextMenuHit<T> {
+    Widget(T),
+    #[cfg(feature = "diff-view")]
+    DiffSource(usize),
+}
+
 /// Emit a secondary-click event only when a semantic target was hit.
 pub(crate) fn emit_context_menu<T>(
     callback: Option<&crate::callback::Callback<(T, crate::core::event::MouseEvent)>>,

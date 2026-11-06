@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::callback::{Callback, KeyHandler};
+use crate::core::node::SecondaryPress;
 use crate::core::node::{
     NodeId, ScrollbarZone, ScrollbarZonesParams, WidgetNode, compute_scrollbar_zones,
 };
@@ -114,6 +115,19 @@ pub(crate) struct TerminalLinkHover {
 }
 
 impl TerminalNode {
+    fn context_menu_content_rect(&self, press: SecondaryPress) -> Rect {
+        terminal_content_layout(
+            press.rect.inner(self.border, self.padding),
+            self.border,
+            self.scrollbar,
+            self.scrollbar_variant,
+            self.scrollbar_gap,
+            self.total_scrollback_rows,
+            press.parent_border_x.is_some(),
+        )
+        .content_rect
+    }
+
     pub(crate) fn input_key_modes(&self) -> TerminalKeyModes {
         self.screen
             .as_ref()
@@ -232,6 +246,13 @@ pub(crate) fn apply_terminal_selection_input(
 }
 
 impl WidgetNode for TerminalNode {
+    fn secondary_hit_test_refinement(&self, press: SecondaryPress) -> Option<bool> {
+        Some(
+            self.context_menu_content_rect(press)
+                .contains(press.mouse.x as i16, press.mouse.y as i16),
+        )
+    }
+
     fn has_secondary_click(
         &self,
         button: crate::core::event::MouseButton,
@@ -240,25 +261,11 @@ impl WidgetNode for TerminalNode {
         button == crate::core::event::MouseButton::Right && self.on_context_menu.is_some()
     }
 
-    fn dispatch_context_menu(
-        &self,
-        mouse: crate::core::event::MouseEvent,
-        rect: Rect,
-        parent_border_x: Option<i16>,
-    ) -> bool {
-        let layout = terminal_content_layout(
-            rect.inner(self.border, self.padding),
-            self.border,
-            self.scrollbar,
-            self.scrollbar_variant,
-            self.scrollbar_gap,
-            self.total_scrollback_rows,
-            parent_border_x.is_some(),
-        );
+    fn dispatch_context_menu(&self, press: SecondaryPress) -> bool {
         crate::widgets::context_menu::emit_mouse_context_menu(
             self.on_context_menu.as_ref(),
-            mouse,
-            layout.content_rect,
+            press.mouse,
+            self.context_menu_content_rect(press),
         )
     }
 

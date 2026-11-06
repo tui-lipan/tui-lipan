@@ -5,7 +5,7 @@ mod overlay;
 mod tree;
 
 pub use id::NodeId;
-pub(crate) use kind::{GroupNode, NodeKind, WidgetNode};
+pub(crate) use kind::{GroupNode, NodeKind, SecondaryPress, WidgetNode};
 pub(crate) use overlay::{
     OverlayAnimationSource, OverlayRoot, ScrollbarAxis, ScrollbarTarget, ScrollbarZone,
     ScrollbarZonesParams, compute_scrollbar_zones,

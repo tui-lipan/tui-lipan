@@ -605,7 +605,7 @@ fn context_menu_managed_terminal_forwards_the_opt_in_callback() {
 fn context_menu_diff_ignores_synthetic_wrap_alignment_rows() {
     for backend_kind in [DiffViewBackend::TextArea, DiffViewBackend::DocumentView] {
         let (menus, callback) = capture();
-        let mut backend = mount(
+        let (mut backend, lower) = layered_context_menu(
             DiffView::with_content(
                 "old\n",
                 "new with many more words that wrap over several visual rows\n",
@@ -637,6 +637,11 @@ fn context_menu_diff_ignores_synthetic_wrap_alignment_rows() {
         assert!(
             menus.borrow().is_empty(),
             "{backend_kind:?}: padding has no source target"
+        );
+        assert_eq!(
+            lower.borrow().len(),
+            1,
+            "padding remains transparent to a lower menu"
         );
     }
 }
@@ -1119,4 +1124,417 @@ fn context_menu_on_a_gated_drag_region_does_not_require_drag_modifiers() {
     }
     assert_eq!(menus.borrow().len(), 2);
     assert!(drags.borrow().is_empty());
+}
+
+fn context_menu_counter<T: 'static>() -> (Rc<std::cell::Cell<usize>>, Callback<T>) {
+    let count = Rc::new(std::cell::Cell::new(0));
+    let sink = count.clone();
+    (count, Callback::new(move |_| sink.set(sink.get() + 1)))
+}
+
+fn layered_context_menu(
+    upper: impl Into<Element>,
+) -> (
+    TestBackend<View>,
+    Captured<crate::core::event::MouseRegionEvent>,
+) {
+    let (lower, callback) = capture();
+    let backend = mount(
+        ZStack::new()
+            .passthrough(true)
+            .child(
+                MouseRegion::new().on_context_menu(callback).child(
+                    Text::new("lower")
+                        .width(Length::Px(60))
+                        .height(Length::Px(24)),
+                ),
+            )
+            .child(VStack::new().child(upper)),
+    );
+    (backend, lower)
+}
+
+#[test]
+fn context_menu_list_rejected_points_reach_lower_passthrough_handler() {
+    for (overflow, overlay) in [(false, false), (true, false), (true, true)] {
+        let (upper, callback) = context_menu_counter();
+        let mut items = vec![ListItem::header("section"), ListItem::new("one")];
+        if overflow {
+            items.extend((0..20).map(|i| ListItem::new(format!("row {i}"))));
+        }
+        let list = List::new()
+            .items(items)
+            .focusable(false)
+            .scroll_wheel(false)
+            .border(true)
+            .padding((1, 1))
+            .width(Length::Px(20))
+            .height(Length::Px(8))
+            .scrollbar(true)
+            .scrollbar_config(ScrollbarConfig::new().gap(2))
+            .on_context_menu(callback);
+        let element: Element = if overlay {
+            Popover::new()
+                .open(true)
+                .capture_focus(false)
+                .capture_pointer(false)
+                .anchor(Some((0, 0)))
+                .content(list)
+                .into()
+        } else {
+            list.into()
+        };
+        let (mut backend, lower) = layered_context_menu(element);
+        let (rect, content, inner) = backend
+            .core
+            .tree
+            .iter()
+            .find_map(|node| {
+                let NodeKind::List(list) = &node.kind else {
+                    return None;
+                };
+                Some((
+                    node.rect,
+                    list.content_rect(node.rect, None),
+                    node.rect.inner(list.border, list.padding),
+                ))
+            })
+            .unwrap();
+        let row_y = content.y + 1;
+        right_click(&mut backend, content.x as u16, row_y as u16);
+        assert_eq!(upper.get(), 1);
+        assert!(lower.borrow().is_empty());
+        let mut rejected = vec![(rect.x, row_y), (rect.x + 1, row_y), (content.x, content.y)];
+        if overflow {
+            rejected.extend([
+                (content.x + content.w as i16, row_y),
+                (inner.x + inner.w as i16 - 1, row_y),
+            ]);
+        } else {
+            rejected.push((content.x, content.y + 3));
+        }
+        for (index, (x, y)) in rejected.into_iter().enumerate() {
+            right_click(&mut backend, x as u16, y as u16);
+            assert_eq!(
+                upper.get(),
+                1,
+                "overflow={overflow}, overlay={overlay}, rejected ({x},{y})"
+            );
+            assert_eq!(
+                lower.borrow().len(),
+                index + 1,
+                "overflow={overflow}, overlay={overlay}, transparent ({x},{y})"
+            );
+        }
+    }
+}
+
+#[test]
+fn context_menu_table_rejected_points_reach_lower_passthrough_handler() {
+    let (upper, callback) = context_menu_counter();
+    let rows = [
+        TableRow::section("section"),
+        TableRow::new(["one"]),
+        TableRow::separator(),
+    ]
+    .into_iter()
+    .chain((0..20).map(|i| TableRow::new([format!("row {i}")])));
+    let (mut backend, lower) = layered_context_menu(
+        Table::new()
+            .header(TableRow::new(["header"]))
+            .rows(rows)
+            .row_gap(1)
+            .focusable(false)
+            .border(true)
+            .padding((1, 1))
+            .width(Length::Px(20))
+            .height(Length::Px(12))
+            .scrollbar(true)
+            .scrollbar_config(ScrollbarConfig::new().gap(2))
+            .on_context_menu(callback),
+    );
+    let (rect, content, inner) = backend
+        .core
+        .tree
+        .iter()
+        .find_map(|node| {
+            let NodeKind::Table(table) = &node.kind else {
+                return None;
+            };
+            Some((
+                node.rect,
+                table.content_rect(node.rect, None),
+                node.rect.inner(table.border, table.padding),
+            ))
+        })
+        .unwrap();
+    let row_y = content.y + 4;
+    right_click(&mut backend, content.x as u16, row_y as u16);
+    assert_eq!(upper.get(), 1);
+    for (index, (x, y)) in [
+        (rect.x, row_y),
+        (rect.x + 1, row_y),
+        (content.x, content.y),
+        (content.x, content.y + 2),
+        (content.x, content.y + 6),
+        (content.x, content.y + 5),
+        (content.x + content.w as i16, row_y),
+        (inner.x + inner.w as i16 - 1, row_y),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        right_click(&mut backend, x as u16, y as u16);
+        assert_eq!(upper.get(), 1, "rejected ({x},{y})");
+        assert_eq!(lower.borrow().len(), index + 1, "transparent ({x},{y})");
+    }
+}
+
+#[test]
+fn context_menu_input_chrome_reaches_lower_passthrough_handler() {
+    let (upper, callback) = context_menu_counter();
+    let (mut backend, lower) = layered_context_menu(
+        Input::new("one")
+            .focusable(false)
+            .border(true)
+            .padding((1, 2))
+            .width(Length::Px(20))
+            .height(Length::Px(5))
+            .on_context_menu(callback),
+    );
+    let (rect, inner) = backend
+        .core
+        .tree
+        .iter()
+        .find_map(|node| {
+            let NodeKind::Input(input) = &node.kind else {
+                return None;
+            };
+            Some((node.rect, node.rect.inner(input.border, input.padding)))
+        })
+        .unwrap();
+    right_click(&mut backend, inner.x as u16, inner.y as u16);
+    assert_eq!(upper.get(), 1);
+    for (index, x) in [rect.x, rect.x + 1].into_iter().enumerate() {
+        right_click(&mut backend, x as u16, inner.y as u16);
+        assert_eq!(upper.get(), 1);
+        assert_eq!(lower.borrow().len(), index + 1);
+    }
+}
+
+#[test]
+fn context_menu_text_area_chrome_reaches_lower_passthrough_handler() {
+    let (upper, callback) = context_menu_counter();
+    let (mut backend, lower) = layered_context_menu(
+        TextArea::new(
+            (0..30)
+                .map(|_| "a long line with enough words to scroll horizontally")
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .focusable(false)
+        .scroll_wheel(false)
+        .border(true)
+        .padding((1, 1))
+        .line_numbers(true)
+        .width(Length::Px(24))
+        .height(Length::Px(9))
+        .wrap(false)
+        .h_scrollbar(true)
+        .scrollbar(true)
+        .scrollbar_config(ScrollbarConfig::new().gap(2))
+        .on_context_menu(callback),
+    );
+    let (rect, content, inner) = backend
+        .core
+        .tree
+        .iter()
+        .find_map(|node| {
+            let NodeKind::TextArea(area) = &node.kind else {
+                return None;
+            };
+            Some((
+                node.rect,
+                area.content_rect(node.rect),
+                node.rect.inner(area.border, area.padding),
+            ))
+        })
+        .unwrap();
+    right_click(&mut backend, content.x as u16, content.y as u16);
+    assert_eq!(upper.get(), 1);
+    for (index, (x, y)) in [
+        (rect.x, content.y),
+        (rect.x + 1, content.y),
+        (inner.x, content.y),
+        (content.x + content.w as i16, content.y),
+        (content.x, content.y + content.h as i16),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        right_click(&mut backend, x as u16, y as u16);
+        assert_eq!(upper.get(), 1, "rejected ({x},{y})");
+        assert_eq!(lower.borrow().len(), index + 1, "transparent ({x},{y})");
+    }
+}
+
+#[test]
+fn context_menu_document_blank_rows_reach_lower_passthrough_handler() {
+    let (upper, callback) = context_menu_counter();
+    let (mut backend, lower) = layered_context_menu(
+        DocumentView::new("one\ntwo")
+            .focusable(false)
+            .scroll_wheel(false)
+            .scrollbar(false)
+            .h_scrollbar(false)
+            .border(true)
+            .padding((1, 1))
+            .width(Length::Px(20))
+            .height(Length::Px(9))
+            .on_context_menu(callback),
+    );
+    let (rect, x, y) = backend
+        .core
+        .tree
+        .iter()
+        .find_map(|node| {
+            let NodeKind::DocumentView(doc) = &node.kind else {
+                return None;
+            };
+            let layout = doc.content_layout(node.rect.inner(doc.border, doc.padding));
+            Some((node.rect, layout.content_x, layout.content_y))
+        })
+        .unwrap();
+    right_click(&mut backend, x as u16, y as u16);
+    assert_eq!(upper.get(), 1);
+    for (index, (x, y)) in [(rect.x, y), (rect.x + 1, y), (x, y + 3)]
+        .into_iter()
+        .enumerate()
+    {
+        right_click(&mut backend, x as u16, y as u16);
+        assert_eq!(upper.get(), 1);
+        assert_eq!(lower.borrow().len(), index + 1);
+    }
+}
+
+#[test]
+fn context_menu_rows_use_parent_integrated_scrollbar_geometry_when_picking() {
+    for table in [false, true] {
+        let config = ScrollbarConfig::new()
+            .variant(ScrollbarVariant::Integrated)
+            .gap(2);
+        let (upper, widget): (Rc<std::cell::Cell<usize>>, Element) = if table {
+            let (count, callback) = context_menu_counter();
+            (
+                count,
+                Table::new()
+                    .rows((0..20).map(|i| TableRow::new([format!("row {i}")])))
+                    .border(false)
+                    .focusable(false)
+                    .scrollbar(true)
+                    .scrollbar_config(config)
+                    .on_context_menu(callback)
+                    .into(),
+            )
+        } else {
+            let (count, callback) = context_menu_counter();
+            (
+                count,
+                List::new()
+                    .items((0..20).map(|i| ListItem::new(format!("row {i}"))))
+                    .border(false)
+                    .focusable(false)
+                    .scroll_wheel(false)
+                    .scrollbar(true)
+                    .scrollbar_config(config)
+                    .on_context_menu(callback)
+                    .into(),
+            )
+        };
+        let (mut backend, lower) = layered_context_menu(
+            Frame::new()
+                .width(Length::Px(20))
+                .height(Length::Px(8))
+                .child(widget),
+        );
+        let (x, y) = backend
+            .core
+            .tree
+            .iter()
+            .find_map(|node| {
+                if !matches!(node.kind, NodeKind::List(_) | NodeKind::Table(_)) {
+                    return None;
+                }
+                assert!(
+                    backend
+                        .core
+                        .tree
+                        .ancestor_frame_integrated_vscrollbar_x(node.parent)
+                        .is_some()
+                );
+                Some((node.rect.x + node.rect.w as i16 - 1, node.rect.y))
+            })
+            .unwrap();
+        right_click(&mut backend, x as u16, y as u16);
+        assert_eq!(
+            upper.get(),
+            1,
+            "table={table}: last content column is still a row target"
+        );
+        assert!(lower.borrow().is_empty());
+    }
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn context_menu_terminal_chrome_reaches_lower_passthrough_handler() {
+    let (upper, callback) = context_menu_counter();
+    let (mut backend, lower) = layered_context_menu(
+        Terminal::new()
+            .snapshot(TerminalRenderSnapshot {
+                text: "terminal".into(),
+                total_scrollback_rows: 20,
+                ..Default::default()
+            })
+            .border(true)
+            .padding((1, 1))
+            .width(Length::Px(20))
+            .height(Length::Px(8))
+            .focusable(false)
+            .scroll_wheel(false)
+            .scrollbar(true)
+            .scrollbar_config(ScrollbarConfig::new().gap(2))
+            .on_context_menu(callback),
+    );
+    let (rect, content) = backend
+        .core
+        .tree
+        .iter()
+        .find_map(|node| {
+            let NodeKind::Terminal(term) = &node.kind else {
+                return None;
+            };
+            Some((
+                node.rect,
+                crate::utils::scrollbar::vertical_scrollbar_content_rect(
+                    node.rect.inner(term.border, term.padding),
+                    term.scrollbar && term.total_scrollback_rows > 0,
+                    term.border,
+                    term.scrollbar_variant,
+                    term.scrollbar_gap,
+                    false,
+                ),
+            ))
+        })
+        .unwrap();
+    right_click(&mut backend, content.x as u16, content.y as u16);
+    assert_eq!(upper.get(), 1);
+    for (index, x) in [rect.x, rect.x + 1, content.x + content.w as i16]
+        .into_iter()
+        .enumerate()
+    {
+        right_click(&mut backend, x as u16, content.y as u16);
+        assert_eq!(upper.get(), 1);
+        assert_eq!(lower.borrow().len(), index + 1);
+    }
 }

@@ -27,6 +27,14 @@ use crate::widgets::{
     Splitter, StateDiagram, Table, Tabs, TextArea,
 };
 
+/// A secondary press with the exact geometry used to render its candidate widget.
+#[derive(Clone, Copy)]
+pub(crate) struct SecondaryPress {
+    pub mouse: crate::core::event::MouseEvent,
+    pub rect: Rect,
+    pub parent_border_x: Option<i16>,
+}
+
 pub(crate) trait WidgetNode {
     fn focus_scope(&self) -> FocusScope {
         FocusScope::None
@@ -66,12 +74,7 @@ pub(crate) trait WidgetNode {
     }
     /// Resolve and emit an opt-in context menu without changing widget state.
     /// `parent_border_x` lets content hit testing match integrated scrollbars.
-    fn dispatch_context_menu(
-        &self,
-        _mouse: crate::core::event::MouseEvent,
-        _rect: Rect,
-        _parent_border_x: Option<i16>,
-    ) -> bool {
+    fn dispatch_context_menu(&self, _press: SecondaryPress) -> bool {
         false
     }
     fn has_on_mouse_move(&self) -> bool {
@@ -125,15 +128,8 @@ pub(crate) trait WidgetNode {
         self.hit_test_refinement(x, y, rect)
     }
     /// Refine picking for the pressed secondary button without requiring a primary callback.
-    fn secondary_hit_test_refinement(
-        &self,
-        x: i16,
-        y: i16,
-        rect: Rect,
-        _button: crate::core::event::MouseButton,
-        _mods: crate::core::event::KeyMods,
-    ) -> Option<bool> {
-        self.hit_test_refinement(x, y, rect)
+    fn secondary_hit_test_refinement(&self, press: SecondaryPress) -> Option<bool> {
+        self.hit_test_refinement(press.mouse.x as i16, press.mouse.y as i16, press.rect)
     }
     /// Refine hover-testing. Defaults to the hit-test refinement for widgets whose
     /// pointer target shape is the same for clicks and hover.
@@ -420,13 +416,8 @@ impl WidgetNode for NodeKind {
         node_kind_delegate_match!(self, has_secondary_click(button, mods))
     }
 
-    fn dispatch_context_menu(
-        &self,
-        mouse: crate::core::event::MouseEvent,
-        rect: Rect,
-        parent_border_x: Option<i16>,
-    ) -> bool {
-        node_kind_delegate_match!(self, dispatch_context_menu(mouse, rect, parent_border_x))
+    fn dispatch_context_menu(&self, press: SecondaryPress) -> bool {
+        node_kind_delegate_match!(self, dispatch_context_menu(press))
     }
 
     fn has_on_mouse_move(&self) -> bool {
@@ -471,18 +462,8 @@ impl WidgetNode for NodeKind {
         node_kind_delegate_match!(self, primary_hit_test_refinement(x, y, rect))
     }
 
-    fn secondary_hit_test_refinement(
-        &self,
-        x: i16,
-        y: i16,
-        rect: Rect,
-        button: crate::core::event::MouseButton,
-        mods: crate::core::event::KeyMods,
-    ) -> Option<bool> {
-        node_kind_delegate_match!(
-            self,
-            secondary_hit_test_refinement(x, y, rect, button, mods)
-        )
+    fn secondary_hit_test_refinement(&self, press: SecondaryPress) -> Option<bool> {
+        node_kind_delegate_match!(self, secondary_hit_test_refinement(press))
     }
 
     fn hover_test_refinement(&self, x: i16, y: i16, rect: Rect) -> Option<bool> {

@@ -3,7 +3,7 @@ use crate::app::input::mouse;
 use crate::clipboard::{CopyOnSelect, PasteSource, RightClickAction};
 use crate::core::component::Component;
 use crate::core::event::{MouseButton, MouseEvent, MouseKind};
-use crate::core::node::{NodeId, NodeKind, NodeTree};
+use crate::core::node::{NodeId, NodeKind, NodeTree, SecondaryPress};
 
 use super::{
     MouseDispatchCtx, SelectionOwner, find_ancestor_mouse_region_drag_target,
@@ -247,8 +247,11 @@ fn dispatch_secondary_node(
         return false;
     }
     let parent_border_x = tree.ancestor_frame_integrated_vscrollbar_x(node.parent);
-    node.kind
-        .dispatch_context_menu(mouse, node.rect, parent_border_x)
+    node.kind.dispatch_context_menu(SecondaryPress {
+        mouse,
+        rect: node.rect,
+        parent_border_x,
+    })
 }
 
 fn dispatch_mouse_region_secondary(

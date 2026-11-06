@@ -626,6 +626,17 @@ impl DiffData {
 }
 
 impl DiffLineClickConfig {
+    pub(crate) fn context_menu_event_at(
+        &self,
+        source_line: usize,
+        mods: crate::core::event::KeyMods,
+    ) -> Option<DiffLineClickEvent> {
+        self.on_context_menu.as_ref()?;
+        let mut event = self.events_by_source_line.get(source_line).copied()??;
+        event.mods = mods;
+        Some(event)
+    }
+
     pub(crate) fn dispatch_context_menu(
         &self,
         source_line: usize,
@@ -634,11 +645,7 @@ impl DiffLineClickConfig {
         crate::widgets::context_menu::emit_context_menu(
             self.on_context_menu.as_ref(),
             mouse,
-            || {
-                let mut event = self.events_by_source_line.get(source_line).copied()??;
-                event.mods = mouse.mods;
-                Some(event)
-            },
+            || self.context_menu_event_at(source_line, mouse.mods),
         )
     }
 }

@@ -106,7 +106,10 @@ release from activating the popup or reaching PTY/clipboard handling. Without a
 handler, existing forwarding and clipboard behavior continues.
 
 Data-row callbacks exclude non-selectable rows, headers, borders, padding,
-scroll indicators, scrollbar tracks, standalone scrollbar gaps, and empty rows.
+scroll indicators, scrollbar tracks, standalone scrollbar gaps, and empty rows. These
+rejected coordinates remain transparent to a lower context-menu handler in
+passthrough layers and non-capturing overlays. Editor and terminal menu requests
+likewise exclude their border, padding and scrollbar areas.
 Tab callbacks report `None` on unused strip space or chrome without switching
 the active tab. Document and diff callbacks resolve the clicked source position
 through wrapping and scrolling. Diff menus also accept the source-line gutter;

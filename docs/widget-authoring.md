@@ -292,11 +292,11 @@ The `WidgetNode` trait hooks control input behavior:
 | `on_focus_callback()` / `on_blur_callback()` | Optional post-reconcile focus transition callbacks |
 | `has_on_click()` | Does this node have primary-button behavior? Do not count context menus or other secondary handlers |
 | `has_secondary_click(button, mods)` | Does this node accept the secondary press with these held modifiers? |
-| `dispatch_context_menu(mouse, rect, parent_border_x)` | Resolve and emit a typed context-menu request without changing focus or selection |
+| `dispatch_context_menu(press)` | Resolve and emit a typed context-menu request using SecondaryPress geometry, without changing focus or selection |
 | `is_hoverable()` | Should hover state be tracked? |
 | `hit_test_refinement(x, y, rect)` | Refine shared pointer geometry for partial-area widgets |
 | `primary_hit_test_refinement(x, y, rect)` | Refine primary picking; defaults to shared geometry |
-| `secondary_hit_test_refinement(x, y, rect, button, mods)` | Refine geometry for that secondary button and modifiers independently of primary callbacks |
+| `secondary_hit_test_refinement(press)` | Resolve whether SecondaryPress hits an accepted secondary target, independently of primary callbacks |
 | `scrollbar_zones(...)` | Expose scrollbar hit zones |
 
 ### Reconcile (`reconcile.rs`)
@@ -594,12 +594,21 @@ for each supported button: context menus and right drags accept Right, while
 `on_middle_click` accepts Middle; keep those callbacks out
 of `has_on_click()`, which also controls semantic Click support. If a widget's
 primary hit refinement depends on primary callbacks, implement
-`secondary_hit_test_refinement(..., button, mods)` using its item geometry so a menu-only widget
+`secondary_hit_test_refinement(press)` using its item geometry so a menu-only widget
 remains reachable. Primary and secondary picking share clipping, layering and
 overlay capture rules. Modifier-gated handlers must apply the same eligibility
 predicate during picking and dispatch. MouseRegion uses `accepts_drag_press` for
 both, including required-modifier subset matching. Extra modifiers are allowed;
 a region's context menu is independent of its drag modifier gate.
+
+`SecondaryPress` supplies the original `MouseEvent`, candidate `rect` and
+`parent_border_x`. Reuse a non-emitting target resolver in both secondary refinement
+and dispatch. Returning `Some(false)` for a rejected point lets traversal consider
+lower passthrough siblings; rejecting only during dispatch loses those siblings.
+Use the parent border when computing integrated-scrollbar content. Never emit a
+callback during picking. Background menus may intentionally accept an empty item
+target, as Tabs and DraggableTabBar do.
+
 
 By default, any node with `has_on_click() == true` or `is_focusable() == true`
 is a click target within its full rect. Override `hit_test_refinement()` to restrict

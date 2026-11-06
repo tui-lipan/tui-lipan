@@ -1,6 +1,6 @@
 use super::id::NodeId;
 use super::iter::NodeDfsIter;
-use super::kind::{NodeKind, WidgetNode};
+use super::kind::{NodeKind, SecondaryPress, WidgetNode};
 use super::overlay::{OverlayRoot, ScrollbarAxis, ScrollbarTarget, ScrollbarZone};
 use crate::core::element::Key;
 use crate::style::{Edge, Rect, Theme};
@@ -205,22 +205,6 @@ impl Node {
             self.kind.hit_test_refinement(x, y, self.rect)
         };
         refinement.unwrap_or_else(|| self.is_interactive())
-    }
-
-    fn matches_secondary_hit_test(
-        &self,
-        x: i16,
-        y: i16,
-        button: crate::core::event::MouseButton,
-        mods: crate::core::event::KeyMods,
-    ) -> bool {
-        if self.kind.has_secondary_click(button, mods) {
-            return self
-                .kind
-                .secondary_hit_test_refinement(x, y, self.rect, button, mods)
-                .unwrap_or(true);
-        }
-        self.matches_hit_test(x, y, true)
     }
 
     /// Returns true if this node has a pointer-move handler.
@@ -1147,6 +1131,32 @@ impl NodeTree {
         self.do_test(x, y, TestKind::Hit)
     }
 
+    fn matches_secondary_hit_test(
+        &self,
+        node: &Node,
+        x: i16,
+        y: i16,
+        button: crate::core::event::MouseButton,
+        mods: crate::core::event::KeyMods,
+    ) -> bool {
+        if !node.kind.has_secondary_click(button, mods) {
+            return node.matches_hit_test(x, y, true);
+        }
+        let press = SecondaryPress {
+            mouse: crate::core::event::MouseEvent {
+                x: x as u16,
+                y: y as u16,
+                kind: crate::core::event::MouseKind::Down(button),
+                mods,
+            },
+            rect: node.rect,
+            parent_border_x: self.ancestor_frame_integrated_vscrollbar_x(node.parent),
+        };
+        node.kind
+            .secondary_hit_test_refinement(press)
+            .unwrap_or(true)
+    }
+
     /// Pick targets for this right/middle button without adding them to primary-click participation.
     pub(crate) fn secondary_hit_test(
         &self,
@@ -1772,7 +1782,7 @@ impl NodeTree {
                     }
                 }
                 TestKind::SecondaryHit(button, mods) => {
-                    node.matches_secondary_hit_test(x, y, button, mods)
+                    self.matches_secondary_hit_test(node, x, y, button, mods)
                 }
                 TestKind::Hover => {
                     if let Some(hit) = node.kind.hover_test_refinement(x, y, node.rect) {

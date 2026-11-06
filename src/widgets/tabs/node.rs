@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::callback::{Callback, KeyHandler};
 use crate::core::event::MouseEvent;
+use crate::core::node::SecondaryPress;
 use crate::core::node::WidgetNode;
 use crate::style::{BorderStyle, Padding, Style, StyleSlot, Theme, ThemeRole};
 
@@ -45,12 +46,12 @@ impl WidgetNode for TabsNode {
             && self.on_context_menu.is_some()
     }
 
-    fn dispatch_context_menu(
-        &self,
-        mouse: crate::core::event::MouseEvent,
-        rect: crate::Rect,
-        _parent_border_x: Option<i16>,
-    ) -> bool {
+    fn dispatch_context_menu(&self, press: SecondaryPress) -> bool {
+        let SecondaryPress {
+            mouse,
+            rect,
+            parent_border_x: _parent_border_x,
+        } = press;
         crate::widgets::context_menu::emit_context_menu(
             self.on_context_menu.as_ref(),
             mouse,

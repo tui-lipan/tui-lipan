@@ -3,6 +3,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::callback::Callback;
+use crate::core::node::SecondaryPress;
 use crate::core::node::WidgetNode;
 use crate::style::{BorderStyle, Length, Padding, Rect, Style, Theme};
 use crate::widgets::Overflow;
@@ -227,15 +228,8 @@ impl SequenceDiagramNode {
 }
 
 impl WidgetNode for SequenceDiagramNode {
-    fn secondary_hit_test_refinement(
-        &self,
-        x: i16,
-        y: i16,
-        rect: Rect,
-        _button: crate::core::event::MouseButton,
-        _mods: crate::core::event::KeyMods,
-    ) -> Option<bool> {
-        Some(self.contains_item_at(rect, x, y))
+    fn secondary_hit_test_refinement(&self, press: SecondaryPress) -> Option<bool> {
+        Some(self.contains_item_at(press.rect, press.mouse.x as i16, press.mouse.y as i16))
     }
 
     fn has_secondary_click(
@@ -246,12 +240,12 @@ impl WidgetNode for SequenceDiagramNode {
         button == crate::core::event::MouseButton::Right && self.on_context_menu.is_some()
     }
 
-    fn dispatch_context_menu(
-        &self,
-        mouse: crate::core::event::MouseEvent,
-        rect: crate::Rect,
-        _parent_border_x: Option<i16>,
-    ) -> bool {
+    fn dispatch_context_menu(&self, press: SecondaryPress) -> bool {
+        let SecondaryPress {
+            mouse,
+            rect,
+            parent_border_x: _parent_border_x,
+        } = press;
         crate::widgets::context_menu::emit_context_menu(
             self.on_context_menu.as_ref(),
             mouse,

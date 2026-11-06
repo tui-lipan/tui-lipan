@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::callback::{Callback, KeyHandler};
 use crate::core::event::MouseEvent;
+use crate::core::node::SecondaryPress;
 use crate::core::node::{ScrollbarZone, ScrollbarZonesParams, WidgetNode, compute_scrollbar_zones};
 use crate::style::{
     BorderStyle, Padding, Rect, ScrollbarVariant, Style, StyleSlot, Theme, ThemeRole,
@@ -77,6 +78,14 @@ pub struct ListNode {
 }
 
 impl ListNode {
+    fn context_menu_item_at(&self, press: SecondaryPress) -> Option<usize> {
+        self.item_at(
+            press.mouse.x as i16,
+            press.mouse.y as i16,
+            self.content_rect(press.rect, press.parent_border_x),
+        )
+    }
+
     pub(crate) fn content_rect(&self, rect: Rect, parent_border_x: Option<i16>) -> Rect {
         crate::utils::scrollbar::vertical_scrollbar_content_rect(
             rect.inner(self.border, self.padding),
@@ -117,6 +126,10 @@ impl ListNode {
 }
 
 impl WidgetNode for ListNode {
+    fn secondary_hit_test_refinement(&self, press: SecondaryPress) -> Option<bool> {
+        Some(self.context_menu_item_at(press).is_some())
+    }
+
     fn has_secondary_click(
         &self,
         button: crate::core::event::MouseButton,
@@ -127,22 +140,13 @@ impl WidgetNode for ListNode {
             && self.on_context_menu.is_some()
     }
 
-    fn dispatch_context_menu(
-        &self,
-        mouse: MouseEvent,
-        rect: Rect,
-        parent_border_x: Option<i16>,
-    ) -> bool {
+    fn dispatch_context_menu(&self, press: SecondaryPress) -> bool {
         crate::widgets::context_menu::emit_context_menu(
             self.on_context_menu.as_ref(),
-            mouse,
+            press.mouse,
             || {
-                self.item_at(
-                    mouse.x as i16,
-                    mouse.y as i16,
-                    self.content_rect(rect, parent_border_x),
-                )
-                .map(|index| ListEvent::click(index, mouse.mods, 1))
+                self.context_menu_item_at(press)
+                    .map(|index| ListEvent::click(index, press.mouse.mods, 1))
             },
         )
     }
