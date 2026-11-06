@@ -805,14 +805,14 @@ pub(crate) fn render_list(params: ListRenderParams<'_, '_, '_>) {
     let use_standalone = scrollbar && !use_integrated;
 
     // For standalone scrollbar, reserve space from content.
-    let content_inner = if use_standalone && inner.w > 0 {
-        Rect {
-            w: inner.w.saturating_sub(1u16.saturating_add(scrollbar_gap)),
-            ..inner
-        }
-    } else {
-        inner
-    };
+    let content_inner = crate::utils::scrollbar::vertical_scrollbar_content_rect(
+        inner,
+        scrollbar,
+        border,
+        scrollbar_variant,
+        scrollbar_gap,
+        parent_integrated_v.is_some(),
+    );
 
     let inner_rrect = to_ratatui_rect(content_inner);
     let effective_rrect = inner_rrect.intersection(rrect);

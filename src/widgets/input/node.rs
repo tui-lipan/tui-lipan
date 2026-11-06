@@ -4,6 +4,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::callback::{Callback, KeyHandler};
 use crate::core::event::MouseEvent;
+use crate::core::node::SecondaryPress;
 use crate::core::node::WidgetNode;
 use crate::style::{
     BorderStyle, CaretShape, Color, Padding, Rect, Style, StyleSlot, Theme, ThemeRole,
@@ -49,6 +50,7 @@ pub struct InputNode {
     pub on_change: Option<Callback<InputEvent>>,
     pub on_edit: Option<Callback<TextEditEvent>>,
     pub on_click: Option<Callback<MouseEvent>>,
+    pub on_context_menu: Option<Callback<crate::core::event::MouseEvent>>,
     pub on_key: Option<KeyHandler>,
     /// Pre-insertion key interceptor. Runs before text insertion in the editable
     /// path. If it returns `true` the key is consumed and text insertion is
@@ -62,6 +64,10 @@ pub struct InputNode {
 }
 
 impl InputNode {
+    fn context_menu_content_rect(&self, press: SecondaryPress) -> Rect {
+        press.rect.inner(self.border, self.padding)
+    }
+
     /// Whether a mouse press can place a caret or start a selection in this input.
     pub(crate) fn accepts_pointer_text(&self) -> bool {
         !self.disabled && (self.on_change.is_some() || self.read_only)
@@ -93,6 +99,31 @@ impl InputNode {
 }
 
 impl WidgetNode for InputNode {
+    fn secondary_hit_test_refinement(&self, press: SecondaryPress) -> Option<bool> {
+        Some(
+            self.context_menu_content_rect(press)
+                .contains(press.mouse.x as i16, press.mouse.y as i16),
+        )
+    }
+
+    fn has_secondary_click(
+        &self,
+        button: crate::core::event::MouseButton,
+        _mods: crate::core::event::KeyMods,
+    ) -> bool {
+        button == crate::core::event::MouseButton::Right
+            && !self.disabled
+            && self.on_context_menu.is_some()
+    }
+
+    fn dispatch_context_menu(&self, press: SecondaryPress) -> bool {
+        crate::widgets::context_menu::emit_mouse_context_menu(
+            self.on_context_menu.as_ref(),
+            press.mouse,
+            self.context_menu_content_rect(press),
+        )
+    }
+
     fn is_disabled(&self) -> bool {
         self.disabled
     }

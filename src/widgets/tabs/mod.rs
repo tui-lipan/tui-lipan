@@ -123,6 +123,7 @@ pub struct Tabs {
     pub(crate) height: Length,
     pub(crate) on_change: Option<Callback<TabsEvent>>,
     pub(crate) on_click: Option<Callback<MouseEvent>>,
+    pub(crate) on_context_menu: Option<Callback<(Option<usize>, crate::core::event::MouseEvent)>>,
     pub(crate) on_key: Option<KeyHandler>,
     pub(crate) disabled: bool,
     pub(crate) disabled_style: Style,
@@ -152,6 +153,7 @@ impl Default for Tabs {
             height: Length::Auto,
             on_change: None,
             on_click: None,
+            on_context_menu: None,
             on_key: None,
             disabled: false,
             disabled_style: Style::default(),
@@ -343,6 +345,16 @@ impl Tabs {
     /// Callback fired when the active tab changes.
     pub fn on_change(mut self, cb: Callback<TabsEvent>) -> Self {
         self.on_change = Some(cb);
+        self
+    }
+
+    /// Handle a right-button press without changing selection or focus.
+    /// The handler owns the full gesture. Mouse coordinates anchor an application-owned popup.
+    pub fn on_context_menu(
+        mut self,
+        cb: Callback<(Option<usize>, crate::core::event::MouseEvent)>,
+    ) -> Self {
+        self.on_context_menu = Some(cb);
         self
     }
 

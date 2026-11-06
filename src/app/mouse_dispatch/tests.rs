@@ -346,7 +346,13 @@ impl MouseDispatchCtx<MockComponent> for MockCtx {
         self.drag_release_result
     }
 
-    fn handle_overlay_click(&mut self, _button: MouseButton, _x: u16, _y: u16) -> bool {
+    fn handle_overlay_click(
+        &mut self,
+        _button: MouseButton,
+        _x: u16,
+        _y: u16,
+        _mods: KeyMods,
+    ) -> bool {
         self.overlay_click_result
     }
 
@@ -5533,4 +5539,210 @@ fn tab_middle_close_owns_drag_and_release_after_terminal_replaces_bar() {
             "{mode:?}: forwarding resumes after release"
         );
     }
+}
+
+struct RowContextMenuHarness {
+    kind: u8,
+    events: Rc<RefCell<Vec<(String, u16, u16)>>>,
+    selections: Rc<RefCell<Vec<usize>>>,
+}
+impl Component for RowContextMenuHarness {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+    fn create_state(&self, _: &()) {}
+    fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+    fn view(&self, _: &Context<Self>) -> Element {
+        use crate::widgets::{
+            FileTree, FileTreeChange, FileTreeChangeSource, FileTreeChangeStatus,
+            FileTreeChangeView, Tree, TreeNode,
+        };
+        let events = self.events.clone();
+        let selections = self.selections.clone();
+        match self.kind {
+            4 => List::new()
+                .items((0..80).map(|index| ListItem::new(format!("row {index}"))))
+                .selected(Some(30))
+                .force_scroll_to_selected(true)
+                .width(Length::Px(20))
+                .height(Length::Px(5))
+                .scrollbar(true)
+                .on_context_menu(Callback::new(
+                    move |(event, mouse): (crate::widgets::ListEvent, MouseEvent)| {
+                        events
+                            .borrow_mut()
+                            .push((event.index.to_string(), mouse.x, mouse.y))
+                    },
+                ))
+                .into(),
+            0 => List::new()
+                .items([
+                    ListItem::header("Group"),
+                    ListItem::new("One"),
+                    ListItem::new("Two"),
+                ])
+                .border(true)
+                .padding((1, 1))
+                .width(Length::Px(20))
+                .height(Length::Px(9))
+                .on_select(Callback::new(move |event: crate::widgets::ListEvent| {
+                    selections.borrow_mut().push(event.index)
+                }))
+                .on_context_menu(Callback::new(
+                    move |(event, mouse): (crate::widgets::ListEvent, MouseEvent)| {
+                        events
+                            .borrow_mut()
+                            .push((event.index.to_string(), mouse.x, mouse.y))
+                    },
+                ))
+                .into(),
+            1 | 2 => {
+                let child = TreeNode::new("One");
+                let child = if self.kind == 2 {
+                    child.content(crate::widgets::Text::new("Composed one"))
+                } else {
+                    child
+                };
+                Tree::new(
+                    TreeNode::new("Root")
+                        .expanded(true)
+                        .child(child)
+                        .child(TreeNode::new("Two")),
+                )
+                .on_select(Callback::new(move |event: crate::widgets::TreeEvent| {
+                    selections.borrow_mut().push(event.index)
+                }))
+                .on_context_menu(Callback::new(
+                    move |(event, mouse): (crate::widgets::TreeEvent, MouseEvent)| {
+                        events.borrow_mut().push((
+                            format!("{:?}", event.path.segments()),
+                            mouse.x,
+                            mouse.y,
+                        ))
+                    },
+                ))
+                .into()
+            }
+            _ => FileTree::new("/context-menu-fixture")
+                .change_source(FileTreeChangeSource::provided([
+                    FileTreeChange::new("src/one.rs", FileTreeChangeStatus::Modified),
+                    FileTreeChange::new("src/two.rs", FileTreeChangeStatus::Modified),
+                ]))
+                .change_view(FileTreeChangeView::ChangedOnly)
+                .root_collapsible(false)
+                .expanded_paths(["/context-menu-fixture/src"])
+                .on_select(Callback::new(move |_: crate::widgets::FileTreeEvent| {
+                    selections.borrow_mut().push(1)
+                }))
+                .on_context_menu(Callback::new(
+                    move |(event, mouse): (crate::widgets::FileTreeEvent, MouseEvent)| {
+                        events
+                            .borrow_mut()
+                            .push((event.path.to_string(), mouse.x, mouse.y))
+                    },
+                ))
+                .into(),
+        }
+    }
+}
+
+#[test]
+fn row_context_menu_preserves_selection_and_reports_logical_identity() {
+    for (kind, y, expected) in [
+        (0, 3, "1"),
+        (1, 1, "[0]"),
+        (2, 1, "[0]"),
+        (3, 2, "/context-menu-fixture/src/one.rs"),
+    ] {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let selections = Rc::new(RefCell::new(Vec::new()));
+        let mut backend = TestBackend::new(RowContextMenuHarness {
+            kind,
+            events: events.clone(),
+            selections: selections.clone(),
+        });
+        backend.render();
+        selections.borrow_mut().clear();
+        press(&mut backend, MouseButton::Right, 5, y);
+        backend
+            .send_mouse(MouseEvent {
+                x: 5,
+                y,
+                kind: MouseKind::Up(MouseButton::Right),
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+        assert_eq!(
+            &*events.borrow(),
+            &[(expected.to_string(), 5, y)],
+            "kind {kind}"
+        );
+        assert!(
+            selections.borrow().is_empty(),
+            "a context-menu gesture must not select or activate kind {kind}"
+        );
+    }
+}
+
+#[test]
+fn list_context_menu_ignores_borders_headers_and_blank_space() {
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let mut backend = TestBackend::new(RowContextMenuHarness {
+        kind: 0,
+        events: events.clone(),
+        selections: Default::default(),
+    });
+    backend.render();
+    let rect = backend
+        .core
+        .tree
+        .iter()
+        .find(|node| matches!(node.kind, NodeKind::List(_)))
+        .unwrap()
+        .rect;
+    let right = (rect.x + rect.w as i16 - 1) as u16;
+    for (x, y) in [(0, 3), (5, 0), (5, 2), (5, 7), (right, 3)] {
+        press(&mut backend, MouseButton::Right, x, y);
+        assert!(
+            events.borrow().is_empty(),
+            "point ({x}, {y}) emitted {:?}",
+            events.borrow()
+        );
+    }
+}
+
+#[test]
+fn list_context_menu_uses_scroll_offset_and_ignores_scrollbar() {
+    use crate::core::node::WidgetNode;
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let mut backend = TestBackend::new(RowContextMenuHarness {
+        kind: 4,
+        events: events.clone(),
+        selections: Default::default(),
+    });
+    backend.render();
+    let (offset, scrollbar) = backend
+        .core
+        .tree
+        .iter()
+        .find_map(|node| match &node.kind {
+            NodeKind::List(list) => Some((
+                list.offset,
+                list.scrollbar_zones(node.id, node.rect, None, None)[0].rect,
+            )),
+            _ => None,
+        })
+        .unwrap();
+    assert!(offset > 0);
+    press(&mut backend, MouseButton::Right, 5, 1);
+    assert_eq!(&*events.borrow(), &[((offset + 1).to_string(), 5, 1)]);
+    press(
+        &mut backend,
+        MouseButton::Right,
+        scrollbar.x as u16,
+        scrollbar.y as u16,
+    );
+    assert_eq!(events.borrow().len(), 1);
 }

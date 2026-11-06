@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::callback::{Callback, KeyHandler};
 use crate::core::event::MouseEvent;
+use crate::core::node::SecondaryPress;
 use crate::core::node::{ScrollbarZone, ScrollbarZonesParams, WidgetNode, compute_scrollbar_zones};
 use crate::style::{
     BorderStyle, Padding, Rect, ScrollbarVariant, Style, StyleSlot, Theme, ThemeRole,
@@ -64,6 +65,7 @@ pub struct ListNode {
     pub on_item_click: Option<Callback<ListEvent>>,
     pub on_activate: Option<Callback<ListEvent>>,
     pub on_ctrl_activate: Option<Callback<ListEvent>>,
+    pub on_context_menu: Option<Callback<(ListEvent, MouseEvent)>>,
     pub on_click: Option<Callback<MouseEvent>>,
     pub activate_on_click: bool,
     pub on_scroll_to: Option<Callback<usize>>,
@@ -75,7 +77,80 @@ pub struct ListNode {
     pub on_blur: Option<Callback<()>>,
 }
 
+impl ListNode {
+    fn context_menu_item_at(&self, press: SecondaryPress) -> Option<usize> {
+        self.item_at(
+            press.mouse.x as i16,
+            press.mouse.y as i16,
+            self.content_rect(press.rect, press.parent_border_x),
+        )
+    }
+
+    pub(crate) fn content_rect(&self, rect: Rect, parent_border_x: Option<i16>) -> Rect {
+        crate::utils::scrollbar::vertical_scrollbar_content_rect(
+            rect.inner(self.border, self.padding),
+            self.scrollbar,
+            self.border,
+            self.scrollbar_variant,
+            self.scrollbar_gap,
+            parent_border_x.is_some(),
+        )
+    }
+
+    pub(crate) fn item_at(&self, x: i16, y: i16, inner: Rect) -> Option<usize> {
+        if self.disabled {
+            return None;
+        }
+        if !inner.contains(x, y) {
+            return None;
+        }
+        let (start, end, top, bottom) = super::utils::calc_list_window_for_items_with_indicators(
+            self.offset,
+            &self.items,
+            inner.h as usize,
+            self.show_scroll_indicators,
+        );
+        let row = usize::try_from(y - inner.y).ok()?;
+        if bottom && row + 1 == inner.h as usize {
+            return None;
+        }
+        let row = row.checked_sub(usize::from(top))?;
+        let index = super::utils::item_index_at_visual_line(
+            &self.items,
+            start,
+            row,
+            end.saturating_sub(start),
+        )?;
+        self.items[index].is_selectable().then_some(index)
+    }
+}
+
 impl WidgetNode for ListNode {
+    fn secondary_hit_test_refinement(&self, press: SecondaryPress) -> Option<bool> {
+        Some(self.context_menu_item_at(press).is_some())
+    }
+
+    fn has_secondary_click(
+        &self,
+        button: crate::core::event::MouseButton,
+        _mods: crate::core::event::KeyMods,
+    ) -> bool {
+        button == crate::core::event::MouseButton::Right
+            && !self.disabled
+            && self.on_context_menu.is_some()
+    }
+
+    fn dispatch_context_menu(&self, press: SecondaryPress) -> bool {
+        crate::widgets::context_menu::emit_context_menu(
+            self.on_context_menu.as_ref(),
+            press.mouse,
+            || {
+                self.context_menu_item_at(press)
+                    .map(|index| ListEvent::click(index, press.mouse.mods, 1))
+            },
+        )
+    }
+
     fn interactive_pointer_shape_at(
         &self,
         x: i16,
@@ -91,25 +166,7 @@ impl WidgetNode for ListNode {
         {
             return None;
         }
-        let inner = rect.inner(self.border, self.padding);
-        if !inner.contains(x, y) {
-            return None;
-        }
-        let (start, end, top, _) = super::utils::calc_list_window_for_items_with_indicators(
-            self.offset,
-            &self.items,
-            inner.h as usize,
-            self.show_scroll_indicators,
-        );
-        let row = usize::try_from(y - inner.y)
-            .ok()?
-            .checked_sub(usize::from(top))?;
-        let index = super::utils::item_index_at_visual_line(
-            &self.items,
-            start,
-            row,
-            end.saturating_sub(start),
-        )?;
+        let index = self.item_at(x, y, rect.inner(self.border, self.padding))?;
         self.items[index].is_selectable().then(|| {
             self.items[index]
                 .pointer_shape

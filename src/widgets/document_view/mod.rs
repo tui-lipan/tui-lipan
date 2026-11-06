@@ -244,6 +244,8 @@ pub struct DocumentView {
     pub on_scroll: Option<Callback<ScrollEvent>>,
     /// Click event callback (with source line + link info).
     pub on_click: Option<Callback<DocumentClickEvent>>,
+    /// Optional handler for a right-button press in the content viewport.
+    pub on_context_menu: Option<Callback<(DocumentClickEvent, crate::core::event::MouseEvent)>>,
     /// Text selection callback.
     pub on_select: Option<Callback<DocumentSelectEvent>>,
     /// Keyboard handler (when focused).
@@ -380,6 +382,7 @@ impl Default for DocumentView {
             on_blur: None,
             on_scroll: None,
             on_click: None,
+            on_context_menu: None,
             on_select: None,
             on_key: None,
             shared_selection_id: None,
@@ -868,6 +871,16 @@ impl DocumentView {
     /// Set the scroll event callback.
     pub fn on_scroll(mut self, cb: Callback<ScrollEvent>) -> Self {
         self.on_scroll = Some(cb);
+        self
+    }
+
+    /// Handle a right-button press without changing selection or focus.
+    /// The handler owns the full gesture. Mouse coordinates anchor an application-owned popup.
+    pub fn on_context_menu(
+        mut self,
+        cb: Callback<(DocumentClickEvent, crate::core::event::MouseEvent)>,
+    ) -> Self {
+        self.on_context_menu = Some(cb);
         self
     }
 

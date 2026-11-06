@@ -4,12 +4,14 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::callback::{Callback, KeyHandler};
+use crate::core::node::SecondaryPress;
 use crate::core::node::{
     NodeKind, ScrollbarZone, ScrollbarZonesParams, WidgetNode, compute_scrollbar_zones,
 };
 use crate::style::{
     BorderStyle, Padding, Rect, ScrollbarVariant, Span, Style, StyleSlot, Theme, ThemeRole,
 };
+use crate::widgets::context_menu::ContextMenuHit;
 
 /// Pre-computed content-area layout derived from a [`DocumentViewNode`] and its
 /// `inner` rect.  This eliminates ~180 lines of duplicated gutter / scrollbar /
@@ -298,6 +300,7 @@ pub(crate) struct DocumentViewNode {
     pub on_blur: Option<Callback<()>>,
     pub on_scroll: Option<Callback<ScrollEvent>>,
     pub on_click: Option<Callback<DocumentClickEvent>>,
+    pub on_context_menu: Option<Callback<(DocumentClickEvent, crate::core::event::MouseEvent)>>,
     pub on_select: Option<Callback<DocumentSelectEvent>>,
     pub on_key: Option<KeyHandler>,
     pub shared_selection_id: Option<Arc<str>>,
@@ -360,6 +363,41 @@ pub(crate) struct DocumentViewNode {
 }
 
 impl WidgetNode for DocumentViewNode {
+    fn secondary_hit_test_refinement(&self, press: SecondaryPress) -> Option<bool> {
+        Some(self.context_menu_hit_at(press).is_some())
+    }
+
+    fn has_secondary_click(
+        &self,
+        button: crate::core::event::MouseButton,
+        _mods: crate::core::event::KeyMods,
+    ) -> bool {
+        let secondary = self.on_context_menu.is_some();
+        #[cfg(feature = "diff-view")]
+        let secondary = secondary
+            || self
+                .diff_line_click
+                .as_ref()
+                .is_some_and(|config| config.on_context_menu.is_some());
+        button == crate::core::event::MouseButton::Right && secondary
+    }
+
+    fn dispatch_context_menu(&self, press: SecondaryPress) -> bool {
+        match self.context_menu_hit_at(press) {
+            Some(ContextMenuHit::Widget(event)) => crate::widgets::context_menu::emit_context_menu(
+                self.on_context_menu.as_ref(),
+                press.mouse,
+                || Some(event),
+            ),
+            #[cfg(feature = "diff-view")]
+            Some(ContextMenuHit::DiffSource(source)) => self
+                .diff_line_click
+                .as_ref()
+                .is_some_and(|config| config.dispatch_context_menu(source, press.mouse)),
+            None => false,
+        }
+    }
+
     fn is_focusable(&self) -> bool {
         self.focusable
     }
@@ -446,6 +484,85 @@ impl WidgetNode for DocumentViewNode {
 }
 
 impl DocumentViewNode {
+    #[cfg(feature = "diff-view")]
+    fn diff_context_menu_source_at(&self, press: SecondaryPress) -> Option<usize> {
+        let config = self.diff_line_click.as_ref()?;
+        let inner = press.rect.inner(self.border, self.padding);
+        let cl = self.content_layout(inner);
+        let row_rect = Rect {
+            x: inner.x,
+            y: cl.content_y,
+            w: cl
+                .content_width
+                .saturating_add(cl.content_x.saturating_sub(inner.x) as u16),
+            h: cl.content_height,
+        };
+        if !row_rect.contains(press.mouse.x as i16, press.mouse.y as i16) {
+            return None;
+        }
+        let visual_idx = self
+            .scroll_offset
+            .saturating_add((press.mouse.y as i16 - inner.y) as usize);
+        let line = self.visual_cache.lines.get(visual_idx)?;
+        if matches!(&line.kind, VisualLineKind::Text { spans, continuation: true, .. } if spans.is_empty())
+        {
+            return None;
+        }
+        config.context_menu_event_at(line.source_line, press.mouse.mods)?;
+        Some(line.source_line)
+    }
+
+    fn context_menu_hit_at(
+        &self,
+        press: SecondaryPress,
+    ) -> Option<ContextMenuHit<DocumentClickEvent>> {
+        #[cfg(feature = "diff-view")]
+        if let Some(source) = self.diff_context_menu_source_at(press) {
+            return Some(ContextMenuHit::DiffSource(source));
+        }
+        self.on_context_menu.as_ref()?;
+        self.click_event_at(press.rect, press.mouse.x as i16, press.mouse.y as i16)
+            .map(ContextMenuHit::Widget)
+    }
+
+    pub(crate) fn click_event_at(&self, rect: Rect, x: i16, y: i16) -> Option<DocumentClickEvent> {
+        let inner = rect.inner(self.border, self.padding);
+        let cl = self.content_layout(inner);
+        let content = Rect {
+            x: cl.content_x,
+            y: cl.content_y,
+            w: cl.content_width,
+            h: cl.content_height,
+        };
+        if !content.contains(x, y) {
+            return None;
+        }
+        let visual_idx = self
+            .scroll_offset
+            .saturating_add(y.saturating_sub(inner.y) as usize);
+        let source_line = *self.visual_cache.source_line_map.get(visual_idx)?;
+        let rel_x = x.saturating_sub(cl.content_x) as usize;
+        let visual_col = if self.wrap {
+            rel_x
+        } else {
+            rel_x.saturating_add(self.h_scroll_offset)
+        };
+        let link = self.visual_cache.lines.get(visual_idx).and_then(|vline| {
+            let text = self.visual_cache.line_texts.get(visual_idx)?;
+            let byte = document_view_byte_in_line_from_visual_col(text.as_ref(), vline, visual_col);
+            let links = match &vline.kind {
+                VisualLineKind::Text { links, .. }
+                | VisualLineKind::BlockQuoteLine { links, .. } => links.as_slice(),
+                _ => &[],
+            };
+            links
+                .iter()
+                .find(|link| byte >= link.start && byte < link.end)
+                .map(|link| link.url.clone())
+        });
+        Some(DocumentClickEvent { source_line, link })
+    }
+
     fn has_diff_context_separator_click(&self) -> bool {
         #[cfg(feature = "diff-view")]
         {
@@ -476,7 +593,9 @@ impl DocumentViewNode {
     fn has_diff_line_click(&self) -> bool {
         #[cfg(feature = "diff-view")]
         {
-            self.diff_line_click.is_some()
+            self.diff_line_click
+                .as_ref()
+                .is_some_and(|config| config.on_click.is_some() || config.on_range_select.is_some())
         }
         #[cfg(not(feature = "diff-view"))]
         {
@@ -622,6 +741,7 @@ impl From<DocumentView> for DocumentViewNode {
             on_blur: dv.on_blur,
             on_scroll: dv.on_scroll,
             on_click: dv.on_click,
+            on_context_menu: dv.on_context_menu,
             on_select: dv.on_select,
             on_key: dv.on_key,
             shared_selection_id: dv.shared_selection_id,
@@ -868,6 +988,70 @@ fn extract_bg_anchor(spans: &[Span]) -> Option<Span> {
         .cloned()
 }
 
+fn flatten_text_lines(
+    formatted_lines: &[super::FormattedLine],
+    inner_w: u16,
+    ctx: &DocumentFlattenCtx<'_>,
+    accum: &mut DocumentFlattenAccum<'_>,
+) {
+    let wrap = ctx.wrap;
+    let bq_depth = accum.bq_depth;
+    let base_indent_cols = accum.base_indent_cols;
+    for fl in formatted_lines {
+        let indent_cols = base_indent_cols.saturating_add(fl.indent * 2);
+        let line_w = span_width(&fl.spans);
+        *accum.max_w = (*accum.max_w).max(line_w + indent_cols);
+
+        if wrap && line_w + indent_cols > inner_w {
+            // Word-wrap this line
+            let avail = inner_w.saturating_sub(indent_cols);
+            let wrapped = wrap_spans_with_links(&fl.spans, &fl.links, avail, avail);
+            let anchor = extract_bg_anchor(&fl.spans);
+            for (i, (mut wline, links)) in wrapped.into_iter().enumerate() {
+                if let Some(ref anchor) = anchor {
+                    wline.insert(0, anchor.clone());
+                }
+                accum.out.push(DocumentVisualLine {
+                    kind: if bq_depth > 0 {
+                        VisualLineKind::BlockQuoteLine {
+                            spans: wline,
+                            depth: bq_depth,
+                            links,
+                        }
+                    } else {
+                        VisualLineKind::Text {
+                            spans: wline,
+                            indent_cols,
+                            continuation: i > 0,
+                            links: shift_links(&links, indent_cols as usize),
+                        }
+                    },
+                    source_line: fl.source_line,
+                });
+            }
+        } else {
+            accum.out.push(DocumentVisualLine {
+                kind: if bq_depth > 0 {
+                    VisualLineKind::BlockQuoteLine {
+                        spans: fl.spans.clone(),
+                        depth: bq_depth,
+                        links: fl.links.clone(),
+                    }
+                } else {
+                    let indent_bytes = indent_cols as usize;
+                    VisualLineKind::Text {
+                        spans: fl.spans.clone(),
+                        indent_cols,
+                        continuation: false,
+                        links: shift_links(&fl.links, indent_bytes),
+                    }
+                },
+                source_line: fl.source_line,
+            });
+        }
+    }
+}
+
 fn flatten_block(
     block: &super::FormattedBlock,
     inner_w: u16,
@@ -882,60 +1066,7 @@ fn flatten_block(
     let base_indent_cols = accum.base_indent_cols;
     match block {
         super::FormattedBlock::Lines(formatted_lines) => {
-            for fl in formatted_lines {
-                let indent_cols = base_indent_cols.saturating_add(fl.indent * 2);
-                let line_w = span_width(&fl.spans);
-                *accum.max_w = (*accum.max_w).max(line_w + indent_cols);
-
-                if wrap && line_w + indent_cols > inner_w {
-                    // Word-wrap this line
-                    let avail = inner_w.saturating_sub(indent_cols);
-                    let wrapped =
-                        crate::utils::text::wrap_spans_for_budgets(&fl.spans, avail, avail);
-                    let anchor = extract_bg_anchor(&fl.spans);
-                    for (i, mut wline) in wrapped.into_iter().enumerate() {
-                        if let Some(ref anchor) = anchor {
-                            wline.insert(0, anchor.clone());
-                        }
-                        accum.out.push(DocumentVisualLine {
-                            kind: if bq_depth > 0 {
-                                VisualLineKind::BlockQuoteLine {
-                                    spans: wline,
-                                    depth: bq_depth,
-                                    links: Vec::new(),
-                                }
-                            } else {
-                                VisualLineKind::Text {
-                                    spans: wline,
-                                    indent_cols,
-                                    continuation: i > 0,
-                                    links: Vec::new(),
-                                }
-                            },
-                            source_line: fl.source_line,
-                        });
-                    }
-                } else {
-                    accum.out.push(DocumentVisualLine {
-                        kind: if bq_depth > 0 {
-                            VisualLineKind::BlockQuoteLine {
-                                spans: fl.spans.clone(),
-                                depth: bq_depth,
-                                links: fl.links.clone(),
-                            }
-                        } else {
-                            let indent_bytes = indent_cols as usize;
-                            VisualLineKind::Text {
-                                spans: fl.spans.clone(),
-                                indent_cols,
-                                continuation: false,
-                                links: shift_links(&fl.links, indent_bytes),
-                            }
-                        },
-                        source_line: fl.source_line,
-                    });
-                }
-            }
+            flatten_text_lines(formatted_lines, inner_w, ctx, accum);
         }
 
         super::FormattedBlock::Table(table) => {
@@ -1038,8 +1169,9 @@ fn flatten_block(
                                         if li == 0 { prefix.len() } else { 0usize };
                                     if should_wrap {
                                         let anchor = extract_bg_anchor(&fl.spans);
-                                        for mut wline in crate::utils::text::wrap_spans_for_budgets(
+                                        for (mut wline, links) in wrap_spans_with_links(
                                             &spans,
+                                            &shift_links(&fl.links, line_prefix_bytes),
                                             first_budget,
                                             cont_budget,
                                         ) {
@@ -1050,7 +1182,7 @@ fn flatten_block(
                                                 kind: VisualLineKind::BlockQuoteLine {
                                                     spans: wline,
                                                     depth: bq_depth,
-                                                    links: Vec::new(),
+                                                    links,
                                                 },
                                                 source_line: fl.source_line,
                                             });
@@ -1066,13 +1198,18 @@ fn flatten_block(
                                         });
                                     }
                                 } else if should_wrap {
-                                    let wrapped = crate::utils::text::wrap_spans_for_budgets(
+                                    let wrapped = wrap_spans_with_links(
                                         &spans,
+                                        &shift_links(
+                                            &fl.links,
+                                            if li == 0 { prefix.len() } else { 0 },
+                                        ),
                                         first_budget,
                                         cont_budget,
                                     );
                                     let anchor = extract_bg_anchor(&fl.spans);
-                                    for (wi, mut wline) in wrapped.into_iter().enumerate() {
+                                    for (wi, (mut wline, links)) in wrapped.into_iter().enumerate()
+                                    {
                                         if let Some(ref anchor) = anchor {
                                             wline.insert(0, anchor.clone());
                                         }
@@ -1086,7 +1223,7 @@ fn flatten_block(
                                                 spans: wline,
                                                 indent_cols: w_indent_cols,
                                                 continuation: li > 0 || wi > 0,
-                                                links: Vec::new(),
+                                                links: shift_links(&links, w_indent_cols as usize),
                                             },
                                             source_line: fl.source_line,
                                         });
@@ -1625,6 +1762,37 @@ pub(crate) fn span_width(spans: &[Span]) -> u16 {
 }
 fn spans_plain_text(spans: &[Span]) -> String {
     spans.iter().map(|s| s.content.as_ref()).collect()
+}
+
+/// Preserve semantic link ranges through wrapping, including a link spanning several rows.
+fn wrap_spans_with_links(
+    spans: &[Span],
+    links: &[FormattedLink],
+    first_budget: u16,
+    cont_budget: u16,
+) -> Vec<(Vec<Span>, Vec<FormattedLink>)> {
+    let mut start = 0usize;
+    crate::utils::text::wrap_spans_for_budgets(spans, first_budget, cont_budget)
+        .into_iter()
+        .map(|line| {
+            let end =
+                start.saturating_add(line.iter().map(|span| span.content.len()).sum::<usize>());
+            let row_links = links
+                .iter()
+                .filter_map(|link| {
+                    let first = start.max(link.start);
+                    let last = end.min(link.end);
+                    (first < last).then(|| FormattedLink {
+                        start: first - start,
+                        end: last - start,
+                        url: link.url.clone(),
+                    })
+                })
+                .collect();
+            start = end;
+            (line, row_links)
+        })
+        .collect()
 }
 
 fn shift_links(links: &[FormattedLink], shift_bytes: usize) -> Vec<FormattedLink> {

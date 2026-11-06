@@ -1766,3 +1766,16 @@ choose automatically. `as_str()` returns the protocol name and `from_name()` par
 name, returning `None` for an unknown name. `AllScroll` reaches the host as the X11 name `fleur`,
 because kitty drops `all-scroll` but shows `fleur` as `move`; `from_name()` also accepts `fleur`, so
 a nested application keeps its shape.
+
+## FlowchartItemEvent
+
+`Flowchart::on_context_menu` receives `(FlowchartItemEvent, MouseEvent)`.
+The non-exhaustive enum identifies the item under the pointer:
+
+| Variant | Payload |
+|---------|---------|
+| `Node` | `FlowchartNodeEvent`, including node id and label |
+| `Edge` | `FlowchartEdgeEvent`, including edge index, endpoints and optional label |
+| `Subgraph` | `FlowchartSubgraphEvent`, including subgraph id and label |
+
+Available through `tui_lipan::FlowchartItemEvent`, `tui_lipan::widgets`, and the prelude.

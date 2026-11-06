@@ -158,6 +158,32 @@ Mouse flow:
 - Click, drag, scroll, move, and scrollbar thumb drags use explicit routed state.
 - Motion and scroll streams may be coalesced for render efficiency.
 
+Primary and secondary pointer picking share traversal, clipping and overlay ordering, but
+use separate widget capabilities. `has_on_click` describes primary-button behavior;
+`has_secondary_click(button, mods)` answers for the pressed button and held modifiers.
+Context menus and eligible right drags accept Right; middle-click callbacks accept Middle. Secondary-only
+widgets cannot become ordinary click targets or advertise semantic Click actions.
+Secondary hit refinements receive the button and modifiers too, keeping diagram geometry independent
+of primary callbacks. Passthrough layers and overlays cannot treat a handler for one
+secondary button as a target for another. MouseRegion picking and drag dispatch both use
+`accepts_drag_press`, sharing callback eligibility and required-modifier matching.
+An ineligible modifier-gated drag does not block a lower context menu in a
+passthrough layer or overlay. A region's own context menu remains independent
+of its drag modifier requirement.
+
+`SecondaryPress` carries the original mouse event, candidate node rect and ancestor
+integrated-scrollbar edge. Picking and dispatch share non-emitting target resolvers:
+a row index, document event, mapped diff source row, or exact content viewport. A
+rejected point stays transparent to lower passthrough layers and non-capturing overlays.
+Tab bars intentionally accept background targets and report a `None` item index.
+
+Context-menu routing walks the hit node's ancestors once. `WidgetNode::dispatch_context_menu`
+resolves typed targets in each primitive; a shared emitter combines the target with the
+original `MouseEvent`. List-based composites forward and translate that event into their
+own model identity. The dispatcher owns drag/release suppression centrally, so callbacks
+can open overlays or remove their targets safely. List and Table rendering and primary/
+secondary hit testing share the standalone-scrollbar content rectangle, including its gap.
+
 For behavior-level documentation, see [Focus](focus.md), [Keybindings](keybindings.md),
 and [Events](events.md).
 

@@ -578,18 +578,14 @@ pub(crate) fn handle_list_click_test_backend<C: Component>(
         return false;
     }
 
-    let mut inner = select.rect.inner(select.border, select.padding);
-    if select.scrollbar {
-        let use_integrated = select.border
-            && matches!(
-                select.scrollbar_variant,
-                crate::style::ScrollbarVariant::Integrated
-            );
-        let use_standalone = select.scrollbar && !use_integrated;
-        if use_standalone && inner.w > 0 {
-            inner.w = inner.w.saturating_sub(1);
-        }
-    }
+    let parent_border_x = backend
+        .core
+        .tree
+        .ancestor_frame_integrated_vscrollbar_x(backend.core.tree.node(hit).parent);
+    let NodeKind::List(list) = &backend.core.tree.node(hit).kind else {
+        return false;
+    };
+    let inner = list.content_rect(select.rect, parent_border_x);
 
     if !inner.contains(x as i16, y as i16) {
         return false;
@@ -754,7 +750,14 @@ pub(crate) fn handle_table_click_test_backend<C: Component>(
         return false;
     }
 
-    let inner = select.rect.inner(select.border, select.padding);
+    let parent_border_x = backend
+        .core
+        .tree
+        .ancestor_frame_integrated_vscrollbar_x(backend.core.tree.node(hit).parent);
+    let NodeKind::Table(table) = &backend.core.tree.node(hit).kind else {
+        return false;
+    };
+    let inner = table.content_rect(select.rect, parent_border_x);
     if !inner.contains(x as i16, y as i16) {
         return false;
     }

@@ -1618,6 +1618,7 @@ pub struct List {
     pub(crate) on_item_click: Option<Callback<ListEvent>>,
     pub(crate) on_activate: Option<Callback<ListEvent>>,
     pub(crate) on_ctrl_activate: Option<Callback<ListEvent>>,
+    pub(crate) on_context_menu: Option<Callback<(ListEvent, MouseEvent)>>,
     pub(crate) on_click: Option<Callback<MouseEvent>>,
     pub(crate) activate_on_click: bool,
     pub(crate) on_scroll_to: Option<Callback<usize>>,
@@ -1677,6 +1678,7 @@ impl Default for List {
             on_item_click: None,
             on_activate: None,
             on_ctrl_activate: None,
+            on_context_menu: None,
             on_click: None,
             activate_on_click: true,
             on_scroll_to: None,
@@ -2110,6 +2112,14 @@ impl List {
     /// selection callbacks still run for pointer selection.
     pub fn on_ctrl_activate(mut self, cb: Callback<ListEvent>) -> Self {
         self.on_ctrl_activate = Some(cb);
+        self
+    }
+
+    /// Handle a right-button press on a selectable row without selecting or activating it.
+    /// The event includes the item index and pointer coordinates in terminal content space.
+    /// Borders, scroll indicators, blank rows and scrollbar tracks do not emit a row event.
+    pub fn on_context_menu(mut self, cb: Callback<(ListEvent, MouseEvent)>) -> Self {
+        self.on_context_menu = Some(cb);
         self
     }
 

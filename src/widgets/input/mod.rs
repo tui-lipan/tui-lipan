@@ -70,6 +70,7 @@ pub struct Input {
     pub(crate) on_change: Option<Callback<InputEvent>>,
     pub(crate) on_edit: Option<Callback<TextEditEvent>>,
     pub(crate) on_click: Option<Callback<MouseEvent>>,
+    pub(crate) on_context_menu: Option<Callback<crate::core::event::MouseEvent>>,
     pub(crate) on_key: Option<KeyHandler>,
     pub(crate) key_interceptor: Option<KeyHandler>,
     pub(crate) focusable: bool,
@@ -127,6 +128,7 @@ impl Input {
             on_change: None,
             on_edit: None,
             on_click: None,
+            on_context_menu: None,
             on_key: None,
             key_interceptor: None,
             focusable: true,
@@ -382,6 +384,13 @@ impl Input {
     /// Callback fired with incremental edit information.
     pub fn on_edit(mut self, cb: Callback<TextEditEvent>) -> Self {
         self.on_edit = Some(cb);
+        self
+    }
+
+    /// Handle a right-button press before clipboard actions or terminal mouse forwarding.
+    /// The handler owns the full gesture. Mouse coordinates anchor an application-owned popup.
+    pub fn on_context_menu(mut self, cb: Callback<crate::core::event::MouseEvent>) -> Self {
+        self.on_context_menu = Some(cb);
         self
     }
 

@@ -56,6 +56,7 @@ State-style setters use [StyleSlot semantics](../styling.md#state-style-slots):
 | `width` | `Length` | Width |
 | `height` | `Length` | Height |
 | `on_select` | `Callback<ListEvent>` | Selection changed |
+| `on_context_menu` | `Callback<(ListEvent, MouseEvent)>` | Right-button press on a data row; preserves selection and reports the clicked row with popup coordinates |
 | `on_item_click` | `Callback<ListEvent>` | Row clicked with mouse |
 | `on_activate` | `Callback<ListEvent>` | Item activated by Enter, a single click by default, or a double-click when `activate_on_click` is false |
 | `on_ctrl_activate` | `Callback<ListEvent>` | Ctrl+click or Ctrl+Enter, independently of normal activation and `activate_on_click` |
@@ -292,6 +293,7 @@ Structured data with rows, columns, and optional scrollbar.
 | `width` | `Length` | Width |
 | `height` | `Length` | Height |
 | `on_select` | `Callback<TableEvent>` | Row selection changed |
+| `on_context_menu` | `Callback<(TableEvent, MouseEvent)>` | Right-button press on a data row; preserves selection and reports the clicked row with popup coordinates |
 | `on_activate` | `Callback<TableEvent>` | Row activated by Enter or double-click |
 | `on_scroll_to` | `Callback<usize>` | Scroll position |
 
@@ -434,6 +436,7 @@ Hierarchical tree view with expand/collapse.
 | `width` | `Length` | Width |
 | `height` | `Length` | Height |
 | `on_select` | `Callback<TreeEvent>` | Node selected |
+| `on_context_menu` | `Callback<(TreeEvent, MouseEvent)>` | Right-button press on a data row; preserves selection and reports the clicked row with popup coordinates |
 | `on_ctrl_activate` | `Callback<TreeEvent>` | Ctrl+click or Ctrl+Enter activates without toggling expansion |
 | `on_toggle` | `Callback<TreeToggleEvent>` | Node expanded/collapsed |
 
@@ -715,6 +718,7 @@ entries and git-backed or application-provided change projections.
 | `tab_stop` | `bool` | Include the tree target in sequential Tab traversal (default: `true`) |
 | `on_focus` / `on_blur` | `Callback<()>` | Tree focus gained / lost |
 | `on_select` | `Callback<FileTreeEvent>` | File/dir selected |
+| `on_context_menu` | `Callback<(FileTreeEvent, MouseEvent)>` | Right-button press on a data row; preserves selection and reports the clicked row with popup coordinates |
 | `on_ctrl_activate` | `Callback<FileTreeEvent>` | Ctrl+click or Ctrl+Enter on a file or directory, without toggling expansion |
 | `on_toggle` | `Callback<FileTreeToggleEvent>` | Directory expanded/collapsed |
 | `on_entry_request` | `Callback<FileTreeEntryRequest>` | Missing provided directory listing requested |
@@ -958,6 +962,7 @@ High-throughput log list with level highlighting and fuzzy filtering.
 | `unfocused_selection_style` | `Style` | Selected row style while log view is not focused; defaults to `selection_style` |
 | `extend_unfocused_selection_style` / `inherit_unfocused_selection_style` | `Style` / `()` | Extend or inherit the unfocused selection theme role instead of replacing it |
 | `on_select` | `Callback<LogViewEvent>` | Entry selected |
+| `on_context_menu` | `Callback<(LogViewEvent, MouseEvent)>` | Right-button press on a data row; preserves selection and reports the clicked row with popup coordinates |
 | `on_activate` | `Callback<LogViewEvent>` | Entry activated |
 
 Plus standard list/scroll styling props, including `scrollbar_config`.
@@ -979,3 +984,9 @@ LogView::new(buffer.clone())
 ```rust
 // LogViewEvent { visible_index: usize, source_index: usize, entry: LogEntry }
 ```
+
+### LogViewProps migration
+
+Code constructing `LogViewProps` with an exhaustive struct literal must add
+`on_context_menu: None`, or set it to the new callback. `LogView::new()` and its
+builder methods keep their existing behavior without a handler.

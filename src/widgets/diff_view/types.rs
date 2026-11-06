@@ -414,6 +414,7 @@ pub(crate) struct DiffContextSeparatorClickConfig {
 pub(crate) struct DiffLineClickConfig {
     pub events_by_source_line: Arc<[Option<DiffLineClickEvent>]>,
     pub on_click: Option<Callback<DiffLineClickEvent>>,
+    pub on_context_menu: Option<Callback<(DiffLineClickEvent, crate::core::event::MouseEvent)>>,
     pub on_range_select: Option<Callback<DiffLineRangeEvent>>,
     pub range_overlay: Style,
 }
@@ -621,5 +622,30 @@ impl DiffData {
             right,
             unified,
         }
+    }
+}
+
+impl DiffLineClickConfig {
+    pub(crate) fn context_menu_event_at(
+        &self,
+        source_line: usize,
+        mods: crate::core::event::KeyMods,
+    ) -> Option<DiffLineClickEvent> {
+        self.on_context_menu.as_ref()?;
+        let mut event = self.events_by_source_line.get(source_line).copied()??;
+        event.mods = mods;
+        Some(event)
+    }
+
+    pub(crate) fn dispatch_context_menu(
+        &self,
+        source_line: usize,
+        mouse: crate::core::event::MouseEvent,
+    ) -> bool {
+        crate::widgets::context_menu::emit_context_menu(
+            self.on_context_menu.as_ref(),
+            mouse,
+            || self.context_menu_event_at(source_line, mouse.mods),
+        )
     }
 }

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::callback::{Callback, KeyHandler};
 use crate::core::event::MouseEvent;
+use crate::core::node::SecondaryPress;
 use crate::core::node::WidgetNode;
 use crate::style::{BorderStyle, FileIconPalette, Padding, Style, StyleSlot, Theme, ThemeRole};
 use crate::widgets::TabsEvent;
@@ -155,6 +156,50 @@ impl DraggableTabBarNode {
 }
 
 impl WidgetNode for DraggableTabBarNode {
+    fn has_secondary_click(
+        &self,
+        button: crate::core::event::MouseButton,
+        _mods: crate::core::event::KeyMods,
+    ) -> bool {
+        button == crate::core::event::MouseButton::Right
+            && !self.disabled
+            && self.on_context_menu.is_some()
+    }
+
+    fn dispatch_context_menu(&self, press: SecondaryPress) -> bool {
+        let SecondaryPress {
+            mouse,
+            rect,
+            parent_border_x: _parent_border_x,
+        } = press;
+        crate::widgets::context_menu::emit_context_menu(
+            self.on_context_menu.as_ref(),
+            mouse,
+            || {
+                let inner = rect.inner(self.border, self.padding);
+                let index = if inner.contains(mouse.x as i16, mouse.y as i16)
+                    && mouse.y as i16 == inner.y
+                {
+                    let col = (mouse.x as i16).saturating_sub(inner.x) as usize;
+                    match crate::widgets::DraggableTabBar::hit_target_at_view_col(
+                        &self.tabs,
+                        &self.display_options(),
+                        &self.viewport_options(inner.w as usize),
+                        col,
+                    ) {
+                        Some(crate::widgets::draggable_tab_bar::DraggableTabHitTarget::Tab(
+                            tab,
+                        )) => Some(tab.index),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                Some(index)
+            },
+        )
+    }
+
     fn interactive_pointer_shape_at(
         &self,
         x: i16,
@@ -200,7 +245,6 @@ impl WidgetNode for DraggableTabBarNode {
     fn has_on_click(&self) -> bool {
         !self.disabled
             && (self.on_click.is_some()
-                || self.on_context_menu.is_some()
                 || self.on_change.is_some()
                 || self.on_action.is_some()
                 || self.on_close.is_some()

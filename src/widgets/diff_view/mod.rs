@@ -202,6 +202,7 @@ pub struct DiffView {
     scroll_to_hunk: Option<usize>,
     on_scroll: Option<Callback<DiffScrollEvent>>,
     on_line_click: Option<Callback<DiffLineClickEvent>>,
+    on_context_menu: Option<Callback<(DiffLineClickEvent, crate::core::event::MouseEvent)>>,
     on_line_range_select: Option<Callback<DiffLineRangeEvent>>,
     line_range_style: StyleSlot,
     on_context_separator_click: Option<Callback<DiffContextSeparatorEvent>>,
@@ -315,6 +316,7 @@ impl DiffView {
             scroll_to_hunk: None,
             on_scroll: None,
             on_line_click: None,
+            on_context_menu: None,
             on_line_range_select: None,
             line_range_style: StyleSlot::Inherit,
             on_context_separator_click: None,
@@ -380,6 +382,16 @@ impl DiffView {
     /// Receive pane-aware scroll events from rendered pane(s).
     pub fn on_scroll(mut self, cb: Callback<DiffScrollEvent>) -> Self {
         self.on_scroll = Some(cb);
+        self
+    }
+
+    /// Handle a right-button press on a source row, preserving selection and focus.
+    /// Reports the pane and source anchor with the popup's mouse coordinates.
+    pub fn on_context_menu(
+        mut self,
+        cb: Callback<(DiffLineClickEvent, crate::core::event::MouseEvent)>,
+    ) -> Self {
+        self.on_context_menu = Some(cb);
         self
     }
 
@@ -995,10 +1007,11 @@ fn line_click_config(
     pane: DiffPane,
     logical_offset: usize,
     on_click: Option<Callback<DiffLineClickEvent>>,
+    on_context_menu: Option<Callback<(DiffLineClickEvent, crate::core::event::MouseEvent)>>,
     on_range_select: Option<Callback<DiffLineRangeEvent>>,
     range_slot: StyleSlot,
 ) -> Option<DiffLineClickConfig> {
-    if on_click.is_none() && on_range_select.is_none() {
+    if on_click.is_none() && on_range_select.is_none() && on_context_menu.is_none() {
         return None;
     }
     let events = anchors
@@ -1029,6 +1042,7 @@ fn line_click_config(
         .then(|| DiffLineClickConfig {
             events_by_source_line: events.into(),
             on_click,
+            on_context_menu,
             on_range_select,
             range_overlay: range_slot.explicit_style().unwrap_or_default(),
         })
@@ -1317,6 +1331,7 @@ impl From<DiffView> for Element {
                 pane,
                 logical_offset,
                 view.on_line_click.clone(),
+                view.on_context_menu.clone(),
                 view.on_line_range_select.clone(),
                 view.line_range_style,
             );
@@ -1456,6 +1471,7 @@ impl From<DiffView> for Element {
                 pane,
                 logical_offset,
                 view.on_line_click.clone(),
+                view.on_context_menu.clone(),
                 view.on_line_range_select.clone(),
                 view.line_range_style,
             );

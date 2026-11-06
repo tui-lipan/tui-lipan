@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::callback::{Callback, KeyHandler};
 use crate::core::event::MouseEvent;
+use crate::core::node::SecondaryPress;
 use crate::core::node::WidgetNode;
 use crate::style::{BorderStyle, Padding, Style, StyleSlot, Theme, ThemeRole};
 
@@ -26,6 +27,7 @@ pub struct TabsNode {
     pub disabled_style: Style,
     pub on_change: Option<Callback<TabsEvent>>,
     pub on_click: Option<Callback<MouseEvent>>,
+    pub on_context_menu: Option<Callback<(Option<usize>, crate::core::event::MouseEvent)>>,
     pub on_key: Option<KeyHandler>,
     pub focusable: bool,
     pub tab_stop: bool,
@@ -34,6 +36,45 @@ pub struct TabsNode {
 }
 
 impl WidgetNode for TabsNode {
+    fn has_secondary_click(
+        &self,
+        button: crate::core::event::MouseButton,
+        _mods: crate::core::event::KeyMods,
+    ) -> bool {
+        button == crate::core::event::MouseButton::Right
+            && !self.disabled
+            && self.on_context_menu.is_some()
+    }
+
+    fn dispatch_context_menu(&self, press: SecondaryPress) -> bool {
+        let SecondaryPress {
+            mouse,
+            rect,
+            parent_border_x: _parent_border_x,
+        } = press;
+        crate::widgets::context_menu::emit_context_menu(
+            self.on_context_menu.as_ref(),
+            mouse,
+            || {
+                let inner = rect.inner(self.border, self.padding);
+                let index = if inner.contains(mouse.x as i16, mouse.y as i16)
+                    && mouse.y as i16 == inner.y
+                {
+                    Tabs::index_at_col(
+                        &self.tabs,
+                        self.divider,
+                        self.overflow,
+                        inner.w as usize,
+                        (mouse.x as i16 - inner.x) as usize,
+                    )
+                } else {
+                    None
+                };
+                Some(index)
+            },
+        )
+    }
+
     fn interactive_pointer_shape_at(
         &self,
         x: i16,
@@ -135,6 +176,7 @@ impl From<Tabs> for TabsNode {
             disabled_style: value.disabled_style,
             on_change: value.on_change,
             on_click: value.on_click,
+            on_context_menu: value.on_context_menu,
             on_key: value.on_key,
             focusable: value.focusable,
             tab_stop: value.tab_stop,

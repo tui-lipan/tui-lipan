@@ -2,6 +2,13 @@
 
 All widgets are available via `use tui_lipan::prelude::*;`
 
+Item context menus are available on List, Tree, FileTree, Table, LogView,
+MultiSelect, both tab bars, DocumentView, DiffView, Graph, Flowchart, and
+SequenceDiagram. Input, TextArea, Terminal, and ManagedTerminal expose mouse-only
+menu requests. See [context-menu events](../events.md#context-menu-requests) for
+payloads and gesture behavior. Use MouseRegion for a whole-widget menu.
+
+
 ## Layout & Containers → [layout.md](layout.md) · [effects.md](effects.md) (`VisualEffect`)
 
 | Widget | Description |

@@ -207,8 +207,9 @@ pub use file_tree::{
 };
 pub use flow::Flow;
 pub use flowchart::{
-    Edge, EdgeArrow, EdgeStyle, FlowDirection, Flowchart, FlowchartEdgeEvent, FlowchartItemPath,
-    FlowchartNodeEvent, FlowchartSubgraphEvent, FlowchartTheme, NodeId, NodeShape,
+    Edge, EdgeArrow, EdgeStyle, FlowDirection, Flowchart, FlowchartEdgeEvent, FlowchartItemEvent,
+    FlowchartItemPath, FlowchartNodeEvent, FlowchartSubgraphEvent, FlowchartTheme, NodeId,
+    NodeShape,
 };
 pub use frame::{
     BorderLabels, BorderMergeMode, DecorationGlyph, DecorationPlacement, EdgeDecoration, Frame,

@@ -37,6 +37,7 @@ inherit scoped theme roles.
 | `height` | `Length` | Height |
 | `on_change` | `Callback<TabsEvent>` | Active tab changed |
 | `on_click` | `Callback<MouseEvent>` | Raw tab-bar click |
+| `on_context_menu` | `Callback<(Option<usize>, MouseEvent)>` | Right-button press without switching tabs; unused strip space, border and padding report `None` |
 | `on_key` | `KeyHandler` | Key handler |
 
 ```rust

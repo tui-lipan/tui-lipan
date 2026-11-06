@@ -419,6 +419,7 @@ pub(crate) struct TreeProps {
     pub on_select: Option<Callback<TreeEvent>>,
     pub on_activate: Option<Callback<TreeEvent>>,
     pub on_ctrl_activate: Option<Callback<TreeEvent>>,
+    pub on_context_menu: Option<Callback<(TreeEvent, crate::core::event::MouseEvent)>>,
     pub on_toggle: Option<Callback<TreeToggleEvent>>,
     pub keymap: TreeKeymap,
     pub focus_policy: Option<FocusAccordion>,

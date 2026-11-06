@@ -44,6 +44,7 @@ pub enum LogViewMsg {
     },
     Selected(ListEvent),
     Activated(ListEvent),
+    ContextMenu(ListEvent, crate::core::event::MouseEvent),
 }
 
 pub struct LogViewComponent;
@@ -82,6 +83,22 @@ impl Component for LogViewComponent {
                 // Rebuild cache since results changed
                 rebuild_cache(ctx);
                 Update::full()
+            }
+            LogViewMsg::ContextMenu(event, mouse) => {
+                crate::widgets::context_menu::emit_context_menu(
+                    ctx.props.on_context_menu.as_ref(),
+                    mouse,
+                    || {
+                        let result = ctx.state.results.get(event.index)?;
+                        let entry = ctx.props.entries.get(result.source_index)?.clone();
+                        Some(LogViewEvent {
+                            visible_index: event.index,
+                            source_index: result.source_index,
+                            entry,
+                        })
+                    },
+                );
+                Update::none()
             }
             LogViewMsg::Selected(event) => {
                 if let Some(on_select) = &ctx.props.on_select
@@ -187,6 +204,13 @@ impl Component for LogViewComponent {
             .activate_on_click(ctx.props.activate_on_click)
             .on_select(ctx.link().callback(LogViewMsg::Selected))
             .on_activate(ctx.link().callback(LogViewMsg::Activated));
+        if ctx.props.on_context_menu.is_some() {
+            list = list.on_context_menu(
+                ctx.link()
+                    .callback(|(event, mouse)| LogViewMsg::ContextMenu(event, mouse)),
+            );
+        }
+
         list = list
             .selection_style_slot(selection_style)
             .unfocused_selection_style_slot(unfocused_selection_style);
@@ -358,6 +382,63 @@ mod tests {
                 .on_select(crate::callback::Callback::new(|_| {}))
                 .into()
         }
+    }
+
+    #[test]
+    fn context_menu_maps_filtered_rows_without_selecting() {
+        use crate::callback::Callback;
+        use crate::core::event::{KeyMods, MouseButton, MouseEvent, MouseKind};
+        use std::cell::RefCell;
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let sink = events.clone();
+        let props = LogView::new()
+            .entries([
+                LogEntry::info("skip"),
+                LogEntry::info("keep first"),
+                LogEntry::info("skip again"),
+                LogEntry::info("keep second"),
+            ])
+            .filter("keep")
+            .auto_follow(false)
+            .selected(0)
+            .on_select(Callback::new(|_| panic!("right click must not select")))
+            .on_context_menu(Callback::new(move |event| sink.borrow_mut().push(event)))
+            .props;
+        let mut backend = crate::TestBackend::new_with_props(LogViewComponent::new(), props);
+        // Seed the real filter result synchronously and invalidate pending background results.
+        refilter_inline(&mut backend.core.ctx);
+        rebuild_cache(&mut backend.core.ctx);
+        backend.render();
+        let (x, y) = backend
+            .core
+            .tree
+            .iter()
+            .find_map(|node| {
+                let NodeKind::List(list) = &node.kind else {
+                    return None;
+                };
+                let inner = node.rect.inner(list.border, list.padding);
+                Some((inner.x as u16, inner.y as u16 + 1))
+            })
+            .unwrap();
+        for kind in [
+            MouseKind::Down(MouseButton::Right),
+            MouseKind::Up(MouseButton::Right),
+        ] {
+            backend
+                .send_mouse(MouseEvent {
+                    x,
+                    y,
+                    kind,
+                    mods: KeyMods::NONE,
+                })
+                .unwrap();
+        }
+        let events = events.borrow();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].0.visible_index, 1);
+        assert_eq!(events[0].0.source_index, 3);
+        assert_eq!(events[0].0.entry.message.as_ref(), "keep second");
     }
 
     #[test]

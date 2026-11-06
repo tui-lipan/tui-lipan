@@ -6,7 +6,6 @@ mod reconcile;
 mod theme;
 
 pub use layout::measure_flowchart;
-pub(crate) use node::FlowchartItemEvent;
 pub use node::FlowchartNode;
 pub(crate) use node::PositionedEdge;
 pub(crate) use node::flowchart_local_content_point;
@@ -270,6 +269,18 @@ pub struct FlowchartSubgraphEvent {
     pub label: Arc<str>,
 }
 
+/// Semantic item under the pointer in a [`Flowchart`].
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum FlowchartItemEvent {
+    /// A node.
+    Node(FlowchartNodeEvent),
+    /// An edge.
+    Edge(FlowchartEdgeEvent),
+    /// A subgraph header.
+    Subgraph(FlowchartSubgraphEvent),
+}
+
 /// Stable path identifying an item in a [`Flowchart`].
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum FlowchartItemPath {
@@ -323,6 +334,8 @@ pub struct Flowchart {
     pub(crate) max_node_width: u16,
     pub(crate) theme: FlowchartTheme,
     pub(crate) on_node_click: Option<Callback<FlowchartNodeEvent>>,
+    pub(crate) on_context_menu:
+        Option<Callback<(FlowchartItemEvent, crate::core::event::MouseEvent)>>,
     pub(crate) on_edge_click: Option<Callback<FlowchartEdgeEvent>>,
     pub(crate) on_subgraph_click: Option<Callback<FlowchartSubgraphEvent>>,
     pub(crate) on_node_hover: Option<Callback<FlowchartNodeEvent>>,
@@ -358,6 +371,7 @@ impl Default for Flowchart {
             max_node_width: 24,
             theme: FlowchartTheme::classic(),
             on_node_click: None,
+            on_context_menu: None,
             on_edge_click: None,
             on_subgraph_click: None,
             on_node_hover: None,
@@ -577,6 +591,16 @@ impl Flowchart {
     /// Set requested height.
     pub fn height(mut self, height: Length) -> Self {
         self.height = height;
+        self
+    }
+
+    /// Handle a right-button press without changing selection or focus.
+    /// The handler owns the full gesture. Mouse coordinates anchor an application-owned popup.
+    pub fn on_context_menu(
+        mut self,
+        cb: Callback<(FlowchartItemEvent, crate::core::event::MouseEvent)>,
+    ) -> Self {
+        self.on_context_menu = Some(cb);
         self
     }
 

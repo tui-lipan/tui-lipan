@@ -3,6 +3,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::callback::Callback;
+use crate::core::node::SecondaryPress;
 use crate::core::node::WidgetNode;
 use crate::style::{BorderStyle, Length, Padding, Rect, Style, Theme};
 use crate::widgets::Overflow;
@@ -146,6 +147,8 @@ pub struct SequenceDiagramNode {
     pub(crate) autonumber: bool,
     pub(crate) repeat_participants_at_bottom: bool,
     pub(crate) on_item_click: Option<Callback<SequenceItemEvent>>,
+    pub(crate) on_context_menu:
+        Option<Callback<(SequenceItemEvent, crate::core::event::MouseEvent)>>,
     pub(crate) on_item_hover: Option<Callback<SequenceItemEvent>>,
     pub(crate) output: Arc<SequenceRenderOutput>,
     pub(crate) output_content_width: Option<u16>,
@@ -172,6 +175,7 @@ impl Default for SequenceDiagramNode {
             autonumber: false,
             repeat_participants_at_bottom: false,
             on_item_click: None,
+            on_context_menu: None,
             on_item_hover: None,
             output: Arc::new(SequenceRenderOutput::default()),
             output_content_width: None,
@@ -190,6 +194,12 @@ impl From<SequenceDiagram> for SequenceDiagramNode {
 }
 
 impl SequenceDiagramNode {
+    fn contains_item_at(&self, rect: Rect, x: i16, y: i16) -> bool {
+        self.local_content_point(rect, x, y)
+            .and_then(|(local_x, local_y)| self.hit_test(local_x, local_y))
+            .is_some()
+    }
+
     pub(crate) fn content_rect(&self, rect: Rect) -> Rect {
         sequence_content_rect(rect, self.border, self.padding)
     }
@@ -218,6 +228,35 @@ impl SequenceDiagramNode {
 }
 
 impl WidgetNode for SequenceDiagramNode {
+    fn secondary_hit_test_refinement(&self, press: SecondaryPress) -> Option<bool> {
+        Some(self.contains_item_at(press.rect, press.mouse.x as i16, press.mouse.y as i16))
+    }
+
+    fn has_secondary_click(
+        &self,
+        button: crate::core::event::MouseButton,
+        _mods: crate::core::event::KeyMods,
+    ) -> bool {
+        button == crate::core::event::MouseButton::Right && self.on_context_menu.is_some()
+    }
+
+    fn dispatch_context_menu(&self, press: SecondaryPress) -> bool {
+        let SecondaryPress {
+            mouse,
+            rect,
+            parent_border_x: _parent_border_x,
+        } = press;
+        crate::widgets::context_menu::emit_context_menu(
+            self.on_context_menu.as_ref(),
+            mouse,
+            || {
+                self.local_content_point(rect, mouse.x as i16, mouse.y as i16)
+                    .and_then(|(x, y)| self.hit_test(x, y))
+                    .and_then(|path| self.item_event(path))
+            },
+        )
+    }
+
     fn has_on_click(&self) -> bool {
         self.on_item_click.is_some()
     }
@@ -231,23 +270,17 @@ impl WidgetNode for SequenceDiagramNode {
     }
 
     fn hit_test_refinement(&self, x: i16, y: i16, rect: Rect) -> Option<bool> {
-        self.on_item_click.as_ref()?;
-        Some(
-            self.local_content_point(rect, x, y)
-                .and_then(|(local_x, local_y)| self.hit_test(local_x, local_y))
-                .is_some(),
-        )
+        if !self.has_on_click() {
+            return None;
+        }
+        Some(self.contains_item_at(rect, x, y))
     }
 
     fn hover_test_refinement(&self, x: i16, y: i16, rect: Rect) -> Option<bool> {
         if !self.is_hoverable() {
             return Some(false);
         }
-        Some(
-            self.local_content_point(rect, x, y)
-                .and_then(|(local_x, local_y)| self.hit_test(local_x, local_y))
-                .is_some(),
-        )
+        Some(self.contains_item_at(rect, x, y))
     }
 }
 

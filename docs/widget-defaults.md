@@ -148,6 +148,7 @@ Source: `src/widgets/input/mod.rs` (`Input`).
 | `on_change` | `None` |
 | `on_edit` | `None` |
 | `on_click` | `None` |
+| `on_context_menu` | `None` |
 | `on_key` | `None` |
 | `key_interceptor` | `None` |
 | `focusable` | `true` |
@@ -203,6 +204,7 @@ Source: `src/widgets/text_area/mod.rs` (`TextArea`).
 | `on_scroll` | `None` |
 | `on_scroll_to` | `None` |
 | `on_click` | `None` |
+| `on_context_menu` | `None` |
 | `on_key` | `None` |
 | `key_interceptor` | `None` |
 | `clear_bindings` | `None` |
@@ -302,6 +304,7 @@ Source: `src/widgets/list/mod.rs` (`List`).
 | `on_item_click` | `None` |
 | `on_activate` | `None` |
 | `on_ctrl_activate` | `None` |
+| `on_context_menu` | `None` |
 | `on_click` | `None` |
 | `activate_on_click` | `true` |
 | `on_scroll_to` | `None` |
@@ -619,6 +622,7 @@ Source: `src/widgets/multi_select.rs` (`MultiSelect`).
 | `on_key` | `None` |
 | `on_active_index_change` | `None` |
 | `on_toggle` | `None` |
+| `on_context_menu` | `None` |
 | `on_change` | `None` |
 | `on_commit` | `None` |
 
@@ -835,6 +839,7 @@ Source: `src/widgets/table/mod.rs` (`Table`).
 | `on_select` | `None` |
 | `on_activate` | `None` |
 | `on_click` | `None` |
+| `on_context_menu` | `None` |
 | `on_scroll_to` | `None` |
 | `on_key` | `None` |
 | `disabled` | `false` |
@@ -878,6 +883,7 @@ Source: `src/widgets/tabs/mod.rs` (`Tabs`).
 | `height` | `Length::Auto` |
 | `on_change` | `None` |
 | `on_click` | `None` |
+| `on_context_menu` | `None` |
 | `on_key` | `None` |
 | `disabled` | `false` |
 | `disabled_style` | `Style::default()` |
@@ -1007,6 +1013,7 @@ Source: `src/widgets/document_view/mod.rs` (`DocumentView`).
 | `on_blur` | `None` |
 | `on_scroll` | `None` |
 | `on_click` | `None` |
+| `on_context_menu` | `None` |
 | `on_select` | `None` |
 | `on_key` | `None` |
 | `shared_selection_id` | `None` |
@@ -1155,6 +1162,7 @@ Source: `src/widgets/file_tree/mod.rs` (`FileTree`).
 | `on_select` | `None` |
 | `on_activate` | `None` |
 | `on_ctrl_activate` | `None` |
+| `on_context_menu` | `None` |
 | `on_toggle` | `None` |
 | `on_entry_request` | `None` |
 
@@ -1298,6 +1306,7 @@ Source: `src/widgets/tree/mod.rs` (`Tree`).
 | `on_select` | `None` |
 | `on_activate` | `None` |
 | `on_ctrl_activate` | `None` |
+| `on_context_menu` | `None` |
 | `on_toggle` | `None` |
 | `keymap` | `TreeKeymap::default()` |
 | `focus_policy` | `None` |
@@ -1344,6 +1353,7 @@ Source: `src/widgets/terminal/mod.rs` (`Terminal`).
 | `on_selection` | `None` |
 | `on_resize` | `None` |
 | `on_mouse_forward` | `None` |
+| `on_context_menu` | `None` |
 | `link_activation_mods` | `KeyMods::CTRL` |
 | `link_hover_style` | `StyleSlot::Replace(Style::new().underline())` |
 | `on_link_activate` | `None` |
@@ -1413,6 +1423,7 @@ Note: `DiffView::new()` delegates to `new_internal("", "", None)`; argument-back
 | `scroll_to_hunk` | `None` |
 | `on_scroll` | `None` |
 | `on_line_click` | `None` |
+| `on_context_menu` | `None` |
 | `on_line_range_select` | `None` |
 | `line_range_style` | `StyleSlot::Inherit` |
 | `on_context_separator_click` | `None` |
@@ -1459,6 +1470,7 @@ Note: `ManagedTerminal` is a component; defaults come from `ManagedTerminalProps
 | `link_activation_mods` | `KeyMods::CTRL` |
 | `link_hover_style` | `StyleSlot::Replace(Style::new().underline())` |
 | `on_link_activate` | `None` |
+| `on_context_menu` | `None` |
 | `resize_debounce` | `Duration::from_millis(16)` |
 | `style` | `crate::style::Style::default()` |
 | `focusable` | `true` |

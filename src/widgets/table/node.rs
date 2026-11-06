@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::callback::{Callback, KeyHandler};
 use crate::core::event::MouseEvent;
+use crate::core::node::SecondaryPress;
 use crate::core::node::{ScrollbarZone, ScrollbarZonesParams, WidgetNode, compute_scrollbar_zones};
 use crate::style::{
     BorderStyle, Padding, Rect, ScrollbarVariant, Style, StyleSlot, Theme, ThemeRole,
@@ -52,6 +53,7 @@ pub struct TableNode {
     pub on_select: Option<Callback<TableEvent>>,
     pub on_activate: Option<Callback<TableEvent>>,
     pub on_click: Option<Callback<MouseEvent>>,
+    pub on_context_menu: Option<Callback<(TableEvent, crate::core::event::MouseEvent)>>,
     pub on_scroll_to: Option<Callback<usize>>,
     pub on_key: Option<KeyHandler>,
     pub focusable: bool,
@@ -69,7 +71,81 @@ pub struct TableNode {
     pub inspector_separator_char: char,
 }
 
+impl TableNode {
+    fn context_menu_item_at(&self, press: SecondaryPress) -> Option<usize> {
+        self.item_at(
+            press.mouse.x as i16,
+            press.mouse.y as i16,
+            press.rect,
+            press.parent_border_x,
+        )
+    }
+
+    pub(crate) fn content_rect(&self, rect: Rect, parent_border_x: Option<i16>) -> Rect {
+        crate::utils::scrollbar::vertical_scrollbar_content_rect(
+            rect.inner(self.border, self.padding),
+            self.scrollbar,
+            self.border,
+            self.scrollbar_variant,
+            self.scrollbar_gap,
+            parent_border_x.is_some(),
+        )
+    }
+
+    pub(crate) fn item_at(
+        &self,
+        x: i16,
+        y: i16,
+        rect: Rect,
+        parent_border_x: Option<i16>,
+    ) -> Option<usize> {
+        let inner = self.content_rect(rect, parent_border_x);
+        if !inner.contains(x, y) {
+            return None;
+        }
+        let header = super::table_header_reserved_height(
+            self.header.as_ref(),
+            self.rows.len(),
+            self.row_gap,
+        );
+        let top = u16::from(self.show_scroll_indicators && self.top_indicator);
+        let bottom = u16::from(self.show_scroll_indicators && self.bottom_indicator);
+        let local_y = u16::try_from(y - inner.y).ok()?;
+        if local_y >= inner.h.saturating_sub(bottom) {
+            return None;
+        }
+        let row = local_y.checked_sub(header.saturating_add(top))?;
+        let index = super::row_index_at_visual_offset(&self.rows, self.offset, row, self.row_gap)?;
+        (self.rows[index].role == super::TableRowRole::Normal).then_some(index)
+    }
+}
+
 impl WidgetNode for TableNode {
+    fn secondary_hit_test_refinement(&self, press: SecondaryPress) -> Option<bool> {
+        Some(self.context_menu_item_at(press).is_some())
+    }
+
+    fn has_secondary_click(
+        &self,
+        button: crate::core::event::MouseButton,
+        _mods: crate::core::event::KeyMods,
+    ) -> bool {
+        button == crate::core::event::MouseButton::Right
+            && !self.disabled
+            && self.on_context_menu.is_some()
+    }
+
+    fn dispatch_context_menu(&self, press: SecondaryPress) -> bool {
+        crate::widgets::context_menu::emit_context_menu(
+            self.on_context_menu.as_ref(),
+            press.mouse,
+            || {
+                self.context_menu_item_at(press)
+                    .map(|index| TableEvent { index })
+            },
+        )
+    }
+
     fn interactive_pointer_shape_at(
         &self,
         x: i16,
@@ -234,6 +310,7 @@ impl From<Table> for TableNode {
             on_select: value.on_select,
             on_activate: value.on_activate,
             on_click: value.on_click,
+            on_context_menu: value.on_context_menu,
             on_scroll_to: value.on_scroll_to,
             on_key: value.on_key,
             focusable: value.focusable,

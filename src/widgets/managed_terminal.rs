@@ -92,6 +92,8 @@ pub struct ManagedTerminalProps {
     pub link_hover_style: StyleSlot,
     /// Callback fired when a modified left click activates a link.
     pub on_link_activate: Option<Callback<TerminalLinkEvent>>,
+    /// Optional handler for a right-button press in the content viewport.
+    pub on_context_menu: Option<Callback<crate::core::event::MouseEvent>>,
     /// Delay before applying a burst of terminal viewport resizes.
     /// Default: `16ms`. Use [`std::time::Duration::ZERO`] to apply every resize immediately.
     /// Interval used to coalesce bursts of PTY resize requests; zero applies each request.
@@ -130,6 +132,7 @@ impl Default for ManagedTerminalProps {
             link_activation_mods: KeyMods::CTRL,
             link_hover_style: StyleSlot::Replace(Style::new().underline()),
             on_link_activate: None,
+            on_context_menu: None,
             resize_debounce: Duration::from_millis(16),
             style: crate::style::Style::default(),
             focusable: true,
@@ -248,6 +251,13 @@ impl ManagedTerminal {
     /// Set the link-hover style slot directly for composite forwarding.
     pub fn link_hover_style_slot(mut self, slot: StyleSlot) -> Self {
         self.props.link_hover_style = slot;
+        self
+    }
+
+    /// Handle a right-button press without changing selection or focus.
+    /// The handler owns the full gesture. Mouse coordinates anchor an application-owned popup.
+    pub fn on_context_menu(mut self, cb: Callback<crate::core::event::MouseEvent>) -> Self {
+        self.props.on_context_menu = Some(cb);
         self
     }
 
@@ -562,6 +572,9 @@ impl Component for ManagedTerminal {
         }
         if let Some(on_blur) = ctx.props.on_blur.clone() {
             terminal = terminal.on_blur(on_blur);
+        }
+        if let Some(callback) = ctx.props.on_context_menu.clone() {
+            terminal = terminal.on_context_menu(callback);
         }
         if let Some(on_link_activate) = ctx.props.on_link_activate.clone() {
             terminal = terminal.on_link_activate(on_link_activate);

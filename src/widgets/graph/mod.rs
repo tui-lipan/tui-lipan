@@ -180,6 +180,7 @@ pub struct Graph {
     pub(crate) edge_style: Style,
     pub(crate) edge_border_style: BorderStyle,
     pub(crate) on_node_click: Option<Callback<GraphNodeEvent>>,
+    pub(crate) on_context_menu: Option<Callback<(GraphNodeEvent, crate::core::event::MouseEvent)>>,
     pub(crate) on_node_hover: Option<Callback<GraphNodeEvent>>,
     pub(crate) on_node_focus: Option<Callback<GraphNodeEvent>>,
     pub(crate) on_node_activate: Option<Callback<GraphNodeEvent>>,
@@ -215,6 +216,7 @@ impl Default for Graph {
             edge_style: Style::default(),
             edge_border_style: BorderStyle::Plain,
             on_node_click: None,
+            on_context_menu: None,
             on_node_hover: None,
             on_node_focus: None,
             on_node_activate: None,
@@ -344,6 +346,16 @@ impl Graph {
     /// Set the focused graph node style slot.
     pub fn node_focus_style_slot(mut self, slot: StyleSlot) -> Self {
         self.node_focus_style = slot;
+        self
+    }
+
+    /// Handle a right-button press without changing selection or focus.
+    /// The handler owns the full gesture. Mouse coordinates anchor an application-owned popup.
+    pub fn on_context_menu(
+        mut self,
+        cb: Callback<(GraphNodeEvent, crate::core::event::MouseEvent)>,
+    ) -> Self {
+        self.on_context_menu = Some(cb);
         self
     }
 

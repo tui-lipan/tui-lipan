@@ -3,12 +3,14 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::callback::Callback;
+use crate::core::node::SecondaryPress;
 use crate::core::node::WidgetNode;
 use crate::style::{BorderStyle, Length, Padding, Rect, Style, Theme};
 
 use super::{
-    Edge, EdgeArrow, EdgeStyle, FlowDirection, Flowchart, FlowchartEdgeEvent, FlowchartItemPath,
-    FlowchartNodeEvent, FlowchartSubgraphEvent, FlowchartTheme, NodeId, NodeShape,
+    Edge, EdgeArrow, EdgeStyle, FlowDirection, Flowchart, FlowchartEdgeEvent, FlowchartItemEvent,
+    FlowchartItemPath, FlowchartNodeEvent, FlowchartSubgraphEvent, FlowchartTheme, NodeId,
+    NodeShape,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -118,6 +120,8 @@ pub struct FlowchartNode {
     pub(crate) max_node_width: u16,
     pub(crate) theme: FlowchartTheme,
     pub(crate) on_node_click: Option<Callback<FlowchartNodeEvent>>,
+    pub(crate) on_context_menu:
+        Option<Callback<(FlowchartItemEvent, crate::core::event::MouseEvent)>>,
     pub(crate) on_edge_click: Option<Callback<FlowchartEdgeEvent>>,
     pub(crate) on_subgraph_click: Option<Callback<FlowchartSubgraphEvent>>,
     pub(crate) on_node_hover: Option<Callback<FlowchartNodeEvent>>,
@@ -155,6 +159,7 @@ impl Default for FlowchartNode {
             max_node_width: flowchart.max_node_width,
             theme: flowchart.theme,
             on_node_click: None,
+            on_context_menu: None,
             on_edge_click: None,
             on_subgraph_click: None,
             on_node_hover: None,
@@ -178,6 +183,12 @@ impl From<Flowchart> for FlowchartNode {
 }
 
 impl FlowchartNode {
+    fn contains_item_at(&self, rect: Rect, x: i16, y: i16) -> bool {
+        self.local_content_point(rect, x, y)
+            .and_then(|(local_x, local_y)| self.hit_test(local_x, local_y))
+            .is_some()
+    }
+
     pub(crate) fn content_rect(&self, rect: Rect) -> Rect {
         flowchart_content_rect(rect, self.border, self.padding)
     }
@@ -282,13 +293,36 @@ impl FlowchartNode {
     }
 }
 
-pub(crate) enum FlowchartItemEvent {
-    Node(FlowchartNodeEvent),
-    Edge(FlowchartEdgeEvent),
-    Subgraph(FlowchartSubgraphEvent),
-}
-
 impl WidgetNode for FlowchartNode {
+    fn secondary_hit_test_refinement(&self, press: SecondaryPress) -> Option<bool> {
+        Some(self.contains_item_at(press.rect, press.mouse.x as i16, press.mouse.y as i16))
+    }
+
+    fn has_secondary_click(
+        &self,
+        button: crate::core::event::MouseButton,
+        _mods: crate::core::event::KeyMods,
+    ) -> bool {
+        button == crate::core::event::MouseButton::Right && self.on_context_menu.is_some()
+    }
+
+    fn dispatch_context_menu(&self, press: SecondaryPress) -> bool {
+        let SecondaryPress {
+            mouse,
+            rect,
+            parent_border_x: _parent_border_x,
+        } = press;
+        crate::widgets::context_menu::emit_context_menu(
+            self.on_context_menu.as_ref(),
+            mouse,
+            || {
+                self.local_content_point(rect, mouse.x as i16, mouse.y as i16)
+                    .and_then(|(x, y)| self.hit_test(x, y))
+                    .and_then(|(_, path)| self.item_event(&path))
+            },
+        )
+    }
+
     fn has_on_click(&self) -> bool {
         self.on_node_click.is_some()
             || self.on_edge_click.is_some()
@@ -314,11 +348,8 @@ impl WidgetNode for FlowchartNode {
     }
 
     fn hit_test_refinement(&self, x: i16, y: i16, rect: Rect) -> Option<bool> {
-        self.has_on_click().then(|| {
-            self.local_content_point(rect, x, y)
-                .and_then(|(local_x, local_y)| self.hit_test(local_x, local_y))
-                .is_some()
-        })
+        self.has_on_click()
+            .then(|| self.contains_item_at(rect, x, y))
     }
 
     fn hover_test_refinement(&self, x: i16, y: i16, rect: Rect) -> Option<bool> {
@@ -326,11 +357,7 @@ impl WidgetNode for FlowchartNode {
             return Some(false);
         }
 
-        Some(
-            self.local_content_point(rect, x, y)
-                .and_then(|(local_x, local_y)| self.hit_test(local_x, local_y))
-                .is_some(),
-        )
+        Some(self.contains_item_at(rect, x, y))
     }
 }
 

@@ -417,3 +417,12 @@ is clipped at the viewport edge and does not reflow the line.
 Use `on_editor_state_change` when one coherent cursor/selection/edit callback is
 preferable to multiple widget-specific callbacks. Existing `on_change`,
 `on_edit`, `on_scroll`, and `on_vim_mode_change` behavior is unchanged.
+
+## Context menus
+
+`Input::on_context_menu` and `TextArea::on_context_menu` take `Callback<MouseEvent>`.
+They report a right-button press inside the content viewport without moving the
+caret, changing selection, or applying clipboard fallback. The application owns
+the menu and its actions. The handler consumes subsequent drag/release events.
+See [context-menu requests](events.md#context-menu-requests) for item-aware menus
+on documents and diffs.

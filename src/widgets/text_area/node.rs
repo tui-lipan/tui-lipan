@@ -5,6 +5,7 @@ use crate::app::TextAreaNewlineBinding;
 use crate::callback::{Callback, KeyHandler};
 use crate::clipboard::ImageContent;
 use crate::core::event::MouseEvent;
+use crate::core::node::SecondaryPress;
 use crate::core::node::{ScrollbarZone, WidgetNode};
 use crate::input::KeyBindings;
 use crate::style::{
@@ -13,6 +14,7 @@ use crate::style::{
 };
 use crate::text::edit::TextEditEvent;
 use crate::text::line_index::LineIndex;
+use crate::widgets::context_menu::ContextMenuHit;
 use crate::widgets::scroll::SmoothScrollState;
 use crate::widgets::scroll_view::ScrollEvent;
 use crate::widgets::text_area::{
@@ -99,6 +101,7 @@ pub struct TextAreaNode {
     pub on_scroll: Option<Callback<ScrollEvent>>,
     pub on_scroll_to: Option<Callback<usize>>,
     pub on_click: Option<Callback<MouseEvent>>,
+    pub on_context_menu: Option<Callback<crate::core::event::MouseEvent>>,
     pub on_key: Option<KeyHandler>,
     pub key_interceptor: Option<KeyHandler>,
     pub clear_bindings: Option<KeyBindings>,
@@ -169,6 +172,44 @@ pub struct TextAreaNode {
 }
 
 impl TextAreaNode {
+    #[cfg(feature = "diff-view")]
+    fn diff_context_menu_source_at(&self, press: SecondaryPress) -> Option<usize> {
+        let config = self.diff_line_click.as_ref()?;
+        let content = self.content_rect(press.rect);
+        let inner = press.rect.inner(self.border, self.padding);
+        let row_rect = Rect {
+            x: inner.x,
+            w: content
+                .w
+                .saturating_add(content.x.saturating_sub(inner.x) as u16),
+            ..content
+        };
+        if !row_rect.contains(press.mouse.x as i16, press.mouse.y as i16) {
+            return None;
+        }
+        let visual_idx = self
+            .scroll_offset
+            .saturating_add((press.mouse.y as i16 - inner.y) as usize);
+        let line = self.visual_cache.latest_lines()?.get(visual_idx)?;
+        if line.continuation && line.start == line.end {
+            return None;
+        }
+        let source = line.line_num.saturating_sub(1);
+        config.context_menu_event_at(source, press.mouse.mods)?;
+        Some(source)
+    }
+
+    fn context_menu_hit_at(&self, press: SecondaryPress) -> Option<ContextMenuHit<()>> {
+        #[cfg(feature = "diff-view")]
+        if let Some(source) = self.diff_context_menu_source_at(press) {
+            return Some(ContextMenuHit::DiffSource(source));
+        }
+        self.on_context_menu.as_ref()?;
+        self.content_rect(press.rect)
+            .contains(press.mouse.x as i16, press.mouse.y as i16)
+            .then_some(ContextMenuHit::Widget(()))
+    }
+
     fn has_diff_context_separator_click(&self) -> bool {
         #[cfg(feature = "diff-view")]
         {
@@ -199,7 +240,9 @@ impl TextAreaNode {
     fn has_diff_line_click(&self) -> bool {
         #[cfg(feature = "diff-view")]
         {
-            self.diff_line_click.is_some()
+            self.diff_line_click
+                .as_ref()
+                .is_some_and(|config| config.on_click.is_some() || config.on_range_select.is_some())
         }
         #[cfg(not(feature = "diff-view"))]
         {
@@ -380,6 +423,43 @@ impl TextAreaNode {
 }
 
 impl WidgetNode for TextAreaNode {
+    fn secondary_hit_test_refinement(&self, press: SecondaryPress) -> Option<bool> {
+        Some(self.context_menu_hit_at(press).is_some())
+    }
+
+    fn has_secondary_click(
+        &self,
+        button: crate::core::event::MouseButton,
+        _mods: crate::core::event::KeyMods,
+    ) -> bool {
+        let secondary = self.on_context_menu.is_some();
+        #[cfg(feature = "diff-view")]
+        let secondary = secondary
+            || self
+                .diff_line_click
+                .as_ref()
+                .is_some_and(|config| config.on_context_menu.is_some());
+        button == crate::core::event::MouseButton::Right && !self.disabled && secondary
+    }
+
+    fn dispatch_context_menu(&self, press: SecondaryPress) -> bool {
+        match self.context_menu_hit_at(press) {
+            Some(ContextMenuHit::Widget(())) => {
+                crate::widgets::context_menu::emit_mouse_context_menu(
+                    self.on_context_menu.as_ref(),
+                    press.mouse,
+                    self.content_rect(press.rect),
+                )
+            }
+            #[cfg(feature = "diff-view")]
+            Some(ContextMenuHit::DiffSource(source)) => self
+                .diff_line_click
+                .as_ref()
+                .is_some_and(|config| config.dispatch_context_menu(source, press.mouse)),
+            None => false,
+        }
+    }
+
     fn is_disabled(&self) -> bool {
         self.disabled
     }
@@ -539,6 +619,7 @@ impl From<super::TextArea> for TextAreaNode {
             on_scroll: value.on_scroll,
             on_scroll_to: value.on_scroll_to,
             on_click: value.on_click,
+            on_context_menu: value.on_context_menu,
             on_key: value.on_key,
             key_interceptor: value.key_interceptor,
             clear_bindings: value.clear_bindings,

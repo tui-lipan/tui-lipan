@@ -137,6 +137,7 @@ pub struct MultiSelect {
     on_key: Option<KeyHandler>,
     on_active_index_change: Option<Callback<usize>>,
     on_toggle: Option<Callback<MultiSelectToggleEvent>>,
+    on_context_menu: Option<Callback<(ListEvent, crate::core::event::MouseEvent)>>,
     on_change: Option<Callback<MultiSelectChangeEvent>>,
     on_commit: Option<Callback<MultiSelectCommitEvent>>,
 }
@@ -193,6 +194,7 @@ impl Default for MultiSelect {
             on_key: None,
             on_active_index_change: None,
             on_toggle: None,
+            on_context_menu: None,
             on_change: None,
             on_commit: None,
         }
@@ -550,6 +552,16 @@ impl MultiSelect {
         self
     }
 
+    /// Handle a right-button press without changing selection or focus.
+    /// The handler owns the full gesture. Mouse coordinates anchor an application-owned popup.
+    pub fn on_context_menu(
+        mut self,
+        cb: Callback<(ListEvent, crate::core::event::MouseEvent)>,
+    ) -> Self {
+        self.on_context_menu = Some(cb);
+        self
+    }
+
     /// Callback fired when the current row toggles selected/unselected.
     pub fn on_toggle(mut self, cb: Callback<MultiSelectToggleEvent>) -> Self {
         self.on_toggle = Some(cb);
@@ -632,6 +644,9 @@ impl From<MultiSelect> for Element {
                     .unwrap_or(multi.list_config.selection_style),
             );
 
+        if let Some(cb) = multi.on_context_menu.clone() {
+            list = list.on_context_menu(cb);
+        }
         if let Some(cb) = multi.on_focus.clone() {
             list = list.on_focus(cb);
         }

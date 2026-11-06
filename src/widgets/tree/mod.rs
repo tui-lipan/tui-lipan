@@ -75,6 +75,7 @@ impl Tree {
                 on_select: None,
                 on_activate: None,
                 on_ctrl_activate: None,
+                on_context_menu: None,
                 on_toggle: None,
                 keymap: TreeKeymap::default(),
                 focus_policy: None,
@@ -496,6 +497,16 @@ impl Tree {
     /// selection callbacks still run for pointer selection.
     pub fn on_ctrl_activate(mut self, cb: Callback<TreeEvent>) -> Self {
         self.props.on_ctrl_activate = Some(cb);
+        self
+    }
+
+    /// Handle a right-button press on a selectable node without changing its selection.
+    /// The tree event identifies the node; the mouse event provides the popup anchor.
+    pub fn on_context_menu(
+        mut self,
+        cb: Callback<(TreeEvent, crate::core::event::MouseEvent)>,
+    ) -> Self {
+        self.props.on_context_menu = Some(cb);
         self
     }
 

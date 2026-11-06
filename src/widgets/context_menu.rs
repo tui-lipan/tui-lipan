@@ -362,3 +362,42 @@ impl crate::Component for MenuList {
             .into()
     }
 }
+
+/// Non-emitting target resolution shared by document/editor picking and dispatch.
+pub(crate) enum ContextMenuHit<T> {
+    Widget(T),
+    #[cfg(feature = "diff-view")]
+    DiffSource(usize),
+}
+
+/// Emit a secondary-click event only when a semantic target was hit.
+pub(crate) fn emit_context_menu<T>(
+    callback: Option<&crate::callback::Callback<(T, crate::core::event::MouseEvent)>>,
+    mouse: crate::core::event::MouseEvent,
+    target: impl FnOnce() -> Option<T>,
+) -> bool {
+    let Some(callback) = callback else {
+        return false;
+    };
+    let Some(target) = target() else {
+        return false;
+    };
+    callback.emit((target, mouse));
+    true
+}
+
+/// Emit a coordinate-only context menu within a widget's content viewport.
+pub(crate) fn emit_mouse_context_menu(
+    callback: Option<&crate::callback::Callback<crate::core::event::MouseEvent>>,
+    mouse: crate::core::event::MouseEvent,
+    content: crate::style::Rect,
+) -> bool {
+    let Some(callback) = callback else {
+        return false;
+    };
+    if !content.contains(mouse.x as i16, mouse.y as i16) {
+        return false;
+    }
+    callback.emit(mouse);
+    true
+}
