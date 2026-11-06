@@ -84,9 +84,11 @@ fn render_terminal_images(
     content_rect: Rect,
     effective: ratatui::layout::Rect,
 ) {
+    // Streamed video stacks each frame over the last; only the newest reaches the host.
+    let placements = crate::widgets::unoccluded_terminal_images(&node.images);
     if crate::backend::ratatui_backend::renderers::image::render_native_terminal_images(
         f,
-        &node.images,
+        &placements,
         content_rect,
         effective,
     ) {
@@ -98,7 +100,7 @@ fn render_terminal_images(
         .first()
         .and_then(|image| image.image.image_lifetime());
     let images =
-        crate::widgets::composite_terminal_images(&node.images, content_rect.w, content_rect.h);
+        crate::widgets::composite_terminal_images(&placements, content_rect.w, content_rect.h);
     let render = crate::backend::ratatui_backend::renderers::image::TerminalImageRender {
         alive: lifetime,
         use_placements: crate::widgets::terminal_images_use_placements(

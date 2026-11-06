@@ -277,6 +277,10 @@ impl HostGraphicsScene {
         let mut desired = DesiredScene::default();
         for (owner, images) in updates {
             let plan = self.plans.get(&owner)?;
+            // The same cull a full paint applies: a video stacks every frame, and the frames under
+            // the newest one would otherwise overlap on one plane and refuse the update.
+            let images = crate::widgets::unoccluded_terminal_images(images);
+            let images = images.as_slice();
             let regions = plan.regions(images)?;
             desired.owners.insert(owner);
             desired.plans.insert(owner, plan.clone());

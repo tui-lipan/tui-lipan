@@ -65,7 +65,7 @@ pub use graphics::{
 pub(crate) use graphics::{
     PLACEHOLDER as KITTY_PLACEHOLDER, composite_terminal_images, crop_for_visible_cells,
     diacritic as kitty_diacritic, image_cell_has_pixels, image_cell_is_opaque, image_covers_cell,
-    terminal_images_use_placements,
+    terminal_images_use_placements, unoccluded_terminal_images,
 };
 #[cfg(feature = "terminal-images")]
 pub use graphics_media::{GraphicsMediaPolicy, GraphicsRelayPolicy};

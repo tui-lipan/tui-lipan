@@ -45,7 +45,9 @@
 
 mod composite;
 
-pub(crate) use composite::{composite_terminal_images, terminal_images_use_placements};
+pub(crate) use composite::{
+    composite_terminal_images, terminal_images_use_placements, unoccluded_terminal_images,
+};
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -201,6 +203,8 @@ pub(crate) struct ImageGeometry {
 #[derive(Debug)]
 struct DeferredDecode {
     payload: std::sync::Mutex<Option<Vec<u8>>>,
+    /// Uncompressed RGB with every pixel's bytes present, so it is known to draw opaque.
+    opaque: bool,
     compressed: bool,
     format: u32,
     width: u32,
@@ -303,6 +307,22 @@ impl TerminalImage {
             ImageSource::Deferred { input, decoded } => decoded
                 .get_or_init(|| decode_deferred(input).map(Arc::new))
                 .as_ref(),
+        }
+    }
+
+    /// Whether every pixel is opaque, known without decoding: an RGB transmission has no alpha.
+    ///
+    /// Only a payload certain to decode qualifies, because one that fails draws nothing and must
+    /// not hide what is under it. A compressed payload can fail to inflate, so it never qualifies.
+    pub(crate) fn is_opaque(&self) -> bool {
+        match &self.source {
+            ImageSource::File { input, decoded } => {
+                input.format == 24 && !matches!(decoded.get(), Some(None))
+            }
+            ImageSource::Decoded(pixels) => !pixels.color().has_alpha(),
+            ImageSource::Deferred { input, decoded } => {
+                input.opaque && !matches!(decoded.get(), Some(None))
+            }
         }
     }
 
@@ -3102,6 +3122,9 @@ impl TerminalGraphics {
                         native: Arc::default(),
                         source: ImageSource::Deferred {
                             input: Arc::new(DeferredDecode {
+                                opaque: channels == 3
+                                    && !command.compressed
+                                    && payload.len() >= bytes,
                                 payload: std::sync::Mutex::new(Some(payload)),
                                 compressed: command.compressed,
                                 format: command.format,
