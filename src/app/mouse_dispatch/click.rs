@@ -163,7 +163,10 @@ pub(crate) fn transition_right_click<C: Component, T: MouseDispatchCtx<C>>(
         // the terminal, focus loss mid-drag) cannot linger and swallow this one.
         ctx.mouse_state().mouse_region_drag = None;
 
-        let Some(hit) = ctx.tree().secondary_hit_test(x as i16, y as i16) else {
+        let Some(hit) = ctx
+            .tree()
+            .secondary_hit_test(x as i16, y as i16, MouseButton::Right)
+        else {
             return Some(hover_dirty);
         };
 
@@ -288,7 +291,10 @@ pub(crate) fn transition_middle_click<C: Component, T: MouseDispatchCtx<C>>(
     if !matches!(mouse.kind, MouseKind::Down(MouseButton::Middle)) {
         return None;
     }
-    let Some(hit) = ctx.tree().secondary_hit_test(x as i16, y as i16) else {
+    let Some(hit) = ctx
+        .tree()
+        .secondary_hit_test(x as i16, y as i16, MouseButton::Middle)
+    else {
         return Some(hover_dirty);
     };
     if !ctx.drag_is_active() && dispatch_secondary_click(ctx.tree(), hit, mouse, true) {

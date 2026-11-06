@@ -56,8 +56,8 @@ pub(crate) trait WidgetNode {
     fn has_on_click(&self) -> bool {
         false
     }
-    /// Whether right/middle-button input has widget behavior, independently of primary clicks.
-    fn has_secondary_click(&self) -> bool {
+    /// Whether this specific secondary button has widget behavior, independently of primary clicks.
+    fn has_secondary_click(&self, _button: crate::core::event::MouseButton) -> bool {
         false
     }
     /// Resolve and emit an opt-in context menu without changing widget state.
@@ -120,8 +120,14 @@ pub(crate) trait WidgetNode {
     fn primary_hit_test_refinement(&self, x: i16, y: i16, rect: Rect) -> Option<bool> {
         self.hit_test_refinement(x, y, rect)
     }
-    /// Refine secondary picking without requiring a primary callback or moving focus.
-    fn secondary_hit_test_refinement(&self, x: i16, y: i16, rect: Rect) -> Option<bool> {
+    /// Refine picking for the pressed secondary button without requiring a primary callback.
+    fn secondary_hit_test_refinement(
+        &self,
+        x: i16,
+        y: i16,
+        rect: Rect,
+        _button: crate::core::event::MouseButton,
+    ) -> Option<bool> {
         self.hit_test_refinement(x, y, rect)
     }
     /// Refine hover-testing. Defaults to the hit-test refinement for widgets whose
@@ -401,8 +407,8 @@ impl WidgetNode for NodeKind {
         node_kind_delegate_match!(self, has_on_click())
     }
 
-    fn has_secondary_click(&self) -> bool {
-        node_kind_delegate_match!(self, has_secondary_click())
+    fn has_secondary_click(&self, button: crate::core::event::MouseButton) -> bool {
+        node_kind_delegate_match!(self, has_secondary_click(button))
     }
 
     fn dispatch_context_menu(
@@ -456,8 +462,14 @@ impl WidgetNode for NodeKind {
         node_kind_delegate_match!(self, primary_hit_test_refinement(x, y, rect))
     }
 
-    fn secondary_hit_test_refinement(&self, x: i16, y: i16, rect: Rect) -> Option<bool> {
-        node_kind_delegate_match!(self, secondary_hit_test_refinement(x, y, rect))
+    fn secondary_hit_test_refinement(
+        &self,
+        x: i16,
+        y: i16,
+        rect: Rect,
+        button: crate::core::event::MouseButton,
+    ) -> Option<bool> {
+        node_kind_delegate_match!(self, secondary_hit_test_refinement(x, y, rect, button))
     }
 
     fn hover_test_refinement(&self, x: i16, y: i16, rect: Rect) -> Option<bool> {

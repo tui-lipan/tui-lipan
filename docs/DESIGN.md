@@ -160,9 +160,12 @@ Mouse flow:
 
 Primary and secondary pointer picking share traversal, clipping and overlay ordering, but
 use separate widget capabilities. `has_on_click` describes primary-button behavior;
-`has_secondary_click` describes context menus, middle clicks and right drags. Secondary-only
+`has_secondary_click(button)` answers for the pressed button: context menus and right
+drags accept Right, and middle-click callbacks accept Middle. Secondary-only
 widgets cannot become ordinary click targets or advertise semantic Click actions.
-Secondary hit refinements keep diagram item geometry independent of primary callbacks.
+Secondary hit refinements receive that button too, keeping diagram geometry independent
+of primary callbacks. Passthrough layers and overlays cannot treat a handler for one
+secondary button as a target for another.
 
 Context-menu routing walks the hit node's ancestors once. `WidgetNode::dispatch_context_menu`
 resolves typed targets in each primitive; a shared emitter combines the target with the

@@ -840,3 +840,136 @@ fn context_menu_only_regions_preserve_primary_routing_and_custom_hit_masks() {
     assert_eq!(menus.borrow().len(), 1);
     assert_eq!(ancestor_menus.borrow().len(), 1);
 }
+
+#[test]
+fn context_menu_diagrams_do_not_occlude_lower_middle_click_handlers() {
+    for kind in 0..3 {
+        let menus = Rc::new(std::cell::Cell::new(0));
+        let (middle_clicks, on_middle_click) = capture();
+        let mut backend = mount(
+            ZStack::new()
+                .passthrough(true)
+                .child(
+                    MouseRegion::new().on_middle_click(on_middle_click).child(
+                        Text::new("underlying content")
+                            .width(Length::Px(40))
+                            .height(Length::Px(12)),
+                    ),
+                )
+                .child(secondary_only_diagram(kind, menus.clone())),
+        );
+        let (x, y) = diagram_cell(&backend);
+        gesture(&mut backend, x, y, MouseButton::Middle);
+        assert_eq!(
+            middle_clicks.borrow().len(),
+            1,
+            "diagram {kind}: middle click reaches lower layer"
+        );
+        assert_eq!(menus.get(), 0);
+        right_click(&mut backend, x, y);
+        assert_eq!(
+            menus.get(),
+            1,
+            "diagram {kind}: right click still opens its menu"
+        );
+        assert_eq!(middle_clicks.borrow().len(), 1);
+    }
+}
+
+#[test]
+fn context_menu_regions_only_occlude_the_button_they_handle() {
+    for top_button in [MouseButton::Right, MouseButton::Middle] {
+        let (lower_right, right_callback) = capture();
+        let (lower_middle, middle_callback) = capture();
+        let (upper_events, upper_callback) = capture();
+        let upper = MouseRegion::new().child(
+            Text::new("upper")
+                .width(Length::Px(12))
+                .height(Length::Px(2)),
+        );
+        let upper = if top_button == MouseButton::Right {
+            upper.on_context_menu(upper_callback)
+        } else {
+            upper.on_middle_click(upper_callback)
+        };
+        let mut backend = mount(
+            ZStack::new()
+                .passthrough(true)
+                .child(
+                    MouseRegion::new()
+                        .on_context_menu(right_callback)
+                        .on_middle_click(middle_callback)
+                        .child(
+                            Text::new("lower")
+                                .width(Length::Px(12))
+                                .height(Length::Px(2)),
+                        ),
+                )
+                .child(upper),
+        );
+        let other_button = if top_button == MouseButton::Right {
+            MouseButton::Middle
+        } else {
+            MouseButton::Right
+        };
+        gesture(&mut backend, 1, 0, other_button);
+        assert!(upper_events.borrow().is_empty());
+        let (expected_right, expected_middle) = if other_button == MouseButton::Right {
+            (1, 0)
+        } else {
+            (0, 1)
+        };
+        assert_eq!(lower_right.borrow().len(), expected_right);
+        assert_eq!(lower_middle.borrow().len(), expected_middle);
+        gesture(&mut backend, 1, 0, top_button);
+        assert_eq!(upper_events.borrow().len(), 1);
+        assert_eq!(lower_right.borrow().len(), expected_right);
+        assert_eq!(lower_middle.borrow().len(), expected_middle);
+    }
+}
+
+#[test]
+fn context_menu_right_drag_regions_do_not_occlude_middle_clicks() {
+    let (middle_clicks, middle_callback) = capture();
+    let (drags, drag_callback) = capture();
+    let mut backend = mount(
+        ZStack::new()
+            .passthrough(true)
+            .child(
+                MouseRegion::new().on_middle_click(middle_callback).child(
+                    Text::new("lower")
+                        .width(Length::Px(12))
+                        .height(Length::Px(2)),
+                ),
+            )
+            .child(
+                MouseRegion::new()
+                    .on_right_drag_start(drag_callback)
+                    .drag_threshold(1, 1)
+                    .child(
+                        Text::new("upper")
+                            .width(Length::Px(12))
+                            .height(Length::Px(2)),
+                    ),
+            ),
+    );
+    gesture(&mut backend, 1, 0, MouseButton::Middle);
+    assert_eq!(middle_clicks.borrow().len(), 1);
+    assert!(drags.borrow().is_empty());
+    for (kind, x) in [
+        (MouseKind::Down(MouseButton::Right), 1),
+        (MouseKind::Drag(MouseButton::Right), 3),
+        (MouseKind::Up(MouseButton::Right), 3),
+    ] {
+        backend
+            .send_mouse(MouseEvent {
+                x,
+                y: 0,
+                kind,
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+    }
+    assert_eq!(drags.borrow().len(), 1);
+    assert_eq!(middle_clicks.borrow().len(), 1);
+}

@@ -45,13 +45,18 @@ impl WidgetNode for MouseRegionNode {
         self.hit_test_refinement(x, y, rect)
     }
 
-    fn has_secondary_click(&self) -> bool {
+    fn has_secondary_click(&self, button: crate::core::event::MouseButton) -> bool {
         self.enabled
-            && (self.on_context_menu.is_some()
-                || self.on_middle_click.is_some()
-                || self.on_right_drag_start.is_some()
-                || self.on_right_drag.is_some()
-                || self.on_right_drag_end.is_some())
+            && match button {
+                crate::core::event::MouseButton::Right => {
+                    self.on_context_menu.is_some()
+                        || self.on_right_drag_start.is_some()
+                        || self.on_right_drag.is_some()
+                        || self.on_right_drag_end.is_some()
+                }
+                crate::core::event::MouseButton::Middle => self.on_middle_click.is_some(),
+                crate::core::event::MouseButton::Left => false,
+            }
     }
 
     fn interactive_pointer_shape_at(

@@ -115,7 +115,10 @@ exclude empty canvas cells. A context-menu callback alone does not request a
 hand cursor in Interactive pointer mode. Adding a context menu also preserves
 ordinary left-click routing and does not advertise a semantic `Click` action by itself.
 For example, a context-menu-only diagram inside `MouseRegion::on_click` still lets
-left clicks reach that enclosing region, while right clicks target the diagram item.
+left clicks reach that enclosing region, while right clicks target the diagram item. A
+right-only menu or drag handler also leaves middle-button picking unchanged, including
+through passthrough layers and overlays. A middle-click-only region likewise does not
+block a right-button target in a lower passthrough layer.
 
 For a menu applying to an entire panel, wrap it with
 `MouseRegion::on_context_menu`. It provides local coordinates and target size

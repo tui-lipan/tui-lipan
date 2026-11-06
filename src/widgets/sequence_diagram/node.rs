@@ -227,12 +227,18 @@ impl SequenceDiagramNode {
 }
 
 impl WidgetNode for SequenceDiagramNode {
-    fn secondary_hit_test_refinement(&self, x: i16, y: i16, rect: Rect) -> Option<bool> {
+    fn secondary_hit_test_refinement(
+        &self,
+        x: i16,
+        y: i16,
+        rect: Rect,
+        _button: crate::core::event::MouseButton,
+    ) -> Option<bool> {
         Some(self.contains_item_at(rect, x, y))
     }
 
-    fn has_secondary_click(&self) -> bool {
-        self.on_context_menu.is_some()
+    fn has_secondary_click(&self, button: crate::core::event::MouseButton) -> bool {
+        button == crate::core::event::MouseButton::Right && self.on_context_menu.is_some()
     }
 
     fn dispatch_context_menu(

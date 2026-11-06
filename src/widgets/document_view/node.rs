@@ -361,7 +361,7 @@ pub(crate) struct DocumentViewNode {
 }
 
 impl WidgetNode for DocumentViewNode {
-    fn has_secondary_click(&self) -> bool {
+    fn has_secondary_click(&self, button: crate::core::event::MouseButton) -> bool {
         let secondary = self.on_context_menu.is_some();
         #[cfg(feature = "diff-view")]
         let secondary = secondary
@@ -369,7 +369,7 @@ impl WidgetNode for DocumentViewNode {
                 .diff_line_click
                 .as_ref()
                 .is_some_and(|config| config.on_context_menu.is_some());
-        secondary
+        button == crate::core::event::MouseButton::Right && secondary
     }
 
     fn dispatch_context_menu(

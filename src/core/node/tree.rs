@@ -207,11 +207,16 @@ impl Node {
         refinement.unwrap_or_else(|| self.is_interactive())
     }
 
-    fn matches_secondary_hit_test(&self, x: i16, y: i16) -> bool {
-        if self.kind.has_secondary_click() {
+    fn matches_secondary_hit_test(
+        &self,
+        x: i16,
+        y: i16,
+        button: crate::core::event::MouseButton,
+    ) -> bool {
+        if self.kind.has_secondary_click(button) {
             return self
                 .kind
-                .secondary_hit_test_refinement(x, y, self.rect)
+                .secondary_hit_test_refinement(x, y, self.rect, button)
                 .unwrap_or(true);
         }
         self.matches_hit_test(x, y, true)
@@ -1128,7 +1133,7 @@ impl NodeTree {
         let kind = if button == crate::core::event::MouseButton::Left {
             TestKind::Hit
         } else {
-            TestKind::SecondaryHit
+            TestKind::SecondaryHit(button)
         };
         !root.captures_focus
             && !self.overlay_captures_pointer(root, x, y)
@@ -1140,9 +1145,14 @@ impl NodeTree {
         self.do_test(x, y, TestKind::Hit)
     }
 
-    /// Pick right/middle-button targets without adding them to primary-click participation.
-    pub(crate) fn secondary_hit_test(&self, x: i16, y: i16) -> Option<NodeId> {
-        self.do_test(x, y, TestKind::SecondaryHit)
+    /// Pick targets for this right/middle button without adding them to primary-click participation.
+    pub(crate) fn secondary_hit_test(
+        &self,
+        x: i16,
+        y: i16,
+        button: crate::core::event::MouseButton,
+    ) -> Option<NodeId> {
+        self.do_test(x, y, TestKind::SecondaryHit(button))
     }
 
     /// Hit-test wheel input, skipping regions that explicitly forward it to lower layers.
@@ -1758,7 +1768,7 @@ impl NodeTree {
                         node.matches_hit_test(x, y, matches!(kind, TestKind::Hit))
                     }
                 }
-                TestKind::SecondaryHit => node.matches_secondary_hit_test(x, y),
+                TestKind::SecondaryHit(button) => node.matches_secondary_hit_test(x, y, button),
                 TestKind::Hover => {
                     if let Some(hit) = node.kind.hover_test_refinement(x, y, node.rect) {
                         hit && node.is_hoverable()
@@ -2037,7 +2047,7 @@ impl NodeTree {
 #[derive(Clone, Copy)]
 enum TestKind<'a> {
     Hit,
-    SecondaryHit,
+    SecondaryHit(crate::core::event::MouseButton),
     Wheel,
     DropTarget(&'a [NodeId]),
     Hover,
@@ -2154,6 +2164,37 @@ mod tests {
             copy_text: None,
             copy_zone: None,
             copy_feedback_active: false,
+        }
+    }
+
+    #[test]
+    fn context_menu_overlay_passthrough_uses_the_pressed_button() {
+        use crate::callback::Callback;
+        use crate::core::event::MouseButton;
+        for button in [MouseButton::Right, MouseButton::Middle] {
+            let (mut tree, _) = build_base_tree();
+            let id = tree.alloc();
+            let region = MouseRegion::new();
+            let region = if button == MouseButton::Right {
+                region.on_context_menu(Callback::new(|_| {}))
+            } else {
+                region.on_middle_click(Callback::new(|_| {}))
+            };
+            tree.node_mut(id).kind = region.into();
+            tree.node_mut(id).rect = Rect {
+                x: 0,
+                y: 0,
+                w: 12,
+                h: 2,
+            };
+            let overlay = overlay_root(id, 1, PointerCapture::None);
+            let other = if button == MouseButton::Right {
+                MouseButton::Middle
+            } else {
+                MouseButton::Right
+            };
+            assert!(tree.overlay_allows_pointer_passthrough(&overlay, 1, 0, other));
+            assert!(!tree.overlay_allows_pointer_passthrough(&overlay, 1, 0, button));
         }
     }
 

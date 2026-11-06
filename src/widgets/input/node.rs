@@ -94,8 +94,10 @@ impl InputNode {
 }
 
 impl WidgetNode for InputNode {
-    fn has_secondary_click(&self) -> bool {
-        !self.disabled && self.on_context_menu.is_some()
+    fn has_secondary_click(&self, button: crate::core::event::MouseButton) -> bool {
+        button == crate::core::event::MouseButton::Right
+            && !self.disabled
+            && self.on_context_menu.is_some()
     }
 
     fn dispatch_context_menu(
