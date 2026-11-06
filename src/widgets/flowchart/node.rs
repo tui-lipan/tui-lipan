@@ -7,8 +7,9 @@ use crate::core::node::WidgetNode;
 use crate::style::{BorderStyle, Length, Padding, Rect, Style, Theme};
 
 use super::{
-    Edge, EdgeArrow, EdgeStyle, FlowDirection, Flowchart, FlowchartEdgeEvent, FlowchartItemPath,
-    FlowchartNodeEvent, FlowchartSubgraphEvent, FlowchartTheme, NodeId, NodeShape,
+    Edge, EdgeArrow, EdgeStyle, FlowDirection, Flowchart, FlowchartEdgeEvent, FlowchartItemEvent,
+    FlowchartItemPath, FlowchartNodeEvent, FlowchartSubgraphEvent, FlowchartTheme, NodeId,
+    NodeShape,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -118,6 +119,8 @@ pub struct FlowchartNode {
     pub(crate) max_node_width: u16,
     pub(crate) theme: FlowchartTheme,
     pub(crate) on_node_click: Option<Callback<FlowchartNodeEvent>>,
+    pub(crate) on_context_menu:
+        Option<Callback<(FlowchartItemEvent, crate::core::event::MouseEvent)>>,
     pub(crate) on_edge_click: Option<Callback<FlowchartEdgeEvent>>,
     pub(crate) on_subgraph_click: Option<Callback<FlowchartSubgraphEvent>>,
     pub(crate) on_node_hover: Option<Callback<FlowchartNodeEvent>>,
@@ -155,6 +158,7 @@ impl Default for FlowchartNode {
             max_node_width: flowchart.max_node_width,
             theme: flowchart.theme,
             on_node_click: None,
+            on_context_menu: None,
             on_edge_click: None,
             on_subgraph_click: None,
             on_node_hover: None,
@@ -282,15 +286,27 @@ impl FlowchartNode {
     }
 }
 
-pub(crate) enum FlowchartItemEvent {
-    Node(FlowchartNodeEvent),
-    Edge(FlowchartEdgeEvent),
-    Subgraph(FlowchartSubgraphEvent),
-}
-
 impl WidgetNode for FlowchartNode {
+    fn dispatch_context_menu(
+        &self,
+        mouse: crate::core::event::MouseEvent,
+        rect: crate::Rect,
+        _parent_border_x: Option<i16>,
+    ) -> bool {
+        crate::widgets::context_menu::emit_context_menu(
+            self.on_context_menu.as_ref(),
+            mouse,
+            || {
+                self.local_content_point(rect, mouse.x as i16, mouse.y as i16)
+                    .and_then(|(x, y)| self.hit_test(x, y))
+                    .and_then(|(_, path)| self.item_event(&path))
+            },
+        )
+    }
+
     fn has_on_click(&self) -> bool {
-        self.on_node_click.is_some()
+        self.on_context_menu.is_some()
+            || self.on_node_click.is_some()
             || self.on_edge_click.is_some()
             || self.on_subgraph_click.is_some()
     }

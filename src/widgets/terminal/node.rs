@@ -70,6 +70,7 @@ pub(crate) struct TerminalNode {
     pub paste_shortcut_behavior: TerminalPasteShortcutBehavior,
     pub on_selection: Option<Callback<TerminalSelectionEvent>>,
     pub on_mouse_forward: Option<Callback<ForwardedMouseEvent>>,
+    pub on_context_menu: Option<Callback<crate::core::event::MouseEvent>>,
     pub link_activation_mods: crate::core::event::KeyMods,
     pub link_hover_style: StyleSlot,
     pub on_link_activate: Option<Callback<TerminalLinkEvent>>,
@@ -231,6 +232,28 @@ pub(crate) fn apply_terminal_selection_input(
 }
 
 impl WidgetNode for TerminalNode {
+    fn dispatch_context_menu(
+        &self,
+        mouse: crate::core::event::MouseEvent,
+        rect: Rect,
+        parent_border_x: Option<i16>,
+    ) -> bool {
+        let layout = terminal_content_layout(
+            rect.inner(self.border, self.padding),
+            self.border,
+            self.scrollbar,
+            self.scrollbar_variant,
+            self.scrollbar_gap,
+            self.total_scrollback_rows,
+            parent_border_x.is_some(),
+        );
+        crate::widgets::context_menu::emit_mouse_context_menu(
+            self.on_context_menu.as_ref(),
+            mouse,
+            layout.content_rect,
+        )
+    }
+
     fn is_focusable(&self) -> bool {
         self.focusable
     }
@@ -248,7 +271,8 @@ impl WidgetNode for TerminalNode {
     }
 
     fn has_on_click(&self) -> bool {
-        self.on_scroll.is_some()
+        self.on_context_menu.is_some()
+            || self.on_scroll.is_some()
             || self.on_scroll_to.is_some()
             || self.scrollbar
             || self.scroll_wheel

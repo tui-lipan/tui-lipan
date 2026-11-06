@@ -18,7 +18,6 @@ use crate::callback::Callback;
 use crate::core::component::Component;
 use crate::core::event::MouseEvent;
 use crate::core::node::{NodeId, NodeKind, ScrollbarTarget};
-use crate::style::ScrollbarVariant;
 use crate::widgets::{InputEvent, ListEvent, TabsEvent};
 
 #[cfg(feature = "terminal")]
@@ -334,15 +333,14 @@ impl<C: Component> AppRunner<C> {
             return false;
         }
 
-        let mut inner = select.rect.inner(select.border, select.padding);
-        if select.scrollbar {
-            let use_integrated =
-                select.border && matches!(select.scrollbar_variant, ScrollbarVariant::Integrated);
-            let use_standalone = select.scrollbar && !use_integrated;
-            if use_standalone && inner.w > 0 {
-                inner.w = inner.w.saturating_sub(1);
-            }
-        }
+        let parent_border_x = self
+            .core
+            .tree
+            .ancestor_frame_integrated_vscrollbar_x(self.core.tree.node(hit).parent);
+        let NodeKind::List(list) = &self.core.tree.node(hit).kind else {
+            return false;
+        };
+        let inner = list.content_rect(select.rect, parent_border_x);
 
         if inner.contains(x as i16, y as i16) {
             let row = (y as i32).saturating_sub(inner.y as i32) as usize;
@@ -495,7 +493,14 @@ impl<C: Component> AppRunner<C> {
             return false;
         }
 
-        let inner = select.rect.inner(select.border, select.padding);
+        let parent_border_x = self
+            .core
+            .tree
+            .ancestor_frame_integrated_vscrollbar_x(self.core.tree.node(hit).parent);
+        let NodeKind::Table(table) = &self.core.tree.node(hit).kind else {
+            return false;
+        };
+        let inner = table.content_rect(select.rect, parent_border_x);
 
         if inner.contains(x as i16, y as i16) {
             if select.show_scroll_indicators && select.top_indicator && (y as i16) == inner.y {

@@ -77,11 +77,21 @@ pub struct ListNode {
 }
 
 impl ListNode {
-    pub(crate) fn context_menu_item_at(&self, x: i16, y: i16, rect: Rect) -> Option<usize> {
+    pub(crate) fn content_rect(&self, rect: Rect, parent_border_x: Option<i16>) -> Rect {
+        crate::utils::scrollbar::vertical_scrollbar_content_rect(
+            rect.inner(self.border, self.padding),
+            self.scrollbar,
+            self.border,
+            self.scrollbar_variant,
+            self.scrollbar_gap,
+            parent_border_x.is_some(),
+        )
+    }
+
+    pub(crate) fn item_at(&self, x: i16, y: i16, inner: Rect) -> Option<usize> {
         if self.disabled {
             return None;
         }
-        let inner = rect.inner(self.border, self.padding);
         if !inner.contains(x, y) {
             return None;
         }
@@ -107,6 +117,26 @@ impl ListNode {
 }
 
 impl WidgetNode for ListNode {
+    fn dispatch_context_menu(
+        &self,
+        mouse: MouseEvent,
+        rect: Rect,
+        parent_border_x: Option<i16>,
+    ) -> bool {
+        crate::widgets::context_menu::emit_context_menu(
+            self.on_context_menu.as_ref(),
+            mouse,
+            || {
+                self.item_at(
+                    mouse.x as i16,
+                    mouse.y as i16,
+                    self.content_rect(rect, parent_border_x),
+                )
+                .map(|index| ListEvent::click(index, mouse.mods, 1))
+            },
+        )
+    }
+
     fn interactive_pointer_shape_at(
         &self,
         x: i16,
@@ -118,30 +148,11 @@ impl WidgetNode for ListNode {
                 || self.on_activate.is_some()
                 || self.on_click.is_some()
                 || self.on_item_click.is_some()
-                || self.on_ctrl_activate.is_some()
-                || self.on_context_menu.is_some())
+                || self.on_ctrl_activate.is_some())
         {
             return None;
         }
-        let inner = rect.inner(self.border, self.padding);
-        if !inner.contains(x, y) {
-            return None;
-        }
-        let (start, end, top, _) = super::utils::calc_list_window_for_items_with_indicators(
-            self.offset,
-            &self.items,
-            inner.h as usize,
-            self.show_scroll_indicators,
-        );
-        let row = usize::try_from(y - inner.y)
-            .ok()?
-            .checked_sub(usize::from(top))?;
-        let index = super::utils::item_index_at_visual_line(
-            &self.items,
-            start,
-            row,
-            end.saturating_sub(start),
-        )?;
+        let index = self.item_at(x, y, rect.inner(self.border, self.padding))?;
         self.items[index].is_selectable().then(|| {
             self.items[index]
                 .pointer_shape

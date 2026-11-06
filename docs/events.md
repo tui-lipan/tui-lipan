@@ -76,16 +76,47 @@ pub struct ListEvent {
 }
 ```
 
-### Row context menus
+### Context-menu requests
 
-`List::on_context_menu`, `Tree::on_context_menu`, and `FileTree::on_context_menu`
-receive `(ListEvent, MouseEvent)`, `(TreeEvent, MouseEvent)`, and
-`(FileTreeEvent, MouseEvent)` respectively. The first event identifies the clicked
-row in its own model; `MouseEvent` supplies the popup anchor in terminal content
-coordinates. Right-clicking preserves selection and expansion. The runtime
-consumes the full right-button gesture, so its release cannot activate a new
-popup or fall through to terminal clipboard handling. Non-selectable rows,
-borders, scroll indicators, and scrollbar tracks do not emit a row event.
+`on_context_menu` is an opt-in callback. The application builds and opens its own
+`ContextMenu` or `Popover`. Item-aware callbacks receive `(event, MouseEvent)`;
+the first value identifies the item under the pointer and the second supplies
+the popup anchor in terminal content coordinates, modifiers, and button press.
+
+| Widget | Callback payload |
+|--------|------------------|
+| `List`, `MultiSelect` | `(ListEvent, MouseEvent)` |
+| `Tree` | `(TreeEvent, MouseEvent)` |
+| `FileTree` | `(FileTreeEvent, MouseEvent)` |
+| `Table` | `(TableEvent, MouseEvent)` |
+| `LogView` | `(LogViewEvent, MouseEvent)` |
+| `Tabs`, `DraggableTabBar` | `(Option<usize>, MouseEvent)` |
+| `DocumentView` | `(DocumentClickEvent, MouseEvent)` |
+| `DiffView` | `(DiffLineClickEvent, MouseEvent)` |
+| `Graph` | `(GraphNodeEvent, MouseEvent)` |
+| `Flowchart` | `(FlowchartItemEvent, MouseEvent)` |
+| `SequenceDiagram` | `(SequenceItemEvent, MouseEvent)` |
+| `Input`, `TextArea`, `Terminal`, `ManagedTerminal` | `MouseEvent` |
+| `MouseRegion` | `MouseRegionEvent` |
+
+Right-clicking preserves focus, selection, expansion, checked items, and editor
+carets. The nearest accepting handler owns the full gesture, including drag and
+release, even if it opens a popup or removes the clicked widget. This prevents
+release from activating the popup or reaching PTY/clipboard handling. Without a
+handler, existing forwarding and clipboard behavior continues.
+
+Data-row callbacks exclude non-selectable rows, headers, borders, padding,
+scroll indicators, scrollbar tracks, standalone scrollbar gaps, and empty rows.
+Tab callbacks report `None` on unused strip space or chrome without switching
+the active tab. Document and diff callbacks resolve the clicked source position
+through wrapping and scrolling. Diff menus also accept the source-line gutter;
+separators and synthetic wrap-padding rows have no source target. Diagram callbacks
+exclude empty canvas cells. A context-menu callback alone does not request a
+hand cursor in Interactive pointer mode.
+
+For a menu applying to an entire panel, wrap it with
+`MouseRegion::on_context_menu`. It provides local coordinates and target size
+without needing a widget-specific callback.
 
 For example, keep the popup's file path and anchor in application state:
 

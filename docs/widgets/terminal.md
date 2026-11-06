@@ -132,6 +132,7 @@ same live screen does not repeat the report. Paint-only updates also synchronize
 | `link_hover_style` | `StyleSlot` | Style for the link under a modified pointer (default: underline) |
 | `on_link_activate` | `Callback<TerminalLinkEvent>` | Modified click on an OSC 8 link or detected URL |
 | `on_selection` | `Callback<TerminalSelectionEvent>` | Selection and extracted text changed |
+| `on_context_menu` | `Callback<MouseEvent>` | Opt-in handler on `Terminal` and `ManagedTerminal`; owns the full right-button gesture before PTY forwarding or clipboard fallback |
 | `on_key` | `KeyHandler` | Low-level key handler |
 
 Calling `selection(...)` makes the selection controlled. Mouse clicks and drags

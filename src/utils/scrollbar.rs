@@ -142,6 +142,28 @@ impl ScrollbarMetrics {
     }
 }
 
+/// Reserve the standalone vertical track and its gap; integrated tracks use a border.
+pub(crate) fn vertical_scrollbar_content_rect(
+    inner: crate::style::Rect,
+    scrollbar: bool,
+    border: bool,
+    variant: crate::style::ScrollbarVariant,
+    gap: u16,
+    parent_integrated: bool,
+) -> crate::style::Rect {
+    let integrated = matches!(variant, crate::style::ScrollbarVariant::Integrated)
+        && (border || parent_integrated);
+    let reserved = if scrollbar && !integrated {
+        1u16.saturating_add(gap)
+    } else {
+        0
+    };
+    crate::style::Rect {
+        w: inner.w.saturating_sub(reserved),
+        ..inner
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ScrollbarMetrics, ScrollbarMetricsCache};

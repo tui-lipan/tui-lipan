@@ -83,6 +83,7 @@ pub struct GraphRenderNode {
     pub(crate) edge_style: Style,
     pub(crate) edge_border_style: BorderStyle,
     pub(crate) on_node_click: Option<Callback<GraphNodeEvent>>,
+    pub(crate) on_context_menu: Option<Callback<(GraphNodeEvent, crate::core::event::MouseEvent)>>,
     pub(crate) on_node_hover: Option<Callback<GraphNodeEvent>>,
     pub(crate) on_node_focus: Option<Callback<GraphNodeEvent>>,
     pub(crate) on_node_activate: Option<Callback<GraphNodeEvent>>,
@@ -117,6 +118,7 @@ impl Default for GraphRenderNode {
             edge_style: Style::default(),
             edge_border_style: BorderStyle::Plain,
             on_node_click: None,
+            on_context_menu: None,
             on_node_hover: None,
             on_node_focus: None,
             on_node_activate: None,
@@ -270,13 +272,35 @@ impl GraphRenderNode {
 }
 
 impl WidgetNode for GraphRenderNode {
+    fn dispatch_context_menu(
+        &self,
+        mouse: crate::core::event::MouseEvent,
+        rect: crate::Rect,
+        _parent_border_x: Option<i16>,
+    ) -> bool {
+        crate::widgets::context_menu::emit_context_menu(
+            self.on_context_menu.as_ref(),
+            mouse,
+            || {
+                self.local_content_point(rect, mouse.x as i16, mouse.y as i16)
+                    .and_then(|(x, y)| self.hit_test(x, y))
+                    .map(|(_, node)| super::GraphNodeEvent {
+                        path: node.path.clone(),
+                        label: node.label.clone(),
+                    })
+            },
+        )
+    }
+
     fn is_focusable(&self) -> bool {
         !self.output.nodes.is_empty()
             && (self.focusable || self.on_node_focus.is_some() || self.on_node_activate.is_some())
     }
 
     fn has_on_click(&self) -> bool {
-        self.on_node_click.is_some() || self.on_node_focus.is_some()
+        self.on_context_menu.is_some()
+            || self.on_node_click.is_some()
+            || self.on_node_focus.is_some()
     }
 
     fn is_hoverable(&self) -> bool {

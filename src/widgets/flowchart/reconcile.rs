@@ -7,13 +7,15 @@ use super::node::{FlowchartCacheKey, FlowchartNode, FlowchartWidgetKey};
 pub fn reconcile_flowchart(flowchart: &Flowchart, node: &mut FlowchartNode) -> bool {
     let cache_key = FlowchartCacheKey::new(flowchart);
     let widget_key = FlowchartWidgetKey::new(flowchart);
-    let callbacks_changed = node.on_node_click != flowchart.on_node_click
+    let callbacks_changed = node.on_context_menu != flowchart.on_context_menu
+        || node.on_node_click != flowchart.on_node_click
         || node.on_edge_click != flowchart.on_edge_click
         || node.on_subgraph_click != flowchart.on_subgraph_click
         || node.on_node_hover != flowchart.on_node_hover
         || node.on_edge_hover != flowchart.on_edge_hover
         || node.on_subgraph_hover != flowchart.on_subgraph_hover;
 
+    node.on_context_menu = flowchart.on_context_menu.clone();
     node.on_node_click = flowchart.on_node_click.clone();
     node.on_edge_click = flowchart.on_edge_click.clone();
     node.on_subgraph_click = flowchart.on_subgraph_click.clone();

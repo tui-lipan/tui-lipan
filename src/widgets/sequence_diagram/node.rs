@@ -146,6 +146,8 @@ pub struct SequenceDiagramNode {
     pub(crate) autonumber: bool,
     pub(crate) repeat_participants_at_bottom: bool,
     pub(crate) on_item_click: Option<Callback<SequenceItemEvent>>,
+    pub(crate) on_context_menu:
+        Option<Callback<(SequenceItemEvent, crate::core::event::MouseEvent)>>,
     pub(crate) on_item_hover: Option<Callback<SequenceItemEvent>>,
     pub(crate) output: Arc<SequenceRenderOutput>,
     pub(crate) output_content_width: Option<u16>,
@@ -172,6 +174,7 @@ impl Default for SequenceDiagramNode {
             autonumber: false,
             repeat_participants_at_bottom: false,
             on_item_click: None,
+            on_context_menu: None,
             on_item_hover: None,
             output: Arc::new(SequenceRenderOutput::default()),
             output_content_width: None,
@@ -218,8 +221,25 @@ impl SequenceDiagramNode {
 }
 
 impl WidgetNode for SequenceDiagramNode {
+    fn dispatch_context_menu(
+        &self,
+        mouse: crate::core::event::MouseEvent,
+        rect: crate::Rect,
+        _parent_border_x: Option<i16>,
+    ) -> bool {
+        crate::widgets::context_menu::emit_context_menu(
+            self.on_context_menu.as_ref(),
+            mouse,
+            || {
+                self.local_content_point(rect, mouse.x as i16, mouse.y as i16)
+                    .and_then(|(x, y)| self.hit_test(x, y))
+                    .and_then(|path| self.item_event(path))
+            },
+        )
+    }
+
     fn has_on_click(&self) -> bool {
-        self.on_item_click.is_some()
+        self.on_context_menu.is_some() || self.on_item_click.is_some()
     }
 
     fn is_hoverable(&self) -> bool {
@@ -231,7 +251,9 @@ impl WidgetNode for SequenceDiagramNode {
     }
 
     fn hit_test_refinement(&self, x: i16, y: i16, rect: Rect) -> Option<bool> {
-        self.on_item_click.as_ref()?;
+        if !self.has_on_click() {
+            return None;
+        }
         Some(
             self.local_content_point(rect, x, y)
                 .and_then(|(local_x, local_y)| self.hit_test(local_x, local_y))

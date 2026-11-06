@@ -99,6 +99,7 @@ pub struct TextAreaNode {
     pub on_scroll: Option<Callback<ScrollEvent>>,
     pub on_scroll_to: Option<Callback<usize>>,
     pub on_click: Option<Callback<MouseEvent>>,
+    pub on_context_menu: Option<Callback<crate::core::event::MouseEvent>>,
     pub on_key: Option<KeyHandler>,
     pub key_interceptor: Option<KeyHandler>,
     pub clear_bindings: Option<KeyBindings>,
@@ -380,6 +381,45 @@ impl TextAreaNode {
 }
 
 impl WidgetNode for TextAreaNode {
+    fn dispatch_context_menu(
+        &self,
+        mouse: crate::core::event::MouseEvent,
+        rect: Rect,
+        _parent_border_x: Option<i16>,
+    ) -> bool {
+        let content = self.content_rect(rect);
+        #[cfg(feature = "diff-view")]
+        if let Some(config) = &self.diff_line_click {
+            let inner = rect.inner(self.border, self.padding);
+            let row_rect = Rect {
+                x: inner.x,
+                w: content
+                    .w
+                    .saturating_add(content.x.saturating_sub(inner.x) as u16),
+                ..content
+            };
+            if row_rect.contains(mouse.x as i16, mouse.y as i16) {
+                let visual_idx = self
+                    .scroll_offset
+                    .saturating_add((mouse.y as i16 - inner.y) as usize);
+                if let Some(line) = self
+                    .visual_cache
+                    .latest_lines()
+                    .and_then(|lines| lines.get(visual_idx))
+                    && !(line.continuation && line.start == line.end)
+                    && config.dispatch_context_menu(line.line_num.saturating_sub(1), mouse)
+                {
+                    return true;
+                }
+            }
+        }
+        crate::widgets::context_menu::emit_mouse_context_menu(
+            self.on_context_menu.as_ref(),
+            mouse,
+            content,
+        )
+    }
+
     fn is_disabled(&self) -> bool {
         self.disabled
     }
@@ -401,7 +441,8 @@ impl WidgetNode for TextAreaNode {
 
     fn has_on_click(&self) -> bool {
         !self.disabled
-            && (self.on_click.is_some()
+            && (self.on_context_menu.is_some()
+                || self.on_click.is_some()
                 || self.has_diff_context_separator_click()
                 || self.has_diff_line_click()
                 || self.on_sentinel_click.is_some()
@@ -539,6 +580,7 @@ impl From<super::TextArea> for TextAreaNode {
             on_scroll: value.on_scroll,
             on_scroll_to: value.on_scroll_to,
             on_click: value.on_click,
+            on_context_menu: value.on_context_menu,
             on_key: value.on_key,
             key_interceptor: value.key_interceptor,
             clear_bindings: value.clear_bindings,

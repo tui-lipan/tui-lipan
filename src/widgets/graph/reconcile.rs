@@ -7,10 +7,12 @@ use super::node::{GraphCacheKey, GraphRenderNode, GraphWidgetKey};
 pub fn reconcile_graph(graph: &Graph, node: &mut GraphRenderNode) -> bool {
     let cache_key = GraphCacheKey::new(graph);
     let widget_key = GraphWidgetKey::new(graph);
-    let callbacks_changed = node.on_node_click != graph.on_node_click
+    let callbacks_changed = node.on_context_menu != graph.on_context_menu
+        || node.on_node_click != graph.on_node_click
         || node.on_node_hover != graph.on_node_hover
         || node.on_node_focus != graph.on_node_focus
         || node.on_node_activate != graph.on_node_activate;
+    node.on_context_menu = graph.on_context_menu.clone();
     node.on_node_click = graph.on_node_click.clone();
     node.on_node_hover = graph.on_node_hover.clone();
     node.on_node_focus = graph.on_node_focus.clone();

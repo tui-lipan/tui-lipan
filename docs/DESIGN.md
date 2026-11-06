@@ -158,6 +158,13 @@ Mouse flow:
 - Click, drag, scroll, move, and scrollbar thumb drags use explicit routed state.
 - Motion and scroll streams may be coalesced for render efficiency.
 
+Context-menu routing walks the hit node's ancestors once. `WidgetNode::dispatch_context_menu`
+resolves typed targets in each primitive; a shared emitter combines the target with the
+original `MouseEvent`. List-based composites forward and translate that event into their
+own model identity. The dispatcher owns drag/release suppression centrally, so callbacks
+can open overlays or remove their targets safely. List and Table rendering and primary/
+secondary hit testing share the standalone-scrollbar content rectangle, including its gap.
+
 For behavior-level documentation, see [Focus](focus.md), [Keybindings](keybindings.md),
 and [Events](events.md).
 

@@ -206,7 +206,8 @@ pub(crate) fn transition_right_click<C: Component, T: MouseDispatchCtx<C>>(
     None
 }
 
-// Resolve tab geometry in the framework, including scrolling, clipping and overflow.
+// The nearest accepting handler resolves its own semantic target. The caller owns
+// the gesture through release, even when the callback opens a popup or removes the node.
 fn dispatch_context_menu(tree: &NodeTree, hit: NodeId, mouse: MouseEvent) -> bool {
     dispatch_secondary_click(tree, hit, mouse, false)
 }
@@ -219,42 +220,8 @@ fn dispatch_secondary_click(
 ) -> bool {
     loop {
         let node = tree.node(hit);
-        match &node.kind {
-            NodeKind::MouseRegion(region)
-                if mouse::mouse_region_accepts_point(region, node.rect, mouse.x, mouse.y) =>
-            {
-                let callback = if middle {
-                    &region.on_middle_click
-                } else {
-                    &region.on_context_menu
-                };
-                if let Some(callback) = callback {
-                    callback.emit(crate::core::event::MouseRegionEvent {
-                        x: mouse.x,
-                        y: mouse.y,
-                        local_x: (mouse.x as i16).saturating_sub(node.rect.x).max(0) as u16,
-                        local_y: (mouse.y as i16).saturating_sub(node.rect.y).max(0) as u16,
-                        target_w: node.rect.w,
-                        target_h: node.rect.h,
-                        kind: mouse.kind,
-                        mods: mouse.mods,
-                    });
-                    return true;
-                }
-            }
-            NodeKind::List(list) if !middle => {
-                if dispatch_list_context_menu(list, node, mouse) {
-                    return true;
-                }
-            }
-            NodeKind::DraggableTabBar(bar) if !middle && !bar.disabled => {
-                if let Some(callback) = &bar.on_context_menu {
-                    let index = context_menu_tab_index(bar, node.rect, mouse);
-                    callback.emit((index, mouse));
-                    return true;
-                }
-            }
-            _ => {}
+        if dispatch_secondary_node(tree, node, mouse, middle) {
+            return true;
         }
         let Some(parent) = node.parent else {
             return false;
@@ -263,52 +230,52 @@ fn dispatch_secondary_click(
     }
 }
 
-fn dispatch_list_context_menu(
-    list: &crate::widgets::internal::ListNode,
+fn dispatch_secondary_node(
+    tree: &NodeTree,
     node: &crate::core::node::Node,
     mouse: MouseEvent,
+    middle: bool,
 ) -> bool {
     use crate::core::node::WidgetNode;
-    let Some(callback) = &list.on_context_menu else {
-        return false;
-    };
-    if list.disabled
-        || list
-            .scrollbar_zones(node.id, node.rect, None, None)
-            .iter()
-            .any(|zone| zone.contains(mouse.x as i16, mouse.y as i16))
-    {
+    if let NodeKind::MouseRegion(region) = &node.kind {
+        return dispatch_mouse_region_secondary(region, node.rect, mouse, middle);
+    }
+    if middle || node.kind.is_disabled() {
         return false;
     }
-    let Some(index) = list.context_menu_item_at(mouse.x as i16, mouse.y as i16, node.rect) else {
-        return false;
-    };
-    callback.emit((
-        crate::widgets::ListEvent::click(index, mouse.mods, 1),
-        mouse,
-    ));
-    true
+    let parent_border_x = tree.ancestor_frame_integrated_vscrollbar_x(node.parent);
+    node.kind
+        .dispatch_context_menu(mouse, node.rect, parent_border_x)
 }
 
-fn context_menu_tab_index(
-    bar: &crate::widgets::internal::DraggableTabBarNode,
+fn dispatch_mouse_region_secondary(
+    region: &crate::widgets::internal::MouseRegionNode,
     rect: crate::style::Rect,
     mouse: MouseEvent,
-) -> Option<usize> {
-    let inner = rect.inner(bar.border, bar.padding);
-    if !inner.contains(mouse.x as i16, mouse.y as i16) || mouse.y as i16 != inner.y {
-        return None;
+    middle: bool,
+) -> bool {
+    let callback = if middle {
+        &region.on_middle_click
+    } else {
+        &region.on_context_menu
+    };
+    let Some(callback) = callback else {
+        return false;
+    };
+    if !mouse::mouse_region_accepts_point(region, rect, mouse.x, mouse.y) {
+        return false;
     }
-    let col = (mouse.x as i16).saturating_sub(inner.x) as usize;
-    match crate::widgets::DraggableTabBar::hit_target_at_view_col(
-        &bar.tabs,
-        &bar.display_options(),
-        &bar.viewport_options(inner.w as usize),
-        col,
-    ) {
-        Some(crate::widgets::draggable_tab_bar::DraggableTabHitTarget::Tab(tab)) => Some(tab.index),
-        _ => None,
-    }
+    callback.emit(crate::core::event::MouseRegionEvent {
+        x: mouse.x,
+        y: mouse.y,
+        local_x: (mouse.x as i16).saturating_sub(rect.x).max(0) as u16,
+        local_y: (mouse.y as i16).saturating_sub(rect.y).max(0) as u16,
+        target_w: rect.w,
+        target_h: rect.h,
+        kind: mouse.kind,
+        mods: mouse.mods,
+    });
+    true
 }
 
 pub(crate) fn transition_middle_click<C: Component, T: MouseDispatchCtx<C>>(

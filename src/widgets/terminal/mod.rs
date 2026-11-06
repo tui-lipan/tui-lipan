@@ -168,6 +168,7 @@ impl Default for Terminal {
             on_selection: None,
             on_resize: None,
             on_mouse_forward: None,
+            on_context_menu: None,
             link_activation_mods: KeyMods::CTRL,
             link_hover_style: StyleSlot::Replace(Style::new().underline()),
             on_link_activate: None,
@@ -533,6 +534,13 @@ impl Terminal {
     /// this callback reports reconciled viewport sizes rather than one event for every host event.
     pub fn on_resize(mut self, cb: Callback<TerminalViewport>) -> Self {
         self.on_resize = Some(cb);
+        self
+    }
+
+    /// Handle a right-button press before clipboard actions or terminal mouse forwarding.
+    /// The handler owns the full gesture. Mouse coordinates anchor an application-owned popup.
+    pub fn on_context_menu(mut self, cb: Callback<crate::core::event::MouseEvent>) -> Self {
+        self.on_context_menu = Some(cb);
         self
     }
 

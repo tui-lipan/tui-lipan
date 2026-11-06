@@ -155,6 +155,40 @@ impl DraggableTabBarNode {
 }
 
 impl WidgetNode for DraggableTabBarNode {
+    fn dispatch_context_menu(
+        &self,
+        mouse: MouseEvent,
+        rect: crate::Rect,
+        _parent_border_x: Option<i16>,
+    ) -> bool {
+        crate::widgets::context_menu::emit_context_menu(
+            self.on_context_menu.as_ref(),
+            mouse,
+            || {
+                let inner = rect.inner(self.border, self.padding);
+                let index = if inner.contains(mouse.x as i16, mouse.y as i16)
+                    && mouse.y as i16 == inner.y
+                {
+                    let col = (mouse.x as i16).saturating_sub(inner.x) as usize;
+                    match crate::widgets::DraggableTabBar::hit_target_at_view_col(
+                        &self.tabs,
+                        &self.display_options(),
+                        &self.viewport_options(inner.w as usize),
+                        col,
+                    ) {
+                        Some(crate::widgets::draggable_tab_bar::DraggableTabHitTarget::Tab(
+                            tab,
+                        )) => Some(tab.index),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                Some(index)
+            },
+        )
+    }
+
     fn interactive_pointer_shape_at(
         &self,
         x: i16,

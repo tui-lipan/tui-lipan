@@ -113,6 +113,7 @@ display content differs from source text.
 | `on_focus` / `on_blur` | `Callback<()>` | Focus transition callbacks |
 | `on_scroll` | `Callback<ScrollEvent>` | Scroll callback |
 | `on_click` | `Callback<DocumentClickEvent>` | Click callback with source-line mapping |
+| `on_context_menu` | `Callback<(DocumentClickEvent, MouseEvent)>` | Right-button press with source line, link URL if hit, and popup coordinates; preserves selection |
 | `on_select` | `Callback<DocumentSelectEvent>` | Text selection callback |
 | `on_key` | `KeyHandler` | Focused keyboard handler |
 | `shared_selection_id` | `Arc<str>` | Group id for cross-DocumentView selection/copy within the same `ScrollView` |

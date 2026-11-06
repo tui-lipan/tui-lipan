@@ -18,8 +18,10 @@ pub fn reconcile_sequence_diagram_with_width(
 ) -> bool {
     let cache_key = SequenceCacheKey::new(diagram);
     let widget_key = SequenceWidgetKey::new(diagram);
-    let callbacks_changed =
-        node.on_item_click != diagram.on_item_click || node.on_item_hover != diagram.on_item_hover;
+    let callbacks_changed = node.on_context_menu != diagram.on_context_menu
+        || node.on_item_click != diagram.on_item_click
+        || node.on_item_hover != diagram.on_item_hover;
+    node.on_context_menu = diagram.on_context_menu.clone();
     node.on_item_click = diagram.on_item_click.clone();
     node.on_item_hover = diagram.on_item_hover.clone();
     if widget_key == node.widget_key && content_width == node.output_content_width {

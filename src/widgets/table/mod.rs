@@ -328,6 +328,7 @@ pub struct Table {
     pub(crate) on_select: Option<Callback<TableEvent>>,
     pub(crate) on_activate: Option<Callback<TableEvent>>,
     pub(crate) on_click: Option<Callback<MouseEvent>>,
+    pub(crate) on_context_menu: Option<Callback<(TableEvent, crate::core::event::MouseEvent)>>,
     pub(crate) on_scroll_to: Option<Callback<usize>>,
     pub(crate) on_key: Option<KeyHandler>,
 
@@ -384,6 +385,7 @@ impl Default for Table {
             on_select: None,
             on_activate: None,
             on_click: None,
+            on_context_menu: None,
             on_scroll_to: None,
             on_key: None,
             disabled: false,
@@ -680,6 +682,16 @@ impl Table {
     /// Set on-activate callback.
     pub fn on_activate(mut self, cb: Callback<TableEvent>) -> Self {
         self.on_activate = Some(cb);
+        self
+    }
+
+    /// Handle a right-button press without changing selection or focus.
+    /// The handler owns the full gesture. Mouse coordinates anchor an application-owned popup.
+    pub fn on_context_menu(
+        mut self,
+        cb: Callback<(TableEvent, crate::core::event::MouseEvent)>,
+    ) -> Self {
+        self.on_context_menu = Some(cb);
         self
     }
 

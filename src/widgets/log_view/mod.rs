@@ -66,6 +66,8 @@ pub struct LogViewProps {
     pub warn_style: Style,
     pub error_style: Style,
     pub on_select: Option<Callback<LogViewEvent>>,
+    /// Right-button press on a filtered row, including its original source identity.
+    pub on_context_menu: Option<Callback<(LogViewEvent, crate::core::event::MouseEvent)>>,
     pub on_activate: Option<Callback<LogViewEvent>>,
     /// Whether a single click activates a row (firing `on_activate`).
     ///
@@ -127,6 +129,7 @@ impl Default for LogView {
                 warn_style: Style::default(),
                 error_style: Style::default(),
                 on_select: None,
+                on_context_menu: None,
                 on_activate: None,
                 activate_on_click: true,
             },
@@ -428,6 +431,16 @@ impl LogView {
     /// Set style for `ERROR` prefix.
     pub fn error_style(mut self, style: Style) -> Self {
         self.props.error_style = style;
+        self
+    }
+
+    /// Handle a right-button press without changing selection or focus.
+    /// The handler owns the full gesture. Mouse coordinates anchor an application-owned popup.
+    pub fn on_context_menu(
+        mut self,
+        cb: Callback<(LogViewEvent, crate::core::event::MouseEvent)>,
+    ) -> Self {
+        self.props.on_context_menu = Some(cb);
         self
     }
 

@@ -336,6 +336,7 @@ setter is used.
 | `width` | `Length` | Width |
 | `height` | `Length` | Height |
 | `on_change` | `Callback<InputEvent>` | Emits value, cursor, and anchor on each edit |
+| `on_context_menu` | `Callback<MouseEvent>` | Right-button press in the content viewport before clipboard handling; preserves caret and selection |
 | `on_edit` | `Callback<TextEditEvent>` | Emits structured edit events |
 | `key_interceptor` | `KeyHandler` | Runs before text insertion |
 
@@ -431,6 +432,7 @@ Multi-line text editor.
 | `vim_keymap` | `TextAreaVimKeymap` | Widget-local Vim key remaps to canonical Vim command characters |
 | `vim_config` | `TextAreaVimConfig` | Vim-only rendering options: search bar, search match/current-match styles, current-line highlighting, and current line-number/gutter styling |
 | `on_change` | `Callback<TextAreaEvent>` | Emits value, cursor, anchor on each edit |
+| `on_context_menu` | `Callback<MouseEvent>` | Right-button press in the content viewport before clipboard handling; preserves caret and selection |
 | `on_edit` | `Callback<TextEditEvent>` | Structured edit events |
 | `on_vim_mode_change` | `Callback<TextAreaVimMode>` | Emits `Insert`/`Normal`/`Visual`/`VisualLine` transitions when `vim_motions(true)` is enabled |
 | `sentinels` | `Vec<TextAreaSentinel>` | Custom inline PUA tokens (`SENTINEL_BASE` + index in value) |
@@ -819,6 +821,7 @@ Line numbers in `DiffView` are source-mapped (git-style), not visual-row counter
 | `expanded_context_lines` | `(DiffContextRange, usize)` | Expand one collapsed range by a specific number of lines |
 | `on_context_separator_click` | `Callback<DiffContextSeparatorEvent>` | Fires when a visible context separator line is clicked |
 | `on_line_click` | `Callback<DiffLineClickEvent>` | Fires when a mapped source row is clicked, with pane, modifiers, old/new line anchor, and pre-wrap logical row |
+| `on_context_menu` | `Callback<(DiffLineClickEvent, MouseEvent)>` | Right-button press on a source row or its gutter; reports pane and source anchor across both backends and wrapping modes, preserving selection |
 | `on_line_range_select` | `Callback<DiffLineRangeEvent>` | Fires after a plain left-button drag through a line-number gutter selects an inclusive source range |
 | `line_range_style` / `extend_line_range_style` / `line_range_style_slot` | `Style` / `StyleSlot` | Replace, extend, or directly configure the theme selection role used for saved source ranges and live drag previews |
 | `inline_block` | `DiffInlineBlock` | Insert one arbitrary full-width element after an anchored source row or inclusive range |
@@ -1219,6 +1222,7 @@ Controlled list for selecting multiple items with `Space` toggle and `Enter` com
 | `empty_text_style` | `Style` | Empty-text style |
 | `on_active_index_change` | `Callback<usize>` | Active row changed |
 | `on_toggle` | `Callback<MultiSelectToggleEvent>` | Current row toggled |
+| `on_context_menu` | `Callback<(ListEvent, MouseEvent)>` | Right-button press reports the source item index; preserves checked items and active row |
 | `on_change` | `Callback<MultiSelectChangeEvent>` | Selected set changed |
 | `on_commit` | `Callback<MultiSelectCommitEvent>` | Enter commit with selected set |
 

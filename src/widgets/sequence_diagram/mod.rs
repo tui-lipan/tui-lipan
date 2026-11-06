@@ -475,6 +475,8 @@ pub struct SequenceDiagram {
     pub(crate) autonumber: bool,
     pub(crate) repeat_participants_at_bottom: bool,
     pub(crate) on_item_click: Option<Callback<SequenceItemEvent>>,
+    pub(crate) on_context_menu:
+        Option<Callback<(SequenceItemEvent, crate::core::event::MouseEvent)>>,
     pub(crate) on_item_hover: Option<Callback<SequenceItemEvent>>,
 }
 
@@ -497,6 +499,7 @@ impl Default for SequenceDiagram {
             autonumber: false,
             repeat_participants_at_bottom: false,
             on_item_click: None,
+            on_context_menu: None,
             on_item_hover: None,
         }
     }
@@ -775,6 +778,16 @@ impl SequenceDiagram {
         self.repeat_participants_at_bottom = repeat;
         self
     }
+    /// Handle a right-button press without changing selection or focus.
+    /// The handler owns the full gesture. Mouse coordinates anchor an application-owned popup.
+    pub fn on_context_menu(
+        mut self,
+        cb: Callback<(SequenceItemEvent, crate::core::event::MouseEvent)>,
+    ) -> Self {
+        self.on_context_menu = Some(cb);
+        self
+    }
+
     /// Sets a callback invoked when an item is clicked.
     pub fn on_item_click(mut self, cb: Callback<SequenceItemEvent>) -> Self {
         self.on_item_click = Some(cb);

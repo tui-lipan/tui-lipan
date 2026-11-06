@@ -400,3 +400,11 @@ probe followed by a second payload read.
 Use [`Terminal::on_paste`](widgets/terminal.md#receive-paste-content-before-pty-encoding)
 to receive the same content through terminal paste shortcuts. File lists contain
 local paths and do not transfer file bytes by themselves.
+
+## Context-menu precedence
+
+An accepting `on_context_menu` callback runs before right-click clipboard
+fallback and terminal mouse forwarding. This applies to editor/terminal callbacks,
+item-aware widgets, and an enclosing `MouseRegion`. It consumes the full
+right-button gesture and preserves selection. With no accepting handler,
+`right_click_action` and PTY mouse reporting keep their configured behavior.

@@ -26,6 +26,7 @@ pub struct TabsNode {
     pub disabled_style: Style,
     pub on_change: Option<Callback<TabsEvent>>,
     pub on_click: Option<Callback<MouseEvent>>,
+    pub on_context_menu: Option<Callback<(Option<usize>, crate::core::event::MouseEvent)>>,
     pub on_key: Option<KeyHandler>,
     pub focusable: bool,
     pub tab_stop: bool,
@@ -34,6 +35,35 @@ pub struct TabsNode {
 }
 
 impl WidgetNode for TabsNode {
+    fn dispatch_context_menu(
+        &self,
+        mouse: crate::core::event::MouseEvent,
+        rect: crate::Rect,
+        _parent_border_x: Option<i16>,
+    ) -> bool {
+        crate::widgets::context_menu::emit_context_menu(
+            self.on_context_menu.as_ref(),
+            mouse,
+            || {
+                let inner = rect.inner(self.border, self.padding);
+                let index = if inner.contains(mouse.x as i16, mouse.y as i16)
+                    && mouse.y as i16 == inner.y
+                {
+                    Tabs::index_at_col(
+                        &self.tabs,
+                        self.divider,
+                        self.overflow,
+                        inner.w as usize,
+                        (mouse.x as i16 - inner.x) as usize,
+                    )
+                } else {
+                    None
+                };
+                Some(index)
+            },
+        )
+    }
+
     fn interactive_pointer_shape_at(
         &self,
         x: i16,
@@ -97,7 +127,10 @@ impl WidgetNode for TabsNode {
     }
 
     fn has_on_click(&self) -> bool {
-        !self.disabled && (self.on_click.is_some() || self.on_change.is_some())
+        !self.disabled
+            && (self.on_context_menu.is_some()
+                || self.on_click.is_some()
+                || self.on_change.is_some())
     }
 
     fn is_hoverable_for_theme(&self, theme: &Theme) -> bool {
@@ -135,6 +168,7 @@ impl From<Tabs> for TabsNode {
             disabled_style: value.disabled_style,
             on_change: value.on_change,
             on_click: value.on_click,
+            on_context_menu: value.on_context_menu,
             on_key: value.on_key,
             focusable: value.focusable,
             tab_stop: value.tab_stop,

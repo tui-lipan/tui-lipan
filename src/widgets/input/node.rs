@@ -49,6 +49,7 @@ pub struct InputNode {
     pub on_change: Option<Callback<InputEvent>>,
     pub on_edit: Option<Callback<TextEditEvent>>,
     pub on_click: Option<Callback<MouseEvent>>,
+    pub on_context_menu: Option<Callback<crate::core::event::MouseEvent>>,
     pub on_key: Option<KeyHandler>,
     /// Pre-insertion key interceptor. Runs before text insertion in the editable
     /// path. If it returns `true` the key is consumed and text insertion is
@@ -93,6 +94,19 @@ impl InputNode {
 }
 
 impl WidgetNode for InputNode {
+    fn dispatch_context_menu(
+        &self,
+        mouse: crate::core::event::MouseEvent,
+        rect: crate::Rect,
+        _parent_border_x: Option<i16>,
+    ) -> bool {
+        crate::widgets::context_menu::emit_mouse_context_menu(
+            self.on_context_menu.as_ref(),
+            mouse,
+            rect.inner(self.border, self.padding),
+        )
+    }
+
     fn is_disabled(&self) -> bool {
         self.disabled
     }
@@ -113,7 +127,10 @@ impl WidgetNode for InputNode {
     }
     fn has_on_click(&self) -> bool {
         !self.disabled
-            && (self.on_click.is_some() || self.on_change.is_some() || self.on_key.is_some())
+            && (self.on_context_menu.is_some()
+                || self.on_click.is_some()
+                || self.on_change.is_some()
+                || self.on_key.is_some())
     }
     fn is_hoverable_for_theme(&self, theme: &Theme) -> bool {
         // Only hoverable if explicitly styled for hover, or has an on_click handler.

@@ -55,6 +55,16 @@ pub(crate) trait WidgetNode {
     fn has_on_click(&self) -> bool {
         false
     }
+    /// Resolve and emit an opt-in context menu without changing widget state.
+    /// `parent_border_x` lets content hit testing match integrated scrollbars.
+    fn dispatch_context_menu(
+        &self,
+        _mouse: crate::core::event::MouseEvent,
+        _rect: Rect,
+        _parent_border_x: Option<i16>,
+    ) -> bool {
+        false
+    }
     fn has_on_mouse_move(&self) -> bool {
         false
     }
@@ -376,6 +386,15 @@ impl WidgetNode for NodeKind {
 
     fn has_on_click(&self) -> bool {
         node_kind_delegate_match!(self, has_on_click())
+    }
+
+    fn dispatch_context_menu(
+        &self,
+        mouse: crate::core::event::MouseEvent,
+        rect: Rect,
+        parent_border_x: Option<i16>,
+    ) -> bool {
+        node_kind_delegate_match!(self, dispatch_context_menu(mouse, rect, parent_border_x))
     }
 
     fn has_on_mouse_move(&self) -> bool {

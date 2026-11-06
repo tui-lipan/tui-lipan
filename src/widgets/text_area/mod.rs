@@ -257,6 +257,7 @@ pub struct TextArea {
     pub(crate) on_scroll: Option<Callback<ScrollEvent>>,
     pub(crate) on_scroll_to: Option<Callback<usize>>,
     pub(crate) on_click: Option<Callback<MouseEvent>>,
+    pub(crate) on_context_menu: Option<Callback<crate::core::event::MouseEvent>>,
     pub(crate) on_key: Option<KeyHandler>,
     pub(crate) key_interceptor: Option<KeyHandler>,
     pub(crate) clear_bindings: Option<KeyBindings>,
@@ -388,6 +389,7 @@ impl Default for TextArea {
             on_scroll: None,
             on_scroll_to: None,
             on_click: None,
+            on_context_menu: None,
             on_key: None,
             key_interceptor: None,
             clear_bindings: None,
@@ -836,6 +838,13 @@ impl TextArea {
     /// Set a single reason-tagged editor-state callback.
     pub fn on_editor_state_change(mut self, cb: Callback<TextAreaStateChangeEvent>) -> Self {
         self.on_editor_state_change = Some(cb);
+        self
+    }
+
+    /// Handle a right-button press before clipboard actions or terminal mouse forwarding.
+    /// The handler owns the full gesture. Mouse coordinates anchor an application-owned popup.
+    pub fn on_context_menu(mut self, cb: Callback<crate::core::event::MouseEvent>) -> Self {
+        self.on_context_menu = Some(cb);
         self
     }
 

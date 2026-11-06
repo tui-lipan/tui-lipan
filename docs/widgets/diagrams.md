@@ -45,6 +45,7 @@ Node-edge structural visualization for trees, with boxed labels and orthogonal b
 | `focusable` | `bool` | Accept focus as one widget with internal roving node focus |
 | `focused_path` | `GraphNodePath` | Controlled internally focused node path |
 | `on_node_click` | `Callback<GraphNodeEvent>` | Fired when a node box is clicked |
+| `on_context_menu` | `Callback<(GraphNodeEvent, MouseEvent)>` | Right-button press on a diagram item with its semantic identity and popup coordinates; preserves focus |
 | `on_node_hover` | `Callback<GraphNodeEvent>` | Fired when hover moves to a different node |
 | `on_node_focus` | `Callback<GraphNodeEvent>` | Fired when keyboard or pointer interaction moves internal node focus |
 | `on_node_activate` | `Callback<GraphNodeEvent>` | Fired when the focused node is activated with Enter or Space |
@@ -149,6 +150,7 @@ click/hover callbacks.
 | `padding` | `impl Into<Padding>` | Padding inside the outer border |
 | `width` / `height` | `Length` | Requested widget size |
 | `on_node_click` / `on_node_hover` | `Callback<FlowchartNodeEvent>` | Node interactions |
+| `on_context_menu` | `Callback<(FlowchartItemEvent, MouseEvent)>` | Right-button press on a diagram item with its semantic identity and popup coordinates; preserves focus |
 | `on_edge_click` / `on_edge_hover` | `Callback<FlowchartEdgeEvent>` | Edge interactions |
 | `on_subgraph_click` / `on_subgraph_hover` | `Callback<FlowchartSubgraphEvent>` | Subgraph header interactions |
 
@@ -206,6 +208,7 @@ notes, fragments, autonumbering, and per-item pointer callbacks.
 | `activation_glyph` | `char` | Override the theme activation fill glyph |
 | `item_hover_style` | `Style` | Style patched onto the hovered item |
 | `on_item_click` | `Callback<SequenceItemEvent>` | Fired when a participant, message, note, fragment label, or self-message is clicked |
+| `on_context_menu` | `Callback<(SequenceItemEvent, MouseEvent)>` | Right-button press on a diagram item with its semantic identity and popup coordinates; preserves focus |
 | `on_item_hover` | `Callback<SequenceItemEvent>` | Fired when hover moves to a different item |
 | `style` | `Style` | Base diagram style |
 | `participant_style` | `Style` | Default participant box/actor style |

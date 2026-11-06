@@ -442,67 +442,14 @@ pub(crate) fn gather_hit_actions(
     };
 
     let document_click = match &node.kind {
-        NodeKind::DocumentView(doc)
-            if doc.on_click.is_some() && node.rect.contains(x_i16, y_i16) =>
-        {
-            let inner = node.rect.inner(doc.border, doc.padding);
-            let cl = doc.content_layout(inner);
-
-            let content_rect = Rect {
-                x: cl.content_x,
-                y: cl.content_y,
-                w: cl.content_width,
-                h: cl.content_height,
-            };
-            if !content_rect.contains(x_i16, y_i16) {
-                None
-            } else {
-                let rel_y = y_i16.saturating_sub(inner.y) as usize;
-                let visual_idx = doc.scroll_offset.saturating_add(rel_y);
-                let source_line = doc
-                    .visual_cache
-                    .source_line_map
-                    .get(visual_idx)
-                    .copied()
-                    .unwrap_or(0);
-
-                let rel_x = x_i16.saturating_sub(cl.content_x).max(0) as usize;
-                let visual_col = if !doc.wrap {
-                    rel_x.saturating_add(doc.h_scroll_offset)
-                } else {
-                    rel_x
-                };
-                let link = doc.visual_cache.lines.get(visual_idx).and_then(|vline| {
-                    let line_text = doc.visual_cache.line_texts.get(visual_idx)?;
-                    let byte_in_line =
-                        crate::widgets::document_view::node::document_view_byte_in_line_from_visual_col(
-                            line_text.as_ref(),
-                            vline,
-                            visual_col,
-                        );
-                    let links = match &vline.kind {
-                        crate::widgets::document_view::node::VisualLineKind::Text {
-                            links, ..
-                        } => links.as_slice(),
-                        crate::widgets::document_view::node::VisualLineKind::BlockQuoteLine {
-                            links,
-                            ..
-                        } => links.as_slice(),
-                        _ => &[],
-                    };
-                    links
-                        .iter()
-                        .find(|l| byte_in_line >= l.start && byte_in_line < l.end)
-                        .map(|l| l.url.clone())
-                });
-
-                doc.on_click.clone().map(|cb| DocumentClick {
-                    cb,
-                    source_line,
-                    link,
-                })
-            }
-        }
+        NodeKind::DocumentView(doc) => doc.on_click.clone().and_then(|cb| {
+            let event = doc.click_event_at(node.rect, x_i16, y_i16)?;
+            Some(DocumentClick {
+                cb,
+                source_line: event.source_line,
+                link: event.link,
+            })
+        }),
         _ => None,
     };
 
@@ -701,10 +648,6 @@ pub(crate) fn gather_hit_actions(
                 on_scroll_to: list_node.on_scroll_to.clone(),
                 activate_on_click: list_node.activate_on_click,
                 len: list_node.items.len(),
-                border: list_node.border,
-                padding: list_node.padding,
-                scrollbar: list_node.scrollbar,
-                scrollbar_variant: list_node.scrollbar_variant,
                 show_scroll_indicators: list_node.show_scroll_indicators,
                 rect: node.rect,
             })
@@ -871,8 +814,6 @@ pub(crate) fn gather_hit_actions(
                 ),
                 row_gap: table_node.row_gap,
                 rect: node.rect,
-                border: table_node.border,
-                padding: table_node.padding,
                 show_scroll_indicators: table_node.show_scroll_indicators,
                 top_indicator: table_node.top_indicator,
                 bottom_indicator: table_node.bottom_indicator,
