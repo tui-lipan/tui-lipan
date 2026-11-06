@@ -307,8 +307,9 @@ incarnation, logical placement, and compacted region. Uncovered scanline interva
 when their host and source pixels are contiguous. More than 512 regions selects composition.
 Before either presentation is chosen, including a graphics-only update, a placement that one
 opaque placement above it covers completely is left out. Opaque means RGB pixels certain to decode:
-a compressed or short payload, or one that already failed, never hides anything. Video streamed as anonymous frames stacks each frame over the last, so only
-the newest is presented, natively when it qualifies, instead of composing the whole stack.
+a compressed or short payload, or one that already failed, never hides anything. Video streamed
+as anonymous frames stacks each frame over the last, so only the newest is presented, natively when
+it qualifies, instead of composing the whole stack.
 
 `HostBackend` owns the committed sources and placements. Sources retain client-local image IDs
 across revision changes. Placements retain `p=` IDs and only emit commands for changed geometry or
