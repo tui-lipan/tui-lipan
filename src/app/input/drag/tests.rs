@@ -58,7 +58,7 @@ fn on_drop_transfer_carries_destination_selection_callback() {
 
 struct DocumentViewDragSmoke;
 
-struct WrappedDocumentViewCopySmoke;
+struct WrappedDocumentViewCopySmoke(&'static str);
 
 struct NewlineDocumentViewCopySmoke;
 
@@ -99,11 +99,7 @@ impl Component for WrappedDocumentViewCopySmoke {
     }
 
     fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
-        DocumentView::new(
-            "Currently, there is no timeout, so it keeps waiting until the process is ready.",
-        )
-        .border(false)
-        .into()
+        DocumentView::new(self.0).border(false).into()
     }
 }
 
@@ -205,9 +201,16 @@ fn document_view_dragging_above_selects_to_document_start() {
 
 #[test]
 fn document_view_copy_ignores_soft_wrap_newlines() {
-    let text = "Currently, there is no timeout, so it keeps waiting until the process is ready.";
-    // Width 11 (10 columns beside the scrollbar) fills the first row with "Currently," so the wrap skips the space after it.
-    for width in [24, 11] {
+    let sentence =
+        "Currently, there is no timeout, so it keeps waiting until the process is ready.";
+    // Width 11 leaves 10 columns beside the scrollbar. Each row there is full and
+    // the next character is a space: between words, or ending the line.
+    for (text, width, first_row) in [
+        (sentence, 24, None),
+        (sentence, 11, Some("Currently,")),
+        ("abcdefghij ", 11, Some("abcdefghij")),
+        ("abcdefghij   ", 11, Some("abcdefghij")),
+    ] {
         let viewport = Rect {
             x: 0,
             y: 0,
@@ -215,7 +218,7 @@ fn document_view_copy_ignores_soft_wrap_newlines() {
             h: 12,
         };
         let mut runtime = RuntimeCore::new_test(
-            WrappedDocumentViewCopySmoke,
+            WrappedDocumentViewCopySmoke(text),
             (),
             viewport,
             Theme::default(),
@@ -225,7 +228,7 @@ fn document_view_copy_ignores_soft_wrap_newlines() {
         runtime.init();
         runtime.render_element(viewport, None, None, None);
 
-        let (first_row, copied) = runtime
+        let (rendered_first_row, copied) = runtime
             .tree
             .iter()
             .find_map(|node| match &node.kind {
@@ -245,10 +248,10 @@ fn document_view_copy_ignores_soft_wrap_newlines() {
             })
             .expect("document view exists");
 
-        if width == 11 {
-            assert_eq!(first_row, "Currently,");
+        if let Some(first_row) = first_row {
+            assert_eq!(rendered_first_row, first_row, "{text:?} at width {width}");
         }
-        assert_eq!(copied, text, "width {width}");
+        assert_eq!(copied, text, "{text:?} at width {width}");
     }
 }
 

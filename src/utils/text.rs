@@ -774,14 +774,18 @@ fn take_row_end(spans: &[Span], start: SpanCursor, budget: usize) -> SpanCursor 
 }
 
 /// Skip the spaces that separate a wrapped row from its continuation.
-fn skip_wrap_whitespace(spans: &[Span], mut cursor: SpanCursor) -> SpanCursor {
+///
+/// Whitespace that ends the text is kept as a row of its own: no continuation
+/// row follows to record it, so skipping it would drop it from the text.
+fn skip_wrap_whitespace(spans: &[Span], end: SpanCursor) -> SpanCursor {
+    let mut cursor = end;
     while let Some((next, ch, _)) = next_char_cursor(spans, cursor) {
         if !ch.is_whitespace() || matches!(ch, '\n' | '\r') {
-            break;
+            return cursor;
         }
         cursor = next;
     }
-    cursor
+    end
 }
 
 pub(crate) fn take_chunk_end(spans: &[Span], start: SpanCursor, max_width: usize) -> SpanCursor {
@@ -1279,6 +1283,10 @@ mod tests {
         assert_eq!(
             rows(wrap_spans_for_budgets(&spans, 3, 3)),
             ["ab ", "cd ", "ef"]
+        );
+        assert_eq!(
+            rows(wrap_spans_for_budgets(&[Span::new("ab  ")], 2, 2)),
+            ["ab", "  "]
         );
         assert_eq!(
             rows(wrap_preformatted_spans_for_budgets(&spans, 2, 2)),
