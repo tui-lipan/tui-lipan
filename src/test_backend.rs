@@ -320,6 +320,13 @@ where
         self.core.ctx.env().cursor_trail.get()
     }
 
+    /// Whether the app called [`Context::skip_cursor_trail`](crate::Context::skip_cursor_trail)
+    /// since this was last asked, clearing the request. Headless rendering draws no trail, so the
+    /// request stays pending until a test takes it.
+    pub fn take_cursor_trail_skip(&mut self) -> bool {
+        self.core.ctx.env().cursor_trail_skip.replace(false)
+    }
+
     /// Returns the current viewport used for layout.
     pub fn viewport(&self) -> Rect {
         self.core.viewport()
@@ -4436,6 +4443,33 @@ mod tests {
         assert_eq!(backend.cursor_trail(), None);
         backend.dispatch(true).expect("update runs");
         assert_eq!(backend.cursor_trail(), Some(crate::CursorTrail::new()));
+    }
+
+    #[test]
+    fn take_cursor_trail_skip_reports_each_request_once() {
+        struct Skipping;
+        impl Component for Skipping {
+            type Message = ();
+            type Properties = ();
+            type State = ();
+            fn create_state(&self, _: &()) {}
+            fn update(&mut self, _: (), ctx: &mut Context<Self>) -> Update {
+                ctx.skip_cursor_trail();
+                Update::none()
+            }
+            fn view(&self, _: &Context<Self>) -> Element {
+                Text::new("skip").into()
+            }
+        }
+
+        let mut backend = TestBackend::new(Skipping);
+        assert!(!backend.take_cursor_trail_skip());
+        backend.dispatch(()).expect("update runs");
+        assert!(backend.take_cursor_trail_skip());
+        assert!(
+            !backend.take_cursor_trail_skip(),
+            "taking the request clears it"
+        );
     }
 
     #[test]

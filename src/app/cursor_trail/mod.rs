@@ -696,6 +696,12 @@ impl CursorTrailState {
         self.sparks.carry(offset);
     }
 
+    /// Forget where the caret was and stop the trail, so the caret's next move draws none.
+    pub(crate) fn forget(&mut self) {
+        self.last = None;
+        self.stop();
+    }
+
     fn stop(&mut self) {
         self.landing = None;
         self.running = None;

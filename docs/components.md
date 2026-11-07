@@ -152,6 +152,7 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
 | `ctx.set_command_chord_reveal_delay(d)` | Retime the reveal delay at runtime (config reload) |
 | `ctx.cursor_trail()` | The [`App::cursor_trail`](quick-start.md#app-configuration) in effect, or `None` |
 | `ctx.set_cursor_trail(trail)` | Change or (with `None`) remove the cursor trail at runtime (config reload); a trail on screen stops with the next frame |
+| `ctx.skip_cursor_trail()` | Draw no trail for the caret's next move and stop one on screen, for a transition the app animates itself, such as switching to another screen; later moves trail as usual |
 | `ctx.scroll_wheel_multiplier()` | Current app-wide mouse wheel step multiplier |
 | `ctx.set_scroll_wheel_multiplier(n)` | Change the app-wide mouse wheel step multiplier at runtime (clamped to `>= 1`) |
 | `ctx.last_mouse()` | Last pointer in terminal content coordinates, or `None` until a mouse event has been seen. Updated even when motion is forwarded to a tracking terminal. |

@@ -2644,6 +2644,71 @@ fn a_cursor_trail_paints_over_full_draws_and_clears_once_it_settles() {
     }
 }
 
+/// `Context::skip_cursor_trail` makes the caret's next move draw no trail and stops one in flight,
+/// for that move only: the move after it trails again.
+#[test]
+fn a_skipped_cursor_trail_draws_nothing_for_the_next_move_only() {
+    use crate::app::{CursorTrail, CursorTrailTrigger};
+
+    const FRAME: std::time::Duration = std::time::Duration::from_millis(16);
+    let mut harness = build(
+        PaneCfg {
+            second_terminal: true,
+            grid_rows: ROWS / 2,
+            focused: true,
+            controlled_clock: true,
+            ..PaneCfg::new()
+        },
+        b"stable",
+    );
+    let env = harness.runner.core.ctx.env().clone();
+    env.cursor_trail.set(Some(
+        CursorTrail::new().trigger(CursorTrailTrigger::FocusChange),
+    ));
+    let mut terminal = crate::backend::ratatui_backend::create_test_terminal(COLS, ROWS).unwrap();
+    let [first, second] = terminal_ids(&harness.runner.core.tree)[..] else {
+        panic!("two terminals");
+    };
+    harness.runner.render_paint_only(&mut terminal).unwrap();
+
+    // Skipped: the focus change draws nothing, on its frame or after.
+    env.cursor_trail_skip.set(true);
+    harness.runner.focus.focused = Some(second);
+    for _ in 0..3 {
+        harness.runner.render_paint_only(&mut terminal).unwrap();
+        assert!(
+            !harness.runner.cursor_trail_requires_full_draw(),
+            "a skipped move started a trail"
+        );
+        env.advance_clock(FRAME);
+    }
+
+    // Not skipped: the next focus change trails again.
+    harness.runner.focus.focused = Some(first);
+    harness.runner.render_paint_only(&mut terminal).unwrap();
+    assert!(
+        harness.runner.cursor_trail_requires_full_draw(),
+        "the skip outlived the move it was for"
+    );
+
+    // A skip mid-flight stops that trail with the next frame.
+    env.cursor_trail_skip.set(true);
+    env.advance_clock(FRAME);
+    harness.runner.render_paint_only(&mut terminal).unwrap();
+    env.advance_clock(FRAME);
+    harness.runner.render_paint_only(&mut terminal).unwrap();
+    assert!(
+        !harness.runner.cursor_trail_requires_full_draw(),
+        "a skip left the trail in flight running"
+    );
+    let (clean, _) = full_paint(&harness.runner, &mut harness.term);
+    assert_eq!(
+        harness.runner.last_frame_snapshot.as_ref(),
+        Some(&clean),
+        "the stopped trail's cells are cleared"
+    );
+}
+
 /// Video streamed as anonymous frames, the way mpv's `--vo=kitty` sends it, stacks every frame
 /// over the last at the same cell. Only the newest can show, so it reaches a Kitty host natively,
 /// as one placement, instead of the whole stack being composed into tiles for every frame.
