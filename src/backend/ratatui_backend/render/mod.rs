@@ -626,6 +626,26 @@ pub(crate) fn overlay_paint_offset(
     }
 }
 
+/// How far from its layout rectangle a node paints: the moves of the `Animated` wrappers above it
+/// and, inside an overlay, that overlay's visibility slide. These are the offsets the paint
+/// applies, so anything placed by the paint, such as the caret, moves by exactly this much.
+pub(crate) fn node_paint_offset(tree: &NodeTree, id: NodeId) -> RenderOffset {
+    // `render_offset_for_node` already includes an `Animated` overlay root's own move, so only
+    // the slide is added here.
+    let offset = render_offset_for_node(tree, id);
+    let mut current = Some(id);
+    while let Some(node_id) = current.filter(|&node_id| tree.is_valid(node_id)) {
+        if let Some(overlay) = tree.overlay_roots().iter().find(|root| root.id == node_id) {
+            return offset.add(overlay_slide_offset(tree, overlay));
+        }
+        if node_id == tree.root {
+            break;
+        }
+        current = tree.node(node_id).parent;
+    }
+    offset
+}
+
 fn overlay_visibility(tree: &NodeTree, overlay: &crate::core::node::OverlayRoot) -> f32 {
     overlay_animation_frame(tree, overlay)
         .map_or(overlay.opacity, |(_, context)| context.progress)

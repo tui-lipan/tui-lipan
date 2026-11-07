@@ -12354,3 +12354,141 @@ fn headless_recording_finishes_with_a_zero_interval_effect() {
     );
     assert!(runner.core.ctx.env().effect_phase.get() > 0);
 }
+
+/// A focused input that moves on screen by a render-only offset: inside an `Animated` FLIP move,
+/// or in a modal sliding in.
+#[derive(Clone)]
+struct CarriedCaretHost {
+    shifted: Rc<Cell<bool>>,
+    modal: bool,
+}
+
+impl Component for CarriedCaretHost {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        let transition = TransitionConfig {
+            duration: Duration::from_millis(100),
+            easing: Easing::Linear,
+        };
+        let input = Input::new("").width(Length::Px(10)).key("input");
+        if self.modal {
+            let modal: Element = crate::widgets::Modal::new()
+                .width(Length::Px(20))
+                .height(Length::Px(7))
+                .animation(
+                    crate::animation::VisibilityAnimation::new()
+                        .enter(transition)
+                        .slide(1.0, 0.0),
+                )
+                .child(input)
+                .into();
+            return crate::widgets::ZStack::new()
+                .child(Text::new("under"))
+                .child(modal.key("modal"))
+                .into();
+        }
+        let leading = if self.shifted.get() { 21 } else { 1 };
+        HStack::new()
+            .child(
+                Spacer::new()
+                    .width(Length::Px(leading))
+                    .height(Length::Px(1)),
+            )
+            .child(
+                Animated::new(input)
+                    .position_transition(true)
+                    .transition(transition)
+                    .key("moving"),
+            )
+            .into()
+    }
+}
+
+/// Play the host's motion frame by frame with a `jump` trail on, returning where each full draw
+/// that showed the caret left it. Every frame must leave the trail idle.
+fn carried_caret_frames(modal: bool) -> Vec<(u16, u16)> {
+    use crate::app::interaction_state::DirtyTracker;
+    use crate::app::{CursorTrail, CursorTrailTrigger};
+
+    const VIEWPORT: Rect = Rect {
+        x: 0,
+        y: 0,
+        w: 60,
+        h: 9,
+    };
+    let shifted = Rc::new(Cell::new(false));
+    let host = CarriedCaretHost {
+        shifted: shifted.clone(),
+        modal,
+    };
+    let mut runner = AppRunner::new(App::new().mouse(false), host.clone(), ());
+    init_runner(&mut runner, host, VIEWPORT);
+    let env = runner.core.ctx.env().clone();
+    env.cursor_trail
+        .set(Some(CursorTrail::new().trigger(CursorTrailTrigger::jump())));
+    let input = node_id_by_key(&runner.core.tree, "input");
+    runner.set_focus(input);
+    let mut terminal =
+        crate::backend::ratatui_backend::create_test_terminal(VIEWPORT.w, VIEWPORT.h)
+            .expect("test terminal");
+    let mut frames = Vec::new();
+    let mut paint = |runner: &mut AppRunner<CarriedCaretHost>, label: &str| {
+        runner.render_paint_only(&mut terminal).expect("paint");
+        assert!(
+            !runner.cursor_trail_requires_full_draw(),
+            "{label}: a caret its widget carries started a trail"
+        );
+        // A modal at the very start of its entrance has not painted yet, so it shows no caret.
+        if let Some(cursor) = runner.capture_painted_frame().cursor {
+            frames.push((cursor.x, cursor.y));
+        }
+    };
+    paint(&mut runner, "first frame");
+    if !modal {
+        shifted.set(true);
+        runner.core.render_element(VIEWPORT, None, None, None);
+        paint(&mut runner, "layout moved");
+    }
+    runner.animation.last_animated_tick = env.now();
+    for step in 0..4 {
+        env.advance_clock(Duration::from_millis(50));
+        let mut dirty = DirtyTracker::default();
+        runner.update_animation_cycle(&mut dirty);
+        paint(&mut runner, &format!("step {step}"));
+    }
+    assert!(
+        frames.len() >= 3,
+        "too few frames showed the caret: {frames:?}"
+    );
+    frames
+}
+
+#[test]
+fn a_caret_an_animated_move_carries_does_not_start_a_jump_trail() {
+    let frames = carried_caret_frames(false);
+    // The layout move lands at once, but the paint starts where the input was.
+    assert_eq!(frames[0], frames[1], "{frames:?}");
+    assert_eq!(frames.last().unwrap().0, frames[0].0 + 20, "{frames:?}");
+    assert!(
+        frames.windows(2).any(|pair| pair[1].0 >= pair[0].0 + 8),
+        "the caret moved as far as a jump in one frame: {frames:?}"
+    );
+}
+
+#[test]
+fn a_caret_in_a_sliding_overlay_does_not_start_a_jump_trail() {
+    let frames = carried_caret_frames(true);
+    assert!(
+        frames.windows(2).any(|pair| pair[0].0 >= pair[1].0 + 8),
+        "the caret slid as far as a jump in one frame: {frames:?}"
+    );
+}

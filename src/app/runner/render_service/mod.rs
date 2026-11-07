@@ -288,17 +288,20 @@ impl<C: Component> AppRunner<C> {
             .unwrap_or_default()
     }
 
-    /// The focused widget and where it is laid out, so the trail can tell a caret its widget
+    /// The focused widget and where it paints - its layout rectangle moved by the render-only
+    /// offsets of `Animated` wrappers and overlay slides - so the trail can tell a caret its widget
     /// carried from one that jumped.
     fn caret_owner(&self) -> Option<crate::app::cursor_trail::CaretOwner> {
         let id = self
             .focus
             .focused
             .filter(|&id| self.core.tree.is_valid(id))?;
-        let rect = self.core.tree.node(id).rect;
+        let tree = &self.core.tree;
+        let rect = tree.node(id).rect;
+        let (dx, dy) = crate::backend::ratatui_backend::render::node_paint_offset(tree, id).cells();
         Some(crate::app::cursor_trail::CaretOwner {
             id,
-            origin: (i32::from(rect.x), i32::from(rect.y)),
+            origin: (i32::from(rect.x) + dx, i32::from(rect.y) + dy),
         })
     }
 

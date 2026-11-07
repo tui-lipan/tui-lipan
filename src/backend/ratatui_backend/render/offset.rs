@@ -16,6 +16,18 @@ impl RenderOffset {
         }
     }
 
+    pub(crate) fn add(self, other: Self) -> Self {
+        Self {
+            x: self.x.saturating_add(other.x),
+            y: self.y.saturating_add(other.y),
+        }
+    }
+
+    /// The offset in cells, x to the right and y down.
+    pub(crate) fn cells(self) -> (i32, i32) {
+        (self.x, self.y)
+    }
+
     pub(crate) fn apply_to_rect(self, mut rect: Rect) -> Rect {
         rect.x = (i32::from(rect.x).saturating_add(self.x)).clamp(i16::MIN as i32, i16::MAX as i32)
             as i16;
