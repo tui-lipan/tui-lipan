@@ -661,55 +661,43 @@ pub(crate) struct SpanCursor {
     pub(crate) byte_idx: usize,
 }
 
+/// Wrap spans into rows, one budget for the first row and another for the rest.
+///
+/// Whitespace at a wrap point stays with the row it ends: a continuation row
+/// never starts with the spaces that separated it from the previous row. Those
+/// spaces do not render past the row's budget, so they are left out of the
+/// returned rows; [`wrap_span_ranges_for_budgets`] reports where each row sits
+/// in the source spans for callers that map byte offsets.
 pub(crate) fn wrap_spans_for_budgets(
     spans: &[Span],
     first_budget: u16,
     cont_budget: u16,
 ) -> Vec<Vec<Span>> {
-    if spans.is_empty() {
-        return vec![Vec::new()];
-    }
+    wrap_span_ranges_for_budgets(spans, first_budget, cont_budget)
+        .into_iter()
+        .map(|range| collect_span_range(spans, range.start, range.end))
+        .collect()
+}
 
-    let mut start = SpanCursor::default();
-    if next_char_cursor(spans, start).is_none() {
-        return vec![Vec::new()];
-    }
-
+/// Wrap preformatted spans, such as code, keeping every byte in some row.
+///
+/// Unlike [`wrap_spans_for_budgets`], whitespace at a wrap point is kept: it
+/// starts the continuation row when it does not fit the row before.
+pub(crate) fn wrap_preformatted_spans_for_budgets(
+    spans: &[Span],
+    first_budget: u16,
+    cont_budget: u16,
+) -> Vec<Vec<Span>> {
     let mut out = Vec::new();
-
-    if first_budget == 0 {
-        out.push(Vec::new());
-    } else {
-        let mut end = take_chunk_end(spans, start, first_budget as usize);
-        if end == start {
-            end = next_char_cursor(spans, start)
-                .map(|(next, _, _)| next)
-                .unwrap_or(start);
-        }
-        out.push(collect_span_range(spans, start, end));
-        start = end;
-    }
-
-    let cont_budget = cont_budget.max(1) as usize;
-    while next_char_cursor(spans, start).is_some() {
-        let mut end = take_chunk_end(spans, start, cont_budget);
-        if end == start {
-            end = next_char_cursor(spans, start)
-                .map(|(next, _, _)| next)
-                .unwrap_or(start);
-        }
-        out.push(collect_span_range(spans, start, end));
-        start = end;
-    }
-
+    for_each_wrapped_range(spans, first_budget, cont_budget, false, |range| {
+        out.push(collect_span_range(spans, range.start, range.end));
+    });
     out
 }
 
 /// Count how many wrapped lines [`wrap_spans_for_budgets`] would produce, without
 /// materializing (and cloning) the wrapped span vectors.
 ///
-/// The control flow mirrors [`wrap_spans_for_budgets`] exactly, so the returned
-/// count is identical to `wrap_spans_for_budgets(spans, first_budget, cont_budget).len()`.
 /// This exists for the measure path, which only needs visual-line *counts* and
 /// must not pay the per-line `Vec<Span>`/`Arc<str>` clone+alloc cost.
 pub(crate) fn count_wrapped_lines_for_budgets(
@@ -717,43 +705,87 @@ pub(crate) fn count_wrapped_lines_for_budgets(
     first_budget: u16,
     cont_budget: u16,
 ) -> usize {
-    if spans.is_empty() {
-        return 1;
-    }
+    let mut count = 0usize;
+    for_each_wrapped_range(spans, first_budget, cont_budget, true, |_| count += 1);
+    count
+}
 
+/// Source cursor range of each row [`wrap_spans_for_budgets`] produces.
+///
+/// Whitespace skipped at a wrap point lies between one row's `end` and the
+/// next row's `start`.
+pub(crate) fn wrap_span_ranges_for_budgets(
+    spans: &[Span],
+    first_budget: u16,
+    cont_budget: u16,
+) -> Vec<Range<SpanCursor>> {
+    let mut out = Vec::new();
+    for_each_wrapped_range(spans, first_budget, cont_budget, true, |range| {
+        out.push(range)
+    });
+    out
+}
+
+fn for_each_wrapped_range(
+    spans: &[Span],
+    first_budget: u16,
+    cont_budget: u16,
+    skip_wrap_spaces: bool,
+    mut emit: impl FnMut(Range<SpanCursor>),
+) {
+    let next_start = |end| {
+        if skip_wrap_spaces {
+            skip_wrap_whitespace(spans, end)
+        } else {
+            end
+        }
+    };
     let mut start = SpanCursor::default();
     if next_char_cursor(spans, start).is_none() {
-        return 1;
+        emit(start..start);
+        return;
     }
 
-    let mut count = 0usize;
-
     if first_budget == 0 {
-        count += 1;
+        emit(start..start);
     } else {
-        let mut end = take_chunk_end(spans, start, first_budget as usize);
-        if end == start {
-            end = next_char_cursor(spans, start)
-                .map(|(next, _, _)| next)
-                .unwrap_or(start);
-        }
-        count += 1;
-        start = end;
+        let end = take_row_end(spans, start, first_budget as usize);
+        emit(start..end);
+        start = next_start(end);
     }
 
     let cont_budget = cont_budget.max(1) as usize;
     while next_char_cursor(spans, start).is_some() {
-        let mut end = take_chunk_end(spans, start, cont_budget);
-        if end == start {
-            end = next_char_cursor(spans, start)
-                .map(|(next, _, _)| next)
-                .unwrap_or(start);
-        }
-        count += 1;
-        start = end;
+        let end = take_row_end(spans, start, cont_budget);
+        emit(start..end);
+        start = next_start(end);
     }
+}
 
-    count
+/// End of the row starting at `start`, always advancing by at least one grapheme.
+fn take_row_end(spans: &[Span], start: SpanCursor, budget: usize) -> SpanCursor {
+    let end = take_chunk_end(spans, start, budget);
+    if end != start {
+        return end;
+    }
+    next_char_cursor(spans, start)
+        .map(|(next, _, _)| next)
+        .unwrap_or(start)
+}
+
+/// Skip the spaces that separate a wrapped row from its continuation.
+///
+/// Whitespace that ends the text is kept as a row of its own: no continuation
+/// row follows to record it, so skipping it would drop it from the text.
+fn skip_wrap_whitespace(spans: &[Span], end: SpanCursor) -> SpanCursor {
+    let mut cursor = end;
+    while let Some((next, ch, _)) = next_char_cursor(spans, cursor) {
+        if !ch.is_whitespace() || matches!(ch, '\n' | '\r') {
+            return cursor;
+        }
+        cursor = next;
+    }
+    end
 }
 
 pub(crate) fn take_chunk_end(spans: &[Span], start: SpanCursor, max_width: usize) -> SpanCursor {
@@ -926,11 +958,12 @@ pub(crate) fn push_span_slice_styled(
 #[cfg(test)]
 mod tests {
     use super::{
-        VirtualTextInsertion, byte_at_col, byte_at_col_sentinel_tabs_virtual, clamp_cursor,
-        count_wrapped_lines_for_budgets, end_at_width, expand_tabs, input_viewport_start,
-        is_wrap_break, next_char_boundary, str_visual_width, str_visual_width_with_tabs,
-        trim_blank_edge_lines, viewport, visual_col_with_virtual, word_boundary_left,
-        word_boundary_right, wrap_spans_for_budgets,
+        SpanCursor, VirtualTextInsertion, byte_at_col, byte_at_col_sentinel_tabs_virtual,
+        clamp_cursor, count_wrapped_lines_for_budgets, end_at_width, expand_tabs,
+        input_viewport_start, is_wrap_break, next_char_boundary, str_visual_width,
+        str_visual_width_with_tabs, trim_blank_edge_lines, viewport, visual_col_with_virtual,
+        word_boundary_left, word_boundary_right, wrap_preformatted_spans_for_budgets,
+        wrap_span_ranges_for_budgets, wrap_spans_for_budgets,
     };
     use crate::style::{Color, Span};
 
@@ -1231,6 +1264,47 @@ mod tests {
         assert!(wrapped[0].is_empty());
         assert_eq!(wrapped[1][0].content.as_ref(), "ab ");
         assert_eq!(wrapped[2][0].content.as_ref(), "cd");
+    }
+
+    #[test]
+    fn wrap_spans_keeps_wrap_point_spaces_off_continuation_rows() {
+        let spans = vec![Span::new("ab "), Span::new("cd  ef").fg(Color::Red)];
+        let rows = |wrapped: Vec<Vec<Span>>| {
+            wrapped
+                .iter()
+                .map(|row| row.iter().map(|span| span.content.as_ref()).collect())
+                .collect::<Vec<String>>()
+        };
+
+        assert_eq!(
+            rows(wrap_spans_for_budgets(&spans, 2, 2)),
+            ["ab", "cd", "ef"]
+        );
+        assert_eq!(
+            rows(wrap_spans_for_budgets(&spans, 3, 3)),
+            ["ab ", "cd ", "ef"]
+        );
+        assert_eq!(
+            rows(wrap_spans_for_budgets(&[Span::new("ab  ")], 2, 2)),
+            ["ab", "  "]
+        );
+        assert_eq!(
+            rows(wrap_preformatted_spans_for_budgets(&spans, 2, 2)),
+            ["ab", " ", "cd", "  ", "ef"]
+        );
+
+        let flat = |cursor: SpanCursor| {
+            spans[..cursor.span_idx]
+                .iter()
+                .map(|span| span.content.len())
+                .sum::<usize>()
+                + cursor.byte_idx
+        };
+        let ranges: Vec<_> = wrap_span_ranges_for_budgets(&spans, 2, 2)
+            .into_iter()
+            .map(|range| flat(range.start)..flat(range.end))
+            .collect();
+        assert_eq!(ranges, [0..2, 3..5, 7..9]);
     }
 
     #[test]
