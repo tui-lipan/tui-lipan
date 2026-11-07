@@ -269,6 +269,20 @@ impl Smear {
         self.settled = false;
     }
 
+    /// Move the whole smear by `offset` cells, as the widget that owns the caret moves: its shape,
+    /// its path, and its momentum stay as they were.
+    pub(crate) fn carry(&mut self, offset: Vec2) {
+        let shift = self.on_screen(offset);
+        self.head = self.head + shift;
+        self.head_before = self.head_before + shift;
+        for (point, _) in &mut self.path {
+            *point = *point + shift;
+        }
+        for corner in &mut self.target {
+            *corner = *corner + offset;
+        }
+    }
+
     pub(crate) fn target(&self) -> &Corners {
         &self.target
     }

@@ -124,7 +124,7 @@ What makes a [`CursorTrail`](quick-start.md#app-configuration) appear.
 | Variant | Notes |
 |---------|-------|
 | `FocusChange` (default) | Focus moves to another widget and the caret moves with it |
-| `Jump { columns, rows }` | A focus change, or a caret move inside one widget of at least `columns` columns or `rows` rows; `CursorTrailTrigger::jump()` is `columns: 8, rows: 2` |
+| `Jump { columns, rows }` | A focus change, or a caret move inside one widget of at least `columns` columns or `rows` rows, measured within the widget, so a widget that moves does not count; `CursorTrailTrigger::jump()` is `columns: 8, rows: 2` |
 
 ### `CursorTrailMotion`
 

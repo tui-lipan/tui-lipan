@@ -67,6 +67,13 @@ impl Sparks {
         self.owed = 0.0;
     }
 
+    /// Move every spark by `offset` cells, as the widget that owns the caret moves.
+    pub(crate) fn carry(&mut self, offset: Vec2) {
+        for particle in &mut self.particles {
+            particle.position = particle.position + offset;
+        }
+    }
+
     /// Emit for one physics step in which the smear's head moved `travelled` cells. New sparks
     /// start on the smear's body: `body(t)` is the point a fraction `t` of the way along it, from
     /// the tail at 0 to the head at 1, so they follow its bends.
