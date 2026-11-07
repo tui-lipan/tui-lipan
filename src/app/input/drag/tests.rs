@@ -206,41 +206,50 @@ fn document_view_dragging_above_selects_to_document_start() {
 #[test]
 fn document_view_copy_ignores_soft_wrap_newlines() {
     let text = "Currently, there is no timeout, so it keeps waiting until the process is ready.";
-    let viewport = Rect {
-        x: 0,
-        y: 0,
-        w: 24,
-        h: 6,
-    };
-    let mut runtime = RuntimeCore::new_test(
-        WrappedDocumentViewCopySmoke,
-        (),
-        viewport,
-        Theme::default(),
-        SurfaceMode::Fullscreen,
-        Rc::new(Cell::new(false)),
-    );
-    runtime.init();
-    runtime.render_element(viewport, None, None, None);
+    // Width 11 (10 columns beside the scrollbar) fills the first row with "Currently," so the wrap skips the space after it.
+    for width in [24, 11] {
+        let viewport = Rect {
+            x: 0,
+            y: 0,
+            w: width,
+            h: 12,
+        };
+        let mut runtime = RuntimeCore::new_test(
+            WrappedDocumentViewCopySmoke,
+            (),
+            viewport,
+            Theme::default(),
+            SurfaceMode::Fullscreen,
+            Rc::new(Cell::new(false)),
+        );
+        runtime.init();
+        runtime.render_element(viewport, None, None, None);
 
-    let copied = runtime
-        .tree
-        .iter()
-        .find_map(|node| match &node.kind {
-            NodeKind::DocumentView(doc) => {
-                assert!(doc.visual_cache.flat_text.contains('\n'));
-                document_view_selected_text_from_node(
-                    doc,
-                    0,
-                    doc.visual_cache.flat_text.len(),
-                    false,
-                )
-            }
-            _ => None,
-        })
-        .expect("document view exists");
+        let (first_row, copied) = runtime
+            .tree
+            .iter()
+            .find_map(|node| match &node.kind {
+                NodeKind::DocumentView(doc) => {
+                    assert!(doc.visual_cache.flat_text.contains('\n'));
+                    Some((
+                        doc.visual_cache.line_texts[0].to_string(),
+                        document_view_selected_text_from_node(
+                            doc,
+                            0,
+                            doc.visual_cache.flat_text.len(),
+                            false,
+                        )?,
+                    ))
+                }
+                _ => None,
+            })
+            .expect("document view exists");
 
-    assert_eq!(copied, text);
+        if width == 11 {
+            assert_eq!(first_row, "Currently,");
+        }
+        assert_eq!(copied, text, "width {width}");
+    }
 }
 
 #[test]

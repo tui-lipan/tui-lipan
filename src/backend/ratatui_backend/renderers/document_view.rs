@@ -1520,6 +1520,7 @@ mod tests {
                     indent_cols: 0,
                     continuation: false,
                     links: Vec::new(),
+                    wrap_gap: None,
                 },
                 source_line: 5,
             },

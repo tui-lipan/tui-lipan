@@ -119,6 +119,16 @@ pub(crate) fn document_view_selected_text_from_node(
         let next = &doc.visual_cache.lines[index + 1];
         if !is_soft_document_view_line_break(line, next) {
             out.push('\n');
+        } else if let VisualLineKind::Text {
+            wrap_gap: Some(gap),
+            ..
+        }
+        | VisualLineKind::BlockQuoteLine {
+            wrap_gap: Some(gap),
+            ..
+        } = &next.kind
+        {
+            out.push_str(gap);
         }
     }
 
