@@ -2644,8 +2644,8 @@ fn a_cursor_trail_paints_over_full_draws_and_clears_once_it_settles() {
     }
 }
 
-/// `Context::skip_cursor_trail` makes the caret's next move draw no trail and stops one in flight,
-/// for that move only: the move after it trails again.
+/// `Context::skip_cursor_trail` makes the caret's next move draw no trail, however many frames
+/// later it comes, and stops one in flight, for that move only: the move after it trails again.
 #[test]
 fn a_skipped_cursor_trail_draws_nothing_for_the_next_move_only() {
     use crate::app::{CursorTrail, CursorTrailTrigger};
@@ -2671,8 +2671,11 @@ fn a_skipped_cursor_trail_draws_nothing_for_the_next_move_only() {
     };
     harness.runner.render_paint_only(&mut terminal).unwrap();
 
-    // Skipped: the focus change draws nothing, on its frame or after.
+    // Skipped: a frame that still shows the caret where it was keeps the skip pending, and the
+    // focus change after it draws nothing, on its frame or after.
     env.cursor_trail_skip.set(true);
+    env.advance_clock(FRAME);
+    harness.runner.render_paint_only(&mut terminal).unwrap();
     harness.runner.focus.focused = Some(second);
     for _ in 0..3 {
         harness.runner.render_paint_only(&mut terminal).unwrap();

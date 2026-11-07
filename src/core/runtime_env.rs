@@ -400,8 +400,8 @@ pub(crate) struct RuntimeEnv {
     /// The trail drawn behind the host caret when it jumps, from [`crate::App::cursor_trail`] and
     /// [`crate::Context::set_cursor_trail`]. `None` draws none.
     pub cursor_trail: Rc<Cell<Option<crate::app::CursorTrail>>>,
-    /// Set by [`crate::Context::skip_cursor_trail`]: the next presented frame forgets where the
-    /// caret was, so its move there draws no trail.
+    /// Set by [`crate::Context::skip_cursor_trail`] until the runner hands it to the trail, which
+    /// then draws none for the caret's next move.
     pub cursor_trail_skip: Rc<Cell<bool>>,
     /// App-wide mouse wheel step multiplier, initialized from [`crate::App::scroll_wheel_multiplier`]
     /// and adjustable at runtime through [`crate::Context::set_scroll_wheel_multiplier`].

@@ -309,7 +309,7 @@ impl<C: Component> AppRunner<C> {
     /// caret is observed.
     fn take_cursor_trail_skip(&mut self) {
         if self.core.ctx.env().cursor_trail_skip.replace(false) {
-            self.cursor_trail.forget();
+            self.cursor_trail.skip_next_move();
         }
     }
 

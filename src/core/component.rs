@@ -1310,7 +1310,8 @@ impl<C: Component> Context<C> {
     /// Draw no trail for the caret's next move, and stop a trail already on screen with the next
     /// frame. For a transition the app animates itself, such as switching to a different screen,
     /// where a smear from the caret on the old screen to the caret on the new one would connect
-    /// two unrelated places. Later moves trail as usual.
+    /// two unrelated places. The skip waits for that move: frames that still show the caret where
+    /// it was, or carry it with its widget, keep it pending. Later moves trail as usual.
     pub fn skip_cursor_trail(&self) {
         self.env.cursor_trail_skip.set(true);
     }
