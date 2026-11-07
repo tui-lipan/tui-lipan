@@ -72,6 +72,10 @@ returns. A title set from a message handler shows up after the next `render()`.
 changed since by `Context::set_cursor_trail`. A change made in a message handler shows up as soon as
 the handler returns. Headless rendering never draws the trail itself.
 
+`take_cursor_trail_skip() -> bool` reports whether the app called `Context::skip_cursor_trail` since
+it was last asked, and clears the request, so each check sees only the requests made since the one
+before.
+
 ### Per-cell style assertions
 
 ```rust

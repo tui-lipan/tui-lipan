@@ -305,11 +305,20 @@ impl<C: Component> AppRunner<C> {
         })
     }
 
+    /// Apply a [`Context::skip_cursor_trail`](crate::Context::skip_cursor_trail) before the next
+    /// caret is observed.
+    fn take_cursor_trail_skip(&mut self) {
+        if self.core.ctx.env().cursor_trail_skip.replace(false) {
+            self.cursor_trail.skip_next_move();
+        }
+    }
+
     /// Hand the caret a presented frame left on the host to the cursor trail.
     pub(super) fn observe_cursor_trail(&mut self, position: Option<Position>) {
         if self.surface.is_inline() {
             return;
         }
+        self.take_cursor_trail_skip();
         let env = self.core.ctx.env();
         let (config, now) = (env.cursor_trail.get(), env.now());
         let look = self.caret_look();
@@ -322,6 +331,7 @@ impl<C: Component> AppRunner<C> {
     /// Take the trail state out of the runner for the length of a draw, so the paint inside the
     /// frame can watch the caret the tree just placed and draw the trail over it in that frame.
     fn begin_trail_pass(&mut self) -> TrailPass {
+        self.take_cursor_trail_skip();
         self.cursor_trail.set_cell_size(host_cell_size());
         let env = self.core.ctx.env();
         TrailPass {

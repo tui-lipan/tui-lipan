@@ -586,6 +586,8 @@ pub(crate) struct CursorTrailState {
     last_frame: Option<Instant>,
     /// The host's cell height over its width, when known, so the smear measures on screen.
     cell_aspect: Option<f32>,
+    /// A skipped move is pending: the next caret move that would start a trail starts none.
+    skip: bool,
 }
 
 /// How soon after a jump inside one widget the caret must hold still before the smear starts:
@@ -624,6 +626,13 @@ impl CursorTrailState {
         let carried = carry_offset(caret.carried_from(last));
         if carried != Vec2::ZERO {
             self.carry(carried);
+        }
+        if self.skip {
+            // Nothing starts while a skip is pending, so there is nothing to move on either.
+            if config.triggers(last, caret) {
+                self.skip = false;
+            }
+            return;
         }
         let target = caret.rect();
         // The trail takes the color of the caret it is following now, so one sent on to another
@@ -694,6 +703,13 @@ impl CursorTrailState {
             running.smear.carry(offset);
         }
         self.sparks.carry(offset);
+    }
+
+    /// Stop the trail now and let the caret's next move that would start one start none. Frames
+    /// that leave the caret where it was, or carry it with its widget, keep the skip pending.
+    pub(crate) fn skip_next_move(&mut self) {
+        self.stop();
+        self.skip = true;
     }
 
     fn stop(&mut self) {
@@ -1069,6 +1085,42 @@ mod tests {
     ) {
         let owner = moved(owner, origin.0, origin.1);
         state.observe(config, Some(Position::new(x, y)), owner, block(), at);
+    }
+
+    #[test]
+    fn a_skip_waits_for_the_move_it_skips() {
+        let start = Instant::now();
+        let mut state = CursorTrailState::default();
+        see(&mut state, trail(), 1, 1, 1, start);
+        state.skip_next_move();
+        // A frame that still shows the caret where it was, as a transition's first frames can,
+        // does not spend the skip.
+        see(&mut state, trail(), 1, 1, 1, start + INTERVAL);
+        state.advance(trail(), start + INTERVAL);
+        assert!(state.frame(trail()).is_none());
+        see(&mut state, trail(), 11, 6, 2, start + INTERVAL * 2);
+        state.advance(trail(), start + INTERVAL * 2);
+        assert!(
+            state.frame(trail()).is_none(),
+            "the skipped move drew a trail"
+        );
+        see(&mut state, trail(), 1, 1, 1, start + INTERVAL * 3);
+        state.advance(trail(), start + INTERVAL * 3);
+        assert!(
+            state.frame(trail()).is_some(),
+            "the move after it trails again"
+        );
+    }
+
+    #[test]
+    fn a_skip_stops_a_trail_in_flight() {
+        let start = Instant::now();
+        let mut state = CursorTrailState::default();
+        running(&mut state, start);
+        state.advance(trail(), start + INTERVAL);
+        assert!(state.frame(trail()).is_some());
+        state.skip_next_move();
+        assert!(state.frame(trail()).is_none());
     }
 
     #[test]
