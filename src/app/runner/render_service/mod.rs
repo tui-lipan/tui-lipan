@@ -288,6 +288,20 @@ impl<C: Component> AppRunner<C> {
             .unwrap_or_default()
     }
 
+    /// The focused widget and where it is laid out, so the trail can tell a caret its widget
+    /// carried from one that jumped.
+    fn caret_owner(&self) -> Option<crate::app::cursor_trail::CaretOwner> {
+        let id = self
+            .focus
+            .focused
+            .filter(|&id| self.core.tree.is_valid(id))?;
+        let rect = self.core.tree.node(id).rect;
+        Some(crate::app::cursor_trail::CaretOwner {
+            id,
+            origin: (i32::from(rect.x), i32::from(rect.y)),
+        })
+    }
+
     /// Hand the caret a presented frame left on the host to the cursor trail.
     pub(super) fn observe_cursor_trail(&mut self, position: Option<Position>) {
         if self.surface.is_inline() {
@@ -297,8 +311,9 @@ impl<C: Component> AppRunner<C> {
         let (config, now) = (env.cursor_trail.get(), env.now());
         let look = self.caret_look();
         self.cursor_trail.set_cell_size(host_cell_size());
+        let owner = self.caret_owner();
         self.cursor_trail
-            .observe(config, position, self.focus.focused, look, now);
+            .observe(config, position, owner, look, now);
     }
 
     /// Take the trail state out of the runner for the length of a draw, so the paint inside the
@@ -311,7 +326,7 @@ impl<C: Component> AppRunner<C> {
             now: env.now(),
             host: self.cursor_trail_host_colors(),
             look: self.caret_look(),
-            owner: self.focus.focused,
+            owner: self.caret_owner(),
             enabled: !self.surface.is_inline(),
             state: std::mem::take(&mut self.cursor_trail),
             painted: None,
@@ -1735,7 +1750,7 @@ struct TrailPass {
     state: crate::app::cursor_trail::CursorTrailState,
     config: Option<crate::app::CursorTrail>,
     look: crate::app::cursor_trail::CaretLook,
-    owner: Option<NodeId>,
+    owner: Option<crate::app::cursor_trail::CaretOwner>,
     now: web_time::Instant,
     host: Option<crate::style::HostTerminalColors>,
     enabled: bool,

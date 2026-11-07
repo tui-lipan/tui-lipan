@@ -38,7 +38,8 @@ pub enum CursorTrailTrigger {
     #[default]
     FocusChange,
     /// On a focus change, and whenever the caret moves at least `columns` columns or `rows` rows
-    /// in one step inside the same widget.
+    /// in one step inside the same widget. The move is measured within the widget, so a widget
+    /// that moves (an animated layout, a drag) carries its caret without starting a trail.
     Jump {
         /// The fewest columns a same-widget move must span.
         columns: u16,
@@ -374,19 +375,22 @@ impl CursorTrail {
             && !matches!(self.motion, CursorTrailMotion::Glide { duration } if duration.is_zero())
     }
 
+    /// Whether the caret's move from `from` to `to` starts a trail. Only the part of the move
+    /// made inside its widget counts, not the part its widget carried it.
     fn triggers(&self, from: Caret, to: Caret) -> bool {
-        if from.position == to.position {
-            return false;
+        if from.owner_id() != to.owner_id() {
+            return from.position != to.position;
         }
-        if from.owner != to.owner {
-            return true;
+        let (carried_x, carried_y) = to.carried_from(from);
+        let dx = (i32::from(to.position.x) - i32::from(from.position.x) - carried_x).unsigned_abs();
+        let dy = (i32::from(to.position.y) - i32::from(from.position.y) - carried_y).unsigned_abs();
+        if dx == 0 && dy == 0 {
+            return false;
         }
         match self.trigger {
             CursorTrailTrigger::FocusChange => false,
             CursorTrailTrigger::Jump { columns, rows } => {
-                let dx = from.position.x.abs_diff(to.position.x);
-                let dy = from.position.y.abs_diff(to.position.y);
-                (columns > 0 && dx >= columns) || (rows > 0 && dy >= rows)
+                (columns > 0 && dx >= u32::from(columns)) || (rows > 0 && dy >= u32::from(rows))
             }
         }
     }
@@ -452,11 +456,18 @@ pub(crate) fn ease_out_cubic(t: f32) -> f32 {
     1.0 - inverse * inverse * inverse
 }
 
+/// The widget that owns the caret, and where its layout rectangle sits on screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CaretOwner {
+    pub(crate) id: NodeId,
+    pub(crate) origin: (i32, i32),
+}
+
 /// The host caret as one presented frame left it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Caret {
     position: Position,
-    owner: Option<NodeId>,
+    owner: Option<CaretOwner>,
     shape: CaretShape,
 }
 
@@ -464,6 +475,29 @@ impl Caret {
     fn rect(self) -> Corners {
         caret_rect(self.position.x, self.position.y, self.shape)
     }
+
+    fn owner_id(self) -> Option<NodeId> {
+        self.owner.map(|owner| owner.id)
+    }
+
+    /// How far the widget that owns the caret moved since `earlier`, in cells, when it is the
+    /// same widget: a caret carried along by its widget (a slide, a drag) has not jumped.
+    fn carried_from(self, earlier: Self) -> (i32, i32) {
+        match (earlier.owner, self.owner) {
+            (Some(from), Some(to)) if from.id == to.id => {
+                (to.origin.0 - from.origin.0, to.origin.1 - from.origin.1)
+            }
+            _ => (0, 0),
+        }
+    }
+}
+
+fn carry_offset((dx, dy): (i32, i32)) -> Vec2 {
+    Vec2::new(dx as f32, dy as f32)
+}
+
+fn carry_corners(corners: Corners, offset: Vec2) -> Corners {
+    corners.map(|corner| corner + offset)
 }
 
 /// The focused widget's caret, as the runner hands it to [`CursorTrailState::observe`].
@@ -566,7 +600,7 @@ impl CursorTrailState {
         &mut self,
         config: Option<CursorTrail>,
         position: Option<Position>,
-        owner: Option<NodeId>,
+        owner: Option<CaretOwner>,
         look: CaretLook,
         now: Instant,
     ) {
@@ -585,6 +619,12 @@ impl CursorTrailState {
             self.stop();
             return;
         };
+        // A widget that moves (a slide, a drag) carries its caret, and a trail already on its way
+        // with it: only what the caret does inside its widget is a jump.
+        let carried = carry_offset(caret.carried_from(last));
+        if carried != Vec2::ZERO {
+            self.carry(carried);
+        }
         let target = caret.rect();
         // The trail takes the color of the caret it is following now, so one sent on to another
         // widget mid-flight does not keep the color of the widget it passed through.
@@ -604,14 +644,14 @@ impl CursorTrailState {
                 landing.to = target;
                 landing.last_move = now;
             }
-            if last.owner != owner {
+            if last.owner_id() != caret.owner_id() {
                 self.launch(now, config.max_length);
             }
             return;
         }
         if config.triggers(last, caret) {
             self.landing = Some(Landing {
-                from: last.rect(),
+                from: carry_corners(last.rect(), carried),
                 to: target,
                 since: now,
                 last_move: now,
@@ -620,7 +660,7 @@ impl CursorTrailState {
             });
             // A focus change lands in one step and starts at once; a jump inside one widget may be
             // the first of several writes, so it waits for the caret to settle.
-            if last.owner != owner {
+            if last.owner_id() != caret.owner_id() {
                 self.launch(now, config.max_length);
             }
         }
@@ -642,6 +682,18 @@ impl CursorTrailState {
             self.clock = Some(now);
             self.last_frame = None;
         }
+    }
+
+    /// Move everything the trail is drawing, or waiting to draw, by `offset` cells.
+    fn carry(&mut self, offset: Vec2) {
+        if let Some(landing) = self.landing.as_mut() {
+            landing.from = carry_corners(landing.from, offset);
+            landing.to = carry_corners(landing.to, offset);
+        }
+        if let Some(running) = self.running.as_mut() {
+            running.smear.carry(offset);
+        }
+        self.sparks.carry(offset);
     }
 
     fn stop(&mut self) {
@@ -917,8 +969,16 @@ mod tests {
     const RED: (u8, u8, u8) = (255, 0, 0);
     const INTERVAL: Duration = Duration::from_millis(16);
 
-    fn node(id: u32) -> Option<NodeId> {
-        Some(NodeId::new(id, 0))
+    fn node(id: u32) -> Option<CaretOwner> {
+        moved(id, 0, 0)
+    }
+
+    /// Widget `id`, laid out at `(x, y)` on screen.
+    fn moved(id: u32, x: i32, y: i32) -> Option<CaretOwner> {
+        Some(CaretOwner {
+            id: NodeId::new(id, 0),
+            origin: (x, y),
+        })
     }
 
     fn trail() -> Option<CursorTrail> {
@@ -997,6 +1057,89 @@ mod tests {
         see(&mut state, jump, 7, 3, 1, start + LANDING_QUIET);
         state.advance(jump, start + LANDING_QUIET * 2);
         assert!(state.frame(jump).is_some(), "2 rows");
+    }
+
+    /// Observe a caret at `(x, y)` in widget `owner`, laid out at `origin`.
+    fn see_in(
+        state: &mut CursorTrailState,
+        config: Option<CursorTrail>,
+        (x, y): (u16, u16),
+        (owner, origin): (u32, (i32, i32)),
+        at: Instant,
+    ) {
+        let owner = moved(owner, origin.0, origin.1);
+        state.observe(config, Some(Position::new(x, y)), owner, block(), at);
+    }
+
+    #[test]
+    fn a_caret_its_widget_carries_does_not_trail() {
+        let start = Instant::now();
+        let jump = Some(CursorTrail::new().trigger(CursorTrailTrigger::jump()));
+        let mut state = CursorTrailState::default();
+        // A pane sliding 20 columns and 4 rows a frame, its caret still in the same cell of it.
+        for step in 0..5_u16 {
+            let at = start + INTERVAL * u32::from(step);
+            let origin = (i32::from(step) * 20, i32::from(step) * 4);
+            see_in(
+                &mut state,
+                jump,
+                (5 + step * 20, 3 + step * 4),
+                (1, origin),
+                at,
+            );
+            state.advance(jump, at + LANDING_QUIET);
+            assert!(state.frame(jump).is_none(), "step {step}");
+        }
+    }
+
+    #[test]
+    fn a_smear_in_flight_rides_with_its_widget() {
+        let start = Instant::now();
+        let mut still = CursorTrailState::default();
+        let mut carried = CursorTrailState::default();
+        for state in [&mut still, &mut carried] {
+            see_in(state, trail(), (1, 1), (1, (0, 0)), start);
+            see_in(state, trail(), (11, 1), (2, (0, 0)), start);
+            state.advance(trail(), start + INTERVAL);
+        }
+        // Mid-flight, the second widget moves 20 columns and 3 rows, taking its caret along.
+        see_in(&mut still, trail(), (11, 1), (2, (0, 0)), start + INTERVAL);
+        see_in(
+            &mut carried,
+            trail(),
+            (31, 4),
+            (2, (20, 3)),
+            start + INTERVAL,
+        );
+        let at = start + INTERVAL * 2;
+        still.advance(trail(), at);
+        carried.advance(trail(), at);
+        let shape = |state: &CursorTrailState| state.frame(trail()).and_then(|frame| frame.smear);
+        let (still, carried) = (shape(&still).unwrap(), shape(&carried).unwrap());
+        let offset = Vec2::new(20.0, 3.0);
+        let close = |a: Vec2, b: Vec2| (a - b).length() < 1e-3;
+        assert!(
+            close(carried.head, still.head + offset),
+            "{carried:?} vs {still:?}"
+        );
+        assert!(
+            close(carried.tail, still.tail + offset),
+            "{carried:?} vs {still:?}"
+        );
+        assert_eq!(carried.target, Position::new(31, 4));
+    }
+
+    #[test]
+    fn a_jump_inside_a_moving_widget_trails_from_where_it_was_carried() {
+        let start = Instant::now();
+        let jump = Some(CursorTrail::new().trigger(CursorTrailTrigger::jump()));
+        let mut state = CursorTrailState::default();
+        see_in(&mut state, jump, (5, 3), (1, (0, 0)), start);
+        // The widget moves 20 columns while its caret jumps 10 within it.
+        see_in(&mut state, jump, (35, 3), (1, (20, 0)), start);
+        let landing = state.landing.expect("a jump within the widget");
+        assert_eq!(landing.from, caret_rect(25, 3, CaretShape::Block));
+        assert_eq!(landing.to, caret_rect(35, 3, CaretShape::Block));
     }
 
     #[test]
