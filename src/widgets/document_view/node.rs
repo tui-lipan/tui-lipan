@@ -1655,7 +1655,9 @@ fn push_code_visual_lines(
     let available_w = ctx.inner_w.saturating_sub(ctx.base_indent_cols);
     if ctx.wrap && line_w > ctx.inner_w {
         let content_w = available_w.saturating_sub(CODE_BLOCK_LEFT_INSET_COLS);
-        for wrapped in crate::utils::text::wrap_spans_for_budgets(&spans, content_w, content_w) {
+        for wrapped in
+            crate::utils::text::wrap_preformatted_spans_for_budgets(&spans, content_w, content_w)
+        {
             let wrapped = with_visual_indent(wrapped, ctx.base_indent_cols);
             let wrapped_w = span_width(&wrapped).saturating_add(CODE_BLOCK_LEFT_INSET_COLS);
             *max_w = (*max_w).max(wrapped_w);
@@ -1771,12 +1773,24 @@ fn wrap_spans_with_links(
     first_budget: u16,
     cont_budget: u16,
 ) -> Vec<(Vec<Span>, Vec<FormattedLink>)> {
-    let mut start = 0usize;
-    crate::utils::text::wrap_spans_for_budgets(spans, first_budget, cont_budget)
+    let mut span_offsets = Vec::with_capacity(spans.len());
+    let mut offset = 0usize;
+    for span in spans {
+        span_offsets.push(offset);
+        offset += span.content.len();
+    }
+    let flat_offset = |cursor: crate::utils::text::SpanCursor| {
+        span_offsets
+            .get(cursor.span_idx)
+            .map_or(offset, |start| start + cursor.byte_idx)
+    };
+
+    crate::utils::text::wrap_span_ranges_for_budgets(spans, first_budget, cont_budget)
         .into_iter()
-        .map(|line| {
-            let end =
-                start.saturating_add(line.iter().map(|span| span.content.len()).sum::<usize>());
+        .map(|range| {
+            let line = crate::utils::text::collect_span_range(spans, range.start, range.end);
+            let start = flat_offset(range.start);
+            let end = flat_offset(range.end);
             let row_links = links
                 .iter()
                 .filter_map(|link| {
@@ -1789,7 +1803,6 @@ fn wrap_spans_with_links(
                     })
                 })
                 .collect();
-            start = end;
             (line, row_links)
         })
         .collect()
@@ -2067,6 +2080,57 @@ mod tests {
         assert_eq!(
             visual_line_render_prefix_cols(&line),
             CODE_BLOCK_LEFT_INSET_COLS as usize
+        );
+    }
+
+    #[cfg(feature = "markdown")]
+    #[test]
+    fn markdown_paragraph_wrap_keeps_the_space_on_the_row_it_ends() {
+        use crate::style::BorderStyle;
+        use crate::widgets::document_view::TableRowSeparators;
+        use crate::widgets::document_view::format::ContentFormatter;
+
+        let doc = MarkdownFormatter::default().format(FormatInput {
+            value: "safely. Runs [link](https://example.com)",
+            content_type: Some("markdown"),
+            document_styles: None,
+        });
+        let doc_styles = DocumentStyles::default();
+        let (lines, _) = flatten_blocks(
+            &doc,
+            7,
+            DocumentFlattenCtx {
+                wrap: true,
+                table_wrap: false,
+                table_width_mode: DocumentTableWidthMode::default(),
+                table_outer_frame: true,
+                table_column_separators: true,
+                table_row_separators: TableRowSeparators::default(),
+                table_cell_padding: 0,
+                table_border_variant: BorderStyle::Plain,
+                doc_styles: &doc_styles,
+                #[cfg(feature = "syntax-syntect")]
+                code_strategy: None,
+            },
+        );
+
+        let rows: Vec<(String, Vec<(usize, usize)>)> = lines
+            .iter()
+            .filter_map(|line| match &line.kind {
+                VisualLineKind::Text { spans, links, .. } => Some((
+                    spans_plain_text(spans),
+                    links.iter().map(|link| (link.start, link.end)).collect(),
+                )),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("safely.".to_string(), vec![]),
+                ("Runs ".to_string(), vec![]),
+                ("link".to_string(), vec![(0, 4)]),
+            ]
         );
     }
 
