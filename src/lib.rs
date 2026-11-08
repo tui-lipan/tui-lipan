@@ -186,9 +186,9 @@ pub use crate::app::input::keymap::{FrameworkAction, FrameworkKeymap, UserKeymap
 pub use crate::app::web_runner::{WebTerminal, mount_web};
 pub use crate::app::{
     App, ContrastPolicy, CursorTrail, CursorTrailFill, CursorTrailGlyphs, CursorTrailMotion,
-    CursorTrailParticles, CursorTrailSpring, CursorTrailTrigger, DevToolsMetric, FocusChanged,
-    FocusEntry, FocusPolicy, InlineHeight, InlineStartupPolicy, ScreenBackground, SurfaceMode,
-    TextAreaNewlineBinding,
+    CursorTrailParticles, CursorTrailSettle, CursorTrailSpring, CursorTrailTrigger, DevToolsMetric,
+    FocusChanged, FocusEntry, FocusPolicy, InlineHeight, InlineStartupPolicy, ScreenBackground,
+    SurfaceMode, TextAreaNewlineBinding,
 };
 pub use crate::mockup::Mockup;
 

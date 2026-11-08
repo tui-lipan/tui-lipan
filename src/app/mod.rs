@@ -26,7 +26,7 @@ pub use context::{
 };
 pub use cursor_trail::{
     CursorTrail, CursorTrailFill, CursorTrailGlyphs, CursorTrailMotion, CursorTrailParticles,
-    CursorTrailSpring, CursorTrailTrigger,
+    CursorTrailSettle, CursorTrailSpring, CursorTrailTrigger,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use runner::AppRunner;

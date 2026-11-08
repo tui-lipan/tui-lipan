@@ -189,7 +189,19 @@ Sparks a moving smear throws off, drawn as braille dots that never cover text or
 
 `CursorTrail` itself also carries `opacity` (strength at the caret, default 1), `taper` (fade toward
 the tail, default 0), `max_length` (longest stretch, in cell widths measured on screen, held from the first frame; default 0, unbounded),
-and `glyphs` (a `CursorTrailGlyphs`, default `Auto`).
+`glyphs` (a `CursorTrailGlyphs`, default `Auto`), and `settle` (a `CursorTrailSettle`).
+
+### `CursorTrailSettle`
+
+How long a jump inside one widget that may land in steps waits for the caret to settle before its
+smear starts. Only a jump to another row or to the widget's left edge waits, since it may be a
+shell's newline or carriage return with its prompt still to come; a jump along one row and a focus
+change start at once. `CursorTrailSettle::DEFAULT` is the default.
+
+| Field | Default | Meaning |
+|-------|---------|---------|
+| `quiet` | 50 ms | How long the caret must hold still; zero starts every jump at once |
+| `max` | 200 ms | The longest a jump waits for a caret that keeps moving |
 
 ### `PngOptions` (`ui-snapshot-png`)
 

@@ -230,6 +230,46 @@ impl Default for CursorTrailParticles {
     }
 }
 
+/// How long a jump inside one widget waits for the caret to settle before its smear starts.
+///
+/// A jump to another row or to the widget's left edge may be the first of several writes (a
+/// shell's newline, then its prompt), so its smear starts once the caret has held still for
+/// `quiet`, or `max` after the jump at the latest, straight to where the caret came to rest. A
+/// jump along one row and a focus change start at once.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CursorTrailSettle {
+    /// How long the caret must hold still. Zero starts every jump at once.
+    pub quiet: Duration,
+    /// The longest a jump waits for a caret that keeps moving.
+    pub max: Duration,
+}
+
+impl CursorTrailSettle {
+    /// Longer than the gap between a shell's newline and its prompt.
+    pub const DEFAULT: Self = Self {
+        quiet: Duration::from_millis(50),
+        max: Duration::from_millis(200),
+    };
+
+    /// Whether a jump that has waited `waited`, and held still for `still`, starts now.
+    fn settled(self, still: Duration, waited: Duration) -> bool {
+        still >= self.quiet || waited >= self.max
+    }
+
+    /// How long until a jump that has waited `waited`, and held still for `still`, starts.
+    fn due(self, still: Duration, waited: Duration) -> Duration {
+        self.quiet
+            .saturating_sub(still)
+            .min(self.max.saturating_sub(waited))
+    }
+}
+
+impl Default for CursorTrailSettle {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
 /// A smear that follows the host caret when it jumps, set with
 /// [`App::cursor_trail`](crate::App::cursor_trail) or
 /// [`Context::set_cursor_trail`](crate::Context::set_cursor_trail).
@@ -275,6 +315,8 @@ pub struct CursorTrail {
     pub particles: Option<CursorTrailParticles>,
     /// Which glyphs the smear's edges are drawn with.
     pub glyphs: CursorTrailGlyphs,
+    /// How long a jump that may land in steps waits for the caret to settle.
+    pub settle: CursorTrailSettle,
 }
 
 impl CursorTrail {
@@ -296,6 +338,7 @@ impl CursorTrail {
             max_length: Self::DEFAULT_MAX_LENGTH,
             particles: None,
             glyphs: CursorTrailGlyphs::Auto,
+            settle: CursorTrailSettle::DEFAULT,
         }
     }
 
@@ -366,6 +409,13 @@ impl CursorTrail {
     #[must_use]
     pub const fn glyphs(mut self, glyphs: CursorTrailGlyphs) -> Self {
         self.glyphs = glyphs;
+        self
+    }
+
+    /// Set how long a jump that may land in steps waits for the caret to settle.
+    #[must_use]
+    pub const fn settle(mut self, settle: CursorTrailSettle) -> Self {
+        self.settle = settle;
         self
     }
 
@@ -490,6 +540,18 @@ impl Caret {
             _ => (0, 0),
         }
     }
+
+    /// Whether a jump inside one widget from `earlier` may be the first of several writes: it
+    /// left the row, as a newline does, or reached the widget's left edge, as a carriage return
+    /// does.
+    fn may_land_in_steps(self, earlier: Self) -> bool {
+        let (_, carried_y) = self.carried_from(earlier);
+        let row_changed = i32::from(self.position.y) - i32::from(earlier.position.y) != carried_y;
+        let at_left_edge = self
+            .owner
+            .is_some_and(|owner| i32::from(self.position.x) <= owner.origin.0);
+        row_changed || at_left_edge
+    }
 }
 
 fn carry_offset((dx, dy): (i32, i32)) -> Vec2 {
@@ -590,12 +652,6 @@ pub(crate) struct CursorTrailState {
     skip: bool,
 }
 
-/// How soon after a jump inside one widget the caret must hold still before the smear starts:
-/// longer than the gap between a shell's newline and its prompt.
-const LANDING_QUIET: Duration = Duration::from_millis(50);
-/// The longest a jump waits for a caret that keeps moving before its smear starts anyway.
-const LANDING_MAX: Duration = Duration::from_millis(200);
-
 impl CursorTrailState {
     /// Record where a presented frame left the caret, starting a trail when it jumped.
     pub(crate) fn observe(
@@ -667,9 +723,14 @@ impl CursorTrailState {
                 color,
                 hold: config.fill == CursorTrailFill::Solid,
             });
-            // A focus change lands in one step and starts at once; a jump inside one widget may be
-            // the first of several writes, so it waits for the caret to settle.
-            if last.owner_id() != caret.owner_id() {
+            // A focus change lands in one step and starts at once, and so does a jump along one
+            // row (deleting words, a jump to the line's end). A jump to another row or to the
+            // widget's left edge may be a newline or a carriage return with the prompt still to
+            // come, so it waits for the caret to settle.
+            let waits = last.owner_id() == caret.owner_id()
+                && caret.may_land_in_steps(last)
+                && !config.settle.quiet.is_zero();
+            if !waits {
                 self.launch(now, config.max_length);
             }
         }
@@ -728,7 +789,7 @@ impl CursorTrailState {
         if let Some(landing) = self.landing {
             let still = now.saturating_duration_since(landing.last_move);
             let waited = now.saturating_duration_since(landing.since);
-            if still >= LANDING_QUIET || waited >= LANDING_MAX {
+            if config.settle.settled(still, waited) {
                 self.launch(now, config.max_length);
             }
         }
@@ -787,11 +848,7 @@ impl CursorTrailState {
                 // Nothing moves while a jump waits, but the host may still show an earlier
                 // trail to clear, or not yet the held caret.
                 needs_paint: self.painted != self.frame(config),
-                next_due: Some(
-                    LANDING_QUIET
-                        .saturating_sub(still)
-                        .min(LANDING_MAX.saturating_sub(waited)),
-                ),
+                next_due: config.map(|config| config.settle.due(still, waited)),
             };
         }
         if self.running.is_some() || self.sparks.alive() {
@@ -983,6 +1040,8 @@ mod tests {
     use ratatui::style::Color as RColor;
 
     const RED: (u8, u8, u8) = (255, 0, 0);
+    const LANDING_QUIET: Duration = CursorTrailSettle::DEFAULT.quiet;
+    const LANDING_MAX: Duration = CursorTrailSettle::DEFAULT.max;
     const INTERVAL: Duration = Duration::from_millis(16);
 
     fn node(id: u32) -> Option<CaretOwner> {
@@ -1187,11 +1246,11 @@ mod tests {
         let jump = Some(CursorTrail::new().trigger(CursorTrailTrigger::jump()));
         let mut state = CursorTrailState::default();
         see_in(&mut state, jump, (5, 3), (1, (0, 0)), start);
-        // The widget moves 20 columns while its caret jumps 10 within it.
-        see_in(&mut state, jump, (35, 3), (1, (20, 0)), start);
+        // The widget moves 20 columns while its caret jumps 10 within it, onto the next row.
+        see_in(&mut state, jump, (35, 4), (1, (20, 0)), start);
         let landing = state.landing.expect("a jump within the widget");
         assert_eq!(landing.from, caret_rect(25, 3, CaretShape::Block));
-        assert_eq!(landing.to, caret_rect(35, 3, CaretShape::Block));
+        assert_eq!(landing.to, caret_rect(35, 4, CaretShape::Block));
     }
 
     #[test]
@@ -1269,6 +1328,74 @@ mod tests {
         }
         let first_jump = start + Duration::from_millis(20);
         assert!(at >= first_jump + LANDING_MAX && at < first_jump + LANDING_MAX + INTERVAL * 2);
+    }
+
+    #[test]
+    fn a_jump_along_one_row_starts_at_once_and_keeps_up_with_key_repeat() {
+        let start = Instant::now();
+        let jump = Some(CursorTrail::new().trigger(CursorTrailTrigger::jump()));
+        let mut state = CursorTrailState::default();
+        // Ctrl+Backspace held in a field laid out at column 5: a word gone every 30ms, never
+        // holding still for as long as a newline's prompt may take.
+        let owner = 7;
+        let observe = |state: &mut CursorTrailState, x: u16, at: Instant| {
+            state.observe(
+                jump,
+                Some(Position::new(x, 3)),
+                moved(owner, 5, 2),
+                block(),
+                at,
+            );
+        };
+        observe(&mut state, 70, start);
+        let mut at = start;
+        for column in [60, 50, 40, 30] {
+            at += Duration::from_millis(30);
+            observe(&mut state, column, at);
+            state.tick(jump, INTERVAL, at);
+            let frame = state
+                .frame(jump)
+                .expect("the smear runs from the first word");
+            let smear = frame.smear.as_ref().expect("smear");
+            assert_eq!(smear.target, Position::new(column, 3), "follows each word");
+        }
+
+        // A carriage return lands on the widget's left edge and may have its prompt to come.
+        let mut state = CursorTrailState::default();
+        observe(&mut state, 40, start);
+        observe(&mut state, 5, start);
+        assert!(state.running.is_none() && state.landing.is_some());
+    }
+
+    #[test]
+    fn the_settle_sets_how_long_a_newline_waits() {
+        let start = Instant::now();
+        let jump = CursorTrail::new().trigger(CursorTrailTrigger::jump());
+        let newline = |settle: CursorTrailSettle| {
+            let config = Some(jump.settle(settle));
+            let mut state = CursorTrailState::default();
+            see(&mut state, config, 40, 3, 1, start);
+            see(&mut state, config, 0, 4, 1, start);
+            (state, config)
+        };
+
+        let (state, _) = newline(CursorTrailSettle {
+            quiet: Duration::ZERO,
+            max: LANDING_MAX,
+        });
+        assert!(state.running.is_some(), "no quiet starts at once");
+
+        let quiet = Duration::from_millis(120);
+        let (mut state, config) = newline(CursorTrailSettle {
+            quiet,
+            max: Duration::from_millis(500),
+        });
+        let tick = state.tick(config, INTERVAL, start);
+        assert_eq!(tick.next_due, Some(quiet));
+        state.tick(config, INTERVAL, start + LANDING_QUIET);
+        assert!(state.running.is_none(), "still waiting past the default");
+        state.tick(config, INTERVAL, start + quiet);
+        assert!(state.running.is_some(), "starts once the caret held still");
     }
 
     #[test]
