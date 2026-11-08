@@ -254,8 +254,9 @@ pub use crate::host_reads_shared_frames;
 pub use crate::widgets::TerminalPtyHandoff;
 #[cfg(feature = "terminal")]
 pub use crate::widgets::{
-    CopyModeAction, CopyModeGrid, CopyModeViewport, DamagedRow, ForwardedMouseEvent,
-    GraphicsDamage, KittyKeyboardFlags, ManagedTerminal, ManagedTerminalProps,
+    AltScreenHistoryReader, CopyModeAction, CopyModeGrid, CopyModeViewport, DamagedRow,
+    ForwardedMouseEvent, GraphicsDamage, HistoryReadError, HistoryReadFrame, HistoryReadRow,
+    HistoryReadStep, KittyKeyboardFlags, ManagedTerminal, ManagedTerminalProps,
     ManagedTerminalStatus, MouseEncoding, MouseMode, MouseModeState, PresentedTerminal,
     ProgramStatusCause, ProgramStatusEvent, ProgramStatusRecord, ProgramStatusSnapshot,
     ProgramStatusState, ScrollbackLineage, SemanticMark, SemanticMarkKind, Terminal,

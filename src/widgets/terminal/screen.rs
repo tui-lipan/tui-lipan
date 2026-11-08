@@ -3349,6 +3349,33 @@ impl TerminalScreen {
         }
     }
 
+    /// Whether the application currently uses the alternate screen.
+    pub fn is_alternate_screen(&self) -> bool {
+        self.term.mode().contains(TermMode::ALT_SCREEN)
+    }
+
+    /// Observe a history-reader frame without changing the viewport or terminal dimensions.
+    pub fn history_read_frame(&mut self) -> super::HistoryReadFrame {
+        let synchronized = self.processor.sync_timeout().pending_timeout()
+            || self.processor.sync_bytes_count() != 0;
+        let snapshot = self.render_snapshot();
+        let mut lines = snapshot.text.split('\n');
+        let rows = (0..usize::from(self.rows))
+            .map(|index| super::HistoryReadRow {
+                text: Arc::from(lines.next().unwrap_or_default()),
+                soft_wrapped: snapshot.wrapped_rows.get(index).copied().unwrap_or(false),
+            })
+            .collect();
+        super::HistoryReadFrame {
+            viewport: TerminalViewport {
+                cols: self.cols,
+                rows: self.rows,
+            },
+            rows,
+            synchronized,
+        }
+    }
+
     /// Return the current scrollback offset (0 = live view).
     pub fn scrollback_offset(&self) -> usize {
         self.scrollback_offset
