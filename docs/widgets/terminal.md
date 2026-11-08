@@ -1387,3 +1387,24 @@ automatic terminal shape. See [mouse pointer shapes](../styling.md#mouse-pointer
 When constructing `TerminalRenderSnapshot` with a struct literal, set `pointer_shape: None` to
 leave mouse pointer choice to the terminal widget, or include `..Default::default()` for fields
 you do not set explicitly.
+
+## Read an alternate-screen application's history
+
+`AltScreenHistoryReader` reconstructs rendered history by requesting wheel ticks and comparing
+settled, overlapping pages. It returns text only after the original viewport has been restored.
+The text preserves soft wraps. It is rendered terminal content, including any displayed formatting,
+not an application's original Markdown or semantic messages.
+
+Start only for a recognized idle application, with mouse reporting enabled, no manual scrollback,
+and no direct terminal attachment. Hold an exclusive input lease until the reader returns
+`HistoryReadStep::Finished`. Feed observations from `TerminalScreen::history_read_frame()` to
+`observe` on each event-loop tick and after output. Execute each returned `ScrollUp` or `ScrollDown`
+exactly once in the application's active mouse protocol. Keep pumping the application while waiting.
+
+Call `interrupt` on human input, resize, application activity, or unexpected output. Queue the input
+and resize until restoration finishes, then release the lease. Never resize the application to
+collect history. A `RestoreUnproven` error contains no reconstructed text. Dynamic chrome,
+ambiguous repeated rows, and pages with insufficient overlap may be refused.
+
+Use `TerminalScreen::is_alternate_screen()` to choose this reader instead of ordinary scrollback
+export. The reader enforces traversal and restoration deadlines and bounds retained pages and text.

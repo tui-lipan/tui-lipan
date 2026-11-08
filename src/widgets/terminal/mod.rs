@@ -13,6 +13,10 @@ mod graphics_media;
 mod media_work;
 #[cfg(feature = "terminal-images")]
 pub use media_work::{TerminalMediaWork, TerminalPreparedInput};
+mod history_read;
+pub use history_read::{
+    AltScreenHistoryReader, HistoryReadError, HistoryReadFrame, HistoryReadRow, HistoryReadStep,
+};
 mod layout;
 mod mod_private;
 mod node;
