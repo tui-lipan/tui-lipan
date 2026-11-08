@@ -91,6 +91,8 @@ pub struct AltScreenHistoryReader {
     action_at: Instant,
     changed_at: Instant,
     restore_at: Option<Instant>,
+    /// The last action sent was an upward wheel tick whose response may still be in flight.
+    pending_up: bool,
     changed: bool,
     pages: usize,
     crop: Option<(usize, usize)>,
@@ -130,6 +132,7 @@ impl AltScreenHistoryReader {
             action_at: now,
             changed_at: now,
             restore_at: None,
+            pending_up: false,
             changed: false,
             pages: 0,
             crop: None,
@@ -149,8 +152,8 @@ impl AltScreenHistoryReader {
         self.error = Some(HistoryReadError::Interrupted);
         self.restore_at.get_or_insert(now);
         if !matches!(self.phase, Phase::Probe | Phase::UndoProbe) {
+            // Keep `action_at`: an upward tick still in flight must settle before release.
             self.phase = Phase::Restore;
-            self.action_at = now.checked_sub(RESPONSE).unwrap_or(now);
         }
     }
 
@@ -284,9 +287,9 @@ impl AltScreenHistoryReader {
 
     fn merge_current_page(&mut self) -> bool {
         let current = &self.observed.rows;
-        let crop = self
-            .crop
-            .unwrap_or_else(|| unchanged_edges(&self.page, current));
+        let Some(crop) = self.crop.or_else(|| unique_crop(&self.page, current)) else {
+            return false;
+        };
         let (top, bottom) = crop;
         let end = current.len().saturating_sub(bottom);
         let Some(added) = prepend_rows(&self.page[top..end], &current[top..end]) else {
@@ -317,7 +320,9 @@ impl AltScreenHistoryReader {
     }
 
     fn restore_step(&mut self, now: Instant) -> HistoryReadStep {
-        if self.observed.rows == self.original.rows {
+        if self.observed.rows == self.original.rows
+            && (!self.pending_up || self.action_settled(now))
+        {
             return match self.error {
                 Some(error) => self.finish(Err(error)),
                 None => {
@@ -343,6 +348,7 @@ impl AltScreenHistoryReader {
         self.action_at = now;
         self.changed_at = now;
         self.changed = false;
+        self.pending_up = up;
         if up {
             HistoryReadStep::ScrollUp
         } else {
@@ -356,19 +362,41 @@ impl AltScreenHistoryReader {
     }
 }
 
-fn unchanged_edges(previous: &[HistoryReadRow], current: &[HistoryReadRow]) -> (usize, usize) {
-    let top = previous
+/// Choose the pinned header/footer crop only when exactly one interpretation reconstructs the
+/// page transition. Equal edge rows may be real repeated transcript instead of chrome, so any
+/// second viable `(top, bottom)` crop makes the transition ambiguous.
+fn unique_crop(previous: &[HistoryReadRow], current: &[HistoryReadRow]) -> Option<(usize, usize)> {
+    let len = current.len();
+    if previous.len() != len {
+        return None;
+    }
+    let max_top = previous
         .iter()
         .zip(current)
         .take_while(|(a, b)| a == b)
         .count();
-    let bottom = previous[top..]
+    let max_bottom = previous
         .iter()
         .rev()
-        .zip(current[top..].iter().rev())
+        .zip(current.iter().rev())
         .take_while(|(a, b)| a == b)
         .count();
-    (top, bottom)
+    let mut found = None;
+    for top in 0..=max_top {
+        for bottom in 0..=max_bottom {
+            if top + bottom >= len {
+                continue;
+            }
+            let end = len - bottom;
+            if prepend_rows(&previous[top..end], &current[top..end]).is_some() {
+                if found.is_some() {
+                    return None;
+                }
+                found = Some((top, bottom));
+            }
+        }
+    }
+    found
 }
 
 /// Accept only a unique offset with at least three overlapping rows and a unique nonblank anchor.
@@ -562,6 +590,48 @@ mod tests {
         assert!(screen.history_read_frame().synchronized);
         screen.process_bytes(b"\x1b[?2026l\x1b[?1049l");
         assert!(!screen.is_alternate_screen());
+    }
+
+    #[test]
+    fn repeated_edge_rows_are_not_silently_taken_as_chrome() {
+        let previous = ["same", "B", "C", "D", "E", "F"].map(row);
+        let current = ["same", "same", "B", "C", "D", "E"].map(row);
+        assert!(unique_crop(&previous, &current).is_none());
+        let previous = ["head", "B", "C", "D", "E", "foot"].map(row);
+        let current = ["head", "A", "B", "C", "D", "foot"].map(row);
+        assert_eq!(unique_crop(&previous, &current), Some((1, 1)));
+    }
+
+    #[test]
+    fn interruption_waits_for_an_in_flight_scroll_up() {
+        let mut now = Instant::now();
+        let mut reader = AltScreenHistoryReader::new(frame(6), now).unwrap();
+        let mut step = HistoryReadStep::Wait;
+        for _ in 0..4 {
+            now += Duration::from_millis(250);
+            step = reader.observe(frame(6), now);
+            if step == HistoryReadStep::ScrollUp {
+                break;
+            }
+        }
+        assert_eq!(step, HistoryReadStep::ScrollUp);
+        reader.interrupt(now);
+        now += Duration::from_millis(250);
+        assert_eq!(reader.observe(frame(6), now), HistoryReadStep::Wait);
+        now += Duration::from_millis(250);
+        assert_eq!(reader.observe(frame(6), now), HistoryReadStep::Wait);
+        // The response finally lands; it must be observed and undone, not outrun.
+        now += Duration::from_millis(250);
+        assert_eq!(reader.observe(frame(4), now), HistoryReadStep::Wait);
+        now += Duration::from_millis(250);
+        assert_eq!(reader.observe(frame(4), now), HistoryReadStep::ScrollDown);
+        now += Duration::from_millis(250);
+        assert_eq!(reader.observe(frame(6), now), HistoryReadStep::Wait);
+        now += Duration::from_millis(250);
+        assert_eq!(
+            reader.observe(frame(6), now),
+            HistoryReadStep::Finished(Err(HistoryReadError::Interrupted))
+        );
     }
 
     #[test]
