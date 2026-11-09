@@ -288,9 +288,9 @@ impl<C: Component> AppRunner<C> {
             .unwrap_or_default()
     }
 
-    /// The focused widget and where it paints - its layout rectangle moved by the render-only
-    /// offsets of `Animated` wrappers and overlay slides - so the trail can tell a caret its widget
-    /// carried from one that jumped.
+    /// The focused widget, where it paints - its layout rectangle moved by the render-only
+    /// offsets of `Animated` wrappers and overlay slides - and its size, so the trail can tell a
+    /// caret that jumped from one its widget carried or reflowed.
     fn caret_owner(&self) -> Option<crate::app::cursor_trail::CaretOwner> {
         let id = self
             .focus
@@ -302,6 +302,7 @@ impl<C: Component> AppRunner<C> {
         Some(crate::app::cursor_trail::CaretOwner {
             id,
             origin: (i32::from(rect.x) + dx, i32::from(rect.y) + dy),
+            size: (rect.w, rect.h),
         })
     }
 

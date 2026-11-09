@@ -39,7 +39,9 @@ pub enum CursorTrailTrigger {
     FocusChange,
     /// On a focus change, and whenever the caret moves at least `columns` columns or `rows` rows
     /// in one step inside the same widget. The move is measured within the widget, so a widget
-    /// that moves (an animated layout, a drag) carries its caret without starting a trail.
+    /// that moves (an animated layout, a drag) carries its caret without starting a trail. A
+    /// widget that changes size reflows its content, so for 300 ms after it does, moves inside
+    /// it start none either.
     Jump {
         /// The fewest columns a same-widget move must span.
         columns: u16,
@@ -511,6 +513,8 @@ pub(crate) fn ease_out_cubic(t: f32) -> f32 {
 pub(crate) struct CaretOwner {
     pub(crate) id: NodeId,
     pub(crate) origin: (i32, i32),
+    /// The widget's width and height in cells.
+    pub(crate) size: (u16, u16),
 }
 
 /// The host caret as one presented frame left it.
@@ -539,6 +543,15 @@ impl Caret {
             }
             _ => (0, 0),
         }
+    }
+
+    /// Whether the widget that owns the caret is the one that owned `earlier` and changed size
+    /// since.
+    fn resized_from(self, earlier: Self) -> bool {
+        matches!(
+            (earlier.owner, self.owner),
+            (Some(from), Some(to)) if from.id == to.id && from.size != to.size
+        )
     }
 
     /// Whether a jump inside one widget from `earlier` may be the first of several writes: it
@@ -650,9 +663,27 @@ pub(crate) struct CursorTrailState {
     cell_aspect: Option<f32>,
     /// A skipped move is pending: the next caret move that would start a trail starts none.
     skip: bool,
+    /// The widget the caret is in and when it last changed size, while its content may still
+    /// be reflowing.
+    resized: Option<(NodeId, Instant)>,
 }
 
 impl CursorTrailState {
+    /// How long after the caret's widget changes size a move inside it starts no trail. A
+    /// resized terminal reflows when its program redraws, a few frames after the resize, so the
+    /// quiet outlasts that round trip.
+    pub(crate) const REFLOW_QUIET: Duration = Duration::from_millis(300);
+
+    /// Whether the move from `last` to `caret` is inside a widget that changed size moments ago,
+    /// and so may be its content reflowing rather than the caret jumping.
+    fn reflowing(&self, last: Caret, caret: Caret, now: Instant) -> bool {
+        last.owner_id() == caret.owner_id()
+            && self.resized.is_some_and(|(id, at)| {
+                caret.owner_id() == Some(id)
+                    && now.saturating_duration_since(at) < Self::REFLOW_QUIET
+            })
+    }
+
     /// Record where a presented frame left the caret, starting a trail when it jumped.
     pub(crate) fn observe(
         &mut self,
@@ -682,6 +713,12 @@ impl CursorTrailState {
         let carried = carry_offset(caret.carried_from(last));
         if carried != Vec2::ZERO {
             self.carry(carried);
+        }
+        if caret.resized_from(last) {
+            self.resized = caret.owner_id().map(|id| (id, now));
+            // A jump still waiting to land was aimed at the old layout, and the caret's next
+            // moves are the content reflowing into the new one.
+            self.landing = None;
         }
         if self.skip {
             // Nothing starts while a skip is pending, so there is nothing to move on either.
@@ -714,7 +751,7 @@ impl CursorTrailState {
             }
             return;
         }
-        if config.triggers(last, caret) {
+        if config.triggers(last, caret) && !self.reflowing(last, caret, now) {
             self.landing = Some(Landing {
                 from: carry_corners(last.rect(), carried),
                 to: target,
@@ -1053,6 +1090,7 @@ mod tests {
         Some(CaretOwner {
             id: NodeId::new(id, 0),
             origin: (x, y),
+            size: (80, 24),
         })
     }
 
@@ -1144,6 +1182,79 @@ mod tests {
     ) {
         let owner = moved(owner, origin.0, origin.1);
         state.observe(config, Some(Position::new(x, y)), owner, block(), at);
+    }
+
+    /// Observe a caret at `(x, y)` in widget `owner`, sized `size`.
+    fn see_sized(
+        state: &mut CursorTrailState,
+        config: Option<CursorTrail>,
+        (x, y): (u16, u16),
+        (owner, size): (u32, (u16, u16)),
+        at: Instant,
+    ) {
+        let owner = node(owner).map(|owner| CaretOwner { size, ..owner });
+        state.observe(config, Some(Position::new(x, y)), owner, block(), at);
+    }
+
+    #[test]
+    fn a_resized_widget_reflowing_its_caret_starts_no_trail() {
+        let start = Instant::now();
+        let jump = Some(CursorTrail::new().trigger(CursorTrailTrigger::jump()));
+        let mut state = CursorTrailState::default();
+        see_sized(&mut state, jump, (2, 20), (1, (80, 24)), start);
+        // The widget shrinks, and its program redraws the prompt ten rows up a few frames later.
+        see_sized(&mut state, jump, (2, 20), (1, (80, 14)), start + INTERVAL);
+        let redraw = start + INTERVAL * 4;
+        see_sized(&mut state, jump, (2, 10), (1, (80, 14)), redraw);
+        state.advance(jump, redraw + LANDING_MAX);
+        assert!(state.frame(jump).is_none(), "the reflow is not a jump");
+
+        let later = start + INTERVAL + CursorTrailState::REFLOW_QUIET;
+        see_sized(&mut state, jump, (40, 2), (1, (80, 14)), later);
+        state.advance(jump, later);
+        assert!(
+            state.frame(jump).is_some(),
+            "a jump once the widget has held its size trails again"
+        );
+    }
+
+    #[test]
+    fn a_focus_change_right_after_a_resize_still_trails() {
+        let start = Instant::now();
+        let jump = Some(CursorTrail::new().trigger(CursorTrailTrigger::jump()));
+        let mut state = CursorTrailState::default();
+        see_sized(&mut state, jump, (2, 20), (1, (80, 24)), start);
+        see_sized(&mut state, jump, (2, 10), (1, (80, 14)), start + INTERVAL);
+        see_sized(
+            &mut state,
+            jump,
+            (50, 3),
+            (2, (40, 14)),
+            start + INTERVAL * 2,
+        );
+        state.advance(jump, start + INTERVAL * 2);
+        assert!(state.frame(jump).is_some());
+    }
+
+    #[test]
+    fn a_resize_drops_a_jump_still_waiting_to_land() {
+        let start = Instant::now();
+        let jump = Some(CursorTrail::new().trigger(CursorTrailTrigger::jump()));
+        let mut state = CursorTrailState::default();
+        see_sized(&mut state, jump, (30, 2), (1, (80, 24)), start);
+        // A newline sends the caret to the next rows' left edge, which waits to settle...
+        see_sized(&mut state, jump, (0, 5), (1, (80, 24)), start + INTERVAL);
+        assert!(state.landing.is_some());
+        // ...and the widget is resized before it does.
+        see_sized(
+            &mut state,
+            jump,
+            (0, 5),
+            (1, (60, 24)),
+            start + INTERVAL * 2,
+        );
+        state.advance(jump, start + INTERVAL * 2 + LANDING_MAX);
+        assert!(state.frame(jump).is_none());
     }
 
     #[test]
