@@ -725,11 +725,13 @@ impl CursorTrailState {
         if caret.resized_from(last) {
             self.resized = caret.owner_id().map(|id| (id, now));
             // A jump inside the widget, waiting to land or on its way, was measured in the old
-            // layout, and the caret's next moves are the content reflowing into the new one. A
-            // trail that brought focus here keeps following the caret to where it settles.
-            self.landing = None;
-            if self.running.as_ref().is_some_and(|running| running.within) {
-                self.running = None;
+            // layout, and so were the sparks it threw: the caret's next moves are the content
+            // reflowing into the new one. A trail that brought focus here keeps following the
+            // caret to where it settles.
+            if self.running.as_ref().is_some_and(|running| !running.within) {
+                self.landing = None;
+            } else {
+                self.stop();
             }
         }
         if self.skip {
@@ -747,6 +749,10 @@ impl CursorTrailState {
             // A smear in flight follows the caret wherever it goes next, keeping its momentum.
             running.smear.retarget(target);
             running.color = color;
+            // Sent on to another widget, it now follows a focus change.
+            if last.owner_id() != caret.owner_id() {
+                running.within = false;
+            }
             return;
         }
         if let Some(landing) = self.landing.as_mut() {
@@ -1329,6 +1335,65 @@ mod tests {
             state.frame(trail()).is_some(),
             "the trail that brought focus here keeps going"
         );
+    }
+
+    #[test]
+    fn a_jump_trail_sent_on_to_another_widget_follows_it_through_a_resize() {
+        let start = Instant::now();
+        let jump = Some(CursorTrail::new().trigger(CursorTrailTrigger::jump()));
+        let mut state = CursorTrailState::default();
+        see_sized(&mut state, jump, (2, 2), (1, (80, 24)), start);
+        see_sized(&mut state, jump, (40, 2), (1, (80, 24)), start + INTERVAL);
+        // Focus moves on before the jump's smear settles, to a widget still growing into place.
+        see_sized(
+            &mut state,
+            jump,
+            (50, 20),
+            (2, (20, 12)),
+            start + INTERVAL * 2,
+        );
+        see_sized(
+            &mut state,
+            jump,
+            (50, 22),
+            (2, (30, 18)),
+            start + INTERVAL * 3,
+        );
+        state.advance(jump, start + INTERVAL * 3);
+        assert!(state.frame(jump).is_some());
+    }
+
+    #[test]
+    fn a_resize_clears_the_sparks_of_the_jump_it_stops() {
+        let start = Instant::now();
+        let sparky = Some(
+            CursorTrail::new()
+                .trigger(CursorTrailTrigger::jump())
+                .particles(Some(CursorTrailParticles {
+                    per_cell: 4.0,
+                    ..CursorTrailParticles::default()
+                })),
+        );
+        let mut state = CursorTrailState::default();
+        see_sized(&mut state, sparky, (2, 20), (1, (80, 24)), start);
+        see_sized(
+            &mut state,
+            sparky,
+            (60, 20),
+            (1, (80, 24)),
+            start + INTERVAL,
+        );
+        let mut at = start + INTERVAL;
+        for _ in 0..3 {
+            at += INTERVAL;
+            state.tick(sparky, INTERVAL, at);
+            let frame = state.frame(sparky);
+            state.record_full_draw(frame, at);
+        }
+        assert!(state.sparks.alive(), "the jump threw sparks");
+        see_sized(&mut state, sparky, (60, 20), (1, (80, 14)), at + INTERVAL);
+        state.advance(sparky, at + INTERVAL * 2);
+        assert!(state.frame(sparky).is_none());
     }
 
     #[test]
