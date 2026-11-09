@@ -177,7 +177,7 @@ struct PaneCfg {
     terminal_portal: bool,
     spinner: bool,
     /// Show a one-row notice in the middle of the screen over the pane: `1` on its own, `2` with a
-    /// backdrop dimming everything else.
+    /// backdrop dimming everything else, `3` inside an `Animated` wrapper a test can move.
     toast: u8,
     /// Run the runtime on a controlled clock, so a test steps time itself.
     controlled_clock: bool,
@@ -274,6 +274,11 @@ impl Component for Pane {
                 .max_width(crate::style::Length::Px(6))
                 .min_height(crate::style::Length::Px(1))
                 .max_height(crate::style::Length::Px(1));
+            let notice: Element = if self.cfg.toast == 3 {
+                crate::widgets::Animated::new(notice).into()
+            } else {
+                notice
+            };
             let portal = Element::new(ElementKind::Portal(Portal {
                 layer: OverlayLayer::Toast,
                 content: Box::new(notice),
@@ -1218,6 +1223,58 @@ fn a_row_under_a_notice_is_rejected_as_a_composite_surface() {
         .screen
         .borrow_mut()
         .process_bytes(format!("\x1b[{};1Hunder the notice", notice + 1).as_bytes());
+    assert_eq!(
+        plan_for(&mut harness),
+        Err(DamageRejection::CompositeSurface)
+    );
+}
+
+/// Pin the moved notice's `Animated` wrapper `rows` above where layout put it, as a frame partway
+/// through a move would, and retake the retained frame with it there. Returns the resting row.
+fn move_notice_up(harness: &mut Harness, rows: u16) -> u16 {
+    let rest = notice_row(harness);
+    let tree = &mut harness.runner.core.tree;
+    let root = tree
+        .overlay_roots()
+        .first()
+        .expect("the notice is mounted")
+        .id;
+    let NodeKind::Animated(animated) = &mut tree.node_mut(root).kind else {
+        panic!("the moved notice is wrapped in Animated");
+    };
+    animated.current_y_offset = -f32::from(rows);
+    let (retained, _) = full_paint(&harness.runner, &mut harness.term);
+    harness.runner.last_frame_snapshot = Some(retained.clone());
+    harness.retained = retained;
+    rest
+}
+
+/// An overlay's extent follows its `Animated` move, not its layout: the row it left is repainted
+/// beside it, matching a full paint, and the row it moved onto is not.
+#[test]
+fn a_moved_notice_covers_the_row_it_moved_to_not_the_one_it_left() {
+    let cfg = PaneCfg {
+        toast: 3,
+        ..PaneCfg::new()
+    };
+    let mut harness = build(cfg, SETUP);
+    let rest = move_notice_up(&mut harness, 3);
+    let moved = rest - 3;
+    assert!(moved > 0, "the notice must stay on screen");
+    // The terminal starts on frame row 0, so terminal row `n + 1` is frame row `n`.
+    harness
+        .screen
+        .borrow_mut()
+        .process_bytes(format!("\x1b[{};1Hwhere it was", rest + 1).as_bytes());
+    let plan = assert_harness_patch_matches_full_paint(&mut harness);
+    assert!(plan.rows.contains(&rest), "rows {:?}", plan.rows);
+
+    let mut harness = build(cfg, SETUP);
+    move_notice_up(&mut harness, 3);
+    harness
+        .screen
+        .borrow_mut()
+        .process_bytes(format!("\x1b[{};1Hwhere it is", moved + 1).as_bytes());
     assert_eq!(
         plan_for(&mut harness),
         Err(DamageRejection::CompositeSurface)
