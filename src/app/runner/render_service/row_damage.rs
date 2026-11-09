@@ -29,7 +29,8 @@ use crate::widgets::internal::TerminalDamage;
 pub(crate) enum DamageRejection {
     /// No live content or runtime-owned widget reported anything.
     NothingMoved,
-    /// Repainting most rows separately costs more than an ordinary single tree walk.
+    /// More than half the frame's rows changed, so patching them costs more than an ordinary
+    /// single tree walk.
     DenseDamage,
     /// The terminal reported `Full` - a resize, a screen swap, decorations.
     #[cfg(feature = "terminal")]
@@ -78,15 +79,25 @@ pub(crate) struct RowDamagePlan {
 const BAND_GAP: u16 = 4;
 
 impl RowDamagePlan {
-    /// The rows to paint, as ascending half-open bands. Each damaged row is in exactly one band,
-    /// and two damaged rows share one when at most [`BAND_GAP`] undamaged rows lie between them.
-    pub(crate) fn bands(&self) -> Vec<std::ops::Range<u16>> {
+    /// The rows to paint in a frame `frame_height` rows tall, as ascending half-open bands. Each
+    /// damaged row is in exactly one band.
+    ///
+    /// Two damaged rows share a band when at most [`BAND_GAP`] undamaged rows lie between them.
+    /// Joining is transitive, so damage spread evenly down the frame could otherwise grow into one
+    /// band nearly as tall as the frame. The bands are held to the same half-frame budget the
+    /// planner applies to damaged rows: past it, every damaged row is its own band again.
+    pub(crate) fn bands(&self, frame_height: u16) -> Vec<std::ops::Range<u16>> {
         let mut bands: Vec<std::ops::Range<u16>> = Vec::new();
         for &row in &self.rows {
             match bands.last_mut() {
                 Some(band) if row >= band.end && row - band.end <= BAND_GAP => band.end = row + 1,
                 _ => bands.push(row..row + 1),
             }
+        }
+        let painted: usize = bands.iter().map(ExactSizeIterator::len).sum();
+        let budget = (usize::from(frame_height) / 2).max(self.rows.len());
+        if painted > budget {
+            return self.rows.iter().map(|&row| row..row + 1).collect();
         }
         bands
     }
@@ -331,16 +342,17 @@ where
         }
     }
 
-    /// Repaint the rows a plan names, and nothing else.
+    /// Repaint the plan's bands: the rows it names, plus the undamaged rows a band joins them
+    /// across (see [`RowDamagePlan::bands`]).
     ///
-    /// Each row is painted by the ordinary tree walk clipped to that row, over Ratatui's current
-    /// buffer used as scratch, seeded with the retained frame's copy of the row. Only that row is
-    /// read, written, compared or sent, so the cost tracks row width and one tree traversal rather
-    /// than the size of the window.
+    /// Each band is painted by one ordinary tree walk clipped to that band, over Ratatui's current
+    /// buffer used as scratch. Only the band is read, written, compared or sent, so the cost tracks
+    /// the band's cells and one tree traversal per band rather than the size of the window. A row
+    /// painted only because a band crosses it comes out as it already was and sends nothing.
     ///
-    /// The retained frame advances one row at a time, at the moment the host accepts that row.
-    /// That is the transaction boundary and it is not the end of this function: a row the backend
-    /// rejected must not be recorded as shown, and a row it accepted must be recorded even if the
+    /// The retained frame advances one band at a time, at the moment the host accepts that band.
+    /// That is the transaction boundary and it is not the end of this function: a band the backend
+    /// rejected must not be recorded as shown, and a band it accepted must be recorded even if the
     /// cursor sync or the flush afterwards fails, because the host already has it.
     pub(super) fn draw_row_damage(
         &mut self,
@@ -374,7 +386,7 @@ where
         )?;
         let mut painted: Vec<u16> = Vec::with_capacity(plan.rows.len());
         let result: crate::Result<()> = self.with_render_context(&cursor_position, |ctx| {
-            for band in plan.bands() {
+            for band in plan.bands(frame_area.height) {
                 patch_rows(terminal, ctx, &mut snapshot, frame_area, band.clone())?;
                 painted.extend(band);
             }

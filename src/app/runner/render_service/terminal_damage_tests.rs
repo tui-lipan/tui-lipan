@@ -642,7 +642,7 @@ fn assert_harness_patch_matches_full_paint(harness: &mut Harness) -> RowDamagePl
     let runner = &harness.runner;
     let term = &mut harness.term;
     runner.with_render_context(&cursor_position, |ctx| {
-        for band in plan.bands() {
+        for band in plan.bands(frame_area().height) {
             patch_rows(term, ctx, &mut patched, frame_area(), band).expect("patching a band");
         }
         place_caret(term, cursor_position.get()).expect("placing the caret");
@@ -754,7 +754,7 @@ fn rows_banded_with_unchanged_rows_between_them_match_a_full_paint() {
         let plan = assert_harness_patch_matches_full_paint(&mut harness);
         // The cursor leaving its row damages that row too, so the band ends wherever it was.
         let end = plan.rows.last().expect("damaged rows") + 1;
-        assert_eq!(plan.bands(), vec![0..end], "rows {:?}", plan.rows);
+        assert_eq!(plan.bands(ROWS), vec![0..end], "rows {:?}", plan.rows);
         assert!(
             !plan.rows.contains(&1) && !plan.rows.contains(&2),
             "rows 1 and 2 must be painted only as part of the band; rows {:?}",
@@ -769,7 +769,7 @@ fn bands_join_rows_at_most_the_band_gap_apart() {
         RowDamagePlan {
             rows: rows.to_vec(),
         }
-        .bands()
+        .bands(80)
     };
     assert_eq!(bands(&[]), Vec::<std::ops::Range<u16>>::new());
     assert_eq!(bands(&[7]), vec![7..8]);
@@ -778,6 +778,30 @@ fn bands_join_rows_at_most_the_band_gap_apart() {
     // Four unchanged rows between two damaged rows still join them; five split them.
     assert_eq!(bands(&[0, 5]), vec![0..6]);
     assert_eq!(bands(&[0, 6]), vec![0..1, 6..7]);
+}
+
+/// Joining is transitive, so damage every `BAND_GAP + 1` rows would chain into one band covering
+/// most of the frame. Past half the frame, each damaged row is painted on its own again.
+#[test]
+fn evenly_spread_damage_does_not_band_across_most_of_the_frame() {
+    let plan = RowDamagePlan {
+        rows: (0..80).step_by(5).collect(),
+    };
+    assert_eq!(plan.rows.len(), 16);
+    let bands = plan.bands(80);
+    assert_eq!(
+        bands,
+        plan.rows
+            .iter()
+            .map(|&row| row..row + 1)
+            .collect::<Vec<_>>()
+    );
+    // The same spacing over fewer rows stays within budget and still joins.
+    let short = RowDamagePlan {
+        rows: vec![0, 5, 10],
+    };
+    assert_eq!(short.bands(80), vec![0..11]);
+    assert_eq!(short.bands(20), vec![0..1, 5..6, 10..11]);
 }
 
 #[test]
