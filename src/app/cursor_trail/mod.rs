@@ -39,7 +39,9 @@ pub enum CursorTrailTrigger {
     FocusChange,
     /// On a focus change, and whenever the caret moves at least `columns` columns or `rows` rows
     /// in one step inside the same widget. The move is measured within the widget, so a widget
-    /// that moves (an animated layout, a drag) carries its caret without starting a trail.
+    /// that moves (an animated layout, a drag) carries its caret without starting a trail. A
+    /// widget that changes size (or a terminal whose screen does) reflows its content, so for
+    /// 300 ms after it does, moves inside it start none, and a jump trail inside it stops.
     Jump {
         /// The fewest columns a same-widget move must span.
         columns: u16,
@@ -511,6 +513,11 @@ pub(crate) fn ease_out_cubic(t: f32) -> f32 {
 pub(crate) struct CaretOwner {
     pub(crate) id: NodeId,
     pub(crate) origin: (i32, i32),
+    /// The widget's width and height in cells.
+    pub(crate) size: (u16, u16),
+    /// The columns and rows of the grid the caret moves in, when the widget keeps one apart from
+    /// its layout: a terminal's screen, which may resize a debounce after its widget does.
+    pub(crate) grid: Option<(u16, u16)>,
 }
 
 /// The host caret as one presented frame left it.
@@ -539,6 +546,16 @@ impl Caret {
             }
             _ => (0, 0),
         }
+    }
+
+    /// Whether the widget that owns the caret is the one that owned `earlier`, and it or the
+    /// grid the caret moves in changed size since.
+    fn resized_from(self, earlier: Self) -> bool {
+        matches!(
+            (earlier.owner, self.owner),
+            (Some(from), Some(to))
+                if from.id == to.id && (from.size != to.size || from.grid != to.grid)
+        )
     }
 
     /// Whether a jump inside one widget from `earlier` may be the first of several writes: it
@@ -580,6 +597,8 @@ struct Landing {
     /// A solid trail holds the caret where it was until it starts, rather than let the host
     /// show it at its destination first and the smear then start from behind it.
     hold: bool,
+    /// The caret jumped inside its widget, rather than leaving it for another.
+    within: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -592,6 +611,8 @@ struct Running {
     color: Option<Color>,
     /// The smear draws the caret itself, so the host caret stays hidden.
     hides: bool,
+    /// The smear follows a jump inside one widget, rather than a focus change.
+    within: bool,
 }
 
 /// What the runner should do about the trail on this pass of the event loop.
@@ -650,9 +671,33 @@ pub(crate) struct CursorTrailState {
     cell_aspect: Option<f32>,
     /// A skipped move is pending: the next caret move that would start a trail starts none.
     skip: bool,
+    /// The widget the caret is in and when it last changed size, while its content may still
+    /// be reflowing.
+    resized: Option<(NodeId, Instant)>,
 }
 
 impl CursorTrailState {
+    /// How long after the caret's widget changes size a move inside it starts no trail. A
+    /// resized terminal reflows when its program redraws, a few frames after the resize, so the
+    /// quiet outlasts that round trip.
+    pub(crate) const REFLOW_QUIET: Duration = Duration::from_millis(300);
+
+    /// Whether the caret's move from `last` to `caret` starts a trail: it triggers one, and is
+    /// not a resized widget's content reflowing.
+    fn starts_trail(&self, config: CursorTrail, last: Caret, caret: Caret, now: Instant) -> bool {
+        config.triggers(last, caret) && !self.reflowing(last, caret, now)
+    }
+
+    /// Whether the move from `last` to `caret` is inside a widget that changed size moments ago,
+    /// and so may be its content reflowing rather than the caret jumping.
+    fn reflowing(&self, last: Caret, caret: Caret, now: Instant) -> bool {
+        last.owner_id() == caret.owner_id()
+            && self.resized.is_some_and(|(id, at)| {
+                caret.owner_id() == Some(id)
+                    && now.saturating_duration_since(at) < Self::REFLOW_QUIET
+            })
+    }
+
     /// Record where a presented frame left the caret, starting a trail when it jumped.
     pub(crate) fn observe(
         &mut self,
@@ -683,9 +728,21 @@ impl CursorTrailState {
         if carried != Vec2::ZERO {
             self.carry(carried);
         }
+        if caret.resized_from(last) {
+            self.resized = caret.owner_id().map(|id| (id, now));
+            // A jump inside the widget, waiting to land or on its way, was measured in the old
+            // layout, and so were the sparks it threw: the caret's next moves are the content
+            // reflowing into the new one. A trail that brought focus here keeps following the
+            // caret to where it settles.
+            if self.running.as_ref().is_some_and(|running| !running.within) {
+                self.landing = None;
+            } else {
+                self.stop();
+            }
+        }
         if self.skip {
             // Nothing starts while a skip is pending, so there is nothing to move on either.
-            if config.triggers(last, caret) {
+            if self.starts_trail(config, last, caret, now) {
                 self.skip = false;
             }
             return;
@@ -698,6 +755,10 @@ impl CursorTrailState {
             // A smear in flight follows the caret wherever it goes next, keeping its momentum.
             running.smear.retarget(target);
             running.color = color;
+            // Sent on to another widget, it now follows a focus change.
+            if last.owner_id() != caret.owner_id() {
+                running.within = false;
+            }
             return;
         }
         if let Some(landing) = self.landing.as_mut() {
@@ -710,11 +771,12 @@ impl CursorTrailState {
                 landing.last_move = now;
             }
             if last.owner_id() != caret.owner_id() {
+                landing.within = false;
                 self.launch(now, config.max_length);
             }
             return;
         }
-        if config.triggers(last, caret) {
+        if self.starts_trail(config, last, caret, now) {
             self.landing = Some(Landing {
                 from: carry_corners(last.rect(), carried),
                 to: target,
@@ -722,6 +784,7 @@ impl CursorTrailState {
                 last_move: now,
                 color,
                 hold: config.fill == CursorTrailFill::Solid,
+                within: last.owner_id() == caret.owner_id(),
             });
             // A focus change lands in one step and starts at once, and so does a jump along one
             // row (deleting words, a jump to the line's end). A jump to another row or to the
@@ -748,6 +811,7 @@ impl CursorTrailState {
                 drawn: None,
                 color: landing.color,
                 hides: landing.hold,
+                within: landing.within,
             });
             self.clock = Some(now);
             self.last_frame = None;
@@ -1053,6 +1117,8 @@ mod tests {
         Some(CaretOwner {
             id: NodeId::new(id, 0),
             origin: (x, y),
+            size: (80, 24),
+            grid: None,
         })
     }
 
@@ -1144,6 +1210,248 @@ mod tests {
     ) {
         let owner = moved(owner, origin.0, origin.1);
         state.observe(config, Some(Position::new(x, y)), owner, block(), at);
+    }
+
+    /// Observe a caret at `(x, y)` in widget `owner`, sized `size`.
+    fn see_sized(
+        state: &mut CursorTrailState,
+        config: Option<CursorTrail>,
+        (x, y): (u16, u16),
+        (owner, size): (u32, (u16, u16)),
+        at: Instant,
+    ) {
+        let owner = node(owner).map(|owner| CaretOwner { size, ..owner });
+        state.observe(config, Some(Position::new(x, y)), owner, block(), at);
+    }
+
+    #[test]
+    fn a_resized_widget_reflowing_its_caret_starts_no_trail() {
+        let start = Instant::now();
+        let jump = Some(CursorTrail::new().trigger(CursorTrailTrigger::jump()));
+        let mut state = CursorTrailState::default();
+        see_sized(&mut state, jump, (2, 20), (1, (80, 24)), start);
+        // The widget shrinks, and its program redraws the prompt ten rows up a few frames later.
+        see_sized(&mut state, jump, (2, 20), (1, (80, 14)), start + INTERVAL);
+        let redraw = start + INTERVAL * 4;
+        see_sized(&mut state, jump, (2, 10), (1, (80, 14)), redraw);
+        state.advance(jump, redraw + LANDING_MAX);
+        assert!(state.frame(jump).is_none(), "the reflow is not a jump");
+
+        let later = start + INTERVAL + CursorTrailState::REFLOW_QUIET;
+        see_sized(&mut state, jump, (40, 2), (1, (80, 14)), later);
+        state.advance(jump, later);
+        assert!(
+            state.frame(jump).is_some(),
+            "a jump once the widget has held its size trails again"
+        );
+    }
+
+    #[test]
+    fn a_focus_change_right_after_a_resize_still_trails() {
+        let start = Instant::now();
+        let jump = Some(CursorTrail::new().trigger(CursorTrailTrigger::jump()));
+        let mut state = CursorTrailState::default();
+        see_sized(&mut state, jump, (2, 20), (1, (80, 24)), start);
+        see_sized(&mut state, jump, (2, 10), (1, (80, 14)), start + INTERVAL);
+        see_sized(
+            &mut state,
+            jump,
+            (50, 3),
+            (2, (40, 14)),
+            start + INTERVAL * 2,
+        );
+        state.advance(jump, start + INTERVAL * 2);
+        assert!(state.frame(jump).is_some());
+    }
+
+    #[test]
+    fn a_resize_drops_a_jump_still_waiting_to_land() {
+        let start = Instant::now();
+        let jump = Some(CursorTrail::new().trigger(CursorTrailTrigger::jump()));
+        let mut state = CursorTrailState::default();
+        see_sized(&mut state, jump, (30, 2), (1, (80, 24)), start);
+        // A newline sends the caret to the next rows' left edge, which waits to settle...
+        see_sized(&mut state, jump, (0, 5), (1, (80, 24)), start + INTERVAL);
+        assert!(state.landing.is_some());
+        // ...and the widget is resized before it does.
+        see_sized(
+            &mut state,
+            jump,
+            (0, 5),
+            (1, (60, 24)),
+            start + INTERVAL * 2,
+        );
+        state.advance(jump, start + INTERVAL * 2 + LANDING_MAX);
+        assert!(state.frame(jump).is_none());
+    }
+
+    #[test]
+    fn a_resize_stops_a_jump_trail_on_its_way() {
+        let start = Instant::now();
+        let jump = Some(CursorTrail::new().trigger(CursorTrailTrigger::jump()));
+        let mut state = CursorTrailState::default();
+        see_sized(&mut state, jump, (2, 20), (1, (80, 24)), start);
+        // A jump along one row starts at once.
+        see_sized(&mut state, jump, (40, 20), (1, (80, 24)), start + INTERVAL);
+        assert!(state.running.is_some());
+        // The widget is resized mid-flight, and the caret reflows into the new layout.
+        see_sized(
+            &mut state,
+            jump,
+            (40, 20),
+            (1, (80, 14)),
+            start + INTERVAL * 2,
+        );
+        see_sized(
+            &mut state,
+            jump,
+            (40, 10),
+            (1, (80, 14)),
+            start + INTERVAL * 4,
+        );
+        state.advance(jump, start + INTERVAL * 5);
+        assert!(
+            state.frame(jump).is_none(),
+            "no smear is sent on to the reflowed caret"
+        );
+    }
+
+    #[test]
+    fn a_focus_trail_follows_its_caret_through_a_resize() {
+        let start = Instant::now();
+        let mut state = CursorTrailState::default();
+        see_sized(&mut state, trail(), (2, 2), (1, (40, 24)), start);
+        // Focus moves to a widget that is still growing into its place, as an opening pane does.
+        see_sized(
+            &mut state,
+            trail(),
+            (50, 20),
+            (2, (20, 12)),
+            start + INTERVAL,
+        );
+        see_sized(
+            &mut state,
+            trail(),
+            (50, 22),
+            (2, (30, 18)),
+            start + INTERVAL * 2,
+        );
+        state.advance(trail(), start + INTERVAL * 2);
+        assert!(
+            state.frame(trail()).is_some(),
+            "the trail that brought focus here keeps going"
+        );
+    }
+
+    #[test]
+    fn a_jump_trail_sent_on_to_another_widget_follows_it_through_a_resize() {
+        let start = Instant::now();
+        let jump = Some(CursorTrail::new().trigger(CursorTrailTrigger::jump()));
+        let mut state = CursorTrailState::default();
+        see_sized(&mut state, jump, (2, 2), (1, (80, 24)), start);
+        see_sized(&mut state, jump, (40, 2), (1, (80, 24)), start + INTERVAL);
+        // Focus moves on before the jump's smear settles, to a widget still growing into place.
+        see_sized(
+            &mut state,
+            jump,
+            (50, 20),
+            (2, (20, 12)),
+            start + INTERVAL * 2,
+        );
+        see_sized(
+            &mut state,
+            jump,
+            (50, 22),
+            (2, (30, 18)),
+            start + INTERVAL * 3,
+        );
+        state.advance(jump, start + INTERVAL * 3);
+        assert!(state.frame(jump).is_some());
+    }
+
+    #[test]
+    fn a_resize_clears_the_sparks_of_the_jump_it_stops() {
+        let start = Instant::now();
+        let sparky = Some(
+            CursorTrail::new()
+                .trigger(CursorTrailTrigger::jump())
+                .particles(Some(CursorTrailParticles {
+                    per_cell: 4.0,
+                    ..CursorTrailParticles::default()
+                })),
+        );
+        let mut state = CursorTrailState::default();
+        see_sized(&mut state, sparky, (2, 20), (1, (80, 24)), start);
+        see_sized(
+            &mut state,
+            sparky,
+            (60, 20),
+            (1, (80, 24)),
+            start + INTERVAL,
+        );
+        let mut at = start + INTERVAL;
+        for _ in 0..3 {
+            at += INTERVAL;
+            state.tick(sparky, INTERVAL, at);
+            let frame = state.frame(sparky);
+            state.record_full_draw(frame, at);
+        }
+        assert!(state.sparks.alive(), "the jump threw sparks");
+        see_sized(&mut state, sparky, (60, 20), (1, (80, 14)), at + INTERVAL);
+        state.advance(sparky, at + INTERVAL * 2);
+        assert!(state.frame(sparky).is_none());
+    }
+
+    #[test]
+    fn a_grid_resized_after_its_widget_restarts_the_quiet() {
+        let start = Instant::now();
+        let jump = Some(CursorTrail::new().trigger(CursorTrailTrigger::jump()));
+        let grid = |cols, rows| {
+            node(1).map(|owner| CaretOwner {
+                size: (60, 24),
+                grid: Some((cols, rows)),
+                ..owner
+            })
+        };
+        let mut state = CursorTrailState::default();
+        let at = |x, y| Some(Position::new(x, y));
+        state.observe(jump, at(2, 20), grid(80, 24), block(), start);
+        // The widget narrows at once; its screen follows a long debounce later, after the
+        // widget's own quiet has passed, and reflows the caret as it does.
+        let debounced = start + CursorTrailState::REFLOW_QUIET * 2;
+        state.observe(jump, at(2, 20), grid(80, 24), block(), debounced);
+        state.observe(jump, at(2, 10), grid(60, 24), block(), debounced + INTERVAL);
+        state.advance(jump, debounced + INTERVAL + LANDING_MAX);
+        assert!(state.frame(jump).is_none());
+    }
+
+    #[test]
+    fn a_reflow_does_not_spend_a_skip() {
+        let start = Instant::now();
+        let jump = Some(CursorTrail::new().trigger(CursorTrailTrigger::jump()));
+        let mut state = CursorTrailState::default();
+        see_sized(&mut state, jump, (2, 20), (1, (80, 24)), start);
+        state.skip_next_move();
+        // The widget resizes and its caret reflows before the skipped move comes.
+        see_sized(&mut state, jump, (2, 20), (1, (80, 14)), start + INTERVAL);
+        see_sized(
+            &mut state,
+            jump,
+            (2, 10),
+            (1, (80, 14)),
+            start + INTERVAL * 2,
+        );
+        assert!(state.skip, "the reflow is not the move the skip waits for");
+        see_sized(
+            &mut state,
+            jump,
+            (50, 3),
+            (2, (40, 14)),
+            start + INTERVAL * 3,
+        );
+        state.advance(jump, start + INTERVAL * 3);
+        assert!(state.frame(jump).is_none(), "the focus change is skipped");
+        assert!(!state.skip, "and spends the skip");
     }
 
     #[test]

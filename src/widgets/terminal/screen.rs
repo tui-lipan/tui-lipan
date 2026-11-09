@@ -659,6 +659,14 @@ impl MutationBaseline {
 pub struct TerminalScreenHandle(Rc<RefCell<TerminalScreen>>);
 
 impl TerminalScreenHandle {
+    /// The screen's columns and rows, or `None` while it is being written to.
+    pub(crate) fn size(&self) -> Option<(u16, u16)> {
+        self.0
+            .try_borrow()
+            .ok()
+            .map(|screen| (screen.cols, screen.rows))
+    }
+
     /// Current input modes, read directly without constructing a render snapshot.
     pub fn key_modes(&self) -> TerminalKeyModes {
         self.0.borrow().key_modes()
