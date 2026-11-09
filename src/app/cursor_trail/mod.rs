@@ -682,6 +682,12 @@ impl CursorTrailState {
     /// quiet outlasts that round trip.
     pub(crate) const REFLOW_QUIET: Duration = Duration::from_millis(300);
 
+    /// Whether the caret's move from `last` to `caret` starts a trail: it triggers one, and is
+    /// not a resized widget's content reflowing.
+    fn starts_trail(&self, config: CursorTrail, last: Caret, caret: Caret, now: Instant) -> bool {
+        config.triggers(last, caret) && !self.reflowing(last, caret, now)
+    }
+
     /// Whether the move from `last` to `caret` is inside a widget that changed size moments ago,
     /// and so may be its content reflowing rather than the caret jumping.
     fn reflowing(&self, last: Caret, caret: Caret, now: Instant) -> bool {
@@ -736,7 +742,7 @@ impl CursorTrailState {
         }
         if self.skip {
             // Nothing starts while a skip is pending, so there is nothing to move on either.
-            if config.triggers(last, caret) {
+            if self.starts_trail(config, last, caret, now) {
                 self.skip = false;
             }
             return;
@@ -770,7 +776,7 @@ impl CursorTrailState {
             }
             return;
         }
-        if config.triggers(last, caret) && !self.reflowing(last, caret, now) {
+        if self.starts_trail(config, last, caret, now) {
             self.landing = Some(Landing {
                 from: carry_corners(last.rect(), carried),
                 to: target,
@@ -1417,6 +1423,35 @@ mod tests {
         state.observe(jump, at(2, 10), grid(60, 24), block(), debounced + INTERVAL);
         state.advance(jump, debounced + INTERVAL + LANDING_MAX);
         assert!(state.frame(jump).is_none());
+    }
+
+    #[test]
+    fn a_reflow_does_not_spend_a_skip() {
+        let start = Instant::now();
+        let jump = Some(CursorTrail::new().trigger(CursorTrailTrigger::jump()));
+        let mut state = CursorTrailState::default();
+        see_sized(&mut state, jump, (2, 20), (1, (80, 24)), start);
+        state.skip_next_move();
+        // The widget resizes and its caret reflows before the skipped move comes.
+        see_sized(&mut state, jump, (2, 20), (1, (80, 14)), start + INTERVAL);
+        see_sized(
+            &mut state,
+            jump,
+            (2, 10),
+            (1, (80, 14)),
+            start + INTERVAL * 2,
+        );
+        assert!(state.skip, "the reflow is not the move the skip waits for");
+        see_sized(
+            &mut state,
+            jump,
+            (50, 3),
+            (2, (40, 14)),
+            start + INTERVAL * 3,
+        );
+        state.advance(jump, start + INTERVAL * 3);
+        assert!(state.frame(jump).is_none(), "the focus change is skipped");
+        assert!(!state.skip, "and spends the skip");
     }
 
     #[test]
