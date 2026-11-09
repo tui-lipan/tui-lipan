@@ -27,7 +27,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect as RatatuiRect};
 
 use super::AppRunner;
-use super::row_damage::{DamageRejection, RowDamagePlan, patch_row, place_caret};
+use super::row_damage::{DamageRejection, RowDamagePlan, patch_rows, place_caret};
 use crate::app::App;
 use crate::app::context::SurfaceMode;
 use crate::backend::ratatui_backend::render;
@@ -633,7 +633,8 @@ fn assert_patch_matches_full_paint(cfg: PaneCfg, setup: &[u8], mutation: &[u8]) 
     assert_harness_patch_matches_full_paint(&mut harness);
 }
 
-fn assert_harness_patch_matches_full_paint(harness: &mut Harness) {
+/// Patch the planned damage, hold it to a full paint, and return the plan that was patched.
+fn assert_harness_patch_matches_full_paint(harness: &mut Harness) -> RowDamagePlan {
     let plan = plan_for(harness).expect("this case is meant to be eligible");
 
     let mut patched = harness.retained.clone();
@@ -641,8 +642,8 @@ fn assert_harness_patch_matches_full_paint(harness: &mut Harness) {
     let runner = &harness.runner;
     let term = &mut harness.term;
     runner.with_render_context(&cursor_position, |ctx| {
-        for &row in &plan.rows {
-            patch_row(term, ctx, &mut patched, frame_area(), row).expect("patching a row");
+        for band in plan.bands() {
+            patch_rows(term, ctx, &mut patched, frame_area(), band).expect("patching a band");
         }
         place_caret(term, cursor_position.get()).expect("placing the caret");
     });
@@ -683,6 +684,7 @@ fn assert_harness_patch_matches_full_paint(harness: &mut Harness) {
     }
     harness.retained = patched;
     harness.runner.last_frame_snapshot = Some(harness.retained.clone());
+    plan
 }
 
 const SETUP: &[u8] = b"first line here\r\nsecond line here\r\nthird line here\r\n";
@@ -728,6 +730,54 @@ fn spinner_only_damage_matches_full_paints_without_terminal_output() {
         assert!(harness.runner.update_spinner_frames());
         assert_harness_patch_matches_full_paint(&mut harness);
     }
+}
+
+/// Damaged rows a few rows apart are painted in one walk, together with the unchanged rows between
+/// them, and the result is still exactly a full paint.
+#[test]
+fn rows_banded_with_unchanged_rows_between_them_match_a_full_paint() {
+    let mut harness = build(
+        PaneCfg {
+            spinner: true,
+            ..PaneCfg::new()
+        },
+        SETUP,
+    );
+    for tick in (2..=12).step_by(2) {
+        harness.runner.animation.spinner_frame = tick;
+        assert!(harness.runner.update_spinner_frames());
+        // The spinner is frame row 0 and the terminal starts on row 1, so this damages row 3.
+        harness
+            .screen
+            .borrow_mut()
+            .process_bytes(format!("\x1b[3;1Hthird {tick}").as_bytes());
+        let plan = assert_harness_patch_matches_full_paint(&mut harness);
+        // The cursor leaving its row damages that row too, so the band ends wherever it was.
+        let end = plan.rows.last().expect("damaged rows") + 1;
+        assert_eq!(plan.bands(), vec![0..end], "rows {:?}", plan.rows);
+        assert!(
+            !plan.rows.contains(&1) && !plan.rows.contains(&2),
+            "rows 1 and 2 must be painted only as part of the band; rows {:?}",
+            plan.rows
+        );
+    }
+}
+
+#[test]
+fn bands_join_rows_at_most_the_band_gap_apart() {
+    let bands = |rows: &[u16]| {
+        RowDamagePlan {
+            rows: rows.to_vec(),
+        }
+        .bands()
+    };
+    assert_eq!(bands(&[]), Vec::<std::ops::Range<u16>>::new());
+    assert_eq!(bands(&[7]), vec![7..8]);
+    // The sidebar shape that motivated bands: four spinners in one list, three in another.
+    assert_eq!(bands(&[2, 3, 5, 7, 37, 38, 39]), vec![2..8, 37..40]);
+    // Four unchanged rows between two damaged rows still join them; five split them.
+    assert_eq!(bands(&[0, 5]), vec![0..6]);
+    assert_eq!(bands(&[0, 6]), vec![0..1, 6..7]);
 }
 
 #[test]
@@ -796,7 +846,8 @@ fn a_change_and_its_restore_match_a_full_paint() {
             let term = &mut harness.term;
             runner.with_render_context(&cursor_position, |ctx| {
                 for &row in &plan.rows {
-                    patch_row(term, ctx, &mut patched, frame_area(), row).expect("patching a row");
+                    patch_rows(term, ctx, &mut patched, frame_area(), row..row + 1)
+                        .expect("patching a row");
                 }
             });
         }
@@ -1150,7 +1201,8 @@ fn a_patched_row_survives_the_next_ordinary_draw() {
         let term = &mut harness.term;
         runner.with_render_context(&cursor_position, |ctx| {
             for &row in &plan.rows {
-                patch_row(term, ctx, &mut patched, frame_area(), row).expect("patching a row");
+                patch_rows(term, ctx, &mut patched, frame_area(), row..row + 1)
+                    .expect("patching a row");
             }
         });
     }
@@ -1216,7 +1268,8 @@ fn the_resync_puts_the_caret_back_after_re_sending_a_row() {
         let term = &mut harness.term;
         runner.with_render_context(&cursor_position, |ctx| {
             for &row in &plan.rows {
-                patch_row(term, ctx, &mut patched, frame_area(), row).expect("patching a row");
+                patch_rows(term, ctx, &mut patched, frame_area(), row..row + 1)
+                    .expect("patching a row");
             }
             place_caret(term, cursor_position.get()).expect("placing the caret");
         });
@@ -1437,7 +1490,7 @@ fn composed_terminal_images_reach_the_host_in_partial_frames() {
     let _plans = terminal.backend().native_plan_scope();
     let mut snapshot = harness.runner.last_frame_snapshot.clone().unwrap();
     harness.runner.with_render_context(&cursor, |ctx| {
-        patch_row(&mut terminal, ctx, &mut snapshot, frame_area(), 1).unwrap();
+        patch_rows(&mut terminal, ctx, &mut snapshot, frame_area(), 1..2).unwrap();
     });
     Backend::flush(terminal.backend_mut()).unwrap();
     let output = terminal.backend().test_output();
