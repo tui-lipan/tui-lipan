@@ -479,14 +479,7 @@ impl<C: Component> AppRunner<C> {
             }
             #[cfg(feature = "terminal")]
             NodeKind::Terminal(terminal) => {
-                if !terminal.cursor_visible || terminal.scrollback_offset != 0 {
-                    return None;
-                }
-                if terminal
-                    .selection
-                    .as_ref()
-                    .is_some_and(|selection| !selection.is_empty())
-                {
+                if !terminal.shows_caret() {
                     return None;
                 }
                 terminal_cursor_position(
@@ -1685,15 +1678,7 @@ impl<C: Component> AppRunner<C> {
             NodeKind::Input(node) => !node.disabled && !node.read_only,
             NodeKind::TextArea(node) => !node.disabled && !node.read_only,
             #[cfg(feature = "terminal")]
-            NodeKind::Terminal(node) => {
-                node.cursor_visible
-                    && node.scrollback_offset == 0
-                    && node
-                        .selection
-                        .as_ref()
-                        .map(|selection| selection.is_empty())
-                        .unwrap_or(true)
-            }
+            NodeKind::Terminal(node) => node.shows_caret(),
             _ => false,
         }
     }
@@ -1734,15 +1719,7 @@ impl<C: Component> AppRunner<C> {
                         .unwrap_or(true)
             }
             #[cfg(feature = "terminal")]
-            NodeKind::Terminal(node) => {
-                node.cursor_visible
-                    && node.scrollback_offset == 0
-                    && node
-                        .selection
-                        .as_ref()
-                        .map(|selection| selection.is_empty())
-                        .unwrap_or(true)
-            }
+            NodeKind::Terminal(node) => node.shows_caret(),
             _ => false,
         }
     }

@@ -170,6 +170,10 @@ struct PaneCfg {
     /// Focus the second terminal rather than the first, so the caret sits on a row the first
     /// terminal's output never damages.
     focus_second: bool,
+    /// Place each terminal's caret with `cursor_override`, as a copy-mode cursor does.
+    cursor_override: Option<(u16, u16)>,
+    /// Scroll the second terminal back this many rows before the first paint.
+    second_scrollback: usize,
     /// Run on an inline surface rather than the alternate screen.
     inline: bool,
     image_overlay: u8,
@@ -232,7 +236,7 @@ impl Pane {
         if self.cfg.padding > 0 {
             widget = widget.padding(self.cfg.padding);
         }
-        widget
+        widget.cursor_override(self.cfg.cursor_override)
     }
 }
 
@@ -525,6 +529,7 @@ fn build(cfg: PaneCfg, setup: &[u8]) -> Harness {
             500,
         )));
         screen.borrow_mut().process_bytes(setup);
+        screen.borrow_mut().set_scrollback(cfg.second_scrollback);
         screen
     });
 
@@ -1097,6 +1102,48 @@ fn a_scrolled_back_terminal_is_rejected() {
         harness.runner.plan_live_damage(&refresh, &[], frame_area()),
         Err(DamageRejection::ScrolledBack)
     );
+}
+
+/// An app-placed caret (a copy-mode cursor) shows through scrollback and a selection, so output in
+/// another terminal must still repaint its row, or the caret drops out until the next full draw.
+#[test]
+fn an_app_placed_caret_survives_another_terminals_damage() {
+    let mut setup = Vec::new();
+    for line in 0..(ROWS as usize * 3) {
+        setup.extend_from_slice(format!("line {line}\r\n").as_bytes());
+    }
+    for (scrolled_back, selection) in [(true, false), (false, true), (true, true)] {
+        let cfg = PaneCfg {
+            second_terminal: true,
+            focus_second: true,
+            grid_rows: ROWS / 2,
+            cursor_override: Some((2, 3)),
+            second_scrollback: if scrolled_back { 3 } else { 0 },
+            selection,
+            ..PaneCfg::new()
+        };
+        let mut harness = build(cfg, &setup);
+        harness.screen.borrow_mut().process_bytes(b"\rX");
+
+        let caret = harness.runner.incremental_cursor_position();
+        assert!(
+            caret.is_some(),
+            "the app-placed caret is wanted (scrolled back: {scrolled_back}, selection: \
+             {selection})"
+        );
+        // The incremental scroll and inline paths ask the same question of the focused widget.
+        assert!(
+            harness.runner.focused_node_requests_cursor()
+                && harness.runner.focused_node_has_cursor_anchor(),
+            "every draw path wants the app-placed caret (scrolled back: {scrolled_back}, \
+             selection: {selection})"
+        );
+        let plan = assert_harness_patch_matches_full_paint(&mut harness);
+        assert!(
+            plan.rows.contains(&caret.expect("caret").y),
+            "the caret row is repainted (scrolled back: {scrolled_back}, selection: {selection})"
+        );
+    }
 }
 
 #[test]
