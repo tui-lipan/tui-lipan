@@ -6,8 +6,8 @@
 //! already refreshed.
 //!
 //! The draw is deliberately not a second renderer. It runs the ordinary tree walk through the
-//! production render context, clipped to one row, so a patched row is by construction the same
-//! cells a full paint would have produced there.
+//! production render context, clipped to a band of rows, so a patched row is by construction the
+//! same cells a full paint would have produced there.
 
 use ratatui::backend::Backend;
 use ratatui::buffer::Buffer;
@@ -29,7 +29,8 @@ use crate::widgets::internal::TerminalDamage;
 pub(crate) enum DamageRejection {
     /// No live content or runtime-owned widget reported anything.
     NothingMoved,
-    /// Repainting most rows separately costs more than an ordinary single tree walk.
+    /// More than half the frame's rows changed, so patching them costs more than an ordinary
+    /// single tree walk.
     DenseDamage,
     /// The terminal reported `Full` - a resize, a screen swap, decorations.
     #[cfg(feature = "terminal")]
@@ -68,6 +69,39 @@ pub(crate) struct RowDamagePlan {
     /// Resolved here rather than in the draw: the mapping from a viewport row to a screen row is
     /// geometry, and geometry is what the planner is for. The draw only paints rows.
     pub rows: Vec<u16>,
+}
+
+/// The most undamaged rows a band paints to join two damaged rows into one tree walk.
+///
+/// Each band costs one walk of the whole tree, and every widget on its rows pays its own setup
+/// again, which for a terminal includes resolving the image layers above it. An extra row costs
+/// one row of cells to blank, paint and compare, and sends nothing when it did not change. Rows
+/// that change together, such as the spinners of a list, usually sit a row or two apart.
+const BAND_GAP: u16 = 4;
+
+impl RowDamagePlan {
+    /// The rows to paint in a frame `frame_height` rows tall, as ascending half-open bands. Each
+    /// damaged row is in exactly one band.
+    ///
+    /// Two damaged rows share a band when at most [`BAND_GAP`] undamaged rows lie between them.
+    /// Joining is transitive, so damage spread evenly down the frame could otherwise grow into one
+    /// band nearly as tall as the frame. The bands are held to the same half-frame budget the
+    /// planner applies to damaged rows: past it, every damaged row is its own band again.
+    pub(crate) fn bands(&self, frame_height: u16) -> Vec<std::ops::Range<u16>> {
+        let mut bands: Vec<std::ops::Range<u16>> = Vec::new();
+        for &row in &self.rows {
+            match bands.last_mut() {
+                Some(band) if row >= band.end && row - band.end <= BAND_GAP => band.end = row + 1,
+                _ => bands.push(row..row + 1),
+            }
+        }
+        let painted: usize = bands.iter().map(ExactSizeIterator::len).sum();
+        let budget = (usize::from(frame_height) / 2).max(self.rows.len());
+        if painted > budget {
+            return self.rows.iter().map(|&row| row..row + 1).collect();
+        }
+        bands
+    }
 }
 
 impl<C> AppRunner<C>
@@ -335,16 +369,17 @@ where
         }
     }
 
-    /// Repaint the rows a plan names, and nothing else.
+    /// Repaint the plan's bands: the rows it names, plus the undamaged rows a band joins them
+    /// across (see [`RowDamagePlan::bands`]).
     ///
-    /// Each row is painted by the ordinary tree walk clipped to that row, over Ratatui's current
-    /// buffer used as scratch, seeded with the retained frame's copy of the row. Only that row is
-    /// read, written, compared or sent, so the cost tracks row width and one tree traversal rather
-    /// than the size of the window.
+    /// Each band is painted by one ordinary tree walk clipped to that band, over Ratatui's current
+    /// buffer used as scratch. Only the band is read, written, compared or sent, so the cost tracks
+    /// the band's cells and one tree traversal per band rather than the size of the window. A row
+    /// painted only because a band crosses it comes out as it already was and sends nothing.
     ///
-    /// The retained frame advances one row at a time, at the moment the host accepts that row.
-    /// That is the transaction boundary and it is not the end of this function: a row the backend
-    /// rejected must not be recorded as shown, and a row it accepted must be recorded even if the
+    /// The retained frame advances one band at a time, at the moment the host accepts that band.
+    /// That is the transaction boundary and it is not the end of this function: a band the backend
+    /// rejected must not be recorded as shown, and a band it accepted must be recorded even if the
     /// cursor sync or the flush afterwards fails, because the host already has it.
     pub(super) fn draw_row_damage(
         &mut self,
@@ -378,9 +413,9 @@ where
         )?;
         let mut painted: Vec<u16> = Vec::with_capacity(plan.rows.len());
         let result: crate::Result<()> = self.with_render_context(&cursor_position, |ctx| {
-            for &row in &plan.rows {
-                patch_row(terminal, ctx, &mut snapshot, frame_area, row)?;
-                painted.push(row);
+            for band in plan.bands(frame_area.height) {
+                patch_rows(terminal, ctx, &mut snapshot, frame_area, band.clone())?;
+                painted.extend(band);
             }
             Ok(())
         });
@@ -439,70 +474,75 @@ where
     }
 }
 
-/// Repaint one physical row and send only what changed on it to the host.
+/// Repaint a band of physical rows in one tree walk and send only what changed to the host.
 ///
 /// Ratatui's current buffer is the scratch surface, chosen so the paint sees the real viewport
 /// geometry rather than a buffer that merely looks like it. It is saved, blanked, painted, read
 /// back and restored - and the restore runs before anything fallible does, which is what makes it
-/// unconditional: there is no error path between taking the row and putting it back.
+/// unconditional: there is no error path between taking the band and putting it back.
 ///
-/// The retained frame's copy of the row is the diff baseline, and only that. It is deliberately
-/// not the paint's starting point: see `blank_row` below.
+/// The retained frame's copy of the band is the diff baseline, and only that. It is deliberately
+/// not the paint's starting point: see `blank_area` below.
 ///
 /// Generic over the backend only so a test can hand it a `TestBackend` and read back what the host
 /// was actually sent. Nothing here is backend-specific.
-pub(super) fn patch_row<B: Backend>(
+pub(super) fn patch_rows<B: Backend>(
     terminal: &mut ratatui::Terminal<B>,
     ctx: &RenderContext<'_>,
     snapshot: &mut Buffer,
     frame_area: RatatuiRect,
-    row: u16,
+    rows: std::ops::Range<u16>,
 ) -> std::result::Result<(), B::Error> {
-    let row_area = RatatuiRect::new(frame_area.x, row, frame_area.width, 1);
-    let previous = read_row(snapshot, row_area);
+    let band = RatatuiRect::new(
+        frame_area.x,
+        rows.start,
+        frame_area.width,
+        rows.end.saturating_sub(rows.start),
+    );
+    if band.is_empty() {
+        return Ok(());
+    }
+    let previous = read_area(snapshot, band);
 
     let next = {
         let mut frame = terminal.get_frame();
-        let scratch = read_row(frame.buffer_mut(), row_area);
+        let scratch = read_area(frame.buffer_mut(), band);
         // A full draw paints into a buffer Ratatui has just reset, so every cell no widget writes
         // ends up blank - including the trailing half of a wide glyph, which the renderer skips
         // rather than clears. Seeding the retained frame's cells here instead would leave that
         // half showing whatever used to be under it. Blank is what the paint expects to find.
-        blank_row(frame.buffer_mut(), row_area);
+        blank_area(frame.buffer_mut(), band);
         // Then the opt-in root background, which `render` paints first and `render_regions` does
         // not, because a region repaint has no root of its own to fill.
         if let Some(background) =
             crate::backend::ratatui_backend::common::current_render_screen_background()
         {
-            frame.render_widget(
-                ratatui::widgets::Block::default().style(background),
-                row_area,
-            );
+            frame.render_widget(ratatui::widgets::Block::default().style(background), band);
         }
         render_regions(
             &mut frame,
             ctx,
             &[crate::style::Rect {
-                x: row_area.x as i16,
-                y: row_area.y as i16,
-                w: row_area.width,
-                h: 1,
+                x: band.x as i16,
+                y: band.y as i16,
+                w: band.width,
+                h: band.height,
             }],
         );
-        let next = read_row(frame.buffer_mut(), row_area);
-        write_row(frame.buffer_mut(), &scratch);
+        let next = read_area(frame.buffer_mut(), band);
+        write_area(frame.buffer_mut(), &scratch);
         next
     };
 
-    // Ratatui's own diff over a one-row buffer, so multi-width glyphs and per-cell diff options
-    // behave exactly as they do in a full draw. The row buffers carry their absolute position, so
-    // the updates are already in screen coordinates.
+    // Ratatui's own diff over a buffer of just the band, so multi-width glyphs and per-cell diff
+    // options behave exactly as they do in a full draw. The band buffers carry their absolute
+    // position, so the updates are already in screen coordinates.
     let updates = previous.diff(&next);
     if !updates.is_empty() {
         terminal.backend_mut().draw(updates.into_iter())?;
     }
-    // The host has this row. Recording it cannot wait for the rest of the frame to succeed.
-    write_row(snapshot, &next);
+    // The host has these rows. Recording them cannot wait for the rest of the frame to succeed.
+    write_area(snapshot, &next);
     Ok(())
 }
 
@@ -513,7 +553,7 @@ pub(super) fn patch_row<B: Backend>(
 /// it one column past the run it just sent, so it wanders to wherever the last patched row
 /// happened to end.
 ///
-/// Generic over the backend for the same reason [`patch_row`] is - so a test can watch what the
+/// Generic over the backend for the same reason [`patch_rows`] is - so a test can watch what the
 /// host was told.
 pub(super) fn place_caret<B: Backend>(
     terminal: &mut ratatui::Terminal<B>,
@@ -529,27 +569,33 @@ pub(super) fn place_caret<B: Backend>(
     Ok(())
 }
 
-/// Reset one row of a buffer, leaving it as a fresh draw would find it.
-fn blank_row(target: &mut Buffer, row_area: RatatuiRect) {
-    for x in row_area.left()..row_area.right() {
-        target[(x, row_area.y)].reset();
+/// Reset an area of a buffer, leaving it as a fresh draw would find it.
+fn blank_area(target: &mut Buffer, area: RatatuiRect) {
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            target[(x, y)].reset();
+        }
     }
 }
 
-/// Copy one row out of a full-frame buffer into a buffer of just that row.
-fn read_row(source: &Buffer, row_area: RatatuiRect) -> Buffer {
-    let mut row = Buffer::empty(row_area);
-    for x in row_area.left()..row_area.right() {
-        row[(x, row_area.y)] = source[(x, row_area.y)].clone();
+/// Copy an area out of a full-frame buffer into a buffer of just that area.
+fn read_area(source: &Buffer, area: RatatuiRect) -> Buffer {
+    let mut copy = Buffer::empty(area);
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            copy[(x, y)] = source[(x, y)].clone();
+        }
     }
-    row
+    copy
 }
 
-/// Copy a one-row buffer back over the same row of a full-frame buffer.
-fn write_row(target: &mut Buffer, row: &Buffer) {
-    let area = row.area;
-    for x in area.left()..area.right() {
-        target[(x, area.y)] = row[(x, area.y)].clone();
+/// Copy a buffer of one area back over the same area of a full-frame buffer.
+fn write_area(target: &mut Buffer, copy: &Buffer) {
+    let area = copy.area;
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            target[(x, y)] = copy[(x, y)].clone();
+        }
     }
 }
 
@@ -579,7 +625,7 @@ pub(super) fn resync_host_patched_rows<B: Backend>(
         {
             continue;
         }
-        let next = read_row(frame, previous.area);
+        let next = read_area(frame, previous.area);
         let updates = previous.diff(&next);
         if !updates.is_empty() {
             terminal.backend_mut().draw(updates.into_iter())?;
@@ -605,7 +651,7 @@ pub(super) fn take_host_patched_rows(
         .into_iter()
         .filter(|row| *row >= snapshot.area.y && *row < snapshot.area.bottom())
         .map(|row| {
-            read_row(
+            read_area(
                 snapshot,
                 RatatuiRect::new(snapshot.area.x, row, snapshot.area.width, 1),
             )
