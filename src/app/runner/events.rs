@@ -654,9 +654,23 @@ impl<C: Component> AppRunner<C> {
     }
 
     pub(crate) fn dispatch_mouse(&mut self, mouse: MouseEvent) -> bool {
+        self.note_pointer_for_trail(mouse);
         let handled = mouse_dispatch::dispatch_mouse_runner(self, mouse);
         self.notify_focus_change();
         handled
+    }
+
+    /// Tell the cursor trail about pointer input before it is dispatched, while the focused widget
+    /// is still the one the caret is in: a caret the pointer moves inside its widget draws no jump
+    /// trail.
+    fn note_pointer_for_trail(&mut self, mouse: MouseEvent) {
+        if matches!(mouse.kind, crate::core::event::MouseKind::Moved) {
+            return;
+        }
+        let at = self.to_content_coords(mouse.x, mouse.y);
+        let owner = self.caret_owner();
+        let now = self.core.ctx.env().now();
+        self.cursor_trail.note_pointer(now, owner, at, mouse.kind);
     }
 
     #[cfg(feature = "terminal")]
@@ -1091,6 +1105,7 @@ impl<C: Component> AppRunner<C> {
         mouse: MouseEvent,
         scroll_ticks: u16,
     ) -> super::DirtyLevel {
+        self.note_pointer_for_trail(mouse);
         let (x, y) = self.to_content_coords(mouse.x, mouse.y);
         let adjusted_mouse = MouseEvent { x, y, ..mouse };
         self.mouse.last_mouse.set(Some((x, y)));

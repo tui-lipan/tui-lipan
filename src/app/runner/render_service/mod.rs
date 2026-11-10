@@ -292,7 +292,9 @@ impl<C: Component> AppRunner<C> {
     /// where it paints - its layout rectangle moved by the render-only
     /// offsets of `Animated` wrappers and overlay slides - and its size, so the trail can tell a
     /// caret that jumped from one its widget carried or reflowed.
-    fn caret_owner(&self) -> Option<crate::app::cursor_trail::CaretOwner> {
+    pub(in crate::app::runner) fn caret_owner(
+        &self,
+    ) -> Option<crate::app::cursor_trail::CaretOwner> {
         let id = self
             .focus
             .focused

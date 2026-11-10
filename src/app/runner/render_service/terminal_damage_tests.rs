@@ -3141,3 +3141,88 @@ fn a_rebuilt_keyed_widget_keeps_its_caret_owner() {
     state.advance(trail, now);
     assert!(state.frame(trail).is_none(), "the dock draws no trail");
 }
+
+/// Every mouse dispatch tells the trail about pointer input, whichever path of the run loop
+/// delivers it (a click coalesced behind pointer motion among them): a press or a scroll in the
+/// focused widget quiets its caret's next jump, and one outside it does not.
+#[test]
+fn mouse_dispatch_quiets_the_focused_caret_s_jump_only_for_input_inside_it() {
+    use crate::app::{CursorTrail, CursorTrailTrigger};
+    use crate::core::event::{KeyMods, MouseButton, MouseEvent, MouseKind};
+
+    let bounds = Rect {
+        x: 0,
+        y: 0,
+        w: 40,
+        h: 3,
+    };
+    let component = DockingInput {
+        docked: Rc::new(StdCell::new(true)),
+    };
+    let mut runner = AppRunner::new(App::new(), component.clone(), ());
+    runner.core = RuntimeCore::new_test(
+        component,
+        (),
+        bounds,
+        Theme::default(),
+        SurfaceMode::Fullscreen,
+        Rc::new(StdCell::new(false)),
+    )
+    .into();
+    runner.core.init();
+    runner.core.render_element(bounds, None, None, None);
+    let input = runner
+        .core
+        .tree
+        .iter()
+        .find(|node| node.key.as_ref().is_some_and(|key| key.as_ref() == "input"))
+        .map(|node| node.id)
+        .expect("the input");
+    let trail = Some(CursorTrail::new().trigger(CursorTrailTrigger::jump()));
+    let env = runner.core.ctx.env().clone();
+    env.cursor_trail.set(trail);
+    let mouse = |x, kind| MouseEvent {
+        x,
+        y: 0,
+        kind,
+        mods: KeyMods::default(),
+    };
+    // Whether a 20-column jump of the input's caret, just after `input`, draws a trail.
+    let jump_trails = |runner: &mut AppRunner<DockingInput>,
+                       pointer: &dyn Fn(&mut AppRunner<DockingInput>)| {
+        runner.cursor_trail = Default::default();
+        runner.focus.focused = Some(input);
+        let owner = runner.caret_owner();
+        let look = crate::app::cursor_trail::CaretLook::default();
+        let now = env.now();
+        runner
+            .cursor_trail
+            .observe(trail, Some(Position::new(8, 0)), owner, look, now);
+        pointer(runner);
+        runner.focus.focused = Some(input);
+        let owner = runner.caret_owner();
+        runner
+            .cursor_trail
+            .observe(trail, Some(Position::new(28, 0)), owner, look, now);
+        runner.cursor_trail.advance(trail, now);
+        runner.cursor_trail.frame(trail).is_some()
+    };
+    assert!(
+        !jump_trails(&mut runner, &|runner| {
+            runner.dispatch_mouse(mouse(20, MouseKind::Down(MouseButton::Left)));
+        }),
+        "a press in the input"
+    );
+    assert!(
+        !jump_trails(&mut runner, &|runner| {
+            runner.dispatch_mouse_scroll_level(mouse(20, MouseKind::ScrollDown), 1);
+        }),
+        "a scroll in the input"
+    );
+    assert!(
+        jump_trails(&mut runner, &|runner| {
+            runner.dispatch_mouse(mouse(2, MouseKind::Down(MouseButton::Left)));
+        }),
+        "a press in the sidebar beside it"
+    );
+}
