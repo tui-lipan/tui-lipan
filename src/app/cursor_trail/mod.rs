@@ -34,7 +34,8 @@ use raster::{GlyphSet, Hull, SmearPaint};
 /// What makes a [`CursorTrail`] appear.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum CursorTrailTrigger {
-    /// Only when focus moves to another widget and the caret moves with it.
+    /// Only when focus moves to another widget and the caret moves with it. A keyed widget stays
+    /// the same widget when a view change rebuilds its node, such as wrapping it in a container.
     #[default]
     FocusChange,
     /// On a focus change, and whenever the caret moves at least `columns` columns or `rows` rows
@@ -508,10 +509,36 @@ pub(crate) fn ease_out_cubic(t: f32) -> f32 {
     1.0 - inverse * inverse * inverse
 }
 
+/// Which widget owns the caret, stable across a rebuild of its node.
+///
+/// A view that wraps a subtree in a new container (a sidebar docking beside the content, say)
+/// rebuilds every node in it, so a node id alone would read the same widget as another one. A
+/// keyed widget is the same widget for as long as its key is, which is what focus restore goes by
+/// too.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum CaretOwnerId {
+    /// A hash of the widget's key.
+    Key(u64),
+    /// An unkeyed widget's node.
+    Node(NodeId),
+}
+
+impl CaretOwnerId {
+    pub(crate) fn of(id: NodeId, key: Option<&crate::core::element::Key>) -> Self {
+        use std::hash::{BuildHasher, BuildHasherDefault};
+        match key {
+            Some(key) => Self::Key(
+                BuildHasherDefault::<rustc_hash::FxHasher>::default().hash_one(key.as_ref()),
+            ),
+            None => Self::Node(id),
+        }
+    }
+}
+
 /// The widget that owns the caret, and where its layout rectangle sits on screen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CaretOwner {
-    pub(crate) id: NodeId,
+    pub(crate) id: CaretOwnerId,
     pub(crate) origin: (i32, i32),
     /// The widget's width and height in cells.
     pub(crate) size: (u16, u16),
@@ -533,7 +560,7 @@ impl Caret {
         caret_rect(self.position.x, self.position.y, self.shape)
     }
 
-    fn owner_id(self) -> Option<NodeId> {
+    fn owner_id(self) -> Option<CaretOwnerId> {
         self.owner.map(|owner| owner.id)
     }
 
@@ -673,7 +700,7 @@ pub(crate) struct CursorTrailState {
     skip: bool,
     /// The widget the caret is in and when it last changed size, while its content may still
     /// be reflowing.
-    resized: Option<(NodeId, Instant)>,
+    resized: Option<(CaretOwnerId, Instant)>,
 }
 
 impl CursorTrailState {
@@ -1115,7 +1142,7 @@ mod tests {
     /// Widget `id`, laid out at `(x, y)` on screen.
     fn moved(id: u32, x: i32, y: i32) -> Option<CaretOwner> {
         Some(CaretOwner {
-            id: NodeId::new(id, 0),
+            id: CaretOwnerId::Node(NodeId::new(id, 0)),
             origin: (x, y),
             size: (80, 24),
             grid: None,

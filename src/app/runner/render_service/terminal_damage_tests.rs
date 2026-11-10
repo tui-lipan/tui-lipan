@@ -3056,3 +3056,88 @@ fn a_new_video_frame_presents_natively_without_a_repaint() {
         assert!(headers.iter().all(|h| !h.contains("a=T")), "{headers:#?}");
     }
 }
+
+/// An input that a sidebar docks beside once `docked` is set, wrapping it in a new container.
+#[derive(Clone)]
+struct DockingInput {
+    docked: Rc<StdCell<bool>>,
+}
+
+impl Component for DockingInput {
+    type Properties = ();
+    type State = ();
+    type Message = ();
+    fn create_state(&self, _: &()) {}
+    fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+    fn view(&self, _: &Context<Self>) -> Element {
+        let input = Element::from(crate::widgets::Input::new("")).key("input");
+        if self.docked.get() {
+            crate::widgets::HStack::new()
+                .child(Text::new("side").width(crate::style::Length::Px(6)))
+                .child(input)
+                .into()
+        } else {
+            input
+        }
+    }
+}
+
+/// Docking a sidebar beside the focused widget rebuilds its node under a new container. The
+/// caret's widget is still the same one, so its move is the widget resizing, not a focus change
+/// with a trail from where the caret was.
+#[test]
+fn a_rebuilt_keyed_widget_keeps_its_caret_owner() {
+    use crate::app::cursor_trail::{CaretLook, CursorTrailState};
+    use crate::app::{CursorTrail, CursorTrailTrigger};
+
+    let bounds = Rect {
+        x: 0,
+        y: 0,
+        w: 40,
+        h: 3,
+    };
+    let docked = Rc::new(StdCell::new(false));
+    let component = DockingInput {
+        docked: Rc::clone(&docked),
+    };
+    let mut runner = AppRunner::new(App::new(), component.clone(), ());
+    runner.core = RuntimeCore::new_test(
+        component,
+        (),
+        bounds,
+        Theme::default(),
+        SurfaceMode::Fullscreen,
+        Rc::new(StdCell::new(false)),
+    )
+    .into();
+    runner.core.init();
+    let focus_input = |runner: &mut AppRunner<DockingInput>| {
+        runner.core.render_element(bounds, None, None, None);
+        let id = runner
+            .core
+            .tree
+            .iter()
+            .find(|node| node.key.as_ref().is_some_and(|key| key.as_ref() == "input"))
+            .map(|node| node.id)
+            .expect("the input");
+        runner.focus.focused = Some(id);
+        (id, runner.caret_owner().expect("an owner"))
+    };
+    let (before_id, before) = focus_input(&mut runner);
+    docked.set(true);
+    let (after_id, after) = focus_input(&mut runner);
+    assert_ne!(before_id, after_id, "the dock rebuilds the input's node");
+    assert_eq!(before.id, after.id, "and it is still the same widget");
+    assert_ne!(before.size, after.size);
+
+    let trail = Some(CursorTrail::new().trigger(CursorTrailTrigger::FocusChange));
+    let now = web_time::Instant::now();
+    let mut state = CursorTrailState::default();
+    let look = CaretLook::default();
+    state.observe(trail, Some(Position::new(0, 0)), Some(before), look, now);
+    state.observe(trail, Some(Position::new(6, 0)), Some(after), look, now);
+    state.advance(trail, now);
+    assert!(state.frame(trail).is_none(), "the dock draws no trail");
+}

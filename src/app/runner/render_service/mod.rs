@@ -288,7 +288,8 @@ impl<C: Component> AppRunner<C> {
             .unwrap_or_default()
     }
 
-    /// The focused widget, where it paints - its layout rectangle moved by the render-only
+    /// The focused widget (by key when it has one, so a rebuilt node is still the same widget),
+    /// where it paints - its layout rectangle moved by the render-only
     /// offsets of `Animated` wrappers and overlay slides - and its size, so the trail can tell a
     /// caret that jumped from one its widget carried or reflowed.
     fn caret_owner(&self) -> Option<crate::app::cursor_trail::CaretOwner> {
@@ -300,7 +301,7 @@ impl<C: Component> AppRunner<C> {
         let rect = tree.node(id).rect;
         let (dx, dy) = crate::backend::ratatui_backend::render::node_paint_offset(tree, id).cells();
         Some(crate::app::cursor_trail::CaretOwner {
-            id,
+            id: crate::app::cursor_trail::CaretOwnerId::of(id, tree.node(id).key.as_ref()),
             origin: (i32::from(rect.x) + dx, i32::from(rect.y) + dy),
             size: (rect.w, rect.h),
             grid: caret_grid(tree, id),
