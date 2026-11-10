@@ -1395,8 +1395,9 @@ settled, overlapping pages. It returns a `HistoryRead` only after the original v
 restored. Its `text` preserves soft wraps. It is rendered terminal content, including any displayed
 formatting, not an application's original Markdown or semantic messages.
 
-Pages are compared without scrollbars: a lone track or thumb glyph at the right edge of a row is
-dropped from comparisons and from the text. Pages are aligned on the rows that moved, so a scrolled
+Pages are compared without scrollbars: a track or thumb glyph at the right edge of a row is
+dropped from comparisons and from the text, whether it stands alone or is drawn over text that
+reaches the last column. A run of the same glyph, such as a full-width rule, is kept. Pages are aligned on the rows that moved, so a scrolled
 view may cover a row with a notice or change a status line. Rows the scroll did not move are chrome:
 those above the transcript are left out, and the text ends at the first row below it that stayed in
 place where a transcript row should have arrived. Rows between the transcript and that footer may

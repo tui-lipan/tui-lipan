@@ -445,16 +445,21 @@ fn without_scrollbars(frame: &HistoryReadFrame) -> Vec<HistoryReadRow> {
         .collect()
 }
 
-/// Drop a lone track or thumb glyph at the right edge. The decision depends only on the row
-/// itself, so a transcript row compares the same wherever the thumb happens to be.
+/// Drop a track or thumb glyph at the right edge. The decision depends only on the row itself,
+/// so a transcript row compares the same wherever the thumb happens to be.
+///
+/// Near the edge the glyph must stand alone after a space. In the last column it may also be
+/// drawn over text or a divider that reaches the edge, unless it continues a run of the same
+/// glyph, as a full-width rule does.
 fn without_scrollbar(row: &HistoryReadRow, cols: u16) -> HistoryReadRow {
     let text = row.text.trim_end();
     if let Some((index, glyph)) = text.char_indices().next_back() {
         let before = &text[..index];
-        if is_scrollbar_glyph(glyph)
-            && (before.is_empty() || before.ends_with(' '))
-            && before.width() + SCROLLBAR_MARGIN >= usize::from(cols)
-        {
+        let column = before.width();
+        let lone = (before.is_empty() || before.ends_with(' '))
+            && column + SCROLLBAR_MARGIN >= usize::from(cols);
+        let overlaid = column + 1 == usize::from(cols) && !before.ends_with(glyph);
+        if is_scrollbar_glyph(glyph) && (lone || overlaid) {
             return HistoryReadRow {
                 text: Arc::from(before.trim_end()),
                 soft_wrapped: row.soft_wrapped,
@@ -670,6 +675,8 @@ mod tests {
         scrollbar: bool,
         /// The scrollbar only appears once scrolled, and stays.
         lingering_scrollbar: bool,
+        /// Every row the thumb is not on carries a track glyph.
+        track: bool,
         touched: bool,
         /// A scrolled transcript has its last row covered and its status row changed.
         decorations: bool,
@@ -690,6 +697,7 @@ mod tests {
                 offset: 0,
                 scrollbar: false,
                 lingering_scrollbar: false,
+                track: false,
                 touched: false,
                 decorations: false,
                 down_cap: usize::MAX,
@@ -716,12 +724,15 @@ mod tests {
             let thumb = (body - 1) * (self.max_offset() - self.offset) / self.max_offset().max(1);
             let mut rows = vec![row("pinned header")];
             rows.extend(visible.into_iter().enumerate().map(|(index, text)| {
-                if show_bar && index == thumb {
-                    let pad = usize::from(COLS) - 1 - text.width();
-                    row(format!("{text}{}█", " ".repeat(pad)))
-                } else {
-                    row(text)
-                }
+                let glyph = match (show_bar && index == thumb, self.track) {
+                    (true, _) => '█',
+                    (false, true) => '│',
+                    (false, false) => return row(text),
+                };
+                // The glyph takes the last column, over any text that reaches it.
+                let text: String = text.chars().take(usize::from(COLS) - 1).collect();
+                let pad = usize::from(COLS) - 1 - text.width();
+                row(format!("{text}{}{glyph}", " ".repeat(pad)))
             }));
             rows.push(row(if self.decorations && self.offset > 0 {
                 "scrolled · esc"
@@ -833,6 +844,18 @@ mod tests {
         let mut app = App::new(300, 1);
         app.rows = 32;
         app.down_cap = 10;
+        let read = drive(&mut app, false).unwrap();
+        assert_eq!(app.offset, 0);
+        assert!(read.complete);
+        assert_eq!(read.text, transcript(&app));
+    }
+
+    #[test]
+    fn a_scrollbar_drawn_over_full_width_rows_is_left_out() {
+        let lines = (0..60).map(|index| format!("{:.<39}", format!("line {index:03} ")));
+        let mut app = App::with_lines(lines, 3);
+        app.scrollbar = true;
+        app.track = true;
         let read = drive(&mut app, false).unwrap();
         assert_eq!(app.offset, 0);
         assert!(read.complete);
@@ -993,15 +1016,21 @@ mod tests {
     }
 
     #[test]
-    fn only_a_lone_glyph_at_the_right_edge_is_a_scrollbar() {
+    fn scrollbar_glyphs_are_dropped_only_at_the_right_edge() {
         let strip = |text: &str| without_scrollbar(&row(text), 20).text.to_string();
         assert_eq!(strip("日本語 🌷          ┃"), "日本語 🌷");
         assert_eq!(strip("text              █"), "text");
         assert_eq!(strip("                  │"), "");
+        // Drawn over a row that reaches the last column.
+        assert_eq!(strip("───────────────────┃"), "───────────────────");
+        assert_eq!(strip("long text, reaching│"), "long text, reaching");
+        assert_eq!(strip("日本語 texts 日本語│"), "日本語 texts 日本語");
         // Not at the edge, or part of the row's own drawing.
         assert_eq!(strip("  ┃ prompt"), "  ┃ prompt");
         assert_eq!(strip("text ┃"), "text ┃");
+        assert_eq!(strip("short text│"), "short text│");
         assert_eq!(strip("╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀"), "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀");
+        assert_eq!(strip("╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄"), "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄");
     }
 
     #[test]
