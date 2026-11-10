@@ -15,7 +15,8 @@ mod media_work;
 pub use media_work::{TerminalMediaWork, TerminalPreparedInput};
 mod history_read;
 pub use history_read::{
-    AltScreenHistoryReader, HistoryReadError, HistoryReadFrame, HistoryReadRow, HistoryReadStep,
+    AltScreenHistoryReader, HistoryRead, HistoryReadError, HistoryReadFrame, HistoryReadRow,
+    HistoryReadStep,
 };
 mod layout;
 mod mod_private;

@@ -3,9 +3,15 @@
 //! The owner feeds settled screen observations and executes returned wheel actions. It must hold
 //! an exclusive input lease, prohibit raw attachments, and interrupt on input, resize, lifecycle
 //! change, or unrelated output. No result is released until the original bottom viewport returns.
-use std::collections::{BTreeSet, HashMap, VecDeque};
+//!
+//! Applications decorate a scrolled transcript: a scrollbar thumb moves, a "back to bottom" notice
+//! covers a row, a status line changes. Pages are therefore compared without scrollbars, and
+//! aligned on the rows that moved rather than on the whole viewport.
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+use unicode_width::UnicodeWidthStr;
 
 use super::TerminalViewport;
 
@@ -29,6 +35,17 @@ pub struct HistoryReadFrame {
     pub synchronized: bool,
 }
 
+/// Reconstructed history, returned once the original viewport is restored.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HistoryRead {
+    /// Rendered rows, oldest first, without scrollbars. Pinned chrome above the transcript is left
+    /// out; rows between the transcript and a pinned footer may remain.
+    pub text: String,
+    /// Scrolling reached the top of the transcript. When `false`, a traversal bound or a page that
+    /// could not be aligned ended the read, and `text` holds the newest rows that were read.
+    pub complete: bool,
+}
+
 /// Why no history can be returned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum HistoryReadError {
@@ -38,13 +55,13 @@ pub enum HistoryReadError {
     /// The initial down probe moved the transcript, so it was manually scrolled.
     #[error("application transcript is not at its bottom")]
     NotAtBottom,
-    /// Scrolling did not reveal a page with a unique, strong overlap.
+    /// The first scrolled page could not be aligned with the bottom page.
     #[error("history pages do not have a unique strong overlap")]
     AmbiguousOverlap,
     /// No scrollable history was observed.
     #[error("scrollable application history is unavailable")]
     Unavailable,
-    /// A traversal time, page, or byte bound was reached.
+    /// A traversal bound was reached before any page was read.
     #[error("history traversal limit reached")]
     Limit,
     /// The original viewport could not be proven restored. No text is returned.
@@ -57,12 +74,12 @@ pub enum HistoryReadError {
 pub enum HistoryReadStep {
     /// Continue pumping the application and call `observe` again.
     Wait,
-    /// Send one upward wheel tick in the application's active mouse protocol.
-    ScrollUp,
-    /// Send one downward wheel tick in the application's active mouse protocol.
-    ScrollDown,
+    /// Send this many upward wheel ticks, in the application's active mouse protocol.
+    ScrollUp(u16),
+    /// Send this many downward wheel ticks, in the application's active mouse protocol.
+    ScrollDown(u16),
     /// The read ended. Only `Ok` contains text, after restoration was proven.
-    Finished(Result<String, HistoryReadError>),
+    Finished(Result<HistoryRead, HistoryReadError>),
 }
 
 #[derive(Clone, Copy)]
@@ -83,7 +100,11 @@ enum Phase {
 /// and holds its input lease through `Finished`, including failed reads and restoration.
 pub struct AltScreenHistoryReader {
     original: HistoryReadFrame,
+    /// The original rows without scrollbars, which restoration must reproduce.
+    original_rows: Vec<HistoryReadRow>,
     observed: HistoryReadFrame,
+    observed_rows: Vec<HistoryReadRow>,
+    /// The last page merged into `content`, without scrollbars.
     page: Vec<HistoryReadRow>,
     content: VecDeque<HistoryReadRow>,
     phase: Phase,
@@ -91,21 +112,35 @@ pub struct AltScreenHistoryReader {
     action_at: Instant,
     changed_at: Instant,
     restore_at: Option<Instant>,
-    /// The last action sent was an upward wheel tick whose response may still be in flight.
+    /// The last action sent was an upward scroll whose response may still be in flight.
     pending_up: bool,
     changed: bool,
     pages: usize,
-    crop: Option<(usize, usize)>,
+    /// The transcript's first row, once a page proved it.
+    band_top: Option<usize>,
+    /// Ticks in the next upward scroll, sized from how far one tick moves the transcript.
+    ticks: u16,
+    /// Ticks in the upward scroll whose page is awaited.
+    sent_ticks: u16,
+    /// Upward ticks sent while harvesting and not yet sent back down.
+    up_ticks: u32,
+    complete: bool,
     error: Option<HistoryReadError>,
 }
 
-const QUIET: Duration = Duration::from_millis(200);
+const QUIET: Duration = Duration::from_millis(60);
 const RESPONSE: Duration = Duration::from_millis(600);
 const TRAVERSAL: Duration = Duration::from_secs(10);
 const RESTORATION: Duration = Duration::from_secs(3);
-const MAX_PAGES: usize = 128;
+const MAX_PAGES: usize = 256;
 const MAX_BYTES: usize = 1024 * 1024;
 const MIN_OVERLAP: usize = 3;
+const MAX_TICKS: u16 = 16;
+/// Ticks in one restoring burst. Larger than an upward scroll, so restoration is never slower
+/// than the traversal it undoes.
+const RESTORE_TICKS: u16 = 64;
+/// A scrollbar glyph counts as one only within this many columns of the right edge.
+const SCROLLBAR_MARGIN: usize = 3;
 
 impl AltScreenHistoryReader {
     /// Start settling the given bottom viewport. A malformed or tiny frame is rejected.
@@ -122,9 +157,12 @@ impl AltScreenHistoryReader {
         {
             return Err(HistoryReadError::Unavailable);
         }
+        let rows = without_scrollbars(&frame);
         Ok(Self {
-            page: frame.rows.clone(),
-            content: frame.rows.iter().cloned().collect(),
+            original_rows: rows.clone(),
+            observed_rows: rows.clone(),
+            page: rows,
+            content: VecDeque::new(),
             original: frame.clone(),
             observed: frame,
             phase: Phase::Settle,
@@ -135,7 +173,11 @@ impl AltScreenHistoryReader {
             pending_up: false,
             changed: false,
             pages: 0,
-            crop: None,
+            band_top: None,
+            ticks: 1,
+            sent_ticks: 0,
+            up_ticks: 0,
+            complete: true,
             error: None,
         })
     }
@@ -152,7 +194,7 @@ impl AltScreenHistoryReader {
         self.error = Some(HistoryReadError::Interrupted);
         self.restore_at.get_or_insert(now);
         if !matches!(self.phase, Phase::Probe | Phase::UndoProbe) {
-            // Keep `action_at`: an upward tick still in flight must settle before release.
+            // Keep `action_at`: an upward scroll still in flight must settle before release.
             self.phase = Phase::Restore;
         }
     }
@@ -183,7 +225,8 @@ impl AltScreenHistoryReader {
         {
             return false;
         }
-        if frame.rows != self.observed.rows {
+        let rows = without_scrollbars(&frame);
+        if rows != self.observed_rows {
             self.changed_at = now;
             self.changed = true;
         }
@@ -191,6 +234,7 @@ impl AltScreenHistoryReader {
             self.changed_at = now;
         }
         self.observed = frame;
+        self.observed_rows = rows;
         if self.observed.synchronized {
             self.changed_at = now;
         }
@@ -199,11 +243,13 @@ impl AltScreenHistoryReader {
 
     fn expired(&mut self, now: Instant) -> Option<HistoryReadStep> {
         if let Some(started) = self.restore_at {
-            return (now.saturating_duration_since(started) >= RESTORATION)
+            // Coming back may take as long as going up did.
+            let allowed = RESTORATION + started.saturating_duration_since(self.started);
+            return (now.saturating_duration_since(started) >= allowed)
                 .then(|| self.finish(Err(HistoryReadError::RestoreUnproven)));
         }
         (now.saturating_duration_since(self.started) >= TRAVERSAL)
-            .then(|| self.restore(HistoryReadError::Limit, now))
+            .then(|| self.stop_early(HistoryReadError::Limit, now))
     }
 
     fn quiet(&self, now: Instant) -> bool {
@@ -215,9 +261,9 @@ impl AltScreenHistoryReader {
             Phase::Settle => {
                 // A screen that changed while initially settling is the baseline actually probed.
                 self.original = self.observed.clone();
-                self.page = self.observed.rows.clone();
-                self.content = self.page.iter().cloned().collect();
-                self.scroll(Phase::Probe, false, now)
+                self.original_rows = self.observed_rows.clone();
+                self.page = self.observed_rows.clone();
+                self.scroll(Phase::Probe, false, 1, now)
             }
             Phase::Probe => self.probe(now),
             Phase::UndoProbe => self.undo_probe(now),
@@ -228,22 +274,22 @@ impl AltScreenHistoryReader {
     }
 
     fn probe(&mut self, now: Instant) -> HistoryReadStep {
-        if self.observed.rows != self.original.rows {
+        if self.observed_rows != self.original_rows {
             self.error.get_or_insert(HistoryReadError::NotAtBottom);
             self.restore_at = Some(now);
-            return self.scroll(Phase::UndoProbe, true, now);
+            return self.scroll(Phase::UndoProbe, true, 1, now);
         }
         if self.action_settled(now) {
             if let Some(error) = self.error {
                 return self.finish(Err(error));
             }
-            return self.scroll(Phase::Harvest, true, now);
+            return self.scroll_up(now);
         }
         HistoryReadStep::Wait
     }
 
     fn undo_probe(&mut self, now: Instant) -> HistoryReadStep {
-        if self.observed.rows == self.original.rows {
+        if self.observed_rows == self.original_rows {
             return self.finish(Err(self.error.unwrap_or(HistoryReadError::NotAtBottom)));
         }
         if self.action_settled(now) {
@@ -257,20 +303,33 @@ impl AltScreenHistoryReader {
     }
 
     fn harvest(&mut self, now: Instant) -> HistoryReadStep {
-        if !self.changed || self.observed.rows == self.page {
+        if !self.changed || self.observed_rows == self.page {
             if !self.action_settled(now) {
                 return HistoryReadStep::Wait;
             }
             if self.pages == 0 {
-                return self.finish(Err(HistoryReadError::Unavailable));
+                return self.restore(HistoryReadError::Unavailable, now);
             }
-            self.phase = Phase::Restore;
-            self.restore_at = Some(now);
-            return self.scroll(Phase::Restore, false, now);
+            // The transcript stopped moving: its top has been read.
+            return self.start_restore(now);
         }
-        if !self.merge_current_page() {
-            return self.restore(HistoryReadError::AmbiguousOverlap, now);
+        let Some(alignment) = align(&self.page, &self.observed_rows, self.band_top) else {
+            return self.stop_early(HistoryReadError::AmbiguousOverlap, now);
+        };
+        if self.pages == 0 {
+            self.content = self.page[alignment.top..alignment.bottom]
+                .iter()
+                .cloned()
+                .collect();
+            while self.content.back().is_some_and(is_blank) {
+                self.content.pop_back();
+            }
         }
+        let added = &self.observed_rows[alignment.top..alignment.top + alignment.shift];
+        for row in added.iter().rev() {
+            self.content.push_front(row.clone());
+        }
+        self.band_top = Some(alignment.top);
         self.pages += 1;
         if self.pages >= MAX_PAGES
             || self
@@ -280,30 +339,29 @@ impl AltScreenHistoryReader {
                 .sum::<usize>()
                 > MAX_BYTES
         {
-            return self.restore(HistoryReadError::Limit, now);
+            return self.stop_early(HistoryReadError::Limit, now);
         }
-        self.scroll(Phase::Harvest, true, now)
+        // Aim for half the moving region per scroll, which keeps a strong overlap.
+        let per_tick = (alignment.shift / usize::from(self.sent_ticks.max(1))).max(1);
+        let ticks = (alignment.span / 2 / per_tick).max(1);
+        self.ticks = u16::try_from(ticks).unwrap_or(MAX_TICKS).min(MAX_TICKS);
+        self.page = self.observed_rows.clone();
+        self.scroll_up(now)
     }
 
-    fn merge_current_page(&mut self) -> bool {
-        let current = &self.observed.rows;
-        let Some(crop) = self.crop.or_else(|| unique_crop(&self.page, current)) else {
-            return false;
-        };
-        let (top, bottom) = crop;
-        let end = current.len().saturating_sub(bottom);
-        let Some(added) = prepend_rows(&self.page[top..end], &current[top..end]) else {
-            return false;
-        };
-        if self.crop.is_none() {
-            self.content = self.page[top..end].iter().cloned().collect();
-            self.crop = Some(crop);
+    /// End the traversal. Rows already read are still returned, as incomplete history.
+    fn stop_early(&mut self, error: HistoryReadError, now: Instant) -> HistoryReadStep {
+        if self.pages == 0 {
+            return self.restore(error, now);
         }
-        for row in added.iter().rev() {
-            self.content.push_front(row.clone());
-        }
-        self.page = current.clone();
-        true
+        self.complete = false;
+        self.start_restore(now)
+    }
+
+    fn start_restore(&mut self, now: Instant) -> HistoryReadStep {
+        self.restore_at.get_or_insert(now);
+        self.phase = Phase::Restore;
+        self.restore_step(now)
     }
 
     fn restore(&mut self, error: HistoryReadError, now: Instant) -> HistoryReadStep {
@@ -320,7 +378,7 @@ impl AltScreenHistoryReader {
     }
 
     fn restore_step(&mut self, now: Instant) -> HistoryReadStep {
-        if self.observed.rows == self.original.rows
+        if self.observed_rows == self.original_rows
             && (!self.pending_up || self.action_settled(now))
         {
             return match self.error {
@@ -333,93 +391,246 @@ impl AltScreenHistoryReader {
                             text.push('\n');
                         }
                     }
-                    self.finish(Ok(text))
+                    let complete = self.complete;
+                    self.finish(Ok(HistoryRead { text, complete }))
                 }
             };
         }
         if self.changed || self.action_settled(now) {
-            return self.scroll(Phase::Restore, false, now);
+            // Applications cap how far one burst moves, so return in bounded bursts. Once the
+            // ticks sent up are spent, keep going in full bursts: the probe proved that ticks
+            // at the bottom change nothing.
+            let ticks = match self.up_ticks {
+                0 => RESTORE_TICKS,
+                pending => u16::try_from(pending)
+                    .unwrap_or(RESTORE_TICKS)
+                    .min(RESTORE_TICKS),
+            };
+            self.up_ticks = self.up_ticks.saturating_sub(u32::from(ticks));
+            return self.scroll(Phase::Restore, false, ticks, now);
         }
         HistoryReadStep::Wait
     }
 
-    fn scroll(&mut self, phase: Phase, up: bool, now: Instant) -> HistoryReadStep {
+    fn scroll_up(&mut self, now: Instant) -> HistoryReadStep {
+        self.sent_ticks = self.ticks;
+        self.up_ticks = self.up_ticks.saturating_add(u32::from(self.ticks));
+        self.scroll(Phase::Harvest, true, self.ticks, now)
+    }
+
+    fn scroll(&mut self, phase: Phase, up: bool, ticks: u16, now: Instant) -> HistoryReadStep {
         self.phase = phase;
         self.action_at = now;
         self.changed_at = now;
         self.changed = false;
         self.pending_up = up;
         if up {
-            HistoryReadStep::ScrollUp
+            HistoryReadStep::ScrollUp(ticks)
         } else {
-            HistoryReadStep::ScrollDown
+            HistoryReadStep::ScrollDown(ticks)
         }
     }
 
-    fn finish(&mut self, result: Result<String, HistoryReadError>) -> HistoryReadStep {
+    fn finish(&mut self, result: Result<HistoryRead, HistoryReadError>) -> HistoryReadStep {
         self.phase = Phase::Finished;
         HistoryReadStep::Finished(result)
     }
 }
 
-/// Choose the pinned header/footer crop only when exactly one interpretation reconstructs the
-/// page transition. Equal edge rows may be real repeated transcript instead of chrome, so any
-/// second viable `(top, bottom)` crop makes the transition ambiguous.
-fn unique_crop(previous: &[HistoryReadRow], current: &[HistoryReadRow]) -> Option<(usize, usize)> {
-    let len = current.len();
-    if previous.len() != len {
-        return None;
-    }
-    let max_top = previous
+fn without_scrollbars(frame: &HistoryReadFrame) -> Vec<HistoryReadRow> {
+    frame
+        .rows
         .iter()
-        .zip(current)
-        .take_while(|(a, b)| a == b)
-        .count();
-    let max_bottom = previous
-        .iter()
-        .rev()
-        .zip(current.iter().rev())
-        .take_while(|(a, b)| a == b)
-        .count();
-    let mut found = None;
-    for top in 0..=max_top {
-        for bottom in 0..=max_bottom {
-            if top + bottom >= len {
-                continue;
-            }
-            let end = len - bottom;
-            if prepend_rows(&previous[top..end], &current[top..end]).is_some() {
-                if found.is_some() {
-                    return None;
-                }
-                found = Some((top, bottom));
-            }
-        }
-    }
-    found
+        .map(|row| without_scrollbar(row, frame.viewport.cols))
+        .collect()
 }
 
-/// Accept only a unique offset with at least three overlapping rows and a unique nonblank anchor.
-/// Repeated rows cannot supply enough evidence on their own.
-fn prepend_rows<'a>(
+/// Drop a lone track or thumb glyph at the right edge. The decision depends only on the row
+/// itself, so a transcript row compares the same wherever the thumb happens to be.
+fn without_scrollbar(row: &HistoryReadRow, cols: u16) -> HistoryReadRow {
+    let text = row.text.trim_end();
+    if let Some((index, glyph)) = text.char_indices().next_back() {
+        let before = &text[..index];
+        if is_scrollbar_glyph(glyph)
+            && (before.is_empty() || before.ends_with(' '))
+            && before.width() + SCROLLBAR_MARGIN >= usize::from(cols)
+        {
+            return HistoryReadRow {
+                text: Arc::from(before.trim_end()),
+                soft_wrapped: row.soft_wrapped,
+            };
+        }
+    }
+    if text.len() == row.text.len() {
+        return row.clone();
+    }
+    HistoryReadRow {
+        text: Arc::from(text),
+        soft_wrapped: row.soft_wrapped,
+    }
+}
+
+fn is_scrollbar_glyph(glyph: char) -> bool {
+    matches!(
+        glyph,
+        '│' | '┃'
+            | '║'
+            | '╎'
+            | '╏'
+            | '┆'
+            | '┇'
+            | '┊'
+            | '┋'
+            | '╵'
+            | '╷'
+            | '╹'
+            | '╻'
+            | '╽'
+            | '╿'
+            | '▏'
+            | '▎'
+            | '▍'
+            | '▌'
+            | '▋'
+            | '▊'
+            | '▉'
+            | '█'
+            | '▐'
+            | '▕'
+            | '▀'
+            | '▄'
+            | '░'
+            | '▒'
+            | '▓'
+            | '▲'
+            | '▼'
+    )
+}
+
+fn is_blank(row: &HistoryReadRow) -> bool {
+    row.text.trim().is_empty()
+}
+
+/// How the transcript moved between two pages, in row indices of the earlier page.
+#[derive(Debug, PartialEq, Eq)]
+struct Alignment {
+    /// Rows the transcript moved down, which equals the rows revealed above it.
+    shift: usize,
+    /// The first transcript row. Rows above it are chrome the scroll did not move.
+    top: usize,
+    /// End of the transcript on the earlier page: the first row proven to be a pinned footer.
+    bottom: usize,
+    /// Height of the region that moved.
+    span: usize,
+}
+
+/// Find the one shift that explains a scroll, then where the transcript starts and ends.
+///
+/// Rows identical in place carry no evidence for the shift. The rest must mostly agree at that
+/// shift, through a row unique to both pages, and no other shift may be plausible: repeated rows
+/// alone cannot tell a small scroll from a larger one.
+///
+/// A row identical in place is not thereby chrome: repeated transcript can sit at the same
+/// position after a scroll. Boundaries rest on what the shift explains, a row explained both ways
+/// is never dropped, and `known_top`, the top proven by an earlier page, settles such a row above
+/// the transcript. Without it the pages are refused rather than guessed.
+fn align(
     previous: &[HistoryReadRow],
-    current: &'a [HistoryReadRow],
-) -> Option<&'a [HistoryReadRow]> {
-    if previous.len() != current.len() {
+    current: &[HistoryReadRow],
+    known_top: Option<usize>,
+) -> Option<Alignment> {
+    let len = previous.len();
+    if current.len() != len || len < MIN_OVERLAP {
         return None;
     }
+    let pinned: Vec<bool> = previous.iter().zip(current).map(|(a, b)| a == b).collect();
+    let (shift, first, last) = shift_between(previous, current, &pinned)?;
+    let moved = |index: usize| index + shift < len && previous[index] == current[index + shift];
+    let top = band_top(first, &pinned, moved, known_top)?;
+    // A footer row is pinned, and differs from the transcript row the shift brings to its place.
+    let bottom = (last + 1..len)
+        .find(|&index| {
+            pinned[index]
+                && !is_blank(&previous[index])
+                && index >= top + shift
+                && current[index] != previous[index - shift]
+        })
+        .unwrap_or(len);
+    Some(Alignment {
+        shift,
+        top,
+        bottom,
+        span: last - top + 1 + shift,
+    })
+}
+
+/// The unique plausible shift, with the first and last earlier-page rows that support it.
+fn shift_between(
+    previous: &[HistoryReadRow],
+    current: &[HistoryReadRow],
+    pinned: &[bool],
+) -> Option<(usize, usize, usize)> {
+    let len = previous.len();
+    let previous_unique = unique_positions(previous);
+    let current_unique = unique_positions(current);
     let mut found = None;
-    for shift in anchor_offsets(previous, current) {
-        let overlap = current.len() - shift;
-        if current[shift..] != previous[..overlap] {
+    for shift in 1..=len - MIN_OVERLAP {
+        let mut comparable = 0;
+        let mut matched = 0;
+        let mut anchored = false;
+        let mut first = None;
+        let mut last = 0;
+        for index in 0..len - shift {
+            let (before, after) = (&previous[index], &current[index + shift]);
+            if pinned[index] || pinned[index + shift] || is_blank(before) || is_blank(after) {
+                continue;
+            }
+            comparable += 1;
+            if before != after {
+                continue;
+            }
+            matched += 1;
+            first.get_or_insert(index);
+            last = index;
+            anchored |= previous_unique.get(before) == Some(&Some(index))
+                && current_unique.get(after) == Some(&Some(index + shift));
+        }
+        if !anchored || matched < MIN_OVERLAP || matched * 2 < comparable {
             continue;
         }
         if found.is_some() {
             return None;
         }
-        found = Some(&current[..shift]);
+        found = Some((shift, first.expect("matched rows"), last));
     }
     found
+}
+
+/// Walk up from the first supporting row while rows moved with the transcript, blank ones
+/// included. A row the scroll did not move is chrome. A row that both moved and stayed in place
+/// is ambiguous: only a top proven by an earlier page decides it.
+fn band_top(
+    first: usize,
+    pinned: &[bool],
+    moved: impl Fn(usize) -> bool,
+    known_top: Option<usize>,
+) -> Option<usize> {
+    let mut top = first;
+    while top > 0 {
+        let row = top - 1;
+        if !moved(row) {
+            break;
+        }
+        if pinned[row] {
+            return match known_top {
+                Some(known) if known <= row => (known..row).all(&moved).then_some(known),
+                Some(known) if known == top => Some(known),
+                _ => None,
+            };
+        }
+        top = row;
+    }
+    Some(top)
 }
 
 fn unique_positions(rows: &[HistoryReadRow]) -> HashMap<&HistoryReadRow, Option<usize>> {
@@ -433,30 +644,11 @@ fn unique_positions(rows: &[HistoryReadRow]) -> HashMap<&HistoryReadRow, Option<
     positions
 }
 
-fn anchor_offsets(previous: &[HistoryReadRow], current: &[HistoryReadRow]) -> BTreeSet<usize> {
-    let previous = unique_positions(previous);
-    let mut offsets = BTreeSet::new();
-    for (row, position) in unique_positions(current) {
-        let Some(current_index) = position else {
-            continue;
-        };
-        let Some(Some(previous_index)) = previous.get(row) else {
-            continue;
-        };
-        if row.text.trim().is_empty() || current_index <= *previous_index {
-            continue;
-        }
-        let shift = current_index - previous_index;
-        if current.len() - shift >= MIN_OVERLAP {
-            offsets.insert(shift);
-        }
-    }
-    offsets
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const COLS: u16 = 40;
 
     fn row(text: impl Into<Arc<str>>) -> HistoryReadRow {
         HistoryReadRow {
@@ -465,115 +657,323 @@ mod tests {
         }
     }
 
-    fn frame(start: usize) -> HistoryReadFrame {
-        let mut rows = vec![row("header")];
-        rows.extend((start..start + 6).map(|index| row(format!("row {index} 🌷"))));
-        rows.push(row("footer"));
-        HistoryReadFrame {
-            viewport: TerminalViewport { cols: 40, rows: 8 },
-            rows,
-            synchronized: false,
+    /// Stand-in for the external application at the scroll boundary: a pinned header, a
+    /// transcript, a status row and a pinned input row. The reconstruction under test is the
+    /// production reader.
+    #[derive(Clone)]
+    struct App {
+        lines: Vec<String>,
+        rows: usize,
+        per_tick: usize,
+        offset: usize,
+        /// A one-row thumb at the right edge that follows the scroll position.
+        scrollbar: bool,
+        /// The scrollbar only appears once scrolled, and stays.
+        lingering_scrollbar: bool,
+        touched: bool,
+        /// A scrolled transcript has its last row covered and its status row changed.
+        decorations: bool,
+        /// One downward burst moves at most this many lines, however many ticks it carries.
+        down_cap: usize,
+    }
+
+    impl App {
+        fn new(lines: usize, per_tick: usize) -> Self {
+            Self::with_lines((0..lines).map(|index| format!("line {index:03}")), per_tick)
+        }
+
+        fn with_lines(lines: impl IntoIterator<Item = String>, per_tick: usize) -> Self {
+            Self {
+                lines: lines.into_iter().collect(),
+                rows: 12,
+                per_tick,
+                offset: 0,
+                scrollbar: false,
+                lingering_scrollbar: false,
+                touched: false,
+                decorations: false,
+                down_cap: usize::MAX,
+            }
+        }
+
+        fn body(&self) -> usize {
+            self.rows - 3
+        }
+
+        fn max_offset(&self) -> usize {
+            self.lines.len().saturating_sub(self.body())
+        }
+
+        fn frame(&self) -> HistoryReadFrame {
+            let body = self.body();
+            let end = self.lines.len() - self.offset;
+            let mut visible = vec![String::new(); body.saturating_sub(end)];
+            visible.extend_from_slice(&self.lines[end.saturating_sub(body)..end]);
+            if self.decorations && self.offset > 0 {
+                *visible.last_mut().unwrap() = "  ↓ back to bottom".into();
+            }
+            let show_bar = self.scrollbar || (self.lingering_scrollbar && self.touched);
+            let thumb = (body - 1) * (self.max_offset() - self.offset) / self.max_offset().max(1);
+            let mut rows = vec![row("pinned header")];
+            rows.extend(visible.into_iter().enumerate().map(|(index, text)| {
+                if show_bar && index == thumb {
+                    let pad = usize::from(COLS) - 1 - text.width();
+                    row(format!("{text}{}█", " ".repeat(pad)))
+                } else {
+                    row(text)
+                }
+            }));
+            rows.push(row(if self.decorations && self.offset > 0 {
+                "scrolled · esc"
+            } else {
+                "ready · ? help"
+            }));
+            rows.push(row("> input"));
+            HistoryReadFrame {
+                viewport: TerminalViewport {
+                    cols: COLS,
+                    rows: u16::try_from(self.rows).unwrap(),
+                },
+                rows,
+                synchronized: false,
+            }
+        }
+
+        fn wheel(&mut self, up: bool, ticks: u16) {
+            self.touched = true;
+            let lines = usize::from(ticks) * self.per_tick;
+            self.offset = if up {
+                (self.offset + lines).min(self.max_offset())
+            } else {
+                self.offset.saturating_sub(lines.min(self.down_cap))
+            };
         }
     }
 
-    // The stand-in is the external application's scroll boundary, never the reconstruction.
-    fn drive(start: usize, interrupt: bool) -> (Result<String, HistoryReadError>, usize) {
-        drive_with_sync(start, interrupt, false)
-    }
-
-    fn drive_with_sync(
-        start: usize,
-        interrupt: bool,
-        synchronized_probe: bool,
-    ) -> (Result<String, HistoryReadError>, usize) {
-        let mut position = start;
+    fn drive(app: &mut App, interrupt: bool) -> Result<HistoryRead, HistoryReadError> {
         let mut now = Instant::now();
-        let mut reader = AltScreenHistoryReader::new(frame(position), now).unwrap();
+        let mut reader = AltScreenHistoryReader::new(app.frame(), now).unwrap();
         let mut interrupted = false;
-        let mut sync_pending = false;
-        let mut probed = false;
-        for _ in 0..300 {
-            now += Duration::from_millis(250);
-            let mut observation = frame(position);
-            observation.synchronized = std::mem::take(&mut sync_pending);
-            match reader.observe(observation, now) {
+        for _ in 0..2000 {
+            now += Duration::from_millis(100);
+            match reader.observe(app.frame(), now) {
                 HistoryReadStep::Wait => {}
-                HistoryReadStep::ScrollUp => {
-                    position = position.saturating_sub(2);
-                    if interrupt && !interrupted {
+                HistoryReadStep::ScrollUp(ticks) => {
+                    app.wheel(true, ticks);
+                    if interrupt && !interrupted && app.offset > 0 {
                         reader.interrupt(now);
                         interrupted = true;
                     }
                 }
-                HistoryReadStep::ScrollDown => {
-                    position = (position + 2).min(6);
-                    sync_pending = synchronized_probe && !probed;
-                    probed = true;
-                }
-                HistoryReadStep::Finished(result) => return (result, position),
+                HistoryReadStep::ScrollDown(ticks) => app.wheel(false, ticks),
+                HistoryReadStep::Finished(result) => return result,
             }
         }
         panic!("reader did not terminate")
     }
 
-    #[test]
-    fn harvests_overlapping_pages_and_proves_bottom_restoration() {
-        let (result, position) = drive(6, false);
-        assert_eq!(position, 6);
-        let expected: String = (0..12).map(|index| format!("row {index} 🌷\n")).collect();
-        assert_eq!(result.unwrap(), expected);
+    fn transcript(app: &App) -> String {
+        app.lines.iter().map(|line| format!("{line}\n")).collect()
     }
 
     #[test]
-    fn synchronized_redraw_with_identical_rows_is_not_mistaken_for_a_scroll() {
-        let (result, position) = drive_with_sync(6, false, true);
-        assert!(result.is_ok(), "{result:?}");
-        assert_eq!(position, 6);
+    fn harvests_the_whole_transcript_and_restores_the_bottom() {
+        for per_tick in [1, 3] {
+            let mut app = App::new(60, per_tick);
+            let read = drive(&mut app, false).unwrap();
+            assert_eq!(app.offset, 0);
+            assert!(read.complete);
+            // The status row never changed, so it is pinned chrome like the input row.
+            assert_eq!(read.text, transcript(&app));
+        }
+    }
+
+    #[test]
+    fn scrollbars_covered_rows_and_changed_status_still_align() {
+        for per_tick in [1, 3] {
+            let mut app = App::new(60, per_tick);
+            app.scrollbar = true;
+            app.decorations = true;
+            let read = drive(&mut app, false).unwrap();
+            assert_eq!(app.offset, 0);
+            assert!(read.complete, "{read:?}");
+            assert!(read.text.starts_with(&transcript(&app)), "{}", read.text);
+            assert!(!read.text.contains('█'), "{}", read.text);
+        }
+    }
+
+    #[test]
+    fn repeated_and_blank_transcript_rows_are_reconstructed_exactly() {
+        let unique = (0..40).map(|index| format!("line {index:03}"));
+        let cases: [Vec<String>; 2] = [
+            // The bottom pair repeats, so it sits in place after a two-line scroll.
+            unique
+                .clone()
+                .chain(["g", "h", "g", "h"].map(String::from))
+                .collect(),
+            // The first visible transcript row is blank.
+            unique
+                .clone()
+                .take(31)
+                .chain([String::new()])
+                .chain(unique.clone().skip(31).take(8))
+                .collect(),
+        ];
+        for lines in cases {
+            let mut app = App::with_lines(lines, 2);
+            let read = drive(&mut app, false).unwrap();
+            assert_eq!(app.offset, 0);
+            assert!(read.complete);
+            assert_eq!(read.text, transcript(&app));
+        }
+    }
+
+    #[test]
+    fn a_downward_burst_the_application_caps_still_restores_the_bottom() {
+        let mut app = App::new(300, 1);
+        app.rows = 32;
+        app.down_cap = 10;
+        let read = drive(&mut app, false).unwrap();
+        assert_eq!(app.offset, 0);
+        assert!(read.complete);
+        assert_eq!(read.text, transcript(&app));
+    }
+
+    #[test]
+    fn a_scrollbar_left_behind_after_scrolling_still_proves_restoration() {
+        let mut app = App::new(60, 3);
+        app.lingering_scrollbar = true;
+        let read = drive(&mut app, false).unwrap();
+        assert!(read.complete);
+        assert!(read.text.starts_with(&transcript(&app)));
+    }
+
+    #[test]
+    fn scrolls_are_batched_once_the_tick_size_is_known() {
+        let mut app = App::new(400, 1);
+        app.rows = 32;
+        let mut now = Instant::now();
+        let mut reader = AltScreenHistoryReader::new(app.frame(), now).unwrap();
+        let mut largest = 0;
+        loop {
+            now += Duration::from_millis(100);
+            match reader.observe(app.frame(), now) {
+                HistoryReadStep::ScrollUp(ticks) => {
+                    largest = largest.max(ticks);
+                    app.wheel(true, ticks);
+                }
+                HistoryReadStep::ScrollDown(ticks) => app.wheel(false, ticks),
+                HistoryReadStep::Finished(result) => {
+                    assert!(result.unwrap().complete);
+                    break;
+                }
+                HistoryReadStep::Wait => {}
+            }
+        }
+        assert!(largest > 1, "every scroll was a single tick");
+        assert_eq!(app.offset, 0);
+    }
+
+    #[test]
+    fn a_traversal_limit_returns_the_newest_rows_as_incomplete() {
+        let mut app = App::new(5000, 1);
+        let read = drive(&mut app, false).unwrap();
+        assert_eq!(app.offset, 0);
+        assert!(!read.complete);
+        let text = read.text;
+        assert!(transcript(&app).ends_with(&text), "{text}");
+        assert!(text.lines().count() > app.body(), "{text}");
     }
 
     #[test]
     fn manually_scrolled_view_is_undone_and_refused() {
-        let (result, position) = drive(2, false);
-        assert_eq!(result, Err(HistoryReadError::NotAtBottom));
-        assert_eq!(position, 2);
+        let mut app = App::new(60, 3);
+        app.offset = 6;
+        assert_eq!(drive(&mut app, false), Err(HistoryReadError::NotAtBottom));
+        assert_eq!(app.offset, 6);
     }
 
     #[test]
     fn interruption_restores_before_releasing_the_lease() {
-        let (result, position) = drive(6, true);
-        assert_eq!(result, Err(HistoryReadError::Interrupted));
-        assert_eq!(position, 6);
+        let mut app = App::new(60, 3);
+        assert_eq!(drive(&mut app, true), Err(HistoryReadError::Interrupted));
+        assert_eq!(app.offset, 0);
+    }
+
+    #[test]
+    fn a_transcript_that_fits_has_no_history() {
+        let mut app = App::new(5, 3);
+        assert_eq!(drive(&mut app, false), Err(HistoryReadError::Unavailable));
     }
 
     #[test]
     fn interruption_during_the_bottom_probe_preserves_the_starting_position() {
-        for start in [2, 6] {
-            let mut position = start;
+        for start in [6, 0] {
+            let mut app = App::new(60, 3);
+            app.offset = start;
             let mut now = Instant::now();
-            let mut reader = AltScreenHistoryReader::new(frame(position), now).unwrap();
+            let mut reader = AltScreenHistoryReader::new(app.frame(), now).unwrap();
             let mut interrupted = false;
             let mut result = None;
             for _ in 0..40 {
                 now += Duration::from_millis(250);
-                match reader.observe(frame(position), now) {
-                    HistoryReadStep::ScrollDown => {
-                        position = (position + 2).min(6);
+                match reader.observe(app.frame(), now) {
+                    HistoryReadStep::ScrollDown(ticks) => {
+                        app.wheel(false, ticks);
                         if !interrupted {
                             reader.interrupt(now);
                             interrupted = true;
                         }
                     }
-                    HistoryReadStep::ScrollUp => position = position.saturating_sub(2),
+                    HistoryReadStep::ScrollUp(ticks) => app.wheel(true, ticks),
                     HistoryReadStep::Finished(end) => {
                         result = Some(end);
                         break;
                     }
-                    _ => {}
+                    HistoryReadStep::Wait => {}
                 }
             }
             assert_eq!(result, Some(Err(HistoryReadError::Interrupted)));
-            assert_eq!(position, start);
+            assert_eq!(app.offset, start);
         }
+    }
+
+    #[test]
+    fn interruption_waits_for_an_in_flight_scroll_up() {
+        let mut app = App::new(60, 3);
+        let bottom = app.frame();
+        let mut now = Instant::now();
+        let mut reader = AltScreenHistoryReader::new(bottom.clone(), now).unwrap();
+        let mut step = HistoryReadStep::Wait;
+        for _ in 0..8 {
+            now += Duration::from_millis(250);
+            step = reader.observe(bottom.clone(), now);
+            if matches!(step, HistoryReadStep::ScrollUp(_)) {
+                break;
+            }
+        }
+        assert_eq!(step, HistoryReadStep::ScrollUp(1));
+        reader.interrupt(now);
+        now += Duration::from_millis(250);
+        assert_eq!(reader.observe(bottom.clone(), now), HistoryReadStep::Wait);
+        now += Duration::from_millis(250);
+        assert_eq!(reader.observe(bottom.clone(), now), HistoryReadStep::Wait);
+        // The response finally lands; it must be observed and undone, not outrun.
+        app.wheel(true, 1);
+        now += Duration::from_millis(250);
+        assert_eq!(reader.observe(app.frame(), now), HistoryReadStep::Wait);
+        now += Duration::from_millis(250);
+        assert_eq!(
+            reader.observe(app.frame(), now),
+            HistoryReadStep::ScrollDown(1)
+        );
+        now += Duration::from_millis(250);
+        assert_eq!(reader.observe(bottom.clone(), now), HistoryReadStep::Wait);
+        now += Duration::from_millis(250);
+        assert_eq!(
+            reader.observe(bottom, now),
+            HistoryReadStep::Finished(Err(HistoryReadError::Interrupted))
+        );
     }
 
     #[test]
@@ -593,102 +993,157 @@ mod tests {
     }
 
     #[test]
-    fn repeated_edge_rows_are_not_silently_taken_as_chrome() {
-        let previous = ["same", "B", "C", "D", "E", "F"].map(row);
-        let current = ["same", "same", "B", "C", "D", "E"].map(row);
-        assert!(unique_crop(&previous, &current).is_none());
-        let previous = ["head", "B", "C", "D", "E", "foot"].map(row);
-        let current = ["head", "A", "B", "C", "D", "foot"].map(row);
-        assert_eq!(unique_crop(&previous, &current), Some((1, 1)));
+    fn only_a_lone_glyph_at_the_right_edge_is_a_scrollbar() {
+        let strip = |text: &str| without_scrollbar(&row(text), 20).text.to_string();
+        assert_eq!(strip("日本語 🌷          ┃"), "日本語 🌷");
+        assert_eq!(strip("text              █"), "text");
+        assert_eq!(strip("                  │"), "");
+        // Not at the edge, or part of the row's own drawing.
+        assert_eq!(strip("  ┃ prompt"), "  ┃ prompt");
+        assert_eq!(strip("text ┃"), "text ┃");
+        assert_eq!(strip("╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀"), "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀");
     }
 
     #[test]
-    fn interruption_waits_for_an_in_flight_scroll_up() {
+    fn soft_wraps_join_rows_in_the_result() {
+        let mut app = App::new(30, 3);
         let mut now = Instant::now();
-        let mut reader = AltScreenHistoryReader::new(frame(6), now).unwrap();
-        let mut step = HistoryReadStep::Wait;
-        for _ in 0..4 {
-            now += Duration::from_millis(250);
-            step = reader.observe(frame(6), now);
-            if step == HistoryReadStep::ScrollUp {
-                break;
+        let wrap = |mut frame: HistoryReadFrame| {
+            for row in &mut frame.rows {
+                row.soft_wrapped = row.text.ends_with("line 004");
             }
-        }
-        assert_eq!(step, HistoryReadStep::ScrollUp);
-        reader.interrupt(now);
-        now += Duration::from_millis(250);
-        assert_eq!(reader.observe(frame(6), now), HistoryReadStep::Wait);
-        now += Duration::from_millis(250);
-        assert_eq!(reader.observe(frame(6), now), HistoryReadStep::Wait);
-        // The response finally lands; it must be observed and undone, not outrun.
-        now += Duration::from_millis(250);
-        assert_eq!(reader.observe(frame(4), now), HistoryReadStep::Wait);
-        now += Duration::from_millis(250);
-        assert_eq!(reader.observe(frame(4), now), HistoryReadStep::ScrollDown);
-        now += Duration::from_millis(250);
-        assert_eq!(reader.observe(frame(6), now), HistoryReadStep::Wait);
-        now += Duration::from_millis(250);
+            frame
+        };
+        let mut reader = AltScreenHistoryReader::new(wrap(app.frame()), now).unwrap();
+        let read = loop {
+            now += Duration::from_millis(100);
+            match reader.observe(wrap(app.frame()), now) {
+                HistoryReadStep::ScrollUp(ticks) => app.wheel(true, ticks),
+                HistoryReadStep::ScrollDown(ticks) => app.wheel(false, ticks),
+                HistoryReadStep::Finished(result) => break result.unwrap(),
+                HistoryReadStep::Wait => {}
+            }
+        };
+        assert!(read.text.contains("line 004line 005\n"), "{}", read.text);
+    }
+
+    #[test]
+    fn repeated_rows_cannot_establish_an_alignment() {
+        let repeated = vec![row("same"); 8];
+        assert!(align(&repeated, &repeated, None).is_none());
+        let blank = vec![row(""); 8];
+        assert!(align(&blank, &blank, None).is_none());
+        let previous = ["a", "b", "c", "d", "e", "f"].map(row);
+        let changed = ["new", "different", "page", "x", "y", "z"].map(row);
+        assert!(align(&previous, &changed, None).is_none());
+    }
+
+    #[test]
+    fn pinned_rows_bound_the_transcript() {
+        let previous = ["head", "c", "d", "e", "f", "g", "status", "foot"].map(row);
+        let current = ["head", "a", "b", "c", "d", "e", "notice", "foot"].map(row);
         assert_eq!(
-            reader.observe(frame(6), now),
-            HistoryReadStep::Finished(Err(HistoryReadError::Interrupted))
+            align(&previous, &current, None),
+            Some(Alignment {
+                shift: 2,
+                top: 1,
+                bottom: 7,
+                span: 5,
+            })
         );
     }
 
     #[test]
-    fn duplicate_or_blank_rows_cannot_establish_an_anchor() {
-        let repeated = vec![row("same"); 8];
-        assert!(prepend_rows(&repeated, &repeated).is_none());
-        let blank = vec![row(""); 8];
-        assert!(prepend_rows(&blank, &blank).is_none());
+    fn alignments_are_correct_or_refused_across_duplicate_row_corpora() {
+        // Repeated and blank transcript rows between a pinned header and footer: an alignment
+        // is either exact, boundaries included, or refused.
+        let mut seed = 42u64;
+        for _ in 0..4000 {
+            let rows: Vec<_> = (0..16)
+                .map(|_| {
+                    seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+                    match (seed >> 32) % 7 {
+                        0 => row(""),
+                        symbol => row(format!("{symbol}")),
+                    }
+                })
+                .collect();
+            for shift in 1..=4 {
+                let page = |range: std::ops::Range<usize>| {
+                    let mut page = vec![row("header")];
+                    page.extend_from_slice(&rows[range]);
+                    page.push(row("footer"));
+                    page
+                };
+                let previous = page(4..12);
+                let current = page(4 - shift..12 - shift);
+                for known_top in [None, Some(1)] {
+                    if let Some(alignment) = align(&previous, &current, known_top) {
+                        assert_eq!(
+                            (alignment.shift, alignment.top, alignment.bottom),
+                            (shift, 1, previous.len() - 1),
+                            "{previous:?} {current:?} {known_top:?}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]
-    fn ambiguous_and_nonoverlapping_changes_are_refused() {
-        let previous = ["a", "b", "c", "d", "e", "f"].map(row);
-        let changed = ["new", "different", "page", "x", "y", "z"].map(row);
-        assert!(prepend_rows(&previous, &changed).is_none());
-        let weak = ["new", "newer", "newest", "extra", "a", "b"].map(row);
-        assert!(prepend_rows(&previous, &weak).is_none());
+    fn repeated_transcript_left_in_place_is_not_taken_for_a_footer() {
+        let previous = ["head", "c", "d", "e", "f", "g", "h", "g", "h", "foot"].map(row);
+        let current = ["head", "a", "b", "c", "d", "e", "f", "g", "h", "foot"].map(row);
+        let alignment = align(&previous, &current, None).unwrap();
+        assert_eq!((alignment.shift, alignment.top), (2, 1));
+        assert_eq!(alignment.bottom, 9, "the trailing g, h are transcript");
     }
 
     #[test]
-    fn overlapping_unicode_rows_retain_their_soft_wrap_metadata() {
-        let mut previous = ["日本", "語🌷", "three", "four", "five", "six"].map(row);
-        previous[0].soft_wrapped = true;
-        let current = [
-            row("first"),
-            previous[0].clone(),
-            previous[1].clone(),
-            previous[2].clone(),
-            previous[3].clone(),
-            previous[4].clone(),
-        ];
-        assert_eq!(prepend_rows(&previous, &current).unwrap(), &[row("first")]);
+    fn a_blank_first_row_still_starts_the_transcript() {
+        let previous = ["head", "", "c", "d", "e", "f", "g", "foot"].map(row);
+        let current = ["head", "a", "b", "", "c", "d", "e", "foot"].map(row);
+        let alignment = align(&previous, &current, None).unwrap();
+        assert_eq!((alignment.shift, alignment.top), (2, 1));
+    }
+
+    #[test]
+    fn a_row_both_moved_and_in_place_needs_a_known_top() {
+        // The blank under the header is either a spacer or a transcript row: both fit.
+        let previous = ["head", "", "c", "d", "e", "f", "g", "foot"].map(row);
+        let current = ["head", "", "b", "", "c", "d", "e", "foot"].map(row);
+        assert_eq!(align(&previous, &current, None), None);
+        assert_eq!(align(&previous, &current, Some(2)).unwrap().top, 2);
+        assert_eq!(align(&previous, &current, Some(1)).unwrap().top, 1);
     }
 
     #[test]
     fn resize_and_restoration_timeout_never_return_text() {
+        let app = App::new(60, 3);
         let now = Instant::now();
-        let mut reader = AltScreenHistoryReader::new(frame(6), now).unwrap();
-        let mut resized = frame(6);
+        let mut reader = AltScreenHistoryReader::new(app.frame(), now).unwrap();
+        let mut resized = app.frame();
         resized.viewport.cols = 80;
         assert_eq!(
             reader.observe(resized, now),
             HistoryReadStep::Finished(Err(HistoryReadError::RestoreUnproven))
         );
-        let mut reader = AltScreenHistoryReader::new(frame(6), now).unwrap();
+        let mut scrolled = app.clone();
+        scrolled.wheel(true, 1);
+        let mut reader = AltScreenHistoryReader::new(app.frame(), now).unwrap();
         assert_eq!(
-            reader.observe(frame(6), now + QUIET),
-            HistoryReadStep::ScrollDown
+            reader.observe(app.frame(), now + QUIET),
+            HistoryReadStep::ScrollDown(1)
         );
         let moved_at = now + QUIET + RESPONSE;
         assert_eq!(
-            reader.observe(frame(6), moved_at),
-            HistoryReadStep::ScrollUp
+            reader.observe(app.frame(), moved_at),
+            HistoryReadStep::ScrollUp(1)
         );
         reader.interrupt(moved_at);
         assert_eq!(
-            reader.observe(frame(4), moved_at + RESTORATION),
+            // Restoration may take as long as the traversal before it, plus its own bound.
+            reader.observe(scrolled.frame(), moved_at + RESTORATION + QUIET + RESPONSE),
             HistoryReadStep::Finished(Err(HistoryReadError::RestoreUnproven))
         );
     }
@@ -696,32 +1151,12 @@ mod tests {
     #[test]
     fn synchronized_frames_do_not_settle_or_issue_scrolls() {
         let now = Instant::now();
-        let mut pending = frame(6);
+        let mut pending = App::new(60, 3).frame();
         pending.synchronized = true;
         let mut reader = AltScreenHistoryReader::new(pending.clone(), now).unwrap();
         assert_eq!(
             reader.observe(pending, now + Duration::from_secs(1)),
             HistoryReadStep::Wait
         );
-    }
-
-    #[test]
-    fn overlap_offsets_are_correct_across_duplicate_row_corpora() {
-        let mut seed = 42u64;
-        for _ in 0..2000 {
-            let rows: Vec<_> = (0..16)
-                .map(|_| {
-                    seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
-                    row(format!("{}", (seed >> 32) % 9))
-                })
-                .collect();
-            for shift in 1..=4 {
-                let previous = &rows[4..12];
-                let current = &rows[4 - shift..12 - shift];
-                if let Some(added) = prepend_rows(previous, current) {
-                    assert_eq!(added, &rows[4 - shift..4]);
-                }
-            }
-        }
     }
 }

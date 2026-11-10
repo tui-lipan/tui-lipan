@@ -1391,20 +1391,34 @@ you do not set explicitly.
 ## Read an alternate-screen application's history
 
 `AltScreenHistoryReader` reconstructs rendered history by requesting wheel ticks and comparing
-settled, overlapping pages. It returns text only after the original viewport has been restored.
-The text preserves soft wraps. It is rendered terminal content, including any displayed formatting,
-not an application's original Markdown or semantic messages.
+settled, overlapping pages. It returns a `HistoryRead` only after the original viewport has been
+restored. Its `text` preserves soft wraps. It is rendered terminal content, including any displayed
+formatting, not an application's original Markdown or semantic messages.
+
+Pages are compared without scrollbars: a lone track or thumb glyph at the right edge of a row is
+dropped from comparisons and from the text. Pages are aligned on the rows that moved, so a scrolled
+view may cover a row with a notice or change a status line. Rows the scroll did not move are chrome:
+those above the transcript are left out, and the text ends at the first row below it that stayed in
+place where a transcript row should have arrived. Rows between the transcript and that footer may
+remain. Repeated transcript that happens to stay in place is kept. When a row above the transcript
+could be either chrome or transcript and no earlier page settles it, the pages are refused.
 
 Start only for a recognized idle application, with mouse reporting enabled, no manual scrollback,
 and no direct terminal attachment. Hold an exclusive input lease until the reader returns
 `HistoryReadStep::Finished`. Feed observations from `TerminalScreen::history_read_frame()` to
-`observe` on each event-loop tick and after output. Execute each returned `ScrollUp` or `ScrollDown`
-exactly once in the application's active mouse protocol. Keep pumping the application while waiting.
+`observe` on each event-loop tick and after output. Execute each returned `ScrollUp(ticks)` or
+`ScrollDown(ticks)` exactly once, as that many wheel ticks in the application's active mouse
+protocol. Keep pumping the application while waiting. The first scroll is a single tick; later
+scrolls are sized from how far one tick moved the transcript.
 
 Call `interrupt` on human input, resize, application activity, or unexpected output. Queue the input
 and resize until restoration finishes, then release the lease. Never resize the application to
-collect history. A `RestoreUnproven` error contains no reconstructed text. Dynamic chrome,
-ambiguous repeated rows, and pages with insufficient overlap may be refused.
+collect history. A `RestoreUnproven` error contains no reconstructed text.
+
+`HistoryRead::complete` is `true` when scrolling reached the top of the transcript. A traversal
+bound, or a later page that cannot be aligned, ends the read early with `complete: false` and the
+newest rows that were read. When the first scrolled page cannot be aligned, the read fails with
+`AmbiguousOverlap`.
 
 Use `TerminalScreen::is_alternate_screen()` to choose this reader instead of ordinary scrollback
 export. The reader enforces traversal and restoration deadlines and bounds retained pages and text.
