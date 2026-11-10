@@ -557,14 +557,16 @@ mod hybrid {
         if let Some((start, compact_len, hits)) =
             find_separator_insensitive(&hay_folded, &query_folded)
         {
+            // Only a whole-field match keeps its tier. Otherwise the query merely spans a
+            // separator, which is weaker evidence than a hit that respects word boundaries:
+            // `tabs` names the word in `Sidebar tabs`, not `Tab s|trip`.
             let tier = if query_folded.len() == compact_len {
                 MatchTier::Exact
-            } else if start == 0 {
-                MatchTier::Prefix
             } else {
                 MatchTier::Substring
             };
-            let quality = query_folded.len() as f64 / compact_len as f64;
+            let quality = (query_folded.len() as f64 / compact_len as f64)
+                * if start == 0 { 1.0 } else { 0.5 };
             return Some(FieldMatch {
                 tier,
                 quality,
@@ -886,6 +888,16 @@ mod tests {
             assert_eq!(results[0].item_index, 0);
             assert_eq!(results[0].label_hits.len(), query.len());
         }
+    }
+
+    #[test]
+    fn hybrid_whole_word_outranks_match_across_separator() {
+        // `tabs` spans the separator in "Tab strip" but names a whole word in
+        // "Sidebar tabs"; the word must win even though it is not the first.
+        let results = hybrid_match(&["Tab strip", "Bigtabs", "Sidebar tabs"], "tabs");
+
+        let order: Vec<_> = results.iter().map(|result| result.item_index).collect();
+        assert_eq!(order, [2, 1, 0], "{results:?}");
     }
 
     #[test]

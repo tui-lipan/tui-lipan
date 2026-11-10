@@ -509,7 +509,9 @@ pub enum SearchMatchMode {
     /// prefix match always outranks a fuzzy one, and weak scattered fuzzy
     /// matches are rejected instead of polluting results.
     /// Contiguous queries may omit separators within a field, so
-    /// `switchmodel` matches `Switch model`.
+    /// `switchmodel` matches `Switch model`. Unless such a query covers the
+    /// whole field, it ranks with substring matches, so `tabs` lists
+    /// `Sidebar tabs` above `Tab strip`.
     ///
     /// Each whitespace-separated query term may match a different field, but
     /// characters within one term never combine across the label, an alias,

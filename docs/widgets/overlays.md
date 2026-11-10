@@ -795,7 +795,10 @@ SearchPalette::new()
 match different item fields. For example, `openai 5.6` can match `OpenAI` in an
 item description and `5.6` in its label. Every term must match, and characters
 within a single term are never combined across fields. Separators within one
-field may be omitted, so `switchmodel` matches `Switch model`.
+field may be omitted, so `switchmodel` matches `Switch model`. Unless the
+query covers the whole field, such a match ranks with substring matches, below
+a match that respects word boundaries: `tabs` lists `Sidebar tabs` above
+`Tab strip`.
 
 | Prop | Type | Description |
 |------|------|-------------|
