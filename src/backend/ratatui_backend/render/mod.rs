@@ -534,7 +534,19 @@ pub(crate) fn render_regions(
         content,
     };
 
-    if !tree.is_valid(tree.root) || !tree.overlay_roots().is_empty() {
+    // A region no overlay reaches is the base tree alone. One an overlay paints into needs the
+    // whole composite, which only the ordinary render produces.
+    let under_overlay = !tree.overlay_roots().is_empty()
+        && overlay_row_spans(tree).is_none_or(|spans| {
+            regions.iter().any(|region| {
+                let top = i32::from(region.y) - i32::from(content.y);
+                let rows = top..top + i32::from(region.h);
+                spans
+                    .iter()
+                    .any(|span| span.start < rows.end && rows.start < span.end)
+            })
+        });
+    if !tree.is_valid(tree.root) || under_overlay {
         render(state.f, ctx);
         return;
     }
@@ -611,6 +623,39 @@ fn overlay_slide_offset(tree: &NodeTree, overlay: &crate::core::node::OverlayRoo
     }
     let rect = tree.node(overlay.id).rect;
     RenderOffset::ZERO.add_cells(recipe.slide_offset_cells(context.progress, rect.w, rect.h))
+}
+
+/// The rows every overlay paints this frame, as half-open spans in tree coordinates, or `None`
+/// when some overlay reaches beyond its own nodes.
+///
+/// An overlay paints over the base tree only where its subtree's nodes sit, after any slide or
+/// `Animated` move, so a row outside every span looks exactly as the base tree paints it. A
+/// backdrop dims the whole screen and a fading overlay blends with what it covers, so those cannot
+/// be bounded that way.
+pub(crate) fn overlay_row_spans(tree: &NodeTree) -> Option<Vec<std::ops::Range<i32>>> {
+    let mut spans = Vec::new();
+    for overlay in tree.overlay_roots() {
+        if !tree.is_valid(overlay.id)
+            || overlay.backdrop.is_some()
+            || overlay_visibility(tree, overlay) < 1.0
+        {
+            return None;
+        }
+        let (_, slide) = overlay_slide_offset(tree, overlay).cells();
+        let mut stack = vec![overlay.id];
+        while let Some(id) = stack.pop() {
+            if !tree.is_valid(id) {
+                continue;
+            }
+            let rect = render_offset_for_node(tree, id).apply_to_rect(tree.node(id).rect);
+            if rect.w > 0 && rect.h > 0 {
+                let top = i32::from(rect.y) + slide;
+                spans.push(top..top + i32::from(rect.h));
+            }
+            stack.extend(tree.node(id).children.iter().copied());
+        }
+    }
+    Some(spans)
 }
 
 /// Everything that moves an overlay away from its resting rectangle while it paints: a wrapping

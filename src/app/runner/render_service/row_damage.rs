@@ -41,8 +41,9 @@ pub(crate) enum DamageRejection {
     NodeMissing,
     /// There is no retained frame to patch, or it does not match the current geometry.
     NoMatchingRetainedFrame,
-    /// An overlay, devtools panel, drag preview or inline surface composites over the tree, so a
-    /// terminal row is not the only thing that could occupy those cells.
+    /// An overlay painting on a damaged row, an overlay with a backdrop or partial opacity, a
+    /// devtools panel, drag preview or inline surface composites over the tree, so a terminal row
+    /// is not the only thing that could occupy those cells.
     CompositeSurface,
     /// The terminal is showing scrollback rather than the live viewport.
     #[cfg(feature = "terminal")]
@@ -85,7 +86,9 @@ where
     }
 
     fn validate_damage_compositing(&self) -> Result<(), DamageRejection> {
-        if self.surface.is_inline() || !self.core.tree.overlay_roots().is_empty() {
+        // Overlays are checked against the damaged rows once those are known: one that paints
+        // none of them leaves them exactly as the base tree paints them.
+        if self.surface.is_inline() {
             return Err(DamageRejection::CompositeSurface);
         }
         #[cfg(feature = "devtools")]
@@ -98,6 +101,29 @@ where
         // The inspector outline is drawn over the finished frame by `render`, and `render_regions`
         // has no equivalent. A repainted row would erase the part of the outline crossing it.
         if self.highlight().is_some() {
+            return Err(DamageRejection::CompositeSurface);
+        }
+        Ok(())
+    }
+
+    /// A row repaint draws the base tree alone, so no overlay may paint on any row it repaints.
+    /// That includes the caret's row, so a caret inside an overlay always takes the full paint.
+    fn validate_rows_beside_overlays(
+        &self,
+        rows: &[u16],
+        frame_area: ratatui::layout::Rect,
+    ) -> Result<(), DamageRejection> {
+        let tree = &self.core.tree;
+        if tree.overlay_roots().is_empty() {
+            return Ok(());
+        }
+        let spans = crate::backend::ratatui_backend::render::overlay_row_spans(tree)
+            .ok_or(DamageRejection::CompositeSurface)?;
+        let covered = rows.iter().any(|&row| {
+            let row = i32::from(row) - i32::from(frame_area.y);
+            spans.iter().any(|span| span.contains(&row))
+        });
+        if covered {
             return Err(DamageRejection::CompositeSurface);
         }
         Ok(())
@@ -289,6 +315,7 @@ where
         if rows.len() > usize::from(frame_area.height) / 2 {
             return Err(DamageRejection::DenseDamage);
         }
+        self.validate_rows_beside_overlays(&rows, frame_area)?;
         Ok(RowDamagePlan { rows })
     }
 
