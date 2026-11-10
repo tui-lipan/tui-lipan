@@ -115,6 +115,18 @@ pub(crate) struct TerminalLinkHover {
 }
 
 impl TerminalNode {
+    /// Whether this terminal shows a caret at all, before focus and blink. Scrollback and a
+    /// selection hide the child's caret; one the app placed (`cursor_override`) stays through both.
+    pub(crate) fn shows_caret(&self) -> bool {
+        self.cursor_visible
+            && (self.cursor_position_override.is_some()
+                || (self.scrollback_offset == 0
+                    && self
+                        .selection
+                        .as_ref()
+                        .is_none_or(|selection| selection.is_empty())))
+    }
+
     fn context_menu_content_rect(&self, press: SecondaryPress) -> Rect {
         terminal_content_layout(
             press.rect.inner(self.border, self.padding),
