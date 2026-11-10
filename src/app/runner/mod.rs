@@ -2771,6 +2771,12 @@ impl<C: Component> AppRunner<C> {
                                     self.apply_pointer_leave(&mut dirty);
                                 }
                                 CoalescedPointer::Inside(mut mouse) => {
+                                    // A press, drag, release, or scroll can move the caret, and a
+                                    // caret the pointer moves draws no jump trail.
+                                    if !matches!(mouse.kind, MouseKind::Moved) {
+                                        let now = self.core.ctx.env().now();
+                                        self.cursor_trail.note_pointer(now);
+                                    }
                                     pointer_motion_only = matches!(
                                         mouse.kind,
                                         MouseKind::Moved

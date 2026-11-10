@@ -42,7 +42,8 @@ pub enum CursorTrailTrigger {
     /// in one step inside the same widget. The move is measured within the widget, so a widget
     /// that moves (an animated layout, a drag) carries its caret without starting a trail. A
     /// widget that changes size (or a terminal whose screen does) reflows its content, so for
-    /// 300 ms after it does, moves inside it start none, and a jump trail inside it stops.
+    /// 300 ms after it does, moves inside it start none, and a jump trail inside it stops. Moves
+    /// the pointer makes inside a widget (a click, a drag, a scroll) start none either.
     Jump {
         /// The fewest columns a same-widget move must span.
         columns: u16,
@@ -701,6 +702,8 @@ pub(crate) struct CursorTrailState {
     /// The widget the caret is in and when it last changed size, while its content may still
     /// be reflowing.
     resized: Option<(CaretOwnerId, Instant)>,
+    /// When the pointer last pressed, dragged, released, or scrolled.
+    pointed: Option<Instant>,
 }
 
 impl CursorTrailState {
@@ -709,10 +712,30 @@ impl CursorTrailState {
     /// quiet outlasts that round trip.
     pub(crate) const REFLOW_QUIET: Duration = Duration::from_millis(300);
 
+    /// How long after pointer input a move inside one widget starts no trail. A caret the pointer
+    /// places, drags, or scrolls lands where the user is already looking, a frame or two after
+    /// the input that moved it.
+    pub(crate) const POINTER_QUIET: Duration = Duration::from_millis(150);
+
+    /// Record pointer input that may move the caret: a press, drag, release, or scroll.
+    pub(crate) fn note_pointer(&mut self, now: Instant) {
+        self.pointed = Some(now);
+    }
+
     /// Whether the caret's move from `last` to `caret` starts a trail: it triggers one, and is
-    /// not a resized widget's content reflowing.
+    /// neither a resized widget's content reflowing nor the pointer moving it within its widget.
     fn starts_trail(&self, config: CursorTrail, last: Caret, caret: Caret, now: Instant) -> bool {
-        config.triggers(last, caret) && !self.reflowing(last, caret, now)
+        config.triggers(last, caret)
+            && !self.reflowing(last, caret, now)
+            && !self.pointer_moved(last, caret, now)
+    }
+
+    /// Whether the move from `last` to `caret` is inside one widget, moments after pointer input.
+    fn pointer_moved(&self, last: Caret, caret: Caret, now: Instant) -> bool {
+        last.owner_id() == caret.owner_id()
+            && self
+                .pointed
+                .is_some_and(|at| now.saturating_duration_since(at) < Self::POINTER_QUIET)
     }
 
     /// Whether the move from `last` to `caret` is inside a widget that changed size moments ago,
@@ -1450,6 +1473,37 @@ mod tests {
         state.observe(jump, at(2, 10), grid(60, 24), block(), debounced + INTERVAL);
         state.advance(jump, debounced + INTERVAL + LANDING_MAX);
         assert!(state.frame(jump).is_none());
+    }
+
+    #[test]
+    fn a_caret_the_pointer_moves_inside_its_widget_starts_no_trail() {
+        let start = Instant::now();
+        let jump = Some(CursorTrail::new().trigger(CursorTrailTrigger::jump()));
+        let mut state = CursorTrailState::default();
+        see(&mut state, jump, 2, 2, 1, start);
+        // A drag moves the caret far, a frame after each step of the pointer.
+        let mut at = start;
+        for x in [20, 40, 60] {
+            state.note_pointer(at);
+            at += INTERVAL;
+            see(&mut state, jump, x, 2, 1, at);
+            state.advance(jump, at);
+            assert!(state.frame(jump).is_none(), "a drag to column {x}");
+        }
+        // A click on another widget is a focus change, and trails as one.
+        state.note_pointer(at);
+        see(&mut state, jump, 5, 9, 2, at + INTERVAL);
+        state.advance(jump, at + INTERVAL);
+        assert!(state.frame(jump).is_some(), "a click to another widget");
+        // Once the pointer rests, a jump by keyboard trails again.
+        let later = at + CursorTrailState::POINTER_QUIET * 2;
+        state.advance(jump, later);
+        see(&mut state, jump, 40, 9, 2, later);
+        state.advance(jump, later + LANDING_QUIET);
+        assert!(
+            state.frame(jump).is_some(),
+            "a keyboard jump after the drag"
+        );
     }
 
     #[test]
