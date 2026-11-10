@@ -623,7 +623,7 @@ fn band_top(
         }
         if pinned[row] {
             return match known_top {
-                Some(known) if known <= row => Some(known).filter(|_| (known..row).all(&moved)),
+                Some(known) if known <= row => (known..row).all(&moved).then_some(known),
                 Some(known) if known == top => Some(known),
                 _ => None,
             };
