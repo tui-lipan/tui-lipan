@@ -24,6 +24,7 @@ use ratatui::layout::Position;
 use web_time::Instant;
 
 use crate::CaretShape;
+use crate::core::event::MouseKind;
 use crate::core::node::NodeId;
 use crate::style::{Color, HostTerminalColors};
 
@@ -34,14 +35,16 @@ use raster::{GlyphSet, Hull, SmearPaint};
 /// What makes a [`CursorTrail`] appear.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum CursorTrailTrigger {
-    /// Only when focus moves to another widget and the caret moves with it.
+    /// Only when focus moves to another widget and the caret moves with it. A keyed widget stays
+    /// the same widget when a view change rebuilds its node, such as wrapping it in a container.
     #[default]
     FocusChange,
     /// On a focus change, and whenever the caret moves at least `columns` columns or `rows` rows
     /// in one step inside the same widget. The move is measured within the widget, so a widget
     /// that moves (an animated layout, a drag) carries its caret without starting a trail. A
     /// widget that changes size (or a terminal whose screen does) reflows its content, so for
-    /// 300 ms after it does, moves inside it start none, and a jump trail inside it stops.
+    /// 300 ms after it does, moves inside it start none, and a jump trail inside it stops. Moves
+    /// the pointer makes inside a widget (a click, a drag, a scroll) start none either.
     Jump {
         /// The fewest columns a same-widget move must span.
         columns: u16,
@@ -508,16 +511,54 @@ pub(crate) fn ease_out_cubic(t: f32) -> f32 {
     1.0 - inverse * inverse * inverse
 }
 
+/// Which widget owns the caret, stable across a rebuild of its node.
+///
+/// A view that wraps a subtree in a new container (a sidebar docking beside the content, say)
+/// rebuilds every node in it, so a node id alone would read the same widget as another one. A
+/// keyed widget is the same widget for as long as its key is, which is what focus restore goes by
+/// too.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum CaretOwnerId {
+    /// A hash of the widget's key.
+    Key(u64),
+    /// An unkeyed widget's node.
+    Node(NodeId),
+}
+
+impl CaretOwnerId {
+    pub(crate) fn of(id: NodeId, key: Option<&crate::core::element::Key>) -> Self {
+        use std::hash::{BuildHasher, BuildHasherDefault};
+        match key {
+            Some(key) => Self::Key(
+                BuildHasherDefault::<rustc_hash::FxHasher>::default().hash_one(key.as_ref()),
+            ),
+            None => Self::Node(id),
+        }
+    }
+}
+
 /// The widget that owns the caret, and where its layout rectangle sits on screen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CaretOwner {
-    pub(crate) id: NodeId,
+    pub(crate) id: CaretOwnerId,
     pub(crate) origin: (i32, i32),
     /// The widget's width and height in cells.
     pub(crate) size: (u16, u16),
     /// The columns and rows of the grid the caret moves in, when the widget keeps one apart from
     /// its layout: a terminal's screen, which may resize a debounce after its widget does.
     pub(crate) grid: Option<(u16, u16)>,
+}
+
+impl CaretOwner {
+    /// Whether the cell at `(x, y)` is inside the widget as it paints.
+    fn contains(self, (x, y): (u16, u16)) -> bool {
+        let (x, y) = (i32::from(x), i32::from(y));
+        let (left, top) = self.origin;
+        x >= left
+            && y >= top
+            && x < left + i32::from(self.size.0)
+            && y < top + i32::from(self.size.1)
+    }
 }
 
 /// The host caret as one presented frame left it.
@@ -533,7 +574,7 @@ impl Caret {
         caret_rect(self.position.x, self.position.y, self.shape)
     }
 
-    fn owner_id(self) -> Option<NodeId> {
+    fn owner_id(self) -> Option<CaretOwnerId> {
         self.owner.map(|owner| owner.id)
     }
 
@@ -673,7 +714,13 @@ pub(crate) struct CursorTrailState {
     skip: bool,
     /// The widget the caret is in and when it last changed size, while its content may still
     /// be reflowing.
-    resized: Option<(NodeId, Instant)>,
+    resized: Option<(CaretOwnerId, Instant)>,
+    /// The widget the pointer last pressed, dragged, released, or scrolled in while it held the
+    /// caret, and when.
+    pointed: Option<(CaretOwnerId, Instant)>,
+    /// The widget a pointer press that is still held began in, while it held the caret, so a drag
+    /// past its edge still acts on it.
+    pressed: Option<CaretOwnerId>,
 }
 
 impl CursorTrailState {
@@ -682,10 +729,61 @@ impl CursorTrailState {
     /// quiet outlasts that round trip.
     pub(crate) const REFLOW_QUIET: Duration = Duration::from_millis(300);
 
+    /// How long after pointer input a move inside one widget starts no trail. A caret the pointer
+    /// places, drags, or scrolls lands where the user is already looking, a frame or two after
+    /// the input that moved it.
+    pub(crate) const POINTER_QUIET: Duration = Duration::from_millis(150);
+
+    /// Record pointer input at `at` that may move the caret in `owner`, the widget that holds it:
+    /// a press or scroll inside it, or a drag or release of a press that began inside it. Input
+    /// anywhere else leaves the caret's moves to trail as usual.
+    pub(crate) fn note_pointer(
+        &mut self,
+        now: Instant,
+        owner: Option<CaretOwner>,
+        at: (u16, u16),
+        kind: MouseKind,
+    ) {
+        let inside = owner
+            .filter(|owner| owner.contains(at))
+            .map(|owner| owner.id);
+        let pressed = owner
+            .map(|owner| owner.id)
+            .filter(|&id| self.pressed == Some(id));
+        let target = match kind {
+            MouseKind::Moved => return,
+            MouseKind::Down(_) => {
+                self.pressed = inside;
+                inside
+            }
+            MouseKind::Drag(_) => inside.or(pressed),
+            MouseKind::Up(_) => {
+                self.pressed = None;
+                inside.or(pressed)
+            }
+            _ => inside,
+        };
+        if let Some(id) = target {
+            self.pointed = Some((id, now));
+        }
+    }
+
     /// Whether the caret's move from `last` to `caret` starts a trail: it triggers one, and is
-    /// not a resized widget's content reflowing.
+    /// neither a resized widget's content reflowing nor the pointer moving it within its widget.
     fn starts_trail(&self, config: CursorTrail, last: Caret, caret: Caret, now: Instant) -> bool {
-        config.triggers(last, caret) && !self.reflowing(last, caret, now)
+        config.triggers(last, caret)
+            && !self.reflowing(last, caret, now)
+            && !self.pointer_moved(last, caret, now)
+    }
+
+    /// Whether the move from `last` to `caret` is inside one widget, moments after pointer input
+    /// in it.
+    fn pointer_moved(&self, last: Caret, caret: Caret, now: Instant) -> bool {
+        last.owner_id() == caret.owner_id()
+            && self.pointed.is_some_and(|(id, at)| {
+                caret.owner_id() == Some(id)
+                    && now.saturating_duration_since(at) < Self::POINTER_QUIET
+            })
     }
 
     /// Whether the move from `last` to `caret` is inside a widget that changed size moments ago,
@@ -1100,6 +1198,7 @@ impl CursorTrailFrame {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::event::MouseButton;
     use ratatui::layout::Rect;
     use ratatui::style::Color as RColor;
 
@@ -1115,7 +1214,7 @@ mod tests {
     /// Widget `id`, laid out at `(x, y)` on screen.
     fn moved(id: u32, x: i32, y: i32) -> Option<CaretOwner> {
         Some(CaretOwner {
-            id: NodeId::new(id, 0),
+            id: CaretOwnerId::Node(NodeId::new(id, 0)),
             origin: (x, y),
             size: (80, 24),
             grid: None,
@@ -1423,6 +1522,55 @@ mod tests {
         state.observe(jump, at(2, 10), grid(60, 24), block(), debounced + INTERVAL);
         state.advance(jump, debounced + INTERVAL + LANDING_MAX);
         assert!(state.frame(jump).is_none());
+    }
+
+    #[test]
+    fn a_caret_the_pointer_moves_inside_its_widget_starts_no_trail() {
+        let start = Instant::now();
+        let jump = Some(CursorTrail::new().trigger(CursorTrailTrigger::jump()));
+        let mut state = CursorTrailState::default();
+        see(&mut state, jump, 2, 2, 1, start);
+        // A press in the widget, then a drag that moves the caret far, a frame after each step of
+        // the pointer, and on past the widget's edge.
+        let mut at = start;
+        state.note_pointer(at, node(1), (2, 2), MouseKind::Down(MouseButton::Left));
+        for x in [20, 40, 60] {
+            state.note_pointer(at, node(1), (x + 30, 2), MouseKind::Drag(MouseButton::Left));
+            at += INTERVAL;
+            see(&mut state, jump, x, 2, 1, at);
+            state.advance(jump, at);
+            assert!(state.frame(jump).is_none(), "a drag to column {x}");
+        }
+        state.note_pointer(at, node(1), (90, 2), MouseKind::Up(MouseButton::Left));
+        // A click on another widget is a focus change, and trails as one.
+        state.note_pointer(at, node(1), (5, 30), MouseKind::Down(MouseButton::Left));
+        see(&mut state, jump, 5, 9, 2, at + INTERVAL);
+        state.advance(jump, at + INTERVAL);
+        assert!(state.frame(jump).is_some(), "a click to another widget");
+        // Once the pointer rests, a jump by keyboard trails again.
+        let later = at + CursorTrailState::POINTER_QUIET * 2;
+        state.advance(jump, later);
+        see(&mut state, jump, 40, 9, 2, later);
+        state.advance(jump, later + LANDING_QUIET);
+        assert!(
+            state.frame(jump).is_some(),
+            "a keyboard jump after the drag"
+        );
+    }
+
+    #[test]
+    fn pointer_input_elsewhere_leaves_the_caret_s_jumps_trailing() {
+        let start = Instant::now();
+        let jump = Some(CursorTrail::new().trigger(CursorTrailTrigger::jump()));
+        let mut state = CursorTrailState::default();
+        // The widget fills columns 0..80 and rows 0..24; the clicks and scroll land below it.
+        see(&mut state, jump, 2, 2, 1, start);
+        state.note_pointer(start, node(1), (5, 30), MouseKind::Down(MouseButton::Left));
+        state.note_pointer(start, node(1), (5, 30), MouseKind::Up(MouseButton::Left));
+        state.note_pointer(start, node(1), (5, 30), MouseKind::ScrollDown);
+        see(&mut state, jump, 40, 2, 1, start + INTERVAL);
+        state.advance(jump, start + INTERVAL);
+        assert!(state.frame(jump).is_some());
     }
 
     #[test]
