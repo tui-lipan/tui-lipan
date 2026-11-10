@@ -1397,9 +1397,11 @@ formatting, not an application's original Markdown or semantic messages.
 
 Pages are compared without scrollbars: a lone track or thumb glyph at the right edge of a row is
 dropped from comparisons and from the text. Pages are aligned on the rows that moved, so a scrolled
-view may cover a row with a notice or change a status line. Rows that stay in place are pinned
-chrome: those above the transcript are left out, and the text ends at the first pinned row below
-it. Rows between the transcript and that footer may remain.
+view may cover a row with a notice or change a status line. Rows the scroll did not move are chrome:
+those above the transcript are left out, and the text ends at the first row below it that stayed in
+place where a transcript row should have arrived. Rows between the transcript and that footer may
+remain. Repeated transcript that happens to stay in place is kept. When a row above the transcript
+could be either chrome or transcript and no earlier page settles it, the pages are refused.
 
 Start only for a recognized idle application, with mouse reporting enabled, no manual scrollback,
 and no direct terminal attachment. Hold an exclusive input lease until the reader returns

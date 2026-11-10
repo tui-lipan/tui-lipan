@@ -116,6 +116,8 @@ pub struct AltScreenHistoryReader {
     pending_up: bool,
     changed: bool,
     pages: usize,
+    /// The transcript's first row, once a page proved it.
+    band_top: Option<usize>,
     /// Ticks in the next upward scroll, sized from how far one tick moves the transcript.
     ticks: u16,
     /// Ticks in the upward scroll whose page is awaited.
@@ -171,6 +173,7 @@ impl AltScreenHistoryReader {
             pending_up: false,
             changed: false,
             pages: 0,
+            band_top: None,
             ticks: 1,
             sent_ticks: 0,
             up_ticks: 0,
@@ -310,7 +313,7 @@ impl AltScreenHistoryReader {
             // The transcript stopped moving: its top has been read.
             return self.start_restore(now);
         }
-        let Some(alignment) = align(&self.page, &self.observed_rows) else {
+        let Some(alignment) = align(&self.page, &self.observed_rows, self.band_top) else {
             return self.stop_early(HistoryReadError::AmbiguousOverlap, now);
         };
         if self.pages == 0 {
@@ -326,6 +329,7 @@ impl AltScreenHistoryReader {
         for row in added.iter().rev() {
             self.content.push_front(row.clone());
         }
+        self.band_top = Some(alignment.top);
         self.pages += 1;
         if self.pages >= MAX_PAGES
             || self
@@ -512,24 +516,61 @@ fn is_blank(row: &HistoryReadRow) -> bool {
 struct Alignment {
     /// Rows the transcript moved down, which equals the rows revealed above it.
     shift: usize,
-    /// The first transcript row. Rows above it are pinned chrome.
+    /// The first transcript row. Rows above it are chrome the scroll did not move.
     top: usize,
-    /// End of the transcript on the earlier page: the first pinned, nonblank row below it.
+    /// End of the transcript on the earlier page: the first row proven to be a pinned footer.
     bottom: usize,
     /// Height of the region that moved.
     span: usize,
 }
 
-/// Find the one shift that explains a scroll. Rows identical in place are pinned chrome and carry
-/// no evidence. The rest must mostly agree at that shift, through a row unique to both pages,
-/// and no other shift may be plausible: repeated rows alone cannot tell a small scroll from a
-/// larger one.
-fn align(previous: &[HistoryReadRow], current: &[HistoryReadRow]) -> Option<Alignment> {
+/// Find the one shift that explains a scroll, then where the transcript starts and ends.
+///
+/// Rows identical in place carry no evidence for the shift. The rest must mostly agree at that
+/// shift, through a row unique to both pages, and no other shift may be plausible: repeated rows
+/// alone cannot tell a small scroll from a larger one.
+///
+/// A row identical in place is not thereby chrome: repeated transcript can sit at the same
+/// position after a scroll. Boundaries rest on what the shift explains, a row explained both ways
+/// is never dropped, and `known_top`, the top proven by an earlier page, settles such a row above
+/// the transcript. Without it the pages are refused rather than guessed.
+fn align(
+    previous: &[HistoryReadRow],
+    current: &[HistoryReadRow],
+    known_top: Option<usize>,
+) -> Option<Alignment> {
     let len = previous.len();
     if current.len() != len || len < MIN_OVERLAP {
         return None;
     }
     let pinned: Vec<bool> = previous.iter().zip(current).map(|(a, b)| a == b).collect();
+    let (shift, first, last) = shift_between(previous, current, &pinned)?;
+    let moved = |index: usize| index + shift < len && previous[index] == current[index + shift];
+    let top = band_top(first, &pinned, moved, known_top)?;
+    // A footer row is pinned, and differs from the transcript row the shift brings to its place.
+    let bottom = (last + 1..len)
+        .find(|&index| {
+            pinned[index]
+                && !is_blank(&previous[index])
+                && index >= top + shift
+                && current[index] != previous[index - shift]
+        })
+        .unwrap_or(len);
+    Some(Alignment {
+        shift,
+        top,
+        bottom,
+        span: last - top + 1 + shift,
+    })
+}
+
+/// The unique plausible shift, with the first and last earlier-page rows that support it.
+fn shift_between(
+    previous: &[HistoryReadRow],
+    current: &[HistoryReadRow],
+    pinned: &[bool],
+) -> Option<(usize, usize, usize)> {
+    let len = previous.len();
     let previous_unique = unique_positions(previous);
     let current_unique = unique_positions(current);
     let mut found = None;
@@ -560,18 +601,36 @@ fn align(previous: &[HistoryReadRow], current: &[HistoryReadRow]) -> Option<Alig
         if found.is_some() {
             return None;
         }
-        let top = first.expect("matched rows");
-        let bottom = (last + 1..len)
-            .find(|&index| pinned[index] && !is_blank(&previous[index]))
-            .unwrap_or(len);
-        found = Some(Alignment {
-            shift,
-            top,
-            bottom,
-            span: last - top + 1 + shift,
-        });
+        found = Some((shift, first.expect("matched rows"), last));
     }
     found
+}
+
+/// Walk up from the first supporting row while rows moved with the transcript, blank ones
+/// included. A row the scroll did not move is chrome. A row that both moved and stayed in place
+/// is ambiguous: only a top proven by an earlier page decides it.
+fn band_top(
+    first: usize,
+    pinned: &[bool],
+    moved: impl Fn(usize) -> bool,
+    known_top: Option<usize>,
+) -> Option<usize> {
+    let mut top = first;
+    while top > 0 {
+        let row = top - 1;
+        if !moved(row) {
+            break;
+        }
+        if pinned[row] {
+            return match known_top {
+                Some(known) if known <= row => Some(known).filter(|_| (known..row).all(&moved)),
+                Some(known) if known == top => Some(known),
+                _ => None,
+            };
+        }
+        top = row;
+    }
+    Some(top)
 }
 
 fn unique_positions(rows: &[HistoryReadRow]) -> HashMap<&HistoryReadRow, Option<usize>> {
@@ -620,8 +679,12 @@ mod tests {
 
     impl App {
         fn new(lines: usize, per_tick: usize) -> Self {
+            Self::with_lines((0..lines).map(|index| format!("line {index:03}")), per_tick)
+        }
+
+        fn with_lines(lines: impl IntoIterator<Item = String>, per_tick: usize) -> Self {
             Self {
-                lines: (0..lines).map(|index| format!("line {index:03}")).collect(),
+                lines: lines.into_iter().collect(),
                 rows: 12,
                 per_tick,
                 offset: 0,
@@ -736,6 +799,32 @@ mod tests {
             assert!(read.complete, "{read:?}");
             assert!(read.text.starts_with(&transcript(&app)), "{}", read.text);
             assert!(!read.text.contains('█'), "{}", read.text);
+        }
+    }
+
+    #[test]
+    fn repeated_and_blank_transcript_rows_are_reconstructed_exactly() {
+        let unique = (0..40).map(|index| format!("line {index:03}"));
+        let cases: [Vec<String>; 2] = [
+            // The bottom pair repeats, so it sits in place after a two-line scroll.
+            unique
+                .clone()
+                .chain(["g", "h", "g", "h"].map(String::from))
+                .collect(),
+            // The first visible transcript row is blank.
+            unique
+                .clone()
+                .take(31)
+                .chain([String::new()])
+                .chain(unique.clone().skip(31).take(8))
+                .collect(),
+        ];
+        for lines in cases {
+            let mut app = App::with_lines(lines, 2);
+            let read = drive(&mut app, false).unwrap();
+            assert_eq!(app.offset, 0);
+            assert!(read.complete);
+            assert_eq!(read.text, transcript(&app));
         }
     }
 
@@ -941,12 +1030,12 @@ mod tests {
     #[test]
     fn repeated_rows_cannot_establish_an_alignment() {
         let repeated = vec![row("same"); 8];
-        assert!(align(&repeated, &repeated).is_none());
+        assert!(align(&repeated, &repeated, None).is_none());
         let blank = vec![row(""); 8];
-        assert!(align(&blank, &blank).is_none());
+        assert!(align(&blank, &blank, None).is_none());
         let previous = ["a", "b", "c", "d", "e", "f"].map(row);
         let changed = ["new", "different", "page", "x", "y", "z"].map(row);
-        assert!(align(&previous, &changed).is_none());
+        assert!(align(&previous, &changed, None).is_none());
     }
 
     #[test]
@@ -954,7 +1043,7 @@ mod tests {
         let previous = ["head", "c", "d", "e", "f", "g", "status", "foot"].map(row);
         let current = ["head", "a", "b", "c", "d", "e", "notice", "foot"].map(row);
         assert_eq!(
-            align(&previous, &current),
+            align(&previous, &current, None),
             Some(Alignment {
                 shift: 2,
                 top: 1,
@@ -965,23 +1054,67 @@ mod tests {
     }
 
     #[test]
-    fn alignments_are_correct_across_duplicate_row_corpora() {
+    fn alignments_are_correct_or_refused_across_duplicate_row_corpora() {
+        // Repeated and blank transcript rows between a pinned header and footer: an alignment
+        // is either exact, boundaries included, or refused.
         let mut seed = 42u64;
-        for _ in 0..2000 {
+        for _ in 0..4000 {
             let rows: Vec<_> = (0..16)
                 .map(|_| {
                     seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
-                    row(format!("{}", (seed >> 32) % 9))
+                    match (seed >> 32) % 7 {
+                        0 => row(""),
+                        symbol => row(format!("{symbol}")),
+                    }
                 })
                 .collect();
             for shift in 1..=4 {
-                let previous = &rows[4..12];
-                let current = &rows[4 - shift..12 - shift];
-                if let Some(alignment) = align(previous, current) {
-                    assert_eq!(alignment.shift, shift, "{previous:?} {current:?}");
+                let page = |range: std::ops::Range<usize>| {
+                    let mut page = vec![row("header")];
+                    page.extend_from_slice(&rows[range]);
+                    page.push(row("footer"));
+                    page
+                };
+                let previous = page(4..12);
+                let current = page(4 - shift..12 - shift);
+                for known_top in [None, Some(1)] {
+                    if let Some(alignment) = align(&previous, &current, known_top) {
+                        assert_eq!(
+                            (alignment.shift, alignment.top, alignment.bottom),
+                            (shift, 1, previous.len() - 1),
+                            "{previous:?} {current:?} {known_top:?}"
+                        );
+                    }
                 }
             }
         }
+    }
+
+    #[test]
+    fn repeated_transcript_left_in_place_is_not_taken_for_a_footer() {
+        let previous = ["head", "c", "d", "e", "f", "g", "h", "g", "h", "foot"].map(row);
+        let current = ["head", "a", "b", "c", "d", "e", "f", "g", "h", "foot"].map(row);
+        let alignment = align(&previous, &current, None).unwrap();
+        assert_eq!((alignment.shift, alignment.top), (2, 1));
+        assert_eq!(alignment.bottom, 9, "the trailing g, h are transcript");
+    }
+
+    #[test]
+    fn a_blank_first_row_still_starts_the_transcript() {
+        let previous = ["head", "", "c", "d", "e", "f", "g", "foot"].map(row);
+        let current = ["head", "a", "b", "", "c", "d", "e", "foot"].map(row);
+        let alignment = align(&previous, &current, None).unwrap();
+        assert_eq!((alignment.shift, alignment.top), (2, 1));
+    }
+
+    #[test]
+    fn a_row_both_moved_and_in_place_needs_a_known_top() {
+        // The blank under the header is either a spacer or a transcript row: both fit.
+        let previous = ["head", "", "c", "d", "e", "f", "g", "foot"].map(row);
+        let current = ["head", "", "b", "", "c", "d", "e", "foot"].map(row);
+        assert_eq!(align(&previous, &current, None), None);
+        assert_eq!(align(&previous, &current, Some(2)).unwrap().top, 2);
+        assert_eq!(align(&previous, &current, Some(1)).unwrap().top, 1);
     }
 
     #[test]
