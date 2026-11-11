@@ -157,6 +157,15 @@ static REGISTRATIONS: Mutex<Registrations> = Mutex::new(Registrations {
 
 impl Registrations {
     fn note(&mut self, command: &ProgramCommand) {
+        // A registration that reaches the host means it is no longer withdrawn, whatever a failed
+        // restore left recorded: the next handoff must withdraw again. Withdrawing something the
+        // host no longer has costs one redundant escape code; missing one would leak it.
+        if matches!(
+            command,
+            ProgramCommand::AcceptDrops { .. } | ProgramCommand::OfferDrags { .. }
+        ) {
+            self.withdrawn = false;
+        }
         match command {
             ProgramCommand::AcceptDrops { mimes } => self.accepting = Some(mimes.clone()),
             ProgramCommand::DropMachineId(id) => {
@@ -267,6 +276,14 @@ fn withdraw_around<W: Write, T>(
 
 /// Register again what a handoff withdrew. They count as restored only once written.
 pub(crate) fn restore_registrations(out: &mut impl Write) -> io::Result<()> {
+    restore_into(&REGISTRATIONS, out)
+}
+
+/// Retry a restore that failed after a handoff, before anything else reaches the host.
+///
+/// The runner calls this only while it owns the terminal, so a withdrawal still recorded then is
+/// one whose restore did not get written.
+pub(crate) fn retry_restore(out: &mut impl Write) -> io::Result<()> {
     restore_into(&REGISTRATIONS, out)
 }
 
@@ -421,17 +438,45 @@ mod tests {
         );
     }
 
+    struct Broken;
+    impl Write for Broken {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(io::Error::other("gone"))
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_registration_after_a_failed_restore_is_withdrawn_by_the_next_handoff() {
+        let registrations = registered(&[accept(&["a/b"])]);
+        handoff(&registrations, Ok(())).0.unwrap();
+        assert!(restore_into(&registrations, &mut Broken).is_err());
+        assert!(locked(&registrations, |r| r.withdrawn), "not restored");
+        // A queued registration reaches the host normally.
+        locked(&registrations, |r| r.commit(&encoded(&[accept(&["c/d"])])));
+        let (_, out) = handoff(&registrations, Ok(()));
+        assert_eq!(
+            out, b"\x1b]72;t=A\x1b\\",
+            "the live registration is withdrawn"
+        );
+    }
+
+    #[test]
+    fn a_failed_restore_is_retried_whole() {
+        let offer = ProgramCommand::OfferDrags { machine_id: None };
+        let registrations = registered(&[accept(&[]), offer.clone()]);
+        handoff(&registrations, Ok(())).0.unwrap();
+        assert!(restore_into(&registrations, &mut Broken).is_err());
+        let mut out = Vec::new();
+        restore_into(&registrations, &mut out).unwrap();
+        assert_eq!(out, encoded(&[accept(&[]), offer]));
+        assert!(!locked(&registrations, |r| r.withdrawn));
+    }
+
     #[test]
     fn a_withdrawal_that_cannot_be_written_stops_the_handoff() {
-        struct Broken;
-        impl Write for Broken {
-            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
-                Err(io::Error::other("gone"))
-            }
-            fn flush(&mut self) -> io::Result<()> {
-                Ok(())
-            }
-        }
         let registrations = registered(&[accept(&[])]);
         let mut ran = false;
         let result = withdraw_around(&registrations, &mut Broken, |_| {

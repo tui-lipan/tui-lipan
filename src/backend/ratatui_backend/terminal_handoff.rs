@@ -288,7 +288,7 @@ pub fn resume_after_external_process(
             err
         );
     }
-    // A failed write leaves them marked withdrawn, so the next handoff does not withdraw again.
+    // A failed write leaves them marked withdrawn; the runner retries before its next DnD output.
     let _ = crate::dnd::host::restore_registrations(&mut out);
     STDIN_READER_PAUSED.store(false, Ordering::SeqCst);
     FULL_REPAINT_AFTER_HANDOFF.store(true, Ordering::SeqCst);

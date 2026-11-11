@@ -132,6 +132,9 @@ impl<C: Component> AppRunner<C> {
         &mut self,
         backend: &mut impl std::io::Write,
     ) -> crate::Result<()> {
+        // A restore that failed when the terminal came back is retried first, so what the app
+        // queued since lands on top of the registrations the host should already have.
+        crate::dnd::host::retry_restore(backend)?;
         let channel = &self.core.ctx.env().host_drag_and_drop;
         if !channel.has_output() {
             return Ok(());
