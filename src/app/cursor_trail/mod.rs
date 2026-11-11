@@ -240,7 +240,8 @@ impl Default for CursorTrailParticles {
 /// A jump to another row or to the widget's left edge may be the first of several writes (a
 /// shell's newline, then its prompt), so its smear starts once the caret has held still for
 /// `quiet`, or `max` after the jump at the latest, straight to where the caret came to rest. A
-/// jump along one row and a focus change start at once.
+/// caret that goes on along its new row instead (a held arrow key wrapping onto another line) has
+/// landed, and its smear starts then. A jump along one row and a focus change start at once.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CursorTrailSettle {
     /// How long the caret must hold still. Zero starts every jump at once.
@@ -599,6 +600,18 @@ impl Caret {
         )
     }
 
+    /// Whether the caret moved along its row since `earlier`, inside the same widget, rather than
+    /// being carried there by it: a held arrow key, or a prompt being written out.
+    fn moved_along_row(self, earlier: Self) -> bool {
+        if earlier.owner_id() != self.owner_id() {
+            return false;
+        }
+        let (carried_x, carried_y) = self.carried_from(earlier);
+        let dx = i32::from(self.position.x) - i32::from(earlier.position.x) - carried_x;
+        let dy = i32::from(self.position.y) - i32::from(earlier.position.y) - carried_y;
+        dy == 0 && dx != 0
+    }
+
     /// Whether a jump inside one widget from `earlier` may be the first of several writes: it
     /// left the row, as a newline does, or reached the widget's left edge, as a carriage return
     /// does.
@@ -870,6 +883,12 @@ impl CursorTrailState {
             }
             if last.owner_id() != caret.owner_id() {
                 landing.within = false;
+                self.launch(now, config.max_length);
+            } else if caret.moved_along_row(last) {
+                // The caret went on along its new row: something is driving it there (a held
+                // arrow key wrapping onto another line, a prompt being written out), so it has
+                // landed. Waiting for it to hold still would leave it held on the old cell for
+                // as long as the key is held.
                 self.launch(now, config.max_length);
             }
             return;
@@ -1770,16 +1789,17 @@ mod tests {
             "straight down from column 40, never toward column 0: {points:?}"
         );
 
-        // A caret that never holds still starts after the longest wait.
+        // A caret that never holds still, output streaming in a line at a time, starts after the
+        // longest wait.
         let mut state = CursorTrailState::default();
-        see(&mut state, jump, 0, 0, 1, start);
+        see(&mut state, jump, 10, 0, 1, start);
         let mut at = start;
-        let mut column = 10;
+        let mut row = 8;
         while state.running.is_none() {
             assert!(at < start + LANDING_MAX * 2, "never started");
             at += Duration::from_millis(20);
-            column += 1;
-            see(&mut state, jump, column, 9, 1, at);
+            row += 1;
+            see(&mut state, jump, 0, row, 1, at);
             state.tick(jump, INTERVAL, at);
         }
         let first_jump = start + Duration::from_millis(20);
@@ -1821,6 +1841,38 @@ mod tests {
         observe(&mut state, 40, start);
         observe(&mut state, 5, start);
         assert!(state.running.is_none() && state.landing.is_some());
+    }
+
+    #[test]
+    fn a_held_arrow_key_wrapping_onto_another_line_is_not_held_back() {
+        let start = Instant::now();
+        let jump = Some(CursorTrail::new().trigger(CursorTrailTrigger::jump()));
+        const REPEAT: Duration = Duration::from_millis(33);
+        // A command wrapped over two rows of an 80-column widget, the arrow held at key repeat.
+        for (wrap, along, next) in [
+            // Left from the start of the second row lands on the end of the first.
+            ((0, 5), (79, 4), (78, 4)),
+            // Right from the end of the first row lands on the start of the second.
+            ((79, 4), (0, 5), (1, 5)),
+        ] {
+            let mut state = CursorTrailState::default();
+            see(&mut state, jump, wrap.0, wrap.1, 1, start);
+            see(&mut state, jump, along.0, along.1, 1, start + REPEAT);
+            assert!(
+                state.landing.is_some(),
+                "the wrap may be a newline's first step"
+            );
+            let repeat = start + REPEAT * 2;
+            see(&mut state, jump, next.0, next.1, 1, repeat);
+            state.tick(jump, INTERVAL, repeat);
+            let frame = state.frame(jump).expect("the next repeat starts the smear");
+            let smear = frame.smear.as_ref().expect("smear");
+            assert_eq!(
+                smear.target,
+                Position::new(next.0, next.1),
+                "{wrap:?}: the smear follows the caret, a repeat after the wrap"
+            );
+        }
     }
 
     #[test]
