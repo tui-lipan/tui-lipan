@@ -1139,7 +1139,7 @@ impl TerminalGuard {
 
 /// Withdraw the app's drag-and-drop registrations before the terminal goes back to the shell.
 fn withdraw_drag_and_drop(out: &mut impl io::Write) {
-    let withdraw = crate::dnd::host::withdraw_registrations(true);
+    let withdraw = crate::dnd::host::withdraw_for_exit();
     if !withdraw.is_empty() {
         let _ = out.write_all(&withdraw).and_then(|()| out.flush());
     }

@@ -191,32 +191,33 @@ pub fn suspend_for_external_process(surface_mode: SurfaceMode) -> io::Result<()>
         }
     }
 
-    // The program about to run may register for drags itself; the app's must not catch them.
-    let withdraw = crate::dnd::host::withdraw_registrations(false);
-    if !withdraw.is_empty() {
-        use std::io::Write as _;
-        let _ = out.write_all(&withdraw).and_then(|()| out.flush());
-    }
-    let mut executor = CrosstermTransitionExecutor::new(&mut out);
     let pop_keyboard =
         !policy.uses_alternate_screen && super::MAIN_SCREEN_KEYBOARD_PUSHED.load(Ordering::SeqCst);
     let plan = suspend_plan(policy, pop_keyboard);
-    let result = execute_plan_with_rollback(&mut executor, &plan);
-    if result.is_ok() && pop_keyboard {
-        super::MAIN_SCREEN_KEYBOARD_PUSHED.store(false, Ordering::SeqCst);
-    }
-    // The plan turns pixel reporting off before handing the terminal over, and a rollback leaves it
-    // off. A plan that failed before reaching it may not have, so it is turned off here as well: the
-    // host is then known to report cells, and the resumed worker asks again if anything wants pixels.
-    #[cfg(unix)]
-    {
+    // The program about to run may register for drags itself; the app's must not catch them. If
+    // the suspend fails, the app keeps the terminal and its registrations are written again.
+    let result = crate::dnd::host::withdrawn_for(&mut out, |out| {
+        let mut executor = CrosstermTransitionExecutor::new(out);
+        let result = execute_plan_with_rollback(&mut executor, &plan);
+        // The plan turns pixel reporting off before handing the terminal over, and a rollback
+        // leaves it off. A plan that failed before reaching it may not have, so it is turned off
+        // here as well: the host is then known to report cells, and the resumed worker asks again
+        // if anything wants pixels.
+        #[cfg(unix)]
         if result.is_err() {
             let _ = execute_plan(&mut executor, &disable_pixel_mouse_plan());
         }
-        crate::app::input::pixel_mouse::note_mode_enabled(false);
+        result
+    });
+    if result.is_ok() && pop_keyboard {
+        super::MAIN_SCREEN_KEYBOARD_PUSHED.store(false, Ordering::SeqCst);
     }
+    #[cfg(unix)]
+    crate::app::input::pixel_mouse::note_mode_enabled(false);
 
     if result.is_err() {
+        #[cfg(unix)]
+        let mut executor = CrosstermTransitionExecutor::new(&mut out);
         #[cfg(unix)]
         if termina_paused {
             let _ = execute_plan(&mut executor, &theme_notification_plan(true));
@@ -287,11 +288,8 @@ pub fn resume_after_external_process(
             err
         );
     }
-    let restore = crate::dnd::host::restore_registrations();
-    if !restore.is_empty() {
-        use std::io::Write as _;
-        let _ = out.write_all(&restore).and_then(|()| out.flush());
-    }
+    // A failed write leaves them marked withdrawn, so the next handoff does not withdraw again.
+    let _ = crate::dnd::host::restore_registrations(&mut out);
     STDIN_READER_PAUSED.store(false, Ordering::SeqCst);
     FULL_REPAINT_AFTER_HANDOFF.store(true, Ordering::SeqCst);
     // Pixel reporting, which the suspend turned off, is asked for again by the resumed Termina

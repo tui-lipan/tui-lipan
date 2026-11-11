@@ -68,7 +68,8 @@ pub enum ProgramCommand {
     },
     /// An image to show while dragging. A stream ends with `end` set.
     PresentImage {
-        /// One-based number of the image; images are sent in order.
+        /// One-based number of the image, up to 2³¹; images are sent in order. The number travels
+        /// negated in a signed 32-bit key, so a larger one is sent as 2³¹.
         image: u32,
         /// How `bytes` encode it.
         format: DragImageFormat,

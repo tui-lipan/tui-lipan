@@ -104,6 +104,8 @@ impl Metadata {
             ('Y', self.big_y),
         ];
         for (key, value) in numbers {
+            // Every number on the wire fits 32 bits, signed or unsigned; a reader refuses more.
+            let value = value.map(|v| v.clamp(i64::from(i32::MIN), i64::from(u32::MAX)));
             if let Some(value) = value {
                 let _ = write!(out, ":{key}={value}");
             }
@@ -518,6 +520,19 @@ mod tests {
             "unsigned values round-trip"
         );
         assert_eq!(Frame::parse(b"t=r:x=4294967296"), Err(FrameError::Metadata));
+        let mut out = Vec::new();
+        Frame {
+            meta: Metadata {
+                x: Some(-5_000_000_000),
+                y: Some(9_000_000_000),
+                ..Metadata::of(b'p')
+            },
+            payload: Vec::new(),
+        }
+        .write(&mut out);
+        let written = String::from_utf8(out).unwrap();
+        assert!(written.contains(":x=-2147483648:y=4294967295"), "{written}");
+        assert!(Frame::parse(&written.as_bytes()[5..written.len() - 2]).is_ok());
         assert_eq!(frame.meta.o, Some(3));
         assert_eq!(frame.meta.i, None);
         assert_eq!(frame.payload, b"text/plain");

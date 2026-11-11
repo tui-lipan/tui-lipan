@@ -10,6 +10,7 @@
 //! a program run in the meantime never receives the app's drags.
 
 use std::cell::{Cell, RefCell};
+use std::io::{self, Write};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
@@ -181,7 +182,8 @@ impl Registrations {
         }
     }
 
-    fn withdraw(&mut self, exiting: bool) -> Vec<u8> {
+    /// The escape codes that withdraw what the host has, unless it is already withdrawn.
+    fn withdrawal(&self) -> Vec<u8> {
         let mut out = Vec::new();
         if !self.withdrawn {
             if self.accepting.is_some() {
@@ -191,17 +193,13 @@ impl Registrations {
                 ProgramCommand::StopOfferingDrags.encode(None, &mut out);
             }
         }
-        if exiting {
-            *self = Self::default();
-        } else {
-            self.withdrawn = true;
-        }
         out
     }
 
-    fn restore(&mut self) -> Vec<u8> {
+    /// The escape codes that register again what a handoff withdrew.
+    fn restoration(&self) -> Vec<u8> {
         let mut out = Vec::new();
-        if !std::mem::take(&mut self.withdrawn) {
+        if !self.withdrawn {
             return out;
         }
         if let Some(mimes) = &self.accepting {
@@ -223,30 +221,76 @@ impl Registrations {
     }
 }
 
+fn locked<R>(registrations: &Mutex<Registrations>, f: impl FnOnce(&mut Registrations) -> R) -> R {
+    let mut guard = registrations
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    f(&mut guard)
+}
+
+fn write_all(out: &mut impl Write, bytes: &[u8]) -> io::Result<()> {
+    if bytes.is_empty() {
+        return Ok(());
+    }
+    out.write_all(bytes)?;
+    out.flush()
+}
+
+/// Run `handoff` with the app's registrations withdrawn from the host, so the program it hands the
+/// terminal to never receives the app's drags.
+///
+/// The registrations count as withdrawn only once the withdrawal has been written. If writing it
+/// fails, `handoff` does not run. If `handoff` fails, the app keeps the terminal, so the
+/// registrations are written again before the error is returned.
+pub(crate) fn withdrawn_for<W: Write, T>(
+    out: &mut W,
+    handoff: impl FnOnce(&mut W) -> io::Result<T>,
+) -> io::Result<T> {
+    withdraw_around(&REGISTRATIONS, out, handoff)
+}
+
+fn withdraw_around<W: Write, T>(
+    registrations: &Mutex<Registrations>,
+    out: &mut W,
+    handoff: impl FnOnce(&mut W) -> io::Result<T>,
+) -> io::Result<T> {
+    write_all(out, &locked(registrations, |r| r.withdrawal()))?;
+    locked(registrations, |r| r.withdrawn = true);
+    match handoff(out) {
+        Ok(value) => Ok(value),
+        Err(err) => {
+            let _ = restore_into(registrations, out);
+            Err(err)
+        }
+    }
+}
+
+/// Register again what a handoff withdrew. They count as restored only once written.
+pub(crate) fn restore_registrations(out: &mut impl Write) -> io::Result<()> {
+    restore_into(&REGISTRATIONS, out)
+}
+
+fn restore_into(registrations: &Mutex<Registrations>, out: &mut impl Write) -> io::Result<()> {
+    write_all(out, &locked(registrations, |r| r.restoration()))?;
+    locked(registrations, |r| r.withdrawn = false);
+    Ok(())
+}
+
+/// The escape codes that withdraw every registration when the app exits, after which they are
+/// forgotten.
+pub(crate) fn withdraw_for_exit() -> Vec<u8> {
+    locked(&REGISTRATIONS, |r| {
+        let out = r.withdrawal();
+        *r = Registrations::default();
+        out
+    })
+}
+
 /// Note escape codes that have been written to the host.
 pub(crate) fn commit_registrations(escape_codes: &[u8]) {
     if let Ok(mut registrations) = REGISTRATIONS.lock() {
         registrations.commit(escape_codes);
     }
-}
-
-/// The escape codes that withdraw every registration, for a handoff or an exit.
-///
-/// After a handoff the registrations come back with [`restore_registrations`]; after an exit they
-/// are forgotten.
-pub(crate) fn withdraw_registrations(exiting: bool) -> Vec<u8> {
-    REGISTRATIONS
-        .lock()
-        .map(|mut registrations| registrations.withdraw(exiting))
-        .unwrap_or_default()
-}
-
-/// The escape codes that register again after a handoff.
-pub(crate) fn restore_registrations() -> Vec<u8> {
-    REGISTRATIONS
-        .lock()
-        .map(|mut registrations| registrations.restore())
-        .unwrap_or_default()
 }
 
 /// Talks to the host terminal on the app's behalf.
@@ -327,50 +371,106 @@ mod tests {
         }
     }
 
+    fn registered(commands: &[ProgramCommand]) -> Mutex<Registrations> {
+        let mut registrations = Registrations::default();
+        registrations.commit(&encoded(commands));
+        Mutex::new(registrations)
+    }
+
+    fn handoff(
+        registrations: &Mutex<Registrations>,
+        result: io::Result<()>,
+    ) -> (io::Result<()>, Vec<u8>) {
+        let mut out = Vec::new();
+        let result = withdraw_around(registrations, &mut out, |_| result);
+        (result, out)
+    }
+
     #[test]
     fn registrations_are_withdrawn_for_a_handoff_and_come_back() {
-        let mut registrations = Registrations::default();
         let offer = ProgramCommand::OfferDrags {
             machine_id: Some("1:abcdef0123456789abcd".into()),
         };
-        registrations.commit(&encoded(&[accept(&["image/png"]), offer.clone()]));
+        let registrations = registered(&[accept(&["image/png"]), offer.clone()]);
+        let (result, out) = handoff(&registrations, Ok(()));
+        assert!(result.is_ok());
+        assert_eq!(out, b"\x1b]72;t=A\x1b\\\x1b]72;t=o:x=2\x1b\\");
+        assert_eq!(handoff(&registrations, Ok(())).1, b"", "already withdrawn");
+        let mut out = Vec::new();
+        restore_into(&registrations, &mut out).unwrap();
+        assert_eq!(out, encoded(&[accept(&["image/png"]), offer]));
+        let mut out = Vec::new();
+        restore_into(&registrations, &mut out).unwrap();
+        assert_eq!(out, b"", "already restored");
+    }
+
+    #[test]
+    fn a_failed_handoff_registers_again_and_the_next_one_withdraws() {
+        let registrations = registered(&[accept(&[])]);
+        let (result, out) = handoff(&registrations, Err(io::Error::other("suspend failed")));
+        assert!(result.is_err());
         assert_eq!(
-            registrations.withdraw(false),
-            b"\x1b]72;t=A\x1b\\\x1b]72;t=o:x=2\x1b\\"
+            out,
+            [b"\x1b]72;t=A\x1b\\".to_vec(), encoded(&[accept(&[])])].concat()
         );
-        assert_eq!(registrations.withdraw(false), b"", "already withdrawn");
+        assert!(!locked(&registrations, |r| r.withdrawn));
+        let (_, out) = handoff(&registrations, Ok(()));
         assert_eq!(
-            registrations.restore(),
-            encoded(&[accept(&["image/png"]), offer])
+            out, b"\x1b]72;t=A\x1b\\",
+            "the next handoff still withdraws"
         );
-        assert_eq!(registrations.restore(), b"", "already restored");
-        registrations.commit(&encoded(&[ProgramCommand::StopOfferingDrags]));
-        assert_eq!(registrations.withdraw(true), b"\x1b]72;t=A\x1b\\");
-        assert_eq!(registrations.restore(), b"", "an exit forgets");
+    }
+
+    #[test]
+    fn a_withdrawal_that_cannot_be_written_stops_the_handoff() {
+        struct Broken;
+        impl Write for Broken {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                Err(io::Error::other("gone"))
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let registrations = registered(&[accept(&[])]);
+        let mut ran = false;
+        let result = withdraw_around(&registrations, &mut Broken, |_| {
+            ran = true;
+            Ok(())
+        });
+        assert!(result.is_err());
+        assert!(
+            !ran,
+            "the terminal is not handed over while the app is still registered"
+        );
+        assert!(!locked(&registrations, |r| r.withdrawn));
     }
 
     #[test]
     fn a_withdrawal_follows_what_reached_the_host_not_what_is_queued() {
         let (channel, host) = channel();
-        let mut registrations = Registrations::default();
+        let registrations = Mutex::new(Registrations::default());
         host.send(&accept(&[]));
-        registrations.commit(&channel.take_output());
+        locked(&registrations, |r| r.commit(&channel.take_output()));
         // Queued, then a handoff before the next flush: the host still has the registration.
         host.send(&ProgramCommand::StopAcceptingDrops);
-        assert_eq!(registrations.withdraw(false), b"\x1b]72;t=A\x1b\\");
+        assert_eq!(handoff(&registrations, Ok(())).1, b"\x1b]72;t=A\x1b\\");
         // On return it registers again, and the queued withdrawal then reaches the host.
-        assert_eq!(registrations.restore(), encoded(&[accept(&[])]));
-        registrations.commit(&channel.take_output());
-        assert_eq!(registrations, Registrations::default());
+        let mut out = Vec::new();
+        restore_into(&registrations, &mut out).unwrap();
+        assert_eq!(out, encoded(&[accept(&[])]));
+        locked(&registrations, |r| r.commit(&channel.take_output()));
+        assert_eq!(*registrations.lock().unwrap(), Registrations::default());
     }
 
     #[test]
     fn a_new_registration_keeps_the_machine_id_across_a_handoff() {
-        let mut registrations = Registrations::default();
         let id = ProgramCommand::DropMachineId("1:abcdef0123456789abcd".into());
-        registrations.commit(&encoded(&[accept(&["a/b"]), id.clone(), accept(&["c/d"])]));
-        registrations.withdraw(false);
-        assert_eq!(registrations.restore(), encoded(&[accept(&["c/d"]), id]));
+        let registrations = registered(&[accept(&["a/b"]), id.clone(), accept(&["c/d"])]);
+        handoff(&registrations, Ok(())).0.unwrap();
+        let mut out = Vec::new();
+        restore_into(&registrations, &mut out).unwrap();
+        assert_eq!(out, encoded(&[accept(&["c/d"]), id]));
     }
 
     #[test]
