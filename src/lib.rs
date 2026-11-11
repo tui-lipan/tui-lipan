@@ -46,6 +46,7 @@ pub mod capture;
 pub mod debug;
 #[cfg(feature = "devtools")]
 pub(crate) mod devtools;
+pub mod dnd;
 pub mod input;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod process;

@@ -178,6 +178,7 @@ export default defineConfig({
           { text: "Clipboard", link: "/clipboard" },
           { text: "Inline Mode", link: "/inline-mode" },
           { text: "External Programs", link: "/external-programs" },
+          { text: "Drag and Drop", link: "/drag-and-drop" },
           { text: "Patterns & Recipes", link: "/patterns" },
           { text: "Large App Shells", link: "/large-app-shells" },
           { text: "Performance", link: "/perf" },

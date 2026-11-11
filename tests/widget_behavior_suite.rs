@@ -42,6 +42,8 @@ mod flow_wrap_height_floor;
 mod focus_removed_widget_step;
 #[path = "suites/widget_behavior/gantt_diagram_render.rs"]
 mod gantt_diagram_render;
+#[path = "suites/widget_behavior/host_drag_and_drop.rs"]
+mod host_drag_and_drop;
 #[path = "suites/widget_behavior/list_click_events.rs"]
 mod list_click_events;
 #[path = "suites/widget_behavior/list_description_fit_render.rs"]

@@ -88,6 +88,8 @@ rustc-hash = "2"
 smallvec = "1"
 
 base64 = "0.23.1"
+# HMAC-SHA256 of the machine id the drag-and-drop protocol compares across machines.
+sha2 = "0.11.1"
 memchr = { version = "2.8.3", optional = true }
 
 thiserror = "2.0.19"

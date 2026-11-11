@@ -125,6 +125,23 @@ impl<C: Component> AppRunner<C> {
         self.terminal.pointer.update(backend, desired)
     }
 
+    /// Write the drag-and-drop commands the app queued since the last pass.
+    ///
+    /// Between frames, so an escape code never lands inside a synchronized update.
+    pub(super) fn flush_host_drag_and_drop(
+        &mut self,
+        backend: &mut impl std::io::Write,
+    ) -> crate::Result<()> {
+        let channel = &self.core.ctx.env().host_drag_and_drop;
+        if !channel.has_output() {
+            return Ok(());
+        }
+        let output = channel.take_output();
+        backend.write_all(&output)?;
+        backend.flush()?;
+        Ok(())
+    }
+
     pub(super) fn needs_mouse_motion(&self) -> bool {
         if !self.mouse_enabled || !self.mouse_capture_active {
             return false;

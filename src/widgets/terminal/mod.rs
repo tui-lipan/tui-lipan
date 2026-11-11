@@ -4,6 +4,7 @@ mod buffer;
 #[cfg(feature = "terminal")]
 mod copy_mode;
 pub(crate) mod damage;
+mod drag_and_drop;
 mod events;
 #[cfg(feature = "terminal-images")]
 mod graphics;

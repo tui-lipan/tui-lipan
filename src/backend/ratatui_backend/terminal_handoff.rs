@@ -173,11 +173,12 @@ pub fn suspend_for_external_process(surface_mode: SurfaceMode) -> io::Result<()>
     }
 
     let mut out = stdout();
-    let mut executor = CrosstermTransitionExecutor::new(&mut out);
     if termina_paused {
         #[cfg(unix)]
-        if let Err(err) = execute_plan_with_rollback(&mut executor, &theme_notification_plan(false))
-        {
+        if let Err(err) = execute_plan_with_rollback(
+            &mut CrosstermTransitionExecutor::new(&mut out),
+            &theme_notification_plan(false),
+        ) {
             if let Some(control) = input_handoff_control() {
                 let _ = control.resume();
             }
@@ -190,6 +191,13 @@ pub fn suspend_for_external_process(surface_mode: SurfaceMode) -> io::Result<()>
         }
     }
 
+    // The program about to run may register for drags itself; the app's must not catch them.
+    let withdraw = crate::dnd::host::withdraw_registrations(false);
+    if !withdraw.is_empty() {
+        use std::io::Write as _;
+        let _ = out.write_all(&withdraw).and_then(|()| out.flush());
+    }
+    let mut executor = CrosstermTransitionExecutor::new(&mut out);
     let pop_keyboard =
         !policy.uses_alternate_screen && super::MAIN_SCREEN_KEYBOARD_PUSHED.load(Ordering::SeqCst);
     let plan = suspend_plan(policy, pop_keyboard);
@@ -278,6 +286,11 @@ pub fn resume_after_external_process(
             "[tui-lipan] terminal_handoff: discard pending input failed (non-fatal): {}",
             err
         );
+    }
+    let restore = crate::dnd::host::restore_registrations();
+    if !restore.is_empty() {
+        use std::io::Write as _;
+        let _ = out.write_all(&restore).and_then(|()| out.flush());
     }
     STDIN_READER_PAUSED.store(false, Ordering::SeqCst);
     FULL_REPAINT_AFTER_HANDOFF.store(true, Ordering::SeqCst);

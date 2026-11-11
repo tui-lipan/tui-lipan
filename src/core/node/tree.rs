@@ -1131,6 +1131,66 @@ impl NodeTree {
         self.do_test(x, y, TestKind::Hit)
     }
 
+    /// The keyed nodes at `(x, y)`, innermost first, each with its rect.
+    ///
+    /// The node a pointer there would hit and its keyed ancestors, which respects overlays and
+    /// skips decoration drawn over content. Where nothing interactive is under the point, the
+    /// topmost nodes that hold it instead, so a passive widget (a frame drawn as a drop zone) is
+    /// found too.
+    pub(crate) fn keyed_at(&self, x: u16, y: u16) -> Vec<(crate::core::element::Key, Rect)> {
+        let (Ok(x), Ok(y)) = (i16::try_from(x), i16::try_from(y)) else {
+            return Vec::new();
+        };
+        if let Some(hit) = self.hit_test(x, y) {
+            let mut keyed = Vec::new();
+            let mut current = Some(hit);
+            while let Some(id) = current {
+                let node = self.node(id);
+                if let Some(key) = &node.key {
+                    keyed.push((key.clone(), node.rect));
+                }
+                current = node.parent;
+            }
+            return keyed;
+        }
+        for root in self.overlay_roots.iter().rev() {
+            let path = self.keyed_path(root.id, x, y);
+            if !path.is_empty() || self.overlay_captures_pointer(root, x, y) {
+                return path;
+            }
+        }
+        if !self.is_valid(self.root) {
+            return Vec::new();
+        }
+        self.keyed_path(self.root, x, y)
+    }
+
+    /// Descend from `start` through the topmost child holding the point, collecting keyed nodes.
+    fn keyed_path(&self, start: NodeId, x: i16, y: i16) -> Vec<(crate::core::element::Key, Rect)> {
+        let usable = |id: NodeId| {
+            self.is_valid(id) && {
+                let node = self.node(id);
+                !node.inert && !node.portal_suppressed && node.rect.contains(x, y)
+            }
+        };
+        let mut keyed = Vec::new();
+        let mut current = usable(start).then_some(start);
+        while let Some(id) = current {
+            let node = self.node(id);
+            if let Some(key) = &node.key {
+                keyed.push((key.clone(), node.rect));
+            }
+            current = node
+                .children
+                .iter()
+                .rev()
+                .copied()
+                .find(|&child| usable(child));
+        }
+        keyed.reverse();
+        keyed
+    }
+
     fn matches_secondary_hit_test(
         &self,
         node: &Node,
