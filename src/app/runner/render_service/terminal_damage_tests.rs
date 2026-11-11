@@ -1671,6 +1671,67 @@ fn incremental_host_scroll_with_terminal_images_requires_a_full_paint() {
     );
 }
 
+/// The scroll fast path ends a cursorless frame with the hidden cursor on a fixed cell, not after
+/// the last cell it sent. Kitty's cursor trail follows even a hidden cursor, so a cursor left
+/// where each scroll's writes ended would trail across the screen on every scroll.
+#[cfg(feature = "terminal-images")]
+#[test]
+fn a_cursorless_incremental_scroll_parks_the_hidden_cursor() {
+    // The child hides its cursor, so no caret is requested and none was ever shown.
+    let mut harness = build(PaneCfg::new(), b"\x1b[?25l");
+    let previous = crate::app::runner::ScrollFrameSnapshot {
+        node_id: harness.runner.core.tree.root,
+        scroll_offset: 0,
+        content_height: 30,
+        content_hash: Some(7),
+        viewport_height: ROWS,
+        scroll_rows: 0..ROWS,
+        scrollbar_rect: None,
+        show_scroll_indicators: false,
+    };
+    let current = crate::app::runner::ScrollFrameSnapshot {
+        scroll_offset: 1,
+        ..previous.clone()
+    };
+    harness.runner.last_scroll_frames = vec![previous];
+    let plan = harness
+        .runner
+        .prepare_incremental_scroll_plan(
+            super::DrawMode::LayoutOnly,
+            frame_area(),
+            std::slice::from_ref(&current),
+        )
+        .expect("a text-only scroll takes the fast path");
+
+    let mut terminal = crate::backend::ratatui_backend::create_test_terminal(COLS, ROWS).unwrap();
+    let mut last = Buffer::empty(frame_area());
+    let mut diff = Buffer::empty(frame_area());
+    let cursor = StdCell::new(None);
+    harness.runner.with_render_context(&cursor, |ctx| {
+        AppRunner::<Pane>::draw_incremental_scroll(
+            &mut terminal,
+            ctx,
+            &plan,
+            &mut last,
+            &mut diff,
+            false,
+        )
+        .unwrap();
+    });
+
+    let output = terminal.backend().test_output();
+    let sent = String::from_utf8_lossy(&output);
+    // The exposed bottom row is the last thing sent, which leaves the cursor at the far corner.
+    assert!(
+        sent.contains(&format!("\x1b[{ROWS};1H")),
+        "the scroll repainted its exposed row: {sent:?}"
+    );
+    assert!(
+        output.ends_with(b"\x1b[?25l\x1b[1;1H"),
+        "the hidden cursor parks on the origin: {sent:?}"
+    );
+}
+
 #[cfg(feature = "terminal-images")]
 #[test]
 fn composed_terminal_images_reach_the_host_in_partial_frames() {

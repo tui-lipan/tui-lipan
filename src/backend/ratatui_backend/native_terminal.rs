@@ -346,7 +346,8 @@ impl<W: io::Write> HostBackend<W> {
     /// Hiding the cursor does not move it, so a hidden cursor otherwise sits wherever the last
     /// cell write left it. Terminals with cursor effects follow it there: Kitty's cursor trail
     /// flies to that cell and back on every blink of a software-blinked caret. Parking it on the
-    /// caret keeps a blink a blink.
+    /// caret keeps a blink a blink. Until a caret has been shown, the cursor parks on the origin,
+    /// so a surface that never shows one keeps a still cursor too.
     ///
     /// Only a fullscreen surface asks for this. An inline viewport relies on ratatui's own record
     /// of where the cursor is, which a move it did not make would falsify.
@@ -686,10 +687,13 @@ impl<W: io::Write> Backend for HostBackend<W> {
 
     fn hide_cursor(&mut self) -> io::Result<()> {
         self.backend.hide_cursor()?;
-        match self.parked_caret {
-            Some(position) if self.parks_hidden_caret => self.backend.set_cursor_position(position),
-            _ => Ok(()),
+        if !self.parks_hidden_caret {
+            return Ok(());
         }
+        let position = self
+            .parked_caret
+            .unwrap_or(ratatui::layout::Position::ORIGIN);
+        self.backend.set_cursor_position(position)
     }
 
     fn show_cursor(&mut self) -> io::Result<()> {
@@ -1373,10 +1377,10 @@ mod hidden_caret_tests {
         }
     }
 
-    /// Draw a frame that places the caret, then one that hides it while repainting the
-    /// bottom-right cell, as a software blink's off phase does when a clock or status repaints.
-    /// Returns the bytes the off-phase frame sent.
-    fn blink_off_output(parks: bool) -> Vec<u8> {
+    /// Draw a first frame, placing the caret when `caret` asks, then one that hides it while
+    /// repainting the bottom-right cell, as a software blink's off phase does when a clock or
+    /// status repaints. Returns the bytes the second frame sent.
+    fn hidden_frame_output(parks: bool, caret: Option<Position>) -> Vec<u8> {
         let sent = Sent::default();
         let mut backend = HostBackend::new(sent.clone());
         if parks {
@@ -1387,20 +1391,24 @@ mod hidden_caret_tests {
         };
         let mut terminal = Terminal::with_options(backend, options).expect("terminal");
         terminal
-            .draw(|f| f.set_cursor_position(Position::new(3, 1)))
-            .expect("lit frame");
+            .draw(|f| {
+                if let Some(caret) = caret {
+                    f.set_cursor_position(caret);
+                }
+            })
+            .expect("first frame");
         let lit = sent.0.borrow().len();
         terminal
             .draw(|f| {
                 f.buffer_mut()[(19, 4)].set_symbol("x");
             })
-            .expect("blink-off frame");
+            .expect("hidden frame");
         sent.0.borrow()[lit..].to_vec()
     }
 
     #[test]
     fn a_hidden_caret_stays_on_its_cell_instead_of_after_the_last_write() {
-        let output = blink_off_output(true);
+        let output = hidden_frame_output(true, Some(Position::new(3, 1)));
         assert!(
             output.ends_with(b"\x1b[?25l\x1b[2;4H"),
             "after hiding, the cursor returns to the caret: {:?}",
@@ -1409,9 +1417,19 @@ mod hidden_caret_tests {
     }
 
     #[test]
+    fn a_surface_that_never_showed_a_caret_parks_its_hidden_cursor_on_the_origin() {
+        let output = hidden_frame_output(true, None);
+        assert!(
+            output.ends_with(b"\x1b[?25l\x1b[1;1H"),
+            "with no caret to return to, the cursor parks on the origin: {:?}",
+            String::from_utf8_lossy(&output),
+        );
+    }
+
+    #[test]
     fn without_parking_a_hidden_cursor_stays_where_the_frame_left_it() {
         // An inline viewport does not park: ratatui tracks that cursor itself.
-        let output = blink_off_output(false);
+        let output = hidden_frame_output(false, Some(Position::new(3, 1)));
         assert!(
             output.ends_with(b"\x1b[?25l"),
             "nothing moves the cursor after hiding it: {:?}",
