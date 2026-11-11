@@ -459,10 +459,22 @@ impl DragOut {
                 channel.push(&out);
             }
             TerminalEvent::RemoteEntryRequested { entry } => {
-                let remote = session
+                // Every request is answered: it is served, or the drag fails.
+                if session.remote.is_none() {
+                    session.remote = Remote::spawn(session.drag.files.clone(), channel).ok();
+                }
+                let served = session
                     .remote
-                    .get_or_insert_with(|| Remote::spawn(session.drag.files.clone(), channel));
-                remote.request(*entry);
+                    .as_ref()
+                    .is_some_and(|remote| remote.request(*entry));
+                if !served {
+                    session.remote = None;
+                    let error = DndError::with_description(
+                        ErrorCode::Io,
+                        "could not start sending the files",
+                    );
+                    channel.push(&encoded(&ProgramCommand::DragError(error)));
+                }
             }
             TerminalEvent::DragFinished { canceled } => {
                 let operation = if *canceled {
@@ -578,12 +590,12 @@ struct Remote {
 }
 
 impl Remote {
-    fn spawn(files: Vec<PathBuf>, channel: &HostChannel) -> Self {
+    fn spawn(files: Vec<PathBuf>, channel: &HostChannel) -> std::io::Result<Self> {
         let (requests, receive) = mpsc::channel::<u32>();
         let cancel = Arc::new(AtomicBool::new(false));
         let sink = channel.background_sink();
         let stop = Arc::clone(&cancel);
-        let spawned = std::thread::Builder::new()
+        std::thread::Builder::new()
             .name("tui-lipan-drag-out".into())
             .spawn(move || {
                 let mut handles = 1u32;
@@ -613,15 +625,13 @@ impl Remote {
                         sink.send(&encoded(&ProgramCommand::DragError(error)));
                     }
                 }
-            });
-        if spawned.is_err() {
-            cancel.store(true, Ordering::Relaxed);
-        }
-        Self { requests, cancel }
+            })?;
+        Ok(Self { requests, cancel })
     }
 
-    fn request(&self, entry: u32) {
-        let _ = self.requests.send(entry);
+    /// Queue `entry` for the worker; false when it is no longer there to send it.
+    fn request(&self, entry: u32) -> bool {
+        self.requests.send(entry).is_ok()
     }
 }
 
@@ -1112,6 +1122,35 @@ mod tests {
             bytes_of(EntryKind::File),
             b"data",
             "read under its real name"
+        );
+    }
+
+    #[test]
+    fn a_request_no_worker_can_serve_fails_the_drag() {
+        let channel = channel();
+        let mut out = DragOut::default();
+        out.host_event(&gesture(), |_| Some(HostDrag::files(["/tmp/x"])), &channel);
+        channel.take_output();
+        // A worker that is gone, as one that could not be started leaves it.
+        let (requests, receive) = mpsc::channel();
+        drop(receive);
+        out.session.as_mut().unwrap().remote = Some(Remote {
+            requests,
+            cancel: Arc::new(AtomicBool::new(false)),
+        });
+        out.host_event(
+            &TerminalEvent::RemoteEntryRequested { entry: 1 },
+            |_| None,
+            &channel,
+        );
+        let sent = commands(&channel.take_output());
+        assert!(
+            matches!(&sent[..], [ProgramCommand::DragError(error)] if error.code == ErrorCode::Io),
+            "{sent:?}"
+        );
+        assert!(
+            out.session.as_ref().unwrap().remote.is_none(),
+            "a new worker is tried next"
         );
     }
 
