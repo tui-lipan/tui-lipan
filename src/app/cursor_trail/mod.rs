@@ -237,8 +237,9 @@ impl Default for CursorTrailParticles {
 
 /// How long a jump inside one widget waits for the caret to settle before its smear starts.
 ///
-/// By default ([`Self::DEFAULT`]) nothing waits: every jump starts its smear at once, and a caret
-/// that moves on is followed from there, so the caret is always shown where it is. A shell's
+/// By default ([`Self::DEFAULT`]) nothing waits: every jump starts its smear at once rather than
+/// holding the caret on its old cell while it settles, and a caret that moves on retargets the
+/// running smear at once. A shell's
 /// newline and then its prompt, written apart, draw one smear that follows the caret on to the
 /// prompt: straight there when the prompt comes before the smear has set off for the new line,
 /// bending toward it when the smear is already on its way.
