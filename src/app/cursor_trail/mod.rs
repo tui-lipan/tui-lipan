@@ -239,8 +239,9 @@ impl Default for CursorTrailParticles {
 ///
 /// By default ([`Self::DEFAULT`]) nothing waits: every jump starts its smear at once, and a caret
 /// that moves on is followed from there, so the caret is always shown where it is. A shell's
-/// newline and then its prompt, written apart, draw a smear that bends from the start of the new
-/// line to the prompt.
+/// newline and then its prompt, written apart, draw one smear that follows the caret on to the
+/// prompt: straight there when the prompt comes before the smear has set off for the new line,
+/// bending toward it when the smear is already on its way.
 ///
 /// With a `quiet` above zero ([`Self::SHELL`]), a jump to another row or to the widget's left edge,
 /// which may be the first of several writes, waits until the caret has held still for `quiet`, or
@@ -1908,25 +1909,59 @@ mod tests {
         }
     }
 
+    /// With no settle, a newline starts its smear at once, so the caret is never held on its old
+    /// cell, and the smear follows the caret on to the prompt. Where it goes depends on whether it
+    /// set off for the new line first: a prompt in before the smear's first step leaves it running
+    /// straight from the command to the prompt, and one that comes after it has moved bends it.
     #[test]
-    fn by_default_a_newline_starts_at_once_and_bends_to_its_prompt() {
+    fn by_default_a_newline_starts_at_once_and_follows_on_to_its_prompt() {
         let start = Instant::now();
         let jump = Some(CursorTrail::new().trigger(CursorTrailTrigger::jump()));
-        let mut state = CursorTrailState::default();
-        // Enter at column 40: the newline lands at column 0 of the next row.
-        see(&mut state, jump, 40, 3, 1, start);
-        see(&mut state, jump, 0, 4, 1, start);
+        // Every point the smear covers, from Enter at column 40 (the newline landing at column 0
+        // of the next row) until it settles on the prompt, which comes `frames` frames later.
+        let covered = |frames: u32| {
+            let mut state = CursorTrailState::default();
+            see(&mut state, jump, 40, 3, 1, start);
+            see(&mut state, jump, 0, 4, 1, start);
+            assert!(
+                state.landing.is_none() && state.running.is_some(),
+                "nothing waits, so the caret is never held on its old cell"
+            );
+            let mut points = Vec::new();
+            let mut at = start;
+            for frame in 0..240 {
+                if frame == frames {
+                    see(&mut state, jump, 40, 6, 1, at);
+                }
+                state.tick(jump, INTERVAL, at);
+                let shown = state.frame(jump);
+                state.record_full_draw(shown.clone(), at);
+                match shown.and_then(|shown| shown.smear) {
+                    Some(smear) => {
+                        if frame >= frames {
+                            assert_eq!(smear.target, Position::new(40, 6), "follows the caret");
+                        }
+                        points.extend(vertices(&smear));
+                    }
+                    None if frame > frames => break,
+                    None => {}
+                }
+                at += INTERVAL;
+            }
+            points
+        };
+
+        let straight = covered(0);
         assert!(
-            state.landing.is_none() && state.running.is_some(),
-            "nothing waits, so the caret is never held on its old cell"
+            straight.iter().all(|p| p.x >= 40.0 && p.x <= 41.0),
+            "a prompt in before the first step: straight down from column 40, never toward \
+             column 0: {straight:?}"
         );
-        // The prompt arrives a few frames later, and the smear follows the caret to it.
-        let prompt = start + Duration::from_millis(33);
-        see(&mut state, jump, 40, 6, 1, prompt);
-        state.tick(jump, INTERVAL, prompt);
-        let frame = state.frame(jump).expect("the smear runs on");
-        let smear = frame.smear.as_ref().expect("smear");
-        assert_eq!(smear.target, Position::new(40, 6));
+        let bent = covered(3);
+        assert!(
+            bent.iter().any(|p| p.x < 36.0),
+            "a prompt three frames on: the smear had set off toward column 0: {bent:?}"
+        );
     }
 
     #[test]

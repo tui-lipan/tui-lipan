@@ -195,8 +195,9 @@ the tail, default 0), `max_length` (longest stretch, in cell widths measured on 
 
 How long a jump inside one widget that may land in steps waits for the caret to settle before its
 smear starts. `CursorTrailSettle::DEFAULT` waits for nothing: every jump starts at once and the
-caret is always shown where it is, so a shell's newline and then its prompt draw a smear that bends
-from the start of the new line to the prompt. `CursorTrailSettle::SHELL` (50 ms, at most 200 ms)
+caret is always shown where it is. A shell's newline and then its prompt draw one smear that follows
+the caret on to the prompt: straight there when the prompt comes before the smear has set off for the
+new line, bending toward it when the smear is already on its way. `CursorTrailSettle::SHELL` (50 ms, at most 200 ms)
 waits instead: a jump to another row or to the widget's left edge, which may be a newline or
 carriage return with its prompt still to come, starts once the caret has held still, straight to
 where it came to rest, and a solid trail holds the caret where it was meanwhile. A caret that goes
