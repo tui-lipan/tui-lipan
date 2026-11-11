@@ -113,7 +113,14 @@ pub(crate) fn reconcile_terminal(
                 && old.wrapped_rows == wrapped_rows
                 && old.hyperlinks == hyperlinks
             {
-                old.link_hover.clone()
+                // A path is a link only while the filter says so, and a rebuilt filter may not.
+                old.link_hover.clone().filter(|hover| {
+                    hover.kind != crate::widgets::TerminalLinkKind::Path
+                        || terminal
+                            .link_paths
+                            .as_ref()
+                            .is_some_and(|filter| filter.accepts(&hover.uri))
+                })
             } else {
                 None
             },
@@ -223,6 +230,7 @@ pub(crate) fn reconcile_terminal(
         link_activation_mods: terminal.link_activation_mods,
         link_hover_style: terminal.link_hover_style,
         on_link_activate: terminal.on_link_activate.clone(),
+        link_paths: terminal.link_paths.clone(),
         style: terminal.style,
         hover_style: terminal.hover_style,
         focus_style: terminal.focus_style,

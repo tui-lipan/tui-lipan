@@ -6,11 +6,11 @@ use crate::callback::KeyHandler;
 use crate::clipboard::{ClipboardConfig, ClipboardPasteContent, ClipboardService, write_osc52};
 use crate::core::event::{KeyCode, KeyEvent, KeyMods, MouseEvent};
 use crate::core::node::{NodeId, NodeKind, NodeTree};
-use crate::utils::hints::{HintScan, HintSpan};
+use crate::utils::hints::{HintKind, HintScan, HintSpan};
 use crate::widgets::internal::{
     TerminalLinkHover, apply_scroll_action, terminal_mouse_content_rect, terminal_node_copy_text,
 };
-use crate::widgets::{ScrollEvent, ScrollMetrics, TerminalLinkEvent};
+use crate::widgets::{ScrollEvent, ScrollMetrics, TerminalLinkEvent, TerminalLinkKind};
 use crate::widgets::{TerminalInputKind, TerminalPasteShortcutBehavior, encode_paste};
 
 /// A link activation resolved from one terminal cell.
@@ -55,11 +55,12 @@ pub(crate) fn link_hit_at_node(
     }
     let row = usize::from(mouse.y.saturating_sub(content.y.max(0) as u16));
     let col = usize::from(mouse.x.saturating_sub(content.x.max(0) as u16));
-    let (uri, spans) = terminal_link_at(term, row, col)?;
+    let (uri, kind, spans) = terminal_link_at(term, row, col)?;
     Some(TerminalLinkHit {
         node_id,
         event: TerminalLinkEvent {
             uri: uri.clone(),
+            kind,
             row,
             col,
         },
@@ -72,7 +73,7 @@ fn terminal_link_at(
     term: &crate::widgets::internal::TerminalNode,
     row: usize,
     col: usize,
-) -> Option<(Arc<str>, Arc<[HintSpan]>)> {
+) -> Option<(Arc<str>, TerminalLinkKind, Arc<[HintSpan]>)> {
     if let Some(clicked) = term.hyperlinks.iter().find(|link| link.contains(row, col)) {
         let mut related = term
             .hyperlinks
@@ -101,11 +102,16 @@ fn terminal_link_at(
                 end_col: link.end_col,
             })
             .collect::<Vec<_>>();
-        return Some((clicked.uri.clone(), spans.into()));
+        return Some((
+            clicked.uri.clone(),
+            TerminalLinkKind::Hyperlink,
+            spans.into(),
+        ));
     }
 
-    HintScan::new()
-        .paths(false)
+    let matched = HintScan::new()
+        .paths(term.link_paths.is_some())
+        .file_names(term.link_paths.is_some())
         .git_shas(false)
         .scan_wrapped(&term.text, &term.wrapped_rows)
         .into_iter()
@@ -114,8 +120,20 @@ fn terminal_link_at(
                 .spans
                 .iter()
                 .any(|span| span.row == row && (span.start_col..span.end_col).contains(&col))
-        })
-        .map(|matched| (matched.text.into(), matched.spans.into()))
+        })?;
+    let kind = match matched.kind {
+        HintKind::Url => TerminalLinkKind::Url,
+        HintKind::Path
+            if term
+                .link_paths
+                .as_ref()
+                .is_some_and(|filter| filter.accepts(&matched.text)) =>
+        {
+            TerminalLinkKind::Path
+        }
+        _ => return None,
+    };
+    Some((matched.text.into(), kind, matched.spans.into()))
 }
 
 fn hyperlink_spans_connect(
@@ -159,6 +177,7 @@ pub(crate) fn update_link_hover(
     if let Some(hit) = next {
         let hover = TerminalLinkHover {
             uri: hit.event.uri,
+            kind: hit.event.kind,
             spans: hit.spans,
         };
         if let NodeKind::Terminal(term) = &mut tree.node_mut(hit.node_id).kind

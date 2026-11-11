@@ -7672,6 +7672,7 @@ struct TerminalLinkClickSmoke {
     snapshot: crate::widgets::TerminalRenderSnapshot,
     activated: Rc<RefCell<Vec<crate::widgets::TerminalLinkEvent>>>,
     forwarded: Rc<RefCell<Vec<Vec<u8>>>>,
+    paths: Option<crate::widgets::TerminalPathFilter>,
 }
 
 #[cfg(feature = "terminal")]
@@ -7689,7 +7690,11 @@ impl Component for TerminalLinkClickSmoke {
     fn view(&self, _ctx: &Context<Self>) -> Element {
         let activated = self.activated.clone();
         let forwarded = self.forwarded.clone();
-        Terminal::new()
+        let mut terminal = Terminal::new();
+        if let Some(paths) = self.paths.clone() {
+            terminal = terminal.link_paths(paths);
+        }
+        terminal
             .snapshot(self.snapshot.clone())
             .width(Length::Flex(1))
             .height(Length::Flex(1))
@@ -7733,11 +7738,19 @@ fn terminal_link_backend(
     activated: &Rc<RefCell<Vec<crate::widgets::TerminalLinkEvent>>>,
     forwarded: &Rc<RefCell<Vec<Vec<u8>>>>,
 ) -> crate::TestBackend<TerminalLinkClickSmoke> {
-    let mut backend = crate::TestBackend::new(TerminalLinkClickSmoke {
+    terminal_link_backend_with(TerminalLinkClickSmoke {
         snapshot,
         activated: activated.clone(),
         forwarded: forwarded.clone(),
-    });
+        paths: None,
+    })
+}
+
+#[cfg(feature = "terminal")]
+fn terminal_link_backend_with(
+    component: TerminalLinkClickSmoke,
+) -> crate::TestBackend<TerminalLinkClickSmoke> {
+    let mut backend = crate::TestBackend::new(component);
     backend.set_viewport(Rect {
         x: 0,
         y: 0,
@@ -7793,6 +7806,7 @@ fn ctrl_click_activates_plain_terminal_urls_before_mouse_forwarding() {
         activated.borrow().as_slice(),
         &[crate::widgets::TerminalLinkEvent {
             uri: Arc::from("https://example.com/docs"),
+            kind: crate::widgets::TerminalLinkKind::Url,
             row: 0,
             col: 10,
         }]
@@ -7840,6 +7854,7 @@ fn terminal_link_hover_requests_native_pointer_motion_reports() {
         snapshot: terminal_link_snapshot("https://example.com"),
         activated: Rc::new(RefCell::new(Vec::new())),
         forwarded: Rc::new(RefCell::new(Vec::new())),
+        paths: None,
     };
     let mut runner = AppRunner::new(App::new(), component.clone(), ());
     init_runner(
@@ -7888,6 +7903,157 @@ fn terminal_link_hover_requests_native_pointer_motion_reports() {
     assert!(
         terminal.link_hover.is_none(),
         "releasing the modifier clears the remembered hover"
+    );
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn paths_are_links_only_when_the_filter_accepts_them() {
+    let activated = Rc::new(RefCell::new(Vec::new()));
+    let forwarded = Rc::new(RefCell::new(Vec::new()));
+    let mut backend = terminal_link_backend_with(TerminalLinkClickSmoke {
+        snapshot: terminal_link_snapshot("see src/main.rs:12:3 or docs/gone.md"),
+        activated: activated.clone(),
+        forwarded: forwarded.clone(),
+        paths: Some(crate::widgets::TerminalPathFilter::new(|path| {
+            path.starts_with("src/")
+        })),
+    });
+
+    for x in [6, 30] {
+        send_left_mouse(
+            &mut backend,
+            x,
+            MouseKind::Down(MouseButton::Left),
+            KeyMods::CTRL,
+        );
+        send_left_mouse(
+            &mut backend,
+            x,
+            MouseKind::Up(MouseButton::Left),
+            KeyMods::CTRL,
+        );
+    }
+
+    assert_eq!(
+        activated.borrow().as_slice(),
+        &[crate::widgets::TerminalLinkEvent {
+            uri: Arc::from("src/main.rs:12:3"),
+            kind: crate::widgets::TerminalLinkKind::Path,
+            row: 0,
+            col: 6,
+        }],
+        "the rejected path is plain text"
+    );
+}
+
+/// A terminal that switches to its second screen and path filter on its one message.
+#[cfg(feature = "terminal")]
+struct TerminalLinkSwitch {
+    screens: [crate::widgets::TerminalRenderSnapshot; 2],
+    accepts: [bool; 2],
+    activated: Rc<RefCell<Vec<crate::widgets::TerminalLinkEvent>>>,
+}
+
+#[cfg(feature = "terminal")]
+impl Component for TerminalLinkSwitch {
+    type Message = ();
+    type Properties = ();
+    type State = usize;
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {
+        0
+    }
+
+    fn update(&mut self, _msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+        ctx.state = 1;
+        Update::full()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        let activated = self.activated.clone();
+        let accept = self.accepts[ctx.state];
+        // A new filter each render, as an application that builds it from current state does.
+        Terminal::new()
+            .snapshot(self.screens[ctx.state].clone())
+            .link_paths(crate::widgets::TerminalPathFilter::new(move |_| accept))
+            .on_link_activate(Callback::new(move |event| {
+                activated.borrow_mut().push(event)
+            }))
+            .into()
+    }
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn a_path_link_follows_the_current_filter_and_kind() {
+    let path = terminal_link_snapshot("src/main.rs");
+    let hyperlink = path
+        .clone()
+        .with_hyperlinks(vec![crate::widgets::TerminalHyperlink::new(
+            "src/main.rs",
+            0,
+            0..11,
+        )]);
+    let backend = |screens, accepts| {
+        let mut backend = crate::TestBackend::new(TerminalLinkSwitch {
+            screens,
+            accepts,
+            activated: Rc::new(RefCell::new(Vec::new())),
+        });
+        backend.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 3,
+        });
+        backend.render();
+        backend
+    };
+    let mouse = |backend: &mut crate::TestBackend<TerminalLinkSwitch>, kind| {
+        backend
+            .send_mouse(MouseEvent {
+                x: 3,
+                y: 0,
+                kind,
+                mods: KeyMods::CTRL,
+            })
+            .expect("mouse dispatch");
+    };
+
+    let mut rejected = backend([path.clone(), path], [true, false]);
+    mouse(&mut rejected, MouseKind::Moved);
+    assert!(
+        rejected
+            .capture_frame()
+            .cell(3, 0)
+            .modifiers
+            .underline
+            .is_some()
+    );
+    rejected.dispatch(()).expect("switch filters");
+    rejected.render();
+    assert!(
+        rejected
+            .capture_frame()
+            .cell(3, 0)
+            .modifiers
+            .underline
+            .is_none(),
+        "a path the new filter rejects is no longer shown as a link"
+    );
+
+    let mut reclassified = backend(
+        [hyperlink, terminal_link_snapshot("src/main.rs")],
+        [true; 2],
+    );
+    mouse(&mut reclassified, MouseKind::Down(MouseButton::Left));
+    reclassified.dispatch(()).expect("drop the hyperlink");
+    reclassified.render();
+    mouse(&mut reclassified, MouseKind::Up(MouseButton::Left));
+    assert!(
+        reclassified.component().activated.borrow().is_empty(),
+        "a release on the same text as a path does not finish a press on a hyperlink"
     );
 }
 

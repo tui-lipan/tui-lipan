@@ -35,8 +35,9 @@ use crate::core::element::Element;
 use crate::core::event::KeyMods;
 use crate::style::{Length, Style, StyleSlot};
 use crate::widgets::terminal::{
-    Terminal, TerminalClipboardTarget, TerminalInputEvent, TerminalLinkEvent, TerminalPty,
-    TerminalPtyConfig, TerminalPtyEvent, TerminalScreen, TerminalScreenHandle, TerminalViewport,
+    Terminal, TerminalClipboardTarget, TerminalInputEvent, TerminalLinkEvent, TerminalPathFilter,
+    TerminalPty, TerminalPtyConfig, TerminalPtyEvent, TerminalScreen, TerminalScreenHandle,
+    TerminalViewport,
 };
 use crate::widgets::{Text, VStack};
 
@@ -84,7 +85,8 @@ pub struct ManagedTerminalProps {
     /// Scrollback lines per wheel tick, overriding the app-wide multiplier.
     /// Default: `None` (use the app-wide multiplier).
     pub scroll_wheel_multiplier: Option<u16>,
-    /// Modifiers required to activate explicit OSC 8 links and detected plain-text URLs.
+    /// Modifiers required to activate explicit OSC 8 links, detected plain-text URLs, and paths
+    /// accepted by [`Self::link_paths`].
     /// Default: [`KeyMods::CTRL`]. Extra held modifiers are allowed.
     pub link_activation_mods: KeyMods,
     /// Style applied to a link under a pointer carrying the activation modifiers.
@@ -92,6 +94,8 @@ pub struct ManagedTerminalProps {
     pub link_hover_style: StyleSlot,
     /// Callback fired when a modified left click activates a link.
     pub on_link_activate: Option<Callback<TerminalLinkEvent>>,
+    /// Decides which detected file paths are links. Default: `None` (paths are not links).
+    pub link_paths: Option<TerminalPathFilter>,
     /// Optional handler for a right-button press in the content viewport.
     pub on_context_menu: Option<Callback<crate::core::event::MouseEvent>>,
     /// Delay before applying a burst of terminal viewport resizes.
@@ -132,6 +136,7 @@ impl Default for ManagedTerminalProps {
             link_activation_mods: KeyMods::CTRL,
             link_hover_style: StyleSlot::Replace(Style::new().underline()),
             on_link_activate: None,
+            link_paths: None,
             on_context_menu: None,
             resize_debounce: Duration::from_millis(16),
             style: crate::style::Style::default(),
@@ -261,9 +266,17 @@ impl ManagedTerminal {
         self
     }
 
-    /// Set the callback for modified clicks on explicit OSC 8 links or plain-text URLs.
+    /// Set the callback for modified clicks on explicit OSC 8 links, plain-text URLs, and, with
+    /// [`Self::link_paths`], file paths.
     pub fn on_link_activate(mut self, callback: Callback<TerminalLinkEvent>) -> Self {
         self.props.on_link_activate = Some(callback);
+        self
+    }
+
+    /// Treat file paths in plain text as links when `filter` accepts them.
+    /// See [`Terminal::link_paths`].
+    pub fn link_paths(mut self, filter: TerminalPathFilter) -> Self {
+        self.props.link_paths = Some(filter);
         self
     }
 
@@ -578,6 +591,9 @@ impl Component for ManagedTerminal {
         }
         if let Some(on_link_activate) = ctx.props.on_link_activate.clone() {
             terminal = terminal.on_link_activate(on_link_activate);
+        }
+        if let Some(filter) = ctx.props.link_paths.clone() {
+            terminal = terminal.link_paths(filter);
         }
 
         if ctx.props.forward_mouse {

@@ -58,9 +58,9 @@ pub use copy_mode::{CopyModeAction, CopyModeGrid, CopyModeViewport, TerminalCopy
 pub use events::{
     ForwardedMouseEvent, KittyKeyboardFlags, MouseEncoding, MouseMode, MouseModeState,
     MouseReportGeometry, TerminalInputEvent, TerminalInputKind, TerminalKeyModes,
-    TerminalLinkEvent, TerminalPasteEvent, TerminalPasteShortcutBehavior, encode_paste,
-    focus_sequences, key_event_to_bytes, mouse_event_to_bytes, paste_sequences,
-    terminal_selection_text,
+    TerminalLinkEvent, TerminalLinkKind, TerminalPasteEvent, TerminalPasteShortcutBehavior,
+    TerminalPathFilter, encode_paste, focus_sequences, key_event_to_bytes, mouse_event_to_bytes,
+    paste_sequences, terminal_selection_text,
 };
 #[cfg(feature = "terminal-images")]
 pub use graphics::{
@@ -178,6 +178,7 @@ impl Default for Terminal {
             link_activation_mods: KeyMods::CTRL,
             link_hover_style: StyleSlot::Replace(Style::new().underline()),
             on_link_activate: None,
+            link_paths: None,
             scroll_wheel: true,
             scroll_wheel_multiplier: None,
             on_scroll: None,
@@ -598,12 +599,24 @@ impl Terminal {
         self
     }
 
-    /// Set the callback for modified clicks on explicit OSC 8 links or plain-text URLs.
+    /// Set the callback for modified clicks on explicit OSC 8 links, plain-text URLs, and, with
+    /// [`Self::link_paths`], file paths.
     ///
     /// A successful activation consumes the complete press/release gesture before terminal text
     /// selection or PTY mouse forwarding. Clicking a cell without a link keeps ordinary behavior.
     pub fn on_link_activate(mut self, cb: Callback<TerminalLinkEvent>) -> Self {
         self.on_link_activate = Some(cb);
+        self
+    }
+
+    /// Treat file paths in plain text as links when `filter` accepts them.
+    ///
+    /// Paths are recognized by the same scanner as [`HintKind::Path`](crate::utils::hints::HintKind)
+    /// hints, with [bare file names](crate::utils::hints::HintScan::file_names) as well, and
+    /// activate with [`TerminalLinkKind::Path`]. Without a filter, the default, only OSC 8 links
+    /// and URLs are links.
+    pub fn link_paths(mut self, filter: TerminalPathFilter) -> Self {
+        self.link_paths = Some(filter);
         self
     }
 

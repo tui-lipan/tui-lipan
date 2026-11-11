@@ -464,6 +464,8 @@ pub(crate) struct MouseRegionHoverState {
 pub(crate) struct TerminalLinkPress {
     pub node_id: NodeId,
     pub uri: std::sync::Arc<str>,
+    #[cfg(feature = "terminal")]
+    pub kind: crate::widgets::TerminalLinkKind,
 }
 
 impl MouseTrackingState {
