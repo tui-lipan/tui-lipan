@@ -135,7 +135,22 @@ A `HostDrag` carries files, text, or both:
 | `.with_text(text)` | Offer this text instead of the files' paths |
 | `.operations(ops)` | What a drop target may do; copy unless set |
 | `.label(text)` | The text shown beside the pointer; defaults to the file name, `N files`, or the text |
+| `.image(image)` | What is shown beside the pointer: a `DragImage` |
 | `.on_finished(callback)` | Hear the outcome as a `HostDragFinished`: the operation, `None` when canceled |
+
+The host terminal draws a text label in its own font, at its normal size on an opaque background.
+A `DragImage` changes that:
+
+| `DragImage` | Shows |
+| --- | --- |
+| `DragImage::label()` | The default label, to restyle with `.scale(…)` and `.transparent()` |
+| `DragImage::text(text)` | This text; `.scale(1.5)` draws it larger, `.transparent()` drops the background |
+| `DragImage::png(bytes)` | A PNG; its size comes from the file |
+| `DragImage::rgb(w, h, pixels)`, `DragImage::rgba(w, h, pixels)` | Raw sRGB pixels |
+| `DragImage::none()` | Nothing |
+
+An image that cannot be shown, such as pixels that do not fill its size, falls back to the default
+label.
 
 To let a drop target move files, offer `DropOperations::EITHER` and remove the originals when
 `on_finished` reports `DropOperation::Move`.

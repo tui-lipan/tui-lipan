@@ -28,7 +28,7 @@ pub struct HostDrag {
     pub(crate) files: Vec<PathBuf>,
     pub(crate) text: Option<String>,
     pub(crate) operations: DropOperations,
-    pub(crate) label: Option<String>,
+    pub(crate) image: Option<DragImage>,
     pub(crate) on_finished: Option<Callback<HostDragFinished>>,
 }
 
@@ -38,7 +38,7 @@ impl fmt::Debug for HostDrag {
             .field("files", &self.files)
             .field("text", &self.text)
             .field("operations", &self.operations)
-            .field("label", &self.label)
+            .field("image", &self.image)
             .finish_non_exhaustive()
     }
 }
@@ -81,10 +81,16 @@ impl HostDrag {
         self
     }
 
-    /// The text shown beside the pointer while dragging. Defaults to the file name, the number of
-    /// files, or the start of the text.
-    pub fn label(mut self, label: impl Into<String>) -> Self {
-        self.label = Some(label.into());
+    /// The text shown beside the pointer while dragging, in the default style. Without one, it is
+    /// the file name, the number of files, or the start of the text. Use [`Self::image`] for a
+    /// different size, a transparent background, a picture, or nothing.
+    pub fn label(self, label: impl Into<String>) -> Self {
+        self.image(DragImage::text(label))
+    }
+
+    /// What is shown beside the pointer while dragging.
+    pub fn image(mut self, image: DragImage) -> Self {
+        self.image = Some(image);
         self
     }
 
@@ -99,9 +105,6 @@ impl HostDrag {
     }
 
     fn default_label(&self) -> String {
-        if let Some(label) = &self.label {
-            return label.clone();
-        }
         match self.files.as_slice() {
             [one] => one
                 .file_name()
@@ -118,6 +121,176 @@ impl HostDrag {
             }
             many => format!("{} files", many.len()),
         }
+    }
+}
+
+/// What is shown beside the pointer while dragging; see [`HostDrag::image`].
+///
+/// Text is drawn by the host terminal in its own font. A picture is a PNG or raw sRGB pixels.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DragImage(DragImageKind);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum DragImageKind {
+    Text {
+        /// `None` is the default label.
+        text: Option<String>,
+        /// The font size relative to the terminal's, as a fraction.
+        scale: (u32, u32),
+        opaque: bool,
+    },
+    Pixels {
+        format: DragImageFormat,
+        width: u32,
+        height: u32,
+        pixels: Vec<u8>,
+    },
+    Nothing,
+}
+
+impl Default for DragImage {
+    fn default() -> Self {
+        Self(DragImageKind::Text {
+            text: None,
+            scale: (1, 1),
+            opaque: true,
+        })
+    }
+}
+
+impl DragImage {
+    /// The default label, which [`DragImage::scale`] and [`DragImage::transparent`] can restyle.
+    pub fn label() -> Self {
+        Self::default()
+    }
+
+    /// This text, drawn by the terminal at its normal font size on an opaque background.
+    pub fn text(text: impl Into<String>) -> Self {
+        Self(DragImageKind::Text {
+            text: Some(text.into()),
+            scale: (1, 1),
+            opaque: true,
+        })
+    }
+
+    /// Draw text this many times the terminal's font size, such as `1.5`. Pictures ignore it.
+    pub fn scale(mut self, scale: f32) -> Self {
+        if let DragImageKind::Text {
+            scale: fraction, ..
+        } = &mut self.0
+            && scale.is_finite()
+            && scale > 0.0
+        {
+            *fraction = (((scale * 100.0).round() as u32).max(1), 100);
+        }
+        self
+    }
+
+    /// Draw text without a background, for a symbol or an emoji as the image. Pictures ignore it.
+    pub fn transparent(mut self) -> Self {
+        if let DragImageKind::Text { opaque, .. } = &mut self.0 {
+            *opaque = false;
+        }
+        self
+    }
+
+    /// A PNG file's bytes. Bytes that are not a PNG are not shown, and the default label is used
+    /// instead.
+    pub fn png(bytes: impl Into<Vec<u8>>) -> Self {
+        let bytes = bytes.into();
+        // The size travels with the image, read from the PNG's header chunk.
+        let size = |range: std::ops::Range<usize>| {
+            bytes
+                .get(range)
+                .and_then(|b| b.try_into().ok())
+                .map(u32::from_be_bytes)
+        };
+        match (bytes.get(..16), size(16..20), size(20..24)) {
+            (Some(b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR"), Some(width), Some(height))
+                if width > 0 && height > 0 =>
+            {
+                Self(DragImageKind::Pixels {
+                    format: DragImageFormat::Png,
+                    width,
+                    height,
+                    pixels: bytes,
+                })
+            }
+            _ => Self::default(),
+        }
+    }
+
+    /// Raw sRGB pixels, three bytes each, row by row. Pixels that do not fill `width × height`
+    /// exactly are not shown, and the default label is used instead.
+    pub fn rgb(width: u32, height: u32, pixels: impl Into<Vec<u8>>) -> Self {
+        Self::pixels(DragImageFormat::Rgb, width, height, pixels.into(), 3)
+    }
+
+    /// Raw sRGB pixels with alpha, four bytes each, row by row. Pixels that do not fill
+    /// `width × height` exactly are not shown, and the default label is used instead.
+    pub fn rgba(width: u32, height: u32, pixels: impl Into<Vec<u8>>) -> Self {
+        Self::pixels(DragImageFormat::Rgba, width, height, pixels.into(), 4)
+    }
+
+    /// Nothing beside the pointer.
+    pub fn none() -> Self {
+        Self(DragImageKind::Nothing)
+    }
+
+    fn pixels(
+        format: DragImageFormat,
+        width: u32,
+        height: u32,
+        pixels: Vec<u8>,
+        size: u64,
+    ) -> Self {
+        let fits = u64::from(width) * u64::from(height) * size == pixels.len() as u64;
+        if width == 0 || height == 0 || !fits {
+            return Self::default();
+        }
+        Self(DragImageKind::Pixels {
+            format,
+            width,
+            height,
+            pixels,
+        })
+    }
+
+    /// The image as the protocol sends it, or nothing for no image.
+    fn encode(&self, default_label: impl FnOnce() -> String, out: &mut Vec<u8>) {
+        let (format, width, height, opacity, bytes) = match &self.0 {
+            DragImageKind::Nothing => return,
+            DragImageKind::Text {
+                text,
+                scale,
+                opaque,
+            } => (
+                DragImageFormat::Text,
+                scale.0,
+                scale.1,
+                if *opaque { 1024 } else { 0 },
+                text.clone().unwrap_or_else(default_label).into_bytes(),
+            ),
+            DragImageKind::Pixels {
+                format,
+                width,
+                height,
+                pixels,
+            } => (*format, *width, *height, 1024, pixels.clone()),
+        };
+        stream(
+            &ProgramCommand::PresentImage {
+                image: 1,
+                format,
+                width,
+                height,
+                opacity,
+                bytes: Vec::new(),
+                end: true,
+            },
+            &bytes,
+            out,
+        );
     }
 }
 
@@ -369,19 +542,10 @@ fn start(drag: HostDrag, channel: &HostChannel) -> Session {
             &mut out,
         );
     }
-    stream(
-        &ProgramCommand::PresentImage {
-            image: 1,
-            format: DragImageFormat::Text,
-            width: 1,
-            height: 1,
-            opacity: 1024,
-            bytes: Vec::new(),
-            end: true,
-        },
-        drag.default_label().as_bytes(),
-        &mut out,
-    );
+    drag.image
+        .clone()
+        .unwrap_or_default()
+        .encode(|| drag.default_label(), &mut out);
     ProgramCommand::StartDrag.encode(None, &mut out);
     channel.push(&out);
     Session {
@@ -705,6 +869,85 @@ mod tests {
             .collect();
         assert_eq!(label, b"2 files");
         assert_eq!(sent.last(), Some(&ProgramCommand::StartDrag));
+    }
+
+    fn image_of(drag: HostDrag) -> Vec<ProgramCommand> {
+        let channel = channel();
+        let mut out = DragOut::default();
+        out.host_event(&gesture(), |_| Some(drag), &channel);
+        commands(&channel.take_output())
+            .into_iter()
+            .filter(|command| matches!(command, ProgramCommand::PresentImage { .. }))
+            .collect()
+    }
+
+    /// The image's format, width, height and opacity, and its bytes joined.
+    type Image = (Option<(DragImageFormat, u32, u32, u32)>, Vec<u8>);
+
+    fn joined(images: &[ProgramCommand]) -> Image {
+        let mut head = None;
+        let mut bytes = Vec::new();
+        for image in images {
+            if let ProgramCommand::PresentImage {
+                format,
+                width,
+                height,
+                opacity,
+                bytes: piece,
+                ..
+            } = image
+            {
+                head = Some((*format, *width, *height, *opacity));
+                bytes.extend(piece);
+            }
+        }
+        (head, bytes)
+    }
+
+    #[test]
+    fn the_image_beside_the_pointer_is_the_apps_to_choose() {
+        let drag = || HostDrag::text("hi");
+        assert_eq!(
+            joined(&image_of(drag())),
+            (Some((DragImageFormat::Text, 1, 1, 1024)), b"hi".to_vec()),
+            "the default label"
+        );
+        assert_eq!(
+            joined(&image_of(
+                drag().image(DragImage::label().scale(1.5).transparent())
+            )),
+            (Some((DragImageFormat::Text, 150, 100, 0)), b"hi".to_vec())
+        );
+        assert_eq!(
+            joined(&image_of(drag().image(DragImage::text("★").scale(2.0)))),
+            (
+                Some((DragImageFormat::Text, 200, 100, 1024)),
+                "★".as_bytes().to_vec()
+            )
+        );
+        assert_eq!(
+            joined(&image_of(drag().image(DragImage::rgba(1, 2, vec![9; 8])))),
+            (Some((DragImageFormat::Rgba, 1, 2, 1024)), vec![9; 8])
+        );
+        assert_eq!(
+            joined(&image_of(drag().image(DragImage::rgb(2, 2, vec![9; 5])))),
+            (Some((DragImageFormat::Text, 1, 1, 1024)), b"hi".to_vec()),
+            "pixels that do not fit fall back to the label"
+        );
+        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+        png.extend(16u32.to_be_bytes());
+        png.extend(8u32.to_be_bytes());
+        assert_eq!(
+            joined(&image_of(drag().image(DragImage::png(png)))).0,
+            Some((DragImageFormat::Png, 16, 8, 1024)),
+            "a PNG's size comes from its header"
+        );
+        assert_eq!(
+            joined(&image_of(drag().image(DragImage::png(b"\x89PNG".to_vec())))).0,
+            Some((DragImageFormat::Text, 1, 1, 1024)),
+            "bytes that are not a PNG fall back to the label"
+        );
+        assert!(image_of(drag().image(DragImage::none())).is_empty());
     }
 
     #[test]

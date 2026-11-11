@@ -33,7 +33,7 @@ pub mod wire;
 pub use self::base64::InvalidBase64;
 pub use self::command::{CommandDecoder, ProgramCommand, TaggedCommand};
 pub use self::drag_out::{
-    HostDrag, HostDragFinished, HostDragItems, HostDragSource, HostDragStart,
+    DragImage, HostDrag, HostDragFinished, HostDragItems, HostDragSource, HostDragStart,
 };
 pub use self::event::{EventDecoder, TaggedEvent, TerminalEvent, data_meta};
 pub use self::host::{HostDragAndDrop, HostEvent, HostTarget};
