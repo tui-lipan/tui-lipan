@@ -625,6 +625,19 @@ impl Remote {
     }
 }
 
+/// A file name or link target as the bytes the file system holds.
+#[cfg(unix)]
+fn os_bytes(name: &std::ffi::OsStr) -> Vec<u8> {
+    use std::os::unix::ffi::OsStrExt;
+    name.as_bytes().to_vec()
+}
+
+/// A file name or link target as UTF-8, which every Windows name is but for unpaired surrogates.
+#[cfg(not(unix))]
+fn os_bytes(name: &std::ffi::OsStr) -> Vec<u8> {
+    name.to_string_lossy().into_owned().into_bytes()
+}
+
 fn encoded(command: &ProgramCommand) -> Vec<u8> {
     let mut out = Vec::new();
     command.encode(None, &mut out);
@@ -669,9 +682,9 @@ impl EntryWriter<'_> {
             }
             let meta = std::fs::symlink_metadata(&path)?;
             if meta.file_type().is_symlink() {
-                let target = std::fs::read_link(&path)?;
+                let target = os_bytes(std::fs::read_link(&path)?.as_os_str());
                 self.send_entry(entry, child, EntryKind::Symlink, |write| {
-                    write(target.to_string_lossy().as_bytes());
+                    write(&target);
                     Ok(())
                 })?;
             } else if meta.is_dir() {
@@ -680,25 +693,24 @@ impl EntryWriter<'_> {
                 // A directory goes whole or not at all: an entry that cannot be read fails the
                 // drag rather than leave a silently incomplete copy. Only kinds the protocol has
                 // no place for (sockets, devices, pipes) are left out.
-                let mut names: Vec<(String, PathBuf)> = Vec::new();
+                // Names are sent as the bytes they are: a name that is not UTF-8 is still the name
+                // its child is read under.
+                let mut names: Vec<(std::ffi::OsString, PathBuf)> = Vec::new();
                 for entry in std::fs::read_dir(&path)? {
                     let entry = entry?;
                     let kind = entry.file_type()?;
                     if kind.is_file() || kind.is_dir() || kind.is_symlink() {
-                        names.push((
-                            entry.file_name().to_string_lossy().into_owned(),
-                            entry.path(),
-                        ));
+                        names.push((entry.file_name(), entry.path()));
                     }
                 }
                 names.sort();
                 let listing = names
                     .iter()
-                    .map(|(name, _)| name.as_str())
+                    .map(|(name, _)| os_bytes(name))
                     .collect::<Vec<_>>()
-                    .join("\0");
+                    .join(&0u8);
                 self.send_entry(entry, child, EntryKind::Directory(handle), |write| {
-                    write(listing.as_bytes());
+                    write(&listing);
                     Ok(())
                 })?;
                 for (index, (_, child_path)) in names.into_iter().enumerate() {
@@ -716,6 +728,13 @@ impl EntryWriter<'_> {
                         write(&buffer[..read]);
                     }
                 })?;
+            } else {
+                // Asked for, so it must be answered: the protocol carries only these three kinds.
+                // A child listed as a file and since replaced by a pipe or socket lands here too.
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "not a regular file, a directory, or a symbolic link",
+                ));
             }
         }
         Ok(())
@@ -1027,6 +1046,89 @@ mod tests {
             .flatten()
             .collect();
         assert_eq!(data, b"hello");
+    }
+
+    /// Drag `path` to another machine and collect what is sent until `done` says it is complete.
+    fn transfer(path: PathBuf, done: impl Fn(&[ProgramCommand]) -> bool) -> Vec<ProgramCommand> {
+        let channel = channel();
+        let mut out = DragOut::default();
+        out.host_event(&gesture(), |_| Some(HostDrag::files([path])), &channel);
+        channel.take_output();
+        out.host_event(
+            &TerminalEvent::RemoteEntryRequested { entry: 1 },
+            |_| None,
+            &channel,
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut sent = Vec::new();
+        while !done(&sent) && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            sent = commands(&[sent_bytes(&sent), channel.take_output()].concat());
+        }
+        sent
+    }
+
+    fn failed(sent: &[ProgramCommand]) -> bool {
+        sent.iter()
+            .any(|c| matches!(c, ProgramCommand::DragError(_)))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn names_and_link_targets_that_are_not_utf8_arrive_exactly() {
+        use std::os::unix::ffi::OsStringExt;
+        let dir = tempfile::tempdir().unwrap();
+        let name = std::ffi::OsString::from_vec(b"name-\xff".to_vec());
+        std::fs::write(dir.path().join(&name), b"data").unwrap();
+        let target = std::ffi::OsString::from_vec(b"target-\xfe".to_vec());
+        std::os::unix::fs::symlink(&target, dir.path().join("link")).unwrap();
+        let ends = |sent: &[ProgramCommand]| {
+            sent.iter()
+                .filter(|c| matches!(c, ProgramCommand::RemoteEntry { end: true, .. }))
+                .count()
+        };
+        let sent = transfer(dir.path().to_path_buf(), |sent| ends(sent) >= 3);
+        let bytes_of = |wanted: EntryKind| -> Vec<u8> {
+            sent.iter()
+                .filter_map(|c| match c {
+                    ProgramCommand::RemoteEntry { kind, bytes, .. } if *kind == wanted => {
+                        Some(bytes.clone())
+                    }
+                    _ => None,
+                })
+                .flatten()
+                .collect()
+        };
+        let Some(ProgramCommand::RemoteEntry {
+            kind: EntryKind::Directory(handle),
+            ..
+        }) = sent.first()
+        else {
+            panic!("{sent:?}");
+        };
+        assert_eq!(bytes_of(EntryKind::Directory(*handle)), b"link\0name-\xff");
+        assert_eq!(bytes_of(EntryKind::Symlink), b"target-\xfe");
+        assert_eq!(
+            bytes_of(EntryKind::File),
+            b"data",
+            "read under its real name"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_entry_the_protocol_cannot_carry_fails_the_drag() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("socket");
+        let _listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let sent = transfer(socket, failed);
+        assert!(
+            matches!(
+                sent.last(),
+                Some(ProgramCommand::DragError(error)) if error.code == ErrorCode::Invalid
+            ),
+            "{sent:?}"
+        );
     }
 
     #[cfg(unix)]
