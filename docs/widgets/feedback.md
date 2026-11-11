@@ -126,6 +126,9 @@ single-sided bars omit the empty side lane. Set `reserve_center_space(true)` to
 keep an empty center slot in the spacing model for compatibility; it does not
 imply equal-third lanes.
 
+Setting only a background on the bar or a slot preserves the surrounding theme
+for child widgets.
+
 ```rust
 StatusBar::new()
     .style(Style::new().bg(Color::DarkGray))

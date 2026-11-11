@@ -260,8 +260,16 @@ fn build_section(items: Vec<Element>, gap: u16, justify: Justify, style: Style) 
         section = section.child(item);
     }
 
+    // Background is painted by the section itself; only text attributes need
+    // a theme, and a theme here would replace the app's active theme.
+    let mut text_style = style;
+    text_style.bg = None;
+    if text_style.is_empty() {
+        return section.into();
+    }
+
     let local_theme = Theme {
-        primary: style,
+        primary: text_style,
         ..Theme::default()
     };
 
