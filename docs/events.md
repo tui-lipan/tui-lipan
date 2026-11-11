@@ -470,7 +470,8 @@ pub enum FlowchartItemPath {
 
 ### Drag And Drop Events
 
-Emitted by: `DragSource`, `DropTarget`
+Emitted by: `DragSource`, `DropTarget`. Drags from other applications through the host terminal
+are covered in [Drag and drop](drag-and-drop.md).
 
 ```rust
 pub struct DragStartEvent {

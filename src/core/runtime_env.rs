@@ -378,6 +378,8 @@ pub(crate) struct RuntimeEnv {
     pub devtools_request: Rc<RefCell<Option<DevToolsRequest>>>,
     /// Pending host terminal window title set through [`crate::Context::set_title`].
     pub title_request: Rc<RefCell<Option<String>>>,
+    /// Drag-and-drop commands queued for the host terminal; see [`crate::dnd::HostDragAndDrop`].
+    pub host_drag_and_drop: Rc<crate::dnd::host::HostChannel>,
     /// Host-application metric rows shown by the DevTools App tab.
     #[cfg(feature = "devtools")]
     pub devtools_metrics: Rc<DevToolsMetrics>,

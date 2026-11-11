@@ -470,7 +470,6 @@ fn process_worker_commands(
     Ok(true)
 }
 
-#[derive(Default)]
 struct WorkerInput {
     // Both decoders observe every byte read from the TTY for the worker's full lifetime. The color
     // scanner never takes ownership of a suffix that Termina's parser expects to finish later.
@@ -481,6 +480,24 @@ struct WorkerInput {
     pending_motion: Option<RunnerEvent>,
     pixel: PixelSwitch,
     cell_reply: CellSizeReplyScanner,
+    /// Finds the host's drag-and-drop escape codes, which termina's parser drops.
+    drag_and_drop: crate::dnd::OscScanner,
+    drag_and_drop_events: crate::dnd::EventDecoder,
+}
+
+impl Default for WorkerInput {
+    fn default() -> Self {
+        Self {
+            parser: Parser::default(),
+            text: Default::default(),
+            colors: Default::default(),
+            pending_motion: None,
+            pixel: Default::default(),
+            cell_reply: Default::default(),
+            drag_and_drop: crate::dnd::OscScanner::for_terminal_input(),
+            drag_and_drop_events: Default::default(),
+        }
+    }
 }
 
 /// A host answer found in raw input, ahead of the parser. See [`WorkerInput::push`].
@@ -489,6 +506,8 @@ enum HostReply {
     PixelMode(u16),
     /// The host's answer to [`CELL_SIZE_QUERY`], as width and height in pixels.
     CellSize(u16, u16),
+    /// The body of a drag-and-drop escape code (OSC 72).
+    DragAndDrop(Vec<u8>),
 }
 
 fn is_pointer_report(event: &RunnerEvent) -> bool {
@@ -532,6 +551,13 @@ impl WorkerInput {
                     // The first size this run learns can make the mode worth asking for.
                     self.sync_pixel_mouse(&mut io::stdout());
                 }
+                HostReply::DragAndDrop(body) => {
+                    for event in self.drag_and_drop_events.push_body(&body) {
+                        if events.send(RunnerEvent::HostDragAndDrop(event)).is_err() {
+                            return false;
+                        }
+                    }
+                }
             }
             rest = &rest[end..];
         }
@@ -541,14 +567,17 @@ impl WorkerInput {
     /// The offset just past the first complete host answer in `bytes`, and what it said.
     fn next_reply(&mut self, bytes: &[u8]) -> Option<(usize, HostReply)> {
         bytes.iter().enumerate().find_map(|(index, &byte)| {
-            // Both scanners see every byte, so neither loses its place in an answer split across
+            // Every scanner sees every byte, so none loses its place in an answer split across
             // reads. They end on different final bytes, so at most one answers per byte.
             let mode = self.pixel.reply.step(byte).map(HostReply::PixelMode);
             let cell = self
                 .cell_reply
                 .step(byte)
                 .map(|(width, height)| HostReply::CellSize(width, height));
-            mode.or(cell).map(|reply| (index + 1, reply))
+            let drag_and_drop = self.drag_and_drop.step(byte).map(HostReply::DragAndDrop);
+            mode.or(cell)
+                .or(drag_and_drop)
+                .map(|reply| (index + 1, reply))
         })
     }
 
@@ -1524,6 +1553,36 @@ mod tests {
                 TerminaEvent::Csi(Csi::Mode(Mode::ReportTheme(expected)))
             );
             assert_eq!(map_termina_event(event), TerminaEventAction::ThemeRefresh);
+        }
+    }
+
+    #[test]
+    fn host_drag_and_drop_codes_become_events_in_input_order() {
+        let stream = b"a\x1b]72;t=m:x=1:y=2:o=1;text/plain\x1b\\b\x1b]72;t=m:x=-1:y=-1\x07";
+        for split in 0..stream.len() {
+            let (events, receiver) = mpsc::channel();
+            let mut input = WorkerInput::default();
+            assert!(input.push(&stream[..split], &events));
+            assert!(input.push(&stream[split..], &events));
+            assert!(input.settle(&events));
+            drop(events);
+            let received: Vec<_> = receiver
+                .into_iter()
+                .map(|event| match event {
+                    RunnerEvent::Terminal(CrosstermEvent::Key(key)) => format!("{:?}", key.code),
+                    RunnerEvent::HostDragAndDrop(tagged) => match tagged.event {
+                        crate::dnd::TerminalEvent::DragOver { .. } => "over".into(),
+                        crate::dnd::TerminalEvent::DragLeave => "leave".into(),
+                        other => format!("{other:?}"),
+                    },
+                    other => format!("{other:?}"),
+                })
+                .collect();
+            assert_eq!(
+                received,
+                ["Char('a')", "over", "Char('b')", "leave"],
+                "split at {split}"
+            );
         }
     }
 

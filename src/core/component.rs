@@ -670,6 +670,19 @@ pub trait Component: Sized + 'static {
         Update::none()
     }
 
+    /// Called on the root component for every drag-and-drop event the host terminal sends.
+    ///
+    /// Hosts that speak the protocol (see [`crate::dnd`]) report drags over the window, drops, the
+    /// data the app asked for, and the progress of drags the app started. Answer through
+    /// [`Context::host_drag_and_drop`]. Nested components do not receive this callback.
+    fn on_host_drag_and_drop(
+        &mut self,
+        _event: crate::dnd::HostEvent,
+        _ctx: &mut Context<Self>,
+    ) -> Update {
+        Update::none()
+    }
+
     /// Called on the root component when the host terminal/window gains or loses focus.
     ///
     /// This is distinct from widget focus and is never delivered to nested components.
@@ -1223,6 +1236,14 @@ impl<C: Component> Context<C> {
     /// Access the toast notification API.
     pub fn toast(&self) -> crate::overlay::ToastHandle {
         crate::overlay::ToastHandle::new(self.env.overlay_manager.clone())
+    }
+
+    /// The host terminal's drag-and-drop channel.
+    ///
+    /// Events arrive at the root component's
+    /// [`Component::on_host_drag_and_drop`]; this sends commands back. See [`crate::dnd`].
+    pub fn host_drag_and_drop(&self) -> crate::dnd::HostDragAndDrop {
+        crate::dnd::HostDragAndDrop::new(std::rc::Rc::clone(&self.env.host_drag_and_drop))
     }
 
     /// Access the clipboard API.

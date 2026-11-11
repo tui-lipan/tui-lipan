@@ -1146,6 +1146,24 @@ child's escapes and re-encodes for whatever the host supports, down to half-bloc
 [terminal-images.md](terminal-images.md). `TerminalScreen::has_images()` is whether any of those
 pixels are still retained; `snapshot.images` is the visible set this frame.
 
+## Drag and drop through OSC 72
+
+`TerminalScreen` speaks the [drag-and-drop protocol](../drag-and-drop.md) with its program when
+enabled with `screen.set_drag_and_drop_enabled(true)`. It is off by default. When on, the screen:
+
+- answers the program's support query, in stream order, so the reply precedes a later device
+  attributes reply;
+- keeps what the program registered: `drag_and_drop_registration()` returns a
+  `ChildRegistration`, and `drag_and_drop_generation()` changes whenever it does;
+- queues every other command, in stream order, for `drain_drag_and_drop_commands()`.
+
+Drain responses and commands after each `process_bytes` call. The embedder answers commands by
+writing `TerminalEvent`s to the program's input, usually through a `dnd::Router`.
+
+The registration is forgotten when the shell draws a prompt (OSC 133 `A`), on RIS or `reset()`,
+when the protocol is turned off, and on `clear_drag_and_drop_registration()`. Call that when the
+program exits, so drops never reach a shell as escape codes.
+
 ## Program status through OSC 7501
 
 `TerminalScreen` supports OSC 7501 revision 0.4. Enable it on the authoritative

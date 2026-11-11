@@ -214,6 +214,60 @@ pub fn host_renders_utf8() -> Option<bool> {
     }
 }
 
+/// Whether the host terminal speaks the drag-and-drop protocol (OSC 72), as the startup probe
+/// found.
+///
+/// The probe asks with `OSC 72 ; t=q` ahead of its `CSI c` sentinel, so a host that answers the
+/// sentinel without answering the query does not. False until a probe has run, on Windows, and in
+/// headless runs.
+pub fn host_speaks_drag_and_drop() -> bool {
+    cfg_select! {
+        unix => HOST_DRAG_AND_DROP.load(Ordering::Relaxed),
+        _ => false,
+    }
+}
+
+#[cfg(unix)]
+static HOST_DRAG_AND_DROP: AtomicBool = AtomicBool::new(false);
+
+/// Whether `response` holds the host's answer to the drag-and-drop query ahead of its primary
+/// device attributes. The protocol reads an answer that comes after them as no answer at all.
+#[cfg(unix)]
+fn answers_drag_and_drop_query(response: &[u8]) -> bool {
+    let answered_at = crate::dnd::OscScanner::default()
+        .scan(response)
+        .into_iter()
+        .find(|(_, body)| {
+            crate::dnd::wire::Frame::parse(body).is_ok_and(|frame| frame.meta.kind() == b'q')
+        })
+        .map(|(end, _)| end);
+    match (answered_at, device_attributes_start(response)) {
+        (Some(answered), Some(attributes)) => answered <= attributes,
+        (Some(_), None) => true,
+        (None, _) => false,
+    }
+}
+
+/// Where the first primary device attributes reply (`CSI ? … c`) begins.
+#[cfg(unix)]
+fn device_attributes_start(response: &[u8]) -> Option<usize> {
+    let mut from = 0;
+    while let Some(offset) = response[from..].windows(3).position(|w| w == b"\x1b[?") {
+        let start = from + offset;
+        let params = &response[start + 3..];
+        let end = params
+            .iter()
+            .position(|b| !(b.is_ascii_digit() || *b == b';'));
+        if let Some(end) = end
+            && params[end] == b'c'
+        {
+            return Some(start);
+        }
+        from = start + 3;
+    }
+    None
+}
+
 /// What the last UTF-8 probe found: [`UTF8_UNKNOWN`], [`UTF8_YES`], or [`UTF8_NO`].
 #[cfg(unix)]
 static HOST_UTF8: AtomicU8 = AtomicU8::new(UTF8_UNKNOWN);
@@ -309,6 +363,8 @@ pub(crate) fn query_host_capabilities_with(
     // DECRQSS for DECSCUSR, before anything changes the user's cursor.
     probe.extend_from_slice(b"\x1bP$q q\x1b\\");
     probe.extend_from_slice(graphics_probe);
+    // Answered before the sentinel by a host that speaks the drag-and-drop protocol.
+    probe.extend_from_slice(b"\x1b]72;t=q\x1b\\");
     probe.extend_from_slice(b"\x1b[6n");
     probe.extend_from_slice(b"\x1b[c");
     // Timed from before the write: what teardown needs to budget for is the whole trip, including
@@ -347,6 +403,10 @@ pub(crate) fn query_host_capabilities_with(
     }
 
     super::startup_input::keep(&super::startup_input::split(&buffer).input);
+    HOST_DRAG_AND_DROP.store(
+        answered.is_some() && answers_drag_and_drop_query(&buffer),
+        Ordering::Relaxed,
+    );
     let cursor_reports_asked = if ask_utf8 { 3 } else { 2 };
     if ask_utf8 {
         record_utf8(utf8_from_reports(&buffer));
@@ -1715,6 +1775,24 @@ mod tests {
             }),
             "three answers and a terminator in one round trip"
         );
+    }
+
+    #[test]
+    fn a_drag_and_drop_reply_comes_before_the_sentinel() {
+        assert!(super::answers_drag_and_drop_query(
+            b"\x1b]72;t=q\x1b\\\x1b[?62;1;6c"
+        ));
+        assert!(!super::answers_drag_and_drop_query(
+            b"\x1b]7501;t=q\x07\x1b[?62;1;6c"
+        ));
+        assert!(!super::answers_drag_and_drop_query(b"\x1b[?62;1;6c"));
+        assert!(
+            !super::answers_drag_and_drop_query(b"\x1b[?62;1;6c\x1b]72;t=q\x1b\\"),
+            "an answer after the device attributes is no answer"
+        );
+        assert!(super::answers_drag_and_drop_query(
+            b"\x1b[?5u\x1b]72;t=q\x1b\\\x1b[?62;1;6c"
+        ));
     }
 
     /// The mode report is why this probe exists at all: a terminal that implements SGR-pixels says

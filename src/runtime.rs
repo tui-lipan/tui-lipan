@@ -260,6 +260,7 @@ where
             full_repaint,
             devtools_request,
             title_request: Rc::default(),
+            host_drag_and_drop: Rc::default(),
             #[cfg(feature = "devtools")]
             devtools_metrics,
             pending_ui_snapshot,
@@ -578,6 +579,18 @@ where
         let update = self
             .component
             .on_window_focus_changed(focused, &mut self.ctx);
+        self.run_root_update(update)
+    }
+
+    /// Invoke the root-only host drag-and-drop callback.
+    pub(crate) fn on_host_drag_and_drop(&mut self, event: crate::dnd::TaggedEvent) -> UpdateLevel {
+        self.ctx.set_active_theme(self.theme.clone());
+        #[cfg(unix)]
+        let cell = crate::app::input::pixel_mouse::cell_size();
+        #[cfg(not(unix))]
+        let cell = None;
+        let event = crate::dnd::host::host_event(event, cell, |x, y| self.tree.keyed_at(x, y));
+        let update = self.component.on_host_drag_and_drop(event, &mut self.ctx);
         self.run_root_update(update)
     }
 

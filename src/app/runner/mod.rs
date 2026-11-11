@@ -110,6 +110,9 @@ enum RunnerEvent {
     HostTerminalColorRefreshRequested,
     /// A live color query completed inside the persistent input worker.
     HostTerminalColors(HostTerminalColors),
+    /// A drag-and-drop event from the host terminal.
+    #[cfg(unix)]
+    HostDragAndDrop(crate::dnd::TaggedEvent),
     /// The host terminal has gone away. Input has stopped; see [`HOST_HANG_UP_GRACE`].
     #[cfg(unix)]
     HostHungUp,
@@ -2322,6 +2325,11 @@ impl<C: Component> AppRunner<C> {
                 .env()
                 .host_cursor_style
                 .set(guard.host_cursor_style);
+            self.core
+                .ctx
+                .env()
+                .host_drag_and_drop
+                .set_supported(crate::style::host_speaks_drag_and_drop());
             #[cfg(feature = "terminal")]
             {
                 self.core.tree.host_cursor_style = guard.host_cursor_style;
@@ -2587,6 +2595,12 @@ impl<C: Component> AppRunner<C> {
                     }
                     Some(RunnerEvent::InputError(message)) => {
                         return Err(std::io::Error::other(message).into());
+                    }
+                    #[cfg(unix)]
+                    Some(RunnerEvent::HostDragAndDrop(event)) => {
+                        let update_level = self.core.on_host_drag_and_drop(event);
+                        self.apply_root_update(&mut dirty, update_level);
+                        None
                     }
                     #[cfg(unix)]
                     Some(RunnerEvent::HostHungUp) => {
@@ -3236,6 +3250,7 @@ impl<C: Component> AppRunner<C> {
                 }
 
                 self.update_mouse_pointer(terminal.backend_mut())?;
+                self.flush_host_drag_and_drop(terminal.backend_mut())?;
                 let ctx_repaint = self.core.take_full_repaint_request();
                 let devtools_request = self.apply_pending_devtools_request();
                 let handoff_repaint = take_handoff_full_repaint_request();

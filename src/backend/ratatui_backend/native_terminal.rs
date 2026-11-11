@@ -1137,11 +1137,20 @@ impl TerminalGuard {
     }
 }
 
+/// Withdraw the app's drag-and-drop registrations before the terminal goes back to the shell.
+fn withdraw_drag_and_drop(out: &mut impl io::Write) {
+    let withdraw = crate::dnd::host::withdraw_for_exit();
+    if !withdraw.is_empty() {
+        let _ = out.write_all(&withdraw).and_then(|()| out.flush());
+    }
+}
+
 fn rollback_entered_terminal(policy: SurfaceTerminalPolicy, keyboard_enhancement: bool) {
     // Drop any probe DA1 reply still queued before `exit_plan` disables raw mode,
     // so it is not echoed to the shell as `^[[?…c`.
     flush_pending_terminal_responses_on_exit();
     let mut stdout = io::stdout();
+    withdraw_drag_and_drop(&mut stdout);
     let plan = exit_plan(policy, pop_keyboard_on_exit(policy, keyboard_enhancement));
     let mut executor = CrosstermTransitionExecutor::new(&mut stdout);
     let _ = execute_plan(&mut executor, &plan);
@@ -1168,15 +1177,17 @@ impl Drop for TerminalGuard {
         crate::app::input::kitty_text::set_enabled(false);
         #[cfg(unix)]
         super::terminal_handoff::pause_input_for_terminal_restore();
-        let mut executor = CrosstermTransitionExecutor::new(&mut self.stdout);
         #[cfg(unix)]
         if self.theme_notifications {
             // Stop notifications and flush the command while raw mode is still
             // active, then discard any report that raced the Termina shutdown.
+            let mut executor = CrosstermTransitionExecutor::new(&mut self.stdout);
             let _ = execute_plan(&mut executor, &theme_notification_plan(false));
             self.theme_notifications = false;
         }
         flush_pending_terminal_responses_on_exit();
+        withdraw_drag_and_drop(&mut self.stdout);
+        let mut executor = CrosstermTransitionExecutor::new(&mut self.stdout);
         let plan = exit_plan(
             self.policy,
             pop_keyboard_on_exit(self.policy, self.keyboard_enhancement),
@@ -1203,6 +1214,7 @@ pub(crate) fn restore_terminal_on_panic(
     #[cfg(not(unix))]
     let _ = theme_notifications;
     flush_pending_terminal_responses_on_exit();
+    withdraw_drag_and_drop(&mut io::stdout());
     let plan = exit_plan(policy, pop_keyboard_on_exit(policy, keyboard_enhancement));
     let _ = execute_plan(&mut executor, &plan);
     note_terminal_restored();

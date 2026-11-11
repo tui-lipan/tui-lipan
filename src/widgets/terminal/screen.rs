@@ -545,6 +545,7 @@ pub struct TerminalScreen {
     semantic_parser: SemanticVteParser,
     program_status: super::program_status::ProgramStatusStore,
     program_status_scanner: super::program_status::ProgramStatusScanner,
+    drag_and_drop: super::drag_and_drop::DragAndDropCapture,
     semantic: SemanticObserver,
     /// Logical viewport rows (matches the PTY size).
     rows: u16,
@@ -1324,6 +1325,7 @@ impl TerminalScreen {
             semantic_parser: SemanticVteParser::new(),
             program_status: Default::default(),
             program_status_scanner: Default::default(),
+            drag_and_drop: Default::default(),
             semantic: SemanticObserver::default(),
             rows,
             cols,
@@ -1381,6 +1383,39 @@ impl TerminalScreen {
     /// Drop active records when the attached process exits, before a replacement PTY starts.
     pub fn program_status_process_exited(&mut self) {
         self.program_status.clear_active();
+    }
+
+    /// Speak the drag-and-drop protocol (OSC 72) with the program. Off by default.
+    ///
+    /// When on, the screen answers the program's support query in stream order and keeps what it
+    /// registered ([`Self::drag_and_drop_registration`]). Every other command queues for
+    /// [`Self::drain_drag_and_drop_commands`]: the embedder owns the conversation with the host and
+    /// answers through the program's input. The registration is forgotten when the shell draws a
+    /// prompt (OSC 133 `A`), on a full reset, and when turned off.
+    pub fn set_drag_and_drop_enabled(&mut self, enabled: bool) {
+        self.drag_and_drop.set_enabled(enabled);
+    }
+
+    /// What the program registered for drag and drop.
+    pub fn drag_and_drop_registration(&self) -> &crate::dnd::ChildRegistration {
+        self.drag_and_drop.registration()
+    }
+
+    /// Changes whenever [`Self::drag_and_drop_registration`] does.
+    pub fn drag_and_drop_generation(&self) -> u64 {
+        self.drag_and_drop.generation()
+    }
+
+    /// Take the program's drag-and-drop commands, in stream order, other than its support query
+    /// and its registrations.
+    pub fn drain_drag_and_drop_commands(&mut self) -> Vec<crate::dnd::TaggedCommand> {
+        self.drag_and_drop.drain()
+    }
+
+    /// Forget the program's drag-and-drop registration, for an embedder that knows the program
+    /// has gone.
+    pub fn clear_drag_and_drop_registration(&mut self) {
+        self.drag_and_drop.clear_registration();
     }
 
     /// Feed terminal bytes.
@@ -1806,6 +1841,12 @@ impl TerminalScreen {
                 )
             })
             .collect();
+        boundaries.extend(
+            self.drag_and_drop
+                .scan(bytes)
+                .into_iter()
+                .map(|(end, reply)| (end, ChunkStop::Respond(reply))),
+        );
         let mut processed = 0;
         while processed < bytes.len() {
             let consumed = self
@@ -1822,6 +1863,9 @@ impl TerminalScreen {
                 boundaries.push((processed, ChunkStop::Respond(self.xtversion_response())));
             }
             if self.semantic.take_phase_change() {
+                if self.semantic.state().command_phase == super::TerminalCommandPhase::Prompt {
+                    self.drag_and_drop.clear_registration();
+                }
                 boundaries.push((
                     processed,
                     ChunkStop::RecordMarks(self.semantic.event_count()),
@@ -3807,6 +3851,7 @@ impl TerminalScreen {
         self.semantic.pointer = Default::default();
         self.program_status.reset();
         self.program_status_scanner = Default::default();
+        self.drag_and_drop.reset();
         self.mouse_mode = MouseModeState::default();
         self.pixel_mouse = false;
         self.scrollback_offset = 0;

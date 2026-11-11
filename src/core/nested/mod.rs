@@ -1639,6 +1639,7 @@ mod tests {
                 memo_dependency_recorder: Rc::new(RefCell::new(None)),
                 full_repaint: Rc::new(Cell::new(false)),
                 title_request: Default::default(),
+                host_drag_and_drop: Default::default(),
                 devtools_request: Rc::new(RefCell::new(None)),
                 #[cfg(feature = "devtools")]
                 devtools_metrics: Rc::new(crate::core::runtime_env::DevToolsMetrics::default()),
@@ -1953,6 +1954,7 @@ mod tests {
                 memo_dependency_recorder: Rc::new(RefCell::new(None)),
                 full_repaint: Rc::new(Cell::new(false)),
                 title_request: Default::default(),
+                host_drag_and_drop: Default::default(),
                 devtools_request: Rc::new(RefCell::new(None)),
                 #[cfg(feature = "devtools")]
                 devtools_metrics: Rc::new(crate::core::runtime_env::DevToolsMetrics::default()),
@@ -2178,6 +2180,7 @@ mod tests {
                 memo_dependency_recorder: Rc::new(RefCell::new(None)),
                 full_repaint: Rc::new(Cell::new(false)),
                 title_request: Default::default(),
+                host_drag_and_drop: Default::default(),
                 devtools_request: Rc::new(RefCell::new(None)),
                 #[cfg(feature = "devtools")]
                 devtools_metrics: Rc::new(crate::core::runtime_env::DevToolsMetrics::default()),

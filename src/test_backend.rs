@@ -337,6 +337,37 @@ where
         self.window_focused
     }
 
+    /// Say whether the simulated host speaks the drag-and-drop protocol.
+    ///
+    /// Off by default, as in a terminal that did not answer the startup query; while off,
+    /// [`HostDragAndDrop`](crate::dnd::HostDragAndDrop) drops what the app sends.
+    pub fn set_host_drag_and_drop_supported(&mut self, supported: bool) {
+        self.core
+            .ctx
+            .env()
+            .host_drag_and_drop
+            .set_supported(supported);
+    }
+
+    /// Deliver a drag-and-drop event from the simulated host to the root component.
+    ///
+    /// Calls [`Component::on_host_drag_and_drop`], runs its command, drains messages already
+    /// available, and renders when an update asks for it. Returns whether anything re-rendered.
+    pub fn host_drag_and_drop(&mut self, event: crate::dnd::TaggedEvent) -> Result<bool> {
+        let level = self.core.on_host_drag_and_drop(event);
+        let pump_dirty = self.pump()?;
+        let dirty = !matches!(level, crate::UpdateLevel::None);
+        if dirty && !pump_dirty {
+            self.render();
+        }
+        Ok(dirty || pump_dirty)
+    }
+
+    /// Take the drag-and-drop escape codes the app has sent to the simulated host so far.
+    pub fn take_host_drag_and_drop_output(&mut self) -> Vec<u8> {
+        self.core.ctx.env().host_drag_and_drop.take_output()
+    }
+
     /// Simulate a host terminal/window focus transition.
     ///
     /// Calls the root component's [`Component::on_window_focus_changed`] callback once per
