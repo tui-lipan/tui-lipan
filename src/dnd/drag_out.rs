@@ -244,8 +244,10 @@ impl DragImage {
         pixels: Vec<u8>,
         size: u64,
     ) -> Self {
-        let fits = u64::from(width) * u64::from(height) * size == pixels.len() as u64;
-        if width == 0 || height == 0 || !fits {
+        let expected = u64::from(width)
+            .checked_mul(u64::from(height))
+            .and_then(|count| count.checked_mul(size));
+        if width == 0 || height == 0 || expected != Some(pixels.len() as u64) {
             return Self::default();
         }
         Self(DragImageKind::Pixels {
@@ -675,20 +677,20 @@ impl EntryWriter<'_> {
             } else if meta.is_dir() {
                 *self.handles = self.handles.saturating_add(1).max(2);
                 let handle = *self.handles;
-                let mut names: Vec<(String, PathBuf)> = std::fs::read_dir(&path)?
-                    .filter_map(Result::ok)
-                    .filter(|entry| {
-                        entry
-                            .file_type()
-                            .is_ok_and(|kind| kind.is_file() || kind.is_dir() || kind.is_symlink())
-                    })
-                    .map(|entry| {
-                        (
+                // A directory goes whole or not at all: an entry that cannot be read fails the
+                // drag rather than leave a silently incomplete copy. Only kinds the protocol has
+                // no place for (sockets, devices, pipes) are left out.
+                let mut names: Vec<(String, PathBuf)> = Vec::new();
+                for entry in std::fs::read_dir(&path)? {
+                    let entry = entry?;
+                    let kind = entry.file_type()?;
+                    if kind.is_file() || kind.is_dir() || kind.is_symlink() {
+                        names.push((
                             entry.file_name().to_string_lossy().into_owned(),
                             entry.path(),
-                        )
-                    })
-                    .collect();
+                        ));
+                    }
+                }
                 names.sort();
                 let listing = names
                     .iter()
@@ -934,6 +936,16 @@ mod tests {
             (Some((DragImageFormat::Text, 1, 1, 1024)), b"hi".to_vec()),
             "pixels that do not fit fall back to the label"
         );
+        assert_eq!(
+            joined(&image_of(drag().image(DragImage::rgba(
+                u32::MAX,
+                u32::MAX,
+                vec![0; 4]
+            ))))
+            .0,
+            Some((DragImageFormat::Text, 1, 1, 1024)),
+            "a size too large to count falls back too"
+        );
         let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
         png.extend(16u32.to_be_bytes());
         png.extend(8u32.to_be_bytes());
@@ -1015,6 +1027,53 @@ mod tests {
             .flatten()
             .collect();
         assert_eq!(data, b"hello");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_that_cannot_be_read_fails_the_drag_rather_than_arrive_incomplete() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let locked = dir.path().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::write(locked.join("secret.txt"), b"x").unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::read_dir(&locked).is_ok() {
+            // Running with privileges that read it anyway: nothing to test.
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+            return;
+        }
+        let channel = channel();
+        let mut out = DragOut::default();
+        out.host_event(
+            &gesture(),
+            |_| Some(HostDrag::files([dir.path().to_path_buf()])),
+            &channel,
+        );
+        channel.take_output();
+        out.host_event(
+            &TerminalEvent::RemoteEntryRequested { entry: 1 },
+            |_| None,
+            &channel,
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut sent = Vec::new();
+        while !sent
+            .iter()
+            .any(|c| matches!(c, ProgramCommand::DragError(_)))
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            sent = commands(&[sent_bytes(&sent), channel.take_output()].concat());
+        }
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(
+            matches!(
+                sent.last(),
+                Some(ProgramCommand::DragError(error)) if error.code == ErrorCode::PermissionDenied
+            ),
+            "{sent:?}"
+        );
     }
 
     #[test]

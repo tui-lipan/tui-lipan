@@ -1162,9 +1162,11 @@ impl NodeTree {
                 .host_drag_at(column, row, node.rect, border)
                 .or_else(|| {
                     let source = node.host_drag.as_ref()?;
+                    // From the widget's true origin, which can lie off screen when it is scrolled.
+                    let (x, y) = node.rect.local_point(x, y);
                     source.offer(crate::dnd::HostDragStart {
-                        x: x.saturating_sub(node.rect.x.max(0) as u16),
-                        y: y.saturating_sub(node.rect.y.max(0) as u16),
+                        x,
+                        y,
                         width: node.rect.w,
                         height: node.rect.h,
                     })
@@ -2722,6 +2724,25 @@ mod tests {
         );
         assert_eq!(tree.live_terminal_ids.len(), 1);
         assert_eq!(tree.pointer_shape_at(0, 0), Some(PointerShape::Grab));
+    }
+
+    #[test]
+    fn a_drag_out_begins_at_the_point_within_a_widget_partly_off_screen() {
+        let (mut tree, base) = build_base_tree();
+        tree.node_mut(base).rect = Rect {
+            x: -5,
+            y: -2,
+            w: 30,
+            h: 12,
+        };
+        let seen = std::rc::Rc::new(std::cell::Cell::new(None));
+        let record = std::rc::Rc::clone(&seen);
+        tree.node_mut(base).host_drag = Some(crate::dnd::HostDragSource::new(move |start| {
+            record.set(Some((start.x, start.y)));
+            Some(crate::dnd::HostDrag::text("x"))
+        }));
+        assert!(tree.host_drag_at(1, 3).is_some());
+        assert_eq!(seen.get(), Some((6, 5)));
     }
 
     #[test]
