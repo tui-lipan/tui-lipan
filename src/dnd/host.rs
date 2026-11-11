@@ -11,7 +11,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use super::{DragPosition, MachineId, ProgramCommand, TaggedEvent, TerminalEvent};
 use crate::core::element::Key;
@@ -130,37 +130,54 @@ impl HostChannel {
     }
 }
 
-/// What the app has registered with the host, kept process-wide so the exit and handoff paths,
-/// which may run off the UI thread, can withdraw it.
-#[derive(Debug, Default)]
+/// What the host has been told the app registered, kept process-wide so the exit and handoff
+/// paths, which may run off the UI thread, can withdraw it.
+///
+/// It follows what reached the host, not what was queued: a command still waiting in the outbox
+/// when a handoff withdraws the registrations has not changed what the host knows.
+#[derive(Debug, Default, PartialEq, Eq)]
 struct Registrations {
-    /// Escape codes that registered for drops, replayed to register again.
-    accepting: Option<Vec<u8>>,
-    /// Escape codes that registered to offer drags.
-    offering: Option<Vec<u8>>,
+    /// Accepting drops, with these extra MIME types.
+    accepting: Option<Vec<Arc<str>>>,
+    /// The machine id sent for drops. It outlives a new `AcceptDrops`, as it does in the terminal.
+    drop_machine_id: Option<Arc<str>>,
+    /// Offering drags, with this machine id.
+    offering: Option<Option<Arc<str>>>,
     /// Withdrawn for a handoff, to be restored on return.
     withdrawn: bool,
 }
 
 static REGISTRATIONS: Mutex<Registrations> = Mutex::new(Registrations {
     accepting: None,
+    drop_machine_id: None,
     offering: None,
     withdrawn: false,
 });
 
 impl Registrations {
-    fn note(&mut self, command: &ProgramCommand, encoded: &[u8]) {
+    fn note(&mut self, command: &ProgramCommand) {
         match command {
-            ProgramCommand::AcceptDrops { .. } => self.accepting = Some(encoded.to_vec()),
-            ProgramCommand::DropMachineId(_) => {
-                if let Some(accepting) = &mut self.accepting {
-                    accepting.extend_from_slice(encoded);
-                }
+            ProgramCommand::AcceptDrops { mimes } => self.accepting = Some(mimes.clone()),
+            ProgramCommand::DropMachineId(id) => {
+                self.drop_machine_id = (!id.is_empty()).then(|| Arc::clone(id));
             }
-            ProgramCommand::StopAcceptingDrops => self.accepting = None,
-            ProgramCommand::OfferDrags { .. } => self.offering = Some(encoded.to_vec()),
+            ProgramCommand::StopAcceptingDrops => {
+                self.accepting = None;
+                self.drop_machine_id = None;
+            }
+            ProgramCommand::OfferDrags { machine_id } => self.offering = Some(machine_id.clone()),
             ProgramCommand::StopOfferingDrags => self.offering = None,
             _ => {}
+        }
+    }
+
+    /// Record escape codes the host has been sent.
+    fn commit(&mut self, escape_codes: &[u8]) {
+        let mut decoder = super::CommandDecoder::default();
+        for (_, body) in super::OscScanner::default().scan(escape_codes) {
+            for tagged in decoder.push_body(&body) {
+                self.note(&tagged.command);
+            }
         }
     }
 
@@ -183,18 +200,33 @@ impl Registrations {
     }
 
     fn restore(&mut self) -> Vec<u8> {
+        let mut out = Vec::new();
         if !std::mem::take(&mut self.withdrawn) {
-            return Vec::new();
+            return out;
         }
-        let mut out = self.accepting.clone().unwrap_or_default();
-        out.extend(self.offering.iter().flatten());
+        if let Some(mimes) = &self.accepting {
+            ProgramCommand::AcceptDrops {
+                mimes: mimes.clone(),
+            }
+            .encode(None, &mut out);
+            if let Some(id) = &self.drop_machine_id {
+                ProgramCommand::DropMachineId(Arc::clone(id)).encode(None, &mut out);
+            }
+        }
+        if let Some(machine_id) = &self.offering {
+            ProgramCommand::OfferDrags {
+                machine_id: machine_id.clone(),
+            }
+            .encode(None, &mut out);
+        }
         out
     }
 }
 
-fn note_sent(command: &ProgramCommand, encoded: &[u8]) {
+/// Note escape codes that have been written to the host.
+pub(crate) fn commit_registrations(escape_codes: &[u8]) {
     if let Ok(mut registrations) = REGISTRATIONS.lock() {
-        registrations.note(command, encoded);
+        registrations.commit(escape_codes);
     }
 }
 
@@ -241,10 +273,7 @@ impl HostDragAndDrop {
         if !self.supported() {
             return;
         }
-        let mut encoded = Vec::new();
-        command.encode(None, &mut encoded);
-        note_sent(command, &encoded);
-        self.channel.outbox.borrow_mut().extend_from_slice(&encoded);
+        command.encode(None, &mut self.channel.outbox.borrow_mut());
     }
 
     /// Queue escape codes already encoded, such as a [`DataStreamWriter`](super::DataStreamWriter)
@@ -253,17 +282,11 @@ impl HostDragAndDrop {
         if !self.supported() {
             return;
         }
-        let mut decoder = super::CommandDecoder::default();
         let mut outbox = self.channel.outbox.borrow_mut();
         for (_, body) in super::OscScanner::default().scan(escape_codes) {
-            let mut code = Vec::with_capacity(body.len() + 7);
-            code.extend_from_slice(b"\x1b]72;");
-            code.extend_from_slice(&body);
-            code.extend_from_slice(b"\x1b\\");
-            for tagged in decoder.push_body(&body) {
-                note_sent(&tagged.command, &code);
+            if let Ok(frame) = super::wire::Frame::parse(&body) {
+                frame.write(&mut outbox);
             }
-            outbox.extend_from_slice(&code);
         }
     }
 
@@ -290,25 +313,64 @@ mod tests {
         assert!(!channel.has_output());
     }
 
+    fn encoded(commands: &[ProgramCommand]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for command in commands {
+            command.encode(None, &mut out);
+        }
+        out
+    }
+
+    fn accept(mimes: &[&str]) -> ProgramCommand {
+        ProgramCommand::AcceptDrops {
+            mimes: mimes.iter().map(|m| Arc::from(*m)).collect(),
+        }
+    }
+
     #[test]
     fn registrations_are_withdrawn_for_a_handoff_and_come_back() {
         let mut registrations = Registrations::default();
-        let mut accept = Vec::new();
-        ProgramCommand::AcceptDrops { mimes: vec![] }.encode(None, &mut accept);
-        registrations.note(&ProgramCommand::AcceptDrops { mimes: vec![] }, &accept);
-        let mut offer = Vec::new();
-        ProgramCommand::OfferDrags { machine_id: None }.encode(None, &mut offer);
-        registrations.note(&ProgramCommand::OfferDrags { machine_id: None }, &offer);
+        let offer = ProgramCommand::OfferDrags {
+            machine_id: Some("1:abcdef0123456789abcd".into()),
+        };
+        registrations.commit(&encoded(&[accept(&["image/png"]), offer.clone()]));
         assert_eq!(
             registrations.withdraw(false),
             b"\x1b]72;t=A\x1b\\\x1b]72;t=o:x=2\x1b\\"
         );
         assert_eq!(registrations.withdraw(false), b"", "already withdrawn");
-        assert_eq!(registrations.restore(), [accept.clone(), offer].concat());
+        assert_eq!(
+            registrations.restore(),
+            encoded(&[accept(&["image/png"]), offer])
+        );
         assert_eq!(registrations.restore(), b"", "already restored");
-        registrations.note(&ProgramCommand::StopOfferingDrags, b"");
+        registrations.commit(&encoded(&[ProgramCommand::StopOfferingDrags]));
         assert_eq!(registrations.withdraw(true), b"\x1b]72;t=A\x1b\\");
         assert_eq!(registrations.restore(), b"", "an exit forgets");
+    }
+
+    #[test]
+    fn a_withdrawal_follows_what_reached_the_host_not_what_is_queued() {
+        let (channel, host) = channel();
+        let mut registrations = Registrations::default();
+        host.send(&accept(&[]));
+        registrations.commit(&channel.take_output());
+        // Queued, then a handoff before the next flush: the host still has the registration.
+        host.send(&ProgramCommand::StopAcceptingDrops);
+        assert_eq!(registrations.withdraw(false), b"\x1b]72;t=A\x1b\\");
+        // On return it registers again, and the queued withdrawal then reaches the host.
+        assert_eq!(registrations.restore(), encoded(&[accept(&[])]));
+        registrations.commit(&channel.take_output());
+        assert_eq!(registrations, Registrations::default());
+    }
+
+    #[test]
+    fn a_new_registration_keeps_the_machine_id_across_a_handoff() {
+        let mut registrations = Registrations::default();
+        let id = ProgramCommand::DropMachineId("1:abcdef0123456789abcd".into());
+        registrations.commit(&encoded(&[accept(&["a/b"]), id.clone(), accept(&["c/d"])]));
+        registrations.withdraw(false);
+        assert_eq!(registrations.restore(), encoded(&[accept(&["c/d"]), id]));
     }
 
     #[test]

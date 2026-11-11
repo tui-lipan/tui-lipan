@@ -35,13 +35,13 @@ pub struct Metadata {
     /// `o`: an operation or a set of operations.
     pub o: Option<u32>,
     /// `x`: a cell column or an index.
-    pub x: Option<i32>,
+    pub x: Option<i64>,
     /// `y`: a cell row or an index.
-    pub y: Option<i32>,
+    pub y: Option<i64>,
     /// `X`: a pixel column, a remote flag, or an entry kind.
-    pub big_x: Option<i32>,
+    pub big_x: Option<i64>,
     /// `Y`: a pixel row or a directory handle.
-    pub big_y: Option<i32>,
+    pub big_y: Option<i64>,
 }
 
 impl Metadata {
@@ -65,18 +65,23 @@ impl Metadata {
     }
 
     /// `x`, zero when absent.
-    pub fn x_or_zero(&self) -> i32 {
+    pub fn x_or_zero(&self) -> i64 {
         self.x.unwrap_or(0)
     }
 
     /// `y`, zero when absent.
-    pub fn y_or_zero(&self) -> i32 {
+    pub fn y_or_zero(&self) -> i64 {
         self.y.unwrap_or(0)
     }
 
     /// `o`, zero when absent.
     pub fn o_or_zero(&self) -> u32 {
         self.o.unwrap_or(0)
+    }
+
+    /// A value as the unsigned 32-bit number it stands for; out of range is clamped.
+    pub(crate) fn unsigned(value: i64) -> u32 {
+        value.clamp(0, i64::from(u32::MAX)) as u32
     }
 
     pub(crate) fn with_i(mut self, i: Option<u32>) -> Self {
@@ -93,10 +98,10 @@ impl Metadata {
         let numbers = [
             ('i', self.i.map(i64::from)),
             ('o', self.o.map(i64::from)),
-            ('x', self.x.map(i64::from)),
-            ('y', self.y.map(i64::from)),
-            ('X', self.big_x.map(i64::from)),
-            ('Y', self.big_y.map(i64::from)),
+            ('x', self.x),
+            ('y', self.y),
+            ('X', self.big_x),
+            ('Y', self.big_y),
         ];
         for (key, value) in numbers {
             if let Some(value) = value {
@@ -179,12 +184,15 @@ fn parse_u32(value: &[u8]) -> Result<u32, FrameError> {
         .ok_or(FrameError::Metadata)
 }
 
-fn parse_i32(value: &[u8]) -> Result<i32, FrameError> {
+fn parse_i32(value: &[u8]) -> Result<i64, FrameError> {
     let text = std::str::from_utf8(value).map_err(|_| FrameError::Metadata)?;
-    // Both signs of 32-bit values appear: indices are unsigned, coordinates may be -1.
-    text.parse::<i32>()
-        .or_else(|_| text.parse::<u32>().map(|v| v as i32))
-        .map_err(|_| FrameError::Metadata)
+    // Both signs of 32-bit values appear: indices and handles are unsigned, coordinates may be -1.
+    let number: i64 = text.parse().map_err(|_| FrameError::Metadata)?;
+    if (i64::from(i32::MIN)..=i64::from(u32::MAX)).contains(&number) {
+        Ok(number)
+    } else {
+        Err(FrameError::Metadata)
+    }
 }
 
 fn write_frame(out: &mut Vec<u8>, meta: &Metadata, payload: &[u8]) {
@@ -194,9 +202,25 @@ fn write_frame(out: &mut Vec<u8>, meta: &Metadata, payload: &[u8]) {
     out.extend_from_slice(header.as_bytes());
     if !payload.is_empty() {
         out.push(b';');
-        out.extend_from_slice(payload);
+        // A control byte would end the escape code early and let the rest of the payload act as
+        // another one. Base64 and well-formed text never hold one; anything else loses it.
+        out.extend(payload.iter().copied().filter(|&b| b >= 0x20 && b != 0x7f));
     }
     out.extend_from_slice(ST);
+}
+
+/// Text without control characters, C1 included, so it reads as text in any terminal.
+fn clean_text(payload: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    match std::str::from_utf8(payload) {
+        Ok(text) if !text.chars().any(char::is_control) => payload.into(),
+        Ok(text) => text
+            .chars()
+            .filter(|c| !c.is_control())
+            .collect::<String>()
+            .into_bytes()
+            .into(),
+        Err(_) => payload.into(),
+    }
 }
 
 /// Append one message, split into as many escape codes as its payload needs.
@@ -218,6 +242,11 @@ pub fn write_message(out: &mut Vec<u8>, meta: Metadata, payload: &[u8], binary: 
         return;
     }
     let step = if binary { RAW_CHUNK } else { MAX_PAYLOAD };
+    let payload = if binary {
+        payload.into()
+    } else {
+        clean_text(payload)
+    };
     let mut chunks = payload.chunks(step).peekable();
     let mut encoded = Vec::new();
     while let Some(chunk) = chunks.next() {
@@ -481,7 +510,14 @@ mod tests {
         let frame = Frame::parse(b"t=m:x=-1:y=-1:X=12:Y=4294967295:o=3;text/plain").unwrap();
         assert_eq!(frame.meta.kind(), b'm');
         assert_eq!((frame.meta.x, frame.meta.y), (Some(-1), Some(-1)));
-        assert_eq!(frame.meta.big_y, Some(-1));
+        assert_eq!(frame.meta.big_y, Some(4294967295));
+        let mut out = Vec::new();
+        frame.write(&mut out);
+        assert!(
+            String::from_utf8_lossy(&out).contains(":Y=4294967295"),
+            "unsigned values round-trip"
+        );
+        assert_eq!(Frame::parse(b"t=r:x=4294967296"), Err(FrameError::Metadata));
         assert_eq!(frame.meta.o, Some(3));
         assert_eq!(frame.meta.i, None);
         assert_eq!(frame.payload, b"text/plain");
@@ -575,6 +611,20 @@ mod tests {
         }
         let unaware: Vec<_> = OscScanner::default().scan(stream);
         assert_eq!(unaware.len(), 2, "program output has no pastes to skip");
+    }
+
+    #[test]
+    fn a_payload_cannot_end_its_escape_code_or_start_another() {
+        let mut out = Vec::new();
+        write_message(
+            &mut out,
+            Metadata::of(b'a'),
+            "text/plain\x1b\\\x1b]2;owned\x07\u{9c}x".as_bytes(),
+            false,
+        );
+        assert_eq!(out, b"\x1b]72;t=a;text/plain\\]2;ownedx\x1b\\");
+        let frames = frames(&out);
+        assert_eq!(frames.len(), 1);
     }
 
     #[test]

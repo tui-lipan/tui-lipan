@@ -108,15 +108,21 @@ pub struct TaggedEvent {
 
 fn position(meta: &Metadata) -> DragPosition {
     DragPosition {
-        cell_x: meta.x_or_zero().max(0) as u32,
-        cell_y: meta.y_or_zero().max(0) as u32,
-        pixel_x: meta.big_x.unwrap_or(0),
-        pixel_y: meta.big_y.unwrap_or(0),
+        cell_x: Metadata::unsigned(meta.x_or_zero()),
+        cell_y: Metadata::unsigned(meta.y_or_zero()),
+        pixel_x: pixel(meta.big_x),
+        pixel_y: pixel(meta.big_y),
     }
 }
 
+fn pixel(value: Option<i64>) -> i32 {
+    value
+        .unwrap_or(0)
+        .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+}
+
 fn response_target(meta: &Metadata) -> Option<DataTarget> {
-    let positive = |value: Option<i32>| value.filter(|v| *v > 0).map(|v| v as u32);
+    let positive = |value: Option<i64>| value.filter(|v| *v > 0).map(Metadata::unsigned);
     match (positive(meta.big_y), positive(meta.x), positive(meta.y)) {
         (Some(handle), Some(entry), _) => Some(DataTarget::DirEntry { handle, entry }),
         (None, Some(mime_index), Some(entry)) => Some(DataTarget::UriEntry { mime_index, entry }),
@@ -238,7 +244,7 @@ fn text_event(meta: &Metadata, text: Vec<u8>) -> Option<TerminalEvent> {
         b'E' if text == b"OK" => TerminalEvent::DragStarted,
         b'E' => TerminalEvent::DragFailed(DndError::parse(&text)),
         b'e' => {
-            let index = meta.y_or_zero().max(0) as u32;
+            let index = Metadata::unsigned(meta.y_or_zero());
             match meta.x_or_zero() {
                 1 => TerminalEvent::DragAccepted { mime_index: index },
                 2 => TerminalEvent::DragActionChanged {
@@ -253,7 +259,7 @@ fn text_event(meta: &Metadata, text: Vec<u8>) -> Option<TerminalEvent> {
             }
         }
         b'k' => TerminalEvent::RemoteEntryRequested {
-            entry: meta.x_or_zero().max(0) as u32,
+            entry: Metadata::unsigned(meta.x_or_zero()),
         },
         _ => return None,
     })
@@ -272,10 +278,10 @@ fn parse_options(text: &[u8]) -> Vec<(Arc<str>, Arc<str>)> {
 
 fn position_meta(t: u8, position: DragPosition) -> Metadata {
     Metadata {
-        x: Some(position.cell_x as i32),
-        y: Some(position.cell_y as i32),
-        big_x: Some(position.pixel_x),
-        big_y: Some(position.pixel_y),
+        x: Some(i64::from(position.cell_x)),
+        y: Some(i64::from(position.cell_y)),
+        big_x: Some(i64::from(position.pixel_x)),
+        big_y: Some(i64::from(position.pixel_y)),
         ..Metadata::of(t)
     }
 }
@@ -284,17 +290,17 @@ fn position_meta(t: u8, position: DragPosition) -> Metadata {
 pub(crate) fn target_meta(t: u8, target: DataTarget) -> Metadata {
     match target {
         DataTarget::Mime { index } => Metadata {
-            x: Some(index as i32),
+            x: Some(i64::from(index)),
             ..Metadata::of(t)
         },
         DataTarget::UriEntry { mime_index, entry } => Metadata {
-            x: Some(mime_index as i32),
-            y: Some(entry as i32),
+            x: Some(i64::from(mime_index)),
+            y: Some(i64::from(entry)),
             ..Metadata::of(t)
         },
         DataTarget::DirEntry { handle, entry } => Metadata {
-            x: Some(entry as i32),
-            big_y: Some(handle as i32),
+            x: Some(i64::from(entry)),
+            big_y: Some(i64::from(handle)),
             ..Metadata::of(t)
         },
     }
@@ -324,7 +330,11 @@ impl TerminalEvent {
         match self {
             Self::Supported { options } => {
                 let mut payload = String::new();
-                for (index, (key, value)) in options.iter().enumerate() {
+                // A key holding `:` or `=`, or a value holding `:`, would read back as other pairs.
+                let pairs = options.iter().filter(|(key, value)| {
+                    !key.is_empty() && !key.contains([':', '=']) && !value.contains(':')
+                });
+                for (index, (key, value)) in pairs.enumerate() {
                     if index > 0 {
                         payload.push(':');
                     }
@@ -405,7 +415,7 @@ impl TerminalEvent {
             Self::RemoteEntryRequested { entry } => text(
                 out,
                 Metadata {
-                    x: Some(*entry as i32),
+                    x: Some(i64::from(*entry)),
                     ..Metadata::of(b'k')
                 },
                 &[],
@@ -416,14 +426,14 @@ impl TerminalEvent {
 
 fn drag_event_meta(x: i32) -> Metadata {
     Metadata {
-        x: Some(x),
+        x: Some(i64::from(x)),
         ..Metadata::of(b'e')
     }
 }
 
 fn drag_event(x: i32, y: u32) -> Metadata {
     Metadata {
-        y: Some(y as i32),
+        y: Some(i64::from(y)),
         ..drag_event_meta(x)
     }
 }

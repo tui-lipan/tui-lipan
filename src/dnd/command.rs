@@ -188,8 +188,8 @@ impl CommandDecoder {
     }
 }
 
-fn positive(value: Option<i32>) -> Option<u32> {
-    value.filter(|v| *v > 0).map(|v| v as u32)
+fn positive(value: Option<i64>) -> Option<u32> {
+    value.filter(|v| *v > 0).map(Metadata::unsigned)
 }
 
 fn data_command(meta: &Metadata, bytes: Vec<u8>, end: bool) -> Option<ProgramCommand> {
@@ -198,16 +198,16 @@ fn data_command(meta: &Metadata, bytes: Vec<u8>, end: bool) -> Option<ProgramCom
             let x = meta.x_or_zero();
             if x >= 0 {
                 ProgramCommand::PresentData {
-                    mime_index: x as u32,
+                    mime_index: Metadata::unsigned(x),
                     bytes,
                     end,
                 }
             } else {
                 ProgramCommand::PresentImage {
-                    image: x.unsigned_abs(),
+                    image: Metadata::unsigned(-x),
                     format: DragImageFormat::from_code(meta.y_or_zero())?,
-                    width: meta.big_x.unwrap_or(0).max(0) as u32,
-                    height: meta.big_y.unwrap_or(0).max(0) as u32,
+                    width: Metadata::unsigned(meta.big_x.unwrap_or(0)),
+                    height: Metadata::unsigned(meta.big_y.unwrap_or(0)),
                     opacity: meta.o_or_zero(),
                     bytes,
                     end,
@@ -215,7 +215,7 @@ fn data_command(meta: &Metadata, bytes: Vec<u8>, end: bool) -> Option<ProgramCom
             }
         }
         b'e' => ProgramCommand::DragData {
-            mime_index: meta.y_or_zero().max(0) as u32,
+            mime_index: Metadata::unsigned(meta.y_or_zero()),
             bytes,
             end,
         },
@@ -237,7 +237,7 @@ fn command(read: Read) -> Option<ProgramCommand> {
         Read::DataEnd { .. } => None,
         Read::Invalid { meta } => match meta.kind() {
             b'e' => Some(ProgramCommand::DragDataError {
-                mime_index: meta.y_or_zero().max(0) as u32,
+                mime_index: Metadata::unsigned(meta.y_or_zero()),
                 error: DndError::with_description(ErrorCode::Invalid, "undecodable data"),
             }),
             b'p' | b'k' => Some(ProgramCommand::DragError(DndError::with_description(
@@ -289,13 +289,13 @@ fn text_command(meta: &Metadata, text: Vec<u8>) -> Option<ProgramCommand> {
         b'P' => match meta.x_or_zero() {
             -1 => ProgramCommand::StartDrag,
             index => ProgramCommand::ChangeImage {
-                index: index.max(0) as u32,
+                index: Metadata::unsigned(index),
             },
         },
         b'E' => match meta.y {
             Some(-1) => ProgramCommand::CancelDrag,
             Some(index) => ProgramCommand::DragDataError {
-                mime_index: index.max(0) as u32,
+                mime_index: Metadata::unsigned(index),
                 error: DndError::parse(&text),
             },
             None => ProgramCommand::DragError(DndError::parse(&text)),
@@ -360,7 +360,7 @@ impl ProgramCommand {
             Self::ReleaseDirectory { handle } => text(
                 out,
                 Metadata {
-                    big_y: Some(*handle as i32),
+                    big_y: Some(i64::from(*handle)),
                     ..Metadata::of(b'r')
                 },
                 &[],
@@ -400,7 +400,7 @@ impl ProgramCommand {
             Self::ChangeImage { index } => text(
                 out,
                 Metadata {
-                    x: Some(*index as i32),
+                    x: Some(i64::from(*index)),
                     ..Metadata::of(b'P')
                 },
                 &[],
@@ -416,7 +416,7 @@ impl ProgramCommand {
             Self::DragDataError { mime_index, error } => text(
                 out,
                 Metadata {
-                    y: Some(*mime_index as i32),
+                    y: Some(i64::from(*mime_index)),
                     ..Metadata::of(b'E')
                 },
                 &error.to_payload(),
@@ -441,7 +441,7 @@ impl ProgramCommand {
     pub fn data_meta(&self) -> Option<Metadata> {
         Some(match self {
             Self::PresentData { mime_index, .. } => Metadata {
-                x: Some(*mime_index as i32),
+                x: Some(i64::from(*mime_index)),
                 ..Metadata::of(b'p')
             },
             Self::PresentImage {
@@ -452,27 +452,27 @@ impl ProgramCommand {
                 opacity,
                 ..
             } => Metadata {
-                x: Some(-(*image as i32)),
+                x: Some(-i64::from(*image)),
                 y: Some(format.code()),
-                big_x: Some(*width as i32),
-                big_y: Some(*height as i32),
+                big_x: Some(i64::from(*width)),
+                big_y: Some(i64::from(*height)),
                 o: Some(*opacity),
                 ..Metadata::of(b'p')
             },
             Self::DragData { mime_index, .. } => Metadata {
-                y: Some(*mime_index as i32),
+                y: Some(i64::from(*mime_index)),
                 ..Metadata::of(b'e')
             },
             Self::RemoteEntry {
                 entry, child, kind, ..
             } => Metadata {
-                x: Some(*entry as i32),
+                x: Some(i64::from(*entry)),
                 big_x: match kind {
                     EntryKind::File => None,
                     kind => Some(kind.code()),
                 },
-                big_y: child.map(|(handle, _)| handle as i32),
-                y: child.map(|(_, index)| index as i32),
+                big_y: child.map(|(handle, _)| i64::from(handle)),
+                y: child.map(|(_, index)| i64::from(index)),
                 ..Metadata::of(b'k')
             },
             _ => return None,
@@ -523,6 +523,13 @@ mod tests {
                 entry: 1,
             }),
             ProgramCommand::ReleaseDirectory { handle: 9 },
+            ProgramCommand::RequestData(DataTarget::DirEntry {
+                handle: u32::MAX,
+                entry: 3_000_000_000,
+            }),
+            ProgramCommand::ReleaseDirectory {
+                handle: 4_000_000_000,
+            },
             ProgramCommand::FinishDrop {
                 operation: DropOperation::Move,
             },

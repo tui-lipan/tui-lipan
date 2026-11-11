@@ -230,14 +230,42 @@ pub fn host_speaks_drag_and_drop() -> bool {
 #[cfg(unix)]
 static HOST_DRAG_AND_DROP: AtomicBool = AtomicBool::new(false);
 
-/// Whether `response` holds the host's answer to the drag-and-drop query.
+/// Whether `response` holds the host's answer to the drag-and-drop query ahead of its primary
+/// device attributes. The protocol reads an answer that comes after them as no answer at all.
 #[cfg(unix)]
 fn answers_drag_and_drop_query(response: &[u8]) -> bool {
-    crate::dnd::OscScanner::default()
+    let answered_at = crate::dnd::OscScanner::default()
         .scan(response)
         .into_iter()
-        .filter_map(|(_, body)| crate::dnd::wire::Frame::parse(&body).ok())
-        .any(|frame| frame.meta.kind() == b'q')
+        .find(|(_, body)| {
+            crate::dnd::wire::Frame::parse(body).is_ok_and(|frame| frame.meta.kind() == b'q')
+        })
+        .map(|(end, _)| end);
+    match (answered_at, device_attributes_start(response)) {
+        (Some(answered), Some(attributes)) => answered <= attributes,
+        (Some(_), None) => true,
+        (None, _) => false,
+    }
+}
+
+/// Where the first primary device attributes reply (`CSI ? … c`) begins.
+#[cfg(unix)]
+fn device_attributes_start(response: &[u8]) -> Option<usize> {
+    let mut from = 0;
+    while let Some(offset) = response[from..].windows(3).position(|w| w == b"\x1b[?") {
+        let start = from + offset;
+        let params = &response[start + 3..];
+        let end = params
+            .iter()
+            .position(|b| !(b.is_ascii_digit() || *b == b';'));
+        if let Some(end) = end
+            && params[end] == b'c'
+        {
+            return Some(start);
+        }
+        from = start + 3;
+    }
+    None
 }
 
 /// What the last UTF-8 probe found: [`UTF8_UNKNOWN`], [`UTF8_YES`], or [`UTF8_NO`].
@@ -1758,6 +1786,13 @@ mod tests {
             b"\x1b]7501;t=q\x07\x1b[?62;1;6c"
         ));
         assert!(!super::answers_drag_and_drop_query(b"\x1b[?62;1;6c"));
+        assert!(
+            !super::answers_drag_and_drop_query(b"\x1b[?62;1;6c\x1b]72;t=q\x1b\\"),
+            "an answer after the device attributes is no answer"
+        );
+        assert!(super::answers_drag_and_drop_query(
+            b"\x1b[?5u\x1b]72;t=q\x1b\\\x1b[?62;1;6c"
+        ));
     }
 
     /// The mode report is why this probe exists at all: a terminal that implements SGR-pixels says

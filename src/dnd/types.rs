@@ -241,7 +241,16 @@ impl DndError {
 
     /// The wire form, `NAME` or `NAME:description`.
     pub fn to_payload(&self) -> Vec<u8> {
-        let mut out = self.code.as_str().as_bytes().to_vec();
+        // A name is an identifier; anything else in one would read as the description.
+        let mut out: Vec<u8> = self
+            .code
+            .as_str()
+            .bytes()
+            .filter(|b| b.is_ascii_alphanumeric() || *b == b'_')
+            .collect();
+        if out.is_empty() {
+            out.extend_from_slice(b"EUNKNOWN");
+        }
         if let Some(description) = &self.description {
             out.push(b':');
             out.extend_from_slice(description.as_bytes());
@@ -293,19 +302,20 @@ pub enum EntryKind {
 
 impl EntryKind {
     /// The protocol's `X` value.
-    pub const fn code(self) -> i32 {
+    pub const fn code(self) -> i64 {
         match self {
             Self::File => 0,
             Self::Symlink => 1,
-            Self::Directory(handle) => handle as i32,
+            Self::Directory(handle) => handle as i64,
         }
     }
 
     /// Read an `X` value.
-    pub const fn from_code(code: i32) -> Self {
+    pub const fn from_code(code: i64) -> Self {
         match code {
             0 => Self::File,
             1 => Self::Symlink,
+            handle if handle < 0 || handle > u32::MAX as i64 => Self::File,
             handle => Self::Directory(handle as u32),
         }
     }
@@ -331,7 +341,7 @@ pub enum DragImageFormat {
 
 impl DragImageFormat {
     /// The protocol's `y` value.
-    pub const fn code(self) -> i32 {
+    pub const fn code(self) -> i64 {
         match self {
             Self::Text => 0,
             Self::Rgb => 24,
@@ -341,7 +351,7 @@ impl DragImageFormat {
     }
 
     /// Read a `y` value.
-    pub const fn from_code(code: i32) -> Option<Self> {
+    pub const fn from_code(code: i64) -> Option<Self> {
         match code {
             0 => Some(Self::Text),
             24 => Some(Self::Rgb),
@@ -390,13 +400,15 @@ pub fn parse_mime_list(payload: &[u8]) -> Vec<Arc<str>> {
 }
 
 /// The protocol's spelling of a MIME list.
+///
+/// A type that could not travel in the list ([`is_valid_mime`]) is left out.
 pub fn format_mime_list<S: AsRef<str>>(mimes: &[S]) -> Vec<u8> {
     let mut out = Vec::new();
-    for (index, mime) in mimes.iter().enumerate() {
-        if index > 0 {
+    for mime in mimes.iter().map(AsRef::as_ref).filter(|m| is_valid_mime(m)) {
+        if !out.is_empty() {
             out.push(b' ');
         }
-        out.extend_from_slice(mime.as_ref().as_bytes());
+        out.extend_from_slice(mime.as_bytes());
     }
     out
 }
@@ -417,6 +429,8 @@ mod tests {
         assert_eq!(error.description.as_deref(), Some("not[31m yours"));
         assert_eq!(error.to_payload(), b"EPERM:not[31m yours");
         assert_eq!(DndError::parse(b"EXDEV").code.as_str(), "EXDEV");
+        let forged = DndError::new(ErrorCode::Other("E\x1b]2;x:y".into()));
+        assert_eq!(forged.to_payload(), b"E2xy");
     }
 
     #[test]
@@ -434,5 +448,10 @@ mod tests {
         assert_eq!(list.len(), 2);
         assert_eq!(format_mime_list(&list), b"text/plain text/uri-list");
         assert!(!is_valid_mime("text/plain charset"));
+        assert_eq!(
+            format_mime_list(&["bad\x1b\\", "text/plain", "two words"]),
+            b"text/plain",
+            "only types that can travel are written"
+        );
     }
 }

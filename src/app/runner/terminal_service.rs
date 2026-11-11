@@ -139,6 +139,7 @@ impl<C: Component> AppRunner<C> {
         let output = channel.take_output();
         backend.write_all(&output)?;
         backend.flush()?;
+        crate::dnd::host::commit_registrations(&output);
         Ok(())
     }
 
