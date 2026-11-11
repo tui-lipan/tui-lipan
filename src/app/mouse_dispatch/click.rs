@@ -41,6 +41,7 @@ pub(crate) fn transition_terminal_link_down<C: Component, T: MouseDispatchCtx<C>
             Some(crate::app::interaction_state::TerminalLinkPress {
                 node_id: hit.node_id,
                 uri: hit.event.uri,
+                kind: hit.event.kind,
             });
         true
     }
@@ -75,6 +76,7 @@ pub(crate) fn transition_terminal_link_gesture<C: Component, T: MouseDispatchCtx
                     mouse,
                 )
                 && hit.event.uri == press.uri
+                && hit.event.kind == press.kind
             {
                 hit.callback.emit(hit.event);
             }

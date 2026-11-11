@@ -112,6 +112,7 @@ pub(crate) struct TerminalNode {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TerminalLinkHover {
     pub uri: Arc<str>,
+    pub kind: crate::widgets::TerminalLinkKind,
     pub spans: Arc<[HintSpan]>,
 }
 

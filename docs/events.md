@@ -521,14 +521,17 @@ Emitted by: `Terminal::on_link_activate`, `ManagedTerminal::on_link_activate`
 
 ```rust
 pub struct TerminalLinkEvent {
-    pub uri: Arc<str>, // Explicit OSC 8 destination or detected plain-text URL
-    pub row: usize,    // Visible viewport row
-    pub col: usize,    // Display column
+    pub uri: Arc<str>,            // OSC 8 destination, detected URL, or path as shown
+    pub kind: TerminalLinkKind,   // Hyperlink, Url, or Path
+    pub row: usize,               // Visible viewport row
+    pub col: usize,               // Display column
 }
 ```
 
 The callback is opt-in and defaults to Ctrl+left-click through
-`link_activation_mods(KeyMods::CTRL)`. The application owns URI policy and opening.
+`link_activation_mods(KeyMods::CTRL)`. Paths activate only with `link_paths(TerminalPathFilter)`
+and only when the filter accepts them; a `Path` event's `uri` keeps any `:line[:column]` suffix.
+The application owns link policy and opening.
 
 ### `PaintedFrame`
 

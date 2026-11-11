@@ -177,6 +177,7 @@ pub(crate) fn update_link_hover(
     if let Some(hit) = next {
         let hover = TerminalLinkHover {
             uri: hit.event.uri,
+            kind: hit.event.kind,
             spans: hit.spans,
         };
         if let NodeKind::Terminal(term) = &mut tree.node_mut(hit.node_id).kind

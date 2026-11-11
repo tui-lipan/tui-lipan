@@ -247,7 +247,7 @@ Terminal::new()
     .screen(TerminalScreenHandle::new(screen))
     .on_link_activate(ctx.link().callback(Msg::OpenLink))
     .link_paths(TerminalPathFilter::new(move |text| {
-        cwd.join(PathPosition::parse(text).path).exists()
+        cwd.join(tui_lipan::utils::hints::PathPosition::parse(text).path).exists()
     }))
 ```
 

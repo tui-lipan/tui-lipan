@@ -7947,6 +7947,116 @@ fn paths_are_links_only_when_the_filter_accepts_them() {
     );
 }
 
+/// A terminal that switches to its second screen and path filter on its one message.
+#[cfg(feature = "terminal")]
+struct TerminalLinkSwitch {
+    screens: [crate::widgets::TerminalRenderSnapshot; 2],
+    accepts: [bool; 2],
+    activated: Rc<RefCell<Vec<crate::widgets::TerminalLinkEvent>>>,
+}
+
+#[cfg(feature = "terminal")]
+impl Component for TerminalLinkSwitch {
+    type Message = ();
+    type Properties = ();
+    type State = usize;
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {
+        0
+    }
+
+    fn update(&mut self, _msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+        ctx.state = 1;
+        Update::full()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        let activated = self.activated.clone();
+        let accept = self.accepts[ctx.state];
+        // A new filter each render, as an application that builds it from current state does.
+        Terminal::new()
+            .snapshot(self.screens[ctx.state].clone())
+            .link_paths(crate::widgets::TerminalPathFilter::new(move |_| accept))
+            .on_link_activate(Callback::new(move |event| {
+                activated.borrow_mut().push(event)
+            }))
+            .into()
+    }
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn a_path_link_follows_the_current_filter_and_kind() {
+    let path = terminal_link_snapshot("src/main.rs");
+    let hyperlink = path
+        .clone()
+        .with_hyperlinks(vec![crate::widgets::TerminalHyperlink::new(
+            "src/main.rs",
+            0,
+            0..11,
+        )]);
+    let backend = |screens, accepts| {
+        let mut backend = crate::TestBackend::new(TerminalLinkSwitch {
+            screens,
+            accepts,
+            activated: Rc::new(RefCell::new(Vec::new())),
+        });
+        backend.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 3,
+        });
+        backend.render();
+        backend
+    };
+    let mouse = |backend: &mut crate::TestBackend<TerminalLinkSwitch>, kind| {
+        backend
+            .send_mouse(MouseEvent {
+                x: 3,
+                y: 0,
+                kind,
+                mods: KeyMods::CTRL,
+            })
+            .expect("mouse dispatch");
+    };
+
+    let mut rejected = backend([path.clone(), path], [true, false]);
+    mouse(&mut rejected, MouseKind::Moved);
+    assert!(
+        rejected
+            .capture_frame()
+            .cell(3, 0)
+            .modifiers
+            .underline
+            .is_some()
+    );
+    rejected.dispatch(()).expect("switch filters");
+    rejected.render();
+    assert!(
+        rejected
+            .capture_frame()
+            .cell(3, 0)
+            .modifiers
+            .underline
+            .is_none(),
+        "a path the new filter rejects is no longer shown as a link"
+    );
+
+    let mut reclassified = backend(
+        [hyperlink, terminal_link_snapshot("src/main.rs")],
+        [true; 2],
+    );
+    mouse(&mut reclassified, MouseKind::Down(MouseButton::Left));
+    reclassified.dispatch(()).expect("drop the hyperlink");
+    reclassified.render();
+    mouse(&mut reclassified, MouseKind::Up(MouseButton::Left));
+    assert!(
+        reclassified.component().activated.borrow().is_empty(),
+        "a release on the same text as a path does not finish a press on a hyperlink"
+    );
+}
+
 #[cfg(feature = "terminal")]
 #[test]
 fn terminal_link_activation_prefers_explicit_osc8_destinations() {

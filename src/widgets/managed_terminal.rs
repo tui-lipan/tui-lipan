@@ -85,7 +85,8 @@ pub struct ManagedTerminalProps {
     /// Scrollback lines per wheel tick, overriding the app-wide multiplier.
     /// Default: `None` (use the app-wide multiplier).
     pub scroll_wheel_multiplier: Option<u16>,
-    /// Modifiers required to activate explicit OSC 8 links and detected plain-text URLs.
+    /// Modifiers required to activate explicit OSC 8 links, detected plain-text URLs, and paths
+    /// accepted by [`Self::link_paths`].
     /// Default: [`KeyMods::CTRL`]. Extra held modifiers are allowed.
     pub link_activation_mods: KeyMods,
     /// Style applied to a link under a pointer carrying the activation modifiers.
