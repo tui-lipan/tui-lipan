@@ -2284,6 +2284,11 @@ impl crate::layout::hash::LayoutHash for DraggableTabBar {
         self.border_style.hash(hasher);
         self.padding.hash(hasher);
         self.tabs.len().hash(hasher);
+        // Auto-sized strips must invalidate measurement when tab content changes.
+        let options = self.display_options();
+        for tab in self.tabs.iter() {
+            tab_metrics_with_options(tab, &options).width.hash(hasher);
+        }
         self.active.hash(hasher);
         self.divider.hash(hasher);
         self.close_symbol.hash(hasher);

@@ -1374,14 +1374,11 @@ fn render_node(
             child_clip = Some(intersect_clip(rect));
         }
         NodeKind::StatusBarLayout(node) => {
-            render_zstack_center(
-                state.f,
-                &resolve_base_style(active_theme, node.style),
-                rect,
-                rrect,
-                clip_bounds,
-                state.ctx.terminal_bg,
-            );
+            let style = resolve_base_style(active_theme, node.style);
+            let terminal_bg = state.ctx.terminal_bg;
+            keeping_kitty_placeholders(state.f, rect, clip_bounds, |f| {
+                render_zstack_center(f, &style, rect, rrect, clip_bounds, terminal_bg);
+            });
             let inner = rect.inner(false, node.padding);
             child_clip = Some(intersect_clip(inner));
         }
@@ -2537,6 +2534,10 @@ fn pending_image_effects(
                     NodeKind::CenterPin(pin) => {
                         passes.extend(surface_pass(node, pin.style, id, visible));
                         child_clip = visible;
+                    }
+                    NodeKind::StatusBarLayout(layout) => {
+                        passes.extend(surface_pass(node, layout.style, id, visible));
+                        child_clip = visible.intersection(&rect.inner(false, layout.padding));
                     }
                     NodeKind::EffectScope(scope) => {
                         if !scope.effects.is_empty() && !scope.cells_only {
