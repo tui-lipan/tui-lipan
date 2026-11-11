@@ -144,27 +144,46 @@ struct Registrations {
     drop_machine_id: Option<Arc<str>>,
     /// Offering drags, with this machine id.
     offering: Option<Option<Arc<str>>>,
-    /// Withdrawn for a handoff, to be restored on return.
-    withdrawn: bool,
+    /// Whether the host has the registrations, as far as can be known.
+    host: HostHas,
+}
+
+/// What the host has of the app's registrations.
+///
+/// A failed write does not prove nothing got through: bytes can be written and the flush fail, or
+/// one escape code arrive and the next not. So a failure leaves the host's state uncertain, and
+/// uncertain is treated as both: a handoff withdraws, and the app registers again.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum HostHas {
+    /// The host has every registration.
+    #[default]
+    All,
+    /// A handoff withdrew them all, and the withdrawal was written.
+    Nothing,
+    /// A withdrawal or a restore failed part way, or a registration reached a host that had been
+    /// withdrawn from: some may have reached the host, some not.
+    Uncertain,
 }
 
 static REGISTRATIONS: Mutex<Registrations> = Mutex::new(Registrations {
     accepting: None,
     drop_machine_id: None,
     offering: None,
-    withdrawn: false,
+    host: HostHas::All,
 });
 
 impl Registrations {
     fn note(&mut self, command: &ProgramCommand) {
-        // A registration that reaches the host means it is no longer withdrawn, whatever a failed
-        // restore left recorded: the next handoff must withdraw again. Withdrawing something the
-        // host no longer has costs one redundant escape code; missing one would leak it.
-        if matches!(
-            command,
-            ProgramCommand::AcceptDrops { .. } | ProgramCommand::OfferDrags { .. }
-        ) {
-            self.withdrawn = false;
+        // A registration that reaches a host the app had withdrawn from leaves it with part of
+        // them: the next handoff must withdraw, and the rest must come back. Withdrawing something
+        // the host no longer has costs one redundant escape code; missing one would leak it.
+        if self.host == HostHas::Nothing
+            && matches!(
+                command,
+                ProgramCommand::AcceptDrops { .. } | ProgramCommand::OfferDrags { .. }
+            )
+        {
+            self.host = HostHas::Uncertain;
         }
         match command {
             ProgramCommand::AcceptDrops { mimes } => self.accepting = Some(mimes.clone()),
@@ -191,10 +210,10 @@ impl Registrations {
         }
     }
 
-    /// The escape codes that withdraw what the host has, unless it is already withdrawn.
+    /// The escape codes that withdraw what the host may have, unless it has none for certain.
     fn withdrawal(&self) -> Vec<u8> {
         let mut out = Vec::new();
-        if !self.withdrawn {
+        if self.host != HostHas::Nothing {
             if self.accepting.is_some() {
                 ProgramCommand::StopAcceptingDrops.encode(None, &mut out);
             }
@@ -205,10 +224,10 @@ impl Registrations {
         out
     }
 
-    /// The escape codes that register again what a handoff withdrew.
+    /// The escape codes that register again what the host may lack, unless it has all for certain.
     fn restoration(&self) -> Vec<u8> {
         let mut out = Vec::new();
-        if !self.withdrawn {
+        if self.host == HostHas::All {
             return out;
         }
         if let Some(mimes) = &self.accepting {
@@ -249,8 +268,9 @@ fn write_all(out: &mut impl Write, bytes: &[u8]) -> io::Result<()> {
 /// terminal to never receives the app's drags.
 ///
 /// The registrations count as withdrawn only once the withdrawal has been written. If writing it
-/// fails, `handoff` does not run. If `handoff` fails, the app keeps the terminal, so the
-/// registrations are written again before the error is returned.
+/// fails, `handoff` does not run, and the host's state is uncertain until the runner restores the
+/// registrations. If `handoff` fails, the app keeps the terminal, so the registrations are written
+/// again before the error is returned.
 pub(crate) fn withdrawn_for<W: Write, T>(
     out: &mut W,
     handoff: impl FnOnce(&mut W) -> io::Result<T>,
@@ -263,8 +283,12 @@ fn withdraw_around<W: Write, T>(
     out: &mut W,
     handoff: impl FnOnce(&mut W) -> io::Result<T>,
 ) -> io::Result<T> {
-    write_all(out, &locked(registrations, |r| r.withdrawal()))?;
-    locked(registrations, |r| r.withdrawn = true);
+    let withdrawal = locked(registrations, |r| r.withdrawal());
+    if let Err(err) = write_all(out, &withdrawal) {
+        locked(registrations, |r| r.host = HostHas::Uncertain);
+        return Err(err);
+    }
+    locked(registrations, |r| r.host = HostHas::Nothing);
     match handoff(out) {
         Ok(value) => Ok(value),
         Err(err) => {
@@ -281,16 +305,23 @@ pub(crate) fn restore_registrations(out: &mut impl Write) -> io::Result<()> {
 
 /// Retry a restore that failed after a handoff, before anything else reaches the host.
 ///
-/// The runner calls this only while it owns the terminal, so a withdrawal still recorded then is
-/// one whose restore did not get written.
+/// The runner calls this only while it owns the terminal, so registrations it finds withdrawn or
+/// uncertain then are ones whose restore did not get written.
 pub(crate) fn retry_restore(out: &mut impl Write) -> io::Result<()> {
     restore_into(&REGISTRATIONS, out)
 }
 
 fn restore_into(registrations: &Mutex<Registrations>, out: &mut impl Write) -> io::Result<()> {
-    write_all(out, &locked(registrations, |r| r.restoration()))?;
-    locked(registrations, |r| r.withdrawn = false);
-    Ok(())
+    let restoration = locked(registrations, |r| r.restoration());
+    let written = write_all(out, &restoration);
+    locked(registrations, |r| {
+        r.host = if written.is_ok() {
+            HostHas::All
+        } else {
+            HostHas::Uncertain
+        };
+    });
+    written
 }
 
 /// The escape codes that withdraw every registration when the app exits, after which they are
@@ -430,7 +461,7 @@ mod tests {
             out,
             [b"\x1b]72;t=A\x1b\\".to_vec(), encoded(&[accept(&[])])].concat()
         );
-        assert!(!locked(&registrations, |r| r.withdrawn));
+        assert_eq!(locked(&registrations, |r| r.host), HostHas::All);
         let (_, out) = handoff(&registrations, Ok(()));
         assert_eq!(
             out, b"\x1b]72;t=A\x1b\\",
@@ -453,7 +484,7 @@ mod tests {
         let registrations = registered(&[accept(&["a/b"])]);
         handoff(&registrations, Ok(())).0.unwrap();
         assert!(restore_into(&registrations, &mut Broken).is_err());
-        assert!(locked(&registrations, |r| r.withdrawn), "not restored");
+        assert_eq!(locked(&registrations, |r| r.host), HostHas::Uncertain);
         // A queued registration reaches the host normally.
         locked(&registrations, |r| r.commit(&encoded(&[accept(&["c/d"])])));
         let (_, out) = handoff(&registrations, Ok(()));
@@ -472,7 +503,68 @@ mod tests {
         let mut out = Vec::new();
         restore_into(&registrations, &mut out).unwrap();
         assert_eq!(out, encoded(&[accept(&[]), offer]));
-        assert!(!locked(&registrations, |r| r.withdrawn));
+        assert_eq!(locked(&registrations, |r| r.host), HostHas::All);
+    }
+
+    /// Takes the first `accepted` bytes, then fails; `flush` always fails.
+    struct Partial {
+        accepted: usize,
+        written: Vec<u8>,
+    }
+
+    impl Write for Partial {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            let room = self.accepted.saturating_sub(self.written.len());
+            if room == 0 {
+                return Err(io::Error::other("gone"));
+            }
+            let taken = room.min(bytes.len());
+            self.written.extend_from_slice(&bytes[..taken]);
+            Ok(taken)
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::Error::other("flush failed"))
+        }
+    }
+
+    #[test]
+    fn a_restore_that_may_have_reached_the_host_is_withdrawn_by_the_next_handoff() {
+        let offer = ProgramCommand::OfferDrags { machine_id: None };
+        let whole = encoded(&[accept(&[]), offer.clone()]).len();
+        // All written but the flush failed; the first registration only; nothing at all.
+        for accepted in [whole, encoded(&[accept(&[])]).len(), 0] {
+            let registrations = registered(&[accept(&[]), offer.clone()]);
+            handoff(&registrations, Ok(())).0.unwrap();
+            let mut out = Partial {
+                accepted,
+                written: Vec::new(),
+            };
+            assert!(restore_into(&registrations, &mut out).is_err());
+            let (_, withdrawal) = handoff(&registrations, Ok(()));
+            assert_eq!(
+                withdrawal, b"\x1b]72;t=A\x1b\\\x1b]72;t=o:x=2\x1b\\",
+                "accepted {accepted} bytes: the next handoff withdraws everything"
+            );
+        }
+    }
+
+    #[test]
+    fn a_withdrawal_that_may_have_half_reached_the_host_is_restored() {
+        let offer = ProgramCommand::OfferDrags { machine_id: None };
+        let registrations = registered(&[accept(&[]), offer.clone()]);
+        let mut out = Partial {
+            accepted: 12,
+            written: Vec::new(),
+        };
+        assert!(withdraw_around(&registrations, &mut out, |_| Ok(())).is_err());
+        assert_eq!(locked(&registrations, |r| r.host), HostHas::Uncertain);
+        let mut retried = Vec::new();
+        restore_into(&registrations, &mut retried).unwrap();
+        assert_eq!(
+            retried,
+            encoded(&[accept(&[]), offer]),
+            "the runner registers again"
+        );
     }
 
     #[test]
@@ -488,7 +580,11 @@ mod tests {
             !ran,
             "the terminal is not handed over while the app is still registered"
         );
-        assert!(!locked(&registrations, |r| r.withdrawn));
+        assert_eq!(locked(&registrations, |r| r.host), HostHas::Uncertain);
+        assert!(
+            !handoff(&registrations, Ok(())).1.is_empty(),
+            "and the next try withdraws"
+        );
     }
 
     #[test]
