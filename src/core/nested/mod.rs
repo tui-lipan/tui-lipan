@@ -464,6 +464,7 @@ struct ElementMetadata {
     semantic_expanded: Option<bool>,
     semantic_value_sensitive: bool,
     pointer_shape: Option<crate::style::PointerShape>,
+    host_drag: Option<crate::dnd::HostDragSource>,
 }
 
 impl ElementMetadata {
@@ -483,6 +484,7 @@ impl ElementMetadata {
             semantic_expanded: self.semantic_expanded,
             semantic_value_sensitive: self.semantic_value_sensitive,
             pointer_shape: self.pointer_shape,
+            host_drag: self.host_drag,
             pointer_focus,
             kind,
             layout,
@@ -511,6 +513,9 @@ impl ElementMetadata {
         }
         element.semantic_value_sensitive |= self.semantic_value_sensitive;
         element.pointer_shape = element.pointer_shape.or(self.pointer_shape);
+        if element.host_drag.is_none() {
+            element.host_drag = self.host_drag;
+        }
         element
     }
 }
@@ -1281,6 +1286,7 @@ impl ComponentRegistry {
                 semantic_expanded,
                 semantic_value_sensitive,
                 pointer_shape,
+                host_drag,
                 pointer_focus,
                 kind,
                 layout,
@@ -1294,6 +1300,7 @@ impl ComponentRegistry {
                 semantic_expanded,
                 semantic_value_sensitive,
                 pointer_shape,
+                host_drag,
             };
             match kind {
                 ElementKind::Component(component) => {
@@ -1432,6 +1439,7 @@ impl ComponentRegistry {
             semantic_expanded,
             semantic_value_sensitive,
             pointer_shape,
+            host_drag,
             pointer_focus,
             kind,
             layout,
@@ -1445,6 +1453,7 @@ impl ComponentRegistry {
             semantic_expanded,
             semantic_value_sensitive,
             pointer_shape,
+            host_drag,
         };
         // A non-component child claims no slot, so this container's slot list is empty - the same
         // thing `expand_children` records when its `specs` come out empty.

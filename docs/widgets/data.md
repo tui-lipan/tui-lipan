@@ -60,6 +60,7 @@ State-style setters use [StyleSlot semantics](../styling.md#state-style-slots):
 | `on_item_click` | `Callback<ListEvent>` | Row clicked with mouse |
 | `on_activate` | `Callback<ListEvent>` | Item activated by Enter, a single click by default, or a double-click when `activate_on_click` is false |
 | `on_ctrl_activate` | `Callback<ListEvent>` | Ctrl+click or Ctrl+Enter, independently of normal activation and `activate_on_click` |
+| `host_drag` | `HostDragItems` | What a selectable item offers when dragged out of the app, by its index; see [Drag and drop](../drag-and-drop.md#drag-out-of-the-app) |
 | `activate_on_click` | `bool` | Activate on a single row click (default: `true`); when false, double-click still activates |
 | `on_scroll_to` | `Callback<usize>` | Scroll position changed |
 
@@ -438,6 +439,7 @@ Hierarchical tree view with expand/collapse.
 | `on_select` | `Callback<TreeEvent>` | Node selected |
 | `on_context_menu` | `Callback<(TreeEvent, MouseEvent)>` | Right-button press on a data row; preserves selection and reports the clicked row with popup coordinates |
 | `on_ctrl_activate` | `Callback<TreeEvent>` | Ctrl+click or Ctrl+Enter activates without toggling expansion |
+| `host_drag` | `Fn(&TreeEvent) -> Option<HostDrag>` | What a row offers when dragged out of the app; see [Drag and drop](../drag-and-drop.md#drag-out-of-the-app) |
 | `on_toggle` | `Callback<TreeToggleEvent>` | Node expanded/collapsed |
 
 Text-only `Tree` uses an inner `List` of flattened visible rows. Its per-row `item_hover_style` and pointer versus keyboard row hover match [List](#list). Trees with composed row content use a `ScrollView`, with tree navigation and arrows supplied by `Tree`.
@@ -720,6 +722,8 @@ entries and git-backed or application-provided change projections.
 | `on_select` | `Callback<FileTreeEvent>` | File/dir selected |
 | `on_context_menu` | `Callback<(FileTreeEvent, MouseEvent)>` | Right-button press on a data row; preserves selection and reports the clicked row with popup coordinates |
 | `on_ctrl_activate` | `Callback<FileTreeEvent>` | Ctrl+click or Ctrl+Enter on a file or directory, without toggling expansion |
+| `host_drag` | `Fn(&FileTreeEvent) -> Option<HostDrag>` | What an entry offers when dragged out of the app |
+| `drag_files_out()` | — | Let entries be dragged out as files: copied by a file manager, their paths given to an editor or shell. Paths must be on this machine. See [Drag and drop](../drag-and-drop.md#drag-out-of-the-app) |
 | `on_toggle` | `Callback<FileTreeToggleEvent>` | Directory expanded/collapsed |
 | `on_entry_request` | `Callback<FileTreeEntryRequest>` | Missing provided directory listing requested |
 

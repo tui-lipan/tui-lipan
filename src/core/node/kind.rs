@@ -145,6 +145,20 @@ pub(crate) trait WidgetNode {
     ) -> Vec<ScrollbarZone> {
         Vec::new()
     }
+    /// What the item at a point offers when dragged out of the app, for a widget of items.
+    fn host_drag_at(
+        &self,
+        _x: i16,
+        _y: i16,
+        _rect: Rect,
+        _parent_border_x: Option<i16>,
+    ) -> Option<crate::dnd::HostDrag> {
+        None
+    }
+    /// Whether some item of this widget can be dragged out of the app.
+    fn offers_host_drag(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Clone)]
@@ -481,6 +495,20 @@ impl WidgetNode for NodeKind {
             self,
             scrollbar_zones(id, rect, parent_border_x, parent_border_y)
         )
+    }
+
+    fn host_drag_at(
+        &self,
+        x: i16,
+        y: i16,
+        rect: Rect,
+        parent_border_x: Option<i16>,
+    ) -> Option<crate::dnd::HostDrag> {
+        node_kind_delegate_match!(self, host_drag_at(x, y, rect, parent_border_x))
+    }
+
+    fn offers_host_drag(&self) -> bool {
+        node_kind_delegate_match!(self, offers_host_drag())
     }
 }
 

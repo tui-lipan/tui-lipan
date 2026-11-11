@@ -202,6 +202,8 @@ web = [
 
 [dev-dependencies]
 criterion = "0.8"
+# Also a feature dependency of `terminal-images`; tests need it with any feature set.
+tempfile = "3.27.0"
 serde_json = "1.0.151"
 
 # ─── Examples ────────────────────────────────────────────────────────────────

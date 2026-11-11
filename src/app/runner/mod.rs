@@ -2598,8 +2598,12 @@ impl<C: Component> AppRunner<C> {
                     }
                     #[cfg(unix)]
                     Some(RunnerEvent::HostDragAndDrop(event)) => {
-                        let update_level = self.core.on_host_drag_and_drop(event);
+                        let (update_level, started) = self.core.on_host_drag_and_drop(event);
                         self.apply_root_update(&mut dirty, update_level);
+                        if started {
+                            self.end_pointer_gesture_for_host_drag();
+                            dirty.mark_paint();
+                        }
                         None
                     }
                     #[cfg(unix)]

@@ -270,6 +270,17 @@ impl Component for TreeComponent {
             .on_item_click(on_item_click)
             .on_activate(on_activate)
             .on_key(on_key);
+        if let Some(drag) = ctx.props.host_drag.clone() {
+            let rows = rows.clone();
+            let paths: Arc<[TreePath]> = entries.iter().map(|entry| entry.path.clone()).collect();
+            list = list.host_drag(crate::dnd::HostDragItems::new(move |position| {
+                let row = rows.row(position);
+                // A spacer is not a row; its position maps to the row after it.
+                (rows.position(row) == Some(position))
+                    .then(|| drag.offer(row, paths.get(row)?.clone()))
+                    .flatten()
+            }));
+        }
         if ctx.props.on_context_menu.is_some() {
             let rows = rows.clone();
             list = list.on_context_menu(ctx.link().callback(

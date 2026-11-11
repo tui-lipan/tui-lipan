@@ -66,6 +66,7 @@ pub struct ListNode {
     pub on_activate: Option<Callback<ListEvent>>,
     pub on_ctrl_activate: Option<Callback<ListEvent>>,
     pub on_context_menu: Option<Callback<(ListEvent, MouseEvent)>>,
+    pub host_drag: Option<crate::dnd::HostDragItems>,
     pub on_click: Option<Callback<MouseEvent>>,
     pub activate_on_click: bool,
     pub on_scroll_to: Option<Callback<usize>>,
@@ -126,6 +127,22 @@ impl ListNode {
 }
 
 impl WidgetNode for ListNode {
+    fn host_drag_at(
+        &self,
+        x: i16,
+        y: i16,
+        rect: Rect,
+        parent_border_x: Option<i16>,
+    ) -> Option<crate::dnd::HostDrag> {
+        let items = self.host_drag.as_ref()?;
+        let index = self.item_at(x, y, self.content_rect(rect, parent_border_x))?;
+        items.offer(index)
+    }
+
+    fn offers_host_drag(&self) -> bool {
+        self.host_drag.is_some()
+    }
+
     fn secondary_hit_test_refinement(&self, press: SecondaryPress) -> Option<bool> {
         Some(self.context_menu_item_at(press).is_some())
     }

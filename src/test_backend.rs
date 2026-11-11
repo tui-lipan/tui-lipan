@@ -354,7 +354,7 @@ where
     /// Calls [`Component::on_host_drag_and_drop`], runs its command, drains messages already
     /// available, and renders when an update asks for it. Returns whether anything re-rendered.
     pub fn host_drag_and_drop(&mut self, event: crate::dnd::TaggedEvent) -> Result<bool> {
-        let level = self.core.on_host_drag_and_drop(event);
+        let (level, _started) = self.core.on_host_drag_and_drop(event);
         let pump_dirty = self.pump()?;
         let dirty = !matches!(level, crate::UpdateLevel::None);
         if dirty && !pump_dirty {
@@ -364,7 +364,11 @@ where
     }
 
     /// Take the drag-and-drop escape codes the app has sent to the simulated host so far.
+    ///
+    /// Includes the registration to offer drags while a widget on screen offers one, as the runner
+    /// sends it between frames.
     pub fn take_host_drag_and_drop_output(&mut self) -> Vec<u8> {
+        self.core.sync_host_drag_offering();
         self.core.ctx.env().host_drag_and_drop.take_output()
     }
 

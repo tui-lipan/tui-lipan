@@ -110,10 +110,26 @@ fn estimate(pixels: i32, cells: u32) -> i32 {
 }
 
 /// The runtime's end of the channel, shared through the runtime environment.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub(crate) struct HostChannel {
     supported: Cell<bool>,
     outbox: RefCell<Vec<u8>>,
+    /// Escape codes from a background thread (a drag's file contents), drained with the outbox.
+    background: Arc<Mutex<Vec<u8>>>,
+    /// Wakes the runner when the background adds something.
+    wake: RefCell<Option<Arc<dyn Fn() + Send + Sync>>>,
+    /// The app itself offers drags, through [`HostDragAndDrop::send`].
+    app_offering: Cell<bool>,
+    /// The runtime registered to offer drags for widgets that offer them.
+    runtime_offering: Cell<bool>,
+}
+
+impl std::fmt::Debug for HostChannel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HostChannel")
+            .field("supported", &self.supported)
+            .finish_non_exhaustive()
+    }
 }
 
 impl HostChannel {
@@ -121,13 +137,68 @@ impl HostChannel {
         self.supported.set(supported);
     }
 
-    /// Everything queued since the last call.
+    pub(crate) fn set_wake(&self, wake: Arc<dyn Fn() + Send + Sync>) {
+        *self.wake.borrow_mut() = Some(wake);
+    }
+
+    /// Everything queued since the last call, the background's after the UI thread's.
     pub(crate) fn take_output(&self) -> Vec<u8> {
-        std::mem::take(&mut self.outbox.borrow_mut())
+        let mut out = std::mem::take(&mut *self.outbox.borrow_mut());
+        if let Ok(mut background) = self.background.lock() {
+            out.append(&mut background);
+        }
+        out
     }
 
     pub(crate) fn has_output(&self) -> bool {
         !self.outbox.borrow().is_empty()
+            || self
+                .background
+                .lock()
+                .is_ok_and(|background| !background.is_empty())
+    }
+
+    /// Queue escape codes the runtime itself wrote, while the host speaks the protocol.
+    pub(crate) fn push(&self, escape_codes: &[u8]) {
+        if self.supported.get() {
+            self.outbox.borrow_mut().extend_from_slice(escape_codes);
+        }
+    }
+
+    pub(crate) fn background_sink(&self) -> super::drag_out::BackgroundSink {
+        super::drag_out::BackgroundSink {
+            outbox: Arc::clone(&self.background),
+            wake: self.wake.borrow().clone(),
+        }
+    }
+
+    /// Offer drags while some widget on screen offers one, unless the app already does.
+    pub(crate) fn sync_runtime_offering(&self, wanted: bool) {
+        if !self.supported.get() || self.app_offering.get() {
+            return;
+        }
+        if wanted && !self.runtime_offering.get() {
+            ProgramCommand::OfferDrags {
+                machine_id: MachineId::local().map(|id| Arc::from(id.as_str())),
+            }
+            .encode(None, &mut self.outbox.borrow_mut());
+            self.runtime_offering.set(true);
+        } else if !wanted && self.runtime_offering.get() {
+            ProgramCommand::StopOfferingDrags.encode(None, &mut self.outbox.borrow_mut());
+            self.runtime_offering.set(false);
+        }
+    }
+
+    fn note_app_command(&self, command: &ProgramCommand) {
+        match command {
+            ProgramCommand::OfferDrags { .. } => self.app_offering.set(true),
+            ProgramCommand::StopOfferingDrags => {
+                // That withdrew the runtime's offer too; it registers again if it still wants one.
+                self.app_offering.set(false);
+                self.runtime_offering.set(false);
+            }
+            _ => {}
+        }
     }
 }
 
@@ -365,6 +436,7 @@ impl HostDragAndDrop {
         if !self.supported() {
             return;
         }
+        self.channel.note_app_command(command);
         command.encode(None, &mut self.channel.outbox.borrow_mut());
     }
 
@@ -374,10 +446,13 @@ impl HostDragAndDrop {
         if !self.supported() {
             return;
         }
-        let mut outbox = self.channel.outbox.borrow_mut();
+        let mut decoder = super::CommandDecoder::default();
         for (_, body) in super::OscScanner::default().scan(escape_codes) {
             if let Ok(frame) = super::wire::Frame::parse(&body) {
-                frame.write(&mut outbox);
+                for tagged in decoder.push(frame.clone()) {
+                    self.channel.note_app_command(&tagged.command);
+                }
+                frame.write(&mut self.channel.outbox.borrow_mut());
             }
         }
     }

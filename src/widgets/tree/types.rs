@@ -369,6 +369,25 @@ pub enum IndentStyle {
     BranchRounded,
 }
 
+/// What a tree row offers when dragged out of the app; see [`Tree::host_drag`](super::Tree::host_drag).
+#[derive(Clone)]
+pub(crate) struct TreeHostDrag(pub(crate) std::rc::Rc<TreeOffer>);
+
+pub(crate) type TreeOffer = dyn Fn(&TreeEvent) -> Option<crate::dnd::HostDrag>;
+
+impl PartialEq for TreeHostDrag {
+    fn eq(&self, other: &Self) -> bool {
+        std::rc::Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl TreeHostDrag {
+    /// The offer of the row `index` at `path`.
+    pub(crate) fn offer(&self, index: usize, path: TreePath) -> Option<crate::dnd::HostDrag> {
+        (self.0)(&TreeEvent { index, path })
+    }
+}
+
 #[derive(Clone, PartialEq)]
 pub(crate) struct TreeProps {
     pub root: TreeNode,
@@ -419,6 +438,7 @@ pub(crate) struct TreeProps {
     pub on_select: Option<Callback<TreeEvent>>,
     pub on_activate: Option<Callback<TreeEvent>>,
     pub on_ctrl_activate: Option<Callback<TreeEvent>>,
+    pub host_drag: Option<TreeHostDrag>,
     pub on_context_menu: Option<Callback<(TreeEvent, crate::core::event::MouseEvent)>>,
     pub on_toggle: Option<Callback<TreeToggleEvent>>,
     pub keymap: TreeKeymap,

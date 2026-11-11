@@ -19,6 +19,7 @@
 
 mod base64;
 mod command;
+pub(crate) mod drag_out;
 mod event;
 pub(crate) mod host;
 mod machine_id;
@@ -31,6 +32,9 @@ pub mod wire;
 
 pub use self::base64::InvalidBase64;
 pub use self::command::{CommandDecoder, ProgramCommand, TaggedCommand};
+pub use self::drag_out::{
+    DragImage, HostDrag, HostDragFinished, HostDragItems, HostDragSource, HostDragStart,
+};
 pub use self::event::{EventDecoder, TaggedEvent, TerminalEvent, data_meta};
 pub use self::host::{HostDragAndDrop, HostEvent, HostTarget};
 pub use self::machine_id::MachineId;

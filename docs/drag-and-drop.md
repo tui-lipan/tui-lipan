@@ -4,7 +4,7 @@ A tui-lipan app can take drops from, and start drags to, the desktop around it w
 terminal speaks kitty's [drag-and-drop protocol](https://sw.kovidgoyal.net/kitty/dnd-protocol/)
 (OSC 72). kitty 0.47 and later do. Everything lives in `tui_lipan::dnd`.
 
-This page covers the app's side. For widgets dragged and dropped *within* an app, see
+This page covers the app's side: taking drops, and letting the user drag files and text out. For widgets dragged and dropped *within* an app, see
 `DragSource` and `DropTarget` in [Events](events.md#drag-and-drop-events).
 
 ## Accept drops
@@ -100,7 +100,71 @@ The host then sets `remote` on the `text/uri-list` data. The app reads each entr
 `DataTarget::DirEntry`. `Data::kind` says whether an entry is a file, a symbolic link, or a
 directory, along with its handle. Release a directory handle with `ReleaseDirectory`.
 
-## Start drags
+## Drag out of the app
+
+Widgets say what they offer, and the runtime runs the drag. A file tree takes one call:
+
+```rust
+FileTree::new(root).drag_files_out()
+```
+
+Dragging an entry to a file manager copies it; dropping it in an editor or a shell gives its path.
+The tree's paths must name files on this machine.
+
+Any element can offer something, decided when the drag begins:
+
+```rust
+use tui_lipan::dnd::{HostDrag, HostDragSource};
+
+Text::new(&self.summary).host_drag(HostDragSource::new({
+    let summary = self.summary.clone();
+    move |_start| Some(HostDrag::text(summary.clone()))
+}))
+```
+
+Widgets of items offer per item, by the item under the pointer: `List::host_drag` with a
+`HostDragItems`, `Tree::host_drag` with the row's `TreeEvent`, and `FileTree::host_drag` with the
+entry's `FileTreeEvent`. The innermost offer under the pointer wins.
+
+A `HostDrag` carries files, text, or both:
+
+| Builder | Effect |
+| --- | --- |
+| `HostDrag::files(paths)` | Offer files and directories as a `text/uri-list`, and their paths as text |
+| `HostDrag::text(text)` | Offer text |
+| `.with_text(text)` | Offer this text instead of the files' paths |
+| `.operations(ops)` | What a drop target may do; copy unless set |
+| `.label(text)` | The text shown beside the pointer; defaults to the file name, `N files`, or the text |
+| `.image(image)` | What is shown beside the pointer: a `DragImage` |
+| `.on_finished(callback)` | Hear the outcome as a `HostDragFinished`: the operation, `None` when canceled |
+
+The host terminal draws a text label in its own font, at its normal size on an opaque background.
+A `DragImage` changes that:
+
+| `DragImage` | Shows |
+| --- | --- |
+| `DragImage::label()` | The default label, to restyle with `.scale(…)` and `.transparent()` |
+| `DragImage::text(text)` | This text; `.scale(1.5)` draws it larger, `.transparent()` drops the background |
+| `DragImage::png(bytes)` | A PNG; its size comes from the file |
+| `DragImage::rgb(w, h, pixels)`, `DragImage::rgba(w, h, pixels)` | Raw sRGB pixels |
+| `DragImage::none()` | Nothing |
+
+An image that cannot be shown, such as pixels that do not fill its size, falls back to the default
+label.
+
+To let a drop target move files, offer `DropOperations::EITHER` and remove the originals when
+`on_finished` reports `DropOperation::Move`.
+
+The runtime registers with the host while something on screen offers a drag, and withdraws once
+nothing does. A drag begun over anything else reaches `on_host_drag_and_drop` as a
+`DragGesture`, so an app can still run drags of its own. When the host takes over the pointer for
+a drag, the press under it ends without a release.
+
+A drop on another machine, such as the desktop of a user running the app over SSH, gets the files'
+contents: the runtime reads them off the UI thread, directories whole, and sends them as the host
+asks.
+
+### Run a drag yourself
 
 Register with `ProgramCommand::OfferDrags`. When the user starts a drag gesture over the window,
 a `DragGesture` arrives; answer with `Offer` and the MIME types on offer, send their data ahead

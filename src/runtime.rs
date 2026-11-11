@@ -128,6 +128,8 @@ pub(crate) struct RuntimeCore<C: Component> {
     pub(crate) root_host: crate::core::nested::HostState,
     pub(crate) extra_root_host: crate::core::nested::HostState,
     pub(crate) tree: NodeTree,
+    /// A drag out of the app a widget offered, which the runtime runs.
+    drag_out: crate::dnd::drag_out::DragOut,
     pub(crate) cached_expanded_element: Option<Element>,
     pub(crate) cached_extra_expanded_element: Option<Element>,
     pub(crate) extra_root_element: Option<Element>,
@@ -288,6 +290,12 @@ where
             },
         );
 
+        // A drag's file contents are read off the UI thread; reaching the outbox wakes the loop.
+        {
+            let wake = command_wake.clone();
+            env.host_drag_and_drop
+                .set_wake(std::sync::Arc::new(move || wake.notify()));
+        }
         let scope = ScopeId(1);
         let ctx = Context::new(&component, scope, dispatcher, props, env, viewport);
 
@@ -314,6 +322,7 @@ where
             root_host: crate::core::nested::HostState::default(),
             extra_root_host: crate::core::nested::HostState::default(),
             tree: NodeTree::new(),
+            drag_out: Default::default(),
             cached_expanded_element: None,
             cached_extra_expanded_element: None,
             extra_root_element: None,
@@ -583,7 +592,30 @@ where
     }
 
     /// Invoke the root-only host drag-and-drop callback.
-    pub(crate) fn on_host_drag_and_drop(&mut self, event: crate::dnd::TaggedEvent) -> UpdateLevel {
+    /// Returns the update, and whether the host began a drag the runtime offered: the pointer
+    /// gesture under it is over, though its release will never arrive.
+    pub(crate) fn on_host_drag_and_drop(
+        &mut self,
+        event: crate::dnd::TaggedEvent,
+    ) -> (UpdateLevel, bool) {
+        let channel = Rc::clone(&self.ctx.env().host_drag_and_drop);
+        let tree = &self.tree;
+        let outcome = self.drag_out.host_event(
+            &event.event,
+            |position| {
+                let x = u16::try_from(position.cell_x).unwrap_or(u16::MAX);
+                let y = u16::try_from(position.cell_y).unwrap_or(u16::MAX);
+                tree.host_drag_at(x, y)
+            },
+            &channel,
+        );
+        if let crate::dnd::drag_out::DragOutcome::Consumed { started } = outcome {
+            return (UpdateLevel::None, started);
+        }
+        (self.deliver_host_drag_and_drop(event), false)
+    }
+
+    fn deliver_host_drag_and_drop(&mut self, event: crate::dnd::TaggedEvent) -> UpdateLevel {
         self.ctx.set_active_theme(self.theme.clone());
         #[cfg(unix)]
         let cell = crate::app::input::pixel_mouse::cell_size();
@@ -592,6 +624,14 @@ where
         let event = crate::dnd::host::host_event(event, cell, |x, y| self.tree.keyed_at(x, y));
         let update = self.component.on_host_drag_and_drop(event, &mut self.ctx);
         self.run_root_update(update)
+    }
+
+    /// Offer drags to the host while a widget on screen offers one.
+    pub(crate) fn sync_host_drag_offering(&self) {
+        self.ctx
+            .env()
+            .host_drag_and_drop
+            .sync_runtime_offering(self.tree.offers_host_drag());
     }
 
     /// Invoke the root-only held-modifier lifecycle callback.

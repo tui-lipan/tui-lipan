@@ -284,7 +284,14 @@ pub(super) fn view(ctx: &Context<TreeComponent>) -> Element {
                     .key(format!("{}-gap", row_key(entry))),
             );
         }
-        view = view.child(row(ctx, entry, index, max_depth, selected).key(row_key(entry)));
+        let mut element = row(ctx, entry, index, max_depth, selected).key(row_key(entry));
+        if let Some(drag) = ctx.props.host_drag.clone() {
+            let path = entry.path.clone();
+            element = element.host_drag(crate::dnd::HostDragSource::new(move |_| {
+                drag.offer(index, path.clone())
+            }));
+        }
+        view = view.child(element);
     }
     if entries.is_empty()
         && let Some(text) = &ctx.props.empty_text
