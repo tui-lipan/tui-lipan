@@ -430,6 +430,16 @@ impl Component for FileTreeComponent {
                     }
                 }));
         }
+        if let Some(drag) = ctx.props.host_drag.clone() {
+            let lookup = projection.lookup.clone();
+            tree = tree.host_drag(move |event: &TreeEvent| {
+                let entry = lookup.get(&event.path)?;
+                (drag.0)(&FileTreeEvent {
+                    path: entry.path.clone(),
+                    kind: entry.kind,
+                })
+            });
+        }
         if ctx.props.on_ctrl_activate.is_some() {
             let lookup = projection.lookup.clone();
             tree = tree.on_ctrl_activate(ctx.link().callback(move |event: TreeEvent| {

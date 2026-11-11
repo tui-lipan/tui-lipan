@@ -98,6 +98,8 @@ pub struct Element {
     pub(crate) pointer_focus: bool,
     /// Explicit mouse pointer for this element and descendants without an override.
     pub(crate) pointer_shape: Option<crate::style::PointerShape>,
+    /// What this element offers when dragged out of the app; see [`Element::host_drag`].
+    pub(crate) host_drag: Option<crate::dnd::HostDragSource>,
     /// Concrete element kind.
     pub(crate) kind: ElementKind,
     /// Layout constraints for stack sizing.
@@ -125,6 +127,7 @@ impl Element {
             semantic_value_sensitive: false,
             pointer_focus: true,
             pointer_shape: None,
+            host_drag: None,
             kind,
             layout: LayoutConstraints::default(),
             layout_hash_cache: Cell::new(None),
@@ -212,6 +215,16 @@ impl Element {
     /// A descendant's explicit override takes precedence. The host terminal must support OSC 22.
     pub fn pointer_shape(mut self, shape: crate::style::PointerShape) -> Self {
         self.pointer_shape = Some(shape);
+        self
+    }
+
+    /// Let the user drag this element out of the app, to other applications.
+    ///
+    /// When a drag begins over the element, in a host terminal that supports drag and drop (see
+    /// [`crate::dnd`]), `source` decides what it offers. An item a descendant offers, such as a
+    /// row of a [`List`] with its own `host_drag`, comes first.
+    pub fn host_drag(mut self, source: crate::dnd::HostDragSource) -> Self {
+        self.host_drag = Some(source);
         self
     }
 
@@ -808,6 +821,11 @@ pub trait IntoElement: Into<Element> + Sized {
     /// Convert into an element and override its mouse pointer. See [`Element::pointer_shape`].
     fn pointer_shape(self, shape: crate::style::PointerShape) -> Element {
         self.into().pointer_shape(shape)
+    }
+
+    /// Convert into an element that can be dragged out of the app. See [`Element::host_drag`].
+    fn host_drag(self, source: crate::dnd::HostDragSource) -> Element {
+        self.into().host_drag(source)
     }
 
     /// Convert into an element and assign a path-independent component state

@@ -112,6 +112,8 @@ pub(crate) struct Node {
     /// Whether pointer presses may acquire focus in this subtree.
     pub pointer_focus: bool,
     pub(crate) pointer_shape: Option<crate::style::PointerShape>,
+    /// What this node offers when dragged out of the app.
+    pub(crate) host_drag: Option<crate::dnd::HostDragSource>,
     /// Layout rectangle.
     pub rect: Rect,
     /// Parent node.
@@ -250,6 +252,7 @@ impl Node {
             semantic_value_sensitive: false,
             pointer_focus: true,
             pointer_shape: None,
+            host_drag: None,
             rect: Rect::default(),
             parent: None,
             children: Vec::new(),
@@ -272,6 +275,7 @@ impl Node {
         self.semantic_value_sensitive = false;
         self.pointer_focus = true;
         self.pointer_shape = None;
+        self.host_drag = None;
         self.parent = None;
         self.rect = Rect::default();
         self.children.clear();
@@ -1138,23 +1142,63 @@ impl NodeTree {
     /// topmost nodes that hold it instead, so a passive widget (a frame drawn as a drop zone) is
     /// found too.
     pub(crate) fn keyed_at(&self, x: u16, y: u16) -> Vec<(crate::core::element::Key, Rect)> {
+        self.nodes_at(x, y)
+            .into_iter()
+            .filter_map(|id| {
+                let node = self.node(id);
+                node.key.clone().map(|key| (key, node.rect))
+            })
+            .collect()
+    }
+
+    /// What is offered at `(x, y)` when a drag out of the app begins there: the innermost item or
+    /// element that offers something.
+    pub(crate) fn host_drag_at(&self, x: u16, y: u16) -> Option<crate::dnd::HostDrag> {
+        let (column, row) = (i16::try_from(x).ok()?, i16::try_from(y).ok()?);
+        self.nodes_at(x, y).into_iter().find_map(|id| {
+            let node = self.node(id);
+            let border = self.ancestor_frame_integrated_vscrollbar_x(node.parent);
+            node.kind
+                .host_drag_at(column, row, node.rect, border)
+                .or_else(|| {
+                    let source = node.host_drag.as_ref()?;
+                    source.offer(crate::dnd::HostDragStart {
+                        x: x.saturating_sub(node.rect.x.max(0) as u16),
+                        y: y.saturating_sub(node.rect.y.max(0) as u16),
+                        width: node.rect.w,
+                        height: node.rect.h,
+                    })
+                })
+        })
+    }
+
+    /// Whether anything on screen can be dragged out of the app.
+    pub(crate) fn offers_host_drag(&self) -> bool {
+        self.iter_with_overlays()
+            .any(|node| !node.inert && (node.host_drag.is_some() || node.kind.offers_host_drag()))
+    }
+
+    /// The nodes at `(x, y)`, innermost first.
+    ///
+    /// The node a pointer there would hit and its ancestors, which respects overlays and skips
+    /// decoration drawn over content. Where nothing interactive is under the point, the topmost
+    /// nodes that hold it instead, so a passive widget (a frame drawn as a drop zone) is found
+    /// too.
+    fn nodes_at(&self, x: u16, y: u16) -> Vec<NodeId> {
         let (Ok(x), Ok(y)) = (i16::try_from(x), i16::try_from(y)) else {
             return Vec::new();
         };
         if let Some(hit) = self.hit_test(x, y) {
-            let mut keyed = Vec::new();
+            let mut path = Vec::new();
             let mut current = Some(hit);
             while let Some(id) = current {
-                let node = self.node(id);
-                if let Some(key) = &node.key {
-                    keyed.push((key.clone(), node.rect));
-                }
-                current = node.parent;
+                path.push(id);
+                current = self.node(id).parent;
             }
-            return keyed;
+            return path;
         }
         for root in self.overlay_roots.iter().rev() {
-            let path = self.keyed_path(root.id, x, y);
+            let path = self.geometric_path(root.id, x, y);
             if !path.is_empty() || self.overlay_captures_pointer(root, x, y) {
                 return path;
             }
@@ -1162,33 +1206,31 @@ impl NodeTree {
         if !self.is_valid(self.root) {
             return Vec::new();
         }
-        self.keyed_path(self.root, x, y)
+        self.geometric_path(self.root, x, y)
     }
 
-    /// Descend from `start` through the topmost child holding the point, collecting keyed nodes.
-    fn keyed_path(&self, start: NodeId, x: i16, y: i16) -> Vec<(crate::core::element::Key, Rect)> {
+    /// Descend from `start` through the topmost child holding the point, innermost first.
+    fn geometric_path(&self, start: NodeId, x: i16, y: i16) -> Vec<NodeId> {
         let usable = |id: NodeId| {
             self.is_valid(id) && {
                 let node = self.node(id);
                 !node.inert && !node.portal_suppressed && node.rect.contains(x, y)
             }
         };
-        let mut keyed = Vec::new();
+        let mut path = Vec::new();
         let mut current = usable(start).then_some(start);
         while let Some(id) = current {
-            let node = self.node(id);
-            if let Some(key) = &node.key {
-                keyed.push((key.clone(), node.rect));
-            }
-            current = node
+            path.push(id);
+            current = self
+                .node(id)
                 .children
                 .iter()
                 .rev()
                 .copied()
                 .find(|&child| usable(child));
         }
-        keyed.reverse();
-        keyed
+        path.reverse();
+        path
     }
 
     fn matches_secondary_hit_test(
@@ -1291,6 +1333,18 @@ impl NodeTree {
             ancestor = self.node(id).parent;
         }
         None
+    }
+
+    /// Give `id` the drag-out source of an element that resolved to it, unless it has its own.
+    pub(crate) fn inherit_host_drag(
+        &mut self,
+        id: NodeId,
+        source: Option<crate::dnd::HostDragSource>,
+    ) {
+        let node = self.node_mut(id);
+        if node.host_drag.is_none() {
+            node.host_drag = source;
+        }
     }
 
     pub(crate) fn inherit_pointer_shape(

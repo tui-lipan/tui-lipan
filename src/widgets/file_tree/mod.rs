@@ -505,6 +505,7 @@ impl FileTree {
                 on_select: None,
                 on_activate: None,
                 on_ctrl_activate: None,
+                host_drag: None,
                 on_context_menu: None,
                 on_toggle: None,
                 on_entry_request: None,
@@ -1488,6 +1489,29 @@ impl FileTree {
     pub fn on_ctrl_activate(mut self, cb: Callback<FileTreeEvent>) -> Self {
         self.props.on_ctrl_activate = Some(cb);
         self
+    }
+
+    /// Let the user drag entries out of the app, to other applications.
+    ///
+    /// When a drag begins on an entry, in a host terminal that supports drag and drop (see
+    /// [`crate::dnd`]), `offer` decides what it offers from the entry's [`FileTreeEvent`]. For the
+    /// common case, offering the entry itself, use [`Self::drag_files_out`].
+    pub fn host_drag(
+        mut self,
+        offer: impl Fn(&FileTreeEvent) -> Option<crate::dnd::HostDrag> + 'static,
+    ) -> Self {
+        self.props.host_drag = Some(mod_private::FileTreeHostDrag(std::rc::Rc::new(offer)));
+        self
+    }
+
+    /// Let the user drag files and directories out of the app: a drop in a file manager copies
+    /// them, and a drop in an editor or a shell gets their paths.
+    ///
+    /// The tree's paths must name files on this machine, as they do when it reads them itself.
+    /// Use [`Self::host_drag`] to offer something else, such as a move, or to hear how a drag
+    /// ended.
+    pub fn drag_files_out(self) -> Self {
+        self.host_drag(|entry| Some(crate::dnd::HostDrag::files([entry.path.as_ref()])))
     }
 
     /// Handle a right-button press on a visible entry without selecting, activating,

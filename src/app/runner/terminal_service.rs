@@ -135,6 +135,7 @@ impl<C: Component> AppRunner<C> {
         // A restore that failed when the terminal came back is retried first, so what the app
         // queued since lands on top of the registrations the host should already have.
         crate::dnd::host::retry_restore(backend)?;
+        self.core.sync_host_drag_offering();
         let channel = &self.core.ctx.env().host_drag_and_drop;
         if !channel.has_output() {
             return Ok(());
@@ -144,6 +145,21 @@ impl<C: Component> AppRunner<C> {
         backend.flush()?;
         crate::dnd::host::commit_registrations(&output);
         Ok(())
+    }
+
+    /// The host took over the pointer for a drag a widget offered, and will not report the
+    /// release: end the press and any drag the gesture began here.
+    pub(super) fn end_pointer_gesture_for_host_drag(&mut self) {
+        if !self.cancel_drag_drop() {
+            self.drag.clear();
+        }
+        self.mouse.left_down_node = None;
+        self.mouse.left_down_pos = None;
+        self.mouse.drag_threshold_exceeded = false;
+        self.mouse.click_consumed = true;
+        self.mouse.pending_drag_source = None;
+        self.mouse.mouse_region_drag = None;
+        self.mouse.pan_view_drag = None;
     }
 
     pub(super) fn needs_mouse_motion(&self) -> bool {

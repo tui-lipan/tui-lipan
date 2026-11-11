@@ -57,6 +57,7 @@ pub(crate) fn reconcile_element(ctx: &mut ReconcileCtx<'_>, args: ElementReconci
         );
         ctx.tree.pop_active_theme();
         ctx.tree.inherit_pointer_shape(id, el.pointer_shape);
+        ctx.tree.inherit_host_drag(id, el.host_drag.clone());
         return id;
     }
     if let ElementKind::ContextProvider(cp) = &el.kind {
@@ -70,6 +71,7 @@ pub(crate) fn reconcile_element(ctx: &mut ReconcileCtx<'_>, args: ElementReconci
             },
         );
         ctx.tree.inherit_pointer_shape(id, el.pointer_shape);
+        ctx.tree.inherit_host_drag(id, el.host_drag.clone());
         return id;
     }
     if let ElementKind::Memo(_) = &el.kind {
@@ -94,6 +96,7 @@ pub(crate) fn reconcile_element(ctx: &mut ReconcileCtx<'_>, args: ElementReconci
         node.semantic_value_sensitive = el.semantic_value_sensitive;
         node.pointer_focus = el.pointer_focus;
         node.pointer_shape = el.pointer_shape;
+        node.host_drag = el.host_drag.clone();
         node.parent = parent;
         node.rect = rect;
         node.set_active_theme(active_theme);
@@ -124,6 +127,7 @@ pub(crate) fn reconcile_element(ctx: &mut ReconcileCtx<'_>, args: ElementReconci
         node.semantic_value_sensitive = el.semantic_value_sensitive;
         node.pointer_focus = el.pointer_focus;
         node.pointer_shape = el.pointer_shape;
+        node.host_drag = el.host_drag.clone();
         node.parent = parent;
         node.set_active_theme(active_theme);
     }

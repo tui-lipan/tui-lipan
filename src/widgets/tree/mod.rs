@@ -75,6 +75,7 @@ impl Tree {
                 on_select: None,
                 on_activate: None,
                 on_ctrl_activate: None,
+                host_drag: None,
                 on_context_menu: None,
                 on_toggle: None,
                 keymap: TreeKeymap::default(),
@@ -497,6 +498,18 @@ impl Tree {
     /// selection callbacks still run for pointer selection.
     pub fn on_ctrl_activate(mut self, cb: Callback<TreeEvent>) -> Self {
         self.props.on_ctrl_activate = Some(cb);
+        self
+    }
+
+    /// Let the user drag rows out of the app, to other applications.
+    ///
+    /// When a drag begins on a row, in a host terminal that supports drag and drop (see
+    /// [`crate::dnd`]), `offer` decides what it offers from the row's [`TreeEvent`].
+    pub fn host_drag(
+        mut self,
+        offer: impl Fn(&TreeEvent) -> Option<crate::dnd::HostDrag> + 'static,
+    ) -> Self {
+        self.props.host_drag = Some(types::TreeHostDrag(std::rc::Rc::new(offer)));
         self
     }
 

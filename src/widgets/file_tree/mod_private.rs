@@ -12,6 +12,18 @@ use crate::widgets::TreeKeymap;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+/// What an entry offers when dragged out of the app; see [`FileTree::host_drag`](super::FileTree::host_drag).
+#[derive(Clone)]
+pub(crate) struct FileTreeHostDrag(pub(crate) std::rc::Rc<FileTreeOffer>);
+
+pub(crate) type FileTreeOffer = dyn Fn(&FileTreeEvent) -> Option<crate::dnd::HostDrag>;
+
+impl PartialEq for FileTreeHostDrag {
+    fn eq(&self, other: &Self) -> bool {
+        std::rc::Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
 #[derive(Clone, PartialEq)]
 pub(crate) struct FileTreeProps {
     pub(crate) root: Arc<str>,
@@ -132,6 +144,7 @@ pub(crate) struct FileTreeProps {
     pub(crate) on_select: Option<Callback<FileTreeEvent>>,
     pub(crate) on_activate: Option<Callback<FileTreeEvent>>,
     pub(crate) on_ctrl_activate: Option<Callback<FileTreeEvent>>,
+    pub(crate) host_drag: Option<FileTreeHostDrag>,
     pub(crate) on_context_menu: Option<Callback<(FileTreeEvent, crate::core::event::MouseEvent)>>,
     pub(crate) on_toggle: Option<Callback<FileTreeToggleEvent>>,
     pub(crate) on_entry_request: Option<Callback<super::events::FileTreeEntryRequest>>,
