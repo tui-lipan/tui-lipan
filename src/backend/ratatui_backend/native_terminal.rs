@@ -285,6 +285,9 @@ pub(crate) struct HostBackend<W: io::Write> {
     frame_flush_time: std::rc::Rc<std::cell::Cell<Duration>>,
     title: Option<std::sync::Arc<str>>,
     pending_title: Option<(std::sync::Arc<str>, usize)>,
+    /// Where the caret was last shown, once [`Self::parking_hidden_caret`] asked for it.
+    parked_caret: Option<ratatui::layout::Position>,
+    parks_hidden_caret: bool,
     #[cfg(test)]
     test_flush_action: u8,
     #[cfg(all(test, feature = "terminal-images"))]
@@ -314,6 +317,8 @@ impl<W: io::Write> HostBackend<W> {
             frame_flush_time: Default::default(),
             title: None,
             pending_title: None,
+            parked_caret: None,
+            parks_hidden_caret: false,
             #[cfg(test)]
             test_flush_action: 0,
             #[cfg(all(test, feature = "terminal-images"))]
@@ -334,6 +339,21 @@ impl<W: io::Write> HostBackend<W> {
             #[cfg(feature = "terminal-images")]
             retired_native_epoch: None,
         }
+    }
+
+    /// Keep the host cursor on the caret while the caret is hidden.
+    ///
+    /// Hiding the cursor does not move it, so a hidden cursor otherwise sits wherever the last
+    /// cell write left it. Terminals with cursor effects follow it there: Kitty's cursor trail
+    /// flies to that cell and back on every blink of a software-blinked caret. Parking it on the
+    /// caret keeps a blink a blink. Until a caret has been shown, the cursor parks on the origin,
+    /// so a surface that never shows one keeps a still cursor too.
+    ///
+    /// Only a fullscreen surface asks for this. An inline viewport relies on ratatui's own record
+    /// of where the cursor is, which a move it did not make would falsify.
+    pub(crate) fn parking_hidden_caret(mut self) -> Self {
+        self.parks_hidden_caret = true;
+        self
     }
 
     pub(crate) fn set_title(&mut self, title: &str) -> io::Result<()> {
@@ -666,7 +686,14 @@ impl<W: io::Write> Backend for HostBackend<W> {
     }
 
     fn hide_cursor(&mut self) -> io::Result<()> {
-        self.backend.hide_cursor()
+        self.backend.hide_cursor()?;
+        if !self.parks_hidden_caret {
+            return Ok(());
+        }
+        let position = self
+            .parked_caret
+            .unwrap_or(ratatui::layout::Position::ORIGIN);
+        self.backend.set_cursor_position(position)
     }
 
     fn show_cursor(&mut self) -> io::Result<()> {
@@ -686,6 +713,8 @@ impl<W: io::Write> Backend for HostBackend<W> {
         &mut self,
         position: P,
     ) -> io::Result<()> {
+        let position = position.into();
+        self.parked_caret = Some(position);
         self.backend.set_cursor_position(position)
     }
 
@@ -769,7 +798,7 @@ pub(crate) fn create_test_terminal(width: u16, height: u16) -> io::Result<Termin
         #[cfg(not(unix))]
         stdout: io::stdout(),
     };
-    let backend = HostBackend::buffered(BufWriter::new(output));
+    let backend = HostBackend::buffered(BufWriter::new(output)).parking_hidden_caret();
     ratatui::Terminal::with_options(
         backend,
         TerminalOptions {
@@ -1063,7 +1092,7 @@ impl TerminalGuard {
         drain_pending_terminal_responses();
 
         let terminal = if policy.uses_alternate_screen {
-            let backend = HostBackend::buffered(buffered_stdout());
+            let backend = HostBackend::buffered(buffered_stdout()).parking_hidden_caret();
             match ratatui::Terminal::new(backend) {
                 Ok(terminal) => terminal,
                 Err(err) => {
@@ -1319,5 +1348,92 @@ mod tests {
         let name = format!("{module}::inline_modifier_request_preserves_shifted_and_composed_text");
         let report = run_with_text(&name, "Ał");
         assert_eq!(report.get("text").map(String::as_str), Some("Ał"));
+    }
+}
+
+#[cfg(test)]
+mod hidden_caret_tests {
+    use std::cell::RefCell;
+    use std::io;
+    use std::rc::Rc;
+
+    use ratatui::layout::{Position, Rect};
+    use ratatui::{Terminal, TerminalOptions, Viewport};
+
+    use super::HostBackend;
+
+    /// What the backend sent, readable while the terminal still owns the writer.
+    #[derive(Clone, Default)]
+    struct Sent(Rc<RefCell<Vec<u8>>>);
+
+    impl io::Write for Sent {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Draw a first frame, placing the caret when `caret` asks, then one that hides it while
+    /// repainting the bottom-right cell, as a software blink's off phase does when a clock or
+    /// status repaints. Returns the bytes the second frame sent.
+    fn hidden_frame_output(parks: bool, caret: Option<Position>) -> Vec<u8> {
+        let sent = Sent::default();
+        let mut backend = HostBackend::new(sent.clone());
+        if parks {
+            backend = backend.parking_hidden_caret();
+        }
+        let options = TerminalOptions {
+            viewport: Viewport::Fixed(Rect::new(0, 0, 20, 5)),
+        };
+        let mut terminal = Terminal::with_options(backend, options).expect("terminal");
+        terminal
+            .draw(|f| {
+                if let Some(caret) = caret {
+                    f.set_cursor_position(caret);
+                }
+            })
+            .expect("first frame");
+        let lit = sent.0.borrow().len();
+        terminal
+            .draw(|f| {
+                f.buffer_mut()[(19, 4)].set_symbol("x");
+            })
+            .expect("hidden frame");
+        sent.0.borrow()[lit..].to_vec()
+    }
+
+    #[test]
+    fn a_hidden_caret_stays_on_its_cell_instead_of_after_the_last_write() {
+        let output = hidden_frame_output(true, Some(Position::new(3, 1)));
+        assert!(
+            output.ends_with(b"\x1b[?25l\x1b[2;4H"),
+            "after hiding, the cursor returns to the caret: {:?}",
+            String::from_utf8_lossy(&output),
+        );
+    }
+
+    #[test]
+    fn a_surface_that_never_showed_a_caret_parks_its_hidden_cursor_on_the_origin() {
+        let output = hidden_frame_output(true, None);
+        assert!(
+            output.ends_with(b"\x1b[?25l\x1b[1;1H"),
+            "with no caret to return to, the cursor parks on the origin: {:?}",
+            String::from_utf8_lossy(&output),
+        );
+    }
+
+    #[test]
+    fn without_parking_a_hidden_cursor_stays_where_the_frame_left_it() {
+        // An inline viewport does not park: ratatui tracks that cursor itself.
+        let output = hidden_frame_output(false, Some(Position::new(3, 1)));
+        assert!(
+            output.ends_with(b"\x1b[?25l"),
+            "nothing moves the cursor after hiding it: {:?}",
+            String::from_utf8_lossy(&output),
+        );
     }
 }
