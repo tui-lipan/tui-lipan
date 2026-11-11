@@ -292,7 +292,7 @@ pub use sparkline::{
 pub use spinner::{Spinner, SpinnerSpeed, SpinnerStyle};
 pub use splitter::{Splitter, SplitterHandleMode, SplitterPaneLimits, SplitterResizeEvent};
 pub use state_diagram::{StateDiagram, StateDiagramTheme, StateKind, StateSpec, StateTransition};
-pub use status_bar::StatusBar;
+pub use status_bar::{StatusBar, StatusBarItemSize};
 pub use table::{
     ColumnWidth, Table, TableCell, TableDisclosureState, TableEvent, TableRow, TableRowRole,
 };

@@ -102,6 +102,8 @@ Application status line with left/center/right slots.
 | `.left(Element)` | method | Left slot content |
 | `.center(Element)` | method | Center slot content |
 | `.right(Element)` | method | Right slot content |
+| `StatusBar::allocate_items(&[StatusBarItemSize], available, gap)` | static method | Allocate widths in retention-priority order; zero-width items should be omitted |
+| `StatusBar::side_widths(width, center_width, gap)` | static method | Left/right budgets around the centered section, excluding horizontal padding |
 | `style` | `Style` | Bar container style (default for all slots) |
 | `left_style` | `Style` | Left slot style patch |
 | `center_style` | `Style` | Center slot style patch |
@@ -128,6 +130,15 @@ imply equal-third lanes.
 
 Setting only a background on the bar or a slot preserves the surrounding theme
 for child widgets.
+
+For priority-based overflow, measure each item with `StatusBarItemSize::measure(&element,
+priority)` and call `StatusBar::allocate_items`. Larger `priority` values are retained first;
+equal priorities keep source order. Each item fits at its `minimum` width or disappears
+entirely. Remaining space expands retained items toward `preferred` in priority order.
+For a scrolling tab strip, lower `minimum` to its smallest usable viewport. Minimums are
+clamped to the preferred width; a nonempty item needs at least one cell. Gaps count only
+between retained items. Omit zero allocations and render other items at their allocated
+widths, preserving source order. The StatusBar does not apply these priorities implicitly.
 
 ```rust
 StatusBar::new()
