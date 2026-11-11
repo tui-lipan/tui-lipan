@@ -1360,6 +1360,7 @@ Source: `src/widgets/terminal/mod.rs` (`Terminal`).
 | `link_activation_mods` | `KeyMods::CTRL` |
 | `link_hover_style` | `StyleSlot::Replace(Style::new().underline())` |
 | `on_link_activate` | `None` |
+| `link_paths` | `None` |
 | `scroll_wheel` | `true` |
 | `scroll_wheel_multiplier` | `None` |
 | `on_scroll` | `None` |
@@ -1473,6 +1474,7 @@ Note: `ManagedTerminal` is a component; defaults come from `ManagedTerminalProps
 | `link_activation_mods` | `KeyMods::CTRL` |
 | `link_hover_style` | `StyleSlot::Replace(Style::new().underline())` |
 | `on_link_activate` | `None` |
+| `link_paths` | `None` |
 | `on_context_menu` | `None` |
 | `resize_debounce` | `Duration::from_millis(16)` |
 | `style` | `crate::style::Style::default()` |

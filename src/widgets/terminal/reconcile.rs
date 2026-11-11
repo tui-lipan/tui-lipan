@@ -109,6 +109,7 @@ pub(crate) fn reconcile_terminal(
             old.viewport_cols,
             if terminal.on_link_activate.is_some()
                 && old.link_activation_mods == terminal.link_activation_mods
+                && old.link_paths.is_some() == terminal.link_paths.is_some()
                 && old.text == text
                 && old.wrapped_rows == wrapped_rows
                 && old.hyperlinks == hyperlinks
@@ -223,6 +224,7 @@ pub(crate) fn reconcile_terminal(
         link_activation_mods: terminal.link_activation_mods,
         link_hover_style: terminal.link_hover_style,
         on_link_activate: terminal.on_link_activate.clone(),
+        link_paths: terminal.link_paths.clone(),
         style: terminal.style,
         hover_style: terminal.hover_style,
         focus_style: terminal.focus_style,

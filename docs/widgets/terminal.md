@@ -28,7 +28,8 @@ The recommended starting point: a complete PTY terminal with automatic lifecycle
 | `scroll_wheel_multiplier` | `Option<u16>` | Scrollback rows per wheel tick, overriding the app-wide multiplier (default: `None`) |
 | `link_activation_mods` | `KeyMods` | Modifiers required for link activation (default: `KeyMods::CTRL`; extras allowed) |
 | `link_hover_style` | `StyleSlot` | Style for the link under a modified pointer (default: underline) |
-| `on_link_activate` | `Callback<TerminalLinkEvent>` | Modified click on an OSC 8 link or detected URL |
+| `on_link_activate` | `Callback<TerminalLinkEvent>` | Modified click on an OSC 8 link, a detected URL, or a path accepted by `link_paths` |
+| `link_paths` | `TerminalPathFilter` | Treat detected file paths the filter accepts as links (default: paths are not links) |
 | `resize_debounce` | `Duration` | Trailing-edge PTY/screen resize delay (default: 16ms; zero is immediate) |
 | `style` | `Style` | Terminal content style |
 | `focusable` | `bool` | Accept focus (default: true) |
@@ -130,7 +131,8 @@ same live screen does not repeat the report. Paint-only updates also synchronize
 | `on_mouse_forward_event` | `Callback<ForwardedMouseEvent>` | Structured mouse report with terminal-local coordinates, modes, and encoded bytes |
 | `link_activation_mods` | `KeyMods` | Modifiers required for link activation (default: `KeyMods::CTRL`; extras allowed) |
 | `link_hover_style` | `StyleSlot` | Style for the link under a modified pointer (default: underline) |
-| `on_link_activate` | `Callback<TerminalLinkEvent>` | Modified click on an OSC 8 link or detected URL |
+| `on_link_activate` | `Callback<TerminalLinkEvent>` | Modified click on an OSC 8 link, a detected URL, or a path accepted by `link_paths` |
+| `link_paths` | `TerminalPathFilter` | Treat detected file paths the filter accepts as links (default: paths are not links) |
 | `on_selection` | `Callback<TerminalSelectionEvent>` | Selection and extracted text changed |
 | `on_context_menu` | `Callback<MouseEvent>` | Opt-in handler on `Terminal` and `ManagedTerminal`; owns the full right-button gesture before PTY forwarding or clipboard fallback |
 | `on_key` | `KeyHandler` | Low-level key handler |
@@ -219,7 +221,8 @@ Terminal::new()
 
 The default activation chord is Ctrl+left-click. `link_activation_mods(...)` changes the required
 modifiers; extra held modifiers are allowed. The callback receives a `TerminalLinkEvent` with the
-destination URI and visible viewport row/column.
+link target, its `TerminalLinkKind` (`Hyperlink`, `Url`, or `Path`), and the visible viewport
+row/column.
 
 Moving the pointer over an activatable link with those modifiers held applies `link_hover_style`
 to the complete link; the default underlines it. The `link_hover_style`,
@@ -232,6 +235,28 @@ widget uses the built-in URL hint scanner, which recognizes allowed-scheme `http
 `mailto` text and rejoins soft-wrapped rows before matching. The framework reports the destination;
 the application decides whether and how to open it. `tui_lipan::utils::open_url` is the
 scheme-restricted system-opener helper.
+
+File paths are not links unless you install `link_paths`. The widget then also runs the path hint
+scanner, which accepts `./`, `../`, `~/`, rooted, drive-letter, and bare relative paths with a file
+extension, plus bare file names such as `README.md`, each with an optional `:line` or
+`:line:column` suffix. A detected path is a link only when your `TerminalPathFilter` accepts it:
+
+```rust
+let cwd = self.cwd.clone();
+Terminal::new()
+    .screen(TerminalScreenHandle::new(screen))
+    .on_link_activate(ctx.link().callback(Msg::OpenLink))
+    .link_paths(TerminalPathFilter::new(move |text| {
+        cwd.join(PathPosition::parse(text).path).exists()
+    }))
+```
+
+The filter receives the path exactly as shown, suffix included;
+`tui_lipan::utils::hints::PathPosition::parse` splits off the line and column. Only the application knows what a
+relative path is relative to and whether it exists, so checking it there keeps text that merely
+looks like a path, such as `docs/gone.md` in prose, from lighting up. The filter runs on pointer
+movement while the activation modifiers are held, on the UI thread, so keep it fast and cache
+anything slow. An activated path arrives with `TerminalLinkKind::Path` and the same text in `uri`.
 
 A link press is resolved before terminal selection and PTY mouse forwarding. When its release lands
 on the same destination without crossing the drag threshold, the callback fires and neither half of

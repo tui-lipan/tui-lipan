@@ -59,6 +59,7 @@ pub struct Terminal {
     pub(crate) link_activation_mods: KeyMods,
     pub(crate) link_hover_style: StyleSlot,
     pub(crate) on_link_activate: Option<Callback<TerminalLinkEvent>>,
+    pub(crate) link_paths: Option<super::TerminalPathFilter>,
     pub(crate) scroll_wheel: bool,
     pub(crate) scroll_wheel_multiplier: Option<u16>,
     pub(crate) on_scroll: Option<Callback<ScrollEvent>>,

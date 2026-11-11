@@ -1,3 +1,4 @@
+use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::core::event::{KeyCode, KeyEvent, KeyMods, MouseButton, MouseEvent, MouseKind};
@@ -39,12 +40,66 @@ pub struct TerminalInputEvent {
     pub bytes: Arc<[u8]>,
 }
 
+/// What a terminal link was recognized as.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum TerminalLinkKind {
+    /// An explicit OSC 8 hyperlink; [`TerminalLinkEvent::uri`] is its destination.
+    Hyperlink,
+    /// A URL detected in plain text.
+    Url,
+    /// A file path detected in plain text and accepted by the terminal's
+    /// [`TerminalPathFilter`].
+    Path,
+}
+
+/// Decides which file paths detected in terminal text are links.
+///
+/// The terminal calls it with the path exactly as shown, including any `:line` or
+/// `:line:column` suffix, for the path under a pointer carrying the link-activation modifiers.
+/// Only the application knows what a relative path is relative to and whether it exists, so it
+/// alone can tell a real path from text shaped like one. The filter runs on the UI thread on
+/// pointer movement, so it should answer quickly and cache anything expensive.
+///
+/// Filters compare by identity, like [`Callback`](crate::callback::Callback).
+#[derive(Clone)]
+pub struct TerminalPathFilter(Rc<dyn Fn(&str) -> bool>);
+
+impl TerminalPathFilter {
+    /// Accept the paths for which `accept` returns `true`.
+    pub fn new(accept: impl Fn(&str) -> bool + 'static) -> Self {
+        Self(Rc::new(accept))
+    }
+
+    /// Whether `path` is a link.
+    pub fn accepts(&self, path: &str) -> bool {
+        (self.0)(path)
+    }
+}
+
+impl PartialEq for TerminalPathFilter {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for TerminalPathFilter {}
+
+impl std::fmt::Debug for TerminalPathFilter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("TerminalPathFilter(..)")
+    }
+}
+
 /// Event emitted when the terminal activates a link under a modified click.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct TerminalLinkEvent {
-    /// Explicit OSC 8 destination or detected plain-text URL.
+    /// The link target: an OSC 8 destination, a detected URL, or a detected path exactly as shown,
+    /// including any `:line` or `:line:column` suffix. [`Self::kind`] says which.
     pub uri: Arc<str>,
+    /// What the link was recognized as.
+    pub kind: TerminalLinkKind,
     /// Zero-based visible viewport row that was activated.
     pub row: usize,
     /// Zero-based display column that was activated.

@@ -75,6 +75,7 @@ pub(crate) struct TerminalNode {
     pub link_activation_mods: crate::core::event::KeyMods,
     pub link_hover_style: StyleSlot,
     pub on_link_activate: Option<Callback<TerminalLinkEvent>>,
+    pub link_paths: Option<crate::widgets::TerminalPathFilter>,
     pub style: Style,
     pub hover_style: StyleSlot,
     pub focus_style: StyleSlot,

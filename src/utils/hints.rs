@@ -17,7 +17,8 @@ pub const HOME_ROW_HINT_KEYS: &str = "asdfghjkl;";
 pub enum HintKind {
     /// A URL whose scheme is allowed by [`crate::utils::open_url()`].
     Url,
-    /// A relative, home-relative, or absolute path using Unix or Windows separators.
+    /// A relative, home-relative, or absolute path using Unix or Windows separators, with any
+    /// `:line` or `:line:column` suffix.
     Path,
     /// A hexadecimal Git object abbreviation or full SHA.
     GitSha,
@@ -104,10 +105,11 @@ where
 /// A builder for combining built-in and custom hint scanners.
 pub struct HintScan {
     scanners: Vec<(HintKind, Box<dyn HintScanner>)>,
+    file_names: bool,
 }
 
 impl HintScan {
-    /// Start with all three built-in scanners enabled.
+    /// Start with the URL, path, and Git SHA scanners enabled, and bare file names off.
     pub fn new() -> Self {
         Self {
             scanners: vec![
@@ -115,6 +117,7 @@ impl HintScan {
                 (HintKind::Path, Box::new(append_path_ranges)),
                 (HintKind::GitSha, Box::new(append_sha_ranges)),
             ],
+            file_names: false,
         }
     }
 
@@ -127,6 +130,17 @@ impl HintScan {
     /// Enable or disable the built-in path scanner.
     pub fn paths(mut self, on: bool) -> Self {
         self.set_builtin(HintKind::Path, on, append_path_ranges);
+        self
+    }
+
+    /// Also report bare file names with an extension, such as `README.md` or `main.rs:12`, as
+    /// [`HintKind::Path`].
+    ///
+    /// Off by default: a name without a separator is as often a domain or a word followed by a
+    /// period, so enable it only where each match is checked, for example against the file system.
+    /// Other hints win where they overlap.
+    pub fn file_names(mut self, on: bool) -> Self {
+        self.file_names = on;
         self
     }
 
@@ -183,6 +197,11 @@ impl HintScan {
                 scanner.scan_line(&line, &mut found);
                 for range in found {
                     push_range(&mut ranges, &line, range, *kind);
+                }
+            }
+            if self.file_names {
+                for range in file_name_ranges(&line) {
+                    push_range(&mut ranges, &line, range, HintKind::Path);
                 }
             }
             ranges.sort_by_key(|(range, _)| (range.start, range.end));
@@ -310,6 +329,52 @@ fn hints_overlap(left: &HintMatch, right: &HintMatch) -> bool {
 impl Default for HintScan {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// A path hint split from its position suffix.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PathPosition<'a> {
+    /// The path without its `:line[:column]` suffix.
+    pub path: &'a str,
+    /// The line number from a `:line` suffix.
+    pub line: Option<u32>,
+    /// The column number from a `:line:column` suffix.
+    pub column: Option<u32>,
+}
+
+impl<'a> PathPosition<'a> {
+    /// Split a trailing `:line` or `:line:column` from a [`HintKind::Path`] match.
+    ///
+    /// Only all-digit parts count, so a drive letter or a colon inside a file name stays in the
+    /// path. A number too large for `u32` is left in the path too.
+    pub fn parse(text: &'a str) -> Self {
+        fn number_suffix(text: &str) -> Option<(&str, u32)> {
+            let (path, number) = text.rsplit_once(':')?;
+            if path.is_empty() || number.is_empty() || !number.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            Some((path, number.parse().ok()?))
+        }
+        let Some((rest, last)) = number_suffix(text) else {
+            return Self {
+                path: text,
+                line: None,
+                column: None,
+            };
+        };
+        match number_suffix(rest) {
+            Some((path, line)) => Self {
+                path,
+                line: Some(line),
+                column: Some(last),
+            },
+            None => Self {
+                path: rest,
+                line: Some(last),
+                column: None,
+            },
+        }
     }
 }
 
@@ -634,7 +699,16 @@ fn path_end(line: &str, separator: usize, quote: Option<char>) -> usize {
         )
 }
 
-fn extend_line_number(line: &str, end: usize) -> usize {
+/// Extend a path ending at `end` over a `:line` or `:line:column` suffix.
+fn extend_position(line: &str, end: usize) -> usize {
+    let line_end = extend_number(line, end);
+    if line_end == end {
+        return end;
+    }
+    extend_number(line, line_end)
+}
+
+fn extend_number(line: &str, end: usize) -> usize {
     if line.as_bytes().get(end) != Some(&b':') {
         return end;
     }
@@ -676,7 +750,7 @@ fn path_ranges(line: &str) -> Vec<Range<usize>> {
         let quote = path_quote(line, start);
         let name_end = path_end(line, separator, quote);
         let end = if quote.is_none() {
-            extend_line_number(line, name_end)
+            extend_position(line, name_end)
         } else {
             name_end
         };
@@ -693,6 +767,37 @@ fn path_ranges(line: &str) -> Vec<Range<usize>> {
 
 fn append_path_ranges(line: &str, out: &mut Vec<Range<usize>>) {
     out.extend(path_ranges(line));
+}
+
+/// Bare `name.ext` tokens, with any `:line[:column]` suffix. See [`HintScan::file_names`].
+fn file_name_ranges(line: &str) -> Vec<Range<usize>> {
+    let bytes = line.as_bytes();
+    let mut ranges = Vec::new();
+    let mut cursor = 0usize;
+    while cursor < bytes.len() {
+        if !is_bare_path_head_byte(bytes[cursor]) {
+            cursor += 1;
+            continue;
+        }
+        let start = cursor;
+        let end = start
+            + bytes[start..]
+                .iter()
+                .position(|byte| !is_bare_path_head_byte(*byte))
+                .unwrap_or(bytes.len() - start);
+        cursor = end;
+        let at_boundary = line[..start]
+            .chars()
+            .next_back()
+            .is_none_or(|ch| is_path_boundary(ch) || ch == '`');
+        // A separator after the name makes it the head of a path, which the path scanner owns.
+        let inside_path = bytes.get(end).copied().is_some_and(is_path_separator);
+        let name = trim_display_punctuation(&line[start..end]);
+        if at_boundary && !inside_path && has_file_extension(name) {
+            ranges.push(start..extend_position(line, start + name.len()));
+        }
+    }
+    ranges
 }
 
 fn sha_ranges(line: &str) -> Vec<Range<usize>> {
@@ -1003,11 +1108,48 @@ mod tests {
     #[test]
     fn bare_relative_paths_need_a_file_extension() {
         let found = HintScan::new().scan(
-            "git diff -- src/ops/session/remotes.rs .agents/ui.md:12, a/b/c.rs and/or 3/4 fix/projects-navigation-ux v1.2/x",
+            "git diff -- src/ops/session/remotes.rs .agents/ui.md:12, a/b/c.rs:7:3: and/or 3/4 fix/projects-navigation-ux v1.2/x",
         );
         assert_eq!(
             texts(&found),
-            vec!["src/ops/session/remotes.rs", ".agents/ui.md:12", "a/b/c.rs"]
+            vec![
+                "src/ops/session/remotes.rs",
+                ".agents/ui.md:12",
+                "a/b/c.rs:7:3"
+            ]
+        );
+        assert!(found.iter().all(|matched| matched.kind == HintKind::Path));
+    }
+
+    #[test]
+    fn path_positions_keep_drive_letters_and_nonnumeric_colons() {
+        let split = |text| {
+            let position = PathPosition::parse(text);
+            (position.path, position.line, position.column)
+        };
+        assert_eq!(
+            split("./src/main.rs:12:3"),
+            ("./src/main.rs", Some(12), Some(3))
+        );
+        assert_eq!(
+            split(r"C:\src\main.rs:12"),
+            (r"C:\src\main.rs", Some(12), None)
+        );
+        assert_eq!(
+            split("./file:with:colon"),
+            ("./file:with:colon", None, None)
+        );
+        assert_eq!(split("./file:"), ("./file:", None, None));
+    }
+
+    #[test]
+    fn bare_file_names_are_found_only_when_asked_for() {
+        let line = "see README.md, shot.png:3 and docs/a.md or v1.2 e.g. `x.rs` foo.bar/baz";
+        assert_eq!(texts(&HintScan::new().scan(line)), vec!["docs/a.md"]);
+        let found = HintScan::new().file_names(true).scan(line);
+        assert_eq!(
+            texts(&found),
+            vec!["README.md", "shot.png:3", "docs/a.md", "e.g", "x.rs"]
         );
         assert!(found.iter().all(|matched| matched.kind == HintKind::Path));
     }
