@@ -1,4 +1,3 @@
-use crossterm::{cursor::MoveTo, execute};
 use ratatui::backend::Backend;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Position;
@@ -244,7 +243,6 @@ impl<C: Component> AppRunner<C> {
             })?;
         } else {
             terminal.hide_cursor()?;
-            execute!(terminal.backend_mut(), MoveTo(0, 0))?;
         }
 
         terminal.swap_buffers();
