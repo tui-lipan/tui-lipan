@@ -309,6 +309,7 @@ pub use crate::widgets::{
 };
 #[cfg(feature = "qr-code")]
 pub use crate::widgets::{QrCode, QrEcc, QrRender};
+pub use crate::widgets::{StatusBar, StatusBarItemSize};
 
 #[cfg(all(feature = "terminal", unix))]
 pub use crate::widgets::TerminalPtyHandoff;

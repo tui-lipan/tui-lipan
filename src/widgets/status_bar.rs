@@ -1,5 +1,9 @@
 //! Status bar widget.
 
+mod overflow;
+
+pub use overflow::StatusBarItemSize;
+
 use std::sync::Arc;
 
 use crate::core::element::{Element, IntoElement};
@@ -57,6 +61,30 @@ impl StatusBar {
     /// Create a new status bar.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Allocate a section's items by retention priority, preserving their source order.
+    ///
+    /// Omit items allocated zero cells. Render retained items at their allocated widths,
+    /// with `gap` cells between them. Whole items fit at their minimum widths first;
+    /// remaining space expands them toward their preferred widths in priority order.
+    pub fn allocate_items(items: &[StatusBarItemSize], available: u16, gap: u16) -> Vec<u16> {
+        overflow::allocate_items(items, available, gap)
+    }
+
+    /// Available left and right widths around a mathematically centered section.
+    ///
+    /// `width` excludes the bar's horizontal padding. `center_width` is clamped to
+    /// `width`; `gap` separates each side from the center. An odd spare cell goes right.
+    pub fn side_widths(width: u16, center_width: u16, gap: u16) -> (u16, u16) {
+        let center_width = center_width.min(width);
+        let center_x = (width - center_width) / 2;
+        (
+            center_x.saturating_sub(gap),
+            width
+                .saturating_sub(center_x + center_width)
+                .saturating_sub(gap),
+        )
     }
 
     /// Add a child to the left section (alias for `left`).

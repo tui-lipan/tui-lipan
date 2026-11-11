@@ -8,6 +8,7 @@ use crate::layout::reconcile::{
 };
 use crate::layout::tag::can_reuse;
 use crate::style::{LayoutConstraints, Length, Padding, Rect, Style};
+use crate::widgets::StatusBar;
 
 #[derive(Clone)]
 pub(crate) struct StatusBarLayout {
@@ -101,13 +102,13 @@ pub(crate) fn reconcile_status_bar_layout(
     let center_right = center_x.saturating_add(center_w as i16);
     let inner_right = inner.x.saturating_add(inner.w as i16);
     let gap = layout.gap.min(inner.w) as i16;
-    let left_end = center_x.saturating_sub(gap).max(inner.x);
+    let (left_width, right_width) = StatusBar::side_widths(inner.w, center_w, layout.gap);
     let right_start = center_right.saturating_add(gap).min(inner_right);
 
     let left_rect = Rect {
         x: inner.x,
         y: inner.y,
-        w: left_end.saturating_sub(inner.x).max(0) as u16,
+        w: left_width,
         h: inner.h,
     };
     let center_rect = Rect {
@@ -119,7 +120,7 @@ pub(crate) fn reconcile_status_bar_layout(
     let right_rect = Rect {
         x: right_start,
         y: inner.y,
-        w: inner_right.saturating_sub(right_start).max(0) as u16,
+        w: right_width,
         h: inner.h,
     };
 
