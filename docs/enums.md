@@ -194,13 +194,18 @@ the tail, default 0), `max_length` (longest stretch, in cell widths measured on 
 ### `CursorTrailSettle`
 
 How long a jump inside one widget that may land in steps waits for the caret to settle before its
-smear starts. Only a jump to another row or to the widget's left edge waits, since it may be a
-shell's newline or carriage return with its prompt still to come; a jump along one row and a focus
-change start at once. `CursorTrailSettle::DEFAULT` is the default.
+smear starts. `CursorTrailSettle::DEFAULT` waits for nothing: every jump starts at once and the
+caret is always shown where it is, so a shell's newline and then its prompt draw a smear that bends
+from the start of the new line to the prompt. `CursorTrailSettle::SHELL` (50 ms, at most 200 ms)
+waits instead: a jump to another row or to the widget's left edge, which may be a newline or
+carriage return with its prompt still to come, starts once the caret has held still, straight to
+where it came to rest, and a solid trail holds the caret where it was meanwhile. A caret that goes
+on along its new row has landed and starts at once. A jump along one row and a focus change always
+start at once.
 
 | Field | Default | Meaning |
 |-------|---------|---------|
-| `quiet` | 50 ms | How long the caret must hold still; zero starts every jump at once |
+| `quiet` | 0 | How long the caret must hold still; zero starts every jump at once |
 | `max` | 200 ms | The longest a jump waits for a caret that keeps moving |
 
 ### `PngOptions` (`ui-snapshot-png`)

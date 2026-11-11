@@ -237,22 +237,35 @@ impl Default for CursorTrailParticles {
 
 /// How long a jump inside one widget waits for the caret to settle before its smear starts.
 ///
-/// A jump to another row or to the widget's left edge may be the first of several writes (a
-/// shell's newline, then its prompt), so its smear starts once the caret has held still for
-/// `quiet`, or `max` after the jump at the latest, straight to where the caret came to rest. A
-/// caret that goes on along its new row instead (a held arrow key wrapping onto another line) has
-/// landed, and its smear starts then. A jump along one row and a focus change start at once.
+/// By default ([`Self::DEFAULT`]) nothing waits: every jump starts its smear at once, and a caret
+/// that moves on is followed from there, so the caret is always shown where it is. A shell's
+/// newline and then its prompt, written apart, draw a smear that bends from the start of the new
+/// line to the prompt.
+///
+/// With a `quiet` above zero ([`Self::SHELL`]), a jump to another row or to the widget's left edge,
+/// which may be the first of several writes, waits until the caret has held still for `quiet`, or
+/// `max` after the jump at the latest, and its smear runs straight to where the caret came to rest.
+/// A solid trail holds the caret where it was meanwhile. A caret that goes on along its new row
+/// instead (a held arrow key wrapping onto another line) has landed, and its smear starts then. A
+/// jump along one row and a focus change always start at once.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CursorTrailSettle {
-    /// How long the caret must hold still. Zero starts every jump at once.
+    /// How long the caret must hold still. Zero (the default) starts every jump at once.
     pub quiet: Duration,
     /// The longest a jump waits for a caret that keeps moving.
     pub max: Duration,
 }
 
 impl CursorTrailSettle {
-    /// Longer than the gap between a shell's newline and its prompt.
+    /// No wait: every jump starts at once.
     pub const DEFAULT: Self = Self {
+        quiet: Duration::ZERO,
+        max: Duration::from_millis(200),
+    };
+
+    /// Waits longer than the gap between a shell's newline and its prompt, so the two draw one
+    /// straight smear.
+    pub const SHELL: Self = Self {
         quiet: Duration::from_millis(50),
         max: Duration::from_millis(200),
     };
@@ -1222,8 +1235,8 @@ mod tests {
     use ratatui::style::Color as RColor;
 
     const RED: (u8, u8, u8) = (255, 0, 0);
-    const LANDING_QUIET: Duration = CursorTrailSettle::DEFAULT.quiet;
-    const LANDING_MAX: Duration = CursorTrailSettle::DEFAULT.max;
+    const LANDING_QUIET: Duration = CursorTrailSettle::SHELL.quiet;
+    const LANDING_MAX: Duration = CursorTrailSettle::SHELL.max;
     const INTERVAL: Duration = Duration::from_millis(16);
 
     fn node(id: u32) -> Option<CaretOwner> {
@@ -1385,7 +1398,11 @@ mod tests {
     #[test]
     fn a_resize_drops_a_jump_still_waiting_to_land() {
         let start = Instant::now();
-        let jump = Some(CursorTrail::new().trigger(CursorTrailTrigger::jump()));
+        let jump = Some(
+            CursorTrail::new()
+                .trigger(CursorTrailTrigger::jump())
+                .settle(CursorTrailSettle::SHELL),
+        );
         let mut state = CursorTrailState::default();
         see_sized(&mut state, jump, (30, 2), (1, (80, 24)), start);
         // A newline sends the caret to the next rows' left edge, which waits to settle...
@@ -1718,7 +1735,11 @@ mod tests {
     #[test]
     fn a_jump_inside_a_moving_widget_trails_from_where_it_was_carried() {
         let start = Instant::now();
-        let jump = Some(CursorTrail::new().trigger(CursorTrailTrigger::jump()));
+        let jump = Some(
+            CursorTrail::new()
+                .trigger(CursorTrailTrigger::jump())
+                .settle(CursorTrailSettle::SHELL),
+        );
         let mut state = CursorTrailState::default();
         see_in(&mut state, jump, (5, 3), (1, (0, 0)), start);
         // The widget moves 20 columns while its caret jumps 10 within it, onto the next row.
@@ -1731,7 +1752,11 @@ mod tests {
     #[test]
     fn a_caret_that_lands_in_steps_gets_one_straight_trail() {
         let start = Instant::now();
-        let jump = Some(CursorTrail::new().trigger(CursorTrailTrigger::jump()));
+        let jump = Some(
+            CursorTrail::new()
+                .trigger(CursorTrailTrigger::jump())
+                .settle(CursorTrailSettle::SHELL),
+        );
         let mut state = CursorTrailState::default();
         // A command typed out to column 40, then Enter: the newline lands the caret at column 0
         // of a blank line, and the prompt arrives two frames later, two rows down at column 40.
@@ -1809,7 +1834,11 @@ mod tests {
     #[test]
     fn a_jump_along_one_row_starts_at_once_and_keeps_up_with_key_repeat() {
         let start = Instant::now();
-        let jump = Some(CursorTrail::new().trigger(CursorTrailTrigger::jump()));
+        let jump = Some(
+            CursorTrail::new()
+                .trigger(CursorTrailTrigger::jump())
+                .settle(CursorTrailSettle::SHELL),
+        );
         let mut state = CursorTrailState::default();
         // Ctrl+Backspace held in a field laid out at column 5: a word gone every 30ms, never
         // holding still for as long as a newline's prompt may take.
@@ -1846,7 +1875,11 @@ mod tests {
     #[test]
     fn a_held_arrow_key_wrapping_onto_another_line_is_not_held_back() {
         let start = Instant::now();
-        let jump = Some(CursorTrail::new().trigger(CursorTrailTrigger::jump()));
+        let jump = Some(
+            CursorTrail::new()
+                .trigger(CursorTrailTrigger::jump())
+                .settle(CursorTrailSettle::SHELL),
+        );
         const REPEAT: Duration = Duration::from_millis(33);
         // A command wrapped over two rows of an 80-column widget, the arrow held at key repeat.
         for (wrap, along, next) in [
@@ -1873,6 +1906,27 @@ mod tests {
                 "{wrap:?}: the smear follows the caret, a repeat after the wrap"
             );
         }
+    }
+
+    #[test]
+    fn by_default_a_newline_starts_at_once_and_bends_to_its_prompt() {
+        let start = Instant::now();
+        let jump = Some(CursorTrail::new().trigger(CursorTrailTrigger::jump()));
+        let mut state = CursorTrailState::default();
+        // Enter at column 40: the newline lands at column 0 of the next row.
+        see(&mut state, jump, 40, 3, 1, start);
+        see(&mut state, jump, 0, 4, 1, start);
+        assert!(
+            state.landing.is_none() && state.running.is_some(),
+            "nothing waits, so the caret is never held on its old cell"
+        );
+        // The prompt arrives a few frames later, and the smear follows the caret to it.
+        let prompt = start + Duration::from_millis(33);
+        see(&mut state, jump, 40, 6, 1, prompt);
+        state.tick(jump, INTERVAL, prompt);
+        let frame = state.frame(jump).expect("the smear runs on");
+        let smear = frame.smear.as_ref().expect("smear");
+        assert_eq!(smear.target, Position::new(40, 6));
     }
 
     #[test]
