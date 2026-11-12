@@ -290,7 +290,7 @@ pub(crate) struct HostBackend<W: io::Write> {
     parks_hidden_caret: bool,
     #[cfg(test)]
     test_flush_action: u8,
-    #[cfg(all(test, feature = "terminal-images"))]
+    #[cfg(all(test, feature = "terminal"))]
     test_output: Option<std::sync::Arc<std::sync::Mutex<Vec<u8>>>>,
     dropped: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     #[cfg(feature = "terminal-images")]
@@ -321,7 +321,7 @@ impl<W: io::Write> HostBackend<W> {
             parks_hidden_caret: false,
             #[cfg(test)]
             test_flush_action: 0,
-            #[cfg(all(test, feature = "terminal-images"))]
+            #[cfg(all(test, feature = "terminal"))]
             test_output: None,
             dropped: Default::default(),
             #[cfg(feature = "terminal-images")]
@@ -591,7 +591,7 @@ impl<W: io::Write> Drop for HostBackend<W> {
 }
 
 impl HostBackend<TerminalWriter> {
-    #[cfg(all(test, feature = "terminal-images"))]
+    #[cfg(all(test, feature = "terminal"))]
     pub(crate) fn test_output(&self) -> Vec<u8> {
         self.test_output
             .as_ref()
@@ -603,10 +603,10 @@ impl HostBackend<TerminalWriter> {
 
     pub(crate) fn buffered(writer: TerminalWriter) -> Self {
         let dropped = std::sync::Arc::clone(&writer.get_ref().dropped);
-        #[cfg(all(test, feature = "terminal-images"))]
+        #[cfg(all(test, feature = "terminal"))]
         let test_output = writer.get_ref().test_buffer.clone();
         let mut backend = Self::new(writer);
-        #[cfg(all(test, feature = "terminal-images"))]
+        #[cfg(all(test, feature = "terminal"))]
         {
             backend.test_output = test_output;
         }

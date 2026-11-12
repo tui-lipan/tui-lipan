@@ -1,0 +1,515 @@
+{
+  "dumps": [
+    {
+      "alternate": false,
+      "bells": 0,
+      "clipboard": [],
+      "cursor": {
+        "blinking": true,
+        "col": 0,
+        "row": 10,
+        "shape": "Block",
+        "visible": true
+      },
+      "history_rows": 0,
+      "key_modes": "TerminalKeyModes { app_cursor: false, bracketed_paste: false, kitty_keyboard: KittyKeyboardFlags { disambiguate_escape_codes: false, report_event_types: false, report_alternate_keys: false, report_all_keys_as_escape_codes: false, report_associated_text: false } }",
+      "marks": "[]",
+      "mouse_mode": "MouseModeState { mode: None, encoding: X10, focus_events_enabled: false }",
+      "responses": [],
+      "rows": [
+        {
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "wrapped": true
+        },
+        {
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "wrapped": true
+        },
+        {
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "wrapped": true
+        },
+        {
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "styles": [
+            {
+              "col": 0,
+              "fg": "Red",
+              "width": 10
+            },
+            {
+              "col": 10,
+              "fg": "Green",
+              "width": 10
+            },
+            {
+              "col": 20,
+              "fg": "Yellow",
+              "width": 10
+            },
+            {
+              "col": 30,
+              "fg": "Blue",
+              "width": 10
+            },
+            {
+              "col": 40,
+              "fg": "Magenta",
+              "width": 10
+            },
+            {
+              "col": 50,
+              "fg": "Cyan",
+              "width": 10
+            },
+            {
+              "col": 60,
+              "fg": "Red",
+              "width": 10
+            },
+            {
+              "col": 70,
+              "fg": "Green",
+              "width": 10
+            },
+            {
+              "col": 80,
+              "fg": "Yellow",
+              "width": 10
+            },
+            {
+              "col": 90,
+              "fg": "Blue",
+              "width": 10
+            },
+            {
+              "col": 100,
+              "fg": "Magenta",
+              "width": 10
+            },
+            {
+              "col": 110,
+              "fg": "Cyan",
+              "width": 10
+            }
+          ],
+          "text": "000000000011111111112222222222333333333344444444445555555555666666666677777777778888888888999999999900000000001111111111",
+          "wrapped": true
+        },
+        {
+          "styles": [
+            {
+              "col": 0,
+              "fg": "Red",
+              "width": 10
+            },
+            {
+              "col": 10,
+              "fg": "Green",
+              "width": 10
+            },
+            {
+              "col": 20,
+              "fg": "Yellow",
+              "width": 10
+            },
+            {
+              "col": 30,
+              "fg": "Blue",
+              "width": 10
+            },
+            {
+              "col": 40,
+              "fg": "Magenta",
+              "width": 10
+            },
+            {
+              "col": 50,
+              "fg": "Cyan",
+              "width": 10
+            },
+            {
+              "col": 60,
+              "fg": "Red",
+              "width": 10
+            },
+            {
+              "col": 70,
+              "fg": "Green",
+              "width": 10
+            },
+            {
+              "col": 80,
+              "fg": "Yellow",
+              "width": 10
+            },
+            {
+              "col": 90,
+              "fg": "Blue",
+              "width": 10
+            },
+            {
+              "col": 100,
+              "fg": "Magenta",
+              "width": 10
+            },
+            {
+              "col": 110,
+              "fg": "Cyan",
+              "width": 10
+            }
+          ],
+          "text": "222222222233333333334444444444555555555566666666667777777777888888888899999999990000000000111111111122222222223333333333"
+        },
+        {
+          "cells": [
+            [
+              1,
+              ""
+            ],
+            [
+              3,
+              ""
+            ],
+            [
+              5,
+              ""
+            ],
+            [
+              7,
+              ""
+            ],
+            [
+              9,
+              ""
+            ],
+            [
+              11,
+              ""
+            ],
+            [
+              13,
+              ""
+            ],
+            [
+              15,
+              ""
+            ],
+            [
+              17,
+              ""
+            ],
+            [
+              19,
+              ""
+            ],
+            [
+              21,
+              ""
+            ],
+            [
+              23,
+              ""
+            ],
+            [
+              25,
+              ""
+            ],
+            [
+              27,
+              ""
+            ],
+            [
+              29,
+              ""
+            ],
+            [
+              31,
+              ""
+            ],
+            [
+              33,
+              ""
+            ],
+            [
+              35,
+              ""
+            ],
+            [
+              37,
+              ""
+            ],
+            [
+              39,
+              ""
+            ],
+            [
+              41,
+              ""
+            ],
+            [
+              43,
+              ""
+            ],
+            [
+              45,
+              ""
+            ],
+            [
+              47,
+              ""
+            ],
+            [
+              49,
+              ""
+            ],
+            [
+              51,
+              ""
+            ],
+            [
+              53,
+              ""
+            ],
+            [
+              55,
+              ""
+            ],
+            [
+              57,
+              ""
+            ],
+            [
+              59,
+              ""
+            ],
+            [
+              61,
+              ""
+            ],
+            [
+              63,
+              ""
+            ],
+            [
+              65,
+              ""
+            ],
+            [
+              67,
+              ""
+            ],
+            [
+              69,
+              ""
+            ],
+            [
+              71,
+              ""
+            ],
+            [
+              73,
+              ""
+            ],
+            [
+              75,
+              ""
+            ],
+            [
+              77,
+              ""
+            ],
+            [
+              79,
+              ""
+            ],
+            [
+              81,
+              ""
+            ],
+            [
+              83,
+              ""
+            ],
+            [
+              85,
+              ""
+            ],
+            [
+              87,
+              ""
+            ],
+            [
+              89,
+              ""
+            ],
+            [
+              91,
+              ""
+            ],
+            [
+              93,
+              ""
+            ],
+            [
+              95,
+              ""
+            ],
+            [
+              97,
+              ""
+            ],
+            [
+              99,
+              ""
+            ],
+            [
+              101,
+              ""
+            ],
+            [
+              103,
+              ""
+            ],
+            [
+              105,
+              ""
+            ],
+            [
+              107,
+              ""
+            ],
+            [
+              109,
+              ""
+            ],
+            [
+              111,
+              ""
+            ],
+            [
+              113,
+              ""
+            ],
+            [
+              115,
+              ""
+            ],
+            [
+              117,
+              ""
+            ],
+            [
+              119,
+              ""
+            ]
+          ],
+          "text": "字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字",
+          "wrapped": true
+        },
+        {
+          "cells": [
+            [
+              1,
+              ""
+            ],
+            [
+              3,
+              ""
+            ],
+            [
+              5,
+              ""
+            ],
+            [
+              7,
+              ""
+            ],
+            [
+              9,
+              ""
+            ],
+            [
+              11,
+              ""
+            ],
+            [
+              13,
+              ""
+            ],
+            [
+              15,
+              ""
+            ],
+            [
+              17,
+              ""
+            ],
+            [
+              19,
+              ""
+            ],
+            [
+              21,
+              ""
+            ],
+            [
+              23,
+              ""
+            ],
+            [
+              25,
+              ""
+            ],
+            [
+              27,
+              ""
+            ],
+            [
+              29,
+              ""
+            ],
+            [
+              31,
+              ""
+            ],
+            [
+              33,
+              ""
+            ],
+            [
+              35,
+              ""
+            ],
+            [
+              37,
+              ""
+            ],
+            [
+              39,
+              ""
+            ]
+          ],
+          "text": "字字字字字字字字字字字字字字字字字字字字"
+        },
+        {
+          "text": "STARTyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+          "wrapped": true
+        },
+        {
+          "text": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyEND"
+        }
+      ],
+      "scroll_offset": 0,
+      "semantic": "TerminalSemanticState { cwd: None, command_phase: Unknown, executable: None }",
+      "size": [
+        120,
+        40
+      ],
+      "status": "ProgramStatusSnapshot { revision: 0, records: [] }",
+      "title": null
+    }
+  ]
+}

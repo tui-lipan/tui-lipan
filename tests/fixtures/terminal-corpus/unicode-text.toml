@@ -1,0 +1,12 @@
+rows = 24
+cols = 80
+scrollback = 10000
+description = "Mixed-width text: combining marks, CJK, emoji, a ZWJ family, and fullwidth letters."
+source = """
+command: scripts/capture-terminal-corpus unicode-text
+tool: python pty capture (3.14.8), winsize 24x80
+program: Python 3.14.8
+child: /usr/bin/python3 /tmp/w/emit_unicode.py
+TERM=xterm-256color COLORTERM=truecolor LANG=C.UTF-8
+The writer does not query the terminal size. Column width differs when the same bytes are replayed at 120 columns.
+"""

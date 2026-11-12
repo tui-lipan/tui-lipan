@@ -1,0 +1,27 @@
+rows = 24
+cols = 80
+scrollback = 10000
+description = "tput clear, cup, color, alternate screen, and reset against xterm-256color."
+source = """
+command: scripts/capture-terminal-corpus tput-clear-reset
+tool: python pty capture (3.14.8), winsize 24x80
+program: GNU bash, version 5.3.20(1)-release (x86_64-pc-linux-gnu); ncurses 6.6.20251230
+child: /bin/bash --noprofile --norc -c "
+printf 'before-clear\n'
+tput clear
+tput cup 5 8
+tput setaf 2
+tput bold
+printf 'green-bold'
+tput sgr0
+printf '\nplain\n'
+tput smcup
+printf 'on-alt-screen\n'
+tput rmcup
+printf 'after-alt\n'
+tput reset
+printf 'after-reset\n'
+"
+TERM=xterm-256color COLORTERM=truecolor LANG=C.UTF-8
+reset sends RIS (ESC c). The shell is non-interactive, so it does not print a prompt.
+"""

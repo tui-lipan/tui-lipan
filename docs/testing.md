@@ -915,3 +915,28 @@ so this also checks updates that arrive without a layout or cell repaint.
 window focus, and mouse-capture preferences included. Use `send_mouse` to exercise a real gesture;
 `pointer_shape_at(x, y)` remains a hover-only query without changing input state. Both queries respect
 the runtime policy set with `Context::set_pointer_mode`; Disabled returns `None`.
+
+### Terminal byte-stream corpus
+
+Run `cargo test --features terminal --test widget_behavior_suite terminal_corpus`
+to replay the Alacritty corpus, check its goldens, and test seeded byte splits.
+After reviewing an intentional output change, prefix that command with
+`TUI_LIPAN_BLESS_TERMINAL_CORPUS=1` to regenerate the goldens.
+
+Each fixture in `tests/fixtures/terminal-corpus/` has a raw `.vt` stream, a `.toml`
+with dimensions and source, and an `.alacritty.json` golden. Optional `[[ops]]`
+entries write a half-open `bytes` range, resize, scroll, or dump. No operations means
+write the whole stream, then dump. Compact dumps retain dimensions and all
+non-default state while omitting trailing default blank rows and default style
+ranges. The fixture README documents the cell representation.
+
+A confirmed chunk defect may have an engine-scoped `[[known_defects]]` entry with
+`check = "chunk_split"`, `seed`, text `path`, `expected_contains`, `actual_contains`,
+and a reason. That seed runs in addition to the standard seeds. Optional
+`[[known_defects.differences]]` records exact additional path/value changes, such
+as the cursor advance caused by a lost character. The test fails if the defect
+stops reproducing or any unlisted field changes. Remove fixed entries.
+
+Use `scripts/capture-terminal-corpus --check` for stream size and privacy checks,
+also run by `./scripts/check-format`. Recording new program streams requires the
+programs named by the capture script and must be reviewed before blessing.

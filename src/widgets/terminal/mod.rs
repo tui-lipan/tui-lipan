@@ -46,7 +46,6 @@ mod pty;
 mod read_gate;
 mod reconcile;
 mod screen;
-mod scrollback_ledger;
 #[cfg(feature = "terminal")]
 mod selection;
 

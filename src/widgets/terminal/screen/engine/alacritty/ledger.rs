@@ -26,6 +26,7 @@
 //! Alacritty's scrolling semantics are reimplemented here - the count comes
 //! from the grid itself, not from a model of when it scrolls.
 
+use super::super::{GridStep, PRIMARY_DEVICE_ATTRIBUTES, SGR_PIXELS_MOUSE};
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::term::{Term, TermMode};
@@ -42,12 +43,6 @@ use alacritty_terminal::vte::ansi::{
 pub(super) fn ledger_capacity(scrollback_len: usize, rows: u16) -> usize {
     scrollback_len.saturating_add(usize::from(rows))
 }
-
-/// DEC private mode for SGR-pixel mouse reporting, which the grid emulator does not implement.
-pub(super) const SGR_PIXELS_MOUSE: u16 = 1016;
-
-/// Primary device attributes (DA1) reply: a VT220 (`62`) with ANSI color (`22`), as Ghostty sends.
-pub(super) const PRIMARY_DEVICE_ATTRIBUTES: &[u8] = b"\x1b[?62;22c";
 
 /// A mode the emulator underneath does not know about, kept beside it.
 ///
@@ -106,8 +101,15 @@ pub(super) struct LedgerTerm<'a, T: EventListener> {
     evicted: usize,
     grid_mutated: bool,
     /// The child sent `RIS` while this wrapper was driving the term.
+    ///
+    /// A reset replaces both grids, not only their history, so it is reported on its own rather
+    /// than as evicted lines: anything anchored to a line, on screen or above it, is gone.
     reset: bool,
     /// The term left the alternate screen while this wrapper was driving it.
+    ///
+    /// Reported as an event rather than read off the mode afterwards: a child can leave the
+    /// alternate screen and open a fresh one within the same write, and the mode alone would
+    /// then look as though the old screen, and whatever was drawn on it, had never gone.
     left_alt_screen: bool,
 }
 
@@ -132,29 +134,19 @@ impl<'a, T: EventListener> LedgerTerm<'a, T> {
         }
     }
 
-    pub(super) fn grid_mutated(&self) -> bool {
-        self.grid_mutated
-    }
-
-    /// Whether the term left the alternate screen while this wrapper was driving it.
-    ///
-    /// Reported as an event rather than read off the mode afterwards: a child can leave the
-    /// alternate screen and open a fresh one within the same write, and the mode alone would
-    /// then look as though the old screen, and whatever was drawn on it, had never gone.
-    pub(super) fn left_alt_screen(&self) -> bool {
-        self.left_alt_screen
-    }
-
-    /// Whether the child hard-reset the terminal (`RIS`) while this wrapper was driving it.
-    ///
-    /// A reset replaces both grids, not only their history, so it is reported on its own rather
-    /// than as evicted lines: anything anchored to a line, on screen or above it, is gone.
-    pub(super) fn reset(&self) -> bool {
-        self.reset
+    /// Everything this wrapper saw while driving the term.
+    pub(super) fn step(&self) -> GridStep {
+        GridStep {
+            evicted: self.evicted,
+            reset: self.reset,
+            left_alt_screen: self.left_alt_screen,
+            grid_mutated: self.grid_mutated,
+        }
     }
 
     /// Lines that fell out of scrollback while this wrapper was driving the term.
-    pub(super) fn evicted(&self) -> usize {
+    #[cfg(test)]
+    fn evicted(&self) -> usize {
         self.evicted
     }
 

@@ -1,0 +1,27 @@
+rows = 4
+cols = 12
+scrollback = 20
+description = "Wrap, history, scroll and resize"
+source = "hand-written"
+
+[[ops]]
+kind = "write"
+bytes = [0, 62]
+
+[[ops]]
+kind = "dump"
+
+[[ops]]
+kind = "scroll"
+delta = 2
+
+[[ops]]
+kind = "dump"
+
+[[ops]]
+kind = "resize"
+rows = 5
+cols = 8
+
+[[ops]]
+kind = "dump"

@@ -1,0 +1,12 @@
+rows = 40
+cols = 120
+scrollback = 10000
+description = "The same long-line stream captured at 120x40."
+source = """
+command: scripts/capture-terminal-corpus long-lines-120x40
+tool: python pty capture (3.14.8), winsize 40x120
+program: Python 3.14.8
+child: /usr/bin/python3 /tmp/w/emit_long.py
+TERM=xterm-256color COLORTERM=truecolor LANG=C.UTF-8
+Same bytes as long-lines.
+"""

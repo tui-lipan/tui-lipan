@@ -1,0 +1,5 @@
+rows = 4
+cols = 12
+scrollback = 20
+description = "OSC metadata, clipboard, links, shell marks and status"
+source = "hand-written"

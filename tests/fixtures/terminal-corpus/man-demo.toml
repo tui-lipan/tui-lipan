@@ -1,0 +1,12 @@
+rows = 24
+cols = 80
+scrollback = 10000
+description = "man displays a local demonstration page and less pages it once."
+source = """
+command: scripts/capture-terminal-corpus man-demo
+tool: python pty capture (3.14.8), winsize 24x80
+program: man 2.13.1; pager less 710 (PCRE2 regular expressions)
+child: man -l -P "less -R" demo.1
+TERM=xterm-256color COLORTERM=truecolor LANG=C.UTF-8
+The page is written for the capture. It is not a system manual.
+"""

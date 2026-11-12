@@ -1,0 +1,12 @@
+rows = 40
+cols = 120
+scrollback = 10000
+description = "The same colored ls at 120x40, where the names fit on fewer rows."
+source = """
+command: scripts/capture-terminal-corpus ls-color-120x40
+tool: python pty capture (3.14.8), winsize 40x120
+program: ls (GNU coreutils) 9.12
+child: /usr/bin/ls --color=always -F
+TERM=xterm-256color COLORTERM=truecolor LANG=C.UTF-8
+Same directory and LS_COLORS as ls-color.
+"""

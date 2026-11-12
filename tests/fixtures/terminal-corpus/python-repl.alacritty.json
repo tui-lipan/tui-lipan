@@ -1,0 +1,161 @@
+{
+  "dumps": [
+    {
+      "alternate": false,
+      "bells": 0,
+      "clipboard": [],
+      "cursor": {
+        "blinking": false,
+        "col": 0,
+        "row": 9,
+        "shape": "Block",
+        "visible": true
+      },
+      "history_rows": 0,
+      "key_modes": "TerminalKeyModes { app_cursor: false, bracketed_paste: false, kitty_keyboard: KittyKeyboardFlags { disambiguate_escape_codes: false, report_event_types: false, report_alternate_keys: false, report_all_keys_as_escape_codes: false, report_associated_text: false } }",
+      "marks": "[]",
+      "mouse_mode": "MouseModeState { mode: None, encoding: X10, focus_events_enabled: false }",
+      "responses": [],
+      "rows": [
+        {
+          "text": "Python 3.14.8 (main, Oct  2 2026, 10:23:31) [GCC 16.2.1 20260810] on linux"
+        },
+        {
+          "text": "Type \"help\", \"copyright\", \"credits\" or \"license\" for more information."
+        },
+        {
+          "styles": [
+            {
+              "attrs": [
+                "bold"
+              ],
+              "col": 0,
+              "fg": "Magenta",
+              "width": 4
+            },
+            {
+              "col": 4,
+              "fg": "Cyan",
+              "width": 5
+            },
+            {
+              "col": 10,
+              "fg": "Green",
+              "width": 19
+            }
+          ],
+          "text": ">>> print(\"hello-from-python\")"
+        },
+        {
+          "text": "hello-from-python"
+        },
+        {
+          "cells": [
+            [
+              17,
+              ""
+            ],
+            [
+              20,
+              ""
+            ],
+            [
+              22,
+              ""
+            ]
+          ],
+          "styles": [
+            {
+              "attrs": [
+                "bold"
+              ],
+              "col": 0,
+              "fg": "Magenta",
+              "width": 4
+            },
+            {
+              "col": 4,
+              "fg": "Cyan",
+              "width": 5
+            },
+            {
+              "col": 10,
+              "fg": "Green",
+              "width": 14
+            }
+          ],
+          "text": ">>> print(\"café 😀 中文\")"
+        },
+        {
+          "cells": [
+            [
+              6,
+              ""
+            ],
+            [
+              9,
+              ""
+            ],
+            [
+              11,
+              ""
+            ]
+          ],
+          "text": "café 😀 中文"
+        },
+        {
+          "styles": [
+            {
+              "attrs": [
+                "bold"
+              ],
+              "col": 0,
+              "fg": "Magenta",
+              "width": 4
+            },
+            {
+              "col": 4,
+              "fg": "Cyan",
+              "width": 5
+            },
+            {
+              "col": 10,
+              "fg": "Green",
+              "width": 7
+            }
+          ],
+          "text": ">>> print(\"sum=6\")"
+        },
+        {
+          "text": "sum=6"
+        },
+        {
+          "styles": [
+            {
+              "attrs": [
+                "bold"
+              ],
+              "col": 0,
+              "fg": "Magenta",
+              "width": 4
+            },
+            {
+              "col": 4,
+              "fg": "Cyan",
+              "width": 4
+            }
+          ],
+          "text": ">>> exit()"
+        }
+      ],
+      "scroll_offset": 0,
+      "semantic": "TerminalSemanticState { cwd: None, command_phase: Unknown, executable: None }",
+      "size": [
+        80,
+        24
+      ],
+      "status": "ProgramStatusSnapshot { revision: 0, records: [] }",
+      "title": null
+    }
+  ]
+}

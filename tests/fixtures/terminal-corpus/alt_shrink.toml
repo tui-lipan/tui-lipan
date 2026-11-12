@@ -1,0 +1,28 @@
+rows = 6
+cols = 10
+scrollback = 20
+description = "Alternate-screen shrink preserves the top rows and cursor, then grows with blank rows"
+source = "Task L minimal libghostty-vt 1.0.1 alternate-screen shrink repro"
+
+[[ops]]
+kind = "write"
+bytes = [0, 74]
+
+[[ops]]
+kind = "dump"
+
+[[ops]]
+kind = "resize"
+rows = 3
+cols = 10
+
+[[ops]]
+kind = "dump"
+
+[[ops]]
+kind = "resize"
+rows = 6
+cols = 10
+
+[[ops]]
+kind = "dump"

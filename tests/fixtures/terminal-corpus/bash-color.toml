@@ -1,0 +1,12 @@
+rows = 24
+cols = 80
+scrollback = 10000
+description = "Interactive bash with a colored prompt, a size check, and a few commands."
+source = """
+command: scripts/capture-terminal-corpus bash-color
+tool: python pty capture (3.14.8), winsize 24x80
+program: GNU bash, version 5.3.20(1)-release (x86_64-pc-linux-gnu)
+child: /bin/bash --noprofile --rcfile /tmp/corpus-home/corpus.bashrc -i
+TERM=xterm-256color COLORTERM=truecolor LANG=C.UTF-8
+bashrc sets a fixed user@host prompt and clears PROMPT_COMMAND; it does not read the system bashrc.
+"""

@@ -1,0 +1,87 @@
+{
+  "dumps": [
+    {
+      "alternate": false,
+      "bells": 0,
+      "clipboard": [],
+      "cursor": {
+        "blinking": true,
+        "col": 0,
+        "row": 5,
+        "shape": "Block",
+        "visible": true
+      },
+      "history_rows": 0,
+      "key_modes": "TerminalKeyModes { app_cursor: false, bracketed_paste: false, kitty_keyboard: KittyKeyboardFlags { disambiguate_escape_codes: false, report_event_types: false, report_alternate_keys: false, report_all_keys_as_escape_codes: false, report_associated_text: false } }",
+      "marks": "[]",
+      "mouse_mode": "MouseModeState { mode: None, encoding: X10, focus_events_enabled: false }",
+      "responses": [],
+      "rows": [
+        {
+          "links": [
+            {
+              "end": 12,
+              "start": 4,
+              "uri": "https://example.com/docs"
+            }
+          ],
+          "text": "see the docs"
+        },
+        {
+          "links": [
+            {
+              "end": 5,
+              "start": 0,
+              "uri": "https://example.com/a"
+            },
+            {
+              "end": 14,
+              "start": 10,
+              "uri": "https://example.com/b"
+            }
+          ],
+          "text": "alpha and beta"
+        },
+        {
+          "links": [
+            {
+              "end": 10,
+              "start": 4,
+              "uri": "https://example.com/bel"
+            }
+          ],
+          "text": "bel legacy"
+        },
+        {
+          "links": [
+            {
+              "end": 80,
+              "start": 0,
+              "uri": "https://example.com/long"
+            }
+          ],
+          "text": "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL",
+          "wrapped": true
+        },
+        {
+          "links": [
+            {
+              "end": 20,
+              "start": 0,
+              "uri": "https://example.com/long"
+            }
+          ],
+          "text": "LLLLLLLLLLLLLLLLLLLL"
+        }
+      ],
+      "scroll_offset": 0,
+      "semantic": "TerminalSemanticState { cwd: None, command_phase: Unknown, executable: None }",
+      "size": [
+        80,
+        24
+      ],
+      "status": "ProgramStatusSnapshot { revision: 0, records: [] }",
+      "title": null
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+*   [33mcommit 6ff98c6fa7f2c6fe6789e01825f2fd4e6f6698d8[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;33mtag: [m[1;33mv1.0.0[m[33m)[m
+[31m|[m[32m\[m  Merge: bba7287 1809695
+[31m|[m [32m|[m Author: Ada Example <ada@example.com>
+[31m|[m [32m|[m Date:   2026-01-14
+[31m|[m [32m|[m 
+[31m|[m [32m|[m     merge feature
+[31m|[m [32m|[m 
+[31m|[m * [33mcommit 18096952c4b89d95ffc5f0a46561e9659698c385[m[33m ([m[1;32mfeature[m[33m)[m
+[31m|[m [32m|[m Author: Ada Example <ada@example.com>
+[31m|[m [32m|[m Date:   2026-01-12
+[31m|[m [32m|[m 
+[31m|[m [32m|[m     start feature
+[31m|[m [32m|[m 
+* [32m|[m [33mcommit bba7287b1b1957dafc8dc9a06810231ad1c29632[m
+[32m|[m[32m/[m  Author: Ada Example <ada@example.com>
+[32m|[m   Date:   2026-01-13
+[32m|[m   
+[32m|[m       adjust the sample wording so this subject wraps on an eighty column screen but not on a wider one
+[32m|[m 
+* [33mcommit 9d130c606ac54f0ca28875979ca53305bf228462[m
+[32m|[m Author: Ada Example <ada@example.com>
+[32m|[m Date:   2026-01-11
+[32m|[m 
+[32m|[m     add notes
+[32m|[m 
+* [33mcommit b2e9e03e69669888b6aff9928be4b78885fe0aab[m
+  Author: Ada Example <ada@example.com>
+  Date:   2026-01-10
+  
+      initial sample

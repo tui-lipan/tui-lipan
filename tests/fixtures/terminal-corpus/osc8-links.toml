@@ -1,0 +1,12 @@
+rows = 24
+cols = 80
+scrollback = 10000
+description = "OSC 8 hyperlinks, including an id parameter, a BEL terminator, and a wrapping label."
+source = """
+command: scripts/capture-terminal-corpus osc8-links
+tool: python pty capture (3.14.8), winsize 24x80
+program: Python 3.14.8
+child: /usr/bin/python3 /tmp/w/emit_osc8.py
+TERM=xterm-256color COLORTERM=truecolor LANG=C.UTF-8
+Targets are https://example.com URLs.
+"""

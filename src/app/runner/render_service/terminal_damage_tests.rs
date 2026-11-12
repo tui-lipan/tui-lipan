@@ -2834,6 +2834,7 @@ fn a_partial_paint_elsewhere_keeps_an_effect_hiding_native_picture_fragments() {
 /// it, full draws paint it frame by frame as it moves, terminal output during it takes the full
 /// draw instead of a row patch, a capture shows what the host shows, a solid smear hides the host
 /// caret while it draws its own, and the frame after it settles puts every cell and the caret back.
+#[cfg(feature = "terminal-images")]
 #[test]
 fn a_cursor_trail_paints_over_full_draws_and_clears_once_it_settles() {
     use crate::app::interaction_state::{DirtyLevel, DirtyTracker};

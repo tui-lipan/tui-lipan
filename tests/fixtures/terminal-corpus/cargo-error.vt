@@ -1,0 +1,11 @@
+[1m[92m   Compiling[0m errcrate v0.1.0 (/tmp/w/errcrate)
+[1m[91merror[E0308][0m[1m: mismatched types[0m
+ [1m[94m--> [0msrc/main.rs:2:22
+  [1m[94m|[0m
+[1m[94m2[0m [1m[94m|[0m     let count: i32 = "nope";
+  [1m[94m|[0m                [1m[94m---[0m   [1m[91m^^^^^^[0m [1m[91mexpected `i32`, found `&str`[0m
+  [1m[94m|[0m                [1m[94m|[0m
+  [1m[94m|[0m                [1m[94mexpected due to this[0m
+
+[1mFor more information about this error, try `rustc --explain E0308`.[0m
+[1m[91merror[0m: could not compile `errcrate` (bin "errcrate") due to 1 previous error
