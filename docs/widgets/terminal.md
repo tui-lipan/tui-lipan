@@ -1474,7 +1474,11 @@ The `terminal-ghostty` feature adds a second emulator for `TerminalScreen`:
 terminal. It is opt-in and unstable. `TerminalScreen::new` always uses the default
 `alacritty_terminal` engine; select Ghostty with the doc-hidden
 `TerminalScreen::with_engine(TerminalEngineKind::Ghostty, rows, cols, scrollback)`.
-Every other `TerminalScreen` method behaves the same with either engine.
+Every other `TerminalScreen` method has the same contract with either engine, and
+what it reports is the same except for the differences listed below. With either
+engine, the state depends only on the bytes and the host's operations: never on how
+`process_bytes` calls split the output, and never on reads such as
+`export_last_command_output` or `write_replay_bytes`.
 
 Two doc-hidden methods matter only with Ghostty (the default engine ignores them):
 
@@ -1489,17 +1493,30 @@ Two doc-hidden methods matter only with Ghostty (the default engine ignores them
 
 - At OSC 133;A (prompt start) with the cursor past column 0, Ghostty starts a new
   line, as FinalTerm prompts do; Alacritty keeps writing on the same line.
+- ED 2 erases the screen in place; Alacritty scrolls it into history first.
 - Secondary device attributes identify the emulator (`CSI > 1;0;0 c`), and Ghostty
   answers more DECRQM, DECRQSS and XTGETTCAP queries.
 - After a reflowing resize, a viewport scrolled into history stays on the line it
   showed.
+- A cell a tab skipped holds a space, not the tab, so copied text has spaces.
+- SGR 31 and SGR 38;5;1 are stored alike, as palette index 1.
+- A replay export does not reopen the OSC 8 hyperlink of the cursor's pen.
 - libghostty-vt implements mode 2048 (in-band resize reports), but the engine
   reports it as unsupported, as Alacritty does, and drops its size reports: hosts
   deliver replies after child output, so a child waiting for one could stop
   redrawing. Applications use SIGWINCH with either engine.
-- Shrinking the alternate screen keeps the top rows when the cursor fits, and
-  otherwise scrolls only enough to keep the cursor row, like Alacritty. Upstream
-  libghostty-vt 1.0.1 drops the top rows; `tui-lipan-ghostty-vt-src` carries a fix.
+- Reading the primary screen while the alternate screen is active
+  (`export_last_command_output`, `write_replay_bytes` and the other history reads)
+  works on a copy restored from a snapshot, so the running application is never
+  touched. It costs more: about 25 ms for 9,000 lines of 200 columns, against 4 ms
+  with Alacritty. If the application has left an escape sequence longer than 4 MiB
+  unfinished at that moment, the read sees an empty primary screen.
+
+`tui-lipan-ghostty-vt-src` patches libghostty-vt 1.0.1 to match Alacritty where
+upstream differs: shrinking the alternate screen keeps the rows at the cursor; in
+the default (mode 2027 off) mode, a combining mark that arrives in a later write
+still reaches the screen, and keycaps keep their VS16; and the patch adds the
+direct grid calls the engine uses instead of writing VT through the child's parser.
 
 The terminal corpus (see [testing](../testing.md#terminal-byte-stream-corpus))
 runs every fixture through both engines and lists each reviewed difference.
@@ -1526,4 +1543,5 @@ shipped to older Linux systems, set `GHOSTTY_VT_GLIBC=2.28`; on macOS,
 `MACOSX_DEPLOYMENT_TARGET` sets the floor (default 13.0). The
 `tui-lipan-ghostty-vt-sys` build script documents every variable, including
 linking a system or prebuilt library, which it refuses unless that library
-carries the alternate-screen fix or `GHOSTTY_VT_ALLOW_UNPATCHED=1` is set.
+carries tui-lipan's patch. `GHOSTTY_VT_ALLOW_UNPATCHED=1` overrides the check, but
+the engine calls functions the patch adds, so an unpatched library does not link.
