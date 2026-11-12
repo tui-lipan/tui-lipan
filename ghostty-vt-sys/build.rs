@@ -152,13 +152,13 @@ fn require_patched(lib_dir: Option<&Path>, what: &str) -> BuildResult<()> {
         return Ok(());
     }
     Err(format!(
-        "{what} may lack {patch}, which keeps the rows above the cursor when the alternate \
-         screen shrinks (an upstream libghostty-vt bug; without it, full-screen programs such \
-         as editors lose their top rows on resize).\n\
+        "{what} may lack {patch}. It fixes upstream libghostty-vt bugs (alternate-screen \
+         shrink, graphemes split across writes) and adds the `ghostty_terminal_tl_*` functions \
+         tui-lipan's engine calls.\n\
          Either build from source (unset GHOSTTY_VT_SYSTEM and GHOSTTY_VT_LIB_DIR), point \
          GHOSTTY_VT_LIB_DIR at a lib/ directory this crate built (it holds {marker}), or set \
-         GHOSTTY_VT_ALLOW_UNPATCHED=1 to accept the bug; `cargo test -p ghostty-vt-sys` then \
-         reports it.",
+         GHOSTTY_VT_ALLOW_UNPATCHED=1 for a library that carries an equivalent patch; an \
+         unpatched one fails to link.",
         patch = patch::PATCH,
         marker = patch::MARKER,
     ))
