@@ -339,8 +339,8 @@ impl Component for WhackAMole {
                     if ctx.state.rand_in(100) < chance {
                         let mut empties: [u8; MOLE_GRID] = [0; MOLE_GRID];
                         let mut n = 0u8;
-                        for i in 0..MOLE_GRID {
-                            if ctx.state.holes[i].is_none() {
+                        for (i, hole) in ctx.state.holes.iter().enumerate() {
+                            if hole.is_none() {
                                 empties[n as usize] = i as u8;
                                 n += 1;
                             }

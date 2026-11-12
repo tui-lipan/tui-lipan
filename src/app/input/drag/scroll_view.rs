@@ -422,11 +422,8 @@ pub(crate) fn shared_document_drag_anchor_for_hit(
     };
 
     if !sv.virtual_cache.entries.is_empty() {
-        for i in 0..sv.virtual_cache.entries.len() {
-            let Some(child_key) = sv.virtual_cache.entries[i]
-                .as_ref()
-                .and_then(|e| e.key.clone())
-            else {
+        for (i, entry) in sv.virtual_cache.entries.iter().enumerate() {
+            let Some(child_key) = entry.as_ref().and_then(|e| e.key.clone()) else {
                 continue;
             };
             let Some(cid) = scroll_view_child_with_key(tree, scroll_view_id, &child_key) else {
