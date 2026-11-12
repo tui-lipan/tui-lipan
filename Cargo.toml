@@ -369,7 +369,3 @@ required-features = ["terminal-images"]
 name = "tab_drop_target"
 harness = false
 
-# Until tui-lipan-ghostty-vt-src 0.2.0 is on crates.io, workspace builds take it from the tree
-# scripts/package-ghostty-src.sh generates. Remove this once it is published.
-[patch.crates-io]
-tui-lipan-ghostty-vt-src = { path = "ghostty-vt-src" }
