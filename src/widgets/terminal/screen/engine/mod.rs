@@ -5,7 +5,7 @@
 //! selection projection and presentation. Everything that parses VT bytes into a grid lives behind
 //! [`TerminalEngine`], so a second emulator can sit beside the default one.
 //!
-//! The interface separates the grid from the screen's metadata:
+//! The interface is shaped after libghostty-vt rather than after `alacritty_terminal`:
 //!
 //! - **In-band notifications.** An engine reports what happened while it parsed through an
 //!   [`EngineObserver`], in stream order: PTY replies, the OSC sequences tui-lipan interprets
@@ -17,9 +17,9 @@
 //! - **Engine-provided line identity.** Evictions are counted by the engine
 //!   ([`GridStep::evicted`]), and points that must follow text through a rewrap are tracked by it
 //!   ([`ResizeRequest::track`]). Alacritty counts through the scrollback ledger and tracks with
-//!   marker characters.
+//!   marker characters; Ghostty has tracked grid references for both.
 //! - **Both screens readable.** [`TerminalEngine::with_primary_screen`] reads the primary screen
-//!   while the alternate one is active. Alacritty swaps grids and repairs.
+//!   while the alternate one is active. Alacritty swaps grids and repairs; Ghostty reads it.
 //!
 //! Grid reads are generic ([`TerminalEngine::row`] returns a concrete row type per engine) and
 //! dispatch happens once per call through [`Engine`], never per cell.
@@ -28,16 +28,36 @@ use super::super::damage::TerminalDamage;
 use super::{TerminalCellSize, TerminalClipboardEvent, TerminalColorPalette};
 
 pub(super) mod alacritty;
+#[cfg(feature = "terminal-ghostty")]
+pub(super) mod ghostty;
 mod semantic;
 
 pub(super) use alacritty::AlacrittyEngine;
 #[cfg(test)]
 pub(in crate::widgets::terminal) use semantic::SemanticTestDriver;
 
+/// The emulator behind a [`TerminalScreen`](super::TerminalScreen).
+///
+/// Unstable: selects the experimental libghostty-vt engine (feature `terminal-ghostty`) through
+/// [`TerminalScreen::with_engine`](super::TerminalScreen::with_engine).
+/// [`TerminalScreen::new`](super::TerminalScreen::new) always uses
+/// [`TerminalEngineKind::Alacritty`].
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TerminalEngineKind {
+    /// `alacritty_terminal`, the default.
+    #[default]
+    Alacritty,
+    /// libghostty-vt 1.0.1, built through `tui-lipan-ghostty-vt-sys`. Experimental.
+    #[cfg(feature = "terminal-ghostty")]
+    Ghostty,
+}
+
 /// DEC private mode for SGR-pixel mouse reporting.
 pub(super) const SGR_PIXELS_MOUSE: u16 = 1016;
 
-/// Primary device attributes: VT220 with ANSI color support.
+/// Primary device attributes (DA1) reply: a VT220 (`62`) with ANSI color (`22`), as Ghostty sends.
 pub(super) const PRIMARY_DEVICE_ATTRIBUTES: &[u8] = b"\x1b[?62;22c";
 
 /// What an engine is built with.
@@ -461,7 +481,6 @@ pub(super) trait TerminalEngine: Sized {
     fn row(&self, absolute_line: usize) -> Self::Row<'_>;
     /// Spend one bounded step compressing retained history; call while the terminal is idle.
     /// Returns whether more work remains for this idle period.
-    #[allow(dead_code)] // Optional engine hook; Alacritty keeps history uncompressed.
     fn compress_idle(&mut self) -> bool {
         false
     }
@@ -480,6 +499,8 @@ pub(super) trait TerminalEngine: Sized {
 #[allow(clippy::large_enum_variant)]
 pub(super) enum Engine {
     Alacritty(AlacrittyEngine),
+    #[cfg(feature = "terminal-ghostty")]
+    Ghostty(ghostty::GhosttyEngine),
 }
 
 /// Run `$body` with `$engine` bound to the concrete engine, so generic grid reads monomorphize.
@@ -487,6 +508,8 @@ macro_rules! with_engine {
     ($engine:expr, $bound:ident => $body:expr) => {
         match $engine {
             $crate::widgets::terminal::screen::engine::Engine::Alacritty($bound) => $body,
+            #[cfg(feature = "terminal-ghostty")]
+            $crate::widgets::terminal::screen::engine::Engine::Ghostty($bound) => $body,
         }
     };
 }
@@ -510,8 +533,12 @@ macro_rules! forward {
 }
 
 impl Engine {
-    pub(super) fn new(config: EngineConfig) -> Self {
-        Self::Alacritty(AlacrittyEngine::new(config))
+    pub(super) fn new(kind: TerminalEngineKind, config: EngineConfig) -> Self {
+        match kind {
+            TerminalEngineKind::Alacritty => Self::Alacritty(AlacrittyEngine::new(config)),
+            #[cfg(feature = "terminal-ghostty")]
+            TerminalEngineKind::Ghostty => Self::Ghostty(ghostty::GhosttyEngine::new(config)),
+        }
     }
 
     pub(super) fn feed<O: EngineObserver>(&mut self, bytes: &[u8], observer: &mut O) -> GridStep {
@@ -570,6 +597,7 @@ impl Engine {
 
     forward! {
         fn reset(&mut self) -> ();
+        fn compress_idle(&mut self) -> bool;
         fn set_default_cursor_style(&mut self, style: EngineCursorStyle) -> bool;
         fn set_report_geometry(&mut self, rows: u16, cols: u16, cell: TerminalCellSize) -> ();
         fn take_damage(&mut self) -> TerminalDamage;
@@ -597,6 +625,8 @@ impl Engine {
     pub(super) fn scrollback_limit(&self) -> usize {
         match self {
             Self::Alacritty(engine) => engine.scrollback_len,
+            #[cfg(feature = "terminal-ghostty")]
+            Self::Ghostty(engine) => engine.scrollback_limit(),
         }
     }
 
@@ -604,6 +634,8 @@ impl Engine {
     pub(super) fn alacritty(&self) -> &AlacrittyEngine {
         match self {
             Self::Alacritty(engine) => engine,
+            #[cfg(feature = "terminal-ghostty")]
+            Self::Ghostty(_) => panic!("not an Alacritty engine"),
         }
     }
 
@@ -611,6 +643,8 @@ impl Engine {
     pub(super) fn alacritty_mut(&mut self) -> &mut AlacrittyEngine {
         match self {
             Self::Alacritty(engine) => engine,
+            #[cfg(feature = "terminal-ghostty")]
+            Self::Ghostty(_) => panic!("not an Alacritty engine"),
         }
     }
 }

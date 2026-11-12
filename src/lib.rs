@@ -9,7 +9,8 @@
 
 #[cfg(all(target_arch = "wasm32", any(feature = "image", feature = "terminal")))]
 compile_error!(
-    "tui-lipan: wasm32 builds cannot enable image or terminal features; use --no-default-features"
+    "tui-lipan: wasm32 builds cannot enable image or terminal features (terminal-ghostty \
+     included); use --no-default-features"
 );
 
 pub mod prelude;
@@ -525,6 +526,9 @@ pub use crate::widgets::{
     TerminalOutputTransaction,
 };
 
+#[cfg(feature = "terminal")]
+#[doc(hidden)]
+pub use widgets::TerminalEngineKind;
 #[cfg(feature = "terminal")]
 pub use widgets::{TerminalReadGate, TerminalReadGateStats};
 

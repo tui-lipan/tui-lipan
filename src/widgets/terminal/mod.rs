@@ -6,6 +6,8 @@ mod copy_mode;
 pub(crate) mod damage;
 mod drag_and_drop;
 mod events;
+#[cfg(feature = "terminal-ghostty")]
+mod ghostty;
 #[cfg(feature = "terminal-images")]
 mod graphics;
 #[cfg(feature = "terminal-images")]
@@ -83,6 +85,8 @@ pub use osc::{
 pub use pty::TerminalPtyHandoff;
 pub use pty::{TerminalPty, TerminalPtyConfig, TerminalPtyError, TerminalPtyEvent};
 pub use read_gate::{TerminalReadGate, TerminalReadGateStats};
+#[doc(hidden)]
+pub use screen::TerminalEngineKind;
 pub use screen::{
     SemanticMark, SemanticMarkKind, TerminalCellSize, TerminalClipboardEvent,
     TerminalClipboardTarget, TerminalColorPalette, TerminalDecoration, TerminalHyperlink,

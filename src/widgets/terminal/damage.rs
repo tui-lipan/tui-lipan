@@ -122,6 +122,11 @@ mod tests {
 
     #[test]
     fn a_spinner_rewrite_damages_one_row() {
+        if super::super::screen::engine_differs(
+            "libghostty-vt reports dirty rows, not column ranges; tui-lipan paints damaged rows whole",
+        ) {
+            return;
+        }
         let mut screen = TerminalScreen::new(24, 80, 1000);
         screen.process_bytes(b"hello\r\n");
         let _ = screen.take_damage();

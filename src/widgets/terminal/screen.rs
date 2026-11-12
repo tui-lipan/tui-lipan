@@ -13,6 +13,8 @@ mod replay;
 
 #[cfg(test)]
 pub(super) use engine::SemanticTestDriver;
+#[doc(hidden)]
+pub use engine::TerminalEngineKind;
 use engine::{
     AnchorKind, CellAttrs, CellColor, CellRead, CursorAnchor, Engine, EngineAnchor, EngineConfig,
     EngineCursorShape, EngineCursorStyle, EngineObserver, GridPoint, GridStep, LinkRead, ModeFlags,
@@ -215,6 +217,27 @@ const DEFAULT_CURSOR_STYLE: EngineCursorStyle = EngineCursorStyle {
     shape: EngineCursorShape::Block,
     blinking: true,
 };
+
+/// The engine [`TerminalScreen::new`] uses: Alacritty, except that the crate's own tests run
+/// against libghostty-vt with `TUI_LIPAN_TEST_ENGINE=ghostty`.
+fn default_engine() -> TerminalEngineKind {
+    #[cfg(all(test, feature = "terminal-ghostty"))]
+    if std::env::var_os("TUI_LIPAN_TEST_ENGINE").is_some_and(|engine| engine == "ghostty") {
+        return TerminalEngineKind::Ghostty;
+    }
+    TerminalEngineKind::Alacritty
+}
+
+/// Whether the tests run against an engine whose documented behavior differs from what the
+/// calling test pins (Alacritty's); `reason` says how. The caller then stops.
+#[cfg(test)]
+pub(super) fn engine_differs(reason: &str) -> bool {
+    let differs = default_engine() != TerminalEngineKind::Alacritty;
+    if differs {
+        eprintln!("skipped on {:?}: {reason}", default_engine());
+    }
+    differs
+}
 
 /// Map an engine cursor shape to the framework [`CaretShape`].
 ///
@@ -1011,14 +1034,42 @@ impl TerminalColorPalette {
 impl TerminalScreen {
     /// Create an Alacritty terminal-backed screen with bounded scrollback.
     pub fn new(rows: u16, cols: u16, scrollback: usize) -> Self {
+        Self::with_engine(default_engine(), rows, cols, scrollback)
+    }
+
+    /// Set the Ghostty engine's initial and reset value of DEC mode 2027.
+    ///
+    /// Disabled by default for compatibility with legacy application cursor arithmetic.
+    /// Experimental, ignored by Alacritty. Child programs can still use DECSET/DECRST 2027.
+    /// Apply before feeding output; existing cells are not reflowed.
+    #[cfg(feature = "terminal-ghostty")]
+    #[doc(hidden)]
+    pub fn with_grapheme_clustering(mut self, enabled: bool) -> Self {
+        if let Engine::Ghostty(engine) = &mut self.engine {
+            engine.set_default_grapheme_clustering(enabled);
+            self.dirty = true;
+        }
+        self
+    }
+
+    /// Create a screen backed by the given emulator engine.
+    ///
+    /// Unstable: the opt-in for the experimental libghostty-vt engine
+    /// (`TerminalEngineKind::Ghostty` with `terminal-ghostty`). [`Self::new`] uses the default
+    /// engine.
+    #[doc(hidden)]
+    pub fn with_engine(kind: TerminalEngineKind, rows: u16, cols: u16, scrollback: usize) -> Self {
         let rows = rows.max(1);
         let cols = cols.max(1);
-        let engine = Engine::new(EngineConfig {
-            rows,
-            cols,
-            scrollback,
-            default_cursor_style: DEFAULT_CURSOR_STYLE,
-        });
+        let engine = Engine::new(
+            kind,
+            EngineConfig {
+                rows,
+                cols,
+                scrollback,
+                default_cursor_style: DEFAULT_CURSOR_STYLE,
+            },
+        );
         let screen = Self {
             damage: DamageAccumulator::default(),
             mutation: TerminalMutation::default(),
@@ -1076,6 +1127,17 @@ impl TerminalScreen {
         let mut screen = screen;
         screen.sync_viewport();
         screen
+    }
+
+    /// Compress retained scrollback a bounded step at a time while the terminal is idle.
+    ///
+    /// Experimental. Call when no output has arrived for a while (say a second), again while it
+    /// returns `true`, and stop once output resumes; it returns `false` when this idle period has
+    /// nothing left to compress. The contents never change. Only engines that compress history
+    /// (libghostty-vt) do anything here; the default engine returns `false` at once.
+    #[doc(hidden)]
+    pub fn compress_idle(&mut self) -> bool {
+        self.engine.compress_idle()
     }
 
     /// Enable OSC 7501 records and feature replies. Disabled by default for passive parsers.
@@ -4211,6 +4273,11 @@ mod tests {
     /// go with the lines they named, not slide onto whatever the screen shows next.
     #[test]
     fn clearing_scrollback_keeps_shell_marks_on_their_own_lines() {
+        if engine_differs(
+            "libghostty erases the screen in place on ED 2 where Alacritty scrolls it into history, so ED 3 does not take the marks of the erased lines with it",
+        ) {
+            return;
+        }
         let mut screen = TerminalScreen::new(4, 30, 100);
         // One write per step, as a shell sends them: marks take the line a chunk ends on.
         let command = |screen: &mut TerminalScreen, output: &str| {
@@ -4534,6 +4601,11 @@ mod tests {
 
     #[test]
     fn capture_frame_keeps_low_indexed_colors_indexed() {
+        if engine_differs(
+            "libghostty-vt stores SGR 31 and SGR 38;5;1 alike, as palette index 1; no API tells them apart",
+        ) {
+            return;
+        }
         let mut screen = TerminalScreen::new(1, 4, 10);
         screen.process_bytes(b"\x1b[38;5;1mf\x1b[0;48;5;1mb\x1b[0;4;58;5;1mu\x1b[0m");
         let frame = screen.capture_frame();
@@ -5003,6 +5075,11 @@ mod tests {
 
     #[test]
     fn nonzero_prompt_anchor_reflows_with_unterminated_output() {
+        if engine_differs(
+            "libghostty starts a fresh line at OSC 133;A after unterminated output (FinalTerm semantics), so the prompt anchor is at column 0 of the next line",
+        ) {
+            return;
+        }
         for input in ["hello", "abcdefghijklmnopqrstuvwxyz1234567890"] {
             let mut screen = TerminalScreen::new(8, 120, 20);
             let output = "x".repeat(40);
@@ -5259,6 +5336,11 @@ mod tests {
     /// Prompt boundaries are found with the engine's own OSC framing.
     #[test]
     fn prompt_boundaries_follow_vt_osc_framing() {
+        if engine_differs(
+            "libghostty starts a fresh line at OSC 133;A when the cursor is not at column 0, so the prompt anchor moves to the next line",
+        ) {
+            return;
+        }
         let mut screen = TerminalScreen::new(4, 20, 10);
         // Raw C1 bytes are UTF-8 continuation bytes, not OSC/ST.
         screen.process_bytes(b"\x9d133;A\x9c");
@@ -5618,7 +5700,11 @@ mod tests {
         screen.process_bytes(b"\x1b[>c");
         let answered = String::from_utf8(screen.drain_responses().concat()).unwrap();
         // Secondary device attributes identify the emulator.
-        let identity = "\x1b[>0;";
+        let identity = match default_engine() {
+            TerminalEngineKind::Alacritty => "\x1b[>0;",
+            #[cfg(feature = "terminal-ghostty")]
+            TerminalEngineKind::Ghostty => "\x1b[>1;",
+        };
         assert!(answered.starts_with(identity), "{answered:?}");
     }
 
@@ -5661,6 +5747,11 @@ mod tests {
 
     #[test]
     fn replay_round_trips_hyperlink_cells_and_active_template() {
+        if engine_differs(
+            "libghostty does not expose the OSC 8 link of the cursor's pen, so a replay cannot reopen it",
+        ) {
+            return;
+        }
         let mut source = TerminalScreen::new(2, 24, 10);
         source.process_bytes(b"\x1b]8;;https://example.com/docs\x1b\\docs");
 
@@ -6177,6 +6268,11 @@ mod tests {
 
     #[test]
     fn logical_text_positions_follow_terminal_cells_for_unicode_sequences() {
+        if engine_differs(
+            "libghostty gives VS16 emoji presentation sequences (keycaps, red heart) two columns; Alacritty gives them one",
+        ) {
+            return;
+        }
         for (text, x_column, inside_cell_boundary) in [
             ("1️⃣x", 1, Some('1'.len_utf8())),
             ("❤️x", 1, Some('❤'.len_utf8())),
@@ -7162,7 +7258,7 @@ mod tests {
             screen.resize(8, 40);
             screen.resize(8, 20);
 
-            // Alacritty carries these marks with their cells during reflow.
+            // The marks are Alacritty's reflow mechanism; Ghostty tracks grid references.
             if !matches!(screen.engine, Engine::Alacritty(_)) {
                 return;
             }
@@ -7191,7 +7287,7 @@ mod tests {
             screen.resize(12, 40);
             screen.resize(12, 20);
 
-            // Alacritty carries these marks with their cells during reflow.
+            // The marks are Alacritty's reflow mechanism; Ghostty tracks grid references.
             if !matches!(screen.engine, Engine::Alacritty(_)) {
                 return;
             }
@@ -7365,3 +7461,6 @@ mod tests {
         assert_eq!(screen.total_text_lines(), 5);
     }
 }
+
+#[cfg(all(test, feature = "terminal-ghostty"))]
+mod graphemes;

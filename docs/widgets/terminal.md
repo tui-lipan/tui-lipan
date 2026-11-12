@@ -1466,3 +1466,64 @@ newest rows that were read. When the first scrolled page cannot be aligned, the 
 
 Use `TerminalScreen::is_alternate_screen()` to choose this reader instead of ordinary scrollback
 export. The reader enforces traversal and restoration deadlines and bounds retained pages and text.
+
+## Experimental Ghostty engine
+
+The `terminal-ghostty` feature adds a second emulator for `TerminalScreen`:
+[libghostty-vt](https://lib.ghostty.org/vt/) 1.0.1, the VT core of the Ghostty
+terminal. It is opt-in and unstable. `TerminalScreen::new` always uses the default
+`alacritty_terminal` engine; select Ghostty with the doc-hidden
+`TerminalScreen::with_engine(TerminalEngineKind::Ghostty, rows, cols, scrollback)`.
+Every other `TerminalScreen` method behaves the same with either engine.
+
+Two doc-hidden methods matter only with Ghostty (the default engine ignores them):
+
+- `with_grapheme_clustering(bool)` sets the initial and reset value of DEC mode
+  2027. It is off by default, because legacy shell cursor arithmetic can disagree
+  with cluster widths; child programs can still toggle the mode.
+- `compress_idle()` compresses retained scrollback a bounded step at a time. Call it
+  after output has been quiet for a while, again while it returns `true`, and stop
+  when output resumes. Contents never change.
+
+### Differences from the default engine
+
+- At OSC 133;A (prompt start) with the cursor past column 0, Ghostty starts a new
+  line, as FinalTerm prompts do; Alacritty keeps writing on the same line.
+- Secondary device attributes identify the emulator (`CSI > 1;0;0 c`), and Ghostty
+  answers more DECRQM, DECRQSS and XTGETTCAP queries.
+- After a reflowing resize, a viewport scrolled into history stays on the line it
+  showed.
+- libghostty-vt implements mode 2048 (in-band resize reports), but the engine
+  reports it as unsupported, as Alacritty does, and drops its size reports: hosts
+  deliver replies after child output, so a child waiting for one could stop
+  redrawing. Applications use SIGWINCH with either engine.
+- Shrinking the alternate screen keeps the top rows when the cursor fits, and
+  otherwise scrolls only enough to keep the cursor row, like Alacritty. Upstream
+  libghostty-vt 1.0.1 drops the top rows; `tui-lipan-ghostty-vt-src` carries a fix.
+
+The terminal corpus (see [testing](../testing.md#terminal-byte-stream-corpus))
+runs every fixture through both engines and lists each reviewed difference.
+
+### Building
+
+`terminal-ghostty` builds libghostty-vt with Zig through
+[`tui-lipan-ghostty-vt-sys`](https://crates.io/crates/tui-lipan-ghostty-vt-sys),
+from the patched release source that
+[`tui-lipan-ghostty-vt-src`](https://crates.io/crates/tui-lipan-ghostty-vt-src)
+vendors. A build needs:
+
+- **Zig 0.17.x** on `PATH`, or `ZIG=/path/to/zig`. The build checks the version
+  first and explains how to install it.
+- On Windows MSVC, the Visual Studio C++ tools and Windows SDK, as for any MSVC
+  Rust build.
+
+No network access is needed. The first build takes about 1.5 minutes (about 10
+on Windows) and is cached in `target/ghostty-vt/` (or `GHOSTTY_VT_CACHE_DIR`) for
+every profile. docs.rs builds skip it.
+
+A native build targets the build machine, including its glibc. For binaries
+shipped to older Linux systems, set `GHOSTTY_VT_GLIBC=2.28`; on macOS,
+`MACOSX_DEPLOYMENT_TARGET` sets the floor (default 13.0). The
+`tui-lipan-ghostty-vt-sys` build script documents every variable, including
+linking a system or prebuilt library, which it refuses unless that library
+carries the alternate-screen fix or `GHOSTTY_VT_ALLOW_UNPATCHED=1` is set.

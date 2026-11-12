@@ -244,6 +244,7 @@ composing them into their own `Component`s, which keeps the public API free of
 | `terminal` | `Terminal` and `ManagedTerminal`: embedded PTY terminal viewport |
 | `terminal-images` | Kitty graphics protocol in terminal panes: the program running in a pane can draw images, whatever the host terminal supports (includes `terminal` and `image`) |
 | `terminal-serde` | Serde derives for terminal snapshot leaf style/mouse types used by external, versioned snapshot transports; includes `terminal` |
+| `terminal-ghostty` | Experimental, opt-in libghostty-vt engine for `TerminalScreen` (needs Zig 0.17.x to build), selected with the unstable `TerminalScreen::with_engine`; `TerminalScreen::new` keeps the default engine. Includes `terminal` |
 | `theme-reload` | Live reload of TOML theme files without restarting the app - see [`docs/styling.md`](docs/styling.md) |
 | `web` | Browser/WASM backend - see [`docs/web-backend.md`](docs/web-backend.md) |
 
