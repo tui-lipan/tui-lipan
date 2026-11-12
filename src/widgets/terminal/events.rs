@@ -742,15 +742,25 @@ pub fn focus_sequences() -> (&'static [u8], &'static [u8]) {
 /// Wraps the text in the bracketed-paste sequences only when the child has enabled the mode
 /// (`CSI ? 2004 h`). A child that has not asked for bracketed paste does not strip the wrapper, so
 /// sending it unconditionally would insert the literal bytes `ESC [ 200 ~` into its input.
+///
+/// A bracketed paste never contains the end sequence: text carrying `ESC [ 201 ~` would close the
+/// paste early and have the child read the rest as typed keys, so it is removed.
 pub fn encode_paste(text: &str, modes: TerminalKeyModes) -> Vec<u8> {
     if !modes.bracketed_paste {
         return text.as_bytes().to_vec();
     }
 
+    const END: &str = "\x1b[201~";
+    let mut body = std::borrow::Cow::Borrowed(text);
+    // Removing one occurrence can join the text around it into another.
+    while body.contains(END) {
+        body = std::borrow::Cow::Owned(body.replace(END, ""));
+    }
+
     let (start, end) = paste_sequences();
-    let mut out = Vec::with_capacity(text.len() + start.len() + end.len());
+    let mut out = Vec::with_capacity(body.len() + start.len() + end.len());
     out.extend_from_slice(start);
-    out.extend_from_slice(text.as_bytes());
+    out.extend_from_slice(body.as_bytes());
     out.extend_from_slice(end);
     out
 }

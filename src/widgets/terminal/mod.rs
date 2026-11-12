@@ -1148,6 +1148,11 @@ mod tests {
             ..TerminalKeyModes::default()
         };
         assert_eq!(encode_paste("hi", on), b"\x1b[200~hi\x1b[201~".to_vec());
+        // Text cannot close the paste itself, even with an end sequence that removal assembles.
+        assert_eq!(
+            encode_paste("a\x1b[2\x1b[201~01~rm -rf\r", on),
+            b"\x1b[200~arm -rf\r\x1b[201~".to_vec()
+        );
     }
 
     #[test]
