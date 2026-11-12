@@ -10,12 +10,14 @@ the source.
    (Terminal.zig).
 3. ghostty_terminal_tl_cursor_set and ghostty_terminal_tl_erase_below: cursor placement and
    ED 0 without the VT parser, so a host can edit the grid while the child has left an escape
-   sequence unfinished (c/terminal.zig, c/main.zig, lib_vt.zig, terminal.h).
+   sequence unfinished. ghostty_terminal_tl_switch_screen: show a screen as it is, without the
+   cursor copy or restore of DECSET 47/1047/1049, to read the inactive screen on a snapshot copy
+   (c/terminal.zig, c/main.zig, lib_vt.zig, terminal.h).
 
 diff -ruN a/include/ghostty/vt/terminal.h b/include/ghostty/vt/terminal.h
 --- a/include/ghostty/vt/terminal.h
 +++ b/include/ghostty/vt/terminal.h
-@@ -3145,6 +3145,32 @@
+@@ -3145,6 +3145,48 @@
  GHOSTTY_API void ghostty_terminal_reset(GhosttyTerminal terminal);
  
  /**
@@ -45,37 +47,55 @@ diff -ruN a/include/ghostty/vt/terminal.h b/include/ghostty/vt/terminal.h
 +GHOSTTY_API GhosttyResult ghostty_terminal_tl_erase_below(GhosttyTerminal terminal);
 +
 +/**
++ * tui-lipan patch: make @p screen the active screen exactly as it is, without
++ * the cursor copy, save or restore that DECSET 47, 1047 and 1049 perform, and
++ * without the VT parser.
++ *
++ * It still ends the old screen's hyperlink and clears the selection, as every
++ * switch does, so use it on a copy (see snapshot.h) to read the inactive screen.
++ *
++ * @return GHOSTTY_SUCCESS, GHOSTTY_INVALID_VALUE for a NULL terminal or an
++ *         unknown screen, or GHOSTTY_OUT_OF_MEMORY
++ *
++ * @ingroup terminal
++ */
++GHOSTTY_API GhosttyResult ghostty_terminal_tl_switch_screen(GhosttyTerminal terminal,
++                                                            GhosttyTerminalScreen screen);
++
++/**
   * Resize the terminal to the given dimensions.
   *
   * Changes the number of columns and rows in the terminal. The primary
 diff -ruN a/src/lib_vt.zig b/src/lib_vt.zig
 --- a/src/lib_vt.zig
 +++ b/src/lib_vt.zig
-@@ -312,6 +312,8 @@
+@@ -312,6 +312,9 @@
          @export(&c.terminal_new, .{ .name = "ghostty_terminal_new" });
          @export(&c.terminal_free, .{ .name = "ghostty_terminal_free" });
          @export(&c.terminal_reset, .{ .name = "ghostty_terminal_reset" });
 +        @export(&c.terminal_tl_cursor_set, .{ .name = "ghostty_terminal_tl_cursor_set" });
 +        @export(&c.terminal_tl_erase_below, .{ .name = "ghostty_terminal_tl_erase_below" });
++        @export(&c.terminal_tl_switch_screen, .{ .name = "ghostty_terminal_tl_switch_screen" });
          @export(&c.terminal_resize, .{ .name = "ghostty_terminal_resize" });
          @export(&c.terminal_set, .{ .name = "ghostty_terminal_set" });
          @export(&c.terminal_vt_write, .{ .name = "ghostty_terminal_vt_write" });
 diff -ruN a/src/terminal/c/main.zig b/src/terminal/c/main.zig
 --- a/src/terminal/c/main.zig
 +++ b/src/terminal/c/main.zig
-@@ -195,6 +195,8 @@
+@@ -195,6 +195,9 @@
  pub const terminal_new = terminal.new;
  pub const terminal_free = terminal.free;
  pub const terminal_reset = terminal.reset;
 +pub const terminal_tl_cursor_set = terminal.tl_cursor_set;
 +pub const terminal_tl_erase_below = terminal.tl_erase_below;
++pub const terminal_tl_switch_screen = terminal.tl_switch_screen;
  pub const terminal_resize = terminal.resize;
  pub const terminal_set = terminal.set;
  pub const terminal_vt_write = terminal.vt_write;
 diff -ruN a/src/terminal/c/terminal.zig b/src/terminal/c/terminal.zig
 --- a/src/terminal/c/terminal.zig
 +++ b/src/terminal/c/terminal.zig
-@@ -1861,6 +1861,31 @@
+@@ -1861,6 +1861,47 @@
      return .success;
  }
  
@@ -101,6 +121,22 @@ diff -ruN a/src/terminal/c/terminal.zig b/src/terminal/c/terminal.zig
 +pub fn tl_erase_below(terminal_: Terminal) callconv(lib.calling_conv) Result {
 +    const wrapper = terminal_ orelse return .invalid_value;
 +    wrapper.terminal.eraseDisplay(.below, false);
++    return .success;
++}
++
++/// tui-lipan patch: make `screen` (0 primary, 1 alternate) the active screen
++/// exactly as it is, without the cursor copy, save or restore that DECSET
++/// 47, 1047 and 1049 perform, and without the VT parser. It still ends the
++/// old screen's hyperlink and clears the selection, as every switch does, so
++/// use it on a copy to read the inactive screen.
++pub fn tl_switch_screen(terminal_: Terminal, screen: c_int) callconv(lib.calling_conv) Result {
++    const wrapper = terminal_ orelse return .invalid_value;
++    const key: TerminalScreen = switch (screen) {
++        0 => .primary,
++        1 => .alternate,
++        else => return .invalid_value,
++    };
++    _ = wrapper.terminal.switchScreen(key) catch return .out_of_memory;
 +    return .success;
 +}
 +

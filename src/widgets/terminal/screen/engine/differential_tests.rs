@@ -582,3 +582,74 @@ fn prompt_resize_keeps_unfinished_sequences() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+/// Reading the primary screen under a running alternate-screen application (the last command's
+/// output, a replay export) must not change what the application sees next: its saved cursor, a
+/// pending wrap, and a sequence it left unfinished.
+#[test]
+fn primary_reads_leave_the_alternate_screen_application_untouched() {
+    let before: &[u8] =
+        b"\x1b]133;A\x1b\\$ \x1b]133;B\x1b\\ls\r\n\x1b]133;C\x1b\\\x1b[32mout\x1b[0m\r\n\
+        \x1b]133;D;0\x1b\\\x1b]133;A\x1b\\$ vim\r\n\
+        \x1b[?1049h\x1b[2;3Hab\x1b7\x1b[1;21Hedge\x1b[3";
+    let tail: &[u8] = b"1mZ\x1b[0m\x1b8Y";
+    let replay_of = |kind| {
+        let mut screen = TerminalScreen::with_engine(kind, 4, 24, 5);
+        screen.process_bytes(before);
+        let mut replay = Vec::new();
+        screen.write_replay_bytes(&mut replay).unwrap();
+        replay
+    };
+    // The replay export repaints the primary screen from the engine's reads with shared code, so
+    // it is byte for byte the same on every engine when the reads are.
+    let reference_replay = replay_of(TerminalEngineKind::Alacritty);
+    for &kind in ENGINES {
+        assert_eq!(
+            String::from_utf8_lossy(&replay_of(kind)),
+            String::from_utf8_lossy(&reference_replay),
+            "{kind:?} replay export"
+        );
+    }
+    let run = |kind, read: bool| {
+        let mut screen = TerminalScreen::with_engine(kind, 4, 24, 5);
+        screen.process_bytes(before);
+        let mut responses = screen.drain_responses();
+        if read {
+            assert_eq!(screen.export_last_command_output().as_deref(), Some("out"));
+            let mut replay = Vec::new();
+            screen.write_replay_bytes(&mut replay).unwrap();
+            assert!(!replay.is_empty());
+        }
+        screen.process_bytes(tail);
+        responses.extend(screen.drain_responses());
+        observe_screen(&mut screen, responses)
+    };
+    let reference = run(TerminalEngineKind::Alacritty, false);
+    let mut failures = Vec::new();
+    for &kind in ENGINES {
+        for read in [false, true] {
+            let actual = run(kind, read);
+            if actual != reference {
+                failures.push(format!(
+                    "{kind:?} (read: {read}):\n  alacritty: {reference:?}\n  {kind:?}: {actual:?}"
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Past the continuation limit a snapshot cannot carry the unfinished sequence, so the Ghostty
+/// engine reads an empty primary screen instead; the running application is still untouched.
+#[cfg(feature = "terminal-ghostty")]
+#[test]
+fn primary_reads_past_the_continuation_limit_are_empty_and_harmless() {
+    let mut screen = TerminalScreen::with_engine(TerminalEngineKind::Ghostty, 4, 24, 5);
+    screen.process_bytes(b"\x1b]133;A\x1b\\$ \x1b]133;C\x1b\\out\r\n\x1b]133;D;0\x1b\\");
+    screen.process_bytes(b"\x1b[?1049h\x1b[2;3Hab\x1b]2;");
+    let title = vec![b'x'; 5 << 20];
+    screen.process_bytes(&title);
+    // The marks are still there; the stand-in primary screen they point into is blank.
+    assert_eq!(screen.export_last_command_output().as_deref(), Some(""));
+    screen.process_bytes(b"\x07Z");
+    assert_eq!(screen.render_snapshot().cursor_col, 5);
+}

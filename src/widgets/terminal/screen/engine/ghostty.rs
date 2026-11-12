@@ -67,6 +67,10 @@ fn ghostty_history_limit(scrollback: usize, cols: u16) -> usize {
         .saturating_add(LINE_BUDGET)
 }
 
+/// Longest unfinished escape sequence (an APC image chunk, say) a primary-screen read under the
+/// alternate screen can carry over; see [`GhosttyEngine::with_primary_screen`].
+const CONTINUATION_LIMIT: usize = 4 << 20;
+
 /// `ED 3`: erase the scrollback.
 const CLEAR_HISTORY: &[u8] = b"\x1b[3J";
 
@@ -280,6 +284,7 @@ impl GhosttyEngine {
                 max_lines: Some(limit),
                 max_bytes: None,
             })?;
+            terminal.set_continuation_limit(CONTINUATION_LIMIT)?;
             let sink = Rc::clone(effects);
             terminal.on_write_pty(Some(Box::new(move |reply: &[u8]| {
                 if let Some(reply) = compatible_response(reply) {
@@ -1100,33 +1105,46 @@ impl TerminalEngine for GhosttyEngine {
             .unwrap_or(false)
     }
 
-    /// libghostty reads only the active screen. Switching away from the alternate screen with
-    /// `DECRST 47` and back clears it, so its contents and cursor are restored from a repaint.
+    /// libghostty reads only the active screen, and showing the primary screen means switching
+    /// screens, which a running alternate-screen application would notice (its saved cursor, a
+    /// pending wrap, an unfinished sequence). So the primary screen is read from a copy restored
+    /// from a snapshot of the whole terminal; the live terminal is never touched.
+    ///
+    /// The snapshot fails only while the child has left a sequence longer than
+    /// [`CONTINUATION_LIMIT`] unfinished. The read then sees an empty primary screen.
     fn with_primary_screen<R>(&mut self, read: impl FnOnce(&Self) -> R) -> R {
         if !self.alternate() {
             return read(self);
         }
-        // Damage up to here is real; what the switches cause is not.
-        self.collect_damage();
         let (rows, cols) = (self.terminal.rows(), self.terminal.cols());
-        let mut repair = Vec::new();
-        let repainted =
-            super::super::replay::write_grid_repaint(self, &mut repair, false, |_, _, _| Ok(()))
-                .and_then(|()| super::super::replay::write_cursor(self, &mut repair, rows, cols));
-        debug_assert!(repainted.is_ok(), "writing into a Vec cannot fail");
-        // Lost on the way: the alternate screen's saved cursor (DECSC) and a pending wrap, which
-        // libghostty offers no way to set.
-        let responses = self.effects.responses.borrow().len();
-        // The copy of the live rows is the alternate screen's; `read` must not see it.
-        self.scratch.get_mut().invalidate();
-        self.terminal.write(b"\x1b[?47l");
-        let result = read(self);
-        self.terminal.write(b"\x1b[?47h");
-        self.terminal.write(&repair);
-        self.effects.responses.borrow_mut().truncate(responses);
-        let _ = self.render.update(&mut self.terminal);
-        self.render.clean();
-        result
+        let mut terminal = self
+            .terminal
+            .snapshot()
+            .and_then(|bytes| Terminal::from_snapshot(&bytes))
+            .or_else(|_| Terminal::new(cols, rows))
+            .unwrap_or_else(|error| panic!("libghostty-vt terminal: {error}"));
+        // Shown as it is: its own cursor, no 47/1047/1049 cursor copy or restore.
+        let _ = terminal.show_screen(Screen::Primary);
+        let mut render =
+            RenderState::new().unwrap_or_else(|error| panic!("libghostty-vt render: {error}"));
+        let _ = render.update(&mut terminal);
+        let copy = Self {
+            terminal,
+            render,
+            damage: DamageAccumulator::default(),
+            effects: Rc::new(Effects::default()),
+            semantic_parser: SemanticVteParser::new(),
+            cursor_requests: self.cursor_requests,
+            default_cursor_style: self.default_cursor_style,
+            scratch: RefCell::new(ReadScratch::default()),
+            scrollback: self.scrollback,
+            compressed_at: None,
+            display_offset: self.display_offset,
+            window_top: None,
+            window_history: self.window_history,
+            held: Vec::new(),
+        };
+        read(&copy)
     }
 }
 

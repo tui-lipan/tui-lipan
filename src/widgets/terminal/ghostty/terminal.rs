@@ -303,12 +303,104 @@ impl Terminal {
         self.with_callbacks(|raw| unsafe { sys::ghostty_terminal_reset(raw) });
     }
 
+    /// Enables continuation tracking for sequences up to `max_bytes` (0 disables it), so a
+    /// [`Self::snapshot`] can be taken while the program has left a sequence unfinished. Costs a
+    /// copy of the unfinished bytes, and nothing at ground.
+    pub fn set_continuation_limit(&mut self, max_bytes: usize) -> Result<(), GhosttyError> {
+        // SAFETY: the option takes `size_t*`.
+        unsafe {
+            self.set_value(
+                sys::GHOSTTY_TERMINAL_OPT_CONTINUATION_MAX_BYTES,
+                Some(&max_bytes),
+            )
+        }
+    }
+
+    /// Encodes the complete state of this terminal: both screens, history, modes, cursors and
+    /// unfinished parser state. Fails when the parser is mid-sequence and continuation tracking
+    /// was off or its limit was exceeded.
+    pub fn snapshot(&self) -> Result<Vec<u8>, GhosttyError> {
+        let mut out: *mut u8 = ptr::null_mut();
+        let mut len = 0usize;
+        // SAFETY: live terminal; NULL selects the default allocator; out-pointers are valid.
+        check(unsafe {
+            sys::ghostty_snapshot_encode_alloc(self.raw(), ptr::null(), &raw mut out, &raw mut len)
+        })?;
+        if out.is_null() {
+            return Ok(Vec::new());
+        }
+        // SAFETY: the library returned `len` initialized bytes at `out`, which it allocated with
+        // the default allocator; they are copied before being freed with it.
+        unsafe {
+            let bytes = std::slice::from_raw_parts(out, len).to_vec();
+            sys::ghostty_free(ptr::null(), out, len);
+            Ok(bytes)
+        }
+    }
+
+    /// A new, independent terminal restored from [`Self::snapshot`] bytes, history included.
+    /// No callback or option set on the original is carried over.
+    pub fn from_snapshot(bytes: &[u8]) -> Result<Self, GhosttyError> {
+        let mut decoder: sys::GhosttySnapshotDecoder = ptr::null_mut();
+        // SAFETY: NULL selects the default allocator; `bytes` outlives the decoder, freed below.
+        check(unsafe {
+            sys::ghostty_snapshot_decoder_new_buf(
+                ptr::null(),
+                &raw mut decoder,
+                bytes.as_ptr(),
+                bytes.len(),
+            )
+        })?;
+        let mut raw: sys::GhosttyTerminal = ptr::null_mut();
+        // SAFETY: live decoder. On success `raw` is a caller-owned terminal with all history
+        // restored; the decoder no longer borrows it once freed, which happens right after.
+        let result = unsafe {
+            let result = sys::ghostty_snapshot_decoder_decode(decoder, &raw mut raw);
+            sys::ghostty_snapshot_decoder_free(decoder);
+            result
+        };
+        let owned = NonNull::new(raw);
+        if let Err(error) = check(result) {
+            if let Some(raw) = owned {
+                // SAFETY: a terminal the failed decode still handed over is ours to free.
+                unsafe { sys::ghostty_terminal_free(raw.as_ptr()) };
+            }
+            return Err(error);
+        }
+        let raw = owned.ok_or(GhosttyError::InvalidValue)?;
+        let handlers = NonNull::from(Box::leak(Box::<Handlers>::default()));
+        let terminal = Self { raw, handlers };
+        // SAFETY: USERDATA takes the pointer itself. Handlers outlive the terminal (Drop).
+        check(unsafe {
+            sys::ghostty_terminal_set(
+                terminal.raw(),
+                sys::GHOSTTY_TERMINAL_OPT_USERDATA,
+                handlers.as_ptr().cast_const().cast(),
+            )
+        })?;
+        Ok(terminal)
+    }
+
     /// Moves the cursor to cell (`x`, `y`) of the active area without going through the VT
     /// parser (tui-lipan's patch). Unlike CUP it ignores origin mode and the margins. It clears a
     /// pending wrap and leaves the saved cursor and any unfinished escape sequence alone.
     pub fn set_cursor_position(&mut self, x: u16, y: u16) -> Result<(), GhosttyError> {
         // SAFETY: live terminal; runs no callback.
         check(self.with_callbacks(|raw| unsafe { sys::ghostty_terminal_tl_cursor_set(raw, x, y) }))
+    }
+
+    /// Makes `screen` the active screen exactly as it is, without the cursor copy, save or
+    /// restore of DECSET 47/1047/1049 and without the VT parser (tui-lipan's patch). It still
+    /// ends the old screen's hyperlink, so use it on a [`Self::from_snapshot`] copy.
+    pub fn show_screen(&mut self, screen: Screen) -> Result<(), GhosttyError> {
+        let key = match screen {
+            Screen::Primary => sys::GHOSTTY_TERMINAL_SCREEN_PRIMARY,
+            Screen::Alternate => sys::GHOSTTY_TERMINAL_SCREEN_ALTERNATE,
+        };
+        // SAFETY: live terminal; runs no callback.
+        check(
+            self.with_callbacks(|raw| unsafe { sys::ghostty_terminal_tl_switch_screen(raw, key) }),
+        )
     }
 
     /// Erases from the cursor to the end of the active area, as ED 0 does, without going

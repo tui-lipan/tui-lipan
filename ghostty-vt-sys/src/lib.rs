@@ -48,6 +48,14 @@ unsafe extern "C" {
     /// Erase from the cursor to the end of the active area, as ED 0 does, without going through
     /// the VT parser.
     pub fn ghostty_terminal_tl_erase_below(terminal: GhosttyTerminal) -> GhosttyResult;
+    /// Make `screen` the active screen exactly as it is, without the cursor copy, save or restore
+    /// of DECSET 47/1047/1049, and without the VT parser. It still ends the old screen's
+    /// hyperlink and clears the selection, so use it on a snapshot copy to read the inactive
+    /// screen. `GHOSTTY_INVALID_VALUE` for a NULL terminal or an unknown screen.
+    pub fn ghostty_terminal_tl_switch_screen(
+        terminal: GhosttyTerminal,
+        screen: GhosttyTerminalScreen,
+    ) -> GhosttyResult;
 }
 pub use modes::*;
 pub use versions::{LIBGHOSTTY_VT_VERSION, ZIG_VERSION};
