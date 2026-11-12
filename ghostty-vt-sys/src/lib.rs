@@ -15,6 +15,18 @@
 //! (`patches/libghostty-vt.patch`) already applied. It needs no network, `curl` or `patch`.
 //! `build.rs` documents every environment variable, including building another source tree or
 //! linking a system or prebuilt library instead.
+//!
+//! # Build cache
+//!
+//! The internal cache key hashes the compiled build recipe, the exact source dependency pin,
+//! the resolved source package manifest and `PATCHES`, and the target/optimization/CPU settings.
+//! A cached prefix from another recipe is ignored, including one restored by CI.
+//!
+//! Local prefixes remain available because cached Cargo build scripts and concurrent builds
+//! can still link them. To reclaim space, stop builds using that cache and remove obsolete
+//! directories under `<cache>/build/`, or clear that whole directory. Cargo watches the linked
+//! archive and rebuilds it when missing. CI restores exact recipe keys only, so subsequent
+//! uploads do not accumulate prefixes from older recipes.
 
 #![no_std]
 #![allow(

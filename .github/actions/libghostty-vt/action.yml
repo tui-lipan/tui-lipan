@@ -7,8 +7,8 @@ description: >-
 runs:
   using: composite
   steps:
-    # tui-lipan-ghostty-vt-sys keys its own build directories by libghostty-vt version, Zig target,
-    # optimization and patch digest, so a restored directory is reused only when it matches.
+    # The sys crate hashes its compiled recipe, pinned source manifest/PATCHES and Zig settings
+    # into each internal directory key. Restored older prefixes cannot satisfy a new recipe.
     - name: Point the libghostty-vt build at a cacheable directory
       shell: bash
       run: echo "GHOSTTY_VT_CACHE_DIR=$RUNNER_TEMP/ghostty-vt" >> "$GITHUB_ENV"
@@ -16,6 +16,8 @@ runs:
     # The sys crate's manifest pins the vendored source version, and build.rs, the patches and
     # versions.rs decide what gets built. Keep the Zig version in sync with ZIG_VERSION in
     # ghostty-vt-sys/src/versions.rs and with the setup-zig step below.
+    # Exact keys keep obsolete recipes out of future uploads and bound each CI cache to the
+    # configurations built by this job. A recipe change deliberately gets a cold build.
     - name: Cache libghostty-vt
       id: cache
       uses: actions/cache@v6
@@ -25,7 +27,6 @@ runs:
           ghostty-vt-${{ runner.os }}-${{ runner.arch }}-zig0.17.1-${{ hashFiles(
           'ghostty-vt-sys/Cargo.toml', 'ghostty-vt-sys/build.rs', 'ghostty-vt-sys/build/**',
           'ghostty-vt-sys/patches/**', 'ghostty-vt-sys/src/versions.rs') }}
-        restore-keys: ghostty-vt-${{ runner.os }}-${{ runner.arch }}-zig0.17.1-
 
     # setup-zig verifies the tarball's minisign signature. Its own Zig caches are off: the build
     # script uses private ones and deletes them, and the installed library is cached above.

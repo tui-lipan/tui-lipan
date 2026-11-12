@@ -33,6 +33,13 @@
 //! Windows MSVC builds the static library with Zig's `windows-msvc` target, which needs the same
 //! Visual Studio C++ tools and Windows SDK that rustc's MSVC target links with.
 //!
+//! Cache entries are keyed by the compiled recipe (`build.rs`, all `build/*.rs`, versions and
+//! this crate's manifest), the pinned source package manifest and PATCHES, and Zig settings.
+//! Old keys are never reused. Prefixes are kept because another Cargo process or cached build
+//! script can still link them. To reclaim old entries, stop builds using this cache and remove
+//! its `build/` directory; Cargo watches linked archives and rebuilds missing entries. CI uses
+//! exact cache keys only, so obsolete recipes are not folded into subsequent cache uploads.
+//!
 //! On docs.rs (`DOCS_RS`) nothing is built or linked: the bindings are committed and rustdoc
 //! never links.
 
@@ -44,6 +51,8 @@ use std::process::Command;
 
 use sha2::{Digest, Sha256};
 
+#[path = "build/cache.rs"]
+mod cache;
 #[path = "build/patch.rs"]
 mod patch;
 #[path = "src/versions.rs"]
@@ -76,7 +85,8 @@ type BuildResult<T> = Result<T, String>;
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed={}", patch::PATCH);
-    println!("cargo:rerun-if-changed=build/patch.rs");
+    println!("cargo:rerun-if-changed=build");
+    println!("cargo:rerun-if-changed=Cargo.toml");
     println!("cargo:rerun-if-changed=src/versions.rs");
     for var in ENV_VARS {
         println!("cargo:rerun-if-env-changed={var}");
@@ -205,40 +215,91 @@ fn emit_link(dir: &Path, link: Link, target: &str) {
     }
 }
 
+/// The Zig settings that affect the installed library.
+struct BuildSettings {
+    optimize: String,
+    cpu: String,
+    zig_target: Option<String>,
+}
+
 /// Builds the static library into a cached install prefix and returns that prefix.
 fn build_from_source(target: &str) -> BuildResult<PathBuf> {
     let cache = cache_dir()?;
-    let optimize = env::var("GHOSTTY_VT_OPTIMIZE").unwrap_or_else(|_| "ReleaseFast".into());
-    let cpu = env::var("GHOSTTY_VT_CPU").unwrap_or_else(|_| "baseline".into());
     let host = env::var("HOST").map_err(|e| e.to_string())?;
-    let zig_target = zig_target(target, &host)?;
-
-    let patch_digest = sha256_file(&Path::new(env!("CARGO_MANIFEST_DIR")).join(patch::PATCH))?;
-    let key = format!(
-        "{VERSION}-{}-{optimize}-{cpu}-{}",
-        zig_target.as_deref().unwrap_or("native"),
-        &patch_digest[..12],
-    );
+    let settings = BuildSettings {
+        optimize: env::var("GHOSTTY_VT_OPTIMIZE").unwrap_or_else(|_| "ReleaseFast".into()),
+        cpu: env::var("GHOSTTY_VT_CPU").unwrap_or_else(|_| "baseline".into()),
+        zig_target: zig_target(target, &host)?,
+    };
+    let key = source_build_key(&settings, target)?;
     let build_dir = cache.join("build").join(&key);
     let prefix = build_dir.join("prefix");
     if prefix.join("lib").join(static_lib_name(target)).exists() {
         return Ok(prefix);
     }
 
-    fs::create_dir_all(&build_dir).map_err(io_err("create", &build_dir))?;
-    let lock_path = build_dir.join(".lock");
-    let lock = File::create(&lock_path).map_err(io_err("create", &lock_path))?;
+    let _lock = lock_build_directory(&build_dir)?;
     // Another build of the same configuration (a parallel `cargo test` and `cargo clippy`)
     // finishes first and this one reuses its result.
-    lock.lock().map_err(io_err("lock", &lock_path))?;
     if prefix.join("lib").join(static_lib_name(target)).exists() {
         return Ok(prefix);
     }
 
+    compile_library(&build_dir, &settings)?;
+    Ok(prefix)
+}
+
+/// Hold the per-key lock until compilation and installation finish.
+fn lock_build_directory(build_dir: &Path) -> BuildResult<File> {
+    fs::create_dir_all(build_dir).map_err(io_err("create", build_dir))?;
+    let lock_path = build_dir.join(".lock");
+    let lock = File::create(&lock_path).map_err(io_err("create", &lock_path))?;
+    lock.lock().map_err(io_err("lock", &lock_path))?;
+    Ok(lock)
+}
+
+/// Fingerprint the actual pinned package metadata as well as the recipe and Zig settings.
+/// Hashing its manifest includes the resolved package version; hashing PATCHES includes every
+/// applied patch digest. Cargo watches both, even if a local dependency override edits them.
+fn source_build_key(settings: &BuildSettings, rust_target: &str) -> BuildResult<String> {
+    let manifest = tui_lipan_ghostty_vt_src::root().join("Cargo.toml");
+    let patches = tui_lipan_ghostty_vt_src::patches_file();
+    let read = |path: &Path| {
+        println!("cargo:rerun-if-changed={}", path.display());
+        fs::read(path).map_err(io_err("read", path))
+    };
+    let manifest = read(&manifest)?;
+    let patches = read(patches)?;
+    let patch_digest = patch::marker()?;
+    let digest = cache::build_key(
+        cache::RECIPE,
+        &[
+            ("version", VERSION.as_bytes()),
+            ("rust-target", rust_target.as_bytes()),
+            (
+                "target",
+                settings
+                    .zig_target
+                    .as_deref()
+                    .unwrap_or("native")
+                    .as_bytes(),
+            ),
+            ("optimize", settings.optimize.as_bytes()),
+            ("cpu", settings.cpu.as_bytes()),
+            ("patch", patch_digest.as_bytes()),
+            ("source-manifest", &manifest),
+            ("source-patches", &patches),
+        ],
+    );
+    Ok(format!("{VERSION}-{digest}"))
+}
+
+/// Compile and install while the caller holds this configuration's cache lock.
+fn compile_library(build_dir: &Path, settings: &BuildSettings) -> BuildResult<()> {
     let (source, deps, patched) = source_trees()?;
     let zig = env::var("ZIG").unwrap_or_else(|_| "zig".into());
     check_zig_version(&zig)?;
-    let source = patch::prepare(&source, &build_dir, !patched)?;
+    let source = patch::prepare(&source, build_dir, !patched)?;
     let staging = build_dir.join("staging");
     let _ = fs::remove_dir_all(&staging);
 
@@ -251,8 +312,8 @@ fn build_from_source(target: &str) -> BuildResult<PathBuf> {
         .arg(&deps)
         .arg("--cache-dir")
         .arg(build_dir.join("zig-local"))
-        .arg(format!("-Doptimize={optimize}"))
-        .arg(format!("-Dcpu={cpu}"))
+        .arg(format!("-Doptimize={}", settings.optimize))
+        .arg(format!("-Dcpu={}", settings.cpu))
         .arg(format!("-Dlib-version-string={VERSION}"))
         // Rust links its own debug info; a stripped archive keeps it out of every binary.
         .arg("-Dstrip=true")
@@ -266,7 +327,7 @@ fn build_from_source(target: &str) -> BuildResult<PathBuf> {
             "GIT_CEILING_DIRECTORIES",
             source.parent().unwrap_or(&source),
         );
-    if let Some(zig_target) = &zig_target {
+    if let Some(zig_target) = &settings.zig_target {
         cmd.arg(format!("-Dtarget={zig_target}"));
     }
     let status = cmd
@@ -279,17 +340,22 @@ fn build_from_source(target: &str) -> BuildResult<PathBuf> {
         ));
     }
 
+    install_prefix(build_dir, &staging, &source)
+}
+
+fn install_prefix(build_dir: &Path, staging: &Path, source: &Path) -> BuildResult<()> {
+    let prefix = build_dir.join("prefix");
     let marker = staging.join("lib").join(patch::MARKER);
     fs::write(&marker, patch::marker()?).map_err(io_err("write", &marker))?;
     let _ = fs::remove_dir_all(&prefix);
-    fs::rename(&staging, &prefix).map_err(io_err("rename", &staging))?;
+    fs::rename(staging, &prefix).map_err(io_err("rename", staging))?;
     // Only a rebuild of this exact configuration could use Zig's caches or the private source
     // copy, and the installed prefix makes that unnecessary. Together they hold several hundred
     // MB, which would also bloat any CI cache of this directory.
     let _ = fs::remove_dir_all(build_dir.join("zig-local"));
-    let _ = fs::remove_dir_all(&source);
+    let _ = fs::remove_dir_all(source);
     let _ = fs::remove_dir_all(build_dir.join("zig-global"));
-    Ok(prefix)
+    Ok(())
 }
 
 /// Fails with install instructions unless `zig` is the required release series. A different
