@@ -1,10 +1,10 @@
 //! Parallel semantic-state and supplementary terminal-protocol observer.
 //!
-//! [`TerminalScreen`](super::TerminalScreen) feeds every PTY byte stream through the primary
-//! Alacritty grid parser *and* a second, independent [`vte::Parser`](alacritty_terminal::vte::Parser)
-//! driven by [`SemanticObserver`]. OSC dispatch tracks working-directory and command-lifecycle
-//! state; CSI dispatch notices XTVERSION, which the grid parser does not implement. Neither path
-//! touches cell/caret state. OSC 22 retains the mouse pointer independently of the grid.
+//! The terminal engine behind [`TerminalScreen`](super::TerminalScreen) reports the OSC sequences
+//! tui-lipan interprets itself, XTVERSION queries, pointer resets and alternate-screen switches in
+//! stream order; [`SemanticObserver`] turns them into working-directory and command-lifecycle
+//! state. None of it touches cell/caret state. OSC 22 retains the mouse pointer independently of
+//! the grid.
 //!
 //! Shell semantic state is intentionally kept out of [`TerminalRenderSnapshot`](super::TerminalRenderSnapshot):
 //! it is runtime metadata (current working directory, foreground command phase, reported
@@ -12,11 +12,9 @@
 
 use std::sync::Arc;
 
-use alacritty_terminal::vte::{Params, Perform};
-
 /// Upper bound on a decoded OSC 7/9;9/133 value this module will retain.
 ///
-/// `vte`'s own OSC buffer (`MAX_OSC_RAW`) already bounds the raw wire payload; this is a second,
+/// The engine's own OSC buffer (`vte`'s `MAX_OSC_RAW` for Alacritty) already bounds the raw wire payload; this is a second,
 /// deliberately generous bound applied after percent-decoding so a pathological child cannot force
 /// unbounded allocation here even if the wire-level limit changes upstream.
 const MAX_SEMANTIC_VALUE_LEN: usize = 8192;
@@ -119,10 +117,18 @@ pub struct TerminalSemanticState {
     pub executable: Option<Arc<str>>,
 }
 
-/// Parallel `vte::Perform` implementation for metadata and unsupported query detection.
+/// Where a prompt's lifecycle crossed a boundary the screen anchors to the cursor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PromptBoundary {
+    /// `OSC 133;A`.
+    Start,
+    /// `OSC 133;C`.
+    CommandStart,
+}
+
+/// Metadata and unsupported-query detection, fed by the terminal engine.
 ///
-/// Every callback besides OSC, CSI, and ESC dispatch keeps the trait's no-op default: this
-/// observer never touches grid/caret state. Mouse pointer requests affect host output only.
+/// This observer never touches grid/caret state. Mouse pointer requests affect host output only.
 #[derive(Debug, Default)]
 pub(super) struct SemanticObserver {
     state: TerminalSemanticState,
@@ -131,10 +137,11 @@ pub(super) struct SemanticObserver {
     pub(super) pointer: super::pointer::PointerState,
     /// Set when the command phase changes, until the screen takes it.
     ///
-    /// This parser reads ahead of the grid. Stopping at each phase change lets the screen advance
-    /// the grid to the same byte and record the mark where the sequence actually arrived, on the
-    /// screen that was active then.
+    /// Stopping at each phase change lets the screen record the mark where the sequence actually
+    /// arrived, on the screen that was active then.
     phase_changed: bool,
+    /// Set by every `OSC 133;A`/`C`, changed phase or not, until the screen takes it.
+    boundary: Option<PromptBoundary>,
 }
 
 impl SemanticObserver {
@@ -164,6 +171,49 @@ impl SemanticObserver {
 
     pub(super) fn take_xtversion_query(&mut self) -> bool {
         std::mem::take(&mut self.xtversion_query)
+    }
+
+    pub(super) fn take_prompt_boundary(&mut self) -> Option<PromptBoundary> {
+        self.boundary.take()
+    }
+
+    /// Whether the last sequence needs the cursor where it arrived.
+    pub(super) fn wants_cursor(&self) -> bool {
+        self.phase_changed || self.boundary.is_some()
+    }
+
+    /// Whether the last sequence queued something that must keep its place among replies.
+    pub(super) fn wants_order(&self) -> bool {
+        self.xtversion_query || self.pointer.response.is_some()
+    }
+
+    /// `OSC 7`, `OSC 9;9`, `OSC 22` or `OSC 133`, split on `;`.
+    pub(super) fn osc(&mut self, params: &[&[u8]]) {
+        let Some(&code) = params.first() else {
+            return;
+        };
+        match code {
+            b"22" if params.len() == 2 => self.pointer.dispatch(params[1]),
+            b"7" => self.handle_osc7(&params[1..]),
+            b"9" if params.get(1).copied() == Some(&b"9"[..]) => self.handle_osc9_9(&params[2..]),
+            b"133" => self.handle_osc133(&params[1..]),
+            _ => {}
+        }
+    }
+
+    /// `CSI > q` / `CSI > 0 q`.
+    pub(super) fn xtversion_query(&mut self) {
+        self.xtversion_query = true;
+    }
+
+    /// `DECSTR` or `RIS`.
+    pub(super) fn pointer_reset(&mut self) {
+        self.pointer = Default::default();
+    }
+
+    /// `DECSET`/`DECRST` 47, 1047 or 1049.
+    pub(super) fn alternate_screen(&mut self, active: bool) {
+        self.pointer.alternate_active = active;
     }
 
     fn set_cwd(&mut self, cwd: TerminalWorkingDirectory) {
@@ -262,6 +312,11 @@ impl SemanticObserver {
             }
         }
 
+        self.boundary = match letter {
+            b'A' => Some(PromptBoundary::Start),
+            b'C' => Some(PromptBoundary::CommandStart),
+            _ => None,
+        };
         match letter {
             b'A' => {
                 self.set_phase(TerminalCommandPhase::Prompt);
@@ -277,57 +332,6 @@ impl SemanticObserver {
             b'D' => self.set_phase(TerminalCommandPhase::Completed { exit_status }),
             _ => {}
         }
-    }
-}
-
-impl Perform for SemanticObserver {
-    fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], ignore: bool, action: char) {
-        if !ignore && intermediates == b"!" && action == 'p' {
-            self.pointer = Default::default();
-        }
-        if !ignore && intermediates == b"?" && matches!(action, 'h' | 'l') {
-            for param in params.iter() {
-                if matches!(param, [47] | [1047] | [1049]) {
-                    self.pointer.alternate_active = action == 'h';
-                }
-            }
-        }
-        if ignore || action != 'q' || intermediates != b">" {
-            return;
-        }
-
-        let mut params = params.iter();
-        let supported_parameter = match params.next() {
-            None => true,
-            Some(&[0]) => params.next().is_none(),
-            Some(_) => false,
-        };
-        if supported_parameter {
-            self.xtversion_query = true;
-        }
-    }
-
-    fn esc_dispatch(&mut self, intermediates: &[u8], ignore: bool, byte: u8) {
-        if !ignore && byte == b'c' && intermediates.is_empty() {
-            self.pointer = Default::default();
-        }
-    }
-
-    fn osc_dispatch(&mut self, params: &[&[u8]], _bell_terminated: bool) {
-        let Some(&code) = params.first() else {
-            return;
-        };
-        match code {
-            b"22" if params.len() == 2 => self.pointer.dispatch(params[1]),
-            b"7" => self.handle_osc7(&params[1..]),
-            b"9" if params.get(1).copied() == Some(&b"9"[..]) => self.handle_osc9_9(&params[2..]),
-            b"133" => self.handle_osc133(&params[1..]),
-            _ => {}
-        }
-    }
-
-    fn terminated(&self) -> bool {
-        self.xtversion_query || self.pointer.response.is_some() || self.phase_changed
     }
 }
 
@@ -484,8 +488,8 @@ fn basename(path: &str) -> Option<Arc<str>> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::screen::SemanticTestDriver as VteParser;
     use super::*;
-    use alacritty_terminal::vte::Parser as VteParser;
 
     fn drive(bytes: &[u8]) -> (TerminalSemanticState, Vec<TerminalSemanticEvent>) {
         let mut parser = VteParser::new();
