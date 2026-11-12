@@ -28,6 +28,9 @@ struct Observation {
     cursor: (u16, u16, bool),
     cursor_style: (crate::style::CaretShape, bool),
     history: usize,
+    /// Evicted lines and history epoch: what absolute line numbers mean.
+    lineage: (u64, u64),
+    scroll_offset: usize,
     alternate: bool,
     key_modes: super::super::super::TerminalKeyModes,
     mouse_mode: super::super::super::MouseModeState,
@@ -48,6 +51,11 @@ fn observe(kind: TerminalEngineKind, chunks: &[&[u8]], size: (u16, u16, usize)) 
         screen.process_bytes(chunk);
         responses.extend(screen.drain_responses());
     }
+    observe_screen(&mut screen, responses)
+}
+
+/// What `screen` reports now, with the replies collected while it was fed.
+fn observe_screen(screen: &mut TerminalScreen, responses: Vec<Vec<u8>>) -> Observation {
     let snapshot = screen.render_snapshot();
     let mut logical = Vec::new();
     let _ = screen.try_for_each_logical_text_line(0, usize::MAX, |line| {
@@ -77,6 +85,8 @@ fn observe(kind: TerminalEngineKind, chunks: &[&[u8]], size: (u16, u16, usize)) 
         ),
         cursor_style: (snapshot.cursor_shape, snapshot.cursor_blinking),
         history: snapshot.total_scrollback_rows,
+        lineage: (snapshot.evicted_lines, snapshot.history_epoch),
+        scroll_offset: snapshot.scrollback_offset,
         alternate: screen.is_alternate_screen(),
         key_modes: screen.key_modes(),
         mouse_mode: screen.mouse_mode(),
@@ -423,4 +433,110 @@ fn alternate_resize_across_pages_matches_alacritty() {
             assert_eq!(observe(kind), reference, "{kind:?}: cursor row {cursor}");
         }
     }
+}
+
+/// Each engine must report the same state however `process_bytes` splits `stream`: at every
+/// single position, and in the given multi-split patterns (piece lengths, repeated). Returns one
+/// failure per engine at most.
+fn split_failures(
+    name: &str,
+    stream: &[u8],
+    size: (u16, u16, usize),
+    patterns: &[&[usize]],
+) -> Vec<String> {
+    let mut failures = Vec::new();
+    for &kind in ENGINES {
+        let whole = observe(kind, &[stream], size);
+        let mut splits: Vec<Vec<&[u8]>> = (1..stream.len())
+            .map(|cut| vec![&stream[..cut], &stream[cut..]])
+            .collect();
+        for pattern in patterns {
+            let mut pieces = Vec::new();
+            let mut start = 0;
+            for &len in pattern.iter().cycle() {
+                if start >= stream.len() {
+                    break;
+                }
+                let end = (start + len.max(1)).min(stream.len());
+                pieces.push(&stream[start..end]);
+                start = end;
+            }
+            splits.push(pieces);
+        }
+        if let Some(pieces) = splits
+            .iter()
+            .find(|pieces| observe(kind, pieces, size) != whole)
+        {
+            let split = observe(kind, pieces, size);
+            let lengths: Vec<usize> = pieces.iter().map(|piece| piece.len()).collect();
+            failures.push(format!(
+                "{kind:?} {name}: pieces {lengths:?}\n  whole: {whole:?}\n  split: {split:?}"
+            ));
+        }
+    }
+    failures
+}
+
+/// Shells send `?1049l` after every command; on the primary screen it must stay a no-op however
+/// the PTY read splits it (libghostty would restore a saved cursor, (0, 0) if none).
+#[test]
+fn leaving_the_alternate_screen_on_the_primary_is_split_invariant() {
+    let stream =
+        b"$ ls\r\none\r\n\x1b]133;D;0\x1b\\\x1b[?1049l\x1b[?1047l\x1b[?47l\x1b]133;A\x1b\\$ ";
+    let failures = split_failures("redundant ?1049l", stream, SIZE, &[&[1], &[3, 1, 2]]);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// `ED 3` drops history; its eviction, marks and export must not depend on the split.
+#[test]
+fn clearing_history_is_split_invariant() {
+    let stream =
+        b"\x1b]133;A\x1b\\$ a\r\n\x1b]133;C\x1b\\1\r\n2\r\n3\r\n4\r\n5\r\n\x1b]133;D;0\x1b\\\
+        \x1b]133;A\x1b\\$ b\r\n\x1b]133;C\x1b\\6\r\n7\r\n\x1b[H\x1b[2J\x1b[3J\x1b]133;D;0\x1b\\\
+        \x1b]133;A\x1b\\$ c\r\n\x1b]133;C\x1b\\8\r\n9\r\n\x1b]133;D;0\x1b\\";
+    let failures = split_failures("ED 3", stream, SIZE, &[&[1], &[2, 5, 1]]);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// `ED 3` while the viewport is scrolled into history: the clear, the eviction count and where
+/// the viewport lands must not depend on how the sequence is split.
+#[test]
+fn clearing_history_while_scrolled_is_split_invariant() {
+    let mut history = b"\x1b]133;A\x1b\\$ a\r\n\x1b]133;C\x1b\\".to_vec();
+    for line in 0..20 {
+        history.extend_from_slice(format!("{line}\r\n").as_bytes());
+    }
+    let rest: &[u8] = b"\x1b]133;D;0\x1b\\x\x1b[3Jy\r\n\x1b]133;A\x1b\\$ b";
+    let size = (4, 24, 5);
+    let run = |kind, pieces: &[&[u8]]| {
+        let mut screen = TerminalScreen::with_engine(kind, size.0, size.1, size.2);
+        screen.process_bytes(&history);
+        screen.set_scrollback(3);
+        let mut responses = screen.drain_responses();
+        for piece in pieces {
+            screen.process_bytes(piece);
+            responses.extend(screen.drain_responses());
+        }
+        observe_screen(&mut screen, responses)
+    };
+    let reference = run(TerminalEngineKind::Alacritty, &[rest]);
+    let mut failures = Vec::new();
+    for &kind in ENGINES {
+        let whole = run(kind, &[rest]);
+        if whole != reference {
+            failures.push(format!(
+                "{kind:?} whole differs from Alacritty:\n  {reference:?}\n  {whole:?}"
+            ));
+        }
+        for cut in 1..rest.len() {
+            let split = run(kind, &[&rest[..cut], &rest[cut..]]);
+            if split != whole {
+                failures.push(format!(
+                    "{kind:?} split at {cut}:\n  whole: {whole:?}\n  split: {split:?}"
+                ));
+                break;
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

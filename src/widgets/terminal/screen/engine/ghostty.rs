@@ -73,6 +73,29 @@ const CLEAR_HISTORY: &[u8] = b"\x1b[3J";
 /// Sequences that leave the alternate screen.
 const LEAVE_ALTERNATE: [&[u8]; 3] = [b"\x1b[?1049l", b"\x1b[?1047l", b"\x1b[?47l"];
 
+/// How many bytes at the end of `bytes` could still become [`CLEAR_HISTORY`] or one of
+/// [`LEAVE_ALTERNATE`] once more output arrives: the longest suffix, starting at an escape, that
+/// is a proper prefix of one of them.
+fn special_sequence_prefix(bytes: &[u8]) -> usize {
+    let longest = LEAVE_ALTERNATE
+        .iter()
+        .chain([&CLEAR_HISTORY])
+        .map(|sequence| sequence.len())
+        .max()
+        .unwrap_or(0);
+    let from = bytes.len().saturating_sub(longest - 1);
+    (from..bytes.len())
+        .find(|&start| {
+            let tail = &bytes[start..];
+            tail[0] == 0x1b
+                && LEAVE_ALTERNATE
+                    .iter()
+                    .chain([&CLEAR_HISTORY])
+                    .any(|sequence| sequence.len() > tail.len() && sequence.starts_with(tail))
+        })
+        .map_or(0, |start| bytes.len() - start)
+}
+
 /// Only advertise protocols the engine contract can deliver. Resize has no observer, and
 /// hosts drain replies after child output, so an idle child waiting for a mode 2048 resize
 /// report would stall. Keep it on SIGWINCH, like Alacritty, until resize replies have a path.
@@ -239,6 +262,12 @@ pub(in super::super) struct GhosttyEngine {
     /// when it was taken: what the next write's evictions are measured against.
     window_top: Option<TrackedRef>,
     window_history: usize,
+    /// The end of the last write that may still become a sequence [`Self::write`] treats
+    /// specially (see [`special_sequence_prefix`]); written ahead of the next write. Recognizing
+    /// it here instead of in libghostty's parser keeps the treatment independent of how the PTY
+    /// reads split the output. It is part of an unfinished escape sequence, so holding it back
+    /// changes no cell, cursor or reply.
+    held: Vec<u8>,
 }
 
 impl GhosttyEngine {
@@ -361,6 +390,22 @@ impl GhosttyEngine {
 
     /// Write `bytes` to libghostty in bounded pieces, measuring each.
     fn write(&mut self, bytes: &[u8]) -> GridStep {
+        let joined;
+        let bytes = if self.held.is_empty() {
+            bytes
+        } else {
+            let mut held = std::mem::take(&mut self.held);
+            held.extend_from_slice(bytes);
+            joined = held;
+            &joined[..]
+        };
+        let (bytes, held) = bytes.split_at(bytes.len() - special_sequence_prefix(bytes));
+        self.held = held.to_vec();
+        self.write_whole(bytes)
+    }
+
+    /// [`Self::write`] for bytes that hold no unfinished special sequence at the end.
+    fn write_whole(&mut self, bytes: &[u8]) -> GridStep {
         self.scratch.get_mut().invalidate();
         let mut total = GridStep::default();
         let mut start = 0;
@@ -616,6 +661,7 @@ impl TerminalEngine for GhosttyEngine {
             display_offset: 0,
             window_top: None,
             window_history: 0,
+            held: Vec::new(),
         };
         engine.set_palette(&TerminalColorPalette::default());
         engine.sync_cursor_blink();
@@ -633,6 +679,7 @@ impl TerminalEngine for GhosttyEngine {
         *self.effects.title.borrow_mut() = None;
         self.semantic_parser = SemanticVteParser::new();
         self.cursor_requests = CursorRequests::default();
+        self.held.clear();
         self.display_offset = 0;
         self.window_top = None;
         self.window_history = 0;
@@ -1084,6 +1131,29 @@ impl TerminalEngine for GhosttyEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only a suffix that can still become a special sequence is held, and nothing once it can
+    /// no longer.
+    #[test]
+    fn only_unfinished_special_sequences_are_held() {
+        for (bytes, held) in [
+            (&b"text\x1b"[..], 1),
+            (b"text\x1b[", 2),
+            (b"\x1b[3", 3),
+            (b"\x1b[?104", 6),
+            (b"\x1b[?1049", 7),
+            (b"\x1b[?47", 5),
+            (b"\x1b[3J", 0),
+            (b"\x1b[?1049l", 0),
+            (b"\x1b[31", 0),
+            (b"\x1b[?1048", 0),
+            (b"\x1b]133;A\x1b\\", 0),
+            (b"\x1b[?1049lx\x1b[?", 3),
+            (b"", 0),
+        ] {
+            assert_eq!(special_sequence_prefix(bytes), held, "{bytes:?}");
+        }
+    }
 
     /// Cutting long runs into pieces must leave exactly the grid one write leaves: graphemes,
     /// wide characters and multi-byte sequences that straddle a piece boundary included.
