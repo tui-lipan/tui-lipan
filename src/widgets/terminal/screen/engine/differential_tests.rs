@@ -41,6 +41,8 @@ struct Observation {
     semantic: super::super::super::TerminalSemanticState,
     marks: Vec<SemanticMark>,
     last_output: Option<String>,
+    /// What [`Step::ReadPrimary`] steps returned: the last command's output and the replay export.
+    reads: Vec<(Option<String>, Vec<u8>)>,
 }
 
 fn observe(kind: TerminalEngineKind, chunks: &[&[u8]], size: (u16, u16, usize)) -> Observation {
@@ -97,6 +99,7 @@ fn observe_screen(screen: &mut TerminalScreen, responses: Vec<Vec<u8>>) -> Obser
         semantic: screen.semantic_state(),
         marks: screen.semantic_marks(),
         last_output: screen.export_last_command_output(),
+        reads: Vec::new(),
     }
 }
 
@@ -487,17 +490,6 @@ fn leaving_the_alternate_screen_on_the_primary_is_split_invariant() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// `ED 3` drops history; its eviction, marks and export must not depend on the split.
-#[test]
-fn clearing_history_is_split_invariant() {
-    let stream =
-        b"\x1b]133;A\x1b\\$ a\r\n\x1b]133;C\x1b\\1\r\n2\r\n3\r\n4\r\n5\r\n\x1b]133;D;0\x1b\\\
-        \x1b]133;A\x1b\\$ b\r\n\x1b]133;C\x1b\\6\r\n7\r\n\x1b[H\x1b[2J\x1b[3J\x1b]133;D;0\x1b\\\
-        \x1b]133;A\x1b\\$ c\r\n\x1b]133;C\x1b\\8\r\n9\r\n\x1b]133;D;0\x1b\\";
-    let failures = split_failures("ED 3", stream, SIZE, &[&[1], &[2, 5, 1]]);
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
-}
-
 /// `ED 3` while the viewport is scrolled into history: the clear, the eviction count and where
 /// the viewport lands must not depend on how the sequence is split.
 #[test]
@@ -652,4 +644,164 @@ fn primary_reads_past_the_continuation_limit_are_empty_and_harmless() {
     assert_eq!(screen.export_last_command_output().as_deref(), Some(""));
     screen.process_bytes(b"\x07Z");
     assert_eq!(screen.render_snapshot().cursor_col, 5);
+}
+
+/// One step of a chunk-invariance scenario.
+#[derive(Clone, Copy)]
+enum Step<'a> {
+    /// Child output, split as the run asks.
+    Write(&'a [u8]),
+    /// A host resize to (rows, cols).
+    Resize(u16, u16),
+    /// The host reads the primary screen: the last command's output and a replay export.
+    ReadPrimary,
+}
+
+/// A named chunk-invariance scenario: screen size (rows, cols, scrollback) and its steps.
+type Scenario<'a> = (&'static str, (u16, u16, usize), Vec<Step<'a>>);
+
+/// How a run splits its writes.
+#[derive(Clone, Copy, Debug)]
+enum Split<'a> {
+    Whole,
+    /// Write step `step` in two at byte `at`; the others whole.
+    At {
+        step: usize,
+        at: usize,
+    },
+    /// Every write in pieces of these lengths, repeated.
+    Pattern(&'a [usize]),
+}
+
+fn run_steps(
+    kind: TerminalEngineKind,
+    size: (u16, u16, usize),
+    steps: &[Step<'_>],
+    split: Split<'_>,
+) -> Observation {
+    let mut screen = TerminalScreen::with_engine(kind, size.0, size.1, size.2);
+    let mut responses = Vec::new();
+    let mut reads = Vec::new();
+    for (index, step) in steps.iter().enumerate() {
+        match *step {
+            Step::Write(bytes) => {
+                let pieces: Vec<&[u8]> = match split {
+                    Split::At { step, at } if step == index => vec![&bytes[..at], &bytes[at..]],
+                    Split::Pattern(lengths) => {
+                        let mut pieces = Vec::new();
+                        let mut start = 0;
+                        for &len in lengths.iter().cycle() {
+                            if start >= bytes.len() {
+                                break;
+                            }
+                            let end = (start + len.max(1)).min(bytes.len());
+                            pieces.push(&bytes[start..end]);
+                            start = end;
+                        }
+                        pieces
+                    }
+                    _ => vec![bytes],
+                };
+                for piece in pieces {
+                    screen.process_bytes(piece);
+                }
+            }
+            Step::Resize(rows, cols) => screen.resize(rows, cols),
+            Step::ReadPrimary => {
+                let mut replay = Vec::new();
+                screen.write_replay_bytes(&mut replay).unwrap();
+                reads.push((screen.export_last_command_output(), replay));
+            }
+        }
+        responses.extend(screen.drain_responses());
+    }
+    let mut observation = observe_screen(&mut screen, responses);
+    observation.reads = reads;
+    observation
+}
+
+/// The state a screen reaches must depend only on the bytes and the host's operations, never on
+/// how `process_bytes` happened to split the bytes, and never on whether the host read the
+/// screen. Every write of every scenario is split at every byte, and all writes together in a
+/// few multi-split patterns. Each engine must match its own unsplit run, and every engine must
+/// match Alacritty.
+#[test]
+fn every_engine_is_chunk_invariant() {
+    let mut ed3 = b"\x1b]133;A\x1b\\$ a\r\n\x1b]133;C\x1b\\".to_vec();
+    for line in 0..12 {
+        ed3.extend_from_slice(format!("{line}\r\n").as_bytes());
+    }
+    ed3.extend_from_slice(b"\x1b]133;D;0\x1b\\\x1b]133;A\x1b\\$ b\r\n\x1b[3J\x1b]133;C\x1b\\8\r\n");
+    let graphemes =
+        "e\u{301} 1\u{fe0f}\u{20e3} \u{1100}\u{1161}\u{11a8} 👨\u{200d}👩\u{200d}👧 \u{2764}\u{fe0f}x\r\n"
+            .repeat(2);
+    let scenarios: [Scenario<'_>; 5] = [
+        (
+            "redundant ?1049l on the primary screen",
+            (4, 24, 5),
+            vec![Step::Write(
+                b"$ ls\r\none\r\n\x1b]133;D;0\x1b\\\x1b[?1049l\x1b[?1047l\x1b]133;A\x1b\\$ ",
+            )],
+        ),
+        ("ED 3 with history and marks", (4, 24, 5), vec![Step::Write(&ed3)]),
+        ("graphemes", (4, 40, 5), vec![Step::Write(graphemes.as_bytes())]),
+        (
+            "prompt resizes with unfinished CSI, OSC and UTF-8",
+            (4, 24, 5),
+            vec![
+                Step::Write(b"out\r\n\x1b]133;A\x1b\\$ cmd \x1b[1;"),
+                Step::Resize(6, 16),
+                Step::Write(b"31mX\x1b[0m\x1b]0;ti"),
+                Step::Resize(4, 24),
+                Step::Write(b"tle\x07\xe6\x9d"),
+                Step::Resize(5, 20),
+                Step::Write(b"\xb1Y"),
+            ],
+        ),
+        (
+            "alternate-screen application read and continued",
+            (4, 24, 5),
+            vec![
+                Step::Write(
+                    b"\x1b]133;A\x1b\\$ \x1b]133;B\x1b\\ls\r\n\x1b]133;C\x1b\\\x1b[32mout\x1b[0m\r\n\
+                    \x1b]133;D;0\x1b\\\x1b]133;A\x1b\\$ vim\r\n\
+                    \x1b[?1049h\x1b[2;3Hab\x1b7\x1b[1;21Hedge\x1b[3",
+                ),
+                Step::ReadPrimary,
+                Step::Write(b"1mZ\x1b[0m\x1b8Y\x1b[4;23Hzz"),
+                Step::ReadPrimary,
+                Step::Write(b"w\x1b[?1049l"),
+                Step::ReadPrimary,
+            ],
+        ),
+    ];
+    let patterns: [&[usize]; 3] = [&[1], &[2, 3, 1], &[7, 1, 4]];
+    let mut failures = Vec::new();
+    for (name, size, steps) in &scenarios {
+        let reference = run_steps(TerminalEngineKind::Alacritty, *size, steps, Split::Whole);
+        for &kind in ENGINES {
+            let whole = run_steps(kind, *size, steps, Split::Whole);
+            if whole != reference {
+                failures.push(format!(
+                    "{kind:?} differs from Alacritty on {name}:\n  alacritty: {reference:?}\n  {kind:?}: {whole:?}"
+                ));
+            }
+            let mut splits: Vec<Split<'_>> = patterns.iter().map(|p| Split::Pattern(p)).collect();
+            for (step, write) in steps.iter().enumerate() {
+                if let Step::Write(bytes) = write {
+                    splits.extend((1..bytes.len()).map(|at| Split::At { step, at }));
+                }
+            }
+            if let Some((split, observed)) = splits
+                .into_iter()
+                .map(|split| (split, run_steps(kind, *size, steps, split)))
+                .find(|(_, observed)| *observed != whole)
+            {
+                failures.push(format!(
+                    "{kind:?} on {name} depends on the split {split:?}:\n  whole: {whole:?}\n  split: {observed:?}"
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
