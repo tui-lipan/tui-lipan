@@ -303,6 +303,21 @@ impl Terminal {
         self.with_callbacks(|raw| unsafe { sys::ghostty_terminal_reset(raw) });
     }
 
+    /// Moves the cursor to cell (`x`, `y`) of the active area without going through the VT
+    /// parser (tui-lipan's patch). Unlike CUP it ignores origin mode and the margins. It clears a
+    /// pending wrap and leaves the saved cursor and any unfinished escape sequence alone.
+    pub fn set_cursor_position(&mut self, x: u16, y: u16) -> Result<(), GhosttyError> {
+        // SAFETY: live terminal; runs no callback.
+        check(self.with_callbacks(|raw| unsafe { sys::ghostty_terminal_tl_cursor_set(raw, x, y) }))
+    }
+
+    /// Erases from the cursor to the end of the active area, as ED 0 does, without going
+    /// through the VT parser (tui-lipan's patch).
+    pub fn erase_below(&mut self) -> Result<(), GhosttyError> {
+        // SAFETY: live terminal; runs no callback.
+        check(self.with_callbacks(|raw| unsafe { sys::ghostty_terminal_tl_erase_below(raw) }))
+    }
+
     // ---- options ---------------------------------------------------------------------------
 
     /// Sets an option whose value is passed by pointer.

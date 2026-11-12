@@ -540,3 +540,45 @@ fn clearing_history_while_scrolled_is_split_invariant() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// A host resize while a prompt is active must not disturb a sequence the child left unfinished:
+/// the continuation completes it exactly as it would have without the resize.
+#[test]
+fn prompt_resize_keeps_unfinished_sequences() {
+    let before: &[u8] = b"out\r\n\x1b]133;A\x1b\\$ make && run ";
+    let cases: [(&str, &[u8], &[u8]); 7] = [
+        ("nothing pending (control)", b"", b"X"),
+        ("saved cursor", b"\x1b7", b"\x1b8X"),
+        ("origin mode", b"\x1b[2;4r\x1b[?6h", b"X\x1b[?6l\x1b[r"),
+        // `before` leaves the cursor at column 14; ten more cells fill the row to its last column.
+        ("pending wrap", b"tencharsxx", b"Y"),
+        ("CSI", b"\x1b[1;", b"31mX\x1b[0m"),
+        ("OSC", b"\x1b]0;ti", b"tle\x07X"),
+        ("UTF-8", b"\xe6\x9d", b"\xb1X"),
+    ];
+    let mut failures = Vec::new();
+    for (name, head, tail) in cases {
+        for (rows, cols) in [(6, 24), (4, 16), (5, 30)] {
+            let run = |kind| {
+                let mut screen = TerminalScreen::with_engine(kind, 4, 24, 5);
+                screen.process_bytes(before);
+                screen.process_bytes(head);
+                let mut responses = screen.drain_responses();
+                screen.resize(rows, cols);
+                screen.process_bytes(tail);
+                responses.extend(screen.drain_responses());
+                observe_screen(&mut screen, responses)
+            };
+            let reference = run(TerminalEngineKind::Alacritty);
+            for &kind in ENGINES {
+                let actual = run(kind);
+                if actual != reference {
+                    failures.push(format!(
+                        "{kind:?} {name} resized to {rows}x{cols}:\n  alacritty: {reference:?}\n  {kind:?}: {actual:?}"
+                    ));
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

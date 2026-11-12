@@ -547,6 +547,9 @@ impl GhosttyEngine {
     ///
     /// Only the part on the live screen can be erased: libghostty cannot write into history, so a
     /// prompt that starts above the screen keeps its first rows.
+    ///
+    /// The erase and every cursor move here are direct grid calls, never VT through the child's
+    /// parser, so a sequence the child left unfinished completes as written after the resize.
     fn prepare_prompt_resize(&mut self, mark: PromptAnchor) -> Option<PromptResize> {
         if self.alternate() {
             return None;
@@ -562,17 +565,18 @@ impl GhosttyEngine {
         let (x, y) = self.terminal.cursor_position();
         let anchor_row = mark.absolute_line as isize - history as isize;
         let cursor_line_offset = (y as isize - anchor_row).max(0) as usize;
-        let mut erase = String::new();
-        match usize::try_from(anchor_row) {
-            Ok(row) if column < cols => {
-                erase.push_str(&format!("\x1b[{};{}H\x1b[J", row + 1, column + 1));
-            }
-            Ok(row) => erase.push_str(&format!("\x1b[{};1H\x1b[J", row + 2)),
-            Err(_) => erase.push_str("\x1b[H\x1b[J"),
+        // As Alacritty erases it: the anchor's row from its column, and every row below.
+        let erase_from = match usize::try_from(anchor_row) {
+            Ok(row) if column < cols => Some((column, row)),
+            Ok(row) => (row + 1 < rows).then_some((0, row + 1)),
+            Err(_) => Some((0, 0)),
+        };
+        if let Some((column, row)) = erase_from {
+            let _ = self.terminal.set_cursor_position(column as u16, row as u16);
+            let _ = self.terminal.erase_below();
         }
         // Back to the shell's cursor: the height change scrolls against it.
-        erase.push_str(&format!("\x1b[{};{}H", y + 1, x + 1));
-        self.terminal.write(erase.as_bytes());
+        let _ = self.terminal.set_cursor_position(x, y);
         Some(PromptResize {
             anchor,
             cursor_line_offset,
@@ -599,8 +603,7 @@ impl GhosttyEngine {
         if let Some((line, column)) = self.tracked_absolute(&resize.anchor)
             && let Some(row) = line.checked_sub(self.history_size())
         {
-            self.terminal
-                .write(format!("\x1b[{};{}H", row + 1, column + 1).as_bytes());
+            let _ = self.terminal.set_cursor_position(column, row as u16);
         }
         let _ = self.terminal.resize(cols, reflow_rows, width, height);
         if let Some((line, _)) = self.tracked_absolute(&resize.anchor) {
@@ -608,8 +611,7 @@ impl GhosttyEngine {
             let row = (anchor_row + resize.cursor_line_offset as isize)
                 .clamp(0, reflow_rows as isize - 1);
             let col = resize.cursor_column.min(usize::from(cols) - 1);
-            self.terminal
-                .write(format!("\x1b[{};{}H", row + 1, col + 1).as_bytes());
+            let _ = self.terminal.set_cursor_position(col as u16, row as u16);
         }
         if reflow_rows != rows {
             let _ = self.terminal.resize(cols, rows, width, height);
