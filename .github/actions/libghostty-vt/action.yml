@@ -1,0 +1,37 @@
+name: libghostty-vt build cache
+description: >-
+  Restores the libghostty-vt static library that `terminal-ghostty` (tui-lipan-ghostty-vt-sys)
+  builds, and installs Zig only when the library has to be built. A cold build takes about 1.5 min
+  on Linux and about 10 min on Windows MSVC.
+
+runs:
+  using: composite
+  steps:
+    # tui-lipan-ghostty-vt-sys keys its own build directories by libghostty-vt version, Zig target,
+    # optimization and patch digest, so a restored directory is reused only when it matches.
+    - name: Point the libghostty-vt build at a cacheable directory
+      shell: bash
+      run: echo "GHOSTTY_VT_CACHE_DIR=$RUNNER_TEMP/ghostty-vt" >> "$GITHUB_ENV"
+
+    # The sys crate's manifest pins the vendored source version, and build.rs, the patches and
+    # versions.rs decide what gets built. Keep the Zig version in sync with ZIG_VERSION in
+    # ghostty-vt-sys/src/versions.rs and with the setup-zig step below.
+    - name: Cache libghostty-vt
+      id: cache
+      uses: actions/cache@v6
+      with:
+        path: ${{ runner.temp }}/ghostty-vt
+        key: >-
+          ghostty-vt-${{ runner.os }}-${{ runner.arch }}-zig0.17.1-${{ hashFiles(
+          'ghostty-vt-sys/Cargo.toml', 'ghostty-vt-sys/build.rs', 'ghostty-vt-sys/build/**',
+          'ghostty-vt-sys/patches/**', 'ghostty-vt-sys/src/versions.rs') }}
+        restore-keys: ghostty-vt-${{ runner.os }}-${{ runner.arch }}-zig0.17.1-
+
+    # setup-zig verifies the tarball's minisign signature. Its own Zig caches are off: the build
+    # script uses private ones and deletes them, and the installed library is cached above.
+    - name: Install Zig 0.17.1
+      if: steps.cache.outputs.cache-hit != 'true'
+      uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+      with:
+        version: 0.17.1
+        use-cache: false

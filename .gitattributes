@@ -2,3 +2,6 @@
 tests/fixtures/terminal-corpus/*.vt -text -whitespace
 # Goldens must retain LF even when core.autocrlf is enabled.
 tests/fixtures/terminal-corpus/*.json text eol=lf
+
+# Unified diff context uses a single space for an empty source line.
+ghostty-vt-sys/patches/*.patch -text whitespace=-blank-at-eol

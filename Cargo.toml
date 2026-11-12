@@ -37,7 +37,9 @@ exclude = [
 all-features = true
 
 [workspace]
-members = ["tui-lipan-macro"]
+members = ["tui-lipan-macro", "ghostty-vt-sys"]
+# Generated and published on its own; see scripts/package-ghostty-src.sh.
+exclude = ["ghostty-vt-src"]
 
 [profile.dev]
 debug = 0

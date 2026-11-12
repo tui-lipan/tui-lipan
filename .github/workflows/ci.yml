@@ -53,6 +53,9 @@ jobs:
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
 
+      - name: Restore or prepare libghostty-vt
+        uses: ./.github/actions/libghostty-vt
+
       - name: Fetch dependencies
         run: cargo fetch
 
@@ -81,6 +84,9 @@ jobs:
 
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
+
+      - name: Restore or prepare libghostty-vt
+        uses: ./.github/actions/libghostty-vt
 
       - name: Check all targets on MSRV
         run: cargo check --workspace --all-targets --all-features
@@ -111,6 +117,9 @@ jobs:
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
 
+      - name: Restore or prepare libghostty-vt
+        uses: ./.github/actions/libghostty-vt
+
       - name: Check all targets on MSRV
         run: cargo check --workspace --all-targets --all-features
 
@@ -127,6 +136,9 @@ jobs:
 
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
+
+      - name: Restore or prepare libghostty-vt
+        uses: ./.github/actions/libghostty-vt
 
       - name: Fetch dependencies
         run: cargo fetch
@@ -154,6 +166,9 @@ jobs:
 
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
+
+      - name: Restore or prepare libghostty-vt
+        uses: ./.github/actions/libghostty-vt
 
       # Darwin POSIX shm descriptors cannot be read or sought. Exercise the actual mmap
       # acquisition and cleanup here; Linux cannot detect a regression to descriptor reads.
@@ -187,6 +202,9 @@ jobs:
 
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
+
+      - name: Restore or prepare libghostty-vt
+        uses: ./.github/actions/libghostty-vt
 
       - name: Fetch dependencies
         run: cargo fetch

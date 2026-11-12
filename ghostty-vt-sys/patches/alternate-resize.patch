@@ -1,0 +1,105 @@
+--- a/src/terminal/PageList.zig
++++ b/src/terminal/PageList.zig
+@@ -1251,6 +1251,10 @@
+     /// resize/reflow behavior depends on the cursor position.
+     cursor: ?Cursor = null,
+ 
++    /// Crop rows below the cursor even when they contain text. Used by screens
++    /// without history, where shifting the cursor row into history loses it.
++    preserve_cursor: bool = false,
++
+     /// Whether the resize may pull rows out of scrollback back into the
+     /// active area. If false, growing rows always appends blank rows at the
+     /// bottom and a column reflow keeps the top of the active area on the
+@@ -3060,7 +3064,10 @@
+                 // behavior because it seemed fine in an ocean of differing behavior
+                 // between terminal apps. I'm completely open to changing it as long
+                 // as resize behavior isn't regressed in a user-hostile way.
+-                const trimmed = self.trimTrailingBlankRows(self.rows - rows);
++                const trimmed = if (opts.preserve_cursor)
++                    self.trimTrailingRows(self.rows - @max(rows, if (opts.cursor) |c| c.y + 1 else rows), true)
++                else
++                    self.trimTrailingBlankRows(self.rows - rows);
+ 
+                 // Account for our trimmed rows in the total row cache
+                 self.total_rows -= trimmed;
+@@ -3409,6 +3416,17 @@
+     self: *PageList,
+     max: size.CellCountInt,
+ ) size.CellCountInt {
++    return self.trimTrailingRows(max, false);
++}
++
++/// A forced crop invalidates pins in discarded rows instead of letting them
++/// prevent the crop. The caller guarantees that the live cursor is retained.
++fn trimTrailingRows(
++    self: *PageList,
++    max: size.CellCountInt,
++    force: bool,
++) size.CellCountInt {
++    if (max == 0) return 0;
+     var trimmed: size.CellCountInt = 0;
+     var invalidated_node: ?*List.Node = null;
+     const bl_pin = self.getBottomRight(.screen).?;
+@@ -3417,7 +3435,7 @@
+         // If the row has any text then we're done. A row marked blank
+         // has no text, so we don't need to read its cells.
+         const rac = row_pin.rowAndCell();
+-        if (!rac.row.blank and
++        if (!force and !rac.row.blank and
+             pagepkg.Cell.hasTextAny(row_pin.cells(.all))) return trimmed;
+ 
+         // If our tracked pins are in this row then we cannot trim it
+@@ -3427,12 +3445,12 @@
+         for (pin_keys) |p| {
+             if (p.node != row_pin.node or
+                 p.y != row_pin.y) continue;
+-            return trimmed;
+-        }
+-
+-        // No text, we can trim this row. Because it has
+-        // no text we can also be sure it has no styling
+-        // so we don't need to worry about memory.
++            if (!force) return trimmed;
++            p.* = row_pin.up(1).?;
++            p.garbage = true;
++        }
++
++        // This row is discarded. Reset its cells before retiring the storage.
+         if (row_pin.node.rows() > 1 and invalidated_node != row_pin.node) {
+             // Shrinking a retained page changes its valid row-coordinate range.
+             self.invalidateNodeLayout(row_pin.node);
+--- a/src/terminal/Screen.zig
++++ b/src/terminal/Screen.zig
+@@ -2243,6 +2243,7 @@
+     // modify its X/Y for reflow. Do this before changing any state since
+     // tracking the pin can fail.
+     const saved_cursor_pin: ?*Pin = saved_cursor: {
++        if (self.no_scrollback) break :saved_cursor null;
+         const sc = self.saved_cursor orelse break :saved_cursor null;
+         const pin = self.pages.pin(.{ .active = .{
+             .x = sc.x,
+@@ -2328,6 +2329,7 @@
+         .rows = opts.rows,
+         .cols = opts.cols,
+         .reflow = opts.reflow,
++        .preserve_cursor = self.no_scrollback,
+         .cursor = .{
+             .x = self.cursor.x,
+             .y = self.cursor.y,
+@@ -2389,6 +2391,15 @@
+         self.cursor.style = .{};
+         self.cursor.style_id = 0;
+     };
++
++    // Screens without history clamp the saved coordinates independently of
++    // scrolling the live cursor into view, as xterm and Alacritty do.
++    if (self.no_scrollback) {
++        if (self.saved_cursor) |*sc| {
++            sc.x = @min(sc.x, opts.cols - 1);
++            sc.y = @min(sc.y, opts.rows - 1);
++        }
++    }
+ 
+     // If we reflowed a saved cursor, update it.
+     if (saved_cursor_pin) |p| {
