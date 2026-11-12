@@ -18,6 +18,18 @@ struct Fixture {
     ops: Vec<Operation>,
     #[serde(default)]
     known_defects: Vec<KnownDefect>,
+    /// Reviewed differences of a second engine from the Alacritty golden.
+    #[serde(default)]
+    differences: Vec<Difference>,
+}
+
+/// A field (exact JSON pointer) a cross-engine comparison ignores. Never applies to the golden
+/// or chunk-split checks.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Difference {
+    path: String,
+    reason: String,
 }
 
 #[derive(Deserialize)]
@@ -54,7 +66,11 @@ struct KnownDifference {
 #[derive(Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum CheckKind {
+    /// The engine's output changes when the same bytes arrive in different chunks.
     ChunkSplit,
+    /// A second engine's output differs from the Alacritty golden (`seed` is unused, write `0`).
+    #[cfg_attr(not(feature = "terminal-ghostty"), allow(dead_code))]
+    Engine,
 }
 
 fn check_split(
@@ -214,8 +230,13 @@ fn dump(
         "clipboard": clipboard, "bells": screen.bell_count()})
 }
 
-fn run(fixture: &Fixture, bytes: &[u8], seed: Option<u64>) -> Value {
-    let mut screen = TerminalScreen::new(fixture.rows, fixture.cols, fixture.scrollback);
+fn run(
+    fixture: &Fixture,
+    bytes: &[u8],
+    factory: impl Fn(u16, u16, usize) -> TerminalScreen,
+    seed: Option<u64>,
+) -> Value {
+    let mut screen = factory(fixture.rows, fixture.cols, fixture.scrollback);
     screen.set_program_status_enabled(true);
     screen.set_xtversion_enabled(true);
     screen.set_terminal_identity("terminal-corpus");
@@ -367,13 +388,13 @@ fn check_golden(path: &Path, expected: &Value) -> Result<(), String> {
 fn check_fixture(path: &Path, failures: &mut Vec<String>) {
     let fixture = load_fixture(path);
     let bytes = fs::read(path.with_extension("vt")).unwrap();
-    let expected = run(&fixture, &bytes, None);
+    let expected = run(&fixture, &bytes, TerminalScreen::new, None);
     if let Err(failure) = check_golden(path, &expected) {
         failures.push(failure);
     }
     for seed in split_seeds(&fixture, "alacritty") {
         let defect = defect_for_seed(&fixture, "alacritty", seed);
-        let actual = run(&fixture, &bytes, Some(seed));
+        let actual = run(&fixture, &bytes, TerminalScreen::new, Some(seed));
         if let Err(diff) = check_split(&expected, &actual, defect) {
             failures.push(format!("{} seed {seed}: {diff}", path.display()));
         }
@@ -425,4 +446,71 @@ fn compact_dump_keeps_styled_blank_rows_and_complex_cells() {
     assert_eq!(styled["rows"].as_array().unwrap().len(), 3);
     assert_eq!(styled["rows"][2]["text"], "");
     assert_eq!(styled["rows"][2]["styles"][0]["width"], 1);
+}
+
+/// Null the allowlisted fields in both values. Every path must exist in the golden.
+#[cfg(feature = "terminal-ghostty")]
+fn without_differences(
+    golden: &mut Value,
+    actual: &mut Value,
+    differences: &[Difference],
+) -> Result<(), String> {
+    for difference in differences {
+        if difference.reason.trim().is_empty() {
+            return Err(format!("difference {} needs a reason", difference.path));
+        }
+        let field = golden
+            .pointer_mut(&difference.path)
+            .filter(|_| !difference.path.is_empty())
+            .ok_or_else(|| format!("difference path {} is not in the golden", difference.path))?;
+        *field = Value::Null;
+        if let Some(field) = actual.pointer_mut(&difference.path) {
+            *field = Value::Null;
+        }
+    }
+    Ok(())
+}
+
+/// Compares every fixture through the Ghostty engine with Alacritty's golden, minus the reviewed
+/// `[[differences]]`, and checks that Ghostty's own output does not depend on chunking.
+#[cfg(feature = "terminal-ghostty")]
+#[test]
+fn terminal_corpus_ghostty() {
+    use tui_lipan::TerminalEngineKind;
+
+    let engine = "ghostty";
+    let ghostty = |rows, cols, scrollback| {
+        TerminalScreen::with_engine(TerminalEngineKind::Ghostty, rows, cols, scrollback)
+    };
+    let mut failures = Vec::new();
+    for path in fixtures() {
+        let fixture = load_fixture(&path);
+        let bytes = fs::read(path.with_extension("vt")).unwrap();
+        let mut golden: Value = serde_json::from_str(
+            &fs::read_to_string(path.with_extension("alacritty.json")).unwrap(),
+        )
+        .unwrap();
+        let actual = run(&fixture, &bytes, ghostty, None);
+        let mut compared = actual.clone();
+        if let Err(failure) = without_differences(&mut golden, &mut compared, &fixture.differences)
+        {
+            failures.push(format!("{}: {failure}", path.display()));
+            continue;
+        }
+        let defect = fixture
+            .known_defects
+            .iter()
+            .find(|defect| defect.engine == engine && defect.check == CheckKind::Engine);
+        if let Err(diff) = check_split(&golden, &compared, defect) {
+            failures.push(format!("{} vs alacritty: {diff}", path.display()));
+        }
+        for seed in split_seeds(&fixture, engine) {
+            let defect = defect_for_seed(&fixture, engine, seed);
+            let split = run(&fixture, &bytes, ghostty, Some(seed));
+            if let Err(diff) = check_split(&actual, &split, defect) {
+                failures.push(format!("{} seed {seed}: {diff}", path.display()));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

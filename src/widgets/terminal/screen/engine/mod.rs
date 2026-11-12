@@ -32,6 +32,9 @@ pub(super) mod alacritty;
 pub(super) mod ghostty;
 mod semantic;
 
+#[cfg(test)]
+mod differential_tests;
+
 pub(super) use alacritty::AlacrittyEngine;
 #[cfg(test)]
 pub(in crate::widgets::terminal) use semantic::SemanticTestDriver;

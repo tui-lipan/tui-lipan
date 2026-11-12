@@ -940,3 +940,21 @@ stops reproducing or any unlisted field changes. Remove fixed entries.
 Use `scripts/capture-terminal-corpus --check` for stream size and privacy checks,
 also run by `./scripts/check-format`. Recording new program streams requires the
 programs named by the capture script and must be reviewed before blessing.
+
+With `terminal-ghostty`, `terminal_corpus_ghostty` also replays every fixture through
+the experimental Ghostty engine. It compares each dump with the Alacritty golden and
+checks Ghostty's own seeded chunk splits. A reviewed, intentional engine difference
+gets a `[[differences]]` entry with an exact JSON pointer `path` (which must exist in
+the golden) and a `reason`; those fields are ignored only in this comparison. A known
+Ghostty defect against the golden uses `[[known_defects]]` with `engine = "ghostty"`,
+`check = "engine"` and `seed = 0`. `TUI_LIPAN_TEST_ENGINE=ghostty cargo test
+--all-features --lib` runs the library's own tests on Ghostty; tests that pin documented
+Alacritty-only behavior skip themselves with a reason.
+
+The Ghostty mode 2027 (grapheme clustering) checks run through `TerminalScreen` reads:
+`cargo test --all-features --lib screen::graphemes -- --nocapture --test-threads=1`.
+They cover cluster text, cell widths, cursor positions, wrapping, byte-at-a-time
+input, reset defaults, and `unicode-width`-based placement with clustering off and on.
+The byte-at-a-time checks pin libghostty-vt 1.0.1's dirty-row defect: a final
+combining mark added in a later write is missing from the render snapshot until
+another mutation refreshes that row.

@@ -10,3 +10,12 @@ child: /usr/bin/python3 /tmp/w/emit_unicode.py
 TERM=xterm-256color COLORTERM=truecolor LANG=C.UTF-8
 The writer does not query the terminal size. Column width differs when the same bytes are replayed at 120 columns.
 """
+
+[[known_defects]]
+engine = "ghostty"
+check = "engine"
+seed = 0
+path = "/dumps/0/rows/5/text"
+expected_contains = "tab\t"
+actual_contains = "tab "
+reason = "libghostty does not keep the tab character in the cell a tab skipped over, so captures and copied text get spaces where the program printed a tab; Alacritty keeps it."

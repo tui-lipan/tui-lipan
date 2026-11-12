@@ -17,3 +17,11 @@ bytes = [59, 86]
 
 [[ops]]
 kind = "dump"
+
+[[differences]]
+path = "/dumps/0/responses/1"
+reason = "Secondary device attributes identify the emulator: Alacritty answers CSI > 0;2600;1 c, Ghostty CSI > 1;0;0 c."
+
+[[differences]]
+path = "/dumps/1/responses/1"
+reason = "The same secondary device attributes reply as /dumps/0/responses/1, accumulated."
