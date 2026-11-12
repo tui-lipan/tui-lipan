@@ -1,4 +1,5 @@
-//! Keep the alternate-screen compatibility fix local to our pinned source build.
+//! tui-lipan's changes to libghostty-vt, applied to a `GHOSTTY_VT_SOURCE_DIR` tree; the vendored
+//! source already carries them. One file, described in its preamble.
 
 use super::{BuildResult, io_err, sha256_file};
 use std::fs;
@@ -6,7 +7,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 
-pub const PATCH: &str = "patches/alternate-resize.patch";
+pub const PATCH: &str = "patches/libghostty-vt.patch";
 
 /// Written next to every library this script installs, naming the patches built into it, so a
 /// later build can take that library through `GHOSTTY_VT_LIB_DIR` without rebuilding.

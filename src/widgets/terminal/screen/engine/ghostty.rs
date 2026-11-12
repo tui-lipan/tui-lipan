@@ -832,7 +832,7 @@ impl TerminalEngine for GhosttyEngine {
                 // The pinned sys build patches Screen/PageList resize to crop the alternate
                 // screen below the cursor first, matching Alacritty. Keep this a native resize:
                 // injecting CUP/ED would disturb pending wrap, saved cursors, DECOM, and any
-                // unfinished VT sequence. See ghostty-vt-sys/patches/alternate-resize.patch.
+                // unfinished VT sequence. See ghostty-vt-sys/patches/libghostty-vt.patch.
                 let (_, _, cell) = self.effects.geometry.get();
                 let _ =
                     self.terminal

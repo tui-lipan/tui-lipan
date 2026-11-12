@@ -149,7 +149,7 @@ typed-path = "0.12.3"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Experimental libghostty-vt engine for `TerminalScreen`; needs Zig 0.17 to build. See
 # ghostty-vt-sys/build.rs. Native only: terminal features do not build for wasm32 (see lib.rs).
-ghostty-vt-sys = { package = "tui-lipan-ghostty-vt-sys", version = "0.2.1", path = "ghostty-vt-sys", optional = true }
+ghostty-vt-sys = { package = "tui-lipan-ghostty-vt-sys", version = "0.3.0", path = "ghostty-vt-sys", optional = true }
 ratatui = { version = "0.30.1", default-features = false, features = ["crossterm", "scrolling-regions", "layout-cache", "underline-color"] }
 syntect = { version = "5.2", optional = true, default-features = false, features = ["default-onig"] }
 two-face = { version = "0.5.1", optional = true, default-features = false, features = ["syntect-onig"] }
@@ -368,3 +368,8 @@ required-features = ["terminal-images"]
 [[bench]]
 name = "tab_drop_target"
 harness = false
+
+# Until tui-lipan-ghostty-vt-src 0.2.0 is on crates.io, workspace builds take it from the tree
+# scripts/package-ghostty-src.sh generates. Remove this once it is published.
+[patch.crates-io]
+tui-lipan-ghostty-vt-src = { path = "ghostty-vt-src" }

@@ -6268,11 +6268,6 @@ mod tests {
 
     #[test]
     fn logical_text_positions_follow_terminal_cells_for_unicode_sequences() {
-        if engine_differs(
-            "libghostty gives VS16 emoji presentation sequences (keycaps, red heart) two columns; Alacritty gives them one",
-        ) {
-            return;
-        }
         for (text, x_column, inside_cell_boundary) in [
             ("1️⃣x", 1, Some('1'.len_utf8())),
             ("❤️x", 1, Some('❤'.len_utf8())),

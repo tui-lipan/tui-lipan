@@ -151,8 +151,8 @@ fn expected_cells(
 ) -> Vec<(&'static str, usize)> {
     let text = CASES[case].1;
     let legacy: &[&[(&str, usize)]] = &[
-        &[("1\u{20e3}", 1)],
-        &[("#\u{20e3}", 1)],
+        &[("1\u{fe0f}\u{20e3}", 1)],
+        &[("#\u{fe0f}\u{20e3}", 1)],
         &[("❤\u{fe0f}", 1)],
         &[("❤\u{fe0e}", 1)],
         &[("🇯", 2), ("🇵", 2)],
@@ -166,7 +166,6 @@ fn expected_cells(
     match (kind, enabled, case) {
         (_, true, 3 | 8) => vec![(text, 1)],
         (_, true, _) => vec![(text, 2)],
-        (TerminalEngineKind::Alacritty, _, 0..=1) => vec![(text, 1)],
         (TerminalEngineKind::Alacritty, _, 4) => vec![("🇯", 1), ("🇵", 1)],
         (TerminalEngineKind::Alacritty, _, 5) => vec![(text, 1)],
         _ => legacy[case].to_vec(),
@@ -215,15 +214,15 @@ fn check_case(
             "{kind:?}/{enabled} {name}"
         );
     }
-    // Feed every byte boundary, including inside UTF-8 and VS/ZWJ sequences.
-    // Pin the legacy dirty-row defect separately from the correct whole-write result.
+    // Feed every byte boundary, including inside UTF-8 and VS/ZWJ sequences: the result must be
+    // the whole write's.
     let mut split = TerminalScreen::with_engine(kind, 5, cols, 0).with_grapheme_clustering(enabled);
     for byte in input.as_bytes() {
         split.process_bytes(std::slice::from_ref(byte));
     }
     assert_eq!(
         cells(&mut split),
-        expected_split_cells(&mut screen, kind, enabled, case),
+        cells(&mut screen),
         "{kind:?}/{enabled} {name} cols={cols}"
     );
     let split_snapshot = split.render_snapshot();
@@ -236,21 +235,4 @@ fn check_case(
     for (_, _, text, _) in cells(&mut screen) {
         assert!(frame.cells.iter().any(|cell| cell.symbol == text));
     }
-}
-
-/// libghostty-vt 1.0.1 legacy appendGrapheme does not dirty the row. The screen
-/// updates RenderState after each write, so a final combining mark is absent
-/// until another row mutation refreshes it. Mode 2027's print path dirties it.
-fn expected_split_cells(
-    whole: &mut TerminalScreen,
-    kind: TerminalEngineKind,
-    enabled: bool,
-    case: usize,
-) -> Vec<(usize, usize, String, usize)> {
-    let mut expected = cells(whole);
-    if kind == TerminalEngineKind::Ghostty && !enabled && [0, 1, 2, 3, 8, 9].contains(&case) {
-        let last = expected.last_mut().unwrap();
-        last.2 = last.2.chars().next().unwrap().to_string();
-    }
-    expected
 }

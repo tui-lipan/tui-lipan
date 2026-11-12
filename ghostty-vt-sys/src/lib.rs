@@ -11,8 +11,8 @@
 //! # Building
 //!
 //! The build script builds the pinned release with Zig [`ZIG_VERSION`]`.x` from the source that
-//! the `tui-lipan-ghostty-vt-src` build-dependency vendors, with one local fix
-//! (`patches/alternate-resize.patch`) already applied. It needs no network, `curl` or `patch`.
+//! the `tui-lipan-ghostty-vt-src` build-dependency vendors, with tui-lipan's changes
+//! (`patches/libghostty-vt.patch`) already applied. It needs no network, `curl` or `patch`.
 //! `build.rs` documents every environment variable, including building another source tree or
 //! linking a system or prebuilt library instead.
 
@@ -31,6 +31,24 @@ mod modes;
 mod versions;
 
 pub use bindings::*;
+
+// Added by tui-lipan's patch (`patches/libghostty-vt.patch`), not part of upstream's C API. A
+// library without the patch fails to link them; the build script refuses such a library unless
+// `GHOSTTY_VT_ALLOW_UNPATCHED` is set.
+unsafe extern "C" {
+    /// Move the cursor to cell (`x`, `y`) of the active area without going through the VT parser.
+    /// Unlike CUP it ignores origin mode and the margins. It clears a pending wrap and leaves the
+    /// saved cursor and any unfinished escape sequence alone. `GHOSTTY_INVALID_VALUE` for a NULL
+    /// terminal or a cell outside the active area.
+    pub fn ghostty_terminal_tl_cursor_set(
+        terminal: GhosttyTerminal,
+        x: u16,
+        y: u16,
+    ) -> GhosttyResult;
+    /// Erase from the cursor to the end of the active area, as ED 0 does, without going through
+    /// the VT parser.
+    pub fn ghostty_terminal_tl_erase_below(terminal: GhosttyTerminal) -> GhosttyResult;
+}
 pub use modes::*;
 pub use versions::{LIBGHOSTTY_VT_VERSION, ZIG_VERSION};
 
@@ -118,7 +136,7 @@ mod tests {
     }
 
     /// The minimal repro of the upstream alternate-screen bug that
-    /// `patches/alternate-resize.patch` fixes: shrinking a screen without history must keep the
+    /// `patches/libghostty-vt.patch` fixes: shrinking a screen without history must keep the
     /// rows from the cursor down, not scroll the top rows away. A system or prebuilt library
     /// linked with `GHOSTTY_VT_ALLOW_UNPATCHED` fails here until upstream ships the fix.
     #[test]
@@ -174,9 +192,62 @@ mod tests {
         assert_eq!(
             rows,
             ["row0", "row1", "row2"],
-            "libghostty-vt lacks patches/alternate-resize.patch: the alternate screen lost the \
+            "libghostty-vt lacks patches/libghostty-vt.patch: the alternate screen lost the \
              rows above the cursor on shrink"
         );
         assert_eq!((x, y), (0, 0));
+    }
+
+    /// The patch's direct grid calls: they move and erase without the parser, so an unfinished
+    /// CSI the child left completes as written, and they reject cells outside the screen.
+    #[test]
+    fn direct_cursor_and_erase_leave_the_parser_alone() {
+        let mut terminal: GhosttyTerminal = core::ptr::null_mut();
+        let mut text = [0u8; 256];
+        let mut written = 0usize;
+        // SAFETY: as in the test above; the formatter is freed before the terminal.
+        unsafe {
+            assert_eq!(
+                ghostty_terminal_new(core::ptr::null(), &mut terminal, 10, 3),
+                GHOSTTY_SUCCESS
+            );
+            let input = b"abcdefghij\r\nklmnopqrst\x1b[";
+            ghostty_terminal_vt_write(terminal, input.as_ptr(), input.len());
+            assert_eq!(
+                ghostty_terminal_tl_cursor_set(terminal, 3, 0),
+                GHOSTTY_SUCCESS
+            );
+            assert_eq!(ghostty_terminal_tl_erase_below(terminal), GHOSTTY_SUCCESS);
+            assert_eq!(
+                ghostty_terminal_tl_cursor_set(terminal, 10, 0),
+                GHOSTTY_INVALID_VALUE
+            );
+            assert_eq!(
+                ghostty_terminal_tl_cursor_set(terminal, 0, 3),
+                GHOSTTY_INVALID_VALUE
+            );
+            let rest = b"1CX";
+            ghostty_terminal_vt_write(terminal, rest.as_ptr(), rest.len());
+            let mut formatter: GhosttyFormatter = core::ptr::null_mut();
+            assert_eq!(
+                ghostty_formatter_terminal_new(core::ptr::null(), &mut formatter, terminal),
+                GHOSTTY_SUCCESS
+            );
+            assert_eq!(
+                ghostty_formatter_format_buf(
+                    formatter,
+                    text.as_mut_ptr(),
+                    text.len(),
+                    &mut written
+                ),
+                GHOSTTY_SUCCESS
+            );
+            ghostty_formatter_free(formatter);
+            ghostty_terminal_free(terminal);
+        }
+        let screen = core::str::from_utf8(&text[..written]).expect("formatter writes UTF-8");
+        let rows: std::vec::Vec<&str> = screen.lines().map(str::trim_end).collect();
+        // `CSI 1 C` moved the cursor one cell right of column 3, then X printed there.
+        assert_eq!(rows, ["abc X"]);
     }
 }

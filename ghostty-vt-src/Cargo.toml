@@ -3,7 +3,7 @@ name = "tui-lipan-ghostty-vt-src"
 # The build metadata names the vendored libghostty-vt release. crates.io ignores it when
 # comparing versions, so every new tree (an upstream bump or a patch change) bumps the numeric
 # part, and tui-lipan-ghostty-vt-sys pins that with `=`.
-version = "0.1.0+libghostty-vt.1.0.1"
+version = "0.2.0+libghostty-vt.1.0.1"
 edition = "2024"
 rust-version = "1.96"
 # Everything vendored: libghostty-vt (MIT), simdutf and wuffs (Apache-2.0 OR MIT), Highway

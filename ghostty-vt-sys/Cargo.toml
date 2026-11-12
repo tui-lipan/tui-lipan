@@ -1,6 +1,6 @@
 [package]
 name = "tui-lipan-ghostty-vt-sys"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.96"
 # The library is MIT; these bindings follow the rest of the workspace.
@@ -20,4 +20,4 @@ pkg-config = "0.3.32"
 sha2 = "0.11.1"
 # The patched release source this crate builds by default. Pinned exactly: the bindings, the
 # patches below and the vendored tree must all describe the same library.
-tui-lipan-ghostty-vt-src = "=0.1.0"
+tui-lipan-ghostty-vt-src = "=0.2.0"

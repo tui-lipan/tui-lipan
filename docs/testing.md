@@ -955,6 +955,6 @@ The Ghostty mode 2027 (grapheme clustering) checks run through `TerminalScreen` 
 `cargo test --all-features --lib screen::graphemes -- --nocapture --test-threads=1`.
 They cover cluster text, cell widths, cursor positions, wrapping, byte-at-a-time
 input, reset defaults, and `unicode-width`-based placement with clustering off and on.
-The byte-at-a-time checks pin libghostty-vt 1.0.1's dirty-row defect: a final
-combining mark added in a later write is missing from the render snapshot until
-another mutation refreshes that row.
+Byte-at-a-time input must produce exactly what one write produces; the vendored
+libghostty-vt carries the fix for its legacy path, which otherwise left a mark that
+arrived in a later write out of the render snapshot.
