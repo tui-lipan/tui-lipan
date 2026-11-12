@@ -1,0 +1,19 @@
+rows = 4
+cols = 12
+scrollback = 20
+description = "Alternate screen transition"
+source = "hand-written"
+
+[[ops]]
+kind = "write"
+bytes = [0, 25]
+
+[[ops]]
+kind = "dump"
+
+[[ops]]
+kind = "write"
+bytes = [25, 33]
+
+[[ops]]
+kind = "dump"

@@ -1,0 +1,5 @@
+rows = 4
+cols = 12
+scrollback = 20
+description = "Wide characters, combining marks and emoji ZWJ"
+source = "hand-written"

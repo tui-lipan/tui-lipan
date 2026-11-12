@@ -133,3 +133,7 @@ mod mouse_region_middle_click;
 
 #[path = "suites/widget_behavior/search_palette_items.rs"]
 mod search_palette_items;
+
+#[cfg(feature = "terminal")]
+#[path = "suites/widget_behavior/terminal_corpus.rs"]
+mod terminal_corpus;

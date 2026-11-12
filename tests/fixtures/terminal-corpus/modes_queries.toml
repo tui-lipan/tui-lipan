@@ -1,0 +1,19 @@
+rows = 4
+cols = 12
+scrollback = 20
+description = "Input modes, protocol queries and bell"
+source = "hand-written"
+
+[[ops]]
+kind = "write"
+bytes = [0, 59]
+
+[[ops]]
+kind = "dump"
+
+[[ops]]
+kind = "write"
+bytes = [59, 86]
+
+[[ops]]
+kind = "dump"

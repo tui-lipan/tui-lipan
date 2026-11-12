@@ -1,0 +1,5 @@
+rows = 4
+cols = 12
+scrollback = 20
+description = "SGR colors and underline styles"
+source = "hand-written"

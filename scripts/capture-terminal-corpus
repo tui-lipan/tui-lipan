@@ -1,0 +1,1400 @@
+#!/usr/bin/env python3
+"""Record raw PTY output for tests/fixtures/terminal-corpus/.
+
+Each `<name>.vt` file is the byte stream a terminal emulator would read from
+the PTY master (program output, plus the kernel echo of typed input). It is
+not a later re-render. The matching `<name>.toml` gives the fixed size the
+PTY was created at. No `[[ops]]` table means: write the whole stream, then dump.
+
+The child runs with a neutral home and user. A fixture is refused when it
+contains that home, the current user, host, or git email. A CPU model, memory
+total, hostname, or kernel release is rewritten to a placeholder of the same
+width. Re-run from the repo root:
+
+    scripts/capture-terminal-corpus
+    scripts/capture-terminal-corpus bash-color nvim-edit
+    scripts/capture-terminal-corpus --check
+"""
+
+from __future__ import annotations
+
+import argparse
+import errno
+import fcntl
+import getpass
+import os
+import pty
+import re
+import select
+import signal
+import socket
+import struct
+import subprocess
+import sys
+import termios
+import textwrap
+import time
+import tomllib
+import unicodedata
+from dataclasses import dataclass, field
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+OUT_DIR = REPO / "tests" / "fixtures" / "terminal-corpus"
+WORK = Path("/tmp/w")
+HOME = Path("/tmp/corpus-home")
+RUN_DIR = Path("/tmp/corpus-run")
+SCROLLBACK = 10000
+MAX_FIXTURE_BYTES = 200 * 1024
+MAX_CORPUS_BYTES = 3 * 1024 * 1024
+_BINARY_UNITS = ("Byte", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB")
+_DECIMAL_UNITS = ("Byte", "kB", "MB", "GB", "TB", "PB", "EB")
+
+# Queries a real terminal answers. Programs such as nvim stall or warn when
+# these go unanswered, so the capture replies the way a plain xterm would.
+# Replies are written to the child; they are not added to the recorded stream.
+_QUERY_PATTERNS: list[tuple[re.Pattern[bytes], object]] = [
+    (re.compile(br"\x1b\]11;\?(?:\x07|\x1b\\)"), lambda _m: b"\x1b]11;rgb:0000/0000/0000\x07"),
+    (re.compile(br"\x1b\]10;\?(?:\x07|\x1b\\)"), lambda _m: b"\x1b]10;rgb:ffff/ffff/ffff\x07"),
+    (re.compile(br"\x1bP\+q[0-9A-Fa-f;]*\x1b\\"), lambda _m: b"\x1bP0+r\x1b\\"),
+    (re.compile(br"\x1bP\$q[ -\x7e]*\x1b\\"), lambda _m: b"\x1bP0$r\x1b\\"),
+    (re.compile(br"\x1b\[\?(\d+)\$p"), lambda m: b"\x1b[?" + m.group(1) + b";2$y"),
+    (re.compile(br"\x1b\[\?u"), lambda _m: b"\x1b[?0u"),
+    (re.compile(br"\x1b\[>[\d;]*c"), lambda _m: b"\x1b[>0;0;0c"),
+    (re.compile(br"\x1b\[0?c"), lambda _m: b"\x1b[?1;2c"),
+    (re.compile(br"\x1b\[5n"), lambda _m: b"\x1b[0n"),
+    (re.compile(br"\x1b\[6n"), lambda _m: b"\x1b[1;1R"),
+]
+
+
+class CaptureError(RuntimeError):
+    pass
+
+
+class Responder:
+    def __init__(self) -> None:
+        self.buf = bytearray()
+
+    def feed(self, data: bytes) -> bytes:
+        self.buf += data
+        replies: list[bytes] = []
+        while True:
+            blob = bytes(self.buf)
+            best: tuple[int, int, bytes] | None = None
+            for pattern, reply_of in _QUERY_PATTERNS:
+                match = pattern.search(blob)
+                if match is not None and (best is None or match.start() < best[0]):
+                    best = (match.start(), match.end(), reply_of(match))
+            if best is None:
+                mark = blob.rfind(b"\x1b")
+                if mark > 0:
+                    del self.buf[:mark]
+                elif mark < 0 and len(self.buf) > 128:
+                    self.buf.clear()
+                break
+            del self.buf[: best[1]]
+            replies.append(best[2])
+        return b"".join(replies)
+
+
+@dataclass
+class Scenario:
+    name: str
+    rows: int
+    cols: int
+    description: str
+    program: str
+    argv: list[str]
+    note: str
+    expect: list[bytes]
+    env: dict[str, str]
+    cwd: Path
+    steps: list[tuple] = field(default_factory=list)
+    timeout: float = 10.0
+
+
+def base_env() -> dict[str, str]:
+    return {
+        "PATH": "/usr/bin:/bin",
+        "HOME": str(HOME),
+        "USER": "user",
+        "LOGNAME": "user",
+        "USERNAME": "user",
+        "HOSTNAME": "host",
+        "SHELL": "/bin/bash",
+        "TERM": "xterm-256color",
+        "COLORTERM": "truecolor",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "XDG_CONFIG_HOME": str(HOME / ".config"),
+        "XDG_CACHE_HOME": str(HOME / ".cache"),
+        "XDG_DATA_HOME": str(HOME / ".local" / "share"),
+        "XDG_STATE_HOME": str(HOME / ".local" / "state"),
+        "XDG_RUNTIME_DIR": str(RUN_DIR),
+        "HISTFILE": "/dev/null",
+        "LESSHISTFILE": "/dev/null",
+        "LESSHISTSIZE": "0",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONNOUSERSITE": "1",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": str(HOME / "gitconfig"),
+        "GIT_CONFIG_SYSTEM": "/dev/null",
+        "GIT_PAGER": "cat",
+        "PAGER": "cat",
+        "GIT_AUTHOR_NAME": "Ada Example",
+        "GIT_AUTHOR_EMAIL": "ada@example.com",
+        "GIT_COMMITTER_NAME": "Ada Example",
+        "GIT_COMMITTER_EMAIL": "ada@example.com",
+        "GIT_TEMPLATE_DIR": str(HOME / "git-template"),
+    }
+
+
+def command_line(argv: list[str]) -> str:
+    return subprocess.list2cmdline(argv)
+
+
+def first_line(argv: list[str], env: dict[str, str] | None = None) -> str:
+    try:
+        out = subprocess.check_output(
+            argv,
+            stderr=subprocess.STDOUT,
+            env=env,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"{argv[0]} (version unavailable: {exc})"
+    line = out.strip().splitlines()
+    return line[0] if line else argv[0]
+
+
+def run_cmd(argv: list[str], cwd: Path, env: dict[str, str]) -> None:
+    proc = subprocess.run(
+        argv,
+        cwd=cwd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if proc.returncode != 0:
+        detail = proc.stderr.decode("utf-8", "replace")[-800:]
+        raise CaptureError(f"{argv!r} -> {proc.returncode}: {detail}")
+
+
+def reset_tree(path: Path) -> None:
+    if path.exists():
+        subprocess.run(["rm", "-rf", str(path)], check=True)
+    path.mkdir(parents=True)
+
+
+def prepare_workspace(env: dict[str, str]) -> None:
+    reset_tree(HOME)
+    reset_tree(WORK)
+    RUN_DIR.mkdir(parents=True, exist_ok=True)
+    for rel in (".config", ".cache", ".local/share", ".local/state", "git-template"):
+        (HOME / rel).mkdir(parents=True, exist_ok=True)
+    (HOME / "gitconfig").write_text(
+        "\n".join(
+            [
+                "[user]",
+                "    name = Ada Example",
+                "    email = ada@example.com",
+                "[init]",
+                "    defaultBranch = main",
+                "[commit]",
+                "    gpgsign = false",
+                "[color]",
+                "    ui = always",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (HOME / "corpus.bashrc").write_text(
+        "PROMPT_COMMAND=\n"
+        "PS1='\\[\\e[1;32m\\]user@host\\[\\e[0m\\]:\\[\\e[1;34m\\]\\w\\[\\e[0m\\]\\$ '\n",
+        encoding="utf-8",
+    )
+    listing = WORK / "listing"
+    listing.mkdir()
+    (listing / "docs").mkdir()
+    (listing / "docs" / "guide.txt").write_text("guide\n", encoding="utf-8")
+    (listing / "README.md").write_text("sample readme\n", encoding="utf-8")
+    (listing / "main.rs").write_text("fn main() {}\n", encoding="utf-8")
+    (listing / "notes.txt").write_text("notes\n", encoding="utf-8")
+    (listing / "very-long-sample-name.txt").write_text("name\n", encoding="utf-8")
+    script = listing / "run.sh"
+    script.write_text("#!/bin/sh\necho sample\n", encoding="utf-8")
+    script.chmod(0o755)
+    (listing / "link").symlink_to("docs")
+    (listing / "missing").symlink_to("absent")
+
+    lines = ["TOP-MARKER", "\x1b[31mRED-MARKER\x1b[0m", "\x1b[32mGREEN-MARKER\x1b[0m"]
+    lines.append("wrap " + ("word " * 40))
+    lines.append("café 😀 中文")
+    lines.extend(f"row {index:03d} alpha beta gamma" for index in range(1, 28))
+    lines.append("PAGE-TWO-MARKER")
+    lines.extend(f"row {index:03d} alpha beta gamma" for index in range(28, 60))
+    (WORK / "page.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    sample = ["fn main() {", "    let values = [1, 2, 3, 4];", "    let mut total = 0;"]
+    sample.append("    for value in values {")
+    sample.append("        total += value;")
+    sample.append("    }")
+    sample.append('    println!("{total}");')
+    sample.append("}")
+    sample.extend(f"// sample line {index:03d} for scrolling" for index in range(1, 80))
+    (WORK / "sample.rs").write_text("\n".join(sample) + "\n", encoding="utf-8")
+
+    paragraphs = [
+        ".TH DEMO 1 \"2026-01-15\" \"demo 1.0\" \"User Commands\"",
+        ".SH NAME",
+        "demo \\- show a page of neutral text",
+        ".SH SYNOPSIS",
+        ".B demo",
+        "[\\fIOPTIONS\\fR]",
+        ".SH DESCRIPTION",
+        "A short manual page used as a terminal capture sample.",
+        ".PP",
+        "It has more than one screen of text so a pager can move.",
+    ]
+    for index in range(1, 14):
+        paragraphs.append(".PP")
+        paragraphs.append(f"Neutral paragraph {index:02d} of the demonstration page.")
+    paragraphs.extend(
+        [
+            ".SH LATER",
+            "later-marker sits on the second screen.",
+            ".SH SEE ALSO",
+            ".BR cat (1)",
+        ]
+    )
+    for index in range(14, 22):
+        paragraphs.append(".PP")
+        paragraphs.append(f"Trailing paragraph {index:02d} keeps the page from ending early.")
+    (WORK / "demo.1").write_text("\n".join(paragraphs) + "\n", encoding="utf-8")
+
+    tui_src = REPO / "scripts" / "terminal-corpus-mouse-tui.py"
+    (WORK / "mouse_tui.py").write_bytes(tui_src.read_bytes())
+    prepare_repo(env)
+    prepare_crate(env)
+
+
+def git(args: list[str], cwd: Path, env: dict[str, str], date: str | None = None) -> None:
+    child = dict(env)
+    if date is not None:
+        child["GIT_AUTHOR_DATE"] = date
+        child["GIT_COMMITTER_DATE"] = date
+    run_cmd(["git", *args], cwd, child)
+
+
+def prepare_repo(env: dict[str, str]) -> None:
+    repo = WORK / "repo"
+    repo.mkdir()
+    git(["init", "-b", "main"], repo, env)
+    long_subject = (
+        "adjust the sample wording so this subject wraps on an eighty column "
+        "screen but not on a wider one"
+    )
+    commits = [
+        ("2026-01-10T12:00:00Z", "initial sample", "README.md", "sample repository\n"),
+        ("2026-01-11T12:00:00Z", "add notes", "notes.txt", "some notes\n"),
+    ]
+    for date, message, name, body in commits:
+        (repo / name).write_text(body, encoding="utf-8")
+        git(["add", name], repo, env)
+        git(["commit", "-m", message], repo, env, date)
+    git(["checkout", "-b", "feature"], repo, env)
+    (repo / "feature.txt").write_text("feature work\n", encoding="utf-8")
+    git(["add", "feature.txt"], repo, env)
+    git(["commit", "-m", "start feature"], repo, env, "2026-01-12T12:00:00Z")
+    git(["checkout", "main"], repo, env)
+    (repo / "more.txt").write_text("more sample text\n", encoding="utf-8")
+    git(["add", "more.txt"], repo, env)
+    git(["commit", "-m", long_subject], repo, env, "2026-01-13T12:00:00Z")
+    git(
+        ["merge", "--no-ff", "feature", "-m", "merge feature"],
+        repo,
+        env,
+        "2026-01-14T12:00:00Z",
+    )
+    git(["tag", "v1.0.0"], repo, env)
+
+
+def prepare_crate(env: dict[str, str]) -> None:
+    crate = WORK / "errcrate"
+    (crate / "src").mkdir(parents=True)
+    (crate / "Cargo.toml").write_text(
+        "[package]\nname = \"errcrate\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        encoding="utf-8",
+    )
+    (crate / "src" / "main.rs").write_text(
+        "fn main() {\n    let count: i32 = \"nope\";\n    println!(\"{count}\");\n}\n",
+        encoding="utf-8",
+    )
+    cargo_home = HOME / "cargo-home"
+    cargo_home.mkdir()
+    target = crate / "target"
+    target.mkdir()
+    # Warm the compile once so the recorded run is the diagnostic, not a download.
+    warm = dict(env)
+    warm.update(cargo_env(cargo_home, target))
+    subprocess.run(
+        ["cargo", "build", "--offline", "--color=always"],
+        cwd=crate,
+        env=warm,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+
+
+def cargo_env(cargo_home: Path, target: Path) -> dict[str, str]:
+    rustup_home = os.environ.get("RUSTUP_HOME", str(Path.home() / ".rustup"))
+    cargo_bin = str(Path.home() / ".cargo" / "bin")
+    return {
+        "PATH": cargo_bin + ":/usr/bin:/bin",
+        "CARGO_HOME": str(cargo_home),
+        "RUSTUP_HOME": rustup_home,
+        "CARGO_TARGET_DIR": str(target),
+        "CARGO_TERM_COLOR": "always",
+        "CARGO_TERM_PROGRESS_WHEN": "never",
+    }
+
+
+def versions(env: dict[str, str]) -> dict[str, str]:
+    cargo = dict(env)
+    cargo.update(cargo_env(HOME / "cargo-home", WORK / "errcrate" / "target"))
+    return {
+        "python": first_line(["/usr/bin/python3", "--version"]),
+        "bash": first_line(["/bin/bash", "--version"]),
+        "ls": first_line(["/usr/bin/ls", "--version"]),
+        "git": first_line(["/usr/bin/git", "--version"]),
+        "nvim": first_line(["/usr/bin/nvim", "--version"]),
+        "less": first_line(["/usr/bin/less", "--version"]),
+        "man": first_line(["/usr/bin/man", "--version"]),
+        "btop": first_line(["/usr/bin/btop", "--version"]),
+        "tput": first_line(["/usr/bin/tput", "-V"]),
+        "unshare": first_line(["/usr/bin/unshare", "--version"]),
+        "cargo": first_line(["cargo", "--version"], cargo),
+        "rustc": first_line(["rustc", "--version"], cargo),
+    }
+
+
+def build_scenarios(env: dict[str, str], info: dict[str, str]) -> list[Scenario]:
+    ls_env = dict(env)
+    ls_env["LS_COLORS"] = (
+        "rs=0:di=01;34:ln=01;36:ex=01;32:or=40;31;01:*.rs=01;33:*.md=01;35:*.sh=01;32:*.txt=00"
+    )
+    cargo = dict(env)
+    cargo.update(cargo_env(HOME / "cargo-home", WORK / "errcrate" / "target"))
+    bash_argv = ["/bin/bash", "--noprofile", "--rcfile", str(HOME / "corpus.bashrc"), "-i"]
+    bash_steps = [
+        ("wait_contains", b"user@host", 5.0),
+        ("wait_idle", 0.15),
+        ("send", b"stty size\n"),
+        ("wait_contains", b"stty size", 3.0),
+        ("wait_idle", 0.15),
+        ("send", b"echo hello-from-bash\n"),
+        ("wait_contains", b"hello-from-bash", 3.0),
+        ("wait_idle", 0.15),
+        ("send", b"printf '\\033[31mred\\033[0m and \\033[32mgreen\\033[0m\\n'\n"),
+        ("wait_contains", b"red", 3.0),
+        ("wait_idle", 0.15),
+        ("send", b"exit\n"),
+        ("wait_exit", 3.0),
+    ]
+    git_argv = [
+        "git",
+        "--no-pager",
+        "-c",
+        "color.ui=always",
+        "log",
+        "--graph",
+        "--color=always",
+        "--decorate",
+        "--all",
+        "--date=short",
+    ]
+    nvim_argv = [
+        "nvim",
+        "--clean",
+        "-c",
+        "syntax enable|setfiletype rust|set noswapfile noundofile nomore shortmess+=I nowrap",
+        "sample.rs",
+    ]
+    nvim_env = dict(env)
+    nvim_env["NVIM_LOG_FILE"] = "/dev/null"
+    mouse_steps = [
+        ("wait_contains", b"READY", 5.0),
+        ("send", b"\x1b[<0;10;4M"),
+        ("wait_contains", b"MOUSE:press:", 3.0),
+        ("send", b"\x1b[<0;10;4m"),
+        ("wait_contains", b"MOUSE:release:", 3.0),
+        ("send", b"\x1b[<32;15;5M"),
+        ("wait_idle", 0.1),
+        ("send", b"\x1b[200~hello paste\x1b[201~"),
+        ("wait_contains", b"PASTE:hello paste", 3.0),
+        ("send", b"q"),
+        ("wait_exit", 3.0),
+    ]
+    items = [
+        Scenario(
+            name="bash-color",
+            rows=24,
+            cols=80,
+            description="Interactive bash with a colored prompt, a size check, and a few commands.",
+            program=info["bash"],
+            argv=bash_argv,
+            note="bashrc sets a fixed user@host prompt and clears PROMPT_COMMAND; it does not read the system bashrc.",
+            expect=[b"hello-from-bash", b"24 80", b"\x1b[31mred", b"\x1b[?2004h"],
+            env=env,
+            cwd=WORK,
+            steps=bash_steps,
+            timeout=12,
+        ),
+        Scenario(
+            name="bash-color-120x40",
+            rows=40,
+            cols=120,
+            description="The same colored bash session at 120x40, so stty size reports the wider PTY.",
+            program=info["bash"],
+            argv=bash_argv,
+            note="Same rcfile as bash-color.",
+            expect=[b"hello-from-bash", b"40 120"],
+            env=env,
+            cwd=WORK,
+            steps=bash_steps,
+            timeout=12,
+        ),
+        Scenario(
+            name="ls-color",
+            rows=24,
+            cols=80,
+            description="ls --color of a small directory with a symlink, an executable, and an orphan link.",
+            program=info["ls"],
+            argv=["/usr/bin/ls", "--color=always", "-F"],
+            note="LS_COLORS is set explicitly. Names are synthetic.",
+            expect=[b"main.rs", b"run.sh", b"missing", b"\x1b["],
+            env=ls_env,
+            cwd=WORK / "listing",
+            steps=[("wait_exit", 4.0)],
+            timeout=6,
+        ),
+        Scenario(
+            name="ls-color-120x40",
+            rows=40,
+            cols=120,
+            description="The same colored ls at 120x40, where the names fit on fewer rows.",
+            program=info["ls"],
+            argv=["/usr/bin/ls", "--color=always", "-F"],
+            note="Same directory and LS_COLORS as ls-color.",
+            expect=[b"main.rs", b"very-long-sample-name.txt", b"\x1b["],
+            env=ls_env,
+            cwd=WORK / "listing",
+            steps=[("wait_exit", 4.0)],
+            timeout=6,
+        ),
+        Scenario(
+            name="git-log",
+            rows=24,
+            cols=80,
+            description="git log --graph --color --decorate of a synthetic repo with a merge and a tag.",
+            program=info["git"],
+            argv=git_argv,
+            note="Commits use Ada Example <ada@example.com> and fixed dates. The long subject is one line; replay width decides the wrap.",
+            expect=[b"Ada Example", b"merge feature", b"v1.0.0", b"\x1b["],
+            env=env,
+            cwd=WORK / "repo",
+            steps=[("wait_exit", 5.0)],
+            timeout=8,
+        ),
+        Scenario(
+            name="nvim-edit",
+            rows=24,
+            cols=80,
+            description="nvim --clean opens a file, pages down, inserts text, and quits the alternate screen.",
+            program=info["nvim"],
+            argv=nvim_argv,
+            note="No user config, shada, or swap files. Syntax uses the system runtime.",
+            expect=[b"Hello", b"sample line", b"\x1b[?1049h", b"\x1b[?1049l"],
+            env=nvim_env,
+            cwd=WORK,
+            steps=[
+                ("wait_contains", b"sample.rs", 12.0),
+                ("wait_idle", 0.25),
+                ("send", b"\x06"),
+                ("wait_idle", 0.2),
+                ("send", b"\x06"),
+                ("wait_idle", 0.2),
+                ("send", b"gg"),
+                ("wait_idle", 0.2),
+                ("send", b"iHello\x1b"),
+                ("wait_contains", b"Hello", 4.0),
+                ("wait_idle", 0.15),
+                ("send", b":q!\r"),
+                ("wait_exit", 4.0),
+            ],
+            timeout=20,
+        ),
+        Scenario(
+            name="less-page",
+            rows=24,
+            cols=80,
+            description="less pages a text file that contains color, unicode, and a wrapped line.",
+            program=info["less"],
+            argv=["/usr/bin/less", "-R", "page.txt"],
+            note="LESSHISTFILE is /dev/null. One page-down, then quit.",
+            expect=[b"TOP-MARKER", b"RED-MARKER", b"PAGE-TWO-MARKER", b"\x1b[?1049h"],
+            env=env,
+            cwd=WORK,
+            steps=[
+                ("wait_contains", b"TOP-MARKER", 5.0),
+                ("wait_idle", 0.15),
+                ("send", b" "),
+                ("wait_contains", b"PAGE-TWO-MARKER", 3.0),
+                ("send", b"q"),
+                ("wait_exit", 3.0),
+            ],
+            timeout=10,
+        ),
+        Scenario(
+            name="btop-sample",
+            rows=24,
+            cols=80,
+            description="btop in tty mode for about two seconds, inside a fresh pid namespace.",
+            program=f"{info['btop']}; {info['unshare']}",
+            argv=[
+                "unshare",
+                "--user",
+                "--map-root-user",
+                "--pid",
+                "--fork",
+                "--mount-proc",
+                "--",
+                "btop",
+                "-t",
+                "-u",
+                "1000",
+            ],
+            note=(
+                "The pid namespace hides host processes. CPU model and memory "
+                "total are replaced with same-width placeholders. The clock and "
+                "per-core totals are live, so a re-record differs."
+            ),
+            expect=[b"btop", b"root", b"\x1b[?1049h"],
+            env=env,
+            cwd=WORK,
+            steps=[
+                ("wait_contains", b"btop", 6.0),
+                ("sleep", 2.0),
+                ("send", b"q"),
+                ("wait_exit", 3.0),
+            ],
+            timeout=12,
+        ),
+        Scenario(
+            name="man-demo",
+            rows=24,
+            cols=80,
+            description="man displays a local demonstration page and less pages it once.",
+            program=f"{info['man']}; pager {info['less']}",
+            argv=["man", "-l", "-P", "less -R", "demo.1"],
+            note="The page is written for the capture. It is not a system manual.",
+            expect=[b"demo", b"later-marker", b"\x1b[?1049h"],
+            env=env,
+            cwd=WORK,
+            steps=[
+                ("wait_contains", b"DESCRIPTION", 8.0),
+                ("wait_idle", 0.2),
+                ("send", b" "),
+                ("wait_contains", b"later-marker", 4.0),
+                ("send", b"q"),
+                ("wait_exit", 3.0),
+            ],
+            timeout=15,
+        ),
+        Scenario(
+            name="python-repl",
+            rows=24,
+            cols=80,
+            description="The system Python REPL prints a banner and evaluates a few expressions.",
+            program=info["python"],
+            argv=["/usr/bin/python3", "-i"],
+            note="HOME is the capture home, so the REPL does not read a user startup file.",
+            expect=[b"Python", b"hello-from-python", "café 😀 中文".encode(), b"sum=6"],
+            env=env,
+            cwd=WORK,
+            steps=[
+                ("wait_contains", b">>>", 5.0),
+                ("send", b'print("hello-from-python")\n'),
+                ("wait_contains", b"hello-from-python", 3.0),
+                ("wait_contains", b">>>", 3.0),
+                ("send", 'print("café 😀 中文")\n'.encode()),
+                ("wait_contains", "中文".encode(), 3.0),
+                ("wait_contains", b">>>", 3.0),
+                ("send", b'print("sum=6")\n'),
+                ("wait_contains", b"sum=6", 3.0),
+                ("send", b"exit()\n"),
+                ("wait_exit", 3.0),
+            ],
+            timeout=12,
+        ),
+        Scenario(
+            name="cargo-error",
+            rows=24,
+            cols=80,
+            description="cargo build --color=always fails a tiny crate on a type error.",
+            program=f"{info['cargo']}; {info['rustc']}",
+            argv=["cargo", "build", "--offline", "--color=always"],
+            note="CARGO_HOME is empty aside from this run, progress bars are off, and the crate lives under /tmp/w/errcrate.",
+            expect=[b"error[E0308]", b"src/main.rs", b"\x1b["],
+            env=cargo,
+            cwd=WORK / "errcrate",
+            steps=[("wait_exit", 60.0)],
+            timeout=90,
+        ),
+        Scenario(
+            name="unicode-text",
+            rows=24,
+            cols=80,
+            description="Mixed-width text: combining marks, CJK, emoji, a ZWJ family, and fullwidth letters.",
+            program=info["python"],
+            argv=["/usr/bin/python3", str(WORK / "emit_unicode.py")],
+            note="The writer does not query the terminal size. Column width differs when the same bytes are replayed at 120 columns.",
+            expect=["café".encode(), "中文日本語한국어".encode(), "😀".encode(), "👨‍👩‍👧".encode(), "ＡＢＣ".encode()],
+            env=env,
+            cwd=WORK,
+            steps=[("wait_exit", 4.0)],
+            timeout=6,
+        ),
+        Scenario(
+            name="long-lines",
+            rows=24,
+            cols=80,
+            description="Lines longer than the screen, including SGR changes that cross the wrap.",
+            program=info["python"],
+            argv=["/usr/bin/python3", str(WORK / "emit_long.py")],
+            note="Wrap position follows the sidecar columns. 400 ASCII columns wrap differently at 80 than at 120.",
+            expect=[b"x" * 200, b"\x1b[31m", "字".encode() * 40],
+            env=env,
+            cwd=WORK,
+            steps=[("wait_exit", 4.0)],
+            timeout=6,
+        ),
+        Scenario(
+            name="long-lines-120x40",
+            rows=40,
+            cols=120,
+            description="The same long-line stream captured at 120x40.",
+            program=info["python"],
+            argv=["/usr/bin/python3", str(WORK / "emit_long.py")],
+            note="Same bytes as long-lines.",
+            expect=[b"x" * 200, "字".encode() * 40],
+            env=env,
+            cwd=WORK,
+            steps=[("wait_exit", 4.0)],
+            timeout=6,
+        ),
+        Scenario(
+            name="tui-mouse",
+            rows=24,
+            cols=80,
+            description="A small TUI enables SGR mouse mode and bracketed paste, then echoes one of each.",
+            program=info["python"],
+            argv=["/usr/bin/python3", str(WORK / "mouse_tui.py")],
+            note="Source program: scripts/terminal-corpus-mouse-tui.py. Input is a press, a release, a motion, and a paste.",
+            expect=[
+                b"\x1b[?1006h",
+                b"\x1b[?2004h",
+                b"MOUSE:press:",
+                b"MOUSE:motion:",
+                b"PASTE:hello paste",
+            ],
+            env=env,
+            cwd=WORK,
+            steps=mouse_steps,
+            timeout=10,
+        ),
+        Scenario(
+            name="osc8-links",
+            rows=24,
+            cols=80,
+            description="OSC 8 hyperlinks, including an id parameter, a BEL terminator, and a wrapping label.",
+            program=info["python"],
+            argv=["/usr/bin/python3", str(WORK / "emit_osc8.py")],
+            note="Targets are https://example.com URLs.",
+            expect=[b"\x1b]8;;https://example.com/docs", b"\x1b]8;id=a1;https://example.com/a", b"legacy"],
+            env=env,
+            cwd=WORK,
+            steps=[("wait_exit", 4.0)],
+            timeout=6,
+        ),
+        Scenario(
+            name="tput-clear-reset",
+            rows=24,
+            cols=80,
+            description="tput clear, cup, color, alternate screen, and reset against xterm-256color.",
+            program=f"{info['bash']}; {info['tput']}",
+            argv=["/bin/bash", "--noprofile", "--norc", "-c", TPUT_SCRIPT],
+            note="reset sends RIS (ESC c). The shell is non-interactive, so it does not print a prompt.",
+            expect=[b"before-clear", b"green-bold", b"on-alt-screen", b"after-reset", b"\x1bc"],
+            env=env,
+            cwd=WORK,
+            steps=[("wait_exit", 4.0)],
+            timeout=6,
+        ),
+    ]
+    return items
+
+
+TPUT_SCRIPT = r"""
+printf 'before-clear\n'
+tput clear
+tput cup 5 8
+tput setaf 2
+tput bold
+printf 'green-bold'
+tput sgr0
+printf '\nplain\n'
+tput smcup
+printf 'on-alt-screen\n'
+tput rmcup
+printf 'after-alt\n'
+tput reset
+printf 'after-reset\n'
+"""
+
+
+def write_emitters() -> None:
+    (WORK / "emit_unicode.py").write_text(
+        textwrap.dedent(
+            """\
+            print("combining:", "e\\u0301", "precomposed:", "café")
+            print("cjk:", "中文日本語한국어")
+            print("emoji:", "😀", "heart:", "❤\\ufe0f", "zwj:", "👨\\u200d👩\\u200d👧")
+            print("fullwidth:", "ＡＢＣ")
+            print("boxes:", "┌──┐")
+            print("tab\\tseparated")
+            print("中" * 50)
+            print("A" * 40 + "😀" * 8 + "文" * 20)
+            """
+        ),
+        encoding="utf-8",
+    )
+    (WORK / "emit_long.py").write_text(
+        textwrap.dedent(
+            """\
+            print("x" * 400)
+            parts = []
+            for index in range(24):
+                color = 31 + (index % 6)
+                parts.append(f"\\x1b[{color}m" + f"{index % 10}" * 10)
+            parts.append("\\x1b[0m")
+            print("".join(parts))
+            print("字" * 80)
+            print("START" + "y" * 180 + "\\x1b[0mEND")
+            """
+        ),
+        encoding="utf-8",
+    )
+    (WORK / "emit_osc8.py").write_text(
+        textwrap.dedent(
+            """\
+            def link(url, text, params=""):
+                return f"\\x1b]8;{params};{url}\\x1b\\\\{text}\\x1b]8;;\\x1b\\\\"
+
+            print("see " + link("https://example.com/docs", "the docs"))
+            print(link("https://example.com/a", "alpha", "id=a1") + " and " + link("https://example.com/b", "beta"))
+            print("bel " + "\\x1b]8;;https://example.com/bel\\x07" + "legacy" + "\\x1b]8;;\\x07")
+            print(link("https://example.com/long", "L" * 100))
+            """
+        ),
+        encoding="utf-8",
+    )
+
+
+def stop_process(pid: int) -> None:
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(pid, sig)
+        except OSError:
+            try:
+                os.kill(pid, sig)
+            except OSError:
+                return
+        time.sleep(0.05)
+
+
+def drive(pid: int, master: int, steps: list[tuple], timeout: float) -> bytes:
+    buf = bytearray()
+    responder = Responder()
+    fcntl.fcntl(master, fcntl.F_SETFL, fcntl.fcntl(master, fcntl.F_GETFL) | os.O_NONBLOCK)
+    deadline = time.monotonic() + timeout
+    index = 0
+    idle_since: float | None = None
+    step_started = time.monotonic()
+    reaped = False
+
+    def reap() -> bool:
+        nonlocal reaped
+        if reaped:
+            return True
+        done, _status = os.waitpid(pid, os.WNOHANG)
+        if done:
+            reaped = True
+        return reaped
+
+    def pull(wait: float) -> str:
+        readable, _, _ = select.select([master], [], [], wait)
+        if not readable:
+            return "timeout"
+        try:
+            chunk = os.read(master, 65536)
+        except OSError as exc:
+            if exc.errno == errno.EIO:
+                return "eof"
+            raise
+        if not chunk:
+            return "eof"
+        buf.extend(chunk)
+        reply = responder.feed(chunk)
+        if reply:
+            try:
+                os.write(master, reply)
+            except OSError:
+                pass
+        return "data"
+
+    try:
+        while time.monotonic() < deadline:
+            if index >= len(steps):
+                kind = pull(0.1)
+                if kind == "eof" or reap():
+                    while pull(0.02) == "data":
+                        pass
+                    break
+                continue
+            step = steps[index]
+            op = step[0]
+            if op == "send":
+                os.write(master, step[1])
+                index += 1
+                idle_since = None
+                step_started = time.monotonic()
+                continue
+            if op == "sleep":
+                end = time.monotonic() + step[1]
+                while time.monotonic() < end:
+                    if pull(0.05) == "eof":
+                        break
+                index += 1
+                step_started = time.monotonic()
+                continue
+            if op == "wait_contains":
+                needle, limit = step[1], step[2]
+                if needle in buf:
+                    index += 1
+                    idle_since = None
+                    step_started = time.monotonic()
+                    continue
+                if time.monotonic() - step_started > limit or pull(0.05) == "eof":
+                    if needle not in buf:
+                        raise CaptureError(f"missing {needle!r}")
+                continue
+            if op == "wait_idle":
+                if idle_since is None:
+                    idle_since = time.monotonic()
+                if time.monotonic() - idle_since >= step[1]:
+                    index += 1
+                    idle_since = None
+                    step_started = time.monotonic()
+                    continue
+                if pull(0.05) == "data":
+                    idle_since = None
+                continue
+            if op == "wait_exit":
+                if reap() or pull(0.05) == "eof":
+                    while pull(0.02) == "data":
+                        pass
+                    reap()
+                    index += 1
+                    continue
+                if time.monotonic() - step_started > step[1]:
+                    raise CaptureError("process did not exit")
+                continue
+            raise CaptureError(f"unknown step {op}")
+        else:
+            raise CaptureError("timed out")
+        if index < len(steps):
+            raise CaptureError(f"stopped at step {index}: {steps[index][0]}")
+        return bytes(buf)
+    finally:
+        if not reaped:
+            stop_process(pid)
+            try:
+                os.waitpid(pid, 0)
+            except OSError:
+                pass
+        os.close(master)
+
+
+def spawn(scenario: Scenario) -> tuple[int, int]:
+    winsize = struct.pack("HHHH", scenario.rows, scenario.cols, 0, 0)
+    pid, master = pty.fork()
+    if pid == 0:
+        try:
+            fcntl.ioctl(0, termios.TIOCSWINSZ, winsize)
+            os.chdir(scenario.cwd)
+            os.execvpe(scenario.argv[0], scenario.argv, scenario.env)
+        except OSError as exc:
+            os.write(2, f"exec failed: {exc}\n".encode())
+            os._exit(127)
+    fcntl.ioctl(master, termios.TIOCSWINSZ, winsize)
+    return pid, master
+
+
+def _command_output(argv: list[str]) -> str:
+    try:
+        result = subprocess.run(
+            argv,
+            cwd=REPO,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return ""
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()
+
+
+def deny_needles() -> tuple[bytes, ...]:
+    """Identity strings for this machine, plus generic home-directory prefixes."""
+    values: list[str] = []
+    try:
+        user = getpass.getuser()
+    except OSError:
+        user = ""
+    if user:
+        values.append(user)
+    host = socket.gethostname()
+    if host:
+        values.append(host)
+        short = host.split(".", 1)[0]
+        if short and short != host:
+            values.append(short)
+    home = str(Path.home())
+    if home:
+        values.append(home)
+    email = _command_output(["git", "config", "user.email"])
+    if email:
+        values.append(email)
+    values.extend(("/home/", "/Users/"))
+    needles: list[bytes] = []
+    seen: set[bytes] = set()
+    for value in values:
+        value = value.strip()
+        # A one-character needle matches almost every stream.
+        if len(value) < 2:
+            continue
+        needle = value.encode()
+        if needle in seen:
+            continue
+        seen.add(needle)
+        needles.append(needle)
+    return tuple(needles)
+
+
+def _display_width(text: str) -> int:
+    width = 0
+    for char in text:
+        if unicodedata.combining(char):
+            continue
+        width += 2 if unicodedata.east_asian_width(char) in {"W", "F"} else 1
+    return width
+
+
+def _same_width(text: str, stem: str) -> str:
+    """ASCII placeholder with the same terminal columns as `text`."""
+    width = _display_width(text)
+    if width <= 0:
+        return ""
+    stem = "".join(char for char in stem if ord(char) < 128) or "x"
+    if len(stem) > width:
+        stem = stem[:width]
+    fitted = stem + ("." * (width - len(stem)))
+    if _display_width(fitted) != width:
+        raise CaptureError(f"placeholder width mismatch for {width} columns")
+    return fitted
+
+
+def _zero_digits(text: str) -> str:
+    return "".join("0" if char.isdigit() else char for char in text)
+
+
+def _cpu_model() -> str:
+    try:
+        text = Path("/proc/cpuinfo").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    for line in text.splitlines():
+        key, sep, value = line.partition(":")
+        if sep and key.strip().lower() == "model name":
+            return " ".join(value.split())
+    return ""
+
+
+def _cpu_forms(model: str) -> list[str]:
+    """Contiguous word sequences that identify this CPU.
+
+    Short tokens with no digit, such as a vendor name, are not specific enough
+    to replace on their own. btop prints one of these sequences, not always the
+    full model line.
+    """
+    words = model.split()
+    forms: list[str] = []
+    seen: set[str] = set()
+    for length in range(len(words), 0, -1):
+        for start in range(0, len(words) - length + 1):
+            form = " ".join(words[start : start + length])
+            if form in seen or len(form) < 4:
+                continue
+            if not any(char.isdigit() for char in form) and len(form) < 12:
+                continue
+            seen.add(form)
+            forms.append(form)
+    return forms
+
+
+def _human_btop_v147(num_bytes: int, decimal: bool) -> str:
+    """Size text btop 1.4.x prints for a byte count (not the shortened form)."""
+    value = num_bytes * 100
+    start = 0
+    units = _DECIMAL_UNITS if decimal else _BINARY_UNITS
+    if decimal:
+        while value >= 100_000 and start < len(units) - 1:
+            value //= 1000
+            start += 1
+    else:
+        while value >= 102_400 and start < len(units) - 1:
+            value >>= 10
+            start += 1
+    out = str(value)
+    if not decimal and len(out) == 4 and start > 0:
+        # Drop the extra hundredth, then put the decimal point two digits in.
+        out = out[:2] + "." + out[2:-1]
+    elif len(out) == 3 and start > 0:
+        out = out[:1] + "." + out[1:]
+    elif len(out) >= 2:
+        out = out[:-2]
+    if not out:
+        out = "0"
+    return f"{out} {units[start]}"
+
+
+def _human_btop_float(num_bytes: int, decimal: bool) -> str:
+    """Size text current btop prints for a byte count (not the shortened form)."""
+    value = float(num_bytes)
+    start = 0
+    units = _DECIMAL_UNITS if decimal else _BINARY_UNITS
+    limit = 999.5 if decimal else 1023.5
+    base = 1000.0 if decimal else 1024.0
+    while value >= limit and start < len(units) - 1:
+        value /= base
+        start += 1
+    scaled = round(value * 10) / 10.0
+    if scaled >= 99.95:
+        rendered = f"{value:.0f}"
+    elif round(value * 100) / 100.0 >= 9.995:
+        rendered = f"{value:.1f}"
+    else:
+        rendered = f"{value:.2f}"
+    return f"{rendered} {units[start]}"
+
+
+def _meminfo_bytes(key: str) -> int | None:
+    try:
+        text = Path("/proc/meminfo").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    prefix = f"{key}:"
+    for line in text.splitlines():
+        if not line.startswith(prefix):
+            continue
+        parts = line.split()
+        if len(parts) >= 2 and parts[1].isdigit():
+            return int(parts[1]) << 10
+    return None
+
+
+def _memory_forms() -> list[str]:
+    forms: list[str] = []
+    seen: set[str] = set()
+    for key in ("MemTotal", "SwapTotal"):
+        num_bytes = _meminfo_bytes(key)
+        if num_bytes is None or num_bytes <= 0:
+            continue
+        for decimal in (False, True):
+            for form in (
+                _human_btop_v147(num_bytes, decimal),
+                _human_btop_float(num_bytes, decimal),
+            ):
+                if form in seen or len(form) < 4:
+                    continue
+                if not any(char.isdigit() and char != "0" for char in form):
+                    continue
+                seen.add(form)
+                forms.append(form)
+    return forms
+
+
+def _host_forms() -> list[str]:
+    host = socket.gethostname().strip()
+    forms: list[str] = []
+    if len(host) >= 4:
+        forms.append(host)
+    short = host.split(".", 1)[0]
+    if len(short) >= 4 and short != host:
+        forms.append(short)
+    return forms
+
+
+def _kernel_forms() -> list[str]:
+    release = _command_output(["uname", "-r"])
+    system = _command_output(["uname", "-s"])
+    forms: list[str] = []
+    if system and release:
+        forms.append(f"{system} {release}")
+    if len(release) >= 4:
+        forms.append(release)
+    return forms
+
+
+def _hardware_pairs() -> list[tuple[bytes, bytes]]:
+    labeled: list[tuple[str, str]] = []
+    labeled.extend((form, _same_width(form, "Generic CPU")) for form in _cpu_forms(_cpu_model()))
+    labeled.extend((form, _zero_digits(form)) for form in _memory_forms())
+    labeled.extend((form, _same_width(form, "host")) for form in _host_forms())
+    labeled.extend((form, _same_width(form, "generic-kernel")) for form in _kernel_forms())
+    pairs: list[tuple[bytes, bytes]] = []
+    seen: set[bytes] = set()
+    for text, replacement in labeled:
+        if _display_width(text) != _display_width(replacement):
+            raise CaptureError(f"hardware placeholder width mismatch for {text!r}")
+        needle = text.encode()
+        if needle in seen or not needle:
+            continue
+        seen.add(needle)
+        pairs.append((needle, replacement.encode()))
+    pairs.sort(key=lambda item: len(item[0]), reverse=True)
+    return pairs
+
+
+def scrub_hardware(data: bytes) -> bytes:
+    for needle, replacement in _hardware_pairs():
+        if needle == replacement:
+            continue
+        data = data.replace(needle, replacement)
+    return data
+
+
+def _hit(name: str, data: bytes, needle: bytes, kind: str) -> str | None:
+    at = data.find(needle)
+    if at == -1:
+        return None
+    window = data[max(0, at - 40) : at + len(needle) + 40]
+    return f"{name} contains {kind} {needle!r} near {window!r}"
+
+
+def hardware_failure(name: str, data: bytes) -> str | None:
+    for needle, _replacement in _hardware_pairs():
+        problem = _hit(name, data, needle, "hardware id")
+        if problem:
+            return problem
+    return None
+
+
+def scrub_failure(name: str, data: bytes) -> str | None:
+    for needle in deny_needles():
+        problem = _hit(name, data, needle, "denied text")
+        if problem:
+            return problem
+    return None
+
+
+def source_text(scenario: Scenario) -> str:
+    body = "\n".join(
+        [
+            f"command: scripts/capture-terminal-corpus {scenario.name}",
+            f"tool: python pty capture ({sys.version.split()[0]}), winsize {scenario.rows}x{scenario.cols}",
+            f"program: {scenario.program}",
+            f"child: {command_line(scenario.argv)}",
+            "TERM=xterm-256color COLORTERM=truecolor LANG=C.UTF-8",
+            scenario.note,
+        ]
+    )
+    return body.strip() + "\n"
+
+
+def write_fixture(scenario: Scenario, data: bytes) -> None:
+    data = scrub_hardware(data)
+    source = source_text(scenario)
+    blob = data + source.encode()
+    problem = hardware_failure(scenario.name, blob) or scrub_failure(scenario.name, blob)
+    if problem:
+        raise CaptureError(problem)
+    if len(data) > MAX_FIXTURE_BYTES:
+        raise CaptureError(f"{scenario.name} is {len(data)} bytes")
+    if not data:
+        raise CaptureError(f"{scenario.name} is empty")
+    for needle in scenario.expect:
+        if needle not in data:
+            raise CaptureError(f"{scenario.name} missing expected {needle!r}")
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    (OUT_DIR / f"{scenario.name}.vt").write_bytes(data)
+    toml = "\n".join(
+        [
+            f"rows = {scenario.rows}",
+            f"cols = {scenario.cols}",
+            f"scrollback = {SCROLLBACK}",
+            f"description = {toml_string(scenario.description)}",
+            'source = """',
+            toml_multiline_content(source.rstrip("\n")),
+            '"""',
+            "",
+        ]
+    )
+    (OUT_DIR / f"{scenario.name}.toml").write_text(toml, encoding="utf-8")
+
+
+def toml_multiline_content(value: str) -> str:
+    # Basic TOML strings cannot contain raw controls, quotes or backslashes.
+    return "".join(
+        "\\\\" if char == "\\" else
+        "\\\"" if char == '"' else
+        f"\\u{ord(char):04X}" if (ord(char) < 32 and char not in "\n\t" or ord(char) == 127) else char
+        for char in value
+    )
+
+
+def toml_string(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def record(names: list[str] | None) -> int:
+    env = base_env()
+    print("preparing /tmp/w", flush=True)
+    prepare_workspace(env)
+    write_emitters()
+    info = versions(env)
+    chosen = build_scenarios(env, info)
+    if names:
+        wanted = set(names)
+        known = {item.name for item in chosen}
+        missing = wanted - known
+        if missing:
+            print("unknown fixture: " + ", ".join(sorted(missing)), file=sys.stderr)
+            return 2
+        chosen = [item for item in chosen if item.name in wanted]
+    failures: list[str] = []
+    for scenario in chosen:
+        print(f"capture {scenario.name}", flush=True)
+        pid, master = spawn(scenario)
+        try:
+            data = drive(pid, master, scenario.steps, scenario.timeout)
+            write_fixture(scenario, data)
+            print(f"  {len(data)} bytes", flush=True)
+        except (CaptureError, OSError) as exc:
+            failures.append(f"{scenario.name}: {exc}")
+            print(f"  FAILED {exc}", file=sys.stderr, flush=True)
+    if failures:
+        print("failures:", file=sys.stderr)
+        for item in failures:
+            print(f"  {item}", file=sys.stderr)
+        return 1
+    return check()
+
+
+def iter_fixtures() -> list[tuple[Path, Path]]:
+    pairs: list[tuple[Path, Path]] = []
+    if not OUT_DIR.is_dir():
+        return pairs
+    for vt in sorted(OUT_DIR.glob("*.vt")):
+        pairs.append((vt, vt.with_suffix(".toml")))
+    return pairs
+
+
+def check() -> int:
+    problems: list[str] = []
+    pairs = iter_fixtures()
+    if not pairs:
+        problems.append("no fixtures in tests/fixtures/terminal-corpus")
+    total = 0
+    seen: set[str] = set()
+    for vt, toml in pairs:
+        seen.add(vt.name)
+        data = vt.read_bytes()
+        total += len(data)
+        if len(data) > MAX_FIXTURE_BYTES:
+            problems.append(f"{vt.name} is {len(data)} bytes")
+        if not toml.is_file():
+            problems.append(f"{vt.name} has no toml sidecar")
+            continue
+        text = toml.read_text(encoding="utf-8")
+        total += len(text.encode())
+        try:
+            metadata = tomllib.loads(text)
+        except tomllib.TOMLDecodeError as exc:
+            problems.append(f"{toml.name} has invalid TOML: {exc}")
+        else:
+            for key in ("rows", "cols", "scrollback", "description", "source"):
+                if key not in metadata:
+                    problems.append(f"{toml.name} missing {key}")
+        blob = data + text.encode()
+        for problem in (hardware_failure(vt.name, blob), scrub_failure(vt.name, blob)):
+            if problem:
+                problems.append(problem)
+    extras = [
+        path.name
+        for path in OUT_DIR.iterdir()
+        if path.is_file() and path.suffix not in {".vt", ".toml", ".md"}
+        and not path.name.endswith(".alacritty.json")
+    ] if OUT_DIR.is_dir() else []
+    for name in extras:
+        problems.append(f"unexpected file {name}")
+    if total > MAX_CORPUS_BYTES:
+        problems.append(f"corpus is {total} bytes")
+    if problems:
+        print("terminal corpus check failed:", file=sys.stderr)
+        for item in problems:
+            print(f"  {item}", file=sys.stderr)
+        return 1
+    print(f"terminal corpus ok: {len(pairs)} fixtures, {total} bytes")
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("names", nargs="*", help="fixture names to record; default is all")
+    parser.add_argument("--check", action="store_true", help="scrub and size-check the fixtures")
+    parser.add_argument("--list", action="store_true", help="list fixture names and exit")
+    args = parser.parse_args()
+    if args.check:
+        return check()
+    if args.list:
+        env = base_env()
+        # Listing must not need the prepared tree or a compiler.
+        for scenario in build_scenarios(env, {key: key for key in (
+            "bash", "ls", "git", "nvim", "less", "man", "btop", "unshare", "python", "cargo", "rustc", "tput"
+        )}):
+            print(f"{scenario.name}\t{scenario.cols}x{scenario.rows}")
+        return 0
+    return record(args.names)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

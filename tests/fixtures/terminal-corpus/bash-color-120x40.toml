@@ -1,0 +1,12 @@
+rows = 40
+cols = 120
+scrollback = 10000
+description = "The same colored bash session at 120x40, so stty size reports the wider PTY."
+source = """
+command: scripts/capture-terminal-corpus bash-color-120x40
+tool: python pty capture (3.14.8), winsize 40x120
+program: GNU bash, version 5.3.20(1)-release (x86_64-pc-linux-gnu)
+child: /bin/bash --noprofile --rcfile /tmp/corpus-home/corpus.bashrc -i
+TERM=xterm-256color COLORTERM=truecolor LANG=C.UTF-8
+Same rcfile as bash-color.
+"""

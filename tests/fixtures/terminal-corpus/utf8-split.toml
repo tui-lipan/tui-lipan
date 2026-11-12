@@ -1,0 +1,19 @@
+rows = 2
+cols = 12
+scrollback = 0
+description = "UTF-8 split before an ASCII space and another multibyte character."
+source = "hand-written"
+
+[[known_defects]]
+engine = "alacritty"
+check = "chunk_split"
+seed = 38
+path = "/dumps/0/rows/0/text"
+expected_contains = "é é"
+actual_contains = "éé"
+reason = "VTE 0.15 partial UTF-8 skips the space: c3 | a9 20 c3 a9 renders éé."
+
+[[known_defects.differences]]
+path = "/dumps/0/cursor/col"
+expected = 3
+actual = 2

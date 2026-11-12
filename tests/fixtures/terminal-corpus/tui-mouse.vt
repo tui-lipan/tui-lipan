@@ -1,0 +1,12 @@
+[?1049h[2J[H[?1000h[?1002h[?1006h[?2004h[1;30;46m mouse + bracketed paste [0m
+q quits
+[4;2H[44m          [0m[6;1HREADY
+
+MOUSE:press:[<0;10;4M
+
+MOUSE:release:[<0;10;4m
+
+MOUSE:motion:[<32;15;5M
+
+PASTE:hello paste
+[?1000l[?1002l[?1006l[?2004l[?1049l

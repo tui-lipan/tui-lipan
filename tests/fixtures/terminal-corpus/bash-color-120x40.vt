@@ -1,0 +1,8 @@
+[?2004h[1;32muser@host[0m:[1;34m/tmp/w[0m$ stty size
+[?2004l40 120
+[?2004h[1;32muser@host[0m:[1;34m/tmp/w[0m$ echo hello-from-bash
+[?2004lhello-from-bash
+[?2004h[1;32muser@host[0m:[1;34m/tmp/w[0m$ printf '\033[31mred\033[0m and \033[32mgreen\033[0m\n'
+[?2004l[31mred[0m and [32mgreen[0m
+[?2004h[1;32muser@host[0m:[1;34m/tmp/w[0m$ exit
+[?2004lexit

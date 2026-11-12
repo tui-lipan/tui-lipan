@@ -1,0 +1,139 @@
+{
+  "dumps": [
+    {
+      "alternate": false,
+      "bells": 0,
+      "clipboard": [],
+      "cursor": {
+        "blinking": true,
+        "col": 0,
+        "row": 8,
+        "shape": "Block",
+        "visible": true
+      },
+      "history_rows": 0,
+      "key_modes": "TerminalKeyModes { app_cursor: false, bracketed_paste: false, kitty_keyboard: KittyKeyboardFlags { disambiguate_escape_codes: false, report_event_types: false, report_alternate_keys: false, report_all_keys_as_escape_codes: false, report_associated_text: false } }",
+      "marks": "[]",
+      "mouse_mode": "MouseModeState { mode: None, encoding: X10, focus_events_enabled: false }",
+      "responses": [],
+      "rows": [
+        {
+          "styles": [
+            {
+              "attrs": [
+                "bold"
+              ],
+              "col": 0,
+              "fg": "Green",
+              "width": 9
+            },
+            {
+              "attrs": [
+                "bold"
+              ],
+              "col": 10,
+              "fg": "Blue",
+              "width": 6
+            }
+          ],
+          "text": "user@host:/tmp/w$ stty size"
+        },
+        {
+          "text": "24 80"
+        },
+        {
+          "styles": [
+            {
+              "attrs": [
+                "bold"
+              ],
+              "col": 0,
+              "fg": "Green",
+              "width": 9
+            },
+            {
+              "attrs": [
+                "bold"
+              ],
+              "col": 10,
+              "fg": "Blue",
+              "width": 6
+            }
+          ],
+          "text": "user@host:/tmp/w$ echo hello-from-bash"
+        },
+        {
+          "text": "hello-from-bash"
+        },
+        {
+          "styles": [
+            {
+              "attrs": [
+                "bold"
+              ],
+              "col": 0,
+              "fg": "Green",
+              "width": 9
+            },
+            {
+              "attrs": [
+                "bold"
+              ],
+              "col": 10,
+              "fg": "Blue",
+              "width": 6
+            }
+          ],
+          "text": "user@host:/tmp/w$ printf '\\033[31mred\\033[0m and \\033[32mgreen\\033[0m\\n'"
+        },
+        {
+          "styles": [
+            {
+              "col": 0,
+              "fg": "Red",
+              "width": 3
+            },
+            {
+              "col": 8,
+              "fg": "Green",
+              "width": 5
+            }
+          ],
+          "text": "red and green"
+        },
+        {
+          "styles": [
+            {
+              "attrs": [
+                "bold"
+              ],
+              "col": 0,
+              "fg": "Green",
+              "width": 9
+            },
+            {
+              "attrs": [
+                "bold"
+              ],
+              "col": 10,
+              "fg": "Blue",
+              "width": 6
+            }
+          ],
+          "text": "user@host:/tmp/w$ exit"
+        },
+        {
+          "text": "exit"
+        }
+      ],
+      "scroll_offset": 0,
+      "semantic": "TerminalSemanticState { cwd: None, command_phase: Unknown, executable: None }",
+      "size": [
+        80,
+        24
+      ],
+      "status": "ProgramStatusSnapshot { revision: 0, records: [] }",
+      "title": null
+    }
+  ]
+}

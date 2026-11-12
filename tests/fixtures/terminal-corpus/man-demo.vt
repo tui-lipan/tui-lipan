@@ -1,0 +1,47 @@
+[?1049h[22;0;0t[24;1H[?1h=[4mDEMO[24m(1)                          User Commands                          [4mDEMO[24m(1)[m
+[m
+[1mNAME[0m[m
+     demo - show a page of neutral text[m
+[m
+[1mSYNOPSIS[0m[m
+     [1mdemo [22m[[4mOPTIONS[24m][m
+[m
+[1mDESCRIPTION[0m[m
+     A short manual page used as a terminal capture sample.[m
+[m
+     It has more than one screen of text so a pager can move.[m
+[m
+     Neutral paragraph 01 of the demonstration page.[m
+[m
+     Neutral paragraph 02 of the demonstration page.[m
+[m
+     Neutral paragraph 03 of the demonstration page.[m
+[m
+     Neutral paragraph 04 of the demonstration page.[m
+[m
+     Neutral paragraph 05 of the demonstration page.[m
+[m
+[7m Manual page demo.1 line 1 (press h for help or q to quit)[27m[K[K     Neutral paragraph 06 of the demonstration page.[m
+[m
+     Neutral paragraph 07 of the demonstration page.[m
+[m
+     Neutral paragraph 08 of the demonstration page.[m
+[m
+     Neutral paragraph 09 of the demonstration page.[m
+[m
+     Neutral paragraph 10 of the demonstration page.[m
+[m
+     Neutral paragraph 11 of the demonstration page.[m
+[m
+     Neutral paragraph 12 of the demonstration page.[m
+[m
+     Neutral paragraph 13 of the demonstration page.[m
+[m
+[1mLATER[0m[m
+     later-marker sits on the second screen.[m
+[m
+[1mSEE ALSO[0m[m
+     [1mcat[22m(1)[m
+[m
+     Trailing paragraph 14 keeps the page from ending early.[m
+[7m Manual page demo.1 line 24 (press h for help or q to quit)[27m[K[K[K[?1l>[?1049l[23;0;0t

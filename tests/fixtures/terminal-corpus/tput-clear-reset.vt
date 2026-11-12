@@ -1,0 +1,6 @@
+before-clear
+[H[2J[3J[6;9H[32m[1mgreen-bold(B[m
+plain
+[?1049h[22;0;0ton-alt-screen
+[?1049l[23;0;0tafter-alt
+c]104[!p[?3;4l[4l>[?69lafter-reset

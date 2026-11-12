@@ -1,0 +1,65 @@
+rows = 24
+cols = 80
+scrollback = 10000
+description = "The system Python REPL prints a banner and evaluates a few expressions."
+source = """
+command: scripts/capture-terminal-corpus python-repl
+tool: python pty capture (3.14.8), winsize 24x80
+program: Python 3.14.8
+child: /usr/bin/python3 -i
+TERM=xterm-256color COLORTERM=truecolor LANG=C.UTF-8
+HOME is the capture home, so the REPL does not read a user startup file.
+"""
+
+[[known_defects]]
+engine = "alacritty"
+check = "chunk_split"
+seed = 1
+path = "/dumps/0/rows/5/text"
+expected_contains = "café 😀 中文"
+actual_contains = "café😀 中文"
+reason = "VTE 0.15 partial UTF-8 skips the space after é in the recorded REPL output."
+
+[[known_defects.differences]]
+path = "/dumps/0/rows/5/cells/0/0"
+expected = 6
+actual = 5
+
+[[known_defects.differences]]
+path = "/dumps/0/rows/5/cells/1/0"
+expected = 9
+actual = 8
+
+[[known_defects.differences]]
+path = "/dumps/0/rows/5/cells/2/0"
+expected = 11
+actual = 10
+
+[[known_defects]]
+engine = "alacritty"
+check = "chunk_split"
+seed = 3735928559
+path = "/dumps/0/rows/4/text"
+expected_contains = "café 😀 中文"
+actual_contains = "café😀 中文"
+reason = "VTE 0.15 partial UTF-8 skips the space after é in the recorded REPL output."
+
+[[known_defects.differences]]
+path = "/dumps/0/rows/4/cells/0/0"
+expected = 17
+actual = 16
+
+[[known_defects.differences]]
+path = "/dumps/0/rows/4/cells/1/0"
+expected = 20
+actual = 19
+
+[[known_defects.differences]]
+path = "/dumps/0/rows/4/cells/2/0"
+expected = 22
+actual = 21
+
+[[known_defects.differences]]
+path = "/dumps/0/rows/4/styles/2/width"
+expected = 14
+actual = 13

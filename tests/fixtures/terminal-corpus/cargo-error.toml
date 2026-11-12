@@ -1,0 +1,12 @@
+rows = 24
+cols = 80
+scrollback = 10000
+description = "cargo build --color=always fails a tiny crate on a type error."
+source = """
+command: scripts/capture-terminal-corpus cargo-error
+tool: python pty capture (3.14.8), winsize 24x80
+program: cargo 1.98.1 (797e8a9bc 2026-08-05); rustc 1.98.1 (48a229cea 2026-09-01)
+child: cargo build --offline --color=always
+TERM=xterm-256color COLORTERM=truecolor LANG=C.UTF-8
+CARGO_HOME is empty aside from this run, progress bars are off, and the crate lives under /tmp/w/errcrate.
+"""

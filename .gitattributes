@@ -1,0 +1,4 @@
+# PTY captures contain raw bytes and significant carriage returns.
+tests/fixtures/terminal-corpus/*.vt -text -whitespace
+# Goldens must retain LF even when core.autocrlf is enabled.
+tests/fixtures/terminal-corpus/*.json text eol=lf

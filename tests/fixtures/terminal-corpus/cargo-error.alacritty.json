@@ -1,0 +1,218 @@
+{
+  "dumps": [
+    {
+      "alternate": false,
+      "bells": 0,
+      "clipboard": [],
+      "cursor": {
+        "blinking": true,
+        "col": 0,
+        "row": 11,
+        "shape": "Block",
+        "visible": true
+      },
+      "history_rows": 0,
+      "key_modes": "TerminalKeyModes { app_cursor: false, bracketed_paste: false, kitty_keyboard: KittyKeyboardFlags { disambiguate_escape_codes: false, report_event_types: false, report_alternate_keys: false, report_all_keys_as_escape_codes: false, report_associated_text: false } }",
+      "marks": "[]",
+      "mouse_mode": "MouseModeState { mode: None, encoding: X10, focus_events_enabled: false }",
+      "responses": [],
+      "rows": [
+        {
+          "styles": [
+            {
+              "attrs": [
+                "bold"
+              ],
+              "col": 0,
+              "fg": "LightGreen",
+              "width": 12
+            }
+          ],
+          "text": "   Compiling errcrate v0.1.0 (/tmp/w/errcrate)"
+        },
+        {
+          "styles": [
+            {
+              "attrs": [
+                "bold"
+              ],
+              "col": 0,
+              "fg": "LightRed",
+              "width": 12
+            },
+            {
+              "attrs": [
+                "bold"
+              ],
+              "col": 12,
+              "width": 18
+            }
+          ],
+          "text": "error[E0308]: mismatched types"
+        },
+        {
+          "styles": [
+            {
+              "attrs": [
+                "bold"
+              ],
+              "col": 1,
+              "fg": "LightBlue",
+              "width": 4
+            }
+          ],
+          "text": " --> src/main.rs:2:22"
+        },
+        {
+          "styles": [
+            {
+              "attrs": [
+                "bold"
+              ],
+              "col": 2,
+              "fg": "LightBlue",
+              "width": 1
+            }
+          ],
+          "text": "  |"
+        },
+        {
+          "styles": [
+            {
+              "attrs": [
+                "bold"
+              ],
+              "col": 0,
+              "fg": "LightBlue",
+              "width": 1
+            },
+            {
+              "attrs": [
+                "bold"
+              ],
+              "col": 2,
+              "fg": "LightBlue",
+              "width": 1
+            }
+          ],
+          "text": "2 |     let count: i32 = \"nope\";"
+        },
+        {
+          "styles": [
+            {
+              "attrs": [
+                "bold"
+              ],
+              "col": 2,
+              "fg": "LightBlue",
+              "width": 1
+            },
+            {
+              "attrs": [
+                "bold"
+              ],
+              "col": 19,
+              "fg": "LightBlue",
+              "width": 3
+            },
+            {
+              "attrs": [
+                "bold"
+              ],
+              "col": 25,
+              "fg": "LightRed",
+              "width": 6
+            },
+            {
+              "attrs": [
+                "bold"
+              ],
+              "col": 32,
+              "fg": "LightRed",
+              "width": 28
+            }
+          ],
+          "text": "  |                ---   ^^^^^^ expected `i32`, found `&str`"
+        },
+        {
+          "styles": [
+            {
+              "attrs": [
+                "bold"
+              ],
+              "col": 2,
+              "fg": "LightBlue",
+              "width": 1
+            },
+            {
+              "attrs": [
+                "bold"
+              ],
+              "col": 19,
+              "fg": "LightBlue",
+              "width": 1
+            }
+          ],
+          "text": "  |                |"
+        },
+        {
+          "styles": [
+            {
+              "attrs": [
+                "bold"
+              ],
+              "col": 2,
+              "fg": "LightBlue",
+              "width": 1
+            },
+            {
+              "attrs": [
+                "bold"
+              ],
+              "col": 19,
+              "fg": "LightBlue",
+              "width": 20
+            }
+          ],
+          "text": "  |                expected due to this"
+        },
+        {
+          "text": ""
+        },
+        {
+          "styles": [
+            {
+              "attrs": [
+                "bold"
+              ],
+              "col": 0,
+              "width": 67
+            }
+          ],
+          "text": "For more information about this error, try `rustc --explain E0308`."
+        },
+        {
+          "styles": [
+            {
+              "attrs": [
+                "bold"
+              ],
+              "col": 0,
+              "fg": "LightRed",
+              "width": 5
+            }
+          ],
+          "text": "error: could not compile `errcrate` (bin \"errcrate\") due to 1 previous error"
+        }
+      ],
+      "scroll_offset": 0,
+      "semantic": "TerminalSemanticState { cwd: None, command_phase: Unknown, executable: None }",
+      "size": [
+        80,
+        24
+      ],
+      "status": "ProgramStatusSnapshot { revision: 0, records: [] }",
+      "title": null
+    }
+  ]
+}
