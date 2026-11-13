@@ -378,7 +378,10 @@ impl AltScreenHistoryReader {
     }
 
     fn restore_step(&mut self, now: Instant) -> HistoryReadStep {
+        // Ticks sent up that the screen never showed may still be on their way, so they are
+        // returned before release. At the bottom that changes nothing, as the probe proved.
         if self.observed_rows == self.original_rows
+            && self.up_ticks == 0
             && (!self.pending_up || self.action_settled(now))
         {
             return match self.error {
@@ -997,6 +1000,33 @@ mod tests {
             reader.observe(bottom, now),
             HistoryReadStep::Finished(Err(HistoryReadError::Interrupted))
         );
+    }
+
+    #[test]
+    fn a_scroll_up_answered_too_late_is_still_returned() {
+        let mut app = App::new(60, 3);
+        let bottom = app.frame();
+        let mut now = Instant::now();
+        let mut reader = AltScreenHistoryReader::new(bottom.clone(), now).unwrap();
+        let mut sent = Vec::new();
+        let result = loop {
+            now += Duration::from_millis(250);
+            match reader.observe(bottom.clone(), now) {
+                HistoryReadStep::Finished(result) => break result,
+                HistoryReadStep::Wait => {}
+                step => sent.push(step),
+            }
+        };
+        // The application finally answers everything it was sent, in order.
+        for step in sent {
+            match step {
+                HistoryReadStep::ScrollUp(ticks) => app.wheel(true, ticks),
+                HistoryReadStep::ScrollDown(ticks) => app.wheel(false, ticks),
+                _ => unreachable!(),
+            }
+        }
+        assert_eq!(result, Err(HistoryReadError::Unavailable));
+        assert_eq!(app.offset, 0);
     }
 
     #[test]
