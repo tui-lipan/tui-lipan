@@ -298,6 +298,9 @@ pub use table::{
 };
 pub use tabs::{Tab, Tabs, TabsEvent, TabsOverflow};
 pub(crate) use tabs::{tab_divider_width, tab_segment_width, tab_width_budgets};
+#[cfg(feature = "terminal")]
+#[doc(hidden)]
+pub use terminal::TerminalEngineKind;
 #[cfg(all(feature = "terminal", unix))]
 pub use terminal::TerminalPtyHandoff;
 #[cfg(feature = "terminal")]

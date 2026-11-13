@@ -37,7 +37,9 @@ exclude = [
 all-features = true
 
 [workspace]
-members = ["tui-lipan-macro"]
+members = ["tui-lipan-macro", "ghostty-vt-sys"]
+# Generated and published on its own; see scripts/package-ghostty-src.sh.
+exclude = ["ghostty-vt-src"]
 
 [profile.dev]
 debug = 0
@@ -145,6 +147,9 @@ dunce = "1.0.5"
 typed-path = "0.12.3"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Experimental libghostty-vt engine for `TerminalScreen`; needs Zig 0.17 to build. See
+# ghostty-vt-sys/build.rs. Native only: terminal features do not build for wasm32 (see lib.rs).
+ghostty-vt-sys = { package = "tui-lipan-ghostty-vt-sys", version = "0.3.1", path = "ghostty-vt-sys", optional = true }
 ratatui = { version = "0.30.1", default-features = false, features = ["crossterm", "scrolling-regions", "layout-cache", "underline-color"] }
 syntect = { version = "5.2", optional = true, default-features = false, features = ["default-onig"] }
 two-face = { version = "0.5.1", optional = true, default-features = false, features = ["syntect-onig"] }
@@ -184,6 +189,9 @@ markdown       = ["dep:pulldown-cmark"]
 terminal      = ["dep:portable-pty", "dep:alacritty_terminal", "dep:memchr"]
 terminal-images = ["terminal", "image", "dep:flate2", "dep:simd-adler32", "dep:tempfile"]
 terminal-serde = ["terminal", "dep:serde"]
+# Experimental: a libghostty-vt engine behind `TerminalScreen` (needs Zig 0.17). The default
+# engine is unchanged.
+terminal-ghostty = ["terminal", "dep:ghostty-vt-sys"]
 profiling-tracing = ["dep:tracing"]
 # Investigation-only allocation attribution hooks; see src/alloc_probe.rs.
 alloc-probe = []
@@ -360,3 +368,4 @@ required-features = ["terminal-images"]
 [[bench]]
 name = "tab_drop_target"
 harness = false
+

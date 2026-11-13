@@ -3,3 +3,15 @@ cols = 12
 scrollback = 20
 description = "OSC metadata, clipboard, links, shell marks and status"
 source = "hand-written"
+
+[[differences]]
+path = "/dumps/0/rows"
+reason = "Ghostty starts a fresh line at OSC 133;A when the cursor is not at column 0 (FinalTerm prompt semantics); Alacritty keeps writing on the same line, so the prompt and everything after it sit one row lower."
+
+[[differences]]
+path = "/dumps/0/cursor"
+reason = "Follows from the OSC 133;A fresh line (see /dumps/0/rows)."
+
+[[differences]]
+path = "/dumps/0/marks"
+reason = "Follows from the OSC 133;A fresh line: the prompt mark lands on the new line (see /dumps/0/rows)."

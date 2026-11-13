@@ -1,6 +1,6 @@
 //! A second VT parser that tells the observer what the grid engine does not report in-band.
 //!
-//! Alacritty does not report OSC 7/9;9/22/133 with their raw parameters, or XTVERSION, the way the
+//! Neither engine reports OSC 7/9;9/22/133 with their raw parameters, or XTVERSION, the way the
 //! observer needs them. This parser reads the raw bytes ahead of the grid, reports those sequences
 //! to the [`EngineObserver`], and stops right after any sequence the observer wants an anchor for,
 //! so the grid can be fed exactly up to that byte first. It never touches cell or caret state.

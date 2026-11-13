@@ -41,7 +41,9 @@ tui-lipan = { path = "…", default-features = false, features = ["web"] }
 ```
 
 The following features are **incompatible** with `web` and trigger a compile
-error on wasm32: `image`, `terminal`.
+error on wasm32: `image`, `terminal` (and features that include it, such as
+`terminal-ghostty`, whose native `ghostty-vt-sys` dependency is not even
+resolved for wasm32).
 
 When `syntax-syntect` is enabled, native builds use Syntect's Oniguruma backend,
 while `wasm32` builds use the pure-Rust `fancy-regex` backend, so syntax

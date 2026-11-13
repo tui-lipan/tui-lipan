@@ -1,0 +1,276 @@
+tui-lipan's changes to libghostty-vt 1.0.1, applied by tui-lipan-ghostty-vt-src (and by
+tui-lipan-ghostty-vt-sys to a GHOSTTY_VT_SOURCE_DIR tree). Each is marked "tui-lipan patch" in
+the source.
+
+1. Alternate-screen shrink keeps the rows at the cursor (PageList.zig, Screen.zig). Upstream
+   1.0.1 crops from the top, so a full-screen program loses its top rows on resize.
+2. The legacy (mode 2027 off) zero-width append path marks the row dirty, as the clustering path
+   does, so a combining mark that arrives in a later write reaches the render state; and it
+   keeps VS15/VS16 after any emoji_vs_base, so keycaps (1 FE0F 20E3) keep their selector
+   (Terminal.zig).
+3. ghostty_terminal_tl_cursor_set and ghostty_terminal_tl_erase_below: cursor placement and
+   ED 0 without the VT parser, so a host can edit the grid while the child has left an escape
+   sequence unfinished. ghostty_terminal_tl_switch_screen: show a screen as it is, without the
+   cursor copy or restore of DECSET 47/1047/1049, to read the inactive screen on a snapshot copy
+   (c/terminal.zig, c/main.zig, lib_vt.zig, terminal.h).
+
+diff -ruN a/include/ghostty/vt/terminal.h b/include/ghostty/vt/terminal.h
+--- a/include/ghostty/vt/terminal.h
++++ b/include/ghostty/vt/terminal.h
+@@ -3145,6 +3145,48 @@
+ GHOSTTY_API void ghostty_terminal_reset(GhosttyTerminal terminal);
+ 
+ /**
++ * tui-lipan patch: move the cursor to cell (x, y) of the active area without
++ * going through the VT parser.
++ *
++ * Unlike CUP it ignores origin mode and the margins. It clears a pending
++ * wrap and leaves the saved cursor and any unfinished escape sequence alone.
++ *
++ * @return GHOSTTY_SUCCESS, or GHOSTTY_INVALID_VALUE for a NULL terminal or a
++ *         cell outside the active area
++ *
++ * @ingroup terminal
++ */
++GHOSTTY_API GhosttyResult ghostty_terminal_tl_cursor_set(GhosttyTerminal terminal,
++                                                         uint16_t x,
++                                                         uint16_t y);
++
++/**
++ * tui-lipan patch: erase from the cursor to the end of the active area, as
++ * ED 0 does, without going through the VT parser.
++ *
++ * @return GHOSTTY_SUCCESS, or GHOSTTY_INVALID_VALUE for a NULL terminal
++ *
++ * @ingroup terminal
++ */
++GHOSTTY_API GhosttyResult ghostty_terminal_tl_erase_below(GhosttyTerminal terminal);
++
++/**
++ * tui-lipan patch: make @p screen the active screen exactly as it is, without
++ * the cursor copy, save or restore that DECSET 47, 1047 and 1049 perform, and
++ * without the VT parser.
++ *
++ * It still ends the old screen's hyperlink and clears the selection, as every
++ * switch does, so use it on a copy (see snapshot.h) to read the inactive screen.
++ *
++ * @return GHOSTTY_SUCCESS, GHOSTTY_INVALID_VALUE for a NULL terminal or an
++ *         unknown screen, or GHOSTTY_OUT_OF_MEMORY
++ *
++ * @ingroup terminal
++ */
++GHOSTTY_API GhosttyResult ghostty_terminal_tl_switch_screen(GhosttyTerminal terminal,
++                                                            GhosttyTerminalScreen screen);
++
++/**
+  * Resize the terminal to the given dimensions.
+  *
+  * Changes the number of columns and rows in the terminal. The primary
+diff -ruN a/src/lib_vt.zig b/src/lib_vt.zig
+--- a/src/lib_vt.zig
++++ b/src/lib_vt.zig
+@@ -312,6 +312,9 @@
+         @export(&c.terminal_new, .{ .name = "ghostty_terminal_new" });
+         @export(&c.terminal_free, .{ .name = "ghostty_terminal_free" });
+         @export(&c.terminal_reset, .{ .name = "ghostty_terminal_reset" });
++        @export(&c.terminal_tl_cursor_set, .{ .name = "ghostty_terminal_tl_cursor_set" });
++        @export(&c.terminal_tl_erase_below, .{ .name = "ghostty_terminal_tl_erase_below" });
++        @export(&c.terminal_tl_switch_screen, .{ .name = "ghostty_terminal_tl_switch_screen" });
+         @export(&c.terminal_resize, .{ .name = "ghostty_terminal_resize" });
+         @export(&c.terminal_set, .{ .name = "ghostty_terminal_set" });
+         @export(&c.terminal_vt_write, .{ .name = "ghostty_terminal_vt_write" });
+diff -ruN a/src/terminal/c/main.zig b/src/terminal/c/main.zig
+--- a/src/terminal/c/main.zig
++++ b/src/terminal/c/main.zig
+@@ -195,6 +195,9 @@
+ pub const terminal_new = terminal.new;
+ pub const terminal_free = terminal.free;
+ pub const terminal_reset = terminal.reset;
++pub const terminal_tl_cursor_set = terminal.tl_cursor_set;
++pub const terminal_tl_erase_below = terminal.tl_erase_below;
++pub const terminal_tl_switch_screen = terminal.tl_switch_screen;
+ pub const terminal_resize = terminal.resize;
+ pub const terminal_set = terminal.set;
+ pub const terminal_vt_write = terminal.vt_write;
+diff -ruN a/src/terminal/c/terminal.zig b/src/terminal/c/terminal.zig
+--- a/src/terminal/c/terminal.zig
++++ b/src/terminal/c/terminal.zig
+@@ -1861,6 +1861,47 @@
+     return .success;
+ }
+ 
++/// tui-lipan patch: move the cursor to cell (x, y) of the active area
++/// without going through the VT parser. Unlike CUP it ignores origin mode
++/// and the margins. It clears a pending wrap and leaves the saved cursor and
++/// any unfinished escape sequence alone.
++pub fn tl_cursor_set(
++    terminal_: Terminal,
++    x: size.CellCountInt,
++    y: size.CellCountInt,
++) callconv(lib.calling_conv) Result {
++    const wrapper = terminal_ orelse return .invalid_value;
++    const t: *ZigTerminal = wrapper.terminal;
++    if (x >= t.cols or y >= t.rows) return .invalid_value;
++    t.screens.active.cursor.pending_wrap = false;
++    t.screens.active.cursorAbsolute(x, y);
++    return .success;
++}
++
++/// tui-lipan patch: erase from the cursor to the end of the active area,
++/// as ED 0 does, without going through the VT parser.
++pub fn tl_erase_below(terminal_: Terminal) callconv(lib.calling_conv) Result {
++    const wrapper = terminal_ orelse return .invalid_value;
++    wrapper.terminal.eraseDisplay(.below, false);
++    return .success;
++}
++
++/// tui-lipan patch: make `screen` (0 primary, 1 alternate) the active screen
++/// exactly as it is, without the cursor copy, save or restore that DECSET
++/// 47, 1047 and 1049 perform, and without the VT parser. It still ends the
++/// old screen's hyperlink and clears the selection, as every switch does, so
++/// use it on a copy to read the inactive screen.
++pub fn tl_switch_screen(terminal_: Terminal, screen: c_int) callconv(lib.calling_conv) Result {
++    const wrapper = terminal_ orelse return .invalid_value;
++    const key: TerminalScreen = switch (screen) {
++        0 => .primary,
++        1 => .alternate,
++        else => return .invalid_value,
++    };
++    _ = wrapper.terminal.switchScreen(key) catch return .out_of_memory;
++    return .success;
++}
++
+ pub fn reset(terminal_: Terminal) callconv(lib.calling_conv) void {
+     const wrapper = terminal_ orelse return;
+     const t: *ZigTerminal = wrapper.terminal;
+diff -ruN a/src/terminal/PageList.zig b/src/terminal/PageList.zig
+--- a/src/terminal/PageList.zig
++++ b/src/terminal/PageList.zig
+@@ -1251,6 +1251,10 @@
+     /// resize/reflow behavior depends on the cursor position.
+     cursor: ?Cursor = null,
+ 
++    /// Crop rows below the cursor even when they contain text. Used by screens
++    /// without history, where shifting the cursor row into history loses it.
++    preserve_cursor: bool = false,
++
+     /// Whether the resize may pull rows out of scrollback back into the
+     /// active area. If false, growing rows always appends blank rows at the
+     /// bottom and a column reflow keeps the top of the active area on the
+@@ -3060,7 +3064,10 @@
+                 // behavior because it seemed fine in an ocean of differing behavior
+                 // between terminal apps. I'm completely open to changing it as long
+                 // as resize behavior isn't regressed in a user-hostile way.
+-                const trimmed = self.trimTrailingBlankRows(self.rows - rows);
++                const trimmed = if (opts.preserve_cursor)
++                    self.trimTrailingRows(self.rows - @max(rows, if (opts.cursor) |c| c.y + 1 else rows), true)
++                else
++                    self.trimTrailingBlankRows(self.rows - rows);
+ 
+                 // Account for our trimmed rows in the total row cache
+                 self.total_rows -= trimmed;
+@@ -3409,6 +3416,17 @@
+     self: *PageList,
+     max: size.CellCountInt,
+ ) size.CellCountInt {
++    return self.trimTrailingRows(max, false);
++}
++
++/// A forced crop invalidates pins in discarded rows instead of letting them
++/// prevent the crop. The caller guarantees that the live cursor is retained.
++fn trimTrailingRows(
++    self: *PageList,
++    max: size.CellCountInt,
++    force: bool,
++) size.CellCountInt {
++    if (max == 0) return 0;
+     var trimmed: size.CellCountInt = 0;
+     var invalidated_node: ?*List.Node = null;
+     const bl_pin = self.getBottomRight(.screen).?;
+@@ -3417,7 +3435,7 @@
+         // If the row has any text then we're done. A row marked blank
+         // has no text, so we don't need to read its cells.
+         const rac = row_pin.rowAndCell();
+-        if (!rac.row.blank and
++        if (!force and !rac.row.blank and
+             pagepkg.Cell.hasTextAny(row_pin.cells(.all))) return trimmed;
+ 
+         // If our tracked pins are in this row then we cannot trim it
+@@ -3427,12 +3445,12 @@
+         for (pin_keys) |p| {
+             if (p.node != row_pin.node or
+                 p.y != row_pin.y) continue;
+-            return trimmed;
++            if (!force) return trimmed;
++            p.* = row_pin.up(1).?;
++            p.garbage = true;
+         }
+ 
+-        // No text, we can trim this row. Because it has
+-        // no text we can also be sure it has no styling
+-        // so we don't need to worry about memory.
++        // This row is discarded. Reset its cells before retiring the storage.
+         if (row_pin.node.rows() > 1 and invalidated_node != row_pin.node) {
+             // Shrinking a retained page changes its valid row-coordinate range.
+             self.invalidateNodeLayout(row_pin.node);
+diff -ruN a/src/terminal/Screen.zig b/src/terminal/Screen.zig
+--- a/src/terminal/Screen.zig
++++ b/src/terminal/Screen.zig
+@@ -2243,6 +2243,7 @@
+     // modify its X/Y for reflow. Do this before changing any state since
+     // tracking the pin can fail.
+     const saved_cursor_pin: ?*Pin = saved_cursor: {
++        if (self.no_scrollback) break :saved_cursor null;
+         const sc = self.saved_cursor orelse break :saved_cursor null;
+         const pin = self.pages.pin(.{ .active = .{
+             .x = sc.x,
+@@ -2328,6 +2329,7 @@
+         .rows = opts.rows,
+         .cols = opts.cols,
+         .reflow = opts.reflow,
++        .preserve_cursor = self.no_scrollback,
+         .cursor = .{
+             .x = self.cursor.x,
+             .y = self.cursor.y,
+@@ -2390,6 +2392,15 @@
+         self.cursor.style_id = 0;
+     };
+ 
++    // Screens without history clamp the saved coordinates independently of
++    // scrolling the live cursor into view, as xterm and Alacritty do.
++    if (self.no_scrollback) {
++        if (self.saved_cursor) |*sc| {
++            sc.x = @min(sc.x, opts.cols - 1);
++            sc.y = @min(sc.y, opts.rows - 1);
++        }
++    }
++
+     // If we reflowed a saved cursor, update it.
+     if (saved_cursor_pin) |p| {
+         // This should never fail because a non-null saved_cursor_pin
+diff -ruN a/src/terminal/Terminal.zig b/src/terminal/Terminal.zig
+--- a/src/terminal/Terminal.zig
++++ b/src/terminal/Terminal.zig
+@@ -2172,13 +2172,19 @@
+             return;
+         }
+ 
+-        // If this is a emoji variation selector, prev must be an emoji
++        // If this is a emoji variation selector, prev must be a valid
++        // variation-sequence base. tui-lipan patch: emoji_vs_base, the
++        // property the grapheme clustering path uses, so keycap bases
++        // (digits, '#', '*') keep their selector too.
+         if (c == 0xFE0F or c == 0xFE0E) {
+             const prev_props = unicode.table.get(prev.content.codepoint.data);
+-            const emoji = prev_props.grapheme_break == .extended_pictographic;
+-            if (!emoji) return;
++            if (!prev_props.emoji_vs_base) return;
+         }
+ 
++        // tui-lipan patch: mark the row dirty, as the grapheme clustering
++        // path does, so a mark arriving in a later write reaches the
++        // render state.
++        self.screens.active.cursorMarkDirty();
+         try self.screens.active.appendGrapheme(prev, c);
+         return;
+     }

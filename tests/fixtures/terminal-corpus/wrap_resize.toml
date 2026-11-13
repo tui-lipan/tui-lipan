@@ -25,3 +25,7 @@ cols = 8
 
 [[ops]]
 kind = "dump"
+
+[[differences]]
+path = "/dumps/2/scroll_offset"
+reason = "Through a reflowing resize, the Ghostty engine keeps a scrolled viewport on the line it showed (tracked grid reference); Alacritty's per-line offset arithmetic returns it to the live screen here."

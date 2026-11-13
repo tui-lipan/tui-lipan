@@ -10,3 +10,7 @@ child: nvim --clean -c "syntax enable|setfiletype rust|set noswapfile noundofile
 TERM=xterm-256color COLORTERM=truecolor LANG=C.UTF-8
 No user config, shada, or swap files. Syntax uses the system runtime.
 """
+
+[[differences]]
+path = "/dumps/0/responses"
+reason = "Ghostty answers more of neovim's probes: DECRQM reports modes 69, 2027 and 2031 as recognized and reset (Alacritty: not recognized), it answers DECRQSS for SGR and XTGETTCAP. Mode 2048 is reported as unsupported by both engines because hosts deliver replies on child output, not on resize."

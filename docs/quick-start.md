@@ -86,6 +86,7 @@ tui-lipan = { version = "*", features = ["image", "big-text"] }
 | `terminal` | No | Embedded PTY / terminal viewport - `Terminal`, `ManagedTerminal` |
 | `terminal-images` | No | Kitty graphics in terminal panes: the program running in a pane can draw images, whatever the host terminal supports; includes `terminal` and `image` |
 | `terminal-serde` | No | Serde derives for terminal snapshot leaf style/mouse types used by external, versioned snapshot transports; includes `terminal` |
+| `terminal-ghostty` | No | Experimental, opt-in libghostty-vt engine for `TerminalScreen` (needs Zig 0.17.x to build), selected with the unstable `TerminalScreen::with_engine`; `TerminalScreen::new` keeps the default engine. Includes `terminal` |
 | `theme-reload` | No | Live reload of TOML theme files without restarting the app - see [Styling](styling.md) |
 | `web` | No | Browser/WASM backend - see [Web / WASM Backend](web-backend.md) |
 
