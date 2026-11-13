@@ -161,6 +161,19 @@ where
         std::any::type_name::<C>()
     }
 
+    /// Let an off-screen render resolve late-bound paints and amounts, as the on-screen draw does.
+    ///
+    /// Without it a capture shows every running fade or pulse at its resting value. The scope is
+    /// partial: a capture is not a paint of the screen, so it must not change what the registry
+    /// knows about which animations the screen shows and where.
+    pub(crate) fn capture_animations(&self) -> crate::animation::registry::RenderRegistryScope {
+        crate::animation::registry::set_render_registry(
+            Rc::clone(&self.ctx.env().animations),
+            self.ctx.env().clock.elapsed(),
+            crate::animation::registry::PaintExtent::Partial,
+        )
+    }
+
     pub(crate) fn new(component: C, props: C::Properties, config: RuntimeCoreConfig) -> Self {
         let RuntimeCoreConfig {
             viewport,

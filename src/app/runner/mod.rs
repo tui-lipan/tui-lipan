@@ -1492,6 +1492,7 @@ impl<C: Component> AppRunner<C> {
         let ran_callbacks = !pending.callbacks.is_empty();
         let screen_background = self.resolved_screen_background();
         let interaction = self.headless_interaction();
+        let _animations = self.core.capture_animations();
         let snapshot = crate::ui_snapshot::build_ui_snapshot(
             &self.core.tree,
             self.core.ctx.viewport(),
@@ -1784,6 +1785,7 @@ impl<C: Component> AppRunner<C> {
         }
         let _highlight =
             crate::backend::ratatui_backend::common::push_render_highlight(self.highlight);
+        let _animations = self.core.capture_animations();
         let _snapshot = crate::ui_snapshot::build_ui_snapshot(
             &self.core.tree,
             self.core.viewport(),
@@ -2201,6 +2203,7 @@ impl<C: Component> AppRunner<C> {
                 self.last_bounds = *viewport;
                 self.headless_render(*viewport);
             }
+            let _animations = self.core.capture_animations();
             let snapshot = crate::ui_snapshot::build_ui_snapshot(
                 &self.core.tree,
                 *viewport,
