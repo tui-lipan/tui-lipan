@@ -756,7 +756,7 @@ impl<C: Component> AppRunner<C> {
                         self.dirty_component_scopes.clear();
                         self.dirty_scope_set.clear();
                     }
-                    DirtyLevel::PaintOnly | DirtyLevel::SpinnerPaintOnly | DirtyLevel::None => {
+                    DirtyLevel::PaintOnly | DirtyLevel::DamagePaintOnly | DirtyLevel::None => {
                         return Ok(false);
                     }
                     #[cfg(feature = "terminal")]
@@ -1113,39 +1113,40 @@ impl<C: Component> AppRunner<C> {
         Ok(())
     }
 
-    /// Spinner updates carry positive provenance: only these allocated nodes and live content
-    /// changed. A generic paint in the same frame widens the dirty level and never enters here.
-    pub(super) fn render_spinner_paint_only(
+    /// Runtime-owned damage carries positive provenance: only these spinner nodes, the areas
+    /// these render-resolved animations paint, and live content changed. A generic paint in the
+    /// same frame widens the dirty level and never enters here.
+    pub(super) fn render_damage_paint_only(
         &mut self,
         terminal: &mut crate::backend::ratatui_backend::Terminal,
     ) -> Result<()> {
         #[cfg(feature = "profiling-tracing")]
-        let _render_span = trace_span!("app.render_spinner_paint_only").entered();
+        let _render_span = trace_span!("app.render_damage_paint_only").entered();
         if self.surface.is_inline() || self.cursor_trail_requires_full_draw() {
             return self.render_paint_only(terminal);
         }
         #[cfg(feature = "devtools")]
         let total_start = Instant::now();
         terminal.autoresize()?;
-        let nodes = std::mem::take(&mut self.animation.spinner_damage);
+        let damage = std::mem::take(&mut self.animation.paint_damage);
         let frame_area = terminal.get_frame().area();
         #[cfg(feature = "terminal")]
         let plan = {
             let refresh = self.core.tree.refresh_live_terminals_detailed();
             self.emit_terminal_focus_change();
-            self.plan_live_damage(&refresh, &nodes, frame_area)
+            self.plan_live_damage(&refresh, &damage, frame_area)
         };
         #[cfg(not(feature = "terminal"))]
         let plan = {
-            let mut nodes = nodes;
-            nodes.extend(self.core.tree.refresh_live_texts());
-            self.plan_node_damage(&nodes, frame_area)
+            let mut damage = damage;
+            damage.nodes.extend(self.core.tree.refresh_live_texts());
+            self.plan_node_damage(&damage, frame_area)
         };
         match plan {
             Ok(plan) => self.draw_row_damage(terminal, &plan),
             Err(row_damage::DamageRejection::NothingVisible) => Ok(()),
             Err(reason) => {
-                crate::debug::internal_log!("[tui-lipan] spinner damage fallback: {reason:?}");
+                crate::debug::internal_log!("[tui-lipan] paint damage fallback: {reason:?}");
                 self.draw_current_tree_after_live_refresh(terminal, DrawMode::PaintOnly)?;
                 Ok(())
             }
@@ -1248,7 +1249,7 @@ impl<C: Component> AppRunner<C> {
         terminal: &mut crate::backend::ratatui_backend::Terminal,
         draw_mode: DrawMode,
     ) -> Result<std::time::Duration> {
-        self.animation.spinner_damage.clear();
+        self.animation.paint_damage.clear();
         #[cfg(feature = "profiling-tracing")]
         let _draw_span = trace_span!("app.draw_current_tree").entered();
 
@@ -1341,6 +1342,9 @@ impl<C: Component> AppRunner<C> {
                 }
                 let last_snapshot = last_snapshot.as_mut().expect("snapshot exists");
                 let diff_snapshot = diff_snapshot.as_mut().expect("diff snapshot exists");
+                // The scroll shifts painted rows on the host without repainting them, so what was
+                // recorded about where animations paint no longer holds until a full paint.
+                self.core.ctx.env().animations.invalidate_read_areas();
                 Self::draw_incremental_scroll(
                     terminal,
                     ctx,
@@ -1388,6 +1392,7 @@ impl<C: Component> AppRunner<C> {
         self.scroll_diff_snapshot = diff_snapshot;
         draw_result?;
         self.frame_rendered = true;
+        self.recorded_caret = cursor_position.get();
         self.finish_trail_pass(trail, cursor_position.get());
 
         #[cfg(any(feature = "devtools", feature = "profiling-tracing"))]

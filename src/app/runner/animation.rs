@@ -151,8 +151,8 @@ impl<C: Component> AppRunner<C> {
                 &mut next_tick,
             ) {
                 changed = true;
-                if !self.animation.spinner_damage.contains(&id) {
-                    self.animation.spinner_damage.push(id);
+                if !self.animation.paint_damage.nodes.contains(&id) {
+                    self.animation.paint_damage.nodes.push(id);
                 }
             }
         }

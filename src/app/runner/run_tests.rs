@@ -1846,8 +1846,11 @@ fn spinner_damage_tracks_glyph_changes_not_clock_ticks() {
     for (tick, changed) in [(1, false), (2, true), (3, false), (4, true), (24, false)] {
         runner.animation.spinner_frame = tick;
         assert_eq!(runner.update_spinner_frames(), changed, "tick {tick}");
-        assert_eq!(runner.animation.spinner_damage.len(), usize::from(changed));
-        runner.animation.spinner_damage.clear();
+        assert_eq!(
+            runner.animation.paint_damage.nodes.len(),
+            usize::from(changed)
+        );
+        runner.animation.paint_damage.nodes.clear();
     }
 }
 
@@ -1962,9 +1965,9 @@ fn spinner_paints_reuse_the_retained_frame_without_rebuilding_or_growing_damage(
     for tick in (2..=80).step_by(2) {
         runner.animation.spinner_frame = tick;
         assert!(runner.update_spinner_frames());
-        runner.render_spinner_paint_only(&mut terminal).unwrap();
+        runner.render_damage_paint_only(&mut terminal).unwrap();
         assert_eq!(runner.host_patched_rows, vec![0]);
-        assert!(runner.animation.spinner_damage.is_empty());
+        assert!(runner.animation.paint_damage.nodes.is_empty());
         assert_eq!(views.get(), view_count);
         let frame = runner.last_frame_snapshot.as_ref().unwrap();
         for y in 1..12 {
@@ -1998,7 +2001,7 @@ fn list_description_spinner_skips_unchanged_and_manual_frames() {
     runner.animation.spinner_frame = 3;
     assert!(!runner.update_spinner_frames());
     assert_eq!(
-        runner.animation.spinner_damage.len(),
+        runner.animation.paint_damage.nodes.len(),
         1,
         "paced frames coalesce damage"
     );

@@ -12,6 +12,12 @@
 //! instead - a [`Paint::Animated`] or an [`EffectAmount`] carrying an [`AnimationHandle`] - which
 //! the renderer resolves while painting. The value never escapes into `view()`, so advancing it is
 //! a repaint.
+//!
+//! A repaint of what, though? While a draw resolves a late-bound value, the renderer says which
+//! screen area it is painting ([`paint_area_scope`]), and the registry records that area against
+//! the entry. When the entry later changes, those areas are all the screen that can show it, so
+//! the runtime repaints just them ([`TransitionTick::render_damage`]) rather than the whole frame.
+//! A value resolved with no area in scope could be anywhere, and its change asks for a full paint.
 
 use std::any::{Any, TypeId};
 use std::cell::{Cell, RefCell};
@@ -22,7 +28,7 @@ use crate::animation::AnimationHandle;
 use crate::animation::transition::{Lerp, Transition, TransitionConfig};
 use crate::callback::ScopeId;
 use crate::core::element::Key;
-use crate::style::{Color, EffectAmount, EffectPulse, Paint};
+use crate::style::{Color, EffectAmount, EffectPulse, Paint, Rect};
 
 /// The identity of a registry entry: the component instance that asked for it, and its key.
 ///
@@ -273,6 +279,40 @@ thread_local! {
     static RENDER_SCOPE: RefCell<Option<RenderScope>> = const { RefCell::new(None) };
 }
 
+thread_local! {
+    /// The screen areas the renderer is painting right now, innermost last. A late-bound value
+    /// resolved while this is non-empty is recorded against the top area; resolved while it is
+    /// empty, it could be painting anywhere. See [`paint_area_scope`].
+    static PAINT_AREAS: RefCell<Vec<Rect>> = const { RefCell::new(Vec::new()) };
+}
+
+/// RAII guard ending a [`paint_area_scope`].
+pub(crate) struct PaintAreaScope(());
+
+impl Drop for PaintAreaScope {
+    fn drop(&mut self) {
+        PAINT_AREAS.with(|areas| {
+            areas.borrow_mut().pop();
+        });
+    }
+}
+
+/// Declare that everything painted until the guard drops lands inside `area`, in frame cells.
+///
+/// The render walk opens one around each node it paints, covering everything that node draws. A
+/// renderer that knows a value only reaches part of its node can open a narrower one around that
+/// part. The area must cover *every* cell a value resolved inside it can colour: it is what gets
+/// repainted when the value changes, and a cell left outside keeps its stale colour.
+pub(crate) fn paint_area_scope(area: Rect) -> PaintAreaScope {
+    PAINT_AREAS.with(|areas| areas.borrow_mut().push(area));
+    PaintAreaScope(())
+}
+
+/// The area the renderer is painting, or `None` when no scope says.
+fn current_paint_area() -> Option<Rect> {
+    PAINT_AREAS.with(|areas| areas.borrow().last().copied())
+}
+
 /// RAII guard restoring the previously installed render scope on drop.
 ///
 /// Dropping it also ends the draw: if it was a full paint, perpetual animations it did not read
@@ -368,6 +408,12 @@ pub(crate) struct AnimationRegistry {
     paint_epoch: Cell<u64>,
     /// Whether a full paint has begun and not yet finished.
     painting: Cell<bool>,
+    /// Where on screen each entry was resolved since the latest full paint. See
+    /// [`render_damage`](TransitionTick::render_damage).
+    read_areas: RefCell<HashMap<AnimationKey, ReadArea>>,
+    /// Whether [`read_areas`](Self::read_areas) still describes the screen: set by a full paint,
+    /// cleared by a draw that moved painted content without recording where it went.
+    read_areas_valid: Cell<bool>,
     /// Scopes whose `view()` ran since the last [`end_frame_gc`](Self::end_frame_gc).
     viewed_scopes: RefCell<std::collections::HashSet<ScopeId>>,
     /// Per-scope view epoch, bumped each time a scope's `view()` begins. An entry owned by a
@@ -376,13 +422,82 @@ pub(crate) struct AnimationRegistry {
 }
 
 /// What advancing the registry by one frame requires of the runtime.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct TransitionTick {
     /// A value some `view()` read as a concrete value changed, so the view must run again for it to
     /// reach the screen.
     pub(crate) view_changed: bool,
     /// A late-bound value changed. The renderer resolves those itself, so a repaint is enough.
     pub(crate) render_changed: bool,
+    /// How much of the screen the late-bound values that changed can reach.
+    pub(crate) render_damage: RenderDamage,
+}
+
+/// The screen a set of changed late-bound values can reach.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) enum RenderDamage {
+    /// Nowhere: nothing on screen reads the values that changed.
+    #[default]
+    None,
+    /// These areas, in frame cells, and nowhere else.
+    Areas(Vec<Rect>),
+    /// Somewhere no area accounts for: a value was resolved outside every paint area, or the
+    /// recorded areas no longer describe the screen. Only a full paint is safe.
+    Unbounded,
+}
+
+impl RenderDamage {
+    fn add(&mut self, read: Option<&ReadArea>) {
+        match (read, &mut *self) {
+            (_, Self::Unbounded) | (None, _) => {}
+            (Some(ReadArea::Unbounded), _) => *self = Self::Unbounded,
+            (Some(ReadArea::Areas(areas)), Self::None) => *self = Self::Areas(areas.clone()),
+            (Some(ReadArea::Areas(areas)), Self::Areas(all)) => {
+                for area in areas {
+                    if !all.contains(area) {
+                        all.push(*area);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Where an entry's value was painted since the latest full paint.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ReadArea {
+    Areas(Vec<Rect>),
+    /// Somewhere no paint area accounts for.
+    Unbounded,
+}
+
+/// Distinct areas kept per entry before they are folded into one that bounds them all. A value read
+/// by a long list is still correct as one area; it just repaints the rows between.
+const MAX_READ_AREAS: usize = 32;
+
+impl ReadArea {
+    fn record(&mut self, area: Option<Rect>) {
+        let Self::Areas(areas) = self else {
+            return;
+        };
+        let Some(area) = area else {
+            *self = Self::Unbounded;
+            return;
+        };
+        if area.is_empty() || areas.iter().any(|known| known.contains_rect(&area)) {
+            return;
+        }
+        areas.retain(|known| !area.contains_rect(known));
+        areas.push(area);
+        if areas.len() > MAX_READ_AREAS {
+            let bounds = areas
+                .iter()
+                .copied()
+                .reduce(|a, b| a.bounding(&b))
+                .expect("more than the limit");
+            *areas = vec![bounds];
+        }
+    }
 }
 
 /// Whether `entry` is a render-resolved animation that should keep asking for paints.
@@ -593,6 +708,11 @@ impl AnimationRegistry {
             entry.wake(now);
         }
         entry.state().resolved_epoch.set(self.paint_epoch.get());
+        self.read_areas
+            .borrow_mut()
+            .entry(key)
+            .or_insert(ReadArea::Areas(Vec::new()))
+            .record(current_paint_area());
         let typed = entry.as_any().downcast_ref::<TypedEntry<T>>()?;
         Some(typed.current)
     }
@@ -747,14 +867,22 @@ impl AnimationRegistry {
     /// so a stalled loop never slows a pulse down. A suspended pulse is not advanced at all.
     pub(crate) fn tick(&self, dt: Duration, now: Duration) -> TransitionTick {
         let mut entries = self.entries.borrow_mut();
+        let read_areas = self.read_areas.borrow();
+        let read_areas_valid = self.read_areas_valid.get();
         let mut result = TransitionTick::default();
-        for entry in entries.values_mut() {
+        for (key, entry) in entries.iter_mut() {
             if entry.state().suspended.get() {
                 continue;
             }
             if entry.tick(dt, now) {
                 if entry.state().render_resolved.get() {
                     result.render_changed = true;
+                    // An entry no paint has read since the latest full one has nothing on screen.
+                    if read_areas_valid {
+                        result.render_damage.add(read_areas.get(key));
+                    } else {
+                        result.render_damage = RenderDamage::Unbounded;
+                    }
                 } else {
                     result.view_changed = true;
                 }
@@ -821,6 +949,7 @@ impl AnimationRegistry {
             .retain(|&scope, _| is_mounted(scope));
         for key in &dropped {
             self.release_handle(key);
+            self.read_areas.borrow_mut().remove(key);
         }
         if !dropped.is_empty() {
             self.generation
@@ -837,9 +966,22 @@ impl AnimationRegistry {
     /// Start a full paint: a new paint epoch that every entry the paint resolves is stamped with.
     /// When the paint ends ([`finish_paint`](Self::finish_paint)), a perpetual render animation
     /// stamped with an older epoch had no reader on screen and is suspended.
+    ///
+    /// It also starts recording afresh where each entry is painted: the whole tree paints, so every
+    /// area that shows an entry is recorded again, at wherever layout has put it now.
     pub(crate) fn begin_paint(&self) {
         self.paint_epoch.set(self.paint_epoch.get().wrapping_add(1));
         self.painting.set(true);
+        self.read_areas.borrow_mut().clear();
+        self.read_areas_valid.set(true);
+    }
+
+    /// Forget where entries were painted, until the next full paint records it again.
+    ///
+    /// For a draw that moves painted content without repainting it, such as an incremental scroll
+    /// shifting rows on the host: the recorded areas then name cells the values have left.
+    pub(crate) fn invalidate_read_areas(&self) {
+        self.read_areas_valid.set(false);
     }
 
     /// End the current draw. After a full paint, suspend the perpetual render animations it did

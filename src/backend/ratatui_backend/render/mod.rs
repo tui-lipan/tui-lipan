@@ -794,6 +794,32 @@ fn render_subtree(
     }
 
     while let Some(item) = stack.pop() {
+        // Everything painted for this item lands inside its node's paint area, so a late-bound
+        // value resolved while painting it is recorded against that area. See
+        // `crate::animation::registry::paint_area_scope`.
+        let _paint_area = {
+            let (id, clip, offset) = match &item {
+                RenderStackItem::Node(id, clip, offset)
+                | RenderStackItem::EffectScopePost(id, clip, offset, ..)
+                | RenderStackItem::AnimatedPost(id, clip, offset, _)
+                | RenderStackItem::SplitterPost(id, clip, offset)
+                | RenderStackItem::DropTargetPost(id, clip, offset)
+                | RenderStackItem::MouseRegionPost(id, clip, offset) => (*id, *clip, *offset),
+            };
+            let (offset, clip) = match (&item, tree.is_valid(id).then(|| &tree.node(id).kind)) {
+                // A node item is painted at its own `Animated` move, which it applies below.
+                (RenderStackItem::Node(..), Some(NodeKind::Animated(animated))) => {
+                    let delta = animated.visual_position_offset_cells();
+                    (offset.add_cells(delta), translate_clip(clip, delta))
+                }
+                _ => (offset, clip),
+            };
+            tree.is_valid(id).then(|| {
+                crate::animation::registry::paint_area_scope(node_paint_area(
+                    state, id, clip, offset,
+                ))
+            })
+        };
         match item {
             RenderStackItem::Node(id, current_clip, inherited_offset) => {
                 if !tree.is_valid(id) {
@@ -1224,6 +1250,48 @@ fn render_diff_line_range_preview(
         }
         _ => {}
     }
+}
+
+/// Every cell a node's paint can reach: its own rectangle where it sits on screen, clipped to
+/// what its ancestors let it paint, plus the cells a few kinds deliberately paint beyond it.
+///
+/// A joined frame draws its shared border one cell above and to the left of its rectangle. A
+/// divider runs to the edges of its parent frame and drops junction glyphs onto that frame's
+/// border.
+fn node_paint_area(
+    state: &RenderState<'_, '_, '_>,
+    id: NodeId,
+    clip: Option<crate::style::Rect>,
+    offset: RenderOffset,
+) -> crate::style::Rect {
+    let tree = state.ctx.tree;
+    let node = tree.node(id);
+    let place = |rect: crate::style::Rect| {
+        let mut rect = offset.apply_to_rect(rect);
+        rect.x = rect.x.saturating_add(state.content.x as i16);
+        rect.y = rect.y.saturating_add(state.content.y as i16);
+        rect
+    };
+    let grow = |rect: crate::style::Rect, left: u16, top: u16, right: u16, bottom: u16| {
+        crate::style::Rect {
+            x: rect.x.saturating_sub(left as i16),
+            y: rect.y.saturating_sub(top as i16),
+            w: rect.w.saturating_add(left).saturating_add(right),
+            h: rect.h.saturating_add(top).saturating_add(bottom),
+        }
+    };
+    let area = match &node.kind {
+        NodeKind::Frame(props) if props.join_frame => grow(place(node.rect), 1, 1, 0, 0),
+        NodeKind::Divider(_) => {
+            let parent = node
+                .parent
+                .filter(|&parent| tree.is_valid(parent))
+                .map_or(node.rect, |parent| tree.node(parent).rect);
+            grow(place(parent.bounding(&node.rect)), 1, 1, 1, 1)
+        }
+        _ => place(node.rect),
+    };
+    clip.map_or(area, |clip| area.intersection(&clip))
 }
 
 fn render_node(

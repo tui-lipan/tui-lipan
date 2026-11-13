@@ -1,4 +1,4 @@
-//! Repainting retained frame rows from live content and runtime-owned widget damage.
+//! Repainting retained frame rows and areas from live content and runtime-owned damage.
 //!
 //! Planning is separated from drawing so eligibility can be asserted without rendering anything:
 //! a test can hand this a tree and a refresh result and check *why* a case was rejected. `None`
@@ -15,6 +15,7 @@ use ratatui::layout::{Position, Rect as RatatuiRect};
 use std::cell::Cell as StdCell;
 
 use crate::app::AppRunner;
+use crate::app::interaction_state::PaintDamage;
 use crate::backend::ratatui_backend::{RenderContext, render_regions};
 use crate::core::component::Component;
 use crate::core::node::NodeId;
@@ -60,15 +61,23 @@ pub(crate) enum DamageRejection {
     NothingVisible,
 }
 
-/// Live content and runtime-owned widgets' damage, resolved to physical frame rows.
+/// Live content and runtime-owned damage, resolved to physical frame rows and areas.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RowDamagePlan {
-    /// Physical frame rows this repaint has to paint, ascending, each inside the frame: every row
-    /// the terminal moved, plus the row the focused widget's caret sits on.
+    /// Physical frame rows this repaint has to paint across the whole frame width, ascending,
+    /// each inside the frame: every row the terminal moved, every row of a damaged node, plus the
+    /// row the focused widget's caret sits on unless the plan [keeps the caret](Self::keeps_caret).
     ///
     /// Resolved here rather than in the draw: the mapping from a viewport row to a screen row is
     /// geometry, and geometry is what the planner is for. The draw only paints rows.
     pub rows: Vec<u16>,
+    /// Frame areas to paint on their own, narrower than the frame: where render-resolved
+    /// animations that changed are painted. Inside the frame, clear of [`rows`](Self::rows), and
+    /// clear of any double-width glyph straddling their edges in the retained frame.
+    pub areas: Vec<RatatuiRect>,
+    /// Whether the caret stays where the latest draw recorded it. Only animation areas changed,
+    /// which moves no content, focus or layout, so the caret's row is not repainted to place it.
+    pub keeps_caret: bool,
 }
 
 /// The most undamaged rows a band paints to join two damaged rows into one tree walk.
@@ -205,20 +214,27 @@ where
     pub(crate) fn plan_live_damage(
         &self,
         refresh: &LiveTerminalRefresh,
-        nodes: &[NodeId],
+        damage: &PaintDamage,
         frame_area: ratatui::layout::Rect,
     ) -> Result<RowDamagePlan, DamageRejection> {
         self.validate_damage_surface(frame_area)?;
-        if refresh.damage.is_empty() && refresh.text_damage.is_empty() && nodes.is_empty() {
+        if refresh.damage.is_empty()
+            && refresh.text_damage.is_empty()
+            && damage.nodes.is_empty()
+            && damage.areas.is_empty()
+        {
             return Err(DamageRejection::NothingMoved);
         }
+        // Anything but animation areas may have moved content or the caret with it.
+        let colours_only =
+            refresh.damage.is_empty() && refresh.text_damage.is_empty() && damage.nodes.is_empty();
         let mut rows = Vec::new();
         for (node, damage) in &refresh.damage {
             self.add_terminal_damage(&mut rows, *node, damage, frame_area)?;
         }
         self.add_node_damage(&mut rows, &refresh.text_damage, frame_area)?;
-        self.add_node_damage(&mut rows, nodes, frame_area)?;
-        self.finish_damage_plan(rows, frame_area)
+        self.add_node_damage(&mut rows, &damage.nodes, frame_area)?;
+        self.finish_damage_plan(rows, &damage.areas, colours_only, frame_area)
     }
 
     #[cfg(feature = "terminal")]
@@ -284,16 +300,16 @@ where
     #[cfg(not(feature = "terminal"))]
     pub(crate) fn plan_node_damage(
         &self,
-        nodes: &[NodeId],
+        damage: &PaintDamage,
         frame_area: ratatui::layout::Rect,
     ) -> Result<RowDamagePlan, DamageRejection> {
         self.validate_damage_surface(frame_area)?;
-        if nodes.is_empty() {
+        if damage.nodes.is_empty() && damage.areas.is_empty() {
             return Err(DamageRejection::NothingMoved);
         }
         let mut rows = Vec::new();
-        self.add_node_damage(&mut rows, nodes, frame_area)?;
-        self.finish_damage_plan(rows, frame_area)
+        self.add_node_damage(&mut rows, &damage.nodes, frame_area)?;
+        self.finish_damage_plan(rows, &damage.areas, damage.nodes.is_empty(), frame_area)
     }
 
     fn add_node_damage(
@@ -321,13 +337,17 @@ where
     fn finish_damage_plan(
         &self,
         mut rows: Vec<u16>,
+        areas: &[crate::style::Rect],
+        colours_only: bool,
         frame_area: ratatui::layout::Rect,
     ) -> Result<RowDamagePlan, DamageRejection> {
         let frame_top = i32::from(frame_area.y);
         let frame_bottom = frame_top + i32::from(frame_area.height);
+        let mut areas = self.plan_areas(areas, &mut rows, frame_area);
         rows.sort_unstable();
         rows.dedup();
-        if rows.is_empty() {
+        areas.retain(|area| (area.top()..area.bottom()).any(|row| !rows.contains(&row)));
+        if rows.is_empty() && areas.is_empty() {
             return Err(DamageRejection::NothingVisible);
         }
 
@@ -337,7 +357,13 @@ where
         // have nothing to place - leaving the host caret wherever the last cell write left it.
         // Painting that one extra row is what lets the draw treat the recorded position as the
         // whole answer, including its decision *not* to show a caret at all.
-        if let Some(caret) = self.incremental_cursor_position()
+        //
+        // When only animation colours changed, nothing that moves or hides the caret did, so the
+        // draw re-places it where the latest draw recorded it instead. Its row can be a long walk
+        // through every pane on the screen, many times the cost of the colours themselves.
+        let keeps_caret = colours_only;
+        if !keeps_caret
+            && let Some(caret) = self.incremental_cursor_position()
             && i32::from(caret.y) >= frame_top
             && i32::from(caret.y) < frame_bottom
             && !rows.contains(&caret.y)
@@ -346,11 +372,64 @@ where
             rows.sort_unstable();
         }
 
-        if rows.len() > usize::from(frame_area.height) / 2 {
+        let width = usize::from(frame_area.width);
+        let painted = rows.len() * width
+            + areas
+                .iter()
+                .map(|area| usize::from(area.width) * usize::from(area.height))
+                .sum::<usize>();
+        if rows.len() > usize::from(frame_area.height) / 2
+            || painted > width * usize::from(frame_area.height) / 2
+        {
             return Err(DamageRejection::DenseDamage);
         }
-        self.validate_rows_beside_overlays(&rows, frame_area)?;
-        Ok(RowDamagePlan { rows })
+        let mut touched = rows.clone();
+        touched.extend(areas.iter().flat_map(|area| area.top()..area.bottom()));
+        self.validate_rows_beside_overlays(&touched, frame_area)?;
+        Ok(RowDamagePlan {
+            rows,
+            areas,
+            keeps_caret,
+        })
+    }
+
+    /// Bring damaged areas into the frame and into as few tree walks as they reasonably fit.
+    ///
+    /// An area whose edge would split a double-width glyph in the retained frame cannot be
+    /// repainted on its own: its paint clips the glyph, and the half left outside would no longer
+    /// match the host. Its rows are repainted whole instead, through `rows`.
+    fn plan_areas(
+        &self,
+        areas: &[crate::style::Rect],
+        rows: &mut Vec<u16>,
+        frame_area: ratatui::layout::Rect,
+    ) -> Vec<RatatuiRect> {
+        let frame = crate::style::Rect {
+            x: frame_area.x as i16,
+            y: frame_area.y as i16,
+            w: frame_area.width,
+            h: frame_area.height,
+        };
+        let mut planned: Vec<RatatuiRect> = Vec::new();
+        for area in areas {
+            let area = area.intersection(&frame);
+            if area.is_empty() {
+                continue;
+            }
+            let area = RatatuiRect::new(area.x as u16, area.y as u16, area.w, area.h);
+            merge_area(&mut planned, area);
+        }
+        let snapshot = self.last_frame_snapshot.as_ref();
+        // An area as wide as the frame is a band of rows, and bands already join their neighbours.
+        planned.retain(|area| {
+            let whole_rows = area.width >= frame_area.width
+                || snapshot.is_some_and(|snapshot| splits_wide_glyph(snapshot, *area));
+            if whole_rows {
+                rows.extend(area.top()..area.bottom());
+            }
+            !whole_rows
+        });
+        planned
     }
 
     /// [`plan_live_damage`](Self::plan_live_damage) for terminal-only frames, logging any fallback.
@@ -360,7 +439,7 @@ where
         refresh: &LiveTerminalRefresh,
         frame_area: ratatui::layout::Rect,
     ) -> Option<RowDamagePlan> {
-        match self.plan_live_damage(refresh, &[], frame_area) {
+        match self.plan_live_damage(refresh, &PaintDamage::default(), frame_area) {
             Ok(plan) => Some(plan),
             Err(reason) => {
                 crate::debug::internal_log!("[tui-lipan] terminal damage fallback: {reason:?}");
@@ -417,6 +496,15 @@ where
                 patch_rows(terminal, ctx, &mut snapshot, frame_area, band.clone())?;
                 painted.extend(band);
             }
+            for &area in &plan.areas {
+                let rows = area.top()..area.bottom();
+                if !patch_area(terminal, ctx, &mut snapshot, area)? {
+                    // The new paint put a double-width glyph across the area's edge, so the rows
+                    // are painted whole instead.
+                    patch_rows(terminal, ctx, &mut snapshot, frame_area, rows.clone())?;
+                }
+                painted.extend(rows);
+            }
             Ok(())
         });
         // Where the paint above asked for the caret, which is the whole answer because the plan
@@ -425,6 +513,10 @@ where
         // destination until the next full draw paints the trail. Inside the synchronized update,
         // for the same reason `Terminal::draw` places it before returning: the host must not be
         // left showing a caret from a half-finished frame.
+        if plan.keeps_caret && cursor_position.get().is_none() {
+            cursor_position.set(self.recorded_caret);
+        }
+        self.recorded_caret = cursor_position.get();
         let placed = if result.is_ok() {
             self.observe_cursor_trail(cursor_position.get());
             let caret = cursor_position
@@ -476,13 +568,7 @@ where
 
 /// Repaint a band of physical rows in one tree walk and send only what changed to the host.
 ///
-/// Ratatui's current buffer is the scratch surface, chosen so the paint sees the real viewport
-/// geometry rather than a buffer that merely looks like it. It is saved, blanked, painted, read
-/// back and restored - and the restore runs before anything fallible does, which is what makes it
-/// unconditional: there is no error path between taking the band and putting it back.
-///
-/// The retained frame's copy of the band is the diff baseline, and only that. It is deliberately
-/// not the paint's starting point: see `blank_area` below.
+/// [`patch_area`] across the whole frame width, where no double-width glyph can be split.
 ///
 /// Generic over the backend only so a test can hand it a `TestBackend` and read back what the host
 /// was actually sent. Nothing here is backend-specific.
@@ -499,51 +585,142 @@ pub(super) fn patch_rows<B: Backend>(
         frame_area.width,
         rows.end.saturating_sub(rows.start),
     );
-    if band.is_empty() {
-        return Ok(());
+    paint_and_send(terminal, ctx, snapshot, band, false).map(|_| ())
+}
+
+/// Repaint one area of the frame in one tree walk and send only what changed to the host.
+///
+/// Returns `false`, having sent nothing and recorded nothing, when the new paint puts a
+/// double-width glyph across the area's edge: half of it lies outside, so the area cannot be
+/// brought to match on its own. The caller repaints its rows whole instead.
+pub(super) fn patch_area<B: Backend>(
+    terminal: &mut ratatui::Terminal<B>,
+    ctx: &RenderContext<'_>,
+    snapshot: &mut Buffer,
+    area: RatatuiRect,
+) -> std::result::Result<bool, B::Error> {
+    paint_and_send(terminal, ctx, snapshot, area, true)
+}
+
+/// Paint `area` and send what changed.
+///
+/// Ratatui's current buffer is the scratch surface, chosen so the paint sees the real viewport
+/// geometry rather than a buffer that merely looks like it. It is saved, blanked, painted, read
+/// back and restored - and the restore runs before anything fallible does, which is what makes it
+/// unconditional: there is no error path between taking the area and putting it back.
+///
+/// The retained frame's copy of the area is the diff baseline, and only that. It is deliberately
+/// not the paint's starting point: see `blank_area` below.
+fn paint_and_send<B: Backend>(
+    terminal: &mut ratatui::Terminal<B>,
+    ctx: &RenderContext<'_>,
+    snapshot: &mut Buffer,
+    area: RatatuiRect,
+    check_edges: bool,
+) -> std::result::Result<bool, B::Error> {
+    if area.is_empty() {
+        return Ok(true);
     }
-    let previous = read_area(snapshot, band);
+    let previous = read_area(snapshot, area);
 
     let next = {
         let mut frame = terminal.get_frame();
-        let scratch = read_area(frame.buffer_mut(), band);
+        let scratch = read_area(frame.buffer_mut(), area);
         // A full draw paints into a buffer Ratatui has just reset, so every cell no widget writes
         // ends up blank - including the trailing half of a wide glyph, which the renderer skips
         // rather than clears. Seeding the retained frame's cells here instead would leave that
         // half showing whatever used to be under it. Blank is what the paint expects to find.
-        blank_area(frame.buffer_mut(), band);
+        blank_area(frame.buffer_mut(), area);
         // Then the opt-in root background, which `render` paints first and `render_regions` does
         // not, because a region repaint has no root of its own to fill.
         if let Some(background) =
             crate::backend::ratatui_backend::common::current_render_screen_background()
         {
-            frame.render_widget(ratatui::widgets::Block::default().style(background), band);
+            frame.render_widget(ratatui::widgets::Block::default().style(background), area);
         }
         render_regions(
             &mut frame,
             ctx,
             &[crate::style::Rect {
-                x: band.x as i16,
-                y: band.y as i16,
-                w: band.width,
-                h: band.height,
+                x: area.x as i16,
+                y: area.y as i16,
+                w: area.width,
+                h: area.height,
             }],
         );
-        let next = read_area(frame.buffer_mut(), band);
+        // The cells left of the area are not painted here and still hold what the host shows,
+        // which `plan_areas` checked. The paint can only put a new glyph across the right edge.
+        let splits = check_edges && spills_right(frame.buffer_mut(), area);
+        let next = read_area(frame.buffer_mut(), area);
         write_area(frame.buffer_mut(), &scratch);
+        if splits {
+            return Ok(false);
+        }
         next
     };
 
-    // Ratatui's own diff over a buffer of just the band, so multi-width glyphs and per-cell diff
-    // options behave exactly as they do in a full draw. The band buffers carry their absolute
+    // Ratatui's own diff over a buffer of just the area, so multi-width glyphs and per-cell diff
+    // options behave exactly as they do in a full draw. The area buffers carry their absolute
     // position, so the updates are already in screen coordinates.
     let updates = previous.diff(&next);
     if !updates.is_empty() {
         terminal.backend_mut().draw(updates.into_iter())?;
     }
-    // The host has these rows. Recording them cannot wait for the rest of the frame to succeed.
+    // The host has these cells. Recording them cannot wait for the rest of the frame to succeed.
     write_area(snapshot, &next);
-    Ok(())
+    Ok(true)
+}
+
+/// Whether a double-width glyph in `buffer` lies across the left or right edge of `area`.
+///
+/// Ratatui stores such a glyph in its first cell and leaves the next one as its trailing half, so
+/// it straddles the left edge when the cell just outside starts a wide glyph, and the right edge
+/// when the area's last cell does.
+fn splits_wide_glyph(buffer: &Buffer, area: RatatuiRect) -> bool {
+    let wide = |x: u16, y: u16| {
+        buffer
+            .cell((x, y))
+            .is_some_and(|cell| unicode_width::UnicodeWidthStr::width(cell.symbol()) > 1)
+    };
+    (area.top()..area.bottom()).any(|y| {
+        (area.left() > buffer.area.left() && wide(area.left() - 1, y))
+            || (area.right() < buffer.area.right() && wide(area.right() - 1, y))
+    })
+}
+
+/// Whether the last cell of a row in `area` starts a double-width glyph, whose second half lies
+/// outside the area.
+fn spills_right(buffer: &Buffer, area: RatatuiRect) -> bool {
+    area.right() < buffer.area.right()
+        && (area.top()..area.bottom()).any(|y| {
+            buffer
+                .cell((area.right() - 1, y))
+                .is_some_and(|cell| unicode_width::UnicodeWidthStr::width(cell.symbol()) > 1)
+        })
+}
+
+/// Add `area` to `planned`, joining it with any area it overlaps or adjoins when one rectangle
+/// around both wastes little: each area is a tree walk of its own, and every cell joined in is
+/// painted and compared for nothing.
+fn merge_area(planned: &mut Vec<RatatuiRect>, mut area: RatatuiRect) {
+    let cells = |rect: RatatuiRect| u32::from(rect.width) * u32::from(rect.height);
+    loop {
+        let joined = planned.iter().position(|known| {
+            let grown = RatatuiRect::new(
+                known.x.saturating_sub(1),
+                known.y.saturating_sub(1),
+                known.width.saturating_add(2),
+                known.height.saturating_add(2),
+            );
+            let bounds = known.union(area);
+            grown.intersects(area) && cells(bounds) * 4 <= (cells(*known) + cells(area)) * 5
+        });
+        match joined {
+            Some(index) => area = planned.swap_remove(index).union(area),
+            None => break,
+        }
+    }
+    planned.push(area);
 }
 
 /// Put the host caret where the paint asked for it, or hide it when no paint asked for one.
