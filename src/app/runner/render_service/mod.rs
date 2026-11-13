@@ -938,7 +938,11 @@ impl<C: Component> AppRunner<C> {
             self.update_spinner_frames();
         }
 
-        let draw_duration = self.draw_current_tree(terminal, draw_mode)?;
+        let draw_duration = if self.skip_draw {
+            std::time::Duration::ZERO
+        } else {
+            self.draw_current_tree(terminal, draw_mode)?
+        };
         self.sync_mouse_motion_capture(terminal)?;
         Ok(draw_duration)
     }

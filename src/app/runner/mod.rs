@@ -127,6 +127,10 @@ const HOST_COLOR_REFRESH_QUIET_WINDOW: Duration = Duration::from_millis(50);
 /// How often the run loop checks the host size for a resize whose event never arrived. A fallback,
 /// so it may lag a little; the host's own resize notification remains the prompt path.
 const SIZE_POLL_INTERVAL: Duration = Duration::from_millis(100);
+/// How long queued keyboard input may hold back a frame. A burst (an unbracketed paste,
+/// key repeat, scripted input) shows once at its end; a stream that never empties the
+/// queue still presents at least this often.
+const INPUT_BATCH_BUDGET: Duration = Duration::from_millis(8);
 const HEADLESS_AUTOMATION_ENV: &str = "TUI_LIPAN_AUTOMATION_HEADLESS";
 const HEADLESS_AUTOMATION_VIEWPORT_ENV: &str = "TUI_LIPAN_AUTOMATION_VIEWPORT";
 
@@ -340,6 +344,23 @@ struct KeyDispatchResult {
     /// meaningful: the key was handled but no render is needed (for example a
     /// copy with feedback disabled or a clipboard no-op).
     dirty_override: Option<DirtyLevel>,
+}
+
+/// Whether the next event, already queued, is a key press or a paste: the input a burst is
+/// made of, which acts on the reconciled tree rather than on what was last drawn. Never
+/// waits: `try_recv` must not block, and an empty queue answers `false`. A received event is
+/// kept in `pending_event` for the next pass.
+fn keyboard_input_queued(
+    pending_event: &mut Option<RunnerEvent>,
+    try_recv: impl FnOnce() -> Result<Option<RunnerEvent>>,
+) -> Result<bool> {
+    if pending_event.is_none() {
+        *pending_event = try_recv()?;
+    }
+    Ok(matches!(
+        pending_event,
+        Some(RunnerEvent::Terminal(CEvent::Key(_) | CEvent::Paste(_)))
+    ))
 }
 
 fn preserve_pending_event(pending_event: &mut Option<RunnerEvent>, event: RunnerEvent) {
@@ -655,6 +676,9 @@ pub struct AppRunner<C: Component> {
         std::cell::RefCell<Option<(u16, u16, Vec<ratatui::buffer::Cell>)>>,
     /// Copy of the last presented terminal buffer for scroll fast paths.
     frame_rendered: bool,
+    /// Reconcile without drawing: more keyboard input is queued, and this pass's frame
+    /// is presented together with that input's.
+    skip_draw: bool,
     host_frame_presented: bool,
     pub(crate) last_frame_snapshot: Option<ratatui::buffer::Buffer>,
     #[cfg(feature = "terminal-images")]
@@ -990,6 +1014,7 @@ impl<C: Component> AppRunner<C> {
             last_bounds: crate::style::Rect::default(),
             dnd_snapshot_cells: std::cell::RefCell::new(None),
             frame_rendered: false,
+            skip_draw: false,
             host_frame_presented: false,
             last_frame_snapshot: None,
             #[cfg(feature = "terminal-images")]
@@ -2471,7 +2496,11 @@ impl<C: Component> AppRunner<C> {
 
             let mut pending_event: Option<RunnerEvent> = None;
             let mut host_color_refresh_quiet_until: Option<Instant> = None;
-            let mut deferred_full: Option<bool> = None;
+            // The dirty level of a pass whose draw waits for queued input, and whether it
+            // was continuous work.
+            let mut deferred_frame: Option<(DirtyLevel, bool)> = None;
+            // When queued input first held back a frame; cleared once one is presented.
+            let mut input_batch_started: Option<Instant> = None;
             // Continuous work shares one phase-preserving presentation deadline.
             let mut paced_frame: Option<(DirtyLevel, Instant)> = None;
             let mut frame_clock = frame_clock::FrameClock::new(self.frame_interval);
@@ -2504,11 +2533,11 @@ impl<C: Component> AppRunner<C> {
                 }
                 #[cfg(feature = "devtools")]
                 self.ingest_pending_devtools_logs();
-                if let Some(continuous) = deferred_full.take() {
+                if let Some((level, continuous)) = deferred_frame.take() {
                     if continuous {
-                        dirty.merge_continuous_level(DirtyLevel::Full);
+                        dirty.merge_continuous_level(level);
                     } else {
-                        dirty.mark_full();
+                        dirty.merge_immediate_level(level);
                     }
                 }
                 // The last partial paint kept a terminal's previous native image. Present the
@@ -3345,28 +3374,34 @@ impl<C: Component> AppRunner<C> {
                 }
                 let frame_level = dirty.level();
 
-                // When a Full render is pending but more input events are
-                // already queued, skip the expensive render and process the
-                // next event first.  This lets rapid input sequences (e.g.
-                // holding an arrow key on a theme-preview list) converge to
-                // the final state before paying for the view()/expand/
-                // reconcile cycle.  Forced repaints are never skipped.
-                if frame_level == DirtyLevel::Full
+                // When keyboard input is already queued, bring the tree up to date but
+                // present this pass's frame together with the next one, so a burst of
+                // keys (an unbracketed paste, key repeat) draws once. The tree must
+                // still be reconciled per event: the next key acts on the props, focus
+                // and overlays this one produced, and a controlled input fed a stale
+                // value would collapse a typed string to its last character. Only the
+                // draw waits. Forced repaints and inline surfaces are never held back,
+                // and the budget keeps a stream that never drains from starving frames.
+                if frame_level.is_dirty()
                     && !force_host_redraw
-                    && !(self.surface.is_transcript()
-                        && self.surface.inline.transcript_reset_pending)
-                    && pending_event.is_none()
-                    && let Some(next) = self.try_recv_event(event_rx)?
+                    && !self.surface.is_inline()
+                    && !self.core.ctx.should_quit()
+                    && input_batch_started
+                        .is_none_or(|started| now.duration_since(started) < INPUT_BATCH_BUDGET)
+                    && keyboard_input_queued(&mut pending_event, || self.try_recv_event(event_rx))?
                 {
-                    preserve_pending_event(&mut pending_event, next);
-                    deferred_full = Some(dirty.continuous_frame() || pointer_motion_only);
+                    input_batch_started.get_or_insert(now);
+                    let carried = self.reconcile_for_queued_input(&mut terminal, frame_level)?;
+                    deferred_frame =
+                        Some((carried, dirty.continuous_frame() || pointer_motion_only));
                     #[cfg(feature = "profiling-tracing")]
                     tracing::trace!(
                         target: "tui_lipan::perf",
-                        "frame skipped: more input pending",
+                        "frame draw deferred: keyboard input queued",
                     );
                     continue;
                 }
+                input_batch_started = None;
 
                 let input_answering = input_answer_until.is_some_and(|until| now < until);
                 let continuous = (dirty.continuous_frame() || pointer_motion_only)
@@ -3631,6 +3666,25 @@ impl<C: Component> AppRunner<C> {
             return Self::recv_inline_event(input, Duration::ZERO);
         }
         try_recv_channel(input.receiver())
+    }
+
+    /// Run the reconcile half of a frame at `level` without drawing it, and return the level
+    /// the eventual frame still owes: a paint when the tree was reconciled here, else `level`.
+    fn reconcile_for_queued_input(
+        &mut self,
+        terminal: &mut crate::backend::ratatui_backend::Terminal,
+        level: DirtyLevel,
+    ) -> Result<DirtyLevel> {
+        let reconcile = match level {
+            DirtyLevel::Full => Self::render,
+            DirtyLevel::LayoutOnly => Self::render_layout_only,
+            // Paint-only levels leave the tree as it is; the whole draw can wait.
+            _ => return Ok(level),
+        };
+        self.skip_draw = true;
+        let result = reconcile(self, terminal);
+        self.skip_draw = false;
+        result.map(|()| DirtyLevel::PaintOnly)
     }
 }
 
