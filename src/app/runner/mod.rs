@@ -106,8 +106,10 @@ enum RunnerEvent {
     Command,
     #[cfg(feature = "terminal")]
     TerminalMutation,
-    /// The input reader observed a terminal theme report or resumed after an external handoff.
+    /// The input reader resumed after an external handoff, or the host asked for a re-probe.
     HostTerminalColorRefreshRequested,
+    /// The host reported its light or dark preference (DEC mode 2031).
+    HostColorScheme(crate::style::ColorScheme),
     /// A live color query completed inside the persistent input worker.
     HostTerminalColors(HostTerminalColors),
     /// A drag-and-drop event from the host terminal.
@@ -2591,6 +2593,16 @@ impl<C: Component> AppRunner<C> {
                 };
                 let maybe_event = match maybe_event {
                     Some(RunnerEvent::HostTerminalColorRefreshRequested) => {
+                        host_color_refresh_quiet_until =
+                            Some(deferred_host_color_refresh_deadline(Instant::now()));
+                        self.request_host_terminal_color_refresh_from_event();
+                        None
+                    }
+                    Some(RunnerEvent::HostColorScheme(scheme)) => {
+                        // A scheme change usually comes with a new palette: keep the re-probe.
+                        if self.core.ctx.env().set_host_color_scheme(scheme) {
+                            dirty.mark_full();
+                        }
                         host_color_refresh_quiet_until =
                             Some(deferred_host_color_refresh_deadline(Instant::now()));
                         self.request_host_terminal_color_refresh_from_event();

@@ -18,6 +18,19 @@ pub struct TerminalCursorStyle {
     pub blinking: bool,
 }
 
+/// Light or dark preference reported by the host terminal.
+///
+/// Terminals that implement DEC private mode 2031 answer `CSI ? 996 n` and notify on change with
+/// `CSI ? 997 ; 1 n` (dark) or `CSI ? 997 ; 2 n` (light). Unlike a guess from the background
+/// color, this is the terminal's own setting, such as a theme that follows the OS appearance.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ColorScheme {
+    /// The terminal uses a dark theme.
+    Dark,
+    /// The terminal uses a light theme.
+    Light,
+}
+
 /// Colors reported by the host terminal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HostTerminalColors {

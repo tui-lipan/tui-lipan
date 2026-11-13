@@ -364,6 +364,8 @@ pub(crate) struct RuntimeEnv {
     pub contexts: Rc<RefCell<FxHashMap<TypeId, Arc<dyn Any>>>>,
     pub context_generations: Rc<RefCell<FxHashMap<TypeId, u64>>>,
     pub host_terminal_colors: Rc<Cell<Option<HostTerminalColors>>>,
+    /// Light or dark preference the host terminal reported (DEC mode 2031, `CSI ? 996 n`).
+    pub host_color_scheme: Rc<Cell<Option<crate::style::ColorScheme>>>,
     pub host_terminal_color_generation: Rc<Cell<u64>>,
     pub host_terminal_color_refresh_requested: Rc<Cell<bool>>,
     pub host_terminal_color_refresh_enabled: bool,
@@ -565,6 +567,21 @@ impl RuntimeEnv {
 
     pub(crate) fn take_host_terminal_color_refresh_request(&self) -> bool {
         self.host_terminal_color_refresh_requested.replace(false)
+    }
+
+    pub(crate) fn host_color_scheme(&self) -> Option<crate::style::ColorScheme> {
+        self.note_memo_dependency(MemoDependency::HostTerminalColors);
+        self.host_color_scheme.get()
+    }
+
+    /// Record the host's reported color scheme; a change advances the host color generation.
+    pub(crate) fn set_host_color_scheme(&self, scheme: crate::style::ColorScheme) -> bool {
+        if self.host_color_scheme.get() == Some(scheme) {
+            return false;
+        }
+        self.host_color_scheme.set(Some(scheme));
+        self.advance_host_terminal_color_generation();
+        true
     }
 
     pub(crate) fn set_host_terminal_colors(&self, colors: Option<HostTerminalColors>) -> bool {

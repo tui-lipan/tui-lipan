@@ -266,6 +266,7 @@ where
             contexts,
             context_generations,
             host_terminal_colors,
+            host_color_scheme: Rc::new(Cell::new(None)),
             host_terminal_color_generation,
             host_terminal_color_refresh_requested,
             host_terminal_color_refresh_enabled,

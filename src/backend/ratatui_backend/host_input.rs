@@ -165,7 +165,7 @@ mod imp {
         match map_termina_event(event) {
             TerminaEventAction::Input(event) => HostEvent::Input(event),
             TerminaEventAction::Pointer(event, sub_cell) => HostEvent::Pointer(event, sub_cell),
-            TerminaEventAction::ThemeRefresh => HostEvent::ThemeRefresh,
+            TerminaEventAction::ThemeReport(_) => HostEvent::ThemeRefresh,
             TerminaEventAction::Ignore => HostEvent::Quiet,
         }
     }

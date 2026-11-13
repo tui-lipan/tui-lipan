@@ -332,8 +332,10 @@ impl<W: Write> TerminalTransitionExecutor for CrosstermTransitionExecutor<W> {
             TerminalOp::PopKeyboardEnhancement => {
                 execute!(self.writer, PopKeyboardEnhancementFlags)
             }
+            // Subscribe, then ask once (`CSI ? 996 n`) so the current scheme is known before
+            // the first change.
             TerminalOp::EnableThemeNotifications => {
-                execute!(self.writer, Print("\x1b[?2031h"))
+                execute!(self.writer, Print("\x1b[?2031h\x1b[?996n"))
             }
             TerminalOp::DisableThemeNotifications => {
                 execute!(self.writer, Print("\x1b[?2031l"))
@@ -549,7 +551,7 @@ mod tests {
         execute_plan(&mut executor, &theme_notification_plan(true)).unwrap();
         execute_plan(&mut executor, &theme_notification_plan(false)).unwrap();
 
-        assert_eq!(executor.into_inner(), b"\x1b[?2031h\x1b[?2031l");
+        assert_eq!(executor.into_inner(), b"\x1b[?2031h\x1b[?996n\x1b[?2031l");
     }
 
     #[test]

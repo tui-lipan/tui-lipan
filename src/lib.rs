@@ -247,11 +247,11 @@ pub use crate::process::{
 };
 pub use crate::style::Theme;
 pub use crate::style::{
-    Align, BorderEdges, BorderStyle, CaretPalette, CaretShape, CellEffect, Color, ColorTransform,
-    DiffPalette, DocumentPalette, DocumentViewPalette, Edge, EffectAmount, EffectAxis, EffectCell,
-    EffectChannels, EffectContext, EffectPalette, EffectPrepareContext, EffectPulse,
-    FileIconPalette, FloatRect, GitStatusPalette, HexAreaPalette, HostTerminalColors, InputPalette,
-    Justify, LayoutConstraints, Length, Padding, Paint, PointerMode, PointerShape,
+    Align, BorderEdges, BorderStyle, CaretPalette, CaretShape, CellEffect, Color, ColorScheme,
+    ColorTransform, DiffPalette, DocumentPalette, DocumentViewPalette, Edge, EffectAmount,
+    EffectAxis, EffectCell, EffectChannels, EffectContext, EffectPalette, EffectPrepareContext,
+    EffectPulse, FileIconPalette, FloatRect, GitStatusPalette, HexAreaPalette, HostTerminalColors,
+    InputPalette, Justify, LayoutConstraints, Length, Padding, Paint, PointerMode, PointerShape,
     PreparedCellEffect, Rect, RetroPreset, RichText, RippleRadius, ScrollbarConfig,
     ScrollbarPalette, ScrollbarVariant, ShrinkPriority, Size, Span, StatusPalette, Style,
     SurfacePalette, SyntaxPalette, TerminalColor, TerminalCursorStyle, TerminalPalette,
