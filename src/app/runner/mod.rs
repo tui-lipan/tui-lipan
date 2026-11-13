@@ -3669,28 +3669,45 @@ impl<C: Component> AppRunner<C> {
     }
 
     /// Run the reconcile half of a frame at `level` without drawing it, and return the level
-    /// the eventual frame still owes: a paint when the tree was reconciled here, else `level`.
+    /// the eventual frame still owes: a paint when the tree was brought up to date here, else
+    /// `level`.
     fn reconcile_for_queued_input(
         &mut self,
         terminal: &mut crate::backend::ratatui_backend::Terminal,
         level: DirtyLevel,
     ) -> Result<DirtyLevel> {
-        let reconcile = match level {
-            DirtyLevel::Full => Self::render,
-            DirtyLevel::LayoutOnly => Self::render_layout_only,
+        type Reconcile<C> =
+            fn(&mut AppRunner<C>, &mut crate::backend::ratatui_backend::Terminal) -> Result<()>;
+        let reconcile: Option<Reconcile<C>> = match level {
+            DirtyLevel::Full => Some(Self::render),
+            DirtyLevel::LayoutOnly => Some(Self::render_layout_only),
             // Paint-only levels leave the tree as it is; the whole draw can wait.
-            _ => return Ok(level),
+            _ => None,
         };
-        self.skip_draw = true;
-        let result = reconcile(self, terminal);
-        self.skip_draw = false;
-        result?;
-        // The draw is what normally tells a terminal child it gained or lost focus. The next
-        // queued key is routed by the focus this reconcile settled, so the child must hear of
-        // the focus change first.
+        #[cfg_attr(not(feature = "terminal"), allow(unused_mut))]
+        let mut reconciled = false;
+        if let Some(reconcile) = reconcile {
+            self.skip_draw = true;
+            let result = reconcile(self, terminal);
+            self.skip_draw = false;
+            result?;
+            reconciled = true;
+        }
+        // The draw is what normally reads live terminal screens and tells a terminal child it
+        // gained or lost focus, or that it just asked for focus reports. The next queued key is
+        // routed by the focus settled here, so the child must hear of that first. Reading a
+        // live screen consumes its damage, so a frame that did owes an ordinary paint, which
+        // repaints the retained tree without needing that damage.
         #[cfg(feature = "terminal")]
-        self.emit_terminal_focus_change();
-        Ok(DirtyLevel::PaintOnly)
+        {
+            reconciled |= self.core.tree.refresh_live_terminals_detailed().changed;
+            self.emit_terminal_focus_change();
+        }
+        Ok(if reconciled {
+            DirtyLevel::PaintOnly
+        } else {
+            level
+        })
     }
 }
 
