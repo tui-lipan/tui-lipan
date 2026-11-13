@@ -1257,8 +1257,42 @@ fn render_diff_line_range_preview(
 ///
 /// A joined frame draws its shared border one cell above and to the left of its rectangle. A
 /// divider runs to the edges of its parent frame and drops junction glyphs onto that frame's
-/// border.
+/// border. A scrolling widget can hang an integrated scrollbar on an ancestor frame's edge,
+/// outside its own rectangle and its clip; those tracks come from the same lookup its renderer
+/// uses, so the area names exactly the strips it can draw on.
 fn node_paint_area(
+    state: &RenderState<'_, '_, '_>,
+    id: NodeId,
+    clip: Option<crate::style::Rect>,
+    offset: RenderOffset,
+) -> crate::animation::registry::PaintArea {
+    let node = state.ctx.tree.node(id);
+    let area =
+        crate::animation::registry::PaintArea::new(node_own_paint_area(state, id, clip, offset));
+    let hosts_integrated_scrollbar = matches!(
+        node.kind,
+        NodeKind::List(_)
+            | NodeKind::Table(_)
+            | NodeKind::ScrollView(_)
+            | NodeKind::TextArea(_)
+            | NodeKind::DocumentView(_)
+    );
+    #[cfg(feature = "terminal")]
+    let hosts_integrated_scrollbar =
+        hosts_integrated_scrollbar || matches!(node.kind, NodeKind::Terminal(_));
+    if !hosts_integrated_scrollbar {
+        return area;
+    }
+    match ancestor_frame_integrated_tracks(state, node.parent) {
+        Some(tracks) => area
+            .with(tracks.v.map_or_else(Default::default, |track| track.strip))
+            .with(tracks.h.map_or_else(Default::default, |track| track.strip)),
+        None => area,
+    }
+}
+
+/// The part of [`node_paint_area`] inside the node's own rectangle and the cells next to it.
+fn node_own_paint_area(
     state: &RenderState<'_, '_, '_>,
     id: NodeId,
     clip: Option<crate::style::Rect>,

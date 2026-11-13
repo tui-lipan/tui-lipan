@@ -86,6 +86,8 @@ pub(crate) fn scroll_view_clip_rect(
 #[derive(Clone, Copy)]
 pub(crate) struct FrameIntegratedVTrack {
     pub track_x: i16,
+    /// Every cell the track can take on screen: its column, the frame's full height.
+    pub strip: Rect,
     pub track_glyph: Option<char>,
     pub border_style_fallback: BorderStyle,
     pub track_style: Style,
@@ -95,6 +97,8 @@ pub(crate) struct FrameIntegratedVTrack {
 #[derive(Clone, Copy)]
 pub(crate) struct FrameIntegratedHTrack {
     pub track_y: i16,
+    /// Every cell the track can take on screen: its row, the frame's full width.
+    pub strip: Rect,
     pub track_glyph: Option<char>,
     pub border_style_fallback: BorderStyle,
     pub track_style: Style,
@@ -179,13 +183,35 @@ fn frame_track_ctx<'a>(
     ))
 }
 
+fn vtrack_strip(ctx: &FrameTrackCtx, track_x: i16) -> Rect {
+    let frame = ctx.geometry.frame_rect;
+    Rect {
+        x: track_x,
+        y: frame.y,
+        w: 1,
+        h: frame.h,
+    }
+}
+
+fn htrack_strip(ctx: &FrameTrackCtx, track_y: i16) -> Rect {
+    let frame = ctx.geometry.frame_rect;
+    Rect {
+        x: frame.x,
+        y: track_y,
+        w: frame.w,
+        h: 1,
+    }
+}
+
 fn frame_integrated_vtrack_from(
     ctx: &FrameTrackCtx,
     props: &crate::widgets::internal::FrameNode,
 ) -> Option<FrameIntegratedVTrack> {
     if ctx.has_border {
+        let track_x = ctx.geometry.vscrollbar_track_x?;
         return Some(FrameIntegratedVTrack {
-            track_x: ctx.geometry.vscrollbar_track_x?,
+            track_x,
+            strip: vtrack_strip(ctx, track_x),
             track_glyph: None,
             border_style_fallback: ctx.border_style,
             track_style: ctx.border_render_style,
@@ -219,6 +245,7 @@ fn frame_integrated_vtrack_from(
 
     Some(FrameIntegratedVTrack {
         track_x,
+        strip: vtrack_strip(ctx, track_x),
         track_glyph: Some(glyph),
         border_style_fallback: BorderStyle::Plain,
         track_style,
@@ -230,8 +257,10 @@ fn frame_integrated_htrack_from(
     props: &crate::widgets::internal::FrameNode,
 ) -> Option<FrameIntegratedHTrack> {
     if ctx.has_border {
+        let track_y = ctx.geometry.hscrollbar_track_y?;
         return Some(FrameIntegratedHTrack {
-            track_y: ctx.geometry.hscrollbar_track_y?,
+            track_y,
+            strip: htrack_strip(ctx, track_y),
             track_glyph: None,
             border_style_fallback: ctx.border_style,
             track_style: ctx.border_render_style,
@@ -265,6 +294,7 @@ fn frame_integrated_htrack_from(
 
     Some(FrameIntegratedHTrack {
         track_y,
+        strip: htrack_strip(ctx, track_y),
         track_glyph: Some(glyph),
         border_style_fallback: BorderStyle::Plain,
         track_style,

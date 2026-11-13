@@ -183,6 +183,11 @@ struct PaneCfg {
     spinner: bool,
     /// Put a header row above the pane whose middle word breathes on a registry pulse.
     pulse: bool,
+    /// Put a scrolling widget in a narrow bordered frame, with an integrated scrollbar whose thumb
+    /// and track breathe on a registry pulse. The scrollbar is drawn on the frame's border, outside
+    /// the widget's own rectangle: `1` is the terminal's vertical one on the right border, `2` a
+    /// document's horizontal one on the bottom border.
+    framed_scrollbar_pulse: u8,
     /// Show a one-row notice in the middle of the screen over the pane: `1` on its own, `2` with a
     /// backdrop dimming everything else, `3` inside an `Animated` wrapper a test can move.
     toast: u8,
@@ -262,6 +267,56 @@ impl Component for Pane {
                 .into(),
             None => self.terminal(&self.screen).into(),
         };
+        if self.cfg.framed_scrollbar_pulse != 0 {
+            let amount = ctx.pulsing_amount(
+                "scrollbar-pulse",
+                crate::style::EffectPulse::new(0.0, 1.0)
+                    .period(std::time::Duration::from_millis(800))
+                    .frame_rate(10),
+            );
+            let breathing = |color: Color| {
+                Style::default()
+                    .fg(color)
+                    .transform_fg(crate::style::ColorTransform::tint(
+                        Color::Rgb(255, 0, 0),
+                        amount,
+                    ))
+            };
+            let config = crate::style::ScrollbarConfig::new()
+                .variant(crate::style::ScrollbarVariant::Integrated)
+                .thumb_style(breathing(Color::Rgb(200, 200, 200)))
+                .track_style(breathing(Color::Rgb(90, 90, 90)));
+            let scrolling: Element = if self.cfg.framed_scrollbar_pulse == 1 {
+                self.terminal(&self.screen)
+                    .scrollbar(true)
+                    .scrollbar_config(config)
+                    .into()
+            } else {
+                crate::widgets::DocumentView::new(
+                    "a line much wider than the narrow frame around it\nand another",
+                )
+                .border(false)
+                .wrap(false)
+                .scrollbar(false)
+                .h_scrollbar(true)
+                .h_scrollbar_variant(crate::style::ScrollbarVariant::Integrated)
+                .scrollbar_config(config)
+                .into()
+            };
+            body = crate::widgets::HStack::new()
+                .child(
+                    crate::widgets::Frame::new()
+                        .border(true)
+                        .width(crate::style::Length::Px(14))
+                        .child(scrolling),
+                )
+                .child(if self.cfg.framed_scrollbar_pulse == 1 {
+                    Text::new("beside the frame").into()
+                } else {
+                    Element::from(self.terminal(&self.screen))
+                })
+                .into();
+        }
         if self.cfg.spinner {
             body = VStack::new()
                 .child(crate::widgets::Spinner::new().height(crate::style::Length::Px(1)))
@@ -905,6 +960,76 @@ fn a_pulse_repaints_only_where_it_is_painted_and_matches_full_paints() {
             .any(|&(x, y)| pulse_area.contains(Position::new(x, y)));
     }
     assert!(moved, "the pulse changed colour on screen at least once");
+}
+
+/// An integrated scrollbar paints its thumb and track on an ancestor frame's border, outside the
+/// widget's own rectangle. A breathing scrollbar must still repaint those border cells, or the
+/// border keeps the colour of the frame before. Both axes: a terminal's vertical track on the
+/// right border, a document's horizontal one on the bottom border.
+#[test]
+fn a_breathing_scrollbar_on_an_ancestor_frame_border_matches_full_paints() {
+    use crate::animation::registry::{PaintExtent, RenderDamage, set_render_registry};
+    use std::time::Duration;
+
+    let lines: String = (0..60).map(|line| format!("line {line}\r\n")).collect();
+    // The frame is 14 columns wide and as tall as the screen.
+    let right_border = |(x, _): (u16, u16)| x == 13;
+    let bottom_border = |(x, y): (u16, u16)| y == ROWS - 1 && x < 14;
+    for (variant, on_border) in [
+        (1, &right_border as &dyn Fn((u16, u16)) -> bool),
+        (2, &bottom_border),
+    ] {
+        let mut harness = build(
+            PaneCfg {
+                framed_scrollbar_pulse: variant,
+                controlled_clock: true,
+                ..PaneCfg::new()
+            },
+            lines.as_bytes(),
+        );
+        let animations = Rc::clone(&harness.runner.core.ctx.env().animations);
+        let mut now = Duration::ZERO;
+        {
+            let _paint = set_render_registry(Rc::clone(&animations), now, PaintExtent::Full);
+            harness.retained = full_paint(&harness.runner, &mut harness.term).0;
+        }
+        harness.runner.last_frame_snapshot = Some(harness.retained.clone());
+
+        let mut border_moved = false;
+        for step in 1..=8u16 {
+            now += Duration::from_millis(100);
+            let RenderDamage::Areas(areas) = animations
+                .tick(Duration::from_millis(100), now)
+                .render_damage
+            else {
+                panic!("variant {variant} step {step}: the scrollbar's area is known");
+            };
+            harness
+                .runner
+                .animation
+                .paint_damage
+                .add_areas(areas.clone());
+            let before = harness.retained.clone();
+            let _paint = set_render_registry(Rc::clone(&animations), now, PaintExtent::Partial);
+            assert_harness_patch_matches_full_paint(&mut harness);
+            // Held to what the registry recorded, not just to the plan: the planner may merge
+            // the widget's own area into a box that covers the border by coincidence.
+            for (x, y) in changed_cells(&before, &harness.retained) {
+                if on_border((x, y)) {
+                    border_moved = true;
+                    assert!(
+                        areas.iter().any(|area| area.contains(x as i16, y as i16)),
+                        "variant {variant} step {step}: border cell ({x}, {y}) is in no recorded \
+                         area {areas:?}"
+                    );
+                }
+            }
+        }
+        assert!(
+            border_moved,
+            "variant {variant}: the scrollbar on the frame border changed colour"
+        );
+    }
 }
 
 /// An area whose edge falls on the trailing half of a double-width glyph cannot be repainted on

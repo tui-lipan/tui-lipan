@@ -279,11 +279,48 @@ thread_local! {
     static RENDER_SCOPE: RefCell<Option<RenderScope>> = const { RefCell::new(None) };
 }
 
+/// The screen a renderer is painting: one rectangle, or a few disjoint ones when a node also
+/// paints on chrome that belongs to an ancestor, such as an integrated scrollbar on a frame's
+/// border. Small and `Copy`, since the render walk opens one around every node.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PaintArea {
+    rects: [Rect; PaintArea::MAX],
+    len: u8,
+}
+
+impl PaintArea {
+    const MAX: usize = 3;
+
+    pub(crate) fn new(rect: Rect) -> Self {
+        Self::default().with(rect)
+    }
+
+    /// This area and `rect`. Past the few rectangles it holds, `rect` is folded into the last one,
+    /// which then bounds both: larger, never smaller than the cells it must cover.
+    pub(crate) fn with(mut self, rect: Rect) -> Self {
+        if rect.is_empty() {
+            return self;
+        }
+        let len = usize::from(self.len);
+        if len < Self::MAX {
+            self.rects[len] = rect;
+            self.len += 1;
+        } else {
+            self.rects[len - 1] = self.rects[len - 1].bounding(&rect);
+        }
+        self
+    }
+
+    pub(crate) fn rects(&self) -> &[Rect] {
+        &self.rects[..usize::from(self.len)]
+    }
+}
+
 thread_local! {
     /// The screen areas the renderer is painting right now, innermost last. A late-bound value
     /// resolved while this is non-empty is recorded against the top area; resolved while it is
     /// empty, it could be painting anywhere. See [`paint_area_scope`].
-    static PAINT_AREAS: RefCell<Vec<Rect>> = const { RefCell::new(Vec::new()) };
+    static PAINT_AREAS: RefCell<Vec<PaintArea>> = const { RefCell::new(Vec::new()) };
 }
 
 /// RAII guard ending a [`paint_area_scope`].
@@ -299,17 +336,18 @@ impl Drop for PaintAreaScope {
 
 /// Declare that everything painted until the guard drops lands inside `area`, in frame cells.
 ///
-/// The render walk opens one around each node it paints, covering everything that node draws. A
-/// renderer that knows a value only reaches part of its node can open a narrower one around that
-/// part. The area must cover *every* cell a value resolved inside it can colour: it is what gets
-/// repainted when the value changes, and a cell left outside keeps its stale colour.
-pub(crate) fn paint_area_scope(area: Rect) -> PaintAreaScope {
+/// The render walk opens one around each node it paints, covering everything that node draws,
+/// including chrome it paints on an ancestor. A renderer that knows a value only reaches part of
+/// its node can open a narrower one around that part. The area must cover *every* cell a value
+/// resolved inside it can colour: it is what gets repainted when the value changes, and a cell
+/// left outside keeps its stale colour.
+pub(crate) fn paint_area_scope(area: PaintArea) -> PaintAreaScope {
     PAINT_AREAS.with(|areas| areas.borrow_mut().push(area));
     PaintAreaScope(())
 }
 
 /// The area the renderer is painting, or `None` when no scope says.
-fn current_paint_area() -> Option<Rect> {
+fn current_paint_area() -> Option<PaintArea> {
     PAINT_AREAS.with(|areas| areas.borrow().last().copied())
 }
 
@@ -476,12 +514,18 @@ enum ReadArea {
 const MAX_READ_AREAS: usize = 32;
 
 impl ReadArea {
-    fn record(&mut self, area: Option<Rect>) {
-        let Self::Areas(areas) = self else {
-            return;
-        };
+    fn record(&mut self, area: Option<PaintArea>) {
         let Some(area) = area else {
             *self = Self::Unbounded;
+            return;
+        };
+        for rect in area.rects() {
+            self.record_rect(*rect);
+        }
+    }
+
+    fn record_rect(&mut self, area: Rect) {
+        let Self::Areas(areas) = self else {
             return;
         };
         if area.is_empty() || areas.iter().any(|known| known.contains_rect(&area)) {
