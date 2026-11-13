@@ -12739,6 +12739,55 @@ fn a_caret_in_a_sliding_overlay_does_not_start_a_jump_trail() {
     );
 }
 
+/// A key queued behind a focus change must reach a terminal child after its focus-in. The
+/// held-back frame skips the draw, and the draw is what normally announces the focus change.
+#[cfg(all(feature = "terminal", not(target_arch = "wasm32")))]
+#[test]
+fn queued_key_reaches_a_terminal_after_its_focus_in() {
+    use crate::widgets::{
+        TerminalInputKind::{FocusIn, Key},
+        TerminalScreen,
+    };
+
+    let screens = std::array::from_fn(|_| Rc::new(RefCell::new(TerminalScreen::new(4, 20, 10))));
+    let reports = Rc::new(RefCell::new(Vec::new()));
+    let component = TerminalFocusReportSmoke {
+        views: Rc::new(Cell::new(0)),
+        screens: screens.clone(),
+        reports: reports.clone(),
+    };
+    let mut runner = AppRunner::new(App::new().mouse(false), component.clone(), ());
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 8,
+    };
+    init_runner(&mut runner, component, viewport);
+    runner.focus.focused = Some(node_id_by_key(&runner.core.tree, "terminal-0"));
+    screens[1].borrow_mut().process_bytes(b"\x1b[?1004h");
+    let mut terminal = crate::backend::ratatui_backend::create_test_terminal(20, 8).unwrap();
+    runner.render(&mut terminal).unwrap();
+    assert!(
+        reports.borrow().is_empty(),
+        "the first pane reports nothing"
+    );
+
+    // What a focus-moving key leaves behind when another key is already queued after it.
+    runner.focus.focused = Some(node_id_by_key(&runner.core.tree, "terminal-1"));
+    runner
+        .reconcile_for_queued_input(&mut terminal, DirtyLevel::Full)
+        .unwrap();
+    let CEvent::Key(key) = c_key('x') else {
+        unreachable!("c_key builds a key event");
+    };
+    runner.dispatch_layered_key(super::to_key_event(key).unwrap());
+    let mut dirty = DirtyTracker::default();
+    runner.drain_messages_and_commands(&mut dirty).unwrap();
+
+    assert_eq!(*reports.borrow(), vec![(1, FocusIn), (1, Key)]);
+}
+
 /// A controlled editor that counts its updates, to show what a burst of queued keys costs.
 #[derive(Clone)]
 struct QueuedTypingSmoke {

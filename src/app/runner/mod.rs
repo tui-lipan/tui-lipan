@@ -3684,7 +3684,13 @@ impl<C: Component> AppRunner<C> {
         self.skip_draw = true;
         let result = reconcile(self, terminal);
         self.skip_draw = false;
-        result.map(|()| DirtyLevel::PaintOnly)
+        result?;
+        // The draw is what normally tells a terminal child it gained or lost focus. The next
+        // queued key is routed by the focus this reconcile settled, so the child must hear of
+        // the focus change first.
+        #[cfg(feature = "terminal")]
+        self.emit_terminal_focus_change();
+        Ok(DirtyLevel::PaintOnly)
     }
 }
 
