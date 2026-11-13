@@ -62,7 +62,7 @@ does not have to be a fight.
 
 ```toml
 [dependencies]
-tui-lipan = "0.43"
+tui-lipan = "0.44"
 ```
 
 ```rust
@@ -251,7 +251,7 @@ composing them into their own `Component`s, which keeps the public API free of
 To build without the system clipboard dependency:
 
 ```toml
-tui-lipan = { version = "0.43", default-features = false }
+tui-lipan = { version = "0.44", default-features = false }
 ```
 
 For smaller shipping binaries, use the size-optimized profile:
