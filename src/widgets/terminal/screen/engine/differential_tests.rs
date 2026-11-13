@@ -580,7 +580,7 @@ fn prompt_resize_keeps_unfinished_sequences() {
 #[test]
 fn primary_reads_leave_the_alternate_screen_application_untouched() {
     let before: &[u8] =
-        b"\x1b]133;A\x1b\\$ \x1b]133;B\x1b\\ls\r\n\x1b]133;C\x1b\\\x1b[32mout\x1b[0m\r\n\
+        b"\x1b]2;shell title\x1b\\\x1b]133;A\x1b\\$ \x1b]133;B\x1b\\ls\r\n\x1b]133;C\x1b\\\x1b[32mout\x1b[0m\r\n\
         \x1b]133;D;0\x1b\\\x1b]133;A\x1b\\$ vim\r\n\
         \x1b[?1049h\x1b[2;3Hab\x1b7\x1b[1;21Hedge\x1b[3";
     let tail: &[u8] = b"1mZ\x1b[0m\x1b8Y";

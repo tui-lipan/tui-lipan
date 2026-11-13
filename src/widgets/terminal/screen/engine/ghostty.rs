@@ -1132,7 +1132,9 @@ impl TerminalEngine for GhosttyEngine {
             terminal,
             render,
             damage: DamageAccumulator::default(),
-            effects: Rc::new(Effects::default()),
+            // The live title, bells and geometry: `read` only gets `&Self`, and the copy has no
+            // callbacks of its own that could write to them.
+            effects: Rc::clone(&self.effects),
             semantic_parser: SemanticVteParser::new(),
             cursor_requests: self.cursor_requests,
             default_cursor_style: self.default_cursor_style,
