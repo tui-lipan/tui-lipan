@@ -403,6 +403,24 @@ impl From<Paint> for ScreenBackground {
 pub(crate) type ClipboardErrorHandler =
     std::rc::Rc<dyn Fn(ClipboardError, &crate::overlay::ToastHandle) + 'static>;
 
+/// The reporter a runtime installs for an app: its reporter, then its error handler with the
+/// toast API. Every runtime (native runner, `TestBackend`, automation) builds it here so an
+/// `App` behaves the same in each.
+pub(crate) fn clipboard_reporter_with_handler(
+    reporter: ClipboardReporter,
+    handler: Option<ClipboardErrorHandler>,
+    overlays: std::rc::Rc<std::cell::RefCell<crate::overlay::OverlayManager>>,
+) -> ClipboardReporter {
+    let Some(handler) = handler else {
+        return reporter;
+    };
+    let toasts = crate::overlay::ToastHandle::new(overlays);
+    std::rc::Rc::new(move |error: ClipboardError| {
+        reporter(error.clone());
+        handler(error, &toasts);
+    })
+}
+
 /// Application builder.
 pub struct App {
     pub(crate) title: Option<String>,
@@ -768,7 +786,8 @@ impl App {
     ///
     /// The handler runs after the [reporter](Self::clipboard_reporter) for every failed
     /// copy or paste the framework performs, including keymap paste and copy-on-select,
-    /// with the toast API the reporter cannot reach. [`ClipboardError::user_message`]
+    /// with the toast API the reporter cannot reach. It applies in the native runner,
+    /// `TestBackend::new_with_app` and automation sessions alike. [`ClipboardError::user_message`]
     /// supplies a sentence to show:
     ///
     /// ```no_run

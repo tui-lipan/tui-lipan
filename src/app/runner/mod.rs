@@ -816,13 +816,11 @@ impl<C: Component> AppRunner<C> {
             .borrow_mut()
             .set_toast_margin(app.toast_margin);
         // The handler needs the toast layer, which exists only once the core does.
-        if let Some(handler) = app.clipboard_error_handler.clone() {
-            let toasts = crate::overlay::ToastHandle::new(core.overlay_manager.clone());
-            clipboard.replace_reporter(Rc::new(move |error: crate::clipboard::ClipboardError| {
-                clipboard_reporter(error.clone());
-                handler(error, &toasts);
-            }));
-        }
+        clipboard.replace_reporter(crate::app::context::clipboard_reporter_with_handler(
+            clipboard_reporter,
+            app.clipboard_error_handler.clone(),
+            core.overlay_manager.clone(),
+        ));
         let mut keymap_config = KeymapConfig::from_clipboard_config(&clipboard_config);
         if let Some(path) = app.keymap_path.clone() {
             keymap_config = keymap_config.keymap_path(path);

@@ -214,10 +214,13 @@ where
         if let Some(provider) = clipboard_provider {
             core.ctx.env().clipboard.replace_provider(provider);
         }
-        core.ctx
-            .env()
-            .clipboard
-            .replace_reporter(clipboard_reporter);
+        core.ctx.env().clipboard.replace_reporter(
+            crate::app::context::clipboard_reporter_with_handler(
+                clipboard_reporter,
+                app.clipboard_error_handler.clone(),
+                core.overlay_manager.clone(),
+            ),
+        );
         let clipboard_config = crate::clipboard::normalize_config_for_primary_support(
             app.clipboard_config.clone(),
             core.ctx.env().clipboard.supports_primary_selection(),
@@ -2482,6 +2485,43 @@ mod tests {
         fn view(&self, _ctx: &Context<Self>) -> Element {
             Input::new("").into()
         }
+    }
+
+    #[test]
+    fn app_clipboard_error_handler_runs_in_test_backends_like_the_native_runner() {
+        use std::cell::RefCell;
+        let reported = Rc::new(Cell::new(0));
+        let handled = Rc::new(RefCell::new(Vec::new()));
+        let app = crate::App::new()
+            .clipboard_reporter({
+                let reported = reported.clone();
+                move |_| reported.set(reported.get() + 1)
+            })
+            .on_clipboard_error({
+                let handled = handled.clone();
+                move |error, toasts| {
+                    toasts.push(crate::widgets::Toast::new(error.user_message()));
+                    handled.borrow_mut().push(error.user_message());
+                }
+            });
+
+        // Automation and the web runner build their runtime through this same constructor.
+        let backend = TestBackend::new_with_app(app, CopyFeedbackHarness, ());
+        backend
+            .core
+            .ctx
+            .env()
+            .clipboard
+            .report_error(crate::ClipboardError::unsupported(
+                crate::ClipboardOperation::ReadClipboard,
+            ));
+
+        assert_eq!(reported.get(), 1);
+        assert_eq!(
+            handled.borrow().as_slice(),
+            &["Reading the clipboard is not supported on this system"]
+        );
+        assert_eq!(backend.core.overlay_manager.borrow().entries().len(), 1);
     }
 
     #[test]
