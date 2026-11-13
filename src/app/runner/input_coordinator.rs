@@ -1287,7 +1287,8 @@ pub(crate) enum TerminaEventAction {
     Input(CrosstermEvent),
     /// A pointer position the host reported in pixels, split into cell and sub-cell parts.
     Pointer(CrosstermEvent, (u16, u16)),
-    ThemeRefresh,
+    /// A theme report, solicited by `CSI ? 996 n` or sent on change under mode 2031.
+    ThemeReport(crate::style::ColorScheme),
     Ignore,
 }
 
@@ -1298,7 +1299,7 @@ fn termina_runner_event(event: TerminaEvent) -> Option<RunnerEvent> {
         TerminaEventAction::Pointer(event, sub_cell) => {
             Some(RunnerEvent::Pointer { event, sub_cell })
         }
-        TerminaEventAction::ThemeRefresh => Some(RunnerEvent::HostTerminalColorRefreshRequested),
+        TerminaEventAction::ThemeReport(scheme) => Some(RunnerEvent::HostColorScheme(scheme)),
         TerminaEventAction::Ignore => None,
     }
 }
@@ -1323,7 +1324,12 @@ pub(crate) fn map_termina_event(event: TerminaEvent) -> TerminaEventAction {
         TerminaEvent::FocusIn => TerminaEventAction::Input(CrosstermEvent::FocusGained),
         TerminaEvent::FocusOut => TerminaEventAction::Input(CrosstermEvent::FocusLost),
         TerminaEvent::Paste(text) => TerminaEventAction::Input(CrosstermEvent::Paste(text)),
-        TerminaEvent::Csi(Csi::Mode(Mode::ReportTheme(_))) => TerminaEventAction::ThemeRefresh,
+        TerminaEvent::Csi(Csi::Mode(Mode::ReportTheme(mode))) => {
+            TerminaEventAction::ThemeReport(match mode {
+                termina::escape::csi::ThemeMode::Dark => crate::style::ColorScheme::Dark,
+                termina::escape::csi::ThemeMode::Light => crate::style::ColorScheme::Light,
+            })
+        }
         TerminaEvent::Csi(_) | TerminaEvent::Osc(_) | TerminaEvent::Dcs(_) => {
             TerminaEventAction::Ignore
         }
@@ -1542,17 +1548,33 @@ mod tests {
     }
 
     #[test]
-    fn exact_dark_and_light_theme_reports_request_refresh() {
-        for (bytes, expected) in [
-            (b"\x1b[?997;1n".as_slice(), ThemeMode::Dark),
-            (b"\x1b[?997;2n".as_slice(), ThemeMode::Light),
+    fn exact_dark_and_light_theme_reports_carry_the_scheme() {
+        use crate::style::ColorScheme;
+        for (bytes, expected, scheme) in [
+            (
+                b"\x1b[?997;1n".as_slice(),
+                ThemeMode::Dark,
+                ColorScheme::Dark,
+            ),
+            (
+                b"\x1b[?997;2n".as_slice(),
+                ThemeMode::Light,
+                ColorScheme::Light,
+            ),
         ] {
             let event = parsed_event(bytes);
             assert_eq!(
                 event,
                 TerminaEvent::Csi(Csi::Mode(Mode::ReportTheme(expected)))
             );
-            assert_eq!(map_termina_event(event), TerminaEventAction::ThemeRefresh);
+            assert_eq!(
+                map_termina_event(event.clone()),
+                TerminaEventAction::ThemeReport(scheme)
+            );
+            assert!(matches!(
+                termina_runner_event(event),
+                Some(RunnerEvent::HostColorScheme(reported)) if reported == scheme
+            ));
         }
     }
 
@@ -1587,14 +1609,15 @@ mod tests {
     }
 
     #[test]
-    fn theme_report_wakes_runner_for_full_palette_refresh() {
+    fn theme_report_wakes_runner_with_the_reported_scheme() {
         let (events, receiver) = mpsc::channel();
 
         let mut input = WorkerInput::default();
         assert!(input.push(b"\x1b[?997;1n", &events));
+        // The runner records the scheme and still re-probes the palette for it.
         assert_eq!(
             receiver.recv().unwrap(),
-            RunnerEvent::HostTerminalColorRefreshRequested
+            RunnerEvent::HostColorScheme(crate::style::ColorScheme::Dark)
         );
     }
 

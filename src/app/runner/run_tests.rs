@@ -186,6 +186,30 @@ fn host_terminal_color_cache_generation_changes_only_when_colors_differ() {
 }
 
 #[test]
+fn host_color_scheme_advances_the_color_generation_only_on_change() {
+    use crate::style::ColorScheme;
+    let runner = AppRunner::new(
+        App::new().live_host_terminal_colors(true),
+        RunnerKeymapSmoke,
+        (),
+    );
+    let env = runner.core.ctx.env();
+    assert_eq!(env.host_color_scheme(), None);
+
+    assert!(env.set_host_color_scheme(ColorScheme::Light));
+    assert_eq!(env.host_color_scheme(), Some(ColorScheme::Light));
+    assert_eq!(runner.core.ctx.host_terminal_color_generation(), 1);
+
+    // Mode 2031 repeats the current scheme alongside palette changes; that is not a change.
+    assert!(!env.set_host_color_scheme(ColorScheme::Light));
+    assert_eq!(runner.core.ctx.host_terminal_color_generation(), 1);
+
+    assert!(env.set_host_color_scheme(ColorScheme::Dark));
+    assert_eq!(env.host_color_scheme(), Some(ColorScheme::Dark));
+    assert_eq!(runner.core.ctx.host_terminal_color_generation(), 2);
+}
+
+#[test]
 fn host_terminal_color_refresh_request_is_opt_in() {
     let disabled = AppRunner::new(App::new(), RunnerKeymapSmoke, ());
     disabled.core.ctx.request_host_terminal_color_refresh();

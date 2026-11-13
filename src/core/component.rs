@@ -1470,6 +1470,19 @@ impl<C: Component> Context<C> {
         self.env.host_terminal_color_generation()
     }
 
+    /// Return the light or dark preference the host terminal reported, if it did.
+    ///
+    /// Terminals implementing DEC private mode 2031 answer a query sent at startup and report
+    /// each change while the app runs; a change also advances
+    /// [`host_terminal_color_generation`](Self::host_terminal_color_generation). `None` means
+    /// the terminal has not reported one: fall back to the
+    /// [host background](Self::host_terminal_colors). Requires
+    /// `App::live_host_terminal_colors(true)` or `App::system_theme()` on a Unix fullscreen
+    /// surface.
+    pub fn host_color_scheme(&self) -> Option<crate::style::ColorScheme> {
+        self.env.host_color_scheme()
+    }
+
     /// Ask the runner to refresh host terminal colors on the UI thread.
     ///
     /// This is a no-op unless `App::system_theme()` or

@@ -97,12 +97,12 @@ pub use crate::{
 pub use crate::style::Theme;
 pub use crate::style::query_host_colors;
 pub use crate::style::{
-    Align, BorderEdges, BorderStyle, CaretPalette, CaretShape, CellEffect, Color, ColorTransform,
-    Edge, EffectAlignment, EffectAmount, EffectCell, EffectChannels, EffectContext, EffectOrigin,
-    EffectPrepareContext, EffectPulse, FloatRect, HostTerminalColors, Justify, LayoutConstraints,
-    Length, Padding, Paint, PointerMode, PointerShape, PreparedCellEffect, Rect, RetroPreset,
-    RichText, RippleRadius, ScrollbarConfig, ScrollbarVariant, ShrinkPriority, Size, Span, Style,
-    TerminalColor, TerminalCursorStyle, VisualEffect,
+    Align, BorderEdges, BorderStyle, CaretPalette, CaretShape, CellEffect, Color, ColorScheme,
+    ColorTransform, Edge, EffectAlignment, EffectAmount, EffectCell, EffectChannels, EffectContext,
+    EffectOrigin, EffectPrepareContext, EffectPulse, FloatRect, HostTerminalColors, Justify,
+    LayoutConstraints, Length, Padding, Paint, PointerMode, PointerShape, PreparedCellEffect, Rect,
+    RetroPreset, RichText, RippleRadius, ScrollbarConfig, ScrollbarVariant, ShrinkPriority, Size,
+    Span, Style, TerminalColor, TerminalCursorStyle, VisualEffect,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

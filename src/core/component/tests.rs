@@ -60,6 +60,7 @@ fn new_registry() -> ComponentRegistry {
             contexts: Rc::new(RefCell::new(FxHashMap::default())),
             context_generations: Rc::new(RefCell::new(FxHashMap::default())),
             host_terminal_colors: Rc::new(Cell::new(None)),
+            host_color_scheme: Rc::new(Cell::new(None)),
             host_terminal_color_generation: Rc::new(Cell::new(0)),
             host_terminal_color_refresh_requested: Rc::new(Cell::new(false)),
             host_cursor_style: Rc::new(Cell::new(None)),
