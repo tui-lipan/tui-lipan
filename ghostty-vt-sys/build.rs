@@ -12,7 +12,7 @@
 //! | `GHOSTTY_VT_LINK` | `static` or `dylib` for `GHOSTTY_VT_LIB_DIR`/pkg-config. Default `static`, `dylib` on MSVC. |
 //! | `GHOSTTY_VT_SYSTEM` | `1` to find an installed library with pkg-config. |
 //! | `GHOSTTY_VT_ALLOW_UNPATCHED` | `1` to link a system or prebuilt library that lacks [`patch::PATCH`]. |
-//! | `GHOSTTY_VT_SOURCE_DIR` | An unpacked, unpatched `libghostty-vt-1.0.1` source tree to build instead of the vendored one. [`patch::PATCH`] is applied to a private copy, which needs `patch` or `git`. |
+//! | `GHOSTTY_VT_SOURCE_DIR` | An unpacked, unpatched `libghostty-vt-1.0.1` source tree to build instead of the vendored one. [`patch::PATCH`] is applied to a private copy, which needs `patch` or `git`. Built outside the shared cache, again whenever the tree changes. |
 //! | `GHOSTTY_VT_DEPS_DIR` | Its unpacked `-deps` directory (Zig packages). Required with `GHOSTTY_VT_SOURCE_DIR`. |
 //! | `GHOSTTY_VT_CACHE_DIR` | Build cache. Default `<target>/ghostty-vt`. |
 //! | `GHOSTTY_VT_OPTIMIZE` | Zig optimize mode. Default `ReleaseFast`, also for debug profiles. |
@@ -122,10 +122,14 @@ fn run() -> BuildResult<()> {
     let prefix = build_from_source(&target)?;
     // A cached build-script result names this library without checking it still exists. When a
     // CI cache restores `target/` but not the library cache, rerun instead of failing to link.
-    println!(
-        "cargo:rerun-if-changed={}",
-        prefix.join("lib").join(static_lib_name(&target)).display()
-    );
+    // Not for a GHOSTTY_VT_SOURCE_DIR build: it lives in OUT_DIR, and since it is rebuilt on every
+    // run, watching it would rerun the script every time.
+    if env::var_os("GHOSTTY_VT_SOURCE_DIR").is_none() {
+        println!(
+            "cargo:rerun-if-changed={}",
+            prefix.join("lib").join(static_lib_name(&target)).display()
+        );
+    }
     println!("cargo:include={}", prefix.join("include").display());
     emit_link(&prefix.join("lib"), Link::Static, &target);
     Ok(())
@@ -231,6 +235,22 @@ fn build_from_source(target: &str) -> BuildResult<PathBuf> {
         cpu: env::var("GHOSTTY_VT_CPU").unwrap_or_else(|_| "baseline".into()),
         zig_target: zig_target(target, &host)?,
     };
+    if let Some(source) = env::var_os("GHOSTTY_VT_SOURCE_DIR") {
+        // A developer's own tree is not identified by the vendored crate's key: always rebuild
+        // it here, outside the shared cache, and rerun when anything in it changes.
+        println!("cargo:rerun-if-changed={}", Path::new(&source).display());
+        if let Some(deps) = env::var_os("GHOSTTY_VT_DEPS_DIR") {
+            println!("cargo:rerun-if-changed={}", Path::new(&deps).display());
+        }
+        let out = PathBuf::from(env::var_os("OUT_DIR").ok_or("OUT_DIR is not set")?);
+        let build_dir = out.join("ghostty-vt-source-dir");
+        if build_dir.exists() {
+            fs::remove_dir_all(&build_dir).map_err(io_err("remove", &build_dir))?;
+        }
+        fs::create_dir_all(&build_dir).map_err(io_err("create", &build_dir))?;
+        compile_library(&build_dir, &settings)?;
+        return Ok(build_dir.join("prefix"));
+    }
     let key = source_build_key(&settings, target)?;
     let build_dir = cache.join("build").join(&key);
     let prefix = build_dir.join("prefix");
