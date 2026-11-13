@@ -788,9 +788,10 @@ impl<C: Component> AppRunner<C> {
             system_provider.supports_primary_selection(),
         );
 
+        let clipboard_reporter = app.clipboard_reporter;
         let clipboard = Rc::new(ClipboardService::new(
             system_provider,
-            app.clipboard_reporter,
+            clipboard_reporter.clone(),
         ));
 
         let core = RuntimeCore::new(
@@ -816,6 +817,12 @@ impl<C: Component> AppRunner<C> {
         core.overlay_manager
             .borrow_mut()
             .set_toast_margin(app.toast_margin);
+        // The handler needs the toast layer, which exists only once the core does.
+        clipboard.replace_reporter(crate::app::context::clipboard_reporter_with_handler(
+            clipboard_reporter,
+            app.clipboard_error_handler.clone(),
+            core.overlay_manager.clone(),
+        ));
         let mut keymap_config = KeymapConfig::from_clipboard_config(&clipboard_config);
         if let Some(path) = app.keymap_path.clone() {
             keymap_config = keymap_config.keymap_path(path);

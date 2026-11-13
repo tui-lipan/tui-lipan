@@ -399,6 +399,28 @@ impl From<Paint> for ScreenBackground {
     }
 }
 
+/// Clipboard failure handler installed with [`App::on_clipboard_error`].
+pub(crate) type ClipboardErrorHandler =
+    std::rc::Rc<dyn Fn(ClipboardError, &crate::overlay::ToastHandle) + 'static>;
+
+/// The reporter a runtime installs for an app: its reporter, then its error handler with the
+/// toast API. Every runtime (native runner, `TestBackend`, automation) builds it here so an
+/// `App` behaves the same in each.
+pub(crate) fn clipboard_reporter_with_handler(
+    reporter: ClipboardReporter,
+    handler: Option<ClipboardErrorHandler>,
+    overlays: std::rc::Rc<std::cell::RefCell<crate::overlay::OverlayManager>>,
+) -> ClipboardReporter {
+    let Some(handler) = handler else {
+        return reporter;
+    };
+    let toasts = crate::overlay::ToastHandle::new(overlays);
+    std::rc::Rc::new(move |error: ClipboardError| {
+        reporter(error.clone());
+        handler(error, &toasts);
+    })
+}
+
 /// Application builder.
 pub struct App {
     pub(crate) title: Option<String>,
@@ -426,6 +448,7 @@ pub struct App {
     pub(crate) contrast_policy: ContrastPolicy,
     pub(crate) clipboard_provider: Option<Box<dyn ClipboardProvider>>,
     pub(crate) clipboard_reporter: ClipboardReporter,
+    pub(crate) clipboard_error_handler: Option<ClipboardErrorHandler>,
     pub(crate) terminal_bg: Option<Color>,
     pub(crate) live_host_terminal_colors: bool,
     pub(crate) frame_rate: u16,
@@ -465,6 +488,7 @@ impl Default for App {
             contrast_policy: ContrastPolicy::default(),
             clipboard_provider: None,
             clipboard_reporter: crate::clipboard::default_clipboard_reporter(),
+            clipboard_error_handler: None,
             terminal_bg: None,
             live_host_terminal_colors: false,
             frame_rate: DEFAULT_FRAME_RATE,
@@ -755,6 +779,28 @@ impl App {
     /// Provide a custom clipboard error reporter.
     pub fn clipboard_reporter(mut self, reporter: impl Fn(ClipboardError) + 'static) -> Self {
         self.clipboard_reporter = std::rc::Rc::new(reporter);
+        self
+    }
+
+    /// Show clipboard failures to the user, for example as an error toast.
+    ///
+    /// The handler runs after the [reporter](Self::clipboard_reporter) for every failed
+    /// copy or paste the framework performs, including keymap paste and copy-on-select,
+    /// with the toast API the reporter cannot reach. It applies in the native runner,
+    /// `TestBackend::new_with_app` and automation sessions alike. [`ClipboardError::user_message`]
+    /// supplies a sentence to show:
+    ///
+    /// ```no_run
+    /// # use tui_lipan::prelude::*;
+    /// App::new().on_clipboard_error(|error, toasts| {
+    ///     toasts.push(Toast::new(error.user_message()));
+    /// });
+    /// ```
+    pub fn on_clipboard_error(
+        mut self,
+        handler: impl Fn(ClipboardError, &crate::overlay::ToastHandle) + 'static,
+    ) -> Self {
+        self.clipboard_error_handler = Some(std::rc::Rc::new(handler));
         self
     }
 

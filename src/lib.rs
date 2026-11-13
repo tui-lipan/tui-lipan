@@ -214,10 +214,10 @@ pub use crate::capture::{
 #[cfg(feature = "ui-snapshot-png")]
 pub use crate::capture::{PngOptions, PngTextRenderer};
 pub use crate::clipboard::{
-    ClipboardConfig, ClipboardContent, ClipboardError, ClipboardHandle, ClipboardPasteContent,
-    ClipboardProvider, CopyFeedback, CopyFeedbackEffect, CopyOnSelect, ImageContent, ImageFormat,
-    PasteOrigin, PasteShiftInsertBehavior, PasteSource, RightClickAction,
-    UnknownCopyFeedbackEffect,
+    ClipboardConfig, ClipboardContent, ClipboardError, ClipboardHandle, ClipboardOperation,
+    ClipboardPasteContent, ClipboardProvider, CopyFeedback, CopyFeedbackEffect, CopyOnSelect,
+    ImageContent, ImageFormat, PasteOrigin, PasteShiftInsertBehavior, PasteSource,
+    RightClickAction, UnknownCopyFeedbackEffect,
 };
 pub use crate::core::component::{
     Breakpoint, Command, Component, Context, KeyUpdate, ScrollbarVisibility, TaskPolicy, Update,
