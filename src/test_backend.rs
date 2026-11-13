@@ -1538,6 +1538,7 @@ where
         &self,
         options: &crate::ui_snapshot::UiSnapshotOptions,
     ) -> crate::ui_snapshot::UiSnapshot {
+        let _animations = self.core.capture_animations();
         crate::ui_snapshot::build_ui_snapshot(
             &self.core.tree,
             self.core.viewport(),

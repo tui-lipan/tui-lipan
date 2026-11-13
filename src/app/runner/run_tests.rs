@@ -2617,6 +2617,11 @@ fn an_animated_colour_fades_without_a_view_pass() {
     );
     let midway = backend.capture_frame().cell(0, 0).fg;
     assert_ne!(midway, start, "the painted colour moved anyway");
+    assert_eq!(
+        backend.capture_ui_snapshot().frame.cell(0, 0).fg,
+        midway,
+        "a UI snapshot shows the fade where it is, not its resting colour"
+    );
 
     backend.advance_frame(Duration::from_millis(60));
     let settled = backend.capture_frame().cell(0, 0).fg;
