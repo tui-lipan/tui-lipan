@@ -149,6 +149,14 @@ impl DirtyTracker {
         self.level.merge(level);
     }
 
+    /// Merge a level that is presented without waiting for the frame clock.
+    pub fn merge_immediate_level(&mut self, level: DirtyLevel) {
+        if level.is_dirty() {
+            self.immediate_layout = true;
+            self.level.merge(level);
+        }
+    }
+
     pub fn continuous_frame(&self) -> bool {
         self.is_dirty() && !self.immediate_layout
     }

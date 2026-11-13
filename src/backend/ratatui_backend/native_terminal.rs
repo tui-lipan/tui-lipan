@@ -290,6 +290,9 @@ pub(crate) struct HostBackend<W: io::Write> {
     parks_hidden_caret: bool,
     #[cfg(test)]
     test_flush_action: u8,
+    /// The size a test terminal reports, so tests never ask a host that may not be a tty.
+    #[cfg(test)]
+    test_size: Option<ratatui::layout::Size>,
     #[cfg(all(test, feature = "terminal"))]
     test_output: Option<std::sync::Arc<std::sync::Mutex<Vec<u8>>>>,
     dropped: std::sync::Arc<std::sync::atomic::AtomicUsize>,
@@ -321,6 +324,8 @@ impl<W: io::Write> HostBackend<W> {
             parks_hidden_caret: false,
             #[cfg(test)]
             test_flush_action: 0,
+            #[cfg(test)]
+            test_size: None,
             #[cfg(all(test, feature = "terminal"))]
             test_output: None,
             dropped: Default::default(),
@@ -733,6 +738,10 @@ impl<W: io::Write> Backend for HostBackend<W> {
     }
 
     fn size(&self) -> io::Result<ratatui::layout::Size> {
+        #[cfg(test)]
+        if let Some(size) = self.test_size {
+            return Ok(size);
+        }
         self.backend.size()
     }
 
@@ -798,7 +807,8 @@ pub(crate) fn create_test_terminal(width: u16, height: u16) -> io::Result<Termin
         #[cfg(not(unix))]
         stdout: io::stdout(),
     };
-    let backend = HostBackend::buffered(BufWriter::new(output)).parking_hidden_caret();
+    let mut backend = HostBackend::buffered(BufWriter::new(output)).parking_hidden_caret();
+    backend.test_size = Some(ratatui::layout::Size::new(width, height));
     ratatui::Terminal::with_options(
         backend,
         TerminalOptions {

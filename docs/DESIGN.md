@@ -151,6 +151,9 @@ Keyboard flow:
 - Focused widgets get first chance.
 - Unhandled keys bubble by component scope from child to parent to root.
 - Focus traversal is handled centrally, including overlay-local traversal.
+- Keys and pastes already queued behind one being handled (an unbracketed paste, key
+  repeat, scripted input) each run their update and reconcile the tree, but the draw waits
+  for the last of them, within a few milliseconds, so a burst presents one frame.
 
 Mouse flow:
 

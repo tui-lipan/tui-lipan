@@ -12738,3 +12738,279 @@ fn a_caret_in_a_sliding_overlay_does_not_start_a_jump_trail() {
         "the caret slid as far as a jump in one frame: {frames:?}"
     );
 }
+
+/// A key queued behind a focus change must reach a terminal child after its focus-in. The
+/// held-back frame skips the draw, and the draw is what normally announces the focus change.
+#[cfg(all(feature = "terminal", not(target_arch = "wasm32")))]
+#[test]
+fn queued_key_reaches_a_terminal_after_its_focus_in() {
+    use crate::widgets::{
+        TerminalInputKind::{FocusIn, Key},
+        TerminalScreen,
+    };
+
+    let screens = std::array::from_fn(|_| Rc::new(RefCell::new(TerminalScreen::new(4, 20, 10))));
+    let reports = Rc::new(RefCell::new(Vec::new()));
+    let component = TerminalFocusReportSmoke {
+        views: Rc::new(Cell::new(0)),
+        screens: screens.clone(),
+        reports: reports.clone(),
+    };
+    let mut runner = AppRunner::new(App::new().mouse(false), component.clone(), ());
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 8,
+    };
+    init_runner(&mut runner, component, viewport);
+    runner.focus.focused = Some(node_id_by_key(&runner.core.tree, "terminal-0"));
+    screens[1].borrow_mut().process_bytes(b"\x1b[?1004h");
+    let mut terminal = crate::backend::ratatui_backend::create_test_terminal(20, 8).unwrap();
+    runner.render(&mut terminal).unwrap();
+    assert!(
+        reports.borrow().is_empty(),
+        "the first pane reports nothing"
+    );
+
+    // What a focus-moving key leaves behind when another key is already queued after it.
+    runner.focus.focused = Some(node_id_by_key(&runner.core.tree, "terminal-1"));
+    runner
+        .reconcile_for_queued_input(&mut terminal, DirtyLevel::Full)
+        .unwrap();
+    let CEvent::Key(key) = c_key('x') else {
+        unreachable!("c_key builds a key event");
+    };
+    runner.dispatch_layered_key(super::to_key_event(key).unwrap());
+    let mut dirty = DirtyTracker::default();
+    runner.drain_messages_and_commands(&mut dirty).unwrap();
+
+    assert_eq!(*reports.borrow(), vec![(1, FocusIn), (1, Key)]);
+}
+
+/// A focused terminal that asks for focus reports must hear focus-in before a key queued behind
+/// that output. Its frame is paint-only, so nothing is reconciled, but the held-back pass still
+/// has to read the live screen; having consumed its damage, it owes an ordinary paint.
+#[cfg(all(feature = "terminal", not(target_arch = "wasm32")))]
+#[test]
+fn queued_key_reaches_a_terminal_after_it_enables_focus_reports() {
+    use crate::widgets::{
+        TerminalInputKind::{FocusIn, Key},
+        TerminalScreen,
+    };
+
+    let screens = std::array::from_fn(|_| Rc::new(RefCell::new(TerminalScreen::new(4, 20, 10))));
+    let reports = Rc::new(RefCell::new(Vec::new()));
+    let component = TerminalFocusReportSmoke {
+        views: Rc::new(Cell::new(0)),
+        screens: screens.clone(),
+        reports: reports.clone(),
+    };
+    let mut runner = AppRunner::new(App::new().mouse(false), component.clone(), ());
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 8,
+    };
+    init_runner(&mut runner, component, viewport);
+    runner.focus.focused = Some(node_id_by_key(&runner.core.tree, "terminal-0"));
+    let mut terminal = crate::backend::ratatui_backend::create_test_terminal(20, 8).unwrap();
+    runner.render(&mut terminal).unwrap();
+    assert!(reports.borrow().is_empty(), "reports are off so far");
+
+    screens[0].borrow_mut().process_bytes(b"\x1b[?1004h");
+    assert_eq!(
+        runner
+            .reconcile_for_queued_input(&mut terminal, DirtyLevel::TerminalPaintOnly)
+            .unwrap(),
+        DirtyLevel::PaintOnly,
+        "a pass that read the live screen owes an ordinary paint"
+    );
+    assert_eq!(*reports.borrow(), vec![(0, FocusIn)]);
+    assert_eq!(
+        runner
+            .reconcile_for_queued_input(&mut terminal, DirtyLevel::TerminalGraphicsOnly)
+            .unwrap(),
+        DirtyLevel::TerminalGraphicsOnly,
+        "with nothing new to read, the owed frame keeps its level"
+    );
+    let CEvent::Key(key) = c_key('x') else {
+        unreachable!("c_key builds a key event");
+    };
+    runner.dispatch_layered_key(super::to_key_event(key).unwrap());
+    let mut dirty = DirtyTracker::default();
+    runner.drain_messages_and_commands(&mut dirty).unwrap();
+    runner.render_paint_only(&mut terminal).unwrap();
+
+    assert_eq!(*reports.borrow(), vec![(0, FocusIn), (0, Key)]);
+}
+
+/// A controlled editor that counts its updates, to show what a burst of queued keys costs.
+#[derive(Clone)]
+struct QueuedTypingSmoke {
+    updates: Rc<Cell<usize>>,
+    layout_only: bool,
+}
+
+impl Component for QueuedTypingSmoke {
+    type Message = TextAreaEvent;
+    type Properties = ();
+    type State = TextEditor;
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {
+        TextEditor::new("")
+    }
+
+    fn update(&mut self, event: Self::Message, ctx: &mut Context<Self>) -> Update {
+        self.updates.set(self.updates.get() + 1);
+        event.apply_to(&mut ctx.state);
+        if self.layout_only {
+            Update::layout()
+        } else {
+            Update::full()
+        }
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        Element::from(TextArea::bound(&ctx.state).on_change(ctx.link().callback(|event| event)))
+            .key("editor")
+    }
+}
+
+/// Keys that are already queued when one is handled run the app's update one by one, but are
+/// presented as a single frame. The tree is still reconciled after each key, because the next
+/// key edits the value this one fed back through the controlled editor; skipping that collapses
+/// the typed string to its last character.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn queued_keys_update_once_each_and_present_one_frame() {
+    const TYPED: &str = "queued burst";
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 40,
+        h: 4,
+    };
+    for layout_only in [false, true] {
+        let updates = Rc::new(Cell::new(0));
+        let component = QueuedTypingSmoke {
+            updates: updates.clone(),
+            layout_only,
+        };
+        let mut runner = AppRunner::new(App::new().mouse(false), component.clone(), ());
+        init_runner(&mut runner, component, viewport);
+        runner.focus.focused = Some(node_id_by_key(&runner.core.tree, "editor"));
+        let mut terminal = crate::backend::ratatui_backend::create_test_terminal(40, 4).unwrap();
+        runner.render(&mut terminal).unwrap();
+
+        // The whole string arrives in one read, as an unbracketed paste does.
+        let (tx, rx) = std::sync::mpsc::channel();
+        for ch in TYPED.chars() {
+            tx.send(super::RunnerEvent::Terminal(c_key(ch))).unwrap();
+        }
+
+        // The event loop's per-event steps: dispatch, drain the update, then draw unless more
+        // keyboard input is already queued.
+        let mut pending_event = None;
+        let mut presented = 0;
+        let mut reconciled_value = Vec::new();
+        while let Some(event) = pending_event
+            .take()
+            .or_else(|| super::try_recv_channel(Some(&rx)).unwrap())
+        {
+            let super::RunnerEvent::Terminal(CEvent::Key(k)) = event else {
+                panic!("only keys were queued");
+            };
+            runner.dispatch_layered_key(super::to_key_event(k).unwrap());
+            let mut dirty = DirtyTracker::default();
+            runner.drain_messages_and_commands(&mut dirty).unwrap();
+            let level = dirty.level();
+            assert!(level.is_dirty(), "every key changes the editor");
+
+            runner.frame_rendered = false;
+            runner.host_frame_presented = false;
+            if super::keyboard_input_queued(&mut pending_event, || {
+                super::try_recv_channel(Some(&rx))
+            })
+            .unwrap()
+            {
+                assert_eq!(
+                    runner
+                        .reconcile_for_queued_input(&mut terminal, level)
+                        .unwrap(),
+                    DirtyLevel::PaintOnly,
+                    "the held-back frame still owes a paint"
+                );
+                assert!(!runner.frame_rendered, "nothing is drawn mid-burst");
+                let editor = node_id_by_key(&runner.core.tree, "editor");
+                let NodeKind::TextArea(node) = &runner.core.tree.node(editor).kind else {
+                    panic!("the editor is a text area");
+                };
+                reconciled_value.push(node.value.to_string());
+            } else {
+                runner.render(&mut terminal).unwrap();
+                presented += usize::from(runner.frame_rendered);
+            }
+        }
+
+        assert_eq!(updates.get(), TYPED.len(), "layout_only={layout_only}");
+        assert_eq!(presented, 1, "layout_only={layout_only}");
+        let expected: Vec<String> = (1..TYPED.len()).map(|n| TYPED[..n].to_owned()).collect();
+        assert_eq!(
+            reconciled_value, expected,
+            "each key sees the value the previous one produced"
+        );
+        let editor = node_id_by_key(&runner.core.tree, "editor");
+        let NodeKind::TextArea(node) = &runner.core.tree.node(editor).kind else {
+            panic!("the editor is a text area");
+        };
+        assert_eq!(&*node.value, TYPED);
+    }
+}
+
+#[test]
+fn only_queued_keyboard_input_holds_back_a_frame() {
+    let empty = || Ok(None);
+    let mut pending_event = None;
+    assert!(
+        !super::keyboard_input_queued(&mut pending_event, empty).unwrap(),
+        "a lone key with nothing behind it draws at once"
+    );
+
+    for (event, batched) in [
+        (c_key('k'), true),
+        (CEvent::Paste("text".into()), true),
+        (
+            c_mouse(CMouseEventKind::Down(CMouseButton::Left), 1, 1),
+            false,
+        ),
+        (CEvent::Resize(80, 24), false),
+        (CEvent::FocusLost, false),
+    ] {
+        let mut pending_event = None;
+        let queued = super::RunnerEvent::Terminal(event.clone());
+        assert_eq!(
+            super::keyboard_input_queued(&mut pending_event, || Ok(Some(queued.clone()))).unwrap(),
+            batched,
+            "{event:?}"
+        );
+        assert_eq!(
+            pending_event,
+            Some(queued),
+            "the event waits for the next pass"
+        );
+    }
+
+    // An event a coalescing loop already set aside counts without another receive.
+    let mut pending_event = Some(super::RunnerEvent::Terminal(c_key('p')));
+    assert!(
+        super::keyboard_input_queued(&mut pending_event, || panic!("must not receive")).unwrap()
+    );
+    assert!(
+        !super::keyboard_input_queued(&mut Some(super::RunnerEvent::Command), || panic!(
+            "must not receive"
+        ))
+        .unwrap()
+    );
+}
