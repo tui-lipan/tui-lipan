@@ -27,12 +27,13 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect as RatatuiRect};
 
 use super::AppRunner;
-use super::row_damage::{DamageRejection, RowDamagePlan, patch_rows, place_caret};
+use super::row_damage::{DamageRejection, RowDamagePlan, patch_area, patch_rows, place_caret};
 use crate::app::App;
 use crate::app::context::SurfaceMode;
+use crate::app::interaction_state::PaintDamage;
 use crate::backend::ratatui_backend::render;
 use crate::core::component::{Component, Context, Update};
-use crate::core::element::Element;
+use crate::core::element::{Element, IntoElement};
 use crate::core::node::{NodeId, NodeKind, NodeTree};
 use crate::runtime::RuntimeCore;
 use crate::style::{Color, Rect, Style, Theme};
@@ -180,6 +181,13 @@ struct PaneCfg {
     transparent_modal: bool,
     terminal_portal: bool,
     spinner: bool,
+    /// Put a header row above the pane whose middle word breathes on a registry pulse.
+    pulse: bool,
+    /// Put a scrolling widget in a narrow bordered frame, with an integrated scrollbar whose thumb
+    /// and track breathe on a registry pulse. The scrollbar is drawn on the frame's border, outside
+    /// the widget's own rectangle: `1` is the terminal's vertical one on the right border, `2` a
+    /// document's horizontal one on the bottom border.
+    framed_scrollbar_pulse: u8,
     /// Show a one-row notice in the middle of the screen over the pane: `1` on its own, `2` with a
     /// backdrop dimming everything else, `3` inside an `Animated` wrapper a test can move.
     toast: u8,
@@ -251,7 +259,7 @@ impl Component for Pane {
         Update::none()
     }
 
-    fn view(&self, _ctx: &Context<Self>) -> Element {
+    fn view(&self, ctx: &Context<Self>) -> Element {
         let mut body: Element = match &self.second {
             Some(second) => VStack::new()
                 .child(self.terminal(&self.screen))
@@ -259,9 +267,89 @@ impl Component for Pane {
                 .into(),
             None => self.terminal(&self.screen).into(),
         };
+        if self.cfg.framed_scrollbar_pulse != 0 {
+            let amount = ctx.pulsing_amount(
+                "scrollbar-pulse",
+                crate::style::EffectPulse::new(0.0, 1.0)
+                    .period(std::time::Duration::from_millis(800))
+                    .frame_rate(10),
+            );
+            let breathing = |color: Color| {
+                Style::default()
+                    .fg(color)
+                    .transform_fg(crate::style::ColorTransform::tint(
+                        Color::Rgb(255, 0, 0),
+                        amount,
+                    ))
+            };
+            let config = crate::style::ScrollbarConfig::new()
+                .variant(crate::style::ScrollbarVariant::Integrated)
+                .thumb_style(breathing(Color::Rgb(200, 200, 200)))
+                .track_style(breathing(Color::Rgb(90, 90, 90)));
+            let scrolling: Element = if self.cfg.framed_scrollbar_pulse == 1 {
+                self.terminal(&self.screen)
+                    .scrollbar(true)
+                    .scrollbar_config(config)
+                    .into()
+            } else {
+                crate::widgets::DocumentView::new(
+                    "a line much wider than the narrow frame around it\nand another",
+                )
+                .border(false)
+                .wrap(false)
+                .scrollbar(false)
+                .h_scrollbar(true)
+                .h_scrollbar_variant(crate::style::ScrollbarVariant::Integrated)
+                .scrollbar_config(config)
+                .into()
+            };
+            body = crate::widgets::HStack::new()
+                .child(
+                    crate::widgets::Frame::new()
+                        .border(true)
+                        .width(crate::style::Length::Px(14))
+                        .child(scrolling),
+                )
+                .child(if self.cfg.framed_scrollbar_pulse == 1 {
+                    Text::new("beside the frame").into()
+                } else {
+                    Element::from(self.terminal(&self.screen))
+                })
+                .into();
+        }
         if self.cfg.spinner {
             body = VStack::new()
                 .child(crate::widgets::Spinner::new().height(crate::style::Length::Px(1)))
+                .child(body)
+                .into();
+        }
+        if self.cfg.pulse {
+            let amount = ctx.pulsing_amount(
+                "pulse",
+                crate::style::EffectPulse::new(0.0, 1.0)
+                    .period(std::time::Duration::from_millis(800))
+                    .frame_rate(10),
+            );
+            let word = |text: &'static str, width: u16| {
+                Text::new(text).width(crate::style::Length::Px(width))
+            };
+            body = VStack::new()
+                .child(
+                    crate::widgets::HStack::new()
+                        .height(crate::style::Length::Px(1))
+                        .child(word("left 界", 10))
+                        .child(
+                            word("BREATHE", 7)
+                                .style(Style::default().fg(Color::Rgb(200, 200, 200)).transform_fg(
+                                    crate::style::ColorTransform::tint(
+                                        Color::Rgb(255, 0, 0),
+                                        amount,
+                                    ),
+                                ))
+                                .key("pulse"),
+                        )
+                        .child(word("界 right", 10)),
+                )
                 .child(body)
                 .into();
         }
@@ -596,8 +684,9 @@ fn build(cfg: PaneCfg, setup: &[u8]) -> Harness {
 
     let mut term =
         Terminal::new(HostBackend::new(COLS, ROWS)).expect("test terminal should initialize");
-    let (retained, _) = full_paint(&runner, &mut term);
+    let (retained, caret) = full_paint(&runner, &mut term);
     runner.last_frame_snapshot = Some(retained.clone());
+    runner.recorded_caret = caret;
 
     Harness {
         runner,
@@ -626,9 +715,10 @@ fn full_paint(
     (buffer, cursor_position.get())
 }
 
-fn changed_rows(before: &Buffer, after: &Buffer) -> Vec<u16> {
+fn changed_cells(before: &Buffer, after: &Buffer) -> Vec<(u16, u16)> {
     (before.area.y..before.area.bottom())
-        .filter(|&y| (before.area.x..before.area.right()).any(|x| before[(x, y)] != after[(x, y)]))
+        .flat_map(|y| (before.area.x..before.area.right()).map(move |x| (x, y)))
+        .filter(|&(x, y)| before[(x, y)] != after[(x, y)])
         .collect()
 }
 
@@ -664,10 +754,10 @@ fn assert_same(actual: &Buffer, expected: &Buffer, what: &str) {
 
 fn plan_for(harness: &mut Harness) -> Result<RowDamagePlan, DamageRejection> {
     let refresh = harness.runner.core.tree.refresh_live_terminals_detailed();
-    let nodes = std::mem::take(&mut harness.runner.animation.spinner_damage);
+    let damage = std::mem::take(&mut harness.runner.animation.paint_damage);
     harness
         .runner
-        .plan_live_damage(&refresh, &nodes, frame_area())
+        .plan_live_damage(&refresh, &damage, frame_area())
 }
 
 /// Apply `mutation`, patch the damaged rows, and hold the result to a full paint.
@@ -690,20 +780,34 @@ fn assert_harness_patch_matches_full_paint(harness: &mut Harness) -> RowDamagePl
         for band in plan.bands(frame_area().height) {
             patch_rows(term, ctx, &mut patched, frame_area(), band).expect("patching a band");
         }
+        for &area in &plan.areas {
+            assert!(
+                patch_area(term, ctx, &mut patched, area).expect("patching an area"),
+                "no glyph straddles {area:?} in these cases"
+            );
+        }
+        // As `draw_row_damage` does: a plan that keeps the caret re-places the recorded one.
+        if plan.keeps_caret && cursor_position.get().is_none() {
+            cursor_position.set(runner.recorded_caret);
+        }
         place_caret(term, cursor_position.get()).expect("placing the caret");
     });
 
     let mut oracle = Terminal::new(HostBackend::new(COLS, ROWS)).expect("oracle terminal");
     let (expected, expected_caret) = full_paint(runner, &mut oracle);
 
-    // Damage has to be complete, not merely correct where it was reported. A row that moved and
+    // Damage has to be complete, not merely correct where it was reported. A cell that moved and
     // was not planned is left stale by the patch and matches on both sides of the comparison.
-    let moved = changed_rows(&harness.retained, &expected);
-    for row in &moved {
+    for (x, y) in changed_cells(&harness.retained, &expected) {
         assert!(
-            plan.rows.contains(row),
-            "row {row} changed but the plan did not name it; planned {:?}, moved {moved:?}",
-            plan.rows
+            plan.rows.contains(&y)
+                || plan
+                    .areas
+                    .iter()
+                    .any(|area| area.contains(Position::new(x, y))),
+            "cell ({x}, {y}) changed but the plan did not name it; planned rows {:?}, areas {:?}",
+            plan.rows,
+            plan.areas
         );
     }
 
@@ -729,6 +833,7 @@ fn assert_harness_patch_matches_full_paint(harness: &mut Harness) -> RowDamagePl
     }
     harness.retained = patched;
     harness.runner.last_frame_snapshot = Some(harness.retained.clone());
+    harness.runner.recorded_caret = cursor_position.get();
     plan
 }
 
@@ -777,6 +882,224 @@ fn spinner_only_damage_matches_full_paints_without_terminal_output() {
     }
 }
 
+/// A registry pulse is recorded where the full paint drew it, and each step of it repaints that
+/// area alone - not its row, and not the frame - while terminal output in the same frame still
+/// takes its own rows. Every step must equal a full paint.
+#[test]
+fn a_pulse_repaints_only_where_it_is_painted_and_matches_full_paints() {
+    use crate::animation::registry::{PaintExtent, RenderDamage, set_render_registry};
+    use std::time::Duration;
+
+    let mut harness = build(
+        PaneCfg {
+            pulse: true,
+            focused: true,
+            controlled_clock: true,
+            ..PaneCfg::new()
+        },
+        SETUP,
+    );
+    let animations = Rc::clone(&harness.runner.core.ctx.env().animations);
+    let mut now = Duration::ZERO;
+    {
+        let _paint = set_render_registry(Rc::clone(&animations), now, PaintExtent::Full);
+        let (retained, caret) = full_paint(&harness.runner, &mut harness.term);
+        harness.retained = retained;
+        harness.runner.recorded_caret = caret;
+    }
+    assert!(
+        harness.runner.recorded_caret.is_some(),
+        "the focused pane shows a caret"
+    );
+    harness.runner.last_frame_snapshot = Some(harness.retained.clone());
+    let pulse = harness
+        .runner
+        .core
+        .tree
+        .iter()
+        .find(|node| node.key.as_ref().is_some_and(|key| key.as_ref() == "pulse"))
+        .expect("the pulsing word is mounted")
+        .rect;
+    let pulse_area = RatatuiRect::new(pulse.x as u16, pulse.y as u16, pulse.w, pulse.h);
+
+    let mut moved = false;
+    for step in 1..=8u16 {
+        now += Duration::from_millis(100);
+        let tick = animations.tick(Duration::from_millis(100), now);
+        let RenderDamage::Areas(areas) = tick.render_damage else {
+            panic!("step {step}: the pulse was painted inside a node, so its area is known");
+        };
+        assert_eq!(areas, vec![pulse], "step {step}");
+        harness.runner.animation.paint_damage.add_areas(areas);
+        if step % 3 == 0 {
+            harness
+                .screen
+                .borrow_mut()
+                .process_bytes(format!("\x1b[4;1Houtput {step}").as_bytes());
+        }
+
+        let before = harness.retained.clone();
+        let _paint = set_render_registry(Rc::clone(&animations), now, PaintExtent::Partial);
+        let plan = assert_harness_patch_matches_full_paint(&mut harness);
+        assert_eq!(plan.areas, vec![pulse_area], "step {step}");
+        assert!(
+            !plan.rows.contains(&pulse_area.y),
+            "step {step}: the pulse's row is not repainted whole; rows {:?}",
+            plan.rows
+        );
+        // With no output, only the colour moved: no row is painted, not even the caret's, and
+        // the caret is put back where it was.
+        if step % 3 != 0 {
+            assert!(
+                plan.keeps_caret && plan.rows.is_empty(),
+                "step {step}: {plan:?}"
+            );
+        }
+        moved |= changed_cells(&before, &harness.retained)
+            .iter()
+            .any(|&(x, y)| pulse_area.contains(Position::new(x, y)));
+    }
+    assert!(moved, "the pulse changed colour on screen at least once");
+}
+
+/// An integrated scrollbar paints its thumb and track on an ancestor frame's border, outside the
+/// widget's own rectangle. A breathing scrollbar must still repaint those border cells, or the
+/// border keeps the colour of the frame before. Both axes: a terminal's vertical track on the
+/// right border, a document's horizontal one on the bottom border.
+#[test]
+fn a_breathing_scrollbar_on_an_ancestor_frame_border_matches_full_paints() {
+    use crate::animation::registry::{PaintExtent, RenderDamage, set_render_registry};
+    use std::time::Duration;
+
+    let lines: String = (0..60).map(|line| format!("line {line}\r\n")).collect();
+    // The frame is 14 columns wide and as tall as the screen.
+    let right_border = |(x, _): (u16, u16)| x == 13;
+    let bottom_border = |(x, y): (u16, u16)| y == ROWS - 1 && x < 14;
+    for (variant, on_border) in [
+        (1, &right_border as &dyn Fn((u16, u16)) -> bool),
+        (2, &bottom_border),
+    ] {
+        let mut harness = build(
+            PaneCfg {
+                framed_scrollbar_pulse: variant,
+                controlled_clock: true,
+                ..PaneCfg::new()
+            },
+            lines.as_bytes(),
+        );
+        let animations = Rc::clone(&harness.runner.core.ctx.env().animations);
+        let mut now = Duration::ZERO;
+        {
+            let _paint = set_render_registry(Rc::clone(&animations), now, PaintExtent::Full);
+            harness.retained = full_paint(&harness.runner, &mut harness.term).0;
+        }
+        harness.runner.last_frame_snapshot = Some(harness.retained.clone());
+
+        let mut border_moved = false;
+        for step in 1..=8u16 {
+            now += Duration::from_millis(100);
+            let RenderDamage::Areas(areas) = animations
+                .tick(Duration::from_millis(100), now)
+                .render_damage
+            else {
+                panic!("variant {variant} step {step}: the scrollbar's area is known");
+            };
+            harness
+                .runner
+                .animation
+                .paint_damage
+                .add_areas(areas.clone());
+            let before = harness.retained.clone();
+            let _paint = set_render_registry(Rc::clone(&animations), now, PaintExtent::Partial);
+            assert_harness_patch_matches_full_paint(&mut harness);
+            // Held to what the registry recorded, not just to the plan: the planner may merge
+            // the widget's own area into a box that covers the border by coincidence.
+            for (x, y) in changed_cells(&before, &harness.retained) {
+                if on_border((x, y)) {
+                    border_moved = true;
+                    assert!(
+                        areas.iter().any(|area| area.contains(x as i16, y as i16)),
+                        "variant {variant} step {step}: border cell ({x}, {y}) is in no recorded \
+                         area {areas:?}"
+                    );
+                }
+            }
+        }
+        assert!(
+            border_moved,
+            "variant {variant}: the scrollbar on the frame border changed colour"
+        );
+    }
+}
+
+/// An area whose edge falls on the trailing half of a double-width glyph cannot be repainted on
+/// its own: the clipped paint would leave half a glyph the host no longer agrees with. Its rows
+/// are repainted whole instead.
+#[test]
+fn an_area_splitting_a_wide_glyph_repaints_its_rows_whole() {
+    let mut harness = build(
+        PaneCfg {
+            pulse: true,
+            controlled_clock: true,
+            ..PaneCfg::new()
+        },
+        SETUP,
+    );
+    // `left 界` puts the glyph in columns 5 and 6, so an area from column 6 cuts it in half.
+    assert_eq!(harness.retained[(5, 0)].symbol(), "界");
+    harness.runner.animation.paint_damage.add_areas([Rect {
+        x: 6,
+        y: 0,
+        w: 4,
+        h: 1,
+    }]);
+    let plan = assert_harness_patch_matches_full_paint(&mut harness);
+    assert_eq!(plan.rows, vec![0]);
+    assert!(plan.areas.is_empty(), "areas {:?}", plan.areas);
+}
+
+/// A value resolved outside every paint area could be anywhere, and a draw that shifts the screen
+/// without repainting it leaves the recorded areas behind. Both ask for a full paint.
+#[test]
+fn a_pulse_with_no_known_area_asks_for_a_full_paint() {
+    use crate::animation::registry::{PaintExtent, RenderDamage, set_render_registry};
+    use std::time::Duration;
+
+    let harness = build(
+        PaneCfg {
+            pulse: true,
+            controlled_clock: true,
+            ..PaneCfg::new()
+        },
+        SETUP,
+    );
+    let animations = Rc::clone(&harness.runner.core.ctx.env().animations);
+    let tick = |now: u64| {
+        animations
+            .tick(Duration::from_millis(100), Duration::from_millis(now))
+            .render_damage
+    };
+    assert_eq!(
+        tick(100),
+        RenderDamage::Unbounded,
+        "no full paint has recorded anything yet"
+    );
+
+    let mut term = Terminal::new(HostBackend::new(COLS, ROWS)).expect("terminal");
+    {
+        let _paint = set_render_registry(
+            Rc::clone(&animations),
+            Duration::from_millis(100),
+            PaintExtent::Full,
+        );
+        full_paint(&harness.runner, &mut term);
+    }
+    assert!(matches!(tick(200), RenderDamage::Areas(_)));
+
+    animations.invalidate_read_areas();
+    assert_eq!(tick(300), RenderDamage::Unbounded, "after a shifting draw");
+}
+
 /// Damaged rows a few rows apart are painted in one walk, together with the unchanged rows between
 /// them, and the result is still exactly a full paint.
 #[test]
@@ -813,6 +1136,8 @@ fn bands_join_rows_at_most_the_band_gap_apart() {
     let bands = |rows: &[u16]| {
         RowDamagePlan {
             rows: rows.to_vec(),
+            areas: Vec::new(),
+            keeps_caret: false,
         }
         .bands(80)
     };
@@ -831,6 +1156,8 @@ fn bands_join_rows_at_most_the_band_gap_apart() {
 fn evenly_spread_damage_does_not_band_across_most_of_the_frame() {
     let plan = RowDamagePlan {
         rows: (0..80).step_by(5).collect(),
+        areas: Vec::new(),
+        keeps_caret: false,
     };
     assert_eq!(plan.rows.len(), 16);
     let bands = plan.bands(80);
@@ -844,6 +1171,8 @@ fn evenly_spread_damage_does_not_band_across_most_of_the_frame() {
     // The same spacing over fewer rows stays within budget and still joins.
     let short = RowDamagePlan {
         rows: vec![0, 5, 10],
+        areas: Vec::new(),
+        keeps_caret: false,
     };
     assert_eq!(short.bands(80), vec![0..11]);
     assert_eq!(short.bands(20), vec![0..1, 5..6, 10..11]);
@@ -1099,7 +1428,9 @@ fn a_scrolled_back_terminal_is_rejected() {
         node.scrollback_offset = 3;
     }
     assert_eq!(
-        harness.runner.plan_live_damage(&refresh, &[], frame_area()),
+        harness
+            .runner
+            .plan_live_damage(&refresh, &PaintDamage::default(), frame_area()),
         Err(DamageRejection::ScrolledBack)
     );
 }
@@ -1190,7 +1521,9 @@ fn shared_screen_updates_fall_back_and_match_a_full_paint() {
             .any(|(_, damage)| matches!(damage, crate::widgets::internal::TerminalDamage::None))
     );
     assert_eq!(
-        harness.runner.plan_live_damage(&refresh, &[], frame_area()),
+        harness
+            .runner
+            .plan_live_damage(&refresh, &PaintDamage::default(), frame_area()),
         Err(DamageRejection::MissingDamage)
     );
 
@@ -1203,9 +1536,9 @@ fn shared_screen_updates_fall_back_and_match_a_full_paint() {
     );
     let mut oracle = Terminal::new(HostBackend::new(COLS, ROWS)).unwrap();
     let (expected, _) = full_paint(&harness.runner, &mut oracle);
-    let moved = changed_rows(&harness.retained, &expected);
-    assert!(moved.iter().any(|row| *row < ROWS / 2));
-    assert!(moved.iter().any(|row| *row >= ROWS / 2));
+    let moved = changed_cells(&harness.retained, &expected);
+    assert!(moved.iter().any(|(_, row)| *row < ROWS / 2));
+    assert!(moved.iter().any(|(_, row)| *row >= ROWS / 2));
     let (painted, _) = full_paint(&harness.runner, &mut harness.term);
     assert_same(&painted, &expected, "fallback frame");
     assert_host_matches(harness.term.backend().buffer(), &expected, "fallback host");
@@ -1569,8 +1902,12 @@ fn planning_the_same_refresh_twice_agrees() {
     let mut harness = build(PaneCfg::new(), SETUP);
     harness.screen.borrow_mut().process_bytes(b"\rX");
     let refresh = harness.runner.core.tree.refresh_live_terminals_detailed();
-    let first = harness.runner.plan_live_damage(&refresh, &[], frame_area());
-    let second = harness.runner.plan_live_damage(&refresh, &[], frame_area());
+    let first = harness
+        .runner
+        .plan_live_damage(&refresh, &PaintDamage::default(), frame_area());
+    let second = harness
+        .runner
+        .plan_live_damage(&refresh, &PaintDamage::default(), frame_area());
     assert_eq!(
         first.map(|plan| plan.rows),
         second.map(|plan| plan.rows),
@@ -1607,7 +1944,9 @@ fn an_unchanged_image_pane_survives_an_unrelated_terminal_update() {
         .borrow_mut()
         .process_bytes(b"\rX");
     let refresh = harness.runner.core.tree.refresh_live_terminals_detailed();
-    let plan = harness.runner.plan_live_damage(&refresh, &[], frame_area());
+    let plan = harness
+        .runner
+        .plan_live_damage(&refresh, &PaintDamage::default(), frame_area());
     match &plan {
         Ok(plan) => harness.runner.draw_row_damage(&mut terminal, plan).unwrap(),
         Err(_) => {

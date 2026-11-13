@@ -320,7 +320,7 @@ impl<C: Component> AppRunner<C> {
             self.animation.last_spinner_tick += Duration::from_millis(ticks * 50);
             if self.update_spinner_frames() {
                 crate::debug::internal_log!("[tui-lipan] dirty: spinner glyph changed");
-                dirty.mark_spinner_paint();
+                dirty.mark_damage_paint();
             }
         }
 
@@ -344,12 +344,25 @@ impl<C: Component> AppRunner<C> {
             // A value a view read concretely has to flow through the next `view()` to reach the
             // rendered styles. A late-bound paint or effect amount does not: the renderer resolves
             // it while drawing, so the whole transition costs repaints.
+            //
+            // When the registry knows every area the changed values paint, only those areas are
+            // repainted. A tree animation in the same frame needs the whole tree painted anyway.
             if transitions.view_changed {
                 dirty.merge_continuous_level(super::DirtyLevel::Full);
             } else if needs_layout {
                 dirty.merge_continuous_level(super::DirtyLevel::LayoutOnly);
-            } else if needs_paint || transitions.render_changed {
+            } else if needs_paint {
                 dirty.mark_paint();
+            } else if transitions.render_changed {
+                match transitions.render_damage {
+                    // Nothing on screen reads what changed.
+                    crate::animation::registry::RenderDamage::None => {}
+                    crate::animation::registry::RenderDamage::Areas(areas) => {
+                        self.animation.paint_damage.add_areas(areas);
+                        dirty.mark_damage_paint();
+                    }
+                    crate::animation::registry::RenderDamage::Unbounded => dirty.mark_paint(),
+                }
             }
         }
 

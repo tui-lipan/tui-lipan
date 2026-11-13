@@ -36,9 +36,10 @@ pub(crate) enum DirtyLevel {
     /// to [`PaintOnly`](Self::PaintOnly).
     #[cfg(feature = "terminal")]
     TerminalPaintOnly,
-    /// Only runtime-owned spinner frames and live content changed. Their allocated rows can
-    /// share the retained-frame damage path; any generic paint invalidates this proof.
-    SpinnerPaintOnly,
+    /// Only runtime-owned damage and live content changed: spinner frames, and render-resolved
+    /// animations whose painted areas are known. They share the retained-frame damage path; any
+    /// generic paint invalidates this proof.
+    DamagePaintOnly,
     /// Draw-only update (cursor blink, spinner frame, image frame).
     PaintOnly,
     /// Reconcile/layout update without broader side effects.
@@ -62,7 +63,7 @@ impl DirtyLevel {
             Self::TerminalGraphicsOnly => 1,
             #[cfg(feature = "terminal")]
             Self::TerminalPaintOnly => 2,
-            Self::SpinnerPaintOnly => 3,
+            Self::DamagePaintOnly => 3,
             Self::PaintOnly => 4,
             Self::LayoutOnly => 5,
             Self::Full => 6,
@@ -109,8 +110,8 @@ pub(crate) struct DirtyTracker {
 }
 
 impl DirtyTracker {
-    pub fn mark_spinner_paint(&mut self) {
-        self.level.merge(DirtyLevel::SpinnerPaintOnly);
+    pub fn mark_damage_paint(&mut self) {
+        self.level.merge(DirtyLevel::DamagePaintOnly);
     }
 
     #[inline]
@@ -305,6 +306,31 @@ pub(crate) struct HexPendingEdit {
     pub before_byte: u8,
 }
 
+/// Screen the runtime itself knows changed, and nothing else did, so a repaint can be limited to
+/// it. See [`DirtyLevel::DamagePaintOnly`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PaintDamage {
+    /// Nodes whose whole rows repaint: spinners whose glyph changed.
+    pub nodes: Vec<crate::core::node::NodeId>,
+    /// Frame areas that repaint alone: where render-resolved animations that changed are painted.
+    pub areas: Vec<crate::style::Rect>,
+}
+
+impl PaintDamage {
+    pub(crate) fn add_areas(&mut self, areas: impl IntoIterator<Item = crate::style::Rect>) {
+        for area in areas {
+            if !self.areas.contains(&area) {
+                self.areas.push(area);
+            }
+        }
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.nodes.clear();
+        self.areas.clear();
+    }
+}
+
 pub(crate) struct AnimationState {
     pub(crate) clock: crate::core::runtime_env::SessionClock,
     pub last_blink: Instant,
@@ -312,9 +338,10 @@ pub(crate) struct AnimationState {
     pub last_spinner_tick: Instant,
     pub spinner_frame: usize,
     pub spinner_tick_interval: std::time::Duration,
-    /// Nodes whose spinner glyphs changed since the last completed paint. Kept across paced
-    /// frames, and discarded when a broader paint supersedes them.
-    pub spinner_damage: Vec<crate::core::node::NodeId>,
+    /// What runtime-owned sources changed since the last completed paint: spinner glyphs and
+    /// render-resolved animations. Kept across paced frames, and discarded when a broader paint
+    /// supersedes them.
+    pub paint_damage: PaintDamage,
     pub last_animated_tick: Instant,
     pub last_effect_tick: Instant,
     #[cfg(feature = "image")]
@@ -346,7 +373,7 @@ impl AnimationState {
             last_spinner_tick: now,
             spinner_frame: 0,
             spinner_tick_interval: std::time::Duration::from_millis(50),
-            spinner_damage: Vec::new(),
+            paint_damage: PaintDamage::default(),
             last_animated_tick: now,
             last_effect_tick: now,
             command_chord_revealed: false,
@@ -619,7 +646,7 @@ mod tests {
     #[cfg(not(feature = "terminal"))]
     const ALL_LEVELS: [DirtyLevel; 5] = [
         DirtyLevel::None,
-        DirtyLevel::SpinnerPaintOnly,
+        DirtyLevel::DamagePaintOnly,
         DirtyLevel::PaintOnly,
         DirtyLevel::LayoutOnly,
         DirtyLevel::Full,
@@ -630,7 +657,7 @@ mod tests {
         DirtyLevel::None,
         DirtyLevel::TerminalGraphicsOnly,
         DirtyLevel::TerminalPaintOnly,
-        DirtyLevel::SpinnerPaintOnly,
+        DirtyLevel::DamagePaintOnly,
         DirtyLevel::PaintOnly,
         DirtyLevel::LayoutOnly,
         DirtyLevel::Full,
@@ -651,14 +678,14 @@ mod tests {
     }
 
     #[test]
-    fn spinner_damage_loses_its_proof_to_any_broader_paint_in_either_order() {
+    fn damage_paint_loses_its_proof_to_any_broader_paint_in_either_order() {
         for broader in [
             DirtyLevel::PaintOnly,
             DirtyLevel::LayoutOnly,
             DirtyLevel::Full,
         ] {
-            assert_eq!(merged(DirtyLevel::SpinnerPaintOnly, broader), broader);
-            assert_eq!(merged(broader, DirtyLevel::SpinnerPaintOnly), broader);
+            assert_eq!(merged(DirtyLevel::DamagePaintOnly, broader), broader);
+            assert_eq!(merged(broader, DirtyLevel::DamagePaintOnly), broader);
         }
         #[cfg(feature = "terminal")]
         for narrower in [
@@ -666,12 +693,12 @@ mod tests {
             DirtyLevel::TerminalGraphicsOnly,
         ] {
             assert_eq!(
-                merged(DirtyLevel::SpinnerPaintOnly, narrower),
-                DirtyLevel::SpinnerPaintOnly
+                merged(DirtyLevel::DamagePaintOnly, narrower),
+                DirtyLevel::DamagePaintOnly
             );
             assert_eq!(
-                merged(narrower, DirtyLevel::SpinnerPaintOnly),
-                DirtyLevel::SpinnerPaintOnly
+                merged(narrower, DirtyLevel::DamagePaintOnly),
+                DirtyLevel::DamagePaintOnly
             );
         }
     }
@@ -701,7 +728,7 @@ mod tests {
                 DirtyLevel::TerminalGraphicsOnly => 1,
                 #[cfg(feature = "terminal")]
                 DirtyLevel::TerminalPaintOnly => 2,
-                DirtyLevel::SpinnerPaintOnly => 3,
+                DirtyLevel::DamagePaintOnly => 3,
                 DirtyLevel::PaintOnly => 4,
                 DirtyLevel::LayoutOnly => 5,
                 DirtyLevel::Full => 6,

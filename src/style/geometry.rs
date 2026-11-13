@@ -94,6 +94,32 @@ impl Rect {
     pub fn is_empty(&self) -> bool {
         self.w == 0 || self.h == 0
     }
+
+    /// Whether every cell of `other` lies inside this rectangle. An empty `other` always does.
+    pub(crate) fn contains_rect(&self, other: &Rect) -> bool {
+        other.is_empty() || other.intersection(self) == *other
+    }
+
+    /// The smallest rectangle covering both. An empty rectangle covers nothing, so the other one
+    /// is returned unchanged.
+    pub(crate) fn bounding(&self, other: &Rect) -> Rect {
+        if self.is_empty() {
+            return *other;
+        }
+        if other.is_empty() {
+            return *self;
+        }
+        let x1 = (self.x as i32).min(other.x as i32);
+        let y1 = (self.y as i32).min(other.y as i32);
+        let x2 = (self.x as i32 + self.w as i32).max(other.x as i32 + other.w as i32);
+        let y2 = (self.y as i32 + self.h as i32).max(other.y as i32 + other.h as i32);
+        Rect {
+            x: x1 as i16,
+            y: y1 as i16,
+            w: (x2 - x1).min(u16::MAX as i32) as u16,
+            h: (y2 - y1).min(u16::MAX as i32) as u16,
+        }
+    }
 }
 
 /// Which frame border edges reserve layout space.

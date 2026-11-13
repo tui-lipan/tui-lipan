@@ -143,6 +143,13 @@ hover effect; a pulse that a full paint did not read (an unhovered hover effect,
 a scrolled-away pane) is suspended until one does, so it cannot keep an idle app
 repainting. Still, request a pulse only while it is meant to show.
 
+A late-bound value also limits how much of the screen it repaints. Each full
+paint records which widgets resolved it, and a frame where only late-bound
+values advanced repaints just those widgets' areas. A pulsing tab or a fading
+border costs the cells of that widget, not the window. Keep a breathing value on
+the smallest widget that shows it: one on a pane's frame repaints the whole
+pane, one on a badge repaints the badge.
+
 A pulse that has to keep step with something else - an app-side timer, another
 pulse asked for later - can be anchored instead of starting when its key first
 appears. `EffectPulse::starting_at(elapsed)` fixes its timeline to an instant on
@@ -361,9 +368,10 @@ rendered frame is unchanged does not request a paint. Manual `.frame(...)`
 spinners are not advanced by the runtime.
 
 On fullscreen surfaces, spinner changes reuse the retained frame and repaint
-only the allocated rows of the affected widgets. Live terminal damage and
-fixed-allocation live labels join the same row repaint, so an animated status
-does not force unrelated panes to be painted in full. Embedded list and tab
+only the allocated rows of the affected widgets. Live terminal damage,
+fixed-allocation live labels, and the areas of advancing late-bound values join
+the same repaint, so an animated status does not force unrelated panes to be
+painted in full. Embedded list and tab
 spinners invalidate their containing widget's allocation. Dense damage,
 overlays, inline surfaces, and cases without a valid retained frame use an
 ordinary paint. Generic paint, layout, and full updates still take precedence;

@@ -304,12 +304,12 @@ fn paced_pointer_frame_due(
     let paint_only = matches!(
         level,
         DirtyLevel::PaintOnly
-            | DirtyLevel::SpinnerPaintOnly
+            | DirtyLevel::DamagePaintOnly
             | DirtyLevel::TerminalPaintOnly
             | DirtyLevel::TerminalGraphicsOnly
     );
     #[cfg(not(feature = "terminal"))]
-    let paint_only = matches!(level, DirtyLevel::PaintOnly | DirtyLevel::SpinnerPaintOnly);
+    let paint_only = matches!(level, DirtyLevel::PaintOnly | DirtyLevel::DamagePaintOnly);
     if !pointer_motion_only || !paint_only {
         return None;
     }
@@ -321,7 +321,7 @@ fn apply_dirty_level(dirty: &mut DirtyTracker, level: DirtyLevel) {
     match level {
         DirtyLevel::None => {}
         DirtyLevel::PaintOnly => dirty.mark_paint(),
-        DirtyLevel::SpinnerPaintOnly => dirty.mark_spinner_paint(),
+        DirtyLevel::DamagePaintOnly => dirty.mark_damage_paint(),
         #[cfg(feature = "terminal")]
         DirtyLevel::TerminalGraphicsOnly => dirty.mark_terminal_graphics(),
         #[cfg(feature = "terminal")]
@@ -668,6 +668,11 @@ pub struct AppRunner<C: Component> {
     /// and would skip a cell whose new content happens to match it, leaving the patch on screen.
     /// The rows are replayed against the retained frame once, on that draw, and forgotten.
     pub(crate) host_patched_rows: Vec<u16>,
+    /// Where the latest draw's paint asked for the caret, before any cursor trail hid it.
+    ///
+    /// A repaint of nothing but animation areas changes no content, focus or layout, so the caret
+    /// stays where this says, and that repaint re-places it here instead of painting its row.
+    pub(crate) recorded_caret: Option<ratatui::layout::Position>,
     /// Reusable scratch terminal for inline transcript element commits.
     pub(crate) inline_commit_scratch:
         Option<ratatui::Terminal<ratatui::backend::CrosstermBackend<Vec<u8>>>>,
@@ -984,6 +989,7 @@ impl<C: Component> AppRunner<C> {
             native_terminal_plans: Default::default(),
             scroll_diff_snapshot: None,
             host_patched_rows: Vec::new(),
+            recorded_caret: None,
             inline_commit_scratch: None,
             last_scroll_frames: Vec::new(),
             last_post_reconcile_epoch: 0,
@@ -3367,8 +3373,8 @@ impl<C: Component> AppRunner<C> {
                     DirtyLevel::PaintOnly => {
                         self.render_paint_only(&mut terminal)?;
                     }
-                    DirtyLevel::SpinnerPaintOnly => {
-                        self.render_spinner_paint_only(&mut terminal)?;
+                    DirtyLevel::DamagePaintOnly => {
+                        self.render_damage_paint_only(&mut terminal)?;
                     }
                     #[cfg(feature = "terminal")]
                     DirtyLevel::TerminalGraphicsOnly => {
