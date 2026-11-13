@@ -7,7 +7,7 @@ mod provider;
 mod service;
 
 pub use commands::ClipboardCommand;
-pub use error::ClipboardError;
+pub use error::{ClipboardError, ClipboardOperation};
 pub use feedback::{CopyFeedback, CopyFeedbackEffect, UnknownCopyFeedbackEffect};
 pub use handle::ClipboardHandle;
 pub(crate) use osc52::write_osc52;

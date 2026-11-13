@@ -1,15 +1,24 @@
 use std::fmt;
 use std::sync::Arc;
 
+/// The clipboard operation a [`ClipboardError`] belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClipboardOperation {
+    /// Reading text from the system clipboard.
     ReadClipboard,
+    /// Writing text to the system clipboard.
     WriteClipboard,
+    /// Reading text from the primary selection.
     ReadPrimarySelection,
+    /// Writing text to the primary selection.
     WritePrimarySelection,
+    /// Reading an image from the clipboard.
     ReadImageClipboard,
+    /// Writing an image to the clipboard.
     WriteImageClipboard,
+    /// Reading file references from the clipboard.
     ReadFileClipboard,
+    /// Writing file references to the clipboard.
     WriteFileClipboard,
 }
 
@@ -70,6 +79,46 @@ impl ClipboardError {
             Self::InvalidInput { operation, .. } => *operation,
         }
     }
+
+    /// A sentence for the person at the terminal, such as an error toast.
+    ///
+    /// [`fmt::Display`] stays diagnostic (it names the operation variant); this names what
+    /// the user tried, for example "Reading the clipboard is not supported on this system".
+    pub fn user_message(&self) -> String {
+        let target = match self.operation() {
+            ClipboardOperation::ReadPrimarySelection
+            | ClipboardOperation::WritePrimarySelection => "the primary selection",
+            _ => "the clipboard",
+        };
+        let reading = self.operation().is_read();
+        match self {
+            Self::Unsupported { .. } if reading => {
+                format!("Reading {target} is not supported on this system")
+            }
+            Self::Unsupported { .. } => {
+                format!("Copying to {target} is not supported on this system")
+            }
+            Self::Provider { message, .. } | Self::InvalidInput { message, .. } if reading => {
+                format!("Could not read {target}: {message}")
+            }
+            Self::Provider { message, .. } | Self::InvalidInput { message, .. } => {
+                format!("Could not copy to {target}: {message}")
+            }
+        }
+    }
+}
+
+impl ClipboardOperation {
+    /// Whether the operation reads (pastes) rather than writes (copies).
+    pub fn is_read(self) -> bool {
+        matches!(
+            self,
+            Self::ReadClipboard
+                | Self::ReadPrimarySelection
+                | Self::ReadImageClipboard
+                | Self::ReadFileClipboard
+        )
+    }
 }
 
 impl fmt::Display for ClipboardError {
@@ -93,3 +142,32 @@ impl fmt::Display for ClipboardError {
 }
 
 impl std::error::Error for ClipboardError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn user_messages_name_what_the_user_tried() {
+        let read = ClipboardOperation::ReadClipboard;
+        let write = ClipboardOperation::WriteClipboard;
+        assert_eq!(
+            ClipboardError::unsupported(read).user_message(),
+            "Reading the clipboard is not supported on this system"
+        );
+        assert_eq!(
+            ClipboardError::unsupported(write).user_message(),
+            "Copying to the clipboard is not supported on this system"
+        );
+        assert_eq!(
+            ClipboardError::provider(ClipboardOperation::ReadImageClipboard, "no display")
+                .user_message(),
+            "Could not read the clipboard: no display"
+        );
+        assert_eq!(
+            ClipboardError::invalid_input(ClipboardOperation::WritePrimarySelection, "too large")
+                .user_message(),
+            "Could not copy to the primary selection: too large"
+        );
+    }
+}

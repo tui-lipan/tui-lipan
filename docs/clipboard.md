@@ -245,6 +245,24 @@ parsed child request can call `relay_osc52()` to emit only the outer-terminal se
 `accept_osc52_store()` applies a parsed child request only when `enable_osc52` is enabled, returning
 `Ok(false)` without touching the native clipboard otherwise. `ManagedTerminal` uses this policy.
 
+### Showing framework clipboard failures
+
+Copies and pastes the framework performs itself, such as the keymap's paste action,
+copy-on-select and right-click copy, report failures to the
+`App::clipboard_reporter`, which only logs by default. To tell the user, install a
+handler. It runs after the reporter and receives the toast API:
+
+```rust
+App::new().on_clipboard_error(|error, toasts| {
+    toasts.push(Toast::new(error.user_message()));
+});
+```
+
+`ClipboardError::user_message()` names what the user tried, for example "Reading the
+clipboard is not supported on this system" or "Could not copy to the clipboard:
+...". `ClipboardError::operation()` returns a `ClipboardOperation`, and
+`ClipboardOperation::is_read()` separates pastes from copies.
+
 ### OSC 52 under a multiplexer
 
 A multiplexer sits between the app and the real terminal emulator, so the escape needs one extra

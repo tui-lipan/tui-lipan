@@ -4163,6 +4163,54 @@ fn runtime_clipboard_config_updates_runner_environment_and_derived_keymap() {
 }
 
 #[test]
+fn clipboard_error_handler_runs_after_the_reporter_with_the_toast_api() {
+    let reported = Rc::new(RefCell::new(Vec::new()));
+    let handled = Rc::new(RefCell::new(Vec::new()));
+    let app = App::new()
+        .mouse(false)
+        .clipboard_reporter({
+            let reported = reported.clone();
+            move |error| reported.borrow_mut().push(error)
+        })
+        .on_clipboard_error({
+            let handled = handled.clone();
+            move |error, toasts| {
+                toasts.push(crate::widgets::Toast::new(error.user_message()));
+                handled.borrow_mut().push(error.user_message());
+            }
+        });
+    let runner = AppRunner::new(app, RunnerKeymapSmoke, ());
+
+    // Every framework copy and paste path reports through the service; keymap paste
+    // (`ui::router`) reports any read error, so this is what a failed Ctrl+V sends.
+    runner.clipboard.report_error(ClipboardError::unsupported(
+        crate::clipboard::ClipboardOperation::ReadClipboard,
+    ));
+
+    assert_eq!(reported.borrow().len(), 1);
+    assert_eq!(
+        handled.borrow().as_slice(),
+        &["Reading the clipboard is not supported on this system"]
+    );
+    assert_eq!(runner.core.overlay_manager.borrow().entries().len(), 1);
+}
+
+#[test]
+fn clipboard_errors_without_a_handler_only_reach_the_reporter() {
+    let reported = Rc::new(RefCell::new(0));
+    let app = App::new().mouse(false).clipboard_reporter({
+        let reported = reported.clone();
+        move |_| *reported.borrow_mut() += 1
+    });
+    let runner = AppRunner::new(app, RunnerKeymapSmoke, ());
+    runner.clipboard.report_error(ClipboardError::unsupported(
+        crate::clipboard::ClipboardOperation::WriteClipboard,
+    ));
+    assert_eq!(*reported.borrow(), 1);
+    assert!(runner.core.overlay_manager.borrow().entries().is_empty());
+}
+
+#[test]
 fn runtime_clipboard_config_normalizes_against_the_active_provider() {
     let writes = Rc::new(RefCell::new(Vec::new()));
     let app = App::new()
