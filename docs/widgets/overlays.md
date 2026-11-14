@@ -130,6 +130,12 @@ its own height away from its place and moves there as visibility rises; exit tra
 the slide, which is painting only: hit-testing uses the resting rectangle, and content past the
 screen edge is clipped. Toasts, modals, and popovers slide; inline hosts ignore it.
 
+Use `.handoff()` when one Modal can open in the update that removes another, such as a picker
+that leads to a second picker. With it set on both, the arriving Modal starts at the visibility the
+departing one had and the departing one is dropped, so the swap takes one frame and the backdrop
+holds steady instead of the new Modal fading in over the remains of the old. Both must be children
+of the same `ZStack` or `Canvas`. Opening or closing a Modal on its own animates as usual.
+
 A custom `CellEffect` can implement `uses_backdrop` and `apply_with_backdrop` to restore the live
 cells beneath erased areas. Its backdrop includes the dialog's current dim. The backdrop dim follows
 visibility separately, so a custom effect does not receive an additional automatic content fade.

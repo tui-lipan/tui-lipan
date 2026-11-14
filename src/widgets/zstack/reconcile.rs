@@ -35,7 +35,16 @@ pub(crate) fn reconcile_zstack(
 
     // Layers that opted into an automatic exit and are no longer described collapse in place.
     // Every layer gets the same rectangle, so there is no slot to reserve and no sibling to move.
-    let retained = exit_retention::plan_positioned_exits(tree, id, &old_children, &plan);
+    let arriving = |index: &usize| plan[*index].is_none();
+    let (retained, handed_over) = exit_retention::plan_positioned_exits_with_handoff(
+        tree,
+        id,
+        &old_children,
+        &plan,
+        (0..plan.len())
+            .filter(arriving)
+            .map(|index| &zstack.children[index]),
+    );
 
     let slots =
         exit_retention::interleave_exits(&old_children, &plan, zstack.children.len(), &retained);
@@ -62,6 +71,9 @@ pub(crate) fn reconcile_zstack(
                         rect,
                     },
                 );
+                if let Some(progress) = handed_over.filter(|_| arriving(&index)) {
+                    exit_retention::take_over(tree, child_id, progress);
+                }
                 new_children.push(child_id);
             }
         }
