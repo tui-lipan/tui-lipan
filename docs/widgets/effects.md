@@ -21,7 +21,7 @@ VisualEffect::Gradient {
 
 ## `VisualEffect::Ripple`
 
-`Ripple` uses `origin: EffectOrigin`, so the ring can be pinned to explicit scope-local cells or resolved from the current `EffectScope` bounds at render time. Its `radius: RippleRadius` is the animation knob: `Fixed` is static, `Loop` repeats from zero to `max_radius`, and `Once` plays a single burst from a captured renderer `start_tick`.
+`Ripple` uses `origin: EffectOrigin`, so the ring can be pinned to explicit scope-local cells or resolved from the current `EffectScope` bounds at render time. Its `radius: RippleRadius` is the animation knob: `Fixed` is static, `Loop` repeats from zero to `max_radius`, `Once` plays a single burst from a captured renderer `start_tick`, and `Collapse` plays the same burst inward, from `max_radius` into the origin.
 
 ```rust
 VisualEffect::Ripple {
@@ -52,7 +52,21 @@ VisualEffect::Ripple {
 }
 ```
 
-`Loop` and `Once` automatically mark the effect as animated so the runtime schedules repaint ticks. Radius growth uses ease-out (`1 - (1 - t)^2`); strength fades linearly by `1 - t`. `Once` stops rendering outside its window, but callers should remove the effect or replace it with `Fixed` after completion so the animation ticker can go idle.
+`Loop`, `Once`, and `Collapse` automatically mark the effect as animated so the runtime schedules repaint ticks. Radius growth uses ease-out (`1 - (1 - t)^2`); strength fades linearly by `1 - t`. `Collapse` eases in instead (`max_radius * (1 - t^2)`), so the ring gathers slowly and lands fast, and its strength rises from 30% to full as it arrives: use it for something reaching the origin, and `Once` for something leaving it. `Once` and `Collapse` stop rendering outside their window, but callers should remove the effect or replace it with `Fixed` after completion so the animation ticker can go idle.
+
+```rust
+VisualEffect::Ripple {
+    origin: EffectOrigin::aligned(EffectAlignment::TOP_RIGHT),
+    radius: RippleRadius::Collapse {
+        max_radius: 18.0,
+        duration_ticks: 45,
+        start_tick: ctx.effect_phase(),
+    },
+    ring_width: 1.5,
+    tint: Color::Cyan,
+    strength: 0.6,
+}
+```
 
 ## `VisualEffect::Clipped`
 

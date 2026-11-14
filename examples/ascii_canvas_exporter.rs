@@ -199,34 +199,7 @@ fn map_paint_color(paint: Paint, f: impl FnOnce(Color) -> Color) -> Paint {
 }
 
 fn resolve_ripple_radius(radius: &RippleRadius, phase: u64) -> Option<(f32, f32)> {
-    match radius {
-        RippleRadius::Fixed(radius) => Some((*radius, 1.0)),
-        RippleRadius::Loop {
-            max_radius,
-            period_ticks,
-        } => {
-            let period = (*period_ticks).max(1) as u64;
-            let t = (phase % period) as f32 / period as f32;
-            Some((ease_out_quad(t) * *max_radius, 1.0 - t))
-        }
-        RippleRadius::Once {
-            max_radius,
-            duration_ticks,
-            start_tick,
-        } => {
-            let elapsed = phase.checked_sub(*start_tick)?;
-            let duration = (*duration_ticks).max(1) as u64;
-            if elapsed >= duration {
-                return None;
-            }
-            let t = elapsed as f32 / duration as f32;
-            Some((ease_out_quad(t) * *max_radius, 1.0 - t))
-        }
-    }
-}
-
-fn ease_out_quad(t: f32) -> f32 {
-    1.0 - (1.0 - t).powi(2)
+    radius.resolve(phase)
 }
 
 // Replicates `gradient_sample_t` from the ratatui backend.

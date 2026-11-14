@@ -426,6 +426,60 @@ pub enum RippleRadius {
         /// Renderer animation phase captured when the burst starts.
         start_tick: u64,
     },
+    /// Play one shockwave inward: the ring gathers from `max_radius` into the origin over
+    /// `duration_ticks`, speeding up and brightening as it converges, then ends. The mirror of
+    /// [`RippleRadius::Once`], for something arriving at the origin rather than leaving it.
+    Collapse {
+        /// Radius the ring starts from, in character columns.
+        max_radius: f32,
+        /// Number of renderer animation ticks for this burst.
+        duration_ticks: u32,
+        /// Renderer animation phase captured when the burst starts.
+        start_tick: u64,
+    },
+}
+
+impl RippleRadius {
+    /// The ring's radius and strength multiplier at renderer phase `phase`, or `None` while a
+    /// burst has not started or has already ended.
+    ///
+    /// Growth eases out (`1 - (1 - t)^2`) with strength fading as `1 - t`; a collapse eases in
+    /// (`1 - t^2` of `max_radius`) with strength rising from 30% to full as it lands.
+    pub fn resolve(&self, phase: u64) -> Option<(f32, f32)> {
+        let ease_out_quad = |t: f32| 1.0 - (1.0 - t).powi(2);
+        let progress = |start_tick: u64, duration_ticks: u32| {
+            let elapsed = phase.checked_sub(start_tick)?;
+            let duration = u64::from(duration_ticks.max(1));
+            (elapsed < duration).then(|| elapsed as f32 / duration as f32)
+        };
+        match *self {
+            Self::Fixed(radius) => Some((radius, 1.0)),
+            Self::Loop {
+                max_radius,
+                period_ticks,
+            } => {
+                let period = u64::from(period_ticks.max(1));
+                let t = (phase % period) as f32 / period as f32;
+                Some((ease_out_quad(t) * max_radius, 1.0 - t))
+            }
+            Self::Once {
+                max_radius,
+                duration_ticks,
+                start_tick,
+            } => {
+                let t = progress(start_tick, duration_ticks)?;
+                Some((ease_out_quad(t) * max_radius, 1.0 - t))
+            }
+            Self::Collapse {
+                max_radius,
+                duration_ticks,
+                start_tick,
+            } => {
+                let t = progress(start_tick, duration_ticks)?;
+                Some(((1.0 - t * t) * max_radius, 0.3 + 0.7 * t))
+            }
+        }
+    }
 }
 
 impl PartialEq for RippleRadius {
@@ -451,6 +505,18 @@ impl PartialEq for RippleRadius {
                     start_tick: start_tick_a,
                 },
                 Self::Once {
+                    max_radius: max_radius_b,
+                    duration_ticks: duration_ticks_b,
+                    start_tick: start_tick_b,
+                },
+            )
+            | (
+                Self::Collapse {
+                    max_radius: max_radius_a,
+                    duration_ticks: duration_ticks_a,
+                    start_tick: start_tick_a,
+                },
+                Self::Collapse {
                     max_radius: max_radius_b,
                     duration_ticks: duration_ticks_b,
                     start_tick: start_tick_b,
@@ -488,6 +554,16 @@ impl Hash for RippleRadius {
                 start_tick,
             } => {
                 2u8.hash(state);
+                max_radius.to_bits().hash(state);
+                duration_ticks.hash(state);
+                start_tick.hash(state);
+            }
+            Self::Collapse {
+                max_radius,
+                duration_ticks,
+                start_tick,
+            } => {
+                3u8.hash(state);
                 max_radius.to_bits().hash(state);
                 duration_ticks.hash(state);
                 start_tick.hash(state);

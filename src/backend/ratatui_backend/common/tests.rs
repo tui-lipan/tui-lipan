@@ -890,6 +890,61 @@ fn once_ripple_before_start_is_noop() {
 }
 
 #[test]
+fn collapse_ripple_gathers_into_its_origin_then_ends() {
+    let scope = Rect {
+        x: 0,
+        y: 0,
+        w: 21,
+        h: 1,
+    };
+    let effect = VisualEffect::Ripple {
+        origin: crate::style::EffectOrigin::cell(0.0, 0.0),
+        radius: RippleRadius::Collapse {
+            max_radius: 20.0,
+            duration_ticks: 10,
+            start_tick: 0,
+        },
+        ring_width: 1.0,
+        tint: Color::rgb(255, 0, 0),
+        strength: 1.0,
+    };
+    // The columns the ring tints at `phase`.
+    let tinted = |phase: u64| {
+        let mut terminal = Terminal::new(TestBackend::new(21, 1)).expect("terminal");
+        terminal
+            .draw(|f| {
+                for x in 0u16..21u16 {
+                    if let Some(c) = f.buffer_mut().cell_mut((x, 0)) {
+                        c.fg = RColor::White;
+                        c.bg = RColor::Black;
+                    }
+                }
+                apply_visual_effects_clipped(
+                    f,
+                    scope,
+                    std::slice::from_ref(&effect),
+                    phase,
+                    None,
+                    None,
+                );
+            })
+            .expect("draw");
+        let buf = terminal.backend().buffer();
+        (0u16..21u16)
+            .filter(|x| buf[(*x, 0)].bg != RColor::Black)
+            .collect::<Vec<_>>()
+    };
+    let early = tinted(1);
+    let late = tinted(8);
+    assert!(!early.is_empty() && !late.is_empty(), "{early:?} {late:?}");
+    assert!(
+        early.iter().min() > late.iter().max(),
+        "the ring moves toward its origin: {early:?} then {late:?}"
+    );
+    assert!(tinted(10).is_empty(), "a finished collapse paints nothing");
+}
+
+#[test]
 fn clipped_bounds_only_tints_inside_rect() {
     let backend = TestBackend::new(4, 1);
     let mut terminal = Terminal::new(backend).expect("terminal");
