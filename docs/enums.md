@@ -904,7 +904,7 @@ A ring moving between two radii over renderer animation ticks. `#[non_exhaustive
 | `from_radius`, `to_radius` | constructor args | - | Radius at the start and end of each play, in character columns |
 | `easing` | `Easing::Linear` | `with_easing(Easing)` | Curve the radius follows |
 | `from_strength`, `to_strength` | `1.0`, `1.0` | `with_strength(from, to)` | Strength multiplier at the start and end of each play, interpolated linearly |
-| `duration_ticks` | constructor arg | - | Renderer ticks one play lasts; `0` counts as `1` |
+| `duration_ticks` | constructor arg | - | Renderer ticks one play lasts; `0` counts as `1`. A one-shot play paints its end state at `start_tick + duration_ticks`, then stops |
 | `start_tick` | `0` | `starting_at(tick)` | Renderer phase the animation starts at; nothing paints before it |
 | `repeat` | `RippleRepeat::Once` | `with_repeat(RippleRepeat)` | What happens after one play |
 

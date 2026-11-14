@@ -942,8 +942,9 @@ fn collapse_ripple_gathers_into_its_origin_then_ends() {
         w: 21,
         h: 1,
     };
+    // The origin sits on cell 0's centre, so the arrival frame tints that cell.
     let effect = VisualEffect::Ripple {
-        origin: crate::style::EffectOrigin::cell(0.0, 0.0),
+        origin: crate::style::EffectOrigin::cell(0.5, 0.5),
         radius: RippleRadius::collapse(20.0, 10, 0),
         ring_width: 1.0,
         tint: Color::rgb(255, 0, 0),
@@ -982,7 +983,8 @@ fn collapse_ripple_gathers_into_its_origin_then_ends() {
         early.iter().min() > late.iter().max(),
         "the ring moves toward its origin: {early:?} then {late:?}"
     );
-    assert!(tinted(10).is_empty(), "a finished collapse paints nothing");
+    assert_eq!(tinted(10), [0], "the last tick lands on the origin");
+    assert!(tinted(11).is_empty(), "a finished collapse paints nothing");
 }
 
 #[test]

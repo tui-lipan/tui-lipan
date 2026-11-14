@@ -48,7 +48,7 @@ VisualEffect::Ripple {
 }
 ```
 
-An `Animated` radius automatically marks the effect as animated so the runtime schedules repaint ticks. `once` and `looping` grow easing out (`1 - (1 - t)^2`) while strength fades linearly by `1 - t`. `collapse` eases in instead (`max_radius * (1 - t^2)`), so the ring gathers slowly and lands fast, and its strength rises from 30% to full as it arrives: use it for something reaching the origin, and `once` for something leaving it. A one-shot animation stops rendering outside its window, but callers should remove the effect or replace it with `Fixed` after completion so the animation ticker can go idle.
+An `Animated` radius automatically marks the effect as animated so the runtime schedules repaint ticks. `once` and `looping` grow easing out (`1 - (1 - t)^2`) while strength fades linearly by `1 - t`. `collapse` eases in instead (`max_radius * (1 - t^2)`), so the ring gathers slowly and lands fast, and its strength rises from 30% to full as it arrives: use it for something reaching the origin, and `once` for something leaving it. A one-shot animation paints its end state on its last tick (`start_tick + duration_ticks`) and stops rendering outside that window, but callers should remove the effect or replace it with `Fixed` after completion so the animation ticker can go idle.
 
 ```rust
 VisualEffect::Ripple {

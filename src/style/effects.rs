@@ -564,7 +564,8 @@ pub struct RippleAnimation {
     pub from_strength: f32,
     /// Strength multiplier at the end of each play.
     pub to_strength: f32,
-    /// Renderer animation ticks one play lasts. `0` is treated as `1`.
+    /// Renderer animation ticks one play lasts. A [`RippleRepeat::Once`] play paints its end
+    /// state at `start_tick + duration_ticks`, then stops. `0` is treated as `1`.
     pub duration_ticks: u32,
     /// Renderer animation phase the animation starts at.
     pub start_tick: u64,
@@ -639,12 +640,16 @@ impl RippleAnimation {
 
     /// The ring's radius and strength multiplier at renderer phase `phase`, or `None` before
     /// `start_tick` and after a [`RippleRepeat::Once`] play has ended.
+    ///
+    /// A one-shot play is inclusive of both ends: `start_tick` resolves to the `from_*` values
+    /// and `start_tick + duration_ticks` to the `to_*` values.
     pub fn resolve(&self, phase: u64) -> Option<(f32, f32)> {
         let elapsed = phase.checked_sub(self.start_tick)?;
         let duration = u64::from(self.duration_ticks.max(1));
         let t = match self.repeat {
             RippleRepeat::Once => {
-                if elapsed >= duration {
+                // Inclusive of the last tick, so a play lands on `to_radius` / `to_strength`.
+                if elapsed > duration {
                     return None;
                 }
                 elapsed as f32 / duration as f32
@@ -1488,7 +1493,8 @@ mod tests {
         assert_close(once.resolve(5), (0.0, 1.0));
         // t = 0.5: 1 - (1 - t)^2 = 0.75 of the radius, strength 1 - t.
         assert_close(once.resolve(10), (7.5, 0.5));
-        assert_eq!(once.resolve(15), None, "after its last tick");
+        assert_close(once.resolve(15), (10.0, 0.0));
+        assert_eq!(once.resolve(16), None, "after its last tick");
     }
 
     #[test]
@@ -1497,7 +1503,9 @@ mod tests {
         assert_close(collapse.resolve(0), (10.0, 0.3));
         // t = 0.5: (1 - t^2) of the radius, strength 0.3 + 0.7 t.
         assert_close(collapse.resolve(5), (7.5, 0.65));
-        assert_eq!(collapse.resolve(10), None);
+        // The last tick lands in the origin at full strength.
+        assert_close(collapse.resolve(10), (0.0, 1.0));
+        assert_eq!(collapse.resolve(11), None);
     }
 
     #[test]
@@ -1522,6 +1530,7 @@ mod tests {
     fn zero_duration_is_one_tick() {
         let flash = RippleAnimation::new(0.0, 10.0, 0).starting_at(3);
         assert_close(flash.resolve(3), (0.0, 1.0));
-        assert_eq!(flash.resolve(4), None);
+        assert_close(flash.resolve(4), (10.0, 1.0));
+        assert_eq!(flash.resolve(5), None);
     }
 }
