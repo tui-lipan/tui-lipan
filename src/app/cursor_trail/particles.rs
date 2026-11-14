@@ -12,7 +12,7 @@ use ratatui::layout::Position;
 use ratatui::style::{Color as RColor, Modifier};
 
 use super::raster::{SmearPaint, mix, rgb, under};
-use super::{CursorTrailParticles, Vec2};
+use super::{CaretOwnerId, CursorTrailParticles, Vec2};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Particle {
@@ -20,6 +20,9 @@ struct Particle {
     velocity: Vec2,
     age: f32,
     lifetime: f32,
+    /// The widget the spark moves with, when it was thrown by a jump inside one. A spark thrown
+    /// by a focus change stays where it is on screen.
+    rides: Option<CaretOwnerId>,
 }
 
 /// The live particles and the generator that places new ones.
@@ -67,19 +70,22 @@ impl Sparks {
         self.owed = 0.0;
     }
 
-    /// Move every spark by `offset` cells, as the widget that owns the caret moves.
-    pub(crate) fn carry(&mut self, offset: Vec2) {
+    /// Move the sparks that ride `owner` by `offset` cells, as that widget moves.
+    pub(crate) fn carry(&mut self, owner: CaretOwnerId, offset: Vec2) {
         for particle in &mut self.particles {
-            particle.position = particle.position + offset;
+            if particle.rides == Some(owner) {
+                particle.position = particle.position + offset;
+            }
         }
     }
 
     /// Emit for one physics step in which the smear's head moved `travelled` cells. New sparks
     /// start on the smear's body: `body(t)` is the point a fraction `t` of the way along it, from
-    /// the tail at 0 to the head at 1, so they follow its bends.
+    /// the tail at 0 to the head at 1, so they follow its bends. They move with `rides`, if any.
     pub(crate) fn emit(
         &mut self,
         config: &CursorTrailParticles,
+        rides: Option<CaretOwnerId>,
         body: impl Fn(f32) -> Vec2,
         velocity: Vec2,
         travelled: f32,
@@ -102,6 +108,7 @@ impl Sparks {
                     + Vec2::new(angle.cos(), angle.sin()).scale(speed),
                 age: 0.0,
                 lifetime,
+                rides,
             });
         }
     }
@@ -222,6 +229,7 @@ mod tests {
         let config = config();
         sparks.emit(
             &config,
+            None,
             |t| Vec2::new(10.0 * t, 0.0),
             Vec2::new(60.0, 0.0),
             10.0,
@@ -244,7 +252,7 @@ mod tests {
         };
         let run = || {
             let mut sparks = Sparks::default();
-            sparks.emit(&config, |_| Vec2::new(5.0, 5.0), Vec2::ZERO, 4.0);
+            sparks.emit(&config, None, |_| Vec2::new(5.0, 5.0), Vec2::ZERO, 4.0);
             let before = sparks.snapshot();
             sparks.step(&config, Duration::from_millis(100));
             (before, sparks.snapshot())
@@ -261,7 +269,13 @@ mod tests {
     fn the_cap_bounds_the_live_sparks() {
         let config = CursorTrailParticles { max: 5, ..config() };
         let mut sparks = Sparks::default();
-        sparks.emit(&config, |t| Vec2::new(50.0 * t, 0.0), Vec2::ZERO, 50.0);
+        sparks.emit(
+            &config,
+            None,
+            |t| Vec2::new(50.0 * t, 0.0),
+            Vec2::ZERO,
+            50.0,
+        );
         assert_eq!(sparks.snapshot().len(), 5);
     }
 

@@ -851,8 +851,8 @@ impl CursorTrailState {
         // A widget that moves (a slide, a drag) carries its caret, and a trail already on its way
         // with it: only what the caret does inside its widget is a jump.
         let carried = carry_offset(caret.carried_from(last));
-        if carried != Vec2::ZERO {
-            self.carry(carried);
+        if let Some(owner) = caret.owner_id().filter(|_| carried != Vec2::ZERO) {
+            self.carry(owner, carried);
         }
         if caret.resized_from(last) {
             self.resized = caret.owner_id().map(|id| (id, now));
@@ -950,20 +950,19 @@ impl CursorTrailState {
         }
     }
 
-    /// Move everything the trail is drawing, or waiting to draw, inside the caret's widget by
-    /// `offset` cells. A trail that brought focus here starts in the widget it left, which did not
-    /// move: its head follows the caret on its own, and its tail and sparks stay where they are.
-    fn carry(&mut self, offset: Vec2) {
+    /// Move everything a jump inside `owner` is drawing, or waiting to draw, by `offset` cells, as
+    /// that widget moves. A trail that brought focus here starts in the widget it left, which did
+    /// not move: its head follows the caret on its own, and its tail and sparks stay where they
+    /// are, even after its smear has settled.
+    fn carry(&mut self, owner: CaretOwnerId, offset: Vec2) {
         if let Some(landing) = self.landing.as_mut().filter(|landing| landing.within) {
             landing.from = carry_corners(landing.from, offset);
             landing.to = carry_corners(landing.to, offset);
         }
-        match self.running.as_mut() {
-            Some(running) if !running.within => return,
-            Some(running) => running.smear.carry(offset),
-            None => {}
+        if let Some(running) = self.running.as_mut().filter(|running| running.within) {
+            running.smear.carry(offset);
         }
-        self.sparks.carry(offset);
+        self.sparks.carry(owner, offset);
     }
 
     /// Stop the trail now and let the caret's next move that would start one start none. Frames
@@ -998,8 +997,12 @@ impl CursorTrailState {
             .map_or(Duration::ZERO, |clock| now.saturating_duration_since(clock));
         self.clock = Some(now);
         let sparks = &mut self.sparks;
+        // `last` is the caret the smear follows now, so a jump inside a widget throws sparks that
+        // ride it.
+        let owner = self.last.and_then(Caret::owner_id);
         if let Some(running) = self.running.as_mut() {
             let particles = config.particles;
+            let rides = owner.filter(|_| running.within);
             let mut previous = running.smear.current_center();
             running
                 .smear
@@ -1010,6 +1013,7 @@ impl CursorTrailState {
                     if let Some(particles) = particles.as_ref() {
                         sparks.emit(
                             particles,
+                            rides,
                             |along| smear.body_point(along),
                             smear.velocity(),
                             travelled,
@@ -1766,6 +1770,53 @@ mod tests {
             .and_then(|frame| frame.smear)
             .unwrap();
         assert_eq!(landed.target, Position::new(40, 2));
+    }
+
+    #[test]
+    fn sparks_outliving_their_smear_move_only_with_the_widget_they_were_thrown_in() {
+        let start = Instant::now();
+        // Sparks that hang where they were thrown for longer than any smear lasts.
+        let still_sparks = CursorTrailParticles {
+            spread: 0.0,
+            inherit: 0.0,
+            gravity: 0.0,
+            drag: 0.0,
+            lifetime: Duration::from_secs(10),
+            ..CursorTrailParticles::default()
+        };
+        let config = Some(
+            CursorTrail::new()
+                .trigger(CursorTrailTrigger::jump())
+                .particles(Some(still_sparks)),
+        );
+        let sparks = |state: &CursorTrailState| -> Vec<Vec2> {
+            let sparks = state.sparks.snapshot().into_iter();
+            sparks.map(|spark| spark.position).collect()
+        };
+        // A focus change into widget 2, then a jump inside widget 3.
+        let mut focus = CursorTrailState::default();
+        see_in(&mut focus, config, (5, 5), (1, (0, 0)), start);
+        see_in(&mut focus, config, (40, 12), (2, (30, 10)), start);
+        let mut jump = CursorTrailState::default();
+        see_in(&mut jump, config, (5, 5), (3, (0, 0)), start);
+        see_in(&mut jump, config, (45, 12), (3, (0, 0)), start);
+        let settled = start + Duration::from_secs(1);
+        for state in [&mut focus, &mut jump] {
+            state.advance(config, settled);
+            assert!(state.running.is_none(), "the smear settled");
+            assert!(state.sparks.alive(), "its sparks are still in the air");
+        }
+        // Then each widget moves up 2 rows, taking its caret along.
+        let before = (sparks(&focus), sparks(&jump));
+        see_in(&mut focus, config, (40, 10), (2, (30, 8)), settled);
+        see_in(&mut jump, config, (45, 10), (3, (0, -2)), settled);
+        assert_eq!(sparks(&focus), before.0, "a focus change's sparks stay put");
+        let risen = before.1.iter().map(|&spark| spark + Vec2::new(0.0, -2.0));
+        assert_eq!(
+            sparks(&jump),
+            risen.collect::<Vec<_>>(),
+            "a jump's sparks ride"
+        );
     }
 
     #[test]
