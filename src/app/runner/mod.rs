@@ -618,6 +618,7 @@ pub struct AppRunner<C: Component> {
     held_modifiers: KeyMods,
     alt_tracker: crate::app::input::convert::AltTracker,
     shift_pause: crate::app::input::convert::ShiftPause,
+    pointer_modifiers: crate::app::input::convert::PointerModifiers,
     on_focus_changed: Option<crate::app::context::FocusChangedHook>,
     pub(crate) drag: DragState,
     pub(crate) mouse: MouseTrackingState,
@@ -980,6 +981,7 @@ impl<C: Component> AppRunner<C> {
             held_modifiers: KeyMods::NONE,
             alt_tracker: Default::default(),
             shift_pause: Default::default(),
+            pointer_modifiers: Default::default(),
             on_focus_changed,
             drag,
             mouse: MouseTrackingState::with_pointer_cell(last_mouse),
@@ -2529,7 +2531,12 @@ impl<C: Component> AppRunner<C> {
                 let modifier_reporting = modifier_reporting && !self.shift_pause.paused();
                 if guard.set_modifier_key_reporting(modifier_reporting)? {
                     self.alt_tracker = Default::default();
-                    self.set_held_modifiers(KeyMods::NONE, &mut dirty);
+                    let held = if modifier_reporting {
+                        self.pointer_modifiers.initial()
+                    } else {
+                        KeyMods::NONE
+                    };
+                    self.set_held_modifiers(held, &mut dirty);
                 }
                 #[cfg(feature = "devtools")]
                 self.ingest_pending_devtools_logs();
@@ -2724,6 +2731,7 @@ impl<C: Component> AppRunner<C> {
                             self.set_window_focused(false, &mut dirty);
                             self.alt_tracker = Default::default();
                             self.shift_pause.reset();
+                            self.pointer_modifiers.forget();
                             self.set_held_modifiers(KeyMods::NONE, &mut dirty);
                             self.animation.reset_blink();
                             dirty.mark_paint();
@@ -2731,6 +2739,7 @@ impl<C: Component> AppRunner<C> {
                         CEvent::Key(k) => {
                             let alt_side = self.alt_tracker.update(k);
                             self.shift_pause.observe_key(k);
+                            self.pointer_modifiers.forget();
                             #[cfg(feature = "terminal")]
                             if let Some(mods) = modifier_key_state(k)
                                 && self.refresh_terminal_link_hover_at_pointer(mods)
@@ -2839,6 +2848,13 @@ impl<C: Component> AppRunner<C> {
                         CEvent::Mouse(m) if self.mouse_enabled => {
                             crate::debug::increment_mouse_events();
                             self.shift_pause.observe_mouse(m.modifiers);
+                            self.pointer_modifiers.observe_mouse(m.modifiers);
+                            if self.core.ctx.modifier_key_reporting_enabled()
+                                && !self.shift_pause.paused()
+                            {
+                                let held = self.pointer_modifiers.reconcile(self.held_modifiers);
+                                self.set_held_modifiers(held, &mut dirty);
+                            }
 
                             match self.classify_host_mouse(m) {
                                 CoalescedPointer::Ignored => {}
