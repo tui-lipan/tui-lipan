@@ -252,9 +252,9 @@ pub use crate::style::{
     EffectAxis, EffectCell, EffectChannels, EffectContext, EffectPalette, EffectPrepareContext,
     EffectPulse, FileIconPalette, FloatRect, GitStatusPalette, HexAreaPalette, HostTerminalColors,
     InputPalette, Justify, LayoutConstraints, Length, Padding, Paint, PointerMode, PointerShape,
-    PreparedCellEffect, Rect, RetroPreset, RichText, RippleRadius, ScrollbarConfig,
-    ScrollbarPalette, ScrollbarVariant, ShrinkPriority, Size, Span, StatusPalette, Style,
-    SurfacePalette, SyntaxPalette, TerminalColor, TerminalCursorStyle, TerminalPalette,
+    PreparedCellEffect, Rect, RetroPreset, RichText, RippleAnimation, RippleRadius, RippleRepeat,
+    ScrollbarConfig, ScrollbarPalette, ScrollbarVariant, ShrinkPriority, Size, Span, StatusPalette,
+    Style, SurfacePalette, SyntaxPalette, TerminalColor, TerminalCursorStyle, TerminalPalette,
     TextAreaPalette, ThemeExtension, ThemePalette, VisualEffect, query_host_colors,
 };
 #[cfg(feature = "theme-reload")]

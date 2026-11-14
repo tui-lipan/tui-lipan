@@ -853,6 +853,8 @@ Semantic roles resolved by `Theme::role(...)` and `StyleSlot` state overlays.
 
 Used with `EffectScope::effect(...)`, `EffectScope::effects(...)`, and `MouseRegion::hover_effect(...)`.
 
+`VisualEffect` is `#[non_exhaustive]` so built-in effects can be added in minor releases; give a `match` on it a wildcard arm. Effects outside the built-in set are written as a `CellEffect` and wrapped in `VisualEffect::Custom`.
+
 | Variant | Description |
 |---------|-------------|
 | `VisualEffect::Monochrome { strength }` | Desaturate fg/bg colors toward grayscale |
@@ -883,13 +885,40 @@ Two-dimensional alignment for `EffectOrigin::Aligned`. Common constants: `TOP_LE
 
 ### `RippleRadius`
 
-Used by `VisualEffect::Ripple`.
+Used by `VisualEffect::Ripple`. `#[non_exhaustive]`; `RippleRadius::resolve(phase)` returns the ring's radius and strength multiplier at a renderer phase without matching.
+
+| Variant / constructor | Description |
+|---------|-------------|
+| `RippleRadius::Fixed(f32)` | Static ring radius in character columns |
+| `RippleRadius::Animated(RippleAnimation)` | Radius and strength driven by the renderer phase; `RippleAnimation` converts with `.into()` |
+| `RippleRadius::looping(max_radius, period_ticks)` | Repeating ease-out shockwave that fades as it grows |
+| `RippleRadius::once(max_radius, duration_ticks, start_tick)` | One-shot ease-out shockwave; capture `start_tick` from `ctx.effect_phase()` when the burst starts |
+| `RippleRadius::collapse(max_radius, duration_ticks, start_tick)` | One-shot ease-in shockwave gathering from `max_radius` into the origin, brightening from 30% to full |
+
+### `RippleAnimation`
+
+A ring moving between two radii over renderer animation ticks. `#[non_exhaustive]` struct: build it with a constructor, then adjust it with the setters.
+
+| Field | Default from `new` | Setter | Description |
+|-------|---------|--------|-------------|
+| `from_radius`, `to_radius` | constructor args | - | Radius at the start and end of each play, in character columns |
+| `easing` | `Easing::Linear` | `with_easing(Easing)` | Curve the radius follows |
+| `from_strength`, `to_strength` | `1.0`, `1.0` | `with_strength(from, to)` | Strength multiplier at the start and end of each play, interpolated linearly |
+| `duration_ticks` | constructor arg | - | Renderer ticks one play lasts; `0` counts as `1` |
+| `start_tick` | `0` | `starting_at(tick)` | Renderer phase the animation starts at; nothing paints before it |
+| `repeat` | `RippleRepeat::Once` | `with_repeat(RippleRepeat)` | What happens after one play |
+
+Constructors: `RippleAnimation::new(from_radius, to_radius, duration_ticks)`, and the presets `once`, `collapse`, and `looping` with the same arguments and curves as the `RippleRadius` shorthands above. `RippleAnimation::resolve(phase)` returns `Option<(radius, strength)>`.
+
+### `RippleRepeat`
+
+`#[non_exhaustive]`. Default: `Once`.
 
 | Variant | Description |
 |---------|-------------|
-| `RippleRadius::Fixed(f32)` | Static ring radius in character columns |
-| `RippleRadius::Loop { max_radius, period_ticks }` | Repeating ease-out shockwave with implicit linear strength fade |
-| `RippleRadius::Once { max_radius, duration_ticks, start_tick }` | One-shot ease-out shockwave; capture `start_tick` from `ctx.effect_phase()` when the burst starts |
+| `RippleRepeat::Once` | Play once, then paint nothing |
+| `RippleRepeat::Loop` | Restart every `duration_ticks` |
+| `RippleRepeat::PingPong` | Play forward, then backward, each leg lasting `duration_ticks` |
 
 ### `Color` (selected variants)
 

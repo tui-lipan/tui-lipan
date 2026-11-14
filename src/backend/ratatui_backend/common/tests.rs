@@ -860,11 +860,7 @@ fn once_ripple_before_start_is_noop() {
     };
     let effect = VisualEffect::Ripple {
         origin: crate::style::EffectOrigin::CENTER,
-        radius: RippleRadius::Once {
-            max_radius: 4.0,
-            duration_ticks: 10,
-            start_tick: 5,
-        },
+        radius: RippleRadius::once(4.0, 10, 5),
         ring_width: 0.75,
         tint: Color::rgb(255, 0, 0),
         strength: 1.0,
@@ -899,11 +895,7 @@ fn collapse_ripple_gathers_into_its_origin_then_ends() {
     };
     let effect = VisualEffect::Ripple {
         origin: crate::style::EffectOrigin::cell(0.0, 0.0),
-        radius: RippleRadius::Collapse {
-            max_radius: 20.0,
-            duration_ticks: 10,
-            start_tick: 0,
-        },
+        radius: RippleRadius::collapse(20.0, 10, 0),
         ring_width: 1.0,
         tint: Color::rgb(255, 0, 0),
         strength: 1.0,

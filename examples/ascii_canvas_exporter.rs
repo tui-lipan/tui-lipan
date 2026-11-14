@@ -122,7 +122,7 @@ fn apply_effect(
             tint,
             strength,
         } => {
-            let Some((radius, strength_multiplier)) = resolve_ripple_radius(radius, phase) else {
+            let Some((radius, strength_multiplier)) = radius.resolve(phase) else {
                 return (fg, bg);
             };
             let (cx, cy) = origin.resolve(buf_w, buf_h);
@@ -170,15 +170,10 @@ fn apply_effect(
             let new_bg = bg_t.and_then(|t| bg.map(|b| t.apply_paint_with_backdrop(b, None)));
             (new_fg.or(fg), new_bg.or(bg))
         }
-        VisualEffect::ContrastPolicy(_)
-        | VisualEffect::RetroCrt { .. }
-        | VisualEffect::PaletteQuantize { .. }
-        | VisualEffect::Custom(_)
-        | VisualEffect::Clipped { .. }
-        | VisualEffect::Channels { .. } => {
-            // Not materialised in this example (wrappers handled above).
-            (fg, bg)
-        }
+        // Contrast policies, CRT and palette effects, and custom effects are not materialised in
+        // this example; clip and channel wrappers are handled above. `VisualEffect` is
+        // non-exhaustive, so this arm also covers effects added later.
+        _ => (fg, bg),
     }
 }
 
@@ -196,10 +191,6 @@ fn map_paint_color(paint: Paint, f: impl FnOnce(Color) -> Color) -> Paint {
             fallback: f(fallback),
         },
     }
-}
-
-fn resolve_ripple_radius(radius: &RippleRadius, phase: u64) -> Option<(f32, f32)> {
-    radius.resolve(phase)
 }
 
 // Replicates `gradient_sample_t` from the ratatui backend.

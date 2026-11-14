@@ -6,7 +6,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::app::ContrastPolicy;
 use crate::style::{
     Color, ColorTransform, EffectAxis, EffectChannels, EffectContext, EffectPalette,
-    EffectPrepareContext, Rect, RetroPreset, RippleRadius, Style, VisualEffect,
+    EffectPrepareContext, Rect, RetroPreset, Style, VisualEffect,
 };
 use crate::utils::color_contrast::{
     readable_text_color, readable_text_color_apca, readable_text_color_black_or_white,
@@ -1125,9 +1125,7 @@ fn apply_visual_effect_to_cell(
             tint,
             strength,
         } => {
-            let Some((effective_radius, strength_multiplier)) =
-                resolve_ripple_radius(radius, phase)
-            else {
+            let Some((effective_radius, strength_multiplier)) = radius.resolve(phase) else {
                 return;
             };
             let (cx, cy) = origin.resolve(effect_bounds.width, effect_bounds.height);
@@ -1237,10 +1235,6 @@ fn apply_visual_effect_to_cell(
         }
         VisualEffect::Clipped { .. } | VisualEffect::Channels { .. } => {}
     }
-}
-
-fn resolve_ripple_radius(radius: &RippleRadius, phase: u64) -> Option<(f32, f32)> {
-    radius.resolve(phase)
 }
 
 struct RippleCellArgs {
