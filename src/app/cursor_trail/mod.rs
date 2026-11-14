@@ -950,14 +950,18 @@ impl CursorTrailState {
         }
     }
 
-    /// Move everything the trail is drawing, or waiting to draw, by `offset` cells.
+    /// Move everything the trail is drawing, or waiting to draw, inside the caret's widget by
+    /// `offset` cells. A trail that brought focus here starts in the widget it left, which did not
+    /// move: its head follows the caret on its own, and its tail and sparks stay where they are.
     fn carry(&mut self, offset: Vec2) {
-        if let Some(landing) = self.landing.as_mut() {
+        if let Some(landing) = self.landing.as_mut().filter(|landing| landing.within) {
             landing.from = carry_corners(landing.from, offset);
             landing.to = carry_corners(landing.to, offset);
         }
-        if let Some(running) = self.running.as_mut() {
-            running.smear.carry(offset);
+        match self.running.as_mut() {
+            Some(running) if !running.within => return,
+            Some(running) => running.smear.carry(offset),
+            None => {}
         }
         self.sparks.carry(offset);
     }
@@ -1698,28 +1702,23 @@ mod tests {
     }
 
     #[test]
-    fn a_smear_in_flight_rides_with_its_widget() {
+    fn a_smear_in_flight_inside_a_widget_rides_with_it() {
         let start = Instant::now();
+        let jump = Some(CursorTrail::new().trigger(CursorTrailTrigger::jump()));
         let mut still = CursorTrailState::default();
         let mut carried = CursorTrailState::default();
         for state in [&mut still, &mut carried] {
-            see_in(state, trail(), (1, 1), (1, (0, 0)), start);
-            see_in(state, trail(), (11, 1), (2, (0, 0)), start);
-            state.advance(trail(), start + INTERVAL);
+            see_in(state, jump, (1, 1), (1, (0, 0)), start);
+            see_in(state, jump, (21, 1), (1, (0, 0)), start);
+            state.advance(jump, start + INTERVAL);
         }
-        // Mid-flight, the second widget moves 20 columns and 3 rows, taking its caret along.
-        see_in(&mut still, trail(), (11, 1), (2, (0, 0)), start + INTERVAL);
-        see_in(
-            &mut carried,
-            trail(),
-            (31, 4),
-            (2, (20, 3)),
-            start + INTERVAL,
-        );
+        // Mid-flight, the widget moves 20 columns and 3 rows, taking its caret along.
+        see_in(&mut still, jump, (21, 1), (1, (0, 0)), start + INTERVAL);
+        see_in(&mut carried, jump, (41, 4), (1, (20, 3)), start + INTERVAL);
         let at = start + INTERVAL * 2;
-        still.advance(trail(), at);
-        carried.advance(trail(), at);
-        let shape = |state: &CursorTrailState| state.frame(trail()).and_then(|frame| frame.smear);
+        still.advance(jump, at);
+        carried.advance(jump, at);
+        let shape = |state: &CursorTrailState| state.frame(jump).and_then(|frame| frame.smear);
         let (still, carried) = (shape(&still).unwrap(), shape(&carried).unwrap());
         let offset = Vec2::new(20.0, 3.0);
         let close = |a: Vec2, b: Vec2| (a - b).length() < 1e-3;
@@ -1731,7 +1730,42 @@ mod tests {
             close(carried.tail, still.tail + offset),
             "{carried:?} vs {still:?}"
         );
-        assert_eq!(carried.target, Position::new(31, 4));
+        assert_eq!(carried.target, Position::new(41, 4));
+    }
+
+    #[test]
+    fn a_focus_trail_into_a_sliding_widget_keeps_its_tail_where_focus_left() {
+        let start = Instant::now();
+        let mut sliding = CursorTrailState::default();
+        // Focus moves from a caret at row 5 to a widget sliding in from below, as a scratchpad
+        // does: it is 10 rows down at first and rises 2 rows a frame, its caret ending at row 2.
+        see_in(&mut sliding, trail(), (5, 5), (1, (0, 0)), start);
+        see_in(&mut sliding, trail(), (40, 12), (2, (30, 10)), start);
+        for step in 1..=5_u16 {
+            let at = start + INTERVAL * u32::from(step);
+            let rise = i32::from(step) * 2;
+            see_in(
+                &mut sliding,
+                trail(),
+                (40, 12 - step * 2),
+                (2, (30, 10 - rise)),
+                at,
+            );
+            sliding.advance(trail(), at);
+            let smear = sliding
+                .frame(trail())
+                .and_then(|frame| frame.smear)
+                .expect("a trail in flight");
+            assert!(
+                smear.tail.y >= 5.0,
+                "step {step}: the tail rose with the widget: {smear:?}"
+            );
+        }
+        let landed = sliding
+            .frame(trail())
+            .and_then(|frame| frame.smear)
+            .unwrap();
+        assert_eq!(landed.target, Position::new(40, 2));
     }
 
     #[test]
