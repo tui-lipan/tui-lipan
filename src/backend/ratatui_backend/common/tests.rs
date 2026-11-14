@@ -815,6 +815,55 @@ fn centered_ripple_resolves_scope_center() {
 }
 
 #[test]
+fn ripple_inside_channel_and_clip_wrappers_still_paints() {
+    // The renderer resolves the ring once per pass from the unwrapped effect, so wrapping must
+    // not hide it.
+    let ripple = VisualEffect::centered_ripple(0.0, 0.75, Color::rgb(255, 0, 0), 1.0);
+    let wrapped = [
+        ripple.clone().foreground_only(),
+        VisualEffect::Clipped {
+            bounds: None,
+            mask: None,
+            inner: Box::new(ripple),
+        },
+    ];
+    for effect in wrapped {
+        let mut terminal = Terminal::new(TestBackend::new(5, 1)).expect("terminal");
+        let scope = Rect {
+            x: 0,
+            y: 0,
+            w: 5,
+            h: 1,
+        };
+        terminal
+            .draw(|f| {
+                for x in 0u16..5u16 {
+                    if let Some(c) = f.buffer_mut().cell_mut((x, 0)) {
+                        c.fg = RColor::White;
+                        c.bg = RColor::Black;
+                    }
+                }
+                apply_visual_effects_clipped(
+                    f,
+                    scope,
+                    std::slice::from_ref(&effect),
+                    0,
+                    None,
+                    None,
+                );
+            })
+            .expect("draw");
+        let buf = terminal.backend().buffer();
+        assert_ne!(buf[(2, 0)].fg, RColor::White, "{effect:?} tints the centre");
+        assert_eq!(
+            buf[(0, 0)].fg,
+            RColor::White,
+            "{effect:?} leaves the edge alone"
+        );
+    }
+}
+
+#[test]
 fn looping_ripple_changes_output_by_phase() {
     let draw_fgs = |phase| {
         let backend = TestBackend::new(9, 1);

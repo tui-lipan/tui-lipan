@@ -1065,6 +1065,10 @@ struct VisualEffectCellParams<'a> {
     quantize_palette: Option<&'a [(u8, u8, u8)]>,
     retro_crt: Option<RetroCrtParams>,
     retro_refresh_waves: &'a [RetroRefreshWave],
+    /// The ripple ring for this pass, or `None` when the effect is not a ripple or its
+    /// animation is outside its window. Resolved once per pass: an animated radius can run an
+    /// easing solver such as a cubic Bezier, which must not repeat for every cell.
+    ripple: Option<RippleFrame>,
     terminal_bg: Option<RColor>,
 }
 
@@ -1118,31 +1122,10 @@ fn apply_visual_effect_to_cell(
                 blend_rgb_toward(rgb, (rr, rg, rb), alpha)
             });
         }
-        VisualEffect::Ripple {
-            origin,
-            radius,
-            ring_width,
-            tint,
-            strength,
-        } => {
-            let Some((effective_radius, strength_multiplier)) = radius.resolve(phase) else {
-                return;
-            };
-            let (cx, cy) = origin.resolve(effect_bounds.width, effect_bounds.height);
-            apply_ripple_to_cell(
-                cell,
-                x,
-                y,
-                effect_bounds,
-                RippleCellArgs {
-                    cx,
-                    cy,
-                    radius: effective_radius,
-                    ring_width: *ring_width,
-                    tint: *tint,
-                    strength: *strength * strength_multiplier,
-                },
-            );
+        VisualEffect::Ripple { .. } => {
+            if let Some(ripple) = &params.ripple {
+                apply_ripple_to_cell(cell, x, y, effect_bounds, ripple);
+            }
         }
         VisualEffect::RetroCrt {
             preset: _,
@@ -1178,6 +1161,7 @@ fn apply_visual_effect_to_cell(
                 quantize_palette: None,
                 retro_crt: None,
                 retro_refresh_waves: &[],
+                ripple: None,
                 terminal_bg: params.terminal_bg,
             };
             apply_visual_effect_to_cell(
@@ -1237,7 +1221,9 @@ fn apply_visual_effect_to_cell(
     }
 }
 
-struct RippleCellArgs {
+/// A ripple ring resolved for one render pass: everything except the per-cell distance.
+#[derive(Clone, Copy, Debug)]
+struct RippleFrame {
     cx: f32,
     cy: f32,
     radius: f32,
@@ -1246,13 +1232,34 @@ struct RippleCellArgs {
     strength: f32,
 }
 
-fn apply_ripple_to_cell(
-    cell: &mut Cell,
-    x: i16,
-    y: i16,
-    effect_bounds: RRect,
-    args: RippleCellArgs,
-) {
+impl RippleFrame {
+    /// Resolve `effect`'s ring at `phase` within `bounds`, or `None` when `effect` is not a
+    /// ripple or its animation paints nothing at `phase`.
+    fn resolve(effect: &VisualEffect, phase: u64, bounds: RRect) -> Option<Self> {
+        let VisualEffect::Ripple {
+            origin,
+            radius,
+            ring_width,
+            tint,
+            strength,
+        } = effect
+        else {
+            return None;
+        };
+        let (radius, strength_multiplier) = radius.resolve(phase)?;
+        let (cx, cy) = origin.resolve(bounds.width, bounds.height);
+        Some(Self {
+            cx,
+            cy,
+            radius,
+            ring_width: *ring_width,
+            tint: *tint,
+            strength: *strength * strength_multiplier,
+        })
+    }
+}
+
+fn apply_ripple_to_cell(cell: &mut Cell, x: i16, y: i16, effect_bounds: RRect, args: &RippleFrame) {
     // Convert to local cell coords. Scale y up because terminal cells are roughly
     // twice as tall as wide; one row should count like about two columns.
     let local_x = x as f32 - effect_bounds.x as f32 + 0.5;
@@ -1388,6 +1395,7 @@ pub(crate) fn apply_visual_effects_over_backdrop(
             quantize_palette,
             retro_crt,
             retro_refresh_waves: retro_refresh_waves.as_slice(),
+            ripple: RippleFrame::resolve(peeled, phase, r_rect),
             terminal_bg,
         };
         let reads_backdrop = peeled.uses_backdrop();
