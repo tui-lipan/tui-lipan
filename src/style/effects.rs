@@ -2,6 +2,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::animation::Easing;
 use crate::app::ContrastPolicy;
 use crate::core::mask::CellMask;
 use crate::style::{Align, Color, ColorTransform, EffectAmount, Rect};
@@ -268,7 +269,10 @@ pub enum EffectChannels {
 }
 
 /// Quantization palette presets for post-processing.
+///
+/// `#[non_exhaustive]` so presets can be added in minor releases.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[non_exhaustive]
 pub enum EffectPalette {
     /// CGA palette.
     Cga,
@@ -283,7 +287,10 @@ pub enum EffectPalette {
 }
 
 /// Preset bundles for CRT-style retro rendering.
+///
+/// `#[non_exhaustive]` so presets can be added in minor releases.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[non_exhaustive]
 pub enum RetroPreset {
     /// Amber phosphor-like CRT look.
     Amber,
@@ -406,60 +413,78 @@ impl Hash for EffectOrigin {
 }
 
 /// Radius behavior for [`VisualEffect::Ripple`].
+///
+/// `#[non_exhaustive]`: match it with a wildcard arm, or call [`Self::resolve`] to get the ring's
+/// radius and strength without matching.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub enum RippleRadius {
     /// Static ring radius in character columns.
     Fixed(f32),
-    /// Continuously restart the shockwave from zero to `max_radius` every `period_ticks`.
-    Loop {
-        /// Maximum ring radius in character columns.
-        max_radius: f32,
-        /// Number of renderer animation ticks per cycle.
-        period_ticks: u32,
-    },
-    /// Play one shockwave from `start_tick` for `duration_ticks` renderer animation ticks.
-    Once {
-        /// Maximum ring radius in character columns.
-        max_radius: f32,
-        /// Number of renderer animation ticks for this burst.
-        duration_ticks: u32,
-        /// Renderer animation phase captured when the burst starts.
-        start_tick: u64,
-    },
+    /// Ring radius and strength driven by the renderer animation phase. See [`RippleAnimation`].
+    Animated(RippleAnimation),
+}
+
+impl RippleRadius {
+    /// Repeat a shockwave from zero to `max_radius` every `period_ticks`, fading as it grows.
+    ///
+    /// Shorthand for [`RippleAnimation::looping`].
+    pub fn looping(max_radius: f32, period_ticks: u32) -> Self {
+        Self::Animated(RippleAnimation::looping(max_radius, period_ticks))
+    }
+
+    /// Play one shockwave out to `max_radius` from `start_tick` for `duration_ticks`.
+    ///
+    /// Shorthand for [`RippleAnimation::once`].
+    pub fn once(max_radius: f32, duration_ticks: u32, start_tick: u64) -> Self {
+        Self::Animated(RippleAnimation::once(
+            max_radius,
+            duration_ticks,
+            start_tick,
+        ))
+    }
+
+    /// Play one shockwave inward from `max_radius` into the origin, from `start_tick` for
+    /// `duration_ticks`.
+    ///
+    /// Shorthand for [`RippleAnimation::collapse`].
+    pub fn collapse(max_radius: f32, duration_ticks: u32, start_tick: u64) -> Self {
+        Self::Animated(RippleAnimation::collapse(
+            max_radius,
+            duration_ticks,
+            start_tick,
+        ))
+    }
+
+    /// Whether the ring changes with the renderer phase, so the effect needs repaint ticks.
+    pub fn is_animated(&self) -> bool {
+        matches!(self, Self::Animated(_))
+    }
+
+    /// The ring's radius and strength multiplier at renderer phase `phase`, or `None` while an
+    /// animation has not started or has already ended.
+    ///
+    /// This is the curve the renderer paints with, so an exporter or a custom effect that draws
+    /// its own ring stays in step with the built-in one.
+    pub fn resolve(&self, phase: u64) -> Option<(f32, f32)> {
+        match self {
+            Self::Fixed(radius) => Some((*radius, 1.0)),
+            Self::Animated(animation) => animation.resolve(phase),
+        }
+    }
+}
+
+impl From<RippleAnimation> for RippleRadius {
+    fn from(animation: RippleAnimation) -> Self {
+        Self::Animated(animation)
+    }
 }
 
 impl PartialEq for RippleRadius {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Fixed(a), Self::Fixed(b)) => a.to_bits() == b.to_bits(),
-            (
-                Self::Loop {
-                    max_radius: max_radius_a,
-                    period_ticks: period_ticks_a,
-                },
-                Self::Loop {
-                    max_radius: max_radius_b,
-                    period_ticks: period_ticks_b,
-                },
-            ) => {
-                max_radius_a.to_bits() == max_radius_b.to_bits() && period_ticks_a == period_ticks_b
-            }
-            (
-                Self::Once {
-                    max_radius: max_radius_a,
-                    duration_ticks: duration_ticks_a,
-                    start_tick: start_tick_a,
-                },
-                Self::Once {
-                    max_radius: max_radius_b,
-                    duration_ticks: duration_ticks_b,
-                    start_tick: start_tick_b,
-                },
-            ) => {
-                max_radius_a.to_bits() == max_radius_b.to_bits()
-                    && duration_ticks_a == duration_ticks_b
-                    && start_tick_a == start_tick_b
-            }
+            (Self::Animated(a), Self::Animated(b)) => a == b,
             _ => false,
         }
     }
@@ -474,25 +499,200 @@ impl Hash for RippleRadius {
                 0u8.hash(state);
                 radius.to_bits().hash(state);
             }
-            Self::Loop {
-                max_radius,
-                period_ticks,
-            } => {
+            Self::Animated(animation) => {
                 1u8.hash(state);
-                max_radius.to_bits().hash(state);
-                period_ticks.hash(state);
-            }
-            Self::Once {
-                max_radius,
-                duration_ticks,
-                start_tick,
-            } => {
-                2u8.hash(state);
-                max_radius.to_bits().hash(state);
-                duration_ticks.hash(state);
-                start_tick.hash(state);
+                animation.hash(state);
             }
         }
+    }
+}
+
+/// How a [`RippleAnimation`] behaves once its `duration_ticks` have passed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum RippleRepeat {
+    /// Play once, then paint nothing.
+    #[default]
+    Once,
+    /// Restart from the beginning every `duration_ticks`.
+    Loop,
+    /// Play forward, then backward, then forward again, each leg lasting `duration_ticks`.
+    PingPong,
+}
+
+/// A ripple ring moving between two radii over renderer animation ticks.
+///
+/// The radius travels `from_radius -> to_radius` along `easing`; the strength multiplier travels
+/// `from_strength -> to_strength` linearly over the same ticks, and scales
+/// [`VisualEffect::Ripple`]'s `strength`. The animation starts at renderer phase `start_tick`
+/// (capture it from `ctx.effect_phase()`) and paints nothing before it.
+///
+/// Start from a preset ([`Self::once`], [`Self::collapse`], [`Self::looping`]) or from
+/// [`Self::new`], then adjust it with the `with_*` setters:
+///
+/// ```
+/// use tui_lipan::prelude::*;
+///
+/// // A ring that springs out past its target and settles, brightening as it goes.
+/// let start_tick = 0;
+/// let radius = RippleAnimation::new(0.0, 12.0, 40)
+///     .with_easing(Easing::EASE_OUT_BACK)
+///     .with_strength(0.4, 1.0)
+///     .starting_at(start_tick);
+/// let effect = VisualEffect::Ripple {
+///     origin: EffectOrigin::CENTER,
+///     radius: radius.into(),
+///     ring_width: 1.5,
+///     tint: Color::Cyan,
+///     strength: 0.6,
+/// };
+/// # let _ = effect;
+/// ```
+///
+/// `#[non_exhaustive]` so new controls can be added without breaking callers; build one through
+/// the constructors rather than a struct literal.
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub struct RippleAnimation {
+    /// Ring radius at the start of each play, in character columns.
+    pub from_radius: f32,
+    /// Ring radius at the end of each play, in character columns.
+    pub to_radius: f32,
+    /// Curve the radius follows from `from_radius` to `to_radius`.
+    pub easing: Easing,
+    /// Strength multiplier at the start of each play.
+    pub from_strength: f32,
+    /// Strength multiplier at the end of each play.
+    pub to_strength: f32,
+    /// Renderer animation ticks one play lasts. A [`RippleRepeat::Once`] play paints its end
+    /// state at `start_tick + duration_ticks`, then stops. `0` is treated as `1`.
+    pub duration_ticks: u32,
+    /// Renderer animation phase the animation starts at.
+    pub start_tick: u64,
+    /// What happens after one play.
+    pub repeat: RippleRepeat,
+}
+
+impl RippleAnimation {
+    /// A single linear play from `from_radius` to `to_radius` over `duration_ticks`, at full
+    /// strength, starting at phase `0`.
+    pub fn new(from_radius: f32, to_radius: f32, duration_ticks: u32) -> Self {
+        Self {
+            from_radius,
+            to_radius,
+            easing: Easing::Linear,
+            from_strength: 1.0,
+            to_strength: 1.0,
+            duration_ticks,
+            start_tick: 0,
+            repeat: RippleRepeat::Once,
+        }
+    }
+
+    /// A shockwave leaving the origin: the ring grows from zero to `max_radius` easing out
+    /// ([`Easing::EaseOutQuad`]) while its strength fades from full to zero.
+    pub fn once(max_radius: f32, duration_ticks: u32, start_tick: u64) -> Self {
+        Self::new(0.0, max_radius, duration_ticks)
+            .with_easing(Easing::EaseOutQuad)
+            .with_strength(1.0, 0.0)
+            .starting_at(start_tick)
+    }
+
+    /// A shockwave arriving at the origin, the mirror of [`Self::once`]: the ring gathers from
+    /// `max_radius` into the origin easing in ([`Easing::EaseInQuad`]), so it lands fast, while
+    /// its strength rises from 30% to full.
+    pub fn collapse(max_radius: f32, duration_ticks: u32, start_tick: u64) -> Self {
+        Self::new(max_radius, 0.0, duration_ticks)
+            .with_easing(Easing::EaseInQuad)
+            .with_strength(0.3, 1.0)
+            .starting_at(start_tick)
+    }
+
+    /// [`Self::once`] restarting every `period_ticks`, from phase `0`.
+    pub fn looping(max_radius: f32, period_ticks: u32) -> Self {
+        Self::once(max_radius, period_ticks, 0).with_repeat(RippleRepeat::Loop)
+    }
+
+    /// Set the curve the radius follows.
+    pub fn with_easing(mut self, easing: Easing) -> Self {
+        self.easing = easing;
+        self
+    }
+
+    /// Set the strength multiplier at the start and end of each play.
+    pub fn with_strength(mut self, from: f32, to: f32) -> Self {
+        self.from_strength = from;
+        self.to_strength = to;
+        self
+    }
+
+    /// Set the renderer phase the animation starts at.
+    pub fn starting_at(mut self, start_tick: u64) -> Self {
+        self.start_tick = start_tick;
+        self
+    }
+
+    /// Set what happens after one play.
+    pub fn with_repeat(mut self, repeat: RippleRepeat) -> Self {
+        self.repeat = repeat;
+        self
+    }
+
+    /// The ring's radius and strength multiplier at renderer phase `phase`, or `None` before
+    /// `start_tick` and after a [`RippleRepeat::Once`] play has ended.
+    ///
+    /// A one-shot play is inclusive of both ends: `start_tick` resolves to the `from_*` values
+    /// and `start_tick + duration_ticks` to the `to_*` values.
+    pub fn resolve(&self, phase: u64) -> Option<(f32, f32)> {
+        let elapsed = phase.checked_sub(self.start_tick)?;
+        let duration = u64::from(self.duration_ticks.max(1));
+        let t = match self.repeat {
+            RippleRepeat::Once => {
+                // Inclusive of the last tick, so a play lands on `to_radius` / `to_strength`.
+                if elapsed > duration {
+                    return None;
+                }
+                elapsed as f32 / duration as f32
+            }
+            RippleRepeat::Loop => (elapsed % duration) as f32 / duration as f32,
+            RippleRepeat::PingPong => {
+                let leg = (elapsed % (duration * 2)) as f32 / duration as f32;
+                if leg <= 1.0 { leg } else { 2.0 - leg }
+            }
+        };
+        let lerp = |from: f32, to: f32, t: f32| from + (to - from) * t;
+        Some((
+            lerp(self.from_radius, self.to_radius, self.easing.apply(t)),
+            lerp(self.from_strength, self.to_strength, t),
+        ))
+    }
+}
+
+impl PartialEq for RippleAnimation {
+    fn eq(&self, other: &Self) -> bool {
+        self.from_radius.to_bits() == other.from_radius.to_bits()
+            && self.to_radius.to_bits() == other.to_radius.to_bits()
+            && self.easing == other.easing
+            && self.from_strength.to_bits() == other.from_strength.to_bits()
+            && self.to_strength.to_bits() == other.to_strength.to_bits()
+            && self.duration_ticks == other.duration_ticks
+            && self.start_tick == other.start_tick
+            && self.repeat == other.repeat
+    }
+}
+
+impl Eq for RippleAnimation {}
+
+impl Hash for RippleAnimation {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.from_radius.to_bits().hash(state);
+        self.to_radius.to_bits().hash(state);
+        self.easing.hash(state);
+        self.from_strength.to_bits().hash(state);
+        self.to_strength.to_bits().hash(state);
+        self.duration_ticks.hash(state);
+        self.start_tick.hash(state);
+        self.repeat.hash(state);
     }
 }
 
@@ -505,7 +705,12 @@ fn resolve_effect_align(align: Align, length: u16) -> f32 {
 }
 
 /// Backend-agnostic visual post-processing effects.
+///
+/// `#[non_exhaustive]` so built-in effects can be added in minor releases: match it with a
+/// wildcard arm. Effects outside the built-in set are written as a [`CellEffect`] and wrapped in
+/// [`VisualEffect::Custom`].
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum VisualEffect {
     /// Convert colors toward monochrome by `strength`.
     Monochrome {
@@ -566,8 +771,8 @@ pub enum VisualEffect {
     ///
     /// Cells within `ring_width` cells of `radius` distance from the center are tinted.
     /// Coordinates are in character cells relative to the effect scope's top-left corner.
-    /// [`RippleRadius::Fixed`] is static; [`RippleRadius::Loop`] and [`RippleRadius::Once`]
-    /// derive radius and fade from the renderer animation phase.
+    /// [`RippleRadius::Fixed`] is static; [`RippleRadius::Animated`] derives radius and fade from
+    /// the renderer animation phase.
     Ripple {
         /// Ripple origin, resolved in effect scope-local coordinates.
         origin: EffectOrigin,
@@ -725,10 +930,7 @@ impl VisualEffect {
     ) -> Self {
         Self::Ripple {
             origin: EffectOrigin::CENTER,
-            radius: RippleRadius::Loop {
-                max_radius,
-                period_ticks,
-            },
+            radius: RippleRadius::looping(max_radius, period_ticks),
             ring_width,
             tint,
             strength,
@@ -746,11 +948,7 @@ impl VisualEffect {
     ) -> Self {
         Self::Ripple {
             origin: EffectOrigin::CENTER,
-            radius: RippleRadius::Once {
-                max_radius,
-                duration_ticks,
-                start_tick,
-            },
+            radius: RippleRadius::once(max_radius, duration_ticks, start_tick),
             ring_width,
             tint,
             strength,
@@ -768,7 +966,7 @@ impl VisualEffect {
             Self::RainbowWave { .. } => true,
             Self::Gradient { speed, .. } => speed.abs() > f32::EPSILON,
             Self::RetroCrt { flicker, .. } => *flicker > 0.0,
-            Self::Ripple { radius, .. } => !matches!(radius, RippleRadius::Fixed(_)),
+            Self::Ripple { radius, .. } => radius.is_animated(),
             Self::Clipped { inner, .. } => inner.is_animated(),
             Self::Channels { inner, .. } => inner.is_animated(),
             Self::Custom(effect) => effect.is_animated(),
@@ -1234,7 +1432,7 @@ mod tests {
     }
 
     #[test]
-    fn ripple_radius_eq_and_hash_use_variant_payloads() {
+    fn ripple_radius_eq_and_hash_use_payloads() {
         let cases = [
             (
                 RippleRadius::Fixed(4.0),
@@ -1242,35 +1440,33 @@ mod tests {
                 RippleRadius::Fixed(5.0),
             ),
             (
-                RippleRadius::Loop {
-                    max_radius: 12.0,
-                    period_ticks: 30,
-                },
-                RippleRadius::Loop {
-                    max_radius: 12.0,
-                    period_ticks: 30,
-                },
-                RippleRadius::Loop {
-                    max_radius: 12.0,
-                    period_ticks: 31,
-                },
+                RippleRadius::looping(12.0, 30),
+                RippleRadius::looping(12.0, 30),
+                RippleRadius::looping(12.0, 31),
             ),
             (
-                RippleRadius::Once {
-                    max_radius: 12.0,
-                    duration_ticks: 30,
-                    start_tick: 7,
-                },
-                RippleRadius::Once {
-                    max_radius: 12.0,
-                    duration_ticks: 30,
-                    start_tick: 7,
-                },
-                RippleRadius::Once {
-                    max_radius: 12.0,
-                    duration_ticks: 30,
-                    start_tick: 8,
-                },
+                RippleRadius::once(12.0, 30, 7),
+                RippleRadius::once(12.0, 30, 7),
+                RippleRadius::once(12.0, 30, 8),
+            ),
+            (
+                RippleRadius::once(12.0, 30, 7),
+                RippleRadius::once(12.0, 30, 7),
+                RippleRadius::collapse(12.0, 30, 7),
+            ),
+            (
+                RippleRadius::from(RippleAnimation::new(0.0, 8.0, 20)),
+                RippleRadius::from(RippleAnimation::new(0.0, 8.0, 20)),
+                RippleRadius::from(
+                    RippleAnimation::new(0.0, 8.0, 20).with_easing(Easing::EaseInOutSine),
+                ),
+            ),
+            (
+                RippleRadius::from(RippleAnimation::new(0.0, 8.0, 20)),
+                RippleRadius::from(RippleAnimation::new(0.0, 8.0, 20)),
+                RippleRadius::from(
+                    RippleAnimation::new(0.0, 8.0, 20).with_repeat(RippleRepeat::PingPong),
+                ),
             ),
         ];
 
@@ -1280,5 +1476,61 @@ mod tests {
             assert_ne!(a, c);
             assert_ne!(hash_radius(&a), hash_radius(&c));
         }
+    }
+
+    fn assert_close(actual: Option<(f32, f32)>, expected: (f32, f32)) {
+        let (radius, strength) = actual.expect("the animation is playing");
+        assert!(
+            (radius - expected.0).abs() < 1e-4 && (strength - expected.1).abs() < 1e-4,
+            "{actual:?} != {expected:?}"
+        );
+    }
+
+    #[test]
+    fn once_grows_easing_out_and_fades() {
+        let once = RippleRadius::once(10.0, 10, 5);
+        assert_eq!(once.resolve(4), None, "before its start tick");
+        assert_close(once.resolve(5), (0.0, 1.0));
+        // t = 0.5: 1 - (1 - t)^2 = 0.75 of the radius, strength 1 - t.
+        assert_close(once.resolve(10), (7.5, 0.5));
+        assert_close(once.resolve(15), (10.0, 0.0));
+        assert_eq!(once.resolve(16), None, "after its last tick");
+    }
+
+    #[test]
+    fn collapse_gathers_easing_in_and_brightens() {
+        let collapse = RippleRadius::collapse(10.0, 10, 0);
+        assert_close(collapse.resolve(0), (10.0, 0.3));
+        // t = 0.5: (1 - t^2) of the radius, strength 0.3 + 0.7 t.
+        assert_close(collapse.resolve(5), (7.5, 0.65));
+        // The last tick lands in the origin at full strength.
+        assert_close(collapse.resolve(10), (0.0, 1.0));
+        assert_eq!(collapse.resolve(11), None);
+    }
+
+    #[test]
+    fn looping_restarts_every_period() {
+        let looping = RippleRadius::looping(10.0, 10);
+        assert_close(looping.resolve(5), (7.5, 0.5));
+        assert_close(looping.resolve(25), (7.5, 0.5));
+        assert_close(looping.resolve(30), (0.0, 1.0));
+    }
+
+    #[test]
+    fn ping_pong_plays_back_and_forth() {
+        let ping_pong = RippleAnimation::new(0.0, 10.0, 10).with_repeat(RippleRepeat::PingPong);
+        assert_close(ping_pong.resolve(5), (5.0, 1.0));
+        assert_close(ping_pong.resolve(10), (10.0, 1.0));
+        assert_close(ping_pong.resolve(15), (5.0, 1.0));
+        assert_close(ping_pong.resolve(20), (0.0, 1.0));
+        assert_close(ping_pong.resolve(25), (5.0, 1.0));
+    }
+
+    #[test]
+    fn zero_duration_is_one_tick() {
+        let flash = RippleAnimation::new(0.0, 10.0, 0).starting_at(3);
+        assert_close(flash.resolve(3), (0.0, 1.0));
+        assert_close(flash.resolve(4), (10.0, 1.0));
+        assert_eq!(flash.resolve(5), None);
     }
 }

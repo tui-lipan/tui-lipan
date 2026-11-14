@@ -813,7 +813,7 @@ Built-in `VisualEffect` variants:
 | `PaletteQuantize { palette }` | Snap colors to a small palette |
 | `Scanlines { strength, spacing }` | Dim every Nth row |
 | `RainbowWave { blend, frequency, speed, axis }` | Animated per-cell color wave |
-| `Ripple { origin, radius, ring_width, tint, strength }` | Aspect-correct radial ring; `radius: RippleRadius` can be `Fixed`, `Loop`, or `Once`, and `origin` can be explicit cells (`EffectOrigin::cell`) or aligned from current scope bounds (`EffectOrigin::aligned`) |
+| `Ripple { origin, radius, ring_width, tint, strength }` | Aspect-correct radial ring; `radius: RippleRadius` is `Fixed` or `Animated(RippleAnimation)` (`RippleRadius::looping` / `once` / `collapse` cover the common shockwaves), and `origin` can be explicit cells (`EffectOrigin::cell`) or aligned from current scope bounds (`EffectOrigin::aligned`) |
 | `Gradient { gradient, blend, frequency, speed, axis }` | Sine-eased mirrored `ColorGradient` sampled along `axis`; nested scopes remap independently |
 | `RetroCrt { preset, flicker, scanline_strength }` | Preset built from simpler primitives |
 | `Clipped { bounds, mask, inner }` | Clip / mask an inner effect (see [effects.md](effects.md)) |

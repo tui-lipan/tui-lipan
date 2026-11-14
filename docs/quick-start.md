@@ -34,7 +34,7 @@ Representative `prelude::*` re-exports:
 | `KeyBinding`, `KeyBindings` | Common keybinding types |
 | `Style`, `Color`, `Length`, `Padding`, `Align`, `Justify`, `BorderStyle`, `BorderEdges`, `CaretPalette`, `CaretShape` | Styling |
 | `RichText`, `Span`, `Edge`, `Rect`, `Size`, `ScrollbarConfig`, `ScrollbarVariant` | Layout & text types |
-| `Theme`, `ColorGradient`, `GradientDirection`, `GradientRange`, `VisualEffect`, `RippleRadius`, `RetroPreset` | Themes & effects |
+| `Theme`, `ColorGradient`, `GradientDirection`, `GradientRange`, `VisualEffect`, `RippleRadius`, `RippleAnimation`, `RippleRepeat`, `RetroPreset` | Themes & effects |
 | `ClipboardConfig`, `PasteShiftInsertBehavior` | Clipboard config |
 | `TextEditor`, `TextInput`, `TextEditEvent`, `TextEditKind` | Text editing |
 | `word_forward_start`, `word_end`, `line_start_at`, `first_nonblank_in_line`, … (`text_motion` module) | Vim-style word/line text motion helpers |

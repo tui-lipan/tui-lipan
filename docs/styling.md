@@ -422,7 +422,7 @@ Common variants:
 | `VisualEffect::PaletteQuantize` | Reduce colors to a preset or custom palette |
 | `VisualEffect::Scanlines` | Static row-based dimming mask |
 | `VisualEffect::RainbowWave` | Animated color cycling by position and frame phase, blended back into the subtree |
-| `VisualEffect::Ripple` | Aspect-correct radial tint ring from an `EffectOrigin`; `RippleRadius::Fixed` is static, while `Loop` / `Once` animate from the renderer phase |
+| `VisualEffect::Ripple` | Aspect-correct radial tint ring from an `EffectOrigin`; `RippleRadius::Fixed` is static, while `RippleRadius::Animated(RippleAnimation)` animates from the renderer phase |
 | `VisualEffect::Gradient` | Sine-eased mirrored `ColorGradient` wash sampled in scope-local coordinates; optional animation via `speed` / frame `phase` |
 | `VisualEffect::RetroCrt` | Retro preset built from palette, scanline, and flicker primitives |
 | `VisualEffect::Clipped` | Bounds and/or `CellMask` to restrict another effect - see [widgets/effects.md](widgets/effects.md) |
@@ -432,9 +432,12 @@ Supporting enums:
 | Enum | Variants |
 |------|----------|
 | `EffectAxis` | `Horizontal`, `Vertical`, `Diagonal` |
-| `EffectPalette` | `Cga`, `Gameboy`, `Amber`, `Green`, `Custom(Vec<Color>)` |
-| `RetroPreset` | `Amber`, `Green`, `Cga`, `Gameboy`, `VaultTec` |
-| `RippleRadius` | `Fixed(f32)`, `Loop { max_radius, period_ticks }`, `Once { max_radius, duration_ticks, start_tick }` |
+| `EffectPalette` | `Cga`, `Gameboy`, `Amber`, `Green`, `Custom(Vec<Color>)` (non-exhaustive) |
+| `RetroPreset` | `Amber`, `Green`, `Cga`, `Gameboy`, `VaultTec` (non-exhaustive) |
+| `RippleRadius` | `Fixed(f32)`, `Animated(RippleAnimation)`; shorthands `looping`, `once`, `collapse` (non-exhaustive) |
+| `RippleRepeat` | `Once`, `Loop`, `PingPong` (non-exhaustive) |
+
+`VisualEffect` is non-exhaustive too, so give any `match` on it a wildcard arm.
 
 Use `Style` when you need inherited colors, focus/hover patches, or per-widget presentation. Use `VisualEffect` when you want to transform the final composed output of an entire subtree.
 

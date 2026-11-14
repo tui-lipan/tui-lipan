@@ -815,6 +815,55 @@ fn centered_ripple_resolves_scope_center() {
 }
 
 #[test]
+fn ripple_inside_channel_and_clip_wrappers_still_paints() {
+    // The renderer resolves the ring once per pass from the unwrapped effect, so wrapping must
+    // not hide it.
+    let ripple = VisualEffect::centered_ripple(0.0, 0.75, Color::rgb(255, 0, 0), 1.0);
+    let wrapped = [
+        ripple.clone().foreground_only(),
+        VisualEffect::Clipped {
+            bounds: None,
+            mask: None,
+            inner: Box::new(ripple),
+        },
+    ];
+    for effect in wrapped {
+        let mut terminal = Terminal::new(TestBackend::new(5, 1)).expect("terminal");
+        let scope = Rect {
+            x: 0,
+            y: 0,
+            w: 5,
+            h: 1,
+        };
+        terminal
+            .draw(|f| {
+                for x in 0u16..5u16 {
+                    if let Some(c) = f.buffer_mut().cell_mut((x, 0)) {
+                        c.fg = RColor::White;
+                        c.bg = RColor::Black;
+                    }
+                }
+                apply_visual_effects_clipped(
+                    f,
+                    scope,
+                    std::slice::from_ref(&effect),
+                    0,
+                    None,
+                    None,
+                );
+            })
+            .expect("draw");
+        let buf = terminal.backend().buffer();
+        assert_ne!(buf[(2, 0)].fg, RColor::White, "{effect:?} tints the centre");
+        assert_eq!(
+            buf[(0, 0)].fg,
+            RColor::White,
+            "{effect:?} leaves the edge alone"
+        );
+    }
+}
+
+#[test]
 fn looping_ripple_changes_output_by_phase() {
     let draw_fgs = |phase| {
         let backend = TestBackend::new(9, 1);
@@ -860,11 +909,7 @@ fn once_ripple_before_start_is_noop() {
     };
     let effect = VisualEffect::Ripple {
         origin: crate::style::EffectOrigin::CENTER,
-        radius: RippleRadius::Once {
-            max_radius: 4.0,
-            duration_ticks: 10,
-            start_tick: 5,
-        },
+        radius: RippleRadius::once(4.0, 10, 5),
         ring_width: 0.75,
         tint: Color::rgb(255, 0, 0),
         strength: 1.0,
@@ -887,6 +932,59 @@ fn once_ripple_before_start_is_noop() {
         assert_eq!(buf[(x, 0)].fg, RColor::White);
         assert_eq!(buf[(x, 0)].bg, RColor::Black);
     }
+}
+
+#[test]
+fn collapse_ripple_gathers_into_its_origin_then_ends() {
+    let scope = Rect {
+        x: 0,
+        y: 0,
+        w: 21,
+        h: 1,
+    };
+    // The origin sits on cell 0's centre, so the arrival frame tints that cell.
+    let effect = VisualEffect::Ripple {
+        origin: crate::style::EffectOrigin::cell(0.5, 0.5),
+        radius: RippleRadius::collapse(20.0, 10, 0),
+        ring_width: 1.0,
+        tint: Color::rgb(255, 0, 0),
+        strength: 1.0,
+    };
+    // The columns the ring tints at `phase`.
+    let tinted = |phase: u64| {
+        let mut terminal = Terminal::new(TestBackend::new(21, 1)).expect("terminal");
+        terminal
+            .draw(|f| {
+                for x in 0u16..21u16 {
+                    if let Some(c) = f.buffer_mut().cell_mut((x, 0)) {
+                        c.fg = RColor::White;
+                        c.bg = RColor::Black;
+                    }
+                }
+                apply_visual_effects_clipped(
+                    f,
+                    scope,
+                    std::slice::from_ref(&effect),
+                    phase,
+                    None,
+                    None,
+                );
+            })
+            .expect("draw");
+        let buf = terminal.backend().buffer();
+        (0u16..21u16)
+            .filter(|x| buf[(*x, 0)].bg != RColor::Black)
+            .collect::<Vec<_>>()
+    };
+    let early = tinted(1);
+    let late = tinted(8);
+    assert!(!early.is_empty() && !late.is_empty(), "{early:?} {late:?}");
+    assert!(
+        early.iter().min() > late.iter().max(),
+        "the ring moves toward its origin: {early:?} then {late:?}"
+    );
+    assert_eq!(tinted(10), [0], "the last tick lands on the origin");
+    assert!(tinted(11).is_empty(), "a finished collapse paints nothing");
 }
 
 #[test]
