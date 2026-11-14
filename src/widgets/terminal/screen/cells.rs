@@ -11,9 +11,6 @@ pub(super) fn render_row<E: TerminalEngine>(
 ) -> Option<Vec<(u16, u16, Span)>> {
     let absolute = viewport_row_line(engine, engine.display_offset(), row)?;
     let grid = engine.row(absolute);
-    if !grid.cells().iter().any(needs_cell_layout) {
-        return None;
-    }
     let mut cells = grid
         .cells()
         .iter()
@@ -42,9 +39,10 @@ pub(super) fn render_row<E: TerminalEngine>(
     Some(cells)
 }
 
-fn needs_cell_layout(cell: &impl CellRead) -> bool {
-    let attrs = cell.attrs();
-    if attrs.intersects(CellAttrs::SPACERS) {
+pub(super) fn needs_cell_layout(cell: &impl CellRead, attrs: CellAttrs) -> bool {
+    let ch = cell.ch();
+    let combined = !cell.zerowidth().is_empty();
+    if matches!(ch, ' '..='~') && !combined {
         return false;
     }
     let width = if attrs.contains(CellAttrs::WIDE_CHAR) {
@@ -52,9 +50,9 @@ fn needs_cell_layout(cell: &impl CellRead) -> bool {
     } else {
         1
     };
-    !cell.zerowidth().is_empty()
-        || matches!(cell.ch(), '\u{1f3fb}'..='\u{1f3ff}')
-        || cell.ch().width().is_some_and(|measured| measured != width)
+    combined
+        || matches!(ch, '\u{1f3fb}'..='\u{1f3ff}')
+        || ch.width().is_some_and(|measured| measured != width)
 }
 
 fn decorate_cell_row(
@@ -88,27 +86,22 @@ fn decorate_cell_row(
 }
 
 fn overlay_cell_label(cells: &mut Vec<(u16, u16, Span)>, col: usize, span: &Span, insert: bool) {
-    use unicode_segmentation::UnicodeSegmentation;
-    use unicode_width::UnicodeWidthStr;
-
-    let Ok(start) = u16::try_from(col) else {
-        return;
+    let start = if insert {
+        insertion_column(cells, col)
+    } else {
+        let Ok(col) = u16::try_from(col) else { return };
+        col
     };
-    let mut end = start;
-    let mut label = Vec::new();
-    for text in span.content.graphemes(true) {
-        let width = text.width().min(u16::MAX as usize) as u16;
-        if width != 0 {
-            label.push((end, width, Span::new(text.to_owned()).style(span.style)));
-            end = end.saturating_add(width);
-        }
+    let (end, label) = position_label(cells, start, span, insert);
+    if start == end {
+        return;
     }
     let mut kept = Vec::new();
     for (col, width, cell) in cells.drain(..) {
         if insert && col >= start {
             kept.push((col.saturating_add(end - start), width, cell));
-        } else if col < end && col.saturating_add(width) > start {
-            keep_uncovered_columns(&mut kept, (col, width, cell), start..end, insert);
+        } else if !insert && col < end && col.saturating_add(width) > start {
+            keep_uncovered_columns(&mut kept, (col, width, cell), start..end);
         } else {
             kept.push((col, width, cell));
         }
@@ -118,15 +111,67 @@ fn overlay_cell_label(cells: &mut Vec<(u16, u16, Span)>, col: usize, span: &Span
     cells.sort_by_key(|(col, _, _)| *col);
 }
 
+/// Match `insert_at_column`: a cut into a wide cell inserts before the whole glyph.
+fn insertion_column(cells: &[(u16, u16, Span)], requested: usize) -> u16 {
+    let end = cells
+        .last()
+        .map_or(0, |(col, width, _)| col.saturating_add(*width));
+    let requested = requested.min(usize::from(end)) as u16;
+    cells
+        .iter()
+        .find(|(col, width, _)| *col <= requested && requested < col.saturating_add(*width))
+        .map_or(requested, |(col, _, _)| *col)
+}
+
+fn position_label(
+    cells: &mut [(u16, u16, Span)],
+    start: u16,
+    span: &Span,
+    insert: bool,
+) -> (u16, Vec<(u16, u16, Span)>) {
+    use unicode_segmentation::UnicodeSegmentation;
+    use unicode_width::UnicodeWidthStr;
+
+    let mut end = start;
+    let mut label = Vec::new();
+    for text in span.content.graphemes(true) {
+        let width = text.width().min(u16::MAX as usize) as u16;
+        if width == 0 {
+            if insert {
+                append_zero_width(cells, &mut label, end, text);
+            }
+        } else {
+            label.push((end, width, Span::new(text.to_owned()).style(span.style)));
+            end = end.saturating_add(width);
+        }
+    }
+    (end, label)
+}
+
+fn append_zero_width(
+    cells: &mut [(u16, u16, Span)],
+    label: &mut [(u16, u16, Span)],
+    col: u16,
+    text: &str,
+) {
+    let previous = label.last_mut().or_else(|| {
+        cells
+            .iter_mut()
+            .find(|(start, width, _)| start.saturating_add(*width) == col)
+    });
+    if let Some((_, _, previous)) = previous {
+        previous.content = format!("{}{text}", previous.content).into();
+    }
+}
+
 /// A label covering half a wide glyph leaves the uncovered half blank.
 fn keep_uncovered_columns(
     kept: &mut Vec<(u16, u16, Span)>,
     (col, width, cell): (u16, u16, Span),
     covered: std::ops::Range<u16>,
-    insert: bool,
 ) {
     for x in col..col.saturating_add(width) {
-        if x < covered.start || (!insert && x >= covered.end) {
+        if !covered.contains(&x) {
             kept.push((x, 1, Span::new(" ").style(cell.style)));
         }
     }

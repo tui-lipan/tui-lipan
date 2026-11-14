@@ -322,6 +322,8 @@ pub struct TerminalScreen {
     mouse_mode: MouseModeState,
     scrollback_offset: usize,
     cache: TerminalRenderSnapshot,
+    /// Cell-layout decisions from the same rows and damage generation as `cache`.
+    cell_layout_rows: Vec<bool>,
     palette: TerminalColorPalette,
     dirty: bool,
     /// Viewport rows changed since the last paint took them.
@@ -1114,6 +1116,7 @@ impl TerminalScreen {
             mouse_mode: MouseModeState::default(),
             scrollback_offset: 0,
             cache: TerminalRenderSnapshot::default(),
+            cell_layout_rows: Vec::new(),
             palette: TerminalColorPalette::default(),
             dirty: true,
             sequence: 0,
@@ -2390,6 +2393,7 @@ impl TerminalScreen {
     pub fn write_replay_bytes<W: Write>(&mut self, writer: &mut W) -> io::Result<()> {
         let dirty = self.dirty;
         let cache = self.cache.clone();
+        let cell_layout_rows = self.cell_layout_rows.clone();
         let sequence = self.sequence;
         let scrollback_offset = self.scrollback_offset;
         let mouse_mode = self.mouse_mode;
@@ -2413,6 +2417,7 @@ impl TerminalScreen {
         self.responses = responses;
         self.dirty = dirty;
         self.cache = cache;
+        self.cell_layout_rows = cell_layout_rows;
         self.sequence = sequence;
         self.scrollback_offset = scrollback_offset;
         self.mouse_mode = mouse_mode;
@@ -2549,12 +2554,13 @@ impl TerminalScreen {
                 _ => None,
             };
             let (rows, cols, palette) = (self.rows, self.cols, self.palette);
+            self.cell_layout_rows.resize(usize::from(rows), false);
             let (mut visible, hyperlinks) = if let Some(damaged) = partial {
                 let mut lines = self.cache.color_lines.to_vec();
                 for row in damaged {
                     lines[usize::from(row.row)].clear();
                 }
-                let (lines, mut changed_links) = with_engine!(&self.engine, engine => {
+                let (lines, mut changed_links, cell_layout_rows) = with_engine!(&self.engine, engine => {
                     renderable_content_lines(
                         engine,
                         damaged.iter().map(|row| usize::from(row.row)),
@@ -2565,6 +2571,10 @@ impl TerminalScreen {
                         lines,
                     )
                 });
+                for row in damaged {
+                    let row = usize::from(row.row);
+                    self.cell_layout_rows[row] = cell_layout_rows[row];
+                }
                 changed_links.extend(
                     self.cache
                         .hyperlinks
@@ -2575,7 +2585,7 @@ impl TerminalScreen {
                 changed_links.sort_by_key(|link| (link.row, link.start_col));
                 (lines, changed_links)
             } else {
-                with_engine!(&self.engine, engine => {
+                let (lines, links, cell_layout_rows) = with_engine!(&self.engine, engine => {
                     renderable_content_lines(
                         engine,
                         0..usize::from(rows),
@@ -2585,7 +2595,9 @@ impl TerminalScreen {
                         palette,
                         vec![Vec::new(); usize::from(rows)],
                     )
-                })
+                });
+                self.cell_layout_rows = cell_layout_rows;
+                (lines, links)
             };
             if visible.is_empty() {
                 visible.push(vec![Span::new("")]);
@@ -2642,6 +2654,9 @@ impl TerminalScreen {
         row: usize,
         decorations: &[TerminalDecoration],
     ) -> Option<Vec<(u16, u16, Span)>> {
+        if !self.cell_layout_rows.get(row).copied().unwrap_or(false) {
+            return None;
+        }
         with_engine!(&self.engine, engine => {
             cells::render_row(engine, row, &self.palette, decorations)
         })
@@ -3174,6 +3189,7 @@ impl TerminalScreen {
         self.mouse_mode = MouseModeState::default();
         self.scrollback_offset = 0;
         self.cache = TerminalRenderSnapshot::default();
+        self.cell_layout_rows.clear();
         self.semantic_marks.clear();
         self.semantic_events_seen = 0;
         self.active_prompt_mark = None;
@@ -3614,7 +3630,8 @@ fn renderable_content_lines<E: TerminalEngine>(
     cols: u16,
     palette: TerminalColorPalette,
     mut lines: Vec<Vec<Span>>,
-) -> (Vec<Vec<Span>>, Vec<TerminalHyperlink>) {
+) -> (Vec<Vec<Span>>, Vec<TerminalHyperlink>, Vec<bool>) {
+    let mut cell_layout_rows = vec![false; usize::from(viewport_rows)];
     let mut hyperlinks: Vec<TerminalHyperlink> = Vec::new();
     let mut current_row: Option<usize> = None;
     let mut run_style: Option<Style> = None;
@@ -3674,6 +3691,9 @@ fn renderable_content_lines<E: TerminalEngine>(
                 continue;
             }
 
+            // Detect during the snapshot's existing cell walk, only for changed rows.
+            // Printable ASCII cells return before any Unicode width lookup.
+            cell_layout_rows[row] = cell_layout_rows[row] || cells::needs_cell_layout(cell, attrs);
             let bits = style_run_bits(attrs);
             let (fg, bg) = (cell.fg(), cell.bg());
             match style_run_progress(run_key.as_mut(), fg, bg, bits, &palette) {
@@ -3704,7 +3724,7 @@ fn renderable_content_lines<E: TerminalEngine>(
         }
     }
 
-    (lines, hyperlinks)
+    (lines, hyperlinks, cell_layout_rows)
 }
 
 fn push_cell_text_str(out: &mut String, cell: &impl CellRead) {
