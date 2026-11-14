@@ -68,6 +68,49 @@ impl ShiftPause {
     }
 }
 
+/// Ctrl and Shift as the latest mouse report saw them.
+///
+/// Without all-keys reporting a modifier press sends nothing, so a key held before reporting is
+/// enabled would stay unknown until it is released and pressed again. Every mouse report carries
+/// the modifier mask, so the report that led the app to enable reporting supplies the starting
+/// set, and later reports correct a press or release the keyboard never sent.
+#[derive(Default)]
+pub(crate) struct PointerModifiers {
+    latest: Option<KeyMods>,
+}
+
+impl PointerModifiers {
+    pub(crate) fn observe_mouse(&mut self, modifiers: crossterm::event::KeyModifiers) {
+        self.latest = Some(KeyMods {
+            ctrl: modifiers.contains(crossterm::event::KeyModifiers::CONTROL),
+            shift: modifiers.contains(crossterm::event::KeyModifiers::SHIFT),
+            ..KeyMods::NONE
+        });
+    }
+
+    /// A key event is newer than any mouse report, and its modifiers may since have been released.
+    pub(crate) fn forget(&mut self) {
+        self.latest = None;
+    }
+
+    /// The held set when reporting turns on.
+    pub(crate) fn initial(&self) -> KeyMods {
+        self.latest.unwrap_or(KeyMods::NONE)
+    }
+
+    /// `held` with Ctrl and Shift taken from the latest mouse report.
+    pub(crate) fn reconcile(&self, held: KeyMods) -> KeyMods {
+        match self.latest {
+            Some(latest) => KeyMods {
+                ctrl: latest.ctrl,
+                shift: latest.shift,
+                ..held
+            },
+            None => held,
+        }
+    }
+}
+
 pub(crate) fn to_key_event(k: crossterm::event::KeyEvent) -> Option<KeyEvent> {
     if !matches!(
         k.kind,
@@ -215,6 +258,34 @@ mod tests {
     use crossterm::event::{
         KeyCode as CrosstermKeyCode, KeyEvent as CrosstermKeyEvent, KeyModifiers,
     };
+
+    #[test]
+    fn pointer_modifiers_supply_ctrl_held_before_reporting_until_a_key_arrives() {
+        let mut pointer = super::PointerModifiers::default();
+        pointer.observe_mouse(KeyModifiers::CONTROL);
+        assert!(pointer.initial().ctrl);
+
+        let held = KeyMods {
+            ctrl: true,
+            alt: true,
+            alt_side: crate::AltSide::Left,
+            ..KeyMods::NONE
+        };
+        pointer.observe_mouse(KeyModifiers::ALT);
+        assert_eq!(
+            pointer.reconcile(held),
+            KeyMods {
+                ctrl: false,
+                ..held
+            },
+            "a mouse report corrects Ctrl and keeps what only the keyboard knows"
+        );
+
+        pointer.observe_mouse(KeyModifiers::CONTROL);
+        pointer.forget();
+        assert_eq!(pointer.initial(), KeyMods::NONE);
+        assert_eq!(pointer.reconcile(held), held);
+    }
 
     #[test]
     fn alt_tracker_preserves_both_sides_and_releases_independently() {

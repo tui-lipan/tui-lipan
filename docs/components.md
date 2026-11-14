@@ -40,7 +40,9 @@ shortcuts, and disable it when the overlay closes. Fullscreen Unix input decodes
 so shifted, composed, and AltGr text remains usable while reporting is enabled. Unix inline
 surfaces ignore this request until their input reader supports associated text. Unsupported
 terminals also leave physical sides unknown, while ordinary combined `KeyEvent`s still carry
-modifiers. Losing host focus clears the held set. Tests can drive the callback with
+modifiers. A key already held when reporting turns on is known from the latest mouse event, and
+mouse events keep Ctrl and Shift current while reporting is on. Losing host focus clears the held
+set. Tests can drive the callback with
 `TestBackend::set_held_modifiers`.
 
 Some hosts clear a Shift+drag text selection when a reported Shift release looks like typing. Call

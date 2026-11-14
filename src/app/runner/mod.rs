@@ -618,6 +618,7 @@ pub struct AppRunner<C: Component> {
     held_modifiers: KeyMods,
     alt_tracker: crate::app::input::convert::AltTracker,
     shift_pause: crate::app::input::convert::ShiftPause,
+    pointer_modifiers: crate::app::input::convert::PointerModifiers,
     on_focus_changed: Option<crate::app::context::FocusChangedHook>,
     pub(crate) drag: DragState,
     pub(crate) mouse: MouseTrackingState,
@@ -980,6 +981,7 @@ impl<C: Component> AppRunner<C> {
             held_modifiers: KeyMods::NONE,
             alt_tracker: Default::default(),
             shift_pause: Default::default(),
+            pointer_modifiers: Default::default(),
             on_focus_changed,
             drag,
             mouse: MouseTrackingState::with_pointer_cell(last_mouse),
@@ -1440,6 +1442,34 @@ impl<C: Component> AppRunner<C> {
         let update_level = self.core.on_window_focus_changed(focused);
         self.apply_root_update(dirty, update_level);
         true
+    }
+
+    /// Follow modifier-key reporting turning on or off. On, the held set starts from the latest
+    /// mouse report. Off, it empties and that report is forgotten: a release while reporting is off
+    /// sends nothing, so the report could name a key that is no longer held when reporting resumes.
+    fn modifier_reporting_changed(&mut self, reporting: bool, dirty: &mut DirtyTracker) {
+        self.alt_tracker = Default::default();
+        let held = if reporting {
+            self.pointer_modifiers.initial()
+        } else {
+            self.pointer_modifiers.forget();
+            KeyMods::NONE
+        };
+        self.set_held_modifiers(held, dirty);
+    }
+
+    /// Record a mouse report's modifiers, including one consumed by coalescing.
+    fn observe_pointer_modifiers(&mut self, modifiers: crossterm::event::KeyModifiers) {
+        self.shift_pause.observe_mouse(modifiers);
+        self.pointer_modifiers.observe_mouse(modifiers);
+    }
+
+    /// Bring held Ctrl and Shift in line with the latest mouse report while modifiers are reported.
+    fn sync_pointer_modifiers(&mut self, dirty: &mut DirtyTracker) {
+        if self.core.ctx.modifier_key_reporting_enabled() && !self.shift_pause.paused() {
+            let held = self.pointer_modifiers.reconcile(self.held_modifiers);
+            self.set_held_modifiers(held, dirty);
+        }
     }
 
     fn set_held_modifiers(&mut self, modifiers: KeyMods, dirty: &mut DirtyTracker) {
@@ -2528,8 +2558,7 @@ impl<C: Component> AppRunner<C> {
                 }
                 let modifier_reporting = modifier_reporting && !self.shift_pause.paused();
                 if guard.set_modifier_key_reporting(modifier_reporting)? {
-                    self.alt_tracker = Default::default();
-                    self.set_held_modifiers(KeyMods::NONE, &mut dirty);
+                    self.modifier_reporting_changed(modifier_reporting, &mut dirty);
                 }
                 #[cfg(feature = "devtools")]
                 self.ingest_pending_devtools_logs();
@@ -2724,6 +2753,7 @@ impl<C: Component> AppRunner<C> {
                             self.set_window_focused(false, &mut dirty);
                             self.alt_tracker = Default::default();
                             self.shift_pause.reset();
+                            self.pointer_modifiers.forget();
                             self.set_held_modifiers(KeyMods::NONE, &mut dirty);
                             self.animation.reset_blink();
                             dirty.mark_paint();
@@ -2731,6 +2761,7 @@ impl<C: Component> AppRunner<C> {
                         CEvent::Key(k) => {
                             let alt_side = self.alt_tracker.update(k);
                             self.shift_pause.observe_key(k);
+                            self.pointer_modifiers.forget();
                             #[cfg(feature = "terminal")]
                             if let Some(mods) = modifier_key_state(k)
                                 && self.refresh_terminal_link_hover_at_pointer(mods)
@@ -2838,7 +2869,7 @@ impl<C: Component> AppRunner<C> {
                         }
                         CEvent::Mouse(m) if self.mouse_enabled => {
                             crate::debug::increment_mouse_events();
-                            self.shift_pause.observe_mouse(m.modifiers);
+                            self.observe_pointer_modifiers(m.modifiers);
 
                             match self.classify_host_mouse(m) {
                                 CoalescedPointer::Ignored => {}
@@ -3220,6 +3251,8 @@ impl<C: Component> AppRunner<C> {
                                     }
                                 }
                             }
+                            // After coalescing, so Ctrl and Shift follow the newest report.
+                            self.sync_pointer_modifiers(&mut dirty);
                         }
                         CEvent::Resize(_, _) => {
                             host_color_refresh_quiet_until =
@@ -3558,15 +3591,17 @@ impl<C: Component> AppRunner<C> {
     ///
     /// Coalescing keeps the newest report and drops the ones behind it, so the sub-cell position has
     /// to follow the report that is kept: it travels beside the event rather than inside it, and
-    /// stale pixels within the right cell are a pointer that jitters where it should glide.
+    /// stale pixels within the right cell are a pointer that jitters where it should glide. Its
+    /// modifiers are recorded for the same reason.
     fn convert_coalesced_pointer(
-        &self,
+        &mut self,
         event: CEvent,
         sub_cell: Option<(u16, u16)>,
     ) -> CoalescedPointer {
         let CEvent::Mouse(event) = event else {
             return CoalescedPointer::Ignored;
         };
+        self.observe_pointer_modifiers(event.modifiers);
         let converted = self.classify_host_mouse(event);
         if matches!(converted, CoalescedPointer::Inside(_)) {
             self.mouse.sub_cell.set(sub_cell);
