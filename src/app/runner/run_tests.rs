@@ -638,6 +638,51 @@ fn convert_coalesced_pointer_reports_outside_inline_viewport() {
 }
 
 #[test]
+fn held_modifiers_follow_the_kept_mouse_report_and_forget_it_when_reporting_stops() {
+    let mut runner = AppRunner::new(App::new(), RunnerKeymapSmoke, ());
+    init_runner(
+        &mut runner,
+        RunnerKeymapSmoke,
+        Rect {
+            x: 0,
+            y: 0,
+            w: 80,
+            h: 24,
+        },
+    );
+    let moved = |column, modifiers| {
+        CEvent::Mouse(CMouseEvent {
+            kind: CMouseEventKind::Moved,
+            column,
+            row: 2,
+            modifiers,
+        })
+    };
+    let mut dirty = DirtyTracker::default();
+    runner.core.ctx.set_modifier_key_reporting(true);
+
+    // Ctrl was held as the pointer moved, then released while more motion was queued.
+    let _ = runner.convert_coalesced_pointer(moved(1, CKeyModifiers::CONTROL), None);
+    runner.sync_pointer_modifiers(&mut dirty);
+    assert!(runner.held_modifiers.ctrl);
+    let _ = runner.convert_coalesced_pointer(moved(2, CKeyModifiers::CONTROL), None);
+    let _ = runner.convert_coalesced_pointer(moved(3, CKeyModifiers::NONE), None);
+    runner.sync_pointer_modifiers(&mut dirty);
+    assert!(
+        !runner.held_modifiers.ctrl,
+        "the newest coalesced report wins"
+    );
+
+    // A Ctrl seen before reporting stops is not replayed when it resumes with no new report.
+    let _ = runner.convert_coalesced_pointer(moved(4, CKeyModifiers::CONTROL), None);
+    runner.modifier_reporting_changed(true, &mut dirty);
+    assert!(runner.held_modifiers.ctrl);
+    runner.modifier_reporting_changed(false, &mut dirty);
+    runner.modifier_reporting_changed(true, &mut dirty);
+    assert_eq!(runner.held_modifiers, KeyMods::NONE);
+}
+
+#[test]
 fn coalesced_drag_that_leaves_inline_viewport_is_not_skipped() {
     let mut runner = AppRunner::new(App::new(), RunnerKeymapSmoke, ());
     init_runner(
