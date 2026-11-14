@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use super::damage::{DamageAccumulator, TerminalDamage, TerminalMutation};
 
+mod cells;
 mod engine;
 mod replay;
 
@@ -471,6 +472,14 @@ impl TerminalScreenHandle {
     /// call (see [`TerminalScreen::render_snapshot`]).
     pub fn snapshot(&self) -> TerminalRenderSnapshot {
         self.0.borrow_mut().render_snapshot()
+    }
+
+    pub(crate) fn render_cell_row(
+        &self,
+        row: usize,
+        decorations: &[TerminalDecoration],
+    ) -> Option<Vec<(u16, u16, Span)>> {
+        self.0.borrow().render_cell_row(row, decorations)
     }
 
     pub(crate) fn set_host_cursor_style(&self, style: crate::style::TerminalCursorStyle) {
@@ -2626,6 +2635,16 @@ impl TerminalScreen {
             self.dirty = false;
         }
         self.cache.clone()
+    }
+
+    pub(crate) fn render_cell_row(
+        &self,
+        row: usize,
+        decorations: &[TerminalDecoration],
+    ) -> Option<Vec<(u16, u16, Span)>> {
+        with_engine!(&self.engine, engine => {
+            cells::render_row(engine, row, &self.palette, decorations)
+        })
     }
 
     /// Capture the visible viewport as a cell grid.
