@@ -270,39 +270,49 @@ pub(crate) fn plan_positioned_exits(
     retained
 }
 
-/// Let arriving overlays replace departing ones whose animations both ask for a
-/// [handoff](crate::animation::VisibilityAnimation::handoff).
+/// [`plan_positioned_exits`], letting arriving overlays replace departing ones whose animations
+/// both ask for a [handoff](crate::animation::VisibilityAnimation::handoff).
 ///
 /// Runs before the children are reconciled. When a child in `arriving` is a new overlay that asks
-/// for a handoff, every departing overlay that asks for one leaves `retained`, so it is never
-/// adopted and this pass's sweep frees it like any removed child. Returns the highest visibility
-/// those had reached, for [`take_over`] to give each child in `arriving` once it is reconciled.
-pub(crate) fn plan_handoff<'a>(
-    tree: &NodeTree,
-    retained: &mut Vec<ExitingChild>,
+/// for a handoff, every departing overlay that asks for one is left out of the retained children,
+/// so it is never adopted and this pass's sweep frees it like any removed child. Also returns the
+/// highest visibility those had, for [`take_over`] to give each child in `arriving` once it is
+/// reconciled. That is read before the exits begin: an exit with no duration snaps to hidden.
+pub(crate) fn plan_positioned_exits_with_handoff<'a>(
+    tree: &mut NodeTree,
+    parent: NodeId,
+    old_children: &[NodeId],
+    reuse: &[Option<NodeId>],
     arriving: impl IntoIterator<Item = &'a Element>,
-) -> Option<f32> {
-    if retained.is_empty() || !arriving.into_iter().any(asks_for_handoff) {
-        return None;
+) -> (Vec<ExitingChild>, Option<f32>) {
+    let handed_over = if arriving.into_iter().any(asks_for_handoff) {
+        old_children
+            .iter()
+            .filter(|id| tree.is_valid(**id) && !reuse.contains(&Some(**id)))
+            .filter_map(|id| handoff_visibility(tree, *id))
+            .filter(|progress| *progress > 0.0)
+            .reduce(f32::max)
+    } else {
+        None
+    };
+    let mut retained = plan_positioned_exits(tree, parent, old_children, reuse);
+    if handed_over.is_some() {
+        retained.retain(|entry| handoff_visibility(tree, entry.id).is_none());
     }
-    let mut handed_over: Option<f32> = None;
-    retained.retain(|entry| {
-        let NodeKind::Portal(portal) = &tree.node(exit_target(tree, entry.id)).kind else {
-            return true;
-        };
-        match &portal.animation {
-            Some(animation) if animation.recipe.handoff && animation.is_closing() => {
-                let progress = animation.progress();
-                handed_over = Some(handed_over.map_or(progress, |best| best.max(progress)));
-                false
-            }
-            _ => true,
-        }
-    });
-    handed_over
+    (retained, handed_over)
 }
 
-/// Continue a newly reconciled overlay from the visibility [`plan_handoff`] returned.
+/// The visibility of an overlay whose animation asks for a handoff.
+fn handoff_visibility(tree: &NodeTree, id: NodeId) -> Option<f32> {
+    let NodeKind::Portal(portal) = &tree.node(exit_target(tree, id)).kind else {
+        return None;
+    };
+    let animation = portal.animation.as_ref()?;
+    animation.recipe.handoff.then(|| animation.progress())
+}
+
+/// Continue a newly reconciled overlay from the visibility
+/// [`plan_positioned_exits_with_handoff`] returned.
 pub(crate) fn take_over(tree: &mut NodeTree, id: NodeId, progress: f32) {
     let target = exit_target(tree, id);
     if let NodeKind::Portal(portal) = &mut tree.node_mut(target).kind
@@ -1749,6 +1759,19 @@ mod tests {
         let reopened = backend.capture_frame();
         assert!(!reopened.plain_text().contains("bravo"));
         assert_ne!(reopened.to_ansi_text(), settled.replace("bravo", "alpha"));
+
+        // An exit with no duration still hands over the visibility it had before it began.
+        let instant = crate::animation::TransitionConfig {
+            duration: std::time::Duration::ZERO,
+            easing: crate::animation::Easing::Linear,
+        };
+        let recipe = crate::animation::VisibilityAnimation::new().exit(instant);
+        let mut snapping = TestBackend::new(Pickers(recipe.handoff()));
+        snapping.render();
+        snapping.advance(std::time::Duration::from_millis(200));
+        snapping.dispatch(Some("bravo")).unwrap();
+        snapping.render();
+        assert_eq!(snapping.capture_frame().to_ansi_text(), settled);
 
         let mut plain = settled_pickers(false);
         plain.dispatch(Some("bravo")).unwrap();

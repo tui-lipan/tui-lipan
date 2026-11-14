@@ -65,10 +65,11 @@ pub(crate) fn reconcile_canvas(ctx: &mut ReconcileCtx<'_>, args: CanvasReconcile
     // Keyed children that opted into an automatic exit and are no longer described keep their own
     // placement while they fade. Canvas items are absolutely positioned, so unlike a stack there is
     // no slot to reserve and the surviving children never move.
-    let mut retained = exit_retention::plan_positioned_exits(ctx.tree, id, &old_children, &plan);
-    let handed_over = exit_retention::plan_handoff(
+    let (retained, handed_over) = exit_retention::plan_positioned_exits_with_handoff(
         ctx.tree,
-        &mut retained,
+        id,
+        &old_children,
+        &plan,
         child_refs
             .iter()
             .zip(&plan)
