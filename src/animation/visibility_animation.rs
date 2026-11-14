@@ -58,6 +58,7 @@ pub struct VisibilityAnimation {
     pub(crate) enter: TransitionConfig,
     pub(crate) exit: TransitionConfig,
     slide: (f32, f32),
+    pub(crate) handoff: bool,
     effect: Option<Rc<dyn Fn(VisibilityAnimationContext) -> VisualEffect>>,
 }
 
@@ -68,6 +69,7 @@ impl PartialEq for VisibilityAnimation {
             && self.exit.duration == other.exit.duration
             && self.exit.easing == other.exit.easing
             && self.slide == other.slide
+            && self.handoff == other.handoff
             && match (&self.effect, &other.effect) {
                 (None, None) => true,
                 (Some(left), Some(right)) => Rc::ptr_eq(left, right),
@@ -88,6 +90,7 @@ impl Default for VisibilityAnimation {
                 easing: Easing::EaseInQuad,
             },
             slide: (0.0, 0.0),
+            handoff: false,
             effect: None,
         }
     }
@@ -99,6 +102,7 @@ impl fmt::Debug for VisibilityAnimation {
             .field("enter", &self.enter)
             .field("exit", &self.exit)
             .field("slide", &self.slide)
+            .field("handoff", &self.handoff)
             .field("custom_effect", &self.effect.is_some())
             .finish()
     }
@@ -134,6 +138,21 @@ impl VisibilityAnimation {
     /// hosts ignore it.
     pub fn slide(mut self, dx: f32, dy: f32) -> Self {
         self.slide = (finite_or_zero(dx), finite_or_zero(dy));
+        self
+    }
+
+    /// Replace a departing overlay at once instead of animating both.
+    ///
+    /// One Modal opening in the update that removes another would otherwise fade in over the
+    /// fading remains of the first. With handoff set on both, the arriving Modal starts at the
+    /// visibility the departing one had reached and the departing one is dropped, so a settled
+    /// Modal is replaced in a single frame and its backdrop holds steady. A Modal still fading out
+    /// from an earlier update hands off the same way. Opening or closing a Modal on its own
+    /// animates as usual.
+    ///
+    /// Both Modals must be children of the same `ZStack` or `Canvas`.
+    pub fn handoff(mut self) -> Self {
+        self.handoff = true;
         self
     }
 
@@ -248,6 +267,17 @@ impl VisibilityAnimationState {
                 config.duration,
                 config.easing,
             ));
+        }
+    }
+
+    /// Continue entering from the visibility a departing overlay handed over.
+    pub fn take_over(&mut self, progress: f32) {
+        self.progress = progress.clamp(0.0, 1.0);
+        if self.progress >= 1.0 {
+            self.closing = false;
+            self.transition = None;
+        } else {
+            self.start(false);
         }
     }
 

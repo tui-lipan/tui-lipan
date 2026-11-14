@@ -270,6 +270,59 @@ pub(crate) fn plan_positioned_exits(
     retained
 }
 
+/// Let arriving overlays replace departing ones whose animations both ask for a
+/// [handoff](crate::animation::VisibilityAnimation::handoff).
+///
+/// Runs before the children are reconciled. When a child in `arriving` is a new overlay that asks
+/// for a handoff, every departing overlay that asks for one leaves `retained`, so it is never
+/// adopted and this pass's sweep frees it like any removed child. Returns the highest visibility
+/// those had reached, for [`take_over`] to give each child in `arriving` once it is reconciled.
+pub(crate) fn plan_handoff<'a>(
+    tree: &NodeTree,
+    retained: &mut Vec<ExitingChild>,
+    arriving: impl IntoIterator<Item = &'a Element>,
+) -> Option<f32> {
+    if retained.is_empty() || !arriving.into_iter().any(asks_for_handoff) {
+        return None;
+    }
+    let mut handed_over: Option<f32> = None;
+    retained.retain(|entry| {
+        let NodeKind::Portal(portal) = &tree.node(exit_target(tree, entry.id)).kind else {
+            return true;
+        };
+        match &portal.animation {
+            Some(animation) if animation.recipe.handoff && animation.is_closing() => {
+                let progress = animation.progress();
+                handed_over = Some(handed_over.map_or(progress, |best| best.max(progress)));
+                false
+            }
+            _ => true,
+        }
+    });
+    handed_over
+}
+
+/// Continue a newly reconciled overlay from the visibility [`plan_handoff`] returned.
+pub(crate) fn take_over(tree: &mut NodeTree, id: NodeId, progress: f32) {
+    let target = exit_target(tree, id);
+    if let NodeKind::Portal(portal) = &mut tree.node_mut(target).kind
+        && let Some(animation) = &mut portal.animation
+        && animation.recipe.handoff
+    {
+        animation.take_over(progress);
+        // Reconciling registered the overlay as entering; a full handoff has already settled it.
+        tree.refresh_animated_widget_activity();
+    }
+}
+
+fn asks_for_handoff(element: &Element) -> bool {
+    matches!(
+        &element.kind,
+        crate::core::element::ElementKind::Portal(portal)
+            if portal.animation.as_ref().is_some_and(|animation| animation.handoff)
+    )
+}
+
 /// Merge retained children into the new live order while anchoring each exit to its nearest
 /// surviving old sibling. This preserves simultaneous removals without letting stale old indices
 /// reorder live children.
@@ -1629,5 +1682,77 @@ mod tests {
         assert!(backend.focus_key(&"field".into()));
         let focused = backend.focused().expect("focus_key focused the field");
         assert!(!backend.core.tree.node(focused).inert);
+    }
+
+    /// Which keyed Modal the root describes, if any; every Modal shares one visibility recipe.
+    struct Pickers(crate::animation::VisibilityAnimation);
+
+    impl Component for Pickers {
+        type Message = Option<&'static str>;
+        type Properties = ();
+        type State = Option<&'static str>;
+
+        fn create_state(&self, _: &()) -> Self::State {
+            Some("alpha")
+        }
+
+        fn update(&mut self, shown: Self::Message, ctx: &mut Context<Self>) -> Update {
+            ctx.state = shown;
+            Update::full()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            let root = ZStack::new().child(Text::new("page").key("page"));
+            match ctx.state {
+                Some(name) => root.child(
+                    crate::widgets::Modal::new()
+                        .animation(self.0.clone())
+                        .child(Text::new(name))
+                        .key(name),
+                ),
+                None => root,
+            }
+            .into()
+        }
+    }
+
+    fn settled_pickers(handoff: bool) -> TestBackend<Pickers> {
+        let recipe = crate::animation::VisibilityAnimation::new();
+        let mut backend =
+            TestBackend::new(Pickers(if handoff { recipe.handoff() } else { recipe }));
+        backend.render();
+        backend.advance(std::time::Duration::from_millis(200));
+        backend
+    }
+
+    #[test]
+    fn a_handoff_replaces_a_modal_in_one_frame_and_plain_closing_still_fades() {
+        let mut backend = settled_pickers(true);
+        let settled = backend
+            .capture_frame()
+            .to_ansi_text()
+            .replace("alpha", "bravo");
+        backend.dispatch(Some("bravo")).unwrap();
+        backend.render();
+        assert_eq!(backend.capture_frame().to_ansi_text(), settled);
+        assert!(!backend.capture_frame().plain_text().contains("alpha"));
+
+        backend.dispatch(None).unwrap();
+        backend.advance_frame(std::time::Duration::from_millis(30));
+        let closing = backend.capture_frame();
+        assert!(closing.plain_text().contains("bravo"));
+        assert_ne!(closing.to_ansi_text(), settled);
+
+        // Reopening over a Modal that is still fading continues from where that one was.
+        backend.dispatch(Some("alpha")).unwrap();
+        backend.render();
+        let reopened = backend.capture_frame();
+        assert!(!reopened.plain_text().contains("bravo"));
+        assert_ne!(reopened.to_ansi_text(), settled.replace("bravo", "alpha"));
+
+        let mut plain = settled_pickers(false);
+        plain.dispatch(Some("bravo")).unwrap();
+        plain.render();
+        assert!(plain.capture_frame().plain_text().contains("alpha"));
     }
 }
