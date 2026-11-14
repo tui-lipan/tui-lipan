@@ -9012,6 +9012,177 @@ struct LiveScreenSmoke {
     views: Rc<Cell<usize>>,
 }
 
+#[cfg(feature = "terminal-ghostty")]
+#[test]
+fn live_terminal_preserves_legacy_emoji_columns_on_repaint() {
+    use crate::widgets::{TerminalEngineKind, TerminalScreen};
+
+    let screen = Rc::new(RefCell::new(TerminalScreen::with_engine(
+        TerminalEngineKind::Ghostty,
+        4,
+        20,
+        0,
+    )));
+    screen
+        .borrow_mut()
+        .process_bytes("👨‍👩‍👧X\r\n❤️X\r\n👍🏽X\r\n🇯🇵X".as_bytes());
+    let mut backend = crate::TestBackend::new(LiveScreenSmoke {
+        screen: screen.clone(),
+        views: Rc::new(Cell::new(0)),
+    });
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 4,
+    });
+    backend.render();
+    let frame = backend.capture_frame();
+    for (x, y) in [(6, 0), (1, 1), (4, 2), (4, 3)] {
+        assert_eq!(
+            frame.cell(x, y).symbol,
+            "X",
+            "column {x}, row {y}: {frame:?}"
+        );
+    }
+    assert_eq!(frame.cell(0, 0).symbol, "👨");
+    assert_eq!(frame.cell(2, 0).symbol, "👩");
+    assert_eq!(frame.cell(0, 1).symbol, "❤");
+    assert!(screen.borrow_mut().render_snapshot().text.contains("❤️X"));
+    let id = node_id_by_key(&backend.core.tree, "terminal");
+    let NodeKind::Terminal(node) = &mut backend.core.tree.node_mut(id).kind else {
+        panic!("terminal")
+    };
+    node.decorations = vec![
+        crate::TerminalDecoration::highlight(0, 6..7, Style::new().fg(Color::Rgb(200, 10, 20))),
+        crate::TerminalDecoration::overlay(3, 1, Span::new("Z")),
+        crate::TerminalDecoration::label(2, 4, Span::new("!")),
+    ]
+    .into();
+    let decorated = backend.capture_frame();
+    assert_eq!(decorated.cell(6, 0).fg, Color::Rgb(200, 10, 20));
+    assert_eq!(decorated.cell(0, 3).symbol, " ");
+    assert_eq!(decorated.cell(1, 3).symbol, "Z");
+    assert_eq!(decorated.cell(4, 2).symbol, "!");
+    assert_eq!(decorated.cell(5, 2).symbol, "X");
+    let NodeKind::Terminal(node) = &mut backend.core.tree.node_mut(id).kind else {
+        panic!("terminal")
+    };
+    node.decorations = Arc::from([]);
+
+    screen.borrow_mut().process_bytes(b"\x1b[1;7HY");
+    assert!(backend.refresh_live_terminals());
+    let repainted = backend.capture_frame();
+    assert_eq!(repainted.cell(6, 0).symbol, "Y");
+    assert_eq!(
+        repainted.cell(1, 1).symbol,
+        "X",
+        "unchanged row retains cell layout"
+    );
+    screen
+        .borrow_mut()
+        .process_bytes("\x1bc\x1b[?2027h👨‍👩‍👧X\r\n❤️X\r\n👍🏽X\r\n🇯🇵X".as_bytes());
+    assert!(backend.refresh_live_terminals());
+    let clustered = backend.capture_frame();
+    for row in 0..4 {
+        assert_eq!(clustered.cell(2, row).symbol, "X", "clustered row {row}");
+    }
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 1,
+        h: 4,
+    });
+    backend.render();
+    assert_eq!(
+        backend.capture_frame().cell(0, 0).symbol,
+        " ",
+        "a clipped wide cluster stays inside the pane"
+    );
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 4,
+    });
+    backend.render();
+    screen.borrow_mut().process_bytes(b"\x1bcabcdefghij");
+    assert!(backend.refresh_live_terminals());
+    assert!(backend.capture_frame().to_fixed_grid_lines()[0].starts_with("abcdefghij"));
+    screen.borrow_mut().process_bytes("\x1b[2;1H❤️X".as_bytes());
+    assert!(backend.refresh_live_terminals());
+    assert_eq!(
+        backend.capture_frame().cell(1, 1).symbol,
+        "X",
+        "damaged ASCII row starts using cell layout"
+    );
+}
+
+#[cfg(feature = "terminal-ghostty")]
+#[test]
+fn live_emoji_row_labels_snap_before_wide_cells() {
+    use crate::widgets::{TerminalDecoration, TerminalEngineKind, TerminalScreen};
+    let screen = Rc::new(RefCell::new(TerminalScreen::with_engine(
+        TerminalEngineKind::Ghostty,
+        1,
+        20,
+        0,
+    )));
+    // A sensitive emoji selects cell layout without affecting the earlier CJK glyph.
+    screen.borrow_mut().process_bytes("a界b ❤️".as_bytes());
+    let mut backend = crate::TestBackend::new(LiveScreenSmoke {
+        screen,
+        views: Rc::new(Cell::new(0)),
+    });
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 1,
+    });
+    backend.render();
+    let id = node_id_by_key(&backend.core.tree, "terminal");
+    for (label, prefix, glyph_col, suffix_col) in [
+        ("!", "a", 2, 4),
+        ("", "a", 1, 3),
+        ("\u{301}", "a\u{301}", 1, 3),
+    ] {
+        let NodeKind::Terminal(node) = &mut backend.core.tree.node_mut(id).kind else {
+            panic!("terminal")
+        };
+        node.decorations = vec![TerminalDecoration::label(0, 2, Span::new(label))].into();
+        let frame = backend.capture_frame();
+        assert_eq!(
+            frame.cell(0, 0).symbol,
+            prefix,
+            "label {label:?}: {frame:?}"
+        );
+        assert_eq!(
+            frame.cell(glyph_col, 0).symbol,
+            "界",
+            "label {label:?}: {frame:?}"
+        );
+        assert_eq!(
+            frame.cell(suffix_col, 0).symbol,
+            "b",
+            "label {label:?}: {frame:?}"
+        );
+        if label == "!" {
+            assert_eq!(frame.cell(1, 0).symbol, "!");
+        }
+    }
+    for label in ["", "\u{301}"] {
+        let NodeKind::Terminal(node) = &mut backend.core.tree.node_mut(id).kind else {
+            panic!("terminal")
+        };
+        node.decorations = vec![TerminalDecoration::overlay(0, 2, Span::new(label))].into();
+        let frame = backend.capture_frame();
+        assert_eq!(frame.cell(0, 0).symbol, "a");
+        assert_eq!(frame.cell(1, 0).symbol, "界");
+        assert_eq!(frame.cell(3, 0).symbol, "b");
+    }
+}
+
 #[cfg(feature = "terminal")]
 impl Component for LiveScreenSmoke {
     type Message = ();

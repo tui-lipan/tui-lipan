@@ -1,4 +1,8 @@
+use std::cell::RefCell;
 use std::hint::black_box;
+use std::rc::Rc;
+use tui_lipan::TestBackend;
+use tui_lipan::prelude::*;
 
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use tui_lipan::TerminalEngineKind;
@@ -122,5 +126,61 @@ fn resize_cycles(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, ingest, snapshots, resize_cycles);
+struct LivePane(Rc<RefCell<TerminalScreen>>);
+
+impl Component for LivePane {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+    fn update(&mut self, _msg: (), _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        Terminal::new()
+            .screen(TerminalScreenHandle::new(Rc::clone(&self.0)))
+            .into()
+    }
+}
+
+fn live_ascii_paint(c: &mut Criterion) {
+    let mut group = c.benchmark_group("terminal_live_ascii");
+    for (engine, prefix) in engines() {
+        for (cols, rows) in [(120, 40), (253, 64)] {
+            for streaming in [false, true] {
+                let screen = Rc::new(RefCell::new(TerminalScreen::with_engine(
+                    engine, rows, cols, 0,
+                )));
+                let line = format!("{}\r\n", "x".repeat(usize::from(cols - 1)));
+                screen
+                    .borrow_mut()
+                    .process_bytes(line.repeat(usize::from(rows)).as_bytes());
+                let mut backend = TestBackend::new(LivePane(Rc::clone(&screen)));
+                backend.set_viewport(Rect {
+                    x: 0,
+                    y: 0,
+                    w: cols,
+                    h: rows,
+                });
+                backend.render();
+                let workload = if streaming { "stream" } else { "repaint" };
+                group.bench_function(format!("{prefix}{workload}/{cols}x{rows}"), |b| {
+                    b.iter(|| {
+                        if streaming {
+                            screen
+                                .borrow_mut()
+                                .process_bytes(black_box(line.as_bytes()));
+                            backend.refresh_live_terminals();
+                        }
+                        black_box(backend.capture_frame());
+                    });
+                });
+            }
+        }
+    }
+    group.finish();
+}
+
+criterion_group!(benches, ingest, snapshots, resize_cycles, live_ascii_paint);
 criterion_main!(benches);

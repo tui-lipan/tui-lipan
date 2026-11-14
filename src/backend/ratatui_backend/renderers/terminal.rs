@@ -452,6 +452,17 @@ fn paint_terminal_rows(
             height: 1,
             ..area
         };
+        // A copy flash may carry an older snapshot, which must keep its own text.
+        let flash_snapshot = flash_range.as_ref().and_then(|range| range.line(row));
+        if let Some(cells) = node
+            .screen
+            .as_ref()
+            .filter(|_| flash_snapshot.is_none())
+            .and_then(|screen| screen.render_cell_row(row, &node.decorations))
+        {
+            paint_terminal_cell_row(buf, paint, row, row_area, dx, cells);
+            continue;
+        }
         let spans = {
             let source = match flash_range.as_ref() {
                 Some(range) if range.selection.columns_for_row(row, 0).is_some() => range.line(row),
@@ -500,6 +511,101 @@ fn paint_terminal_rows(
         };
         paint_terminal_row(buf, spans, row_area, content_w, dx);
     }
+}
+
+fn paint_terminal_cell_row(
+    buf: &mut ratatui::buffer::Buffer,
+    paint: &TerminalRowPaint<'_>,
+    row: usize,
+    area: ratatui::layout::Rect,
+    dx: u16,
+    cells: Vec<(u16, u16, Span)>,
+) {
+    use ratatui::buffer::CellDiffOption;
+    use std::num::NonZeroU16;
+
+    for (col, width, span) in cells {
+        let end = col.saturating_add(width);
+        let right = dx.saturating_add(area.width.min(paint.content_w));
+        let start = col.max(dx);
+        let stop = end.min(right);
+        if start >= stop {
+            continue;
+        }
+        let style = terminal_cell_style(paint, row, col, end, span.style);
+        if start != col || stop != end {
+            for x in start..stop {
+                let cell = &mut buf[(area.x + x - dx, area.y)];
+                cell.reset();
+                cell.set_style(to_ratatui_style(style));
+            }
+            continue;
+        }
+        let x = area.x + col - dx;
+        let symbol = cell_symbol_for_width(&span.content, width);
+        buf[(x, area.y)]
+            .set_symbol(&symbol)
+            .set_style(to_ratatui_style(style))
+            .set_diff_option(CellDiffOption::ForcedWidth(NonZeroU16::new(width).unwrap()));
+        for offset in 1..width {
+            let spacer = &mut buf[(x + offset, area.y)];
+            spacer.reset();
+            spacer.set_style(to_ratatui_style(style));
+        }
+    }
+}
+
+fn terminal_cell_style(
+    paint: &TerminalRowPaint<'_>,
+    row: usize,
+    col: u16,
+    end: u16,
+    base: Style,
+) -> Style {
+    let selection = paint
+        .paint_selection
+        .as_ref()
+        .and_then(|selection| selection.columns_for_row(row, usize::from(paint.content_w)));
+    let mut style = paint.content_style.patch(base);
+    if paint.node.link_hover.as_ref().is_some_and(|hover| {
+        hover.spans.iter().any(|range| {
+            range.row == row
+                && range.start_col < usize::from(end)
+                && range.end_col > usize::from(col)
+        })
+    }) {
+        style = style.patch(paint.link_hover_style);
+    }
+    if selection.is_some_and(|(start, stop)| start < usize::from(end) && stop > usize::from(col)) {
+        style = style.patch(paint.selection_style);
+        if let Some(scan) = paint.scan {
+            let position = (f32::from(col) + 0.5) / f32::from(paint.content_w).max(1.0);
+            if let Some(feedback) = scan.style_at(Some(position)) {
+                style = style.patch(feedback);
+            }
+        }
+    }
+    style
+}
+
+/// A legacy one-column cell cannot display an emoji presentation that needs two columns.
+/// Use its text presentation, keeping the original cluster in the screen for copying/export.
+fn cell_symbol_for_width(text: &str, width: u16) -> std::borrow::Cow<'_, str> {
+    // Legacy emulators keep a ZWJ on the preceding cell instead of forming one cluster.
+    // Do not leave an unfinished join across the cursor move to the next cell: host shaping
+    // can join it to text at another position, even across pane borders.
+    let text = text.trim_end_matches('\u{200d}');
+    if text.is_empty() || text.chars().any(char::is_control) {
+        return " ".into();
+    }
+    if width == 1 && UnicodeWidthStr::width(text) > 1 {
+        let narrow = text.replace('\u{fe0f}', "");
+        if UnicodeWidthStr::width(narrow.as_str()) <= 1 {
+            return narrow.into();
+        }
+        return "�".into();
+    }
+    text.into()
 }
 
 /// Paint one row's spans into `row_area`, a one-row rect already inside `buf`.
