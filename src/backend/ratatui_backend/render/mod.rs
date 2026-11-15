@@ -213,9 +213,11 @@ pub(crate) fn render(f: &mut ratatui::Frame<'_>, ctx: &RenderContext<'_>) {
     let initial_root = extra_root.map_or(tree.root, |(base, _extra)| base);
 
     #[cfg(feature = "terminal-images")]
+    let image_occlusions = image_occlusion_rects(tree, content_rect, extra_root);
+    #[cfg(feature = "terminal-images")]
     let _image_occlusion_guard = {
         crate::backend::ratatui_backend::renderers::image::set_image_occlusions(
-            image_occlusion_rects(tree, content_rect, extra_root),
+            image_occlusions_above(&image_occlusions, None),
         );
         ImageOcclusionGuard
     };
@@ -260,6 +262,10 @@ pub(crate) fn render(f: &mut ratatui::Frame<'_>, ctx: &RenderContext<'_>) {
                 .filter(|&&(index, _)| index > overlay_index)
                 .map(|(_, backdrop)| backdrop.clone())
                 .collect(),
+        );
+        #[cfg(feature = "terminal-images")]
+        crate::backend::ratatui_backend::renderers::image::replace_image_occlusions(
+            image_occlusions_above(&image_occlusions, Some(overlay_index)),
         );
         #[cfg(feature = "image")]
         install_pending_image_effects(pending_image_effects(
@@ -560,7 +566,10 @@ pub(crate) fn render_regions(
             h: content.height,
         };
         crate::backend::ratatui_backend::renderers::image::set_image_occlusions(
-            image_occlusion_rects(tree, content_rect, extra_root_wrapper_children(tree)),
+            image_occlusions_above(
+                &image_occlusion_rects(tree, content_rect, extra_root_wrapper_children(tree)),
+                None,
+            ),
         );
         ImageOcclusionGuard
     };
@@ -2858,15 +2867,16 @@ fn overlay_image_backdrops(
         .collect()
 }
 
-/// Opaque overlay and DevTools rects a Kitty placeholder row must walk around.
+/// Opaque overlay and DevTools rects a Kitty placeholder row must walk around, each with the index
+/// of the overlay it belongs to. DevTools (`None`) covers every overlay.
 #[cfg(feature = "terminal-images")]
 fn image_occlusion_rects(
     tree: &NodeTree,
     content_rect: Rect,
     extra_root: Option<(NodeId, NodeId)>,
-) -> Vec<ratatui::layout::Rect> {
+) -> Vec<(Option<usize>, ratatui::layout::Rect)> {
     let mut rects = Vec::new();
-    for overlay in tree.overlay_roots() {
+    for (index, overlay) in tree.overlay_roots().iter().enumerate() {
         if !tree.is_valid(overlay.id) {
             continue;
         }
@@ -2888,7 +2898,7 @@ fn image_occlusion_rects(
         {
             let full = to_ratatui_rect(content_rect);
             if full.width > 0 && full.height > 0 {
-                rects.push(full);
+                rects.push((Some(index), full));
             }
         }
         let clear_rect = clip_overlay_clear_rect(
@@ -2896,7 +2906,7 @@ fn image_occlusion_rects(
             overlay_paint_offset(tree, overlay).apply_to_rect(tree.node(overlay.id).rect),
         );
         if clear_rect.width > 0 && clear_rect.height > 0 {
-            rects.push(clear_rect);
+            rects.push((Some(index), clear_rect));
         }
     }
     if let Some((_base, extra)) = extra_root {
@@ -2904,13 +2914,30 @@ fn image_occlusion_rects(
         if let Some(rect) = keyed_descendant_rect(tree, extra, crate::devtools::DEVTOOLS_KEY) {
             let panel = clip_overlay_clear_rect(content_rect, rect);
             if panel.width > 0 && panel.height > 0 {
-                rects.push(panel);
+                rects.push((None, panel));
             }
         }
         #[cfg(not(feature = "devtools"))]
         let _ = extra;
     }
     rects
+}
+
+/// The occlusions that sit above content drawn in `layer`: everything for the base tree (`None`),
+/// only later overlays and DevTools for overlay `Some(index)`. An overlay never hides its own images.
+#[cfg(feature = "terminal-images")]
+fn image_occlusions_above(
+    rects: &[(Option<usize>, ratatui::layout::Rect)],
+    layer: Option<usize>,
+) -> Vec<ratatui::layout::Rect> {
+    rects
+        .iter()
+        .filter(|(owner, _)| match (layer, owner) {
+            (None, _) | (_, None) => true,
+            (Some(layer), Some(owner)) => owner > &layer,
+        })
+        .map(|&(_, rect)| rect)
+        .collect()
 }
 
 #[cfg(all(feature = "terminal-images", feature = "devtools"))]

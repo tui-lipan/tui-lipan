@@ -666,6 +666,15 @@ pub(crate) fn set_image_occlusions(rects: Vec<ratatui::layout::Rect>) {
     IMAGE_PLACEHOLDERS_PAINTED.set(false);
 }
 
+/// Swap the active holes mid-frame, keeping what earlier layers already painted.
+///
+/// Each overlay walks around only the overlays above it, never its own rectangle, so the list
+/// changes per layer while the painted bookkeeping covers the whole frame.
+#[cfg(feature = "terminal-images")]
+pub(crate) fn replace_image_occlusions(rects: Vec<ratatui::layout::Rect>) {
+    IMAGE_OCCLUSIONS.with(|slot| *slot.borrow_mut() = rects);
+}
+
 /// Add holes for one image-owning subtree, restoring the frame-wide list on drop.
 ///
 /// Floating terminal panes are ordinary Canvas layers rather than root-portal overlays. A lower
