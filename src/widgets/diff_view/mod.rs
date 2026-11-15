@@ -1143,7 +1143,12 @@ impl From<DiffView> for Element {
         let diff_data = if let Some(data) = view.diff_data.clone() {
             data
         } else if let Some(patch) = view.patch.as_ref() {
-            cached_patch_diff_data(Arc::clone(patch), config)
+            let patch_config = DiffDataConfig {
+                show_context_separator: view.show_context_separator,
+                context_separator_text: view.context_separator_text.clone(),
+                ..config
+            };
+            cached_patch_diff_data(Arc::clone(patch), patch_config)
         } else {
             cached_diff_data(&view.before, &view.after, config)
         };

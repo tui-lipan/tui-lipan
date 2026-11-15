@@ -356,6 +356,8 @@ pub(crate) fn build_patch_data(patch: &str, config: DiffDataConfig) -> DiffData 
 
     let mut old_ln_opt: Option<usize> = None;
     let mut new_ln_opt: Option<usize> = None;
+    let mut old_hunk_side = PatchHunkSide::default();
+    let mut new_hunk_side = PatchHunkSide::default();
     let mut current_hunk: Option<DiffHunk> = None;
     let mut next_hunk_index = 0usize;
     let mut pending_left: Vec<Arc<str>> = Vec::new();
@@ -476,22 +478,22 @@ pub(crate) fn build_patch_data(patch: &str, config: DiffDataConfig) -> DiffData 
             let mut old_start = None;
             let mut new_start = None;
             if parts.len() >= 3 && parts[1].starts_with('-') && parts[2].starts_with('+') {
-                old_start = parts[1][1..]
-                    .split(',')
-                    .next()
-                    .unwrap_or("0")
-                    .parse::<usize>()
-                    .ok();
-                new_start = parts[2][1..]
-                    .split(',')
-                    .next()
-                    .unwrap_or("0")
-                    .parse::<usize>()
-                    .ok();
+                let next_old = PatchHunkSide::parse(&parts[1][1..]);
+                let next_new = PatchHunkSide::parse(&parts[2][1..]);
+                old_start = next_old.start;
+                new_start = next_new.start;
                 if config.show_context_separator
                     && current_hunk.is_some()
-                    && let Some(hidden) =
-                        hunk_gap(old_ln_opt, old_start).or_else(|| hunk_gap(new_ln_opt, new_start))
+                    && let Some(hidden) = hunk_gap(
+                        old_hunk_side.post_hunk_line(old_ln_opt),
+                        next_old.pre_hunk_line(),
+                    )
+                    .or_else(|| {
+                        hunk_gap(
+                            new_hunk_side.post_hunk_line(new_ln_opt),
+                            next_new.pre_hunk_line(),
+                        )
+                    })
                 {
                     let separator =
                         hunk_gap_separator(hidden, config.context_separator_text.as_ref());
@@ -501,6 +503,11 @@ pub(crate) fn build_patch_data(patch: &str, config: DiffDataConfig) -> DiffData 
                 }
                 old_ln_opt = old_start;
                 new_ln_opt = new_start;
+                old_hunk_side = next_old;
+                new_hunk_side = next_new;
+            } else {
+                old_hunk_side = PatchHunkSide::default();
+                new_hunk_side = PatchHunkSide::default();
             }
             current_hunk = Some(DiffHunk {
                 index: next_hunk_index,
@@ -526,6 +533,8 @@ pub(crate) fn build_patch_data(patch: &str, config: DiffDataConfig) -> DiffData 
 
             old_ln_opt = None;
             new_ln_opt = None;
+            old_hunk_side = PatchHunkSide::default();
+            new_hunk_side = PatchHunkSide::default();
             current_hunk = None;
         } else if let Some(rest) = line.strip_prefix('+') {
             pending_right.push(rest.into());
@@ -616,6 +625,10 @@ pub(crate) fn build_patch_data(patch: &str, config: DiffDataConfig) -> DiffData 
             );
 
             let fb_kind = if line.starts_with("diff --git") {
+                old_ln_opt = None;
+                new_ln_opt = None;
+                old_hunk_side = PatchHunkSide::default();
+                new_hunk_side = PatchHunkSide::default();
                 current_hunk = None;
                 DiffLineKind::PatchHeader
             } else {
@@ -878,6 +891,47 @@ fn revealed_lines_for_range(
         .find(|expansion| expansion.range == *range)
         .map(|expansion| expansion.lines_revealed)
         .unwrap_or(0)
+}
+
+#[derive(Clone, Copy, Default)]
+struct PatchHunkSide {
+    start: Option<usize>,
+    count: Option<usize>,
+}
+
+impl PatchHunkSide {
+    fn parse(spec: &str) -> Self {
+        let mut parts = spec.split(',');
+        let start = parts.next().and_then(|s| s.parse::<usize>().ok());
+        let count = match parts.next() {
+            Some(count) => count.parse::<usize>().ok(),
+            None => Some(1),
+        };
+        Self { start, count }
+    }
+
+    /// First untouched line after this hunk ends.
+    ///
+    /// Zero-length ranges like `-1,0` place the anchor on the preceding line,
+    /// so when no lines were consumed the next untouched line is `start + 1`.
+    fn post_hunk_line(self, cursor: Option<usize>) -> Option<usize> {
+        let next = cursor?;
+        if self.count == Some(0) && cursor == self.start {
+            Some(next.saturating_add(1))
+        } else {
+            Some(next)
+        }
+    }
+
+    /// Boundary line before this hunk starts (accounting for zero-length ranges).
+    fn pre_hunk_line(self) -> Option<usize> {
+        let start = self.start?;
+        if self.count == Some(0) {
+            Some(start.saturating_add(1))
+        } else {
+            Some(start)
+        }
+    }
 }
 
 /// Lines a patch skips between the previous hunk (ending just before `next`)
@@ -1962,6 +2016,75 @@ mod tests {
         assert!(
             !data.unified.lines.iter().any(|l| l.text.as_ref() == "d"),
             "{kinds:?}"
+        );
+    }
+
+    #[test]
+    fn pure_insertion_hunk_counts_only_hidden_lines_between_hunks() {
+        let patch = concat!(
+            "@@ -1,0 +2 @@ a\n",
+            "+X\n",
+            "@@ -6 +7 @@ e\n",
+            "-f\n",
+            "+F\n",
+        );
+        let data = build_patch_data(patch, DiffDataConfig::default());
+        let separators: Vec<_> = data
+            .unified
+            .lines
+            .iter()
+            .filter(|line| line.kind == DiffLineKind::Separator)
+            .map(|line| line.text.as_ref())
+            .collect();
+        assert_eq!(separators, vec!["↑↓ 4 hidden lines between ↑↓"]);
+    }
+
+    #[test]
+    fn zero_length_hunk_ranges_count_gaps_accurately_across_combinations() {
+        // Pure insertion at file start (`-0,0`) followed by change at line 3 (lines 1..=2 hidden).
+        let start_insert = concat!("@@ -0,0 +1 @@\n", "+X\n", "@@ -3 +4 @@\n", "-c\n", "+C\n",);
+        let data = build_patch_data(start_insert, DiffDataConfig::default());
+        let sep: Vec<_> = data
+            .unified
+            .lines
+            .iter()
+            .filter(|l| l.kind == DiffLineKind::Separator)
+            .map(|l| l.text.as_ref())
+            .collect();
+        assert_eq!(sep, vec!["↑↓ 2 hidden lines between ↑↓"]);
+
+        // Two pure insertions with lines 2..=5 hidden between them.
+        let two_inserts = concat!("@@ -1,0 +2 @@ a\n", "+X\n", "@@ -5,0 +7 @@ e\n", "+Y\n",);
+        let data = build_patch_data(two_inserts, DiffDataConfig::default());
+        let sep: Vec<_> = data
+            .unified
+            .lines
+            .iter()
+            .filter(|l| l.kind == DiffLineKind::Separator)
+            .map(|l| l.text.as_ref())
+            .collect();
+        assert_eq!(sep, vec!["↑↓ 4 hidden lines between ↑↓"]);
+
+        // Two pure deletions with 2 lines hidden between them.
+        let two_deletes = concat!("@@ -2 +1,0 @@ a\n", "-X\n", "@@ -5 +3,0 @@ c\n", "-Y\n",);
+        let data = build_patch_data(two_deletes, DiffDataConfig::default());
+        let sep: Vec<_> = data
+            .unified
+            .lines
+            .iter()
+            .filter(|l| l.kind == DiffLineKind::Separator)
+            .map(|l| l.text.as_ref())
+            .collect();
+        assert_eq!(sep, vec!["↑↓ 2 hidden lines between ↑↓"]);
+
+        // Adjacent insertion before line 1 and change on line 1 has no gap.
+        let adjacent_insert = concat!("@@ -0,0 +1 @@\n", "+X\n", "@@ -1 +2 @@\n", "-a\n", "+A\n",);
+        let data = build_patch_data(adjacent_insert, DiffDataConfig::default());
+        assert!(
+            data.unified
+                .lines
+                .iter()
+                .all(|l| l.kind != DiffLineKind::Separator)
         );
     }
 
