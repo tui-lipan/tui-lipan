@@ -2,7 +2,8 @@
 //!
 //! This formatter supports common markdown structures used in TUI previews:
 //! headings, fenced code blocks, tables, blockquotes, lists, horizontal rules,
-//! and inline styles (emphasis/strong/strikethrough/code/link).
+//! and inline styles (emphasis/strong/strikethrough/code/link). Images become
+//! links to their source, labelled by their alt text.
 
 use std::hash::{Hash, Hasher};
 
