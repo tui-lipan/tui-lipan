@@ -1056,6 +1056,7 @@ Source: `src/widgets/file_tree/mod.rs` (`FileTree`).
 | `icon_palette` | `FileIconPalette::default()` |
 | `icon_overrides` | `HashMap::new()` |
 | `show_arrows` | `true` |
+| `show_root` | `true` |
 | `root_collapsible` | `true` |
 | `expanded_arrow` | `"▼".into()` |
 | `collapsed_arrow` | `"▶".into()` |

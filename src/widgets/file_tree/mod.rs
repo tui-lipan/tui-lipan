@@ -392,6 +392,7 @@ impl FileTree {
                 icon_palette: FileIconPalette::default(),
                 icon_overrides: HashMap::new(),
                 show_arrows: true,
+                show_root: true,
                 root_collapsible: true,
                 expanded_arrow: "▼".into(),
                 collapsed_arrow: "▶".into(),
@@ -601,6 +602,15 @@ impl FileTree {
     /// Set both `show_icons(false)` and `show_arrows(false)` for labels only.
     pub fn show_arrows(mut self, show: bool) -> Self {
         self.props.show_arrows = show;
+        self
+    }
+
+    /// Toggle the root directory row (default true).
+    ///
+    /// Set to false to omit the root row and render its top-level entries at depth 0 without a
+    /// heading. The hidden root stays expanded even if [`Self::root_collapsible`] is true.
+    pub fn show_root(mut self, show: bool) -> Self {
+        self.props.show_root = show;
         self
     }
 
@@ -1644,6 +1654,8 @@ mod tests {
     fn indent_width_defaults_to_two_and_can_be_compacted() {
         assert_eq!(FileTree::new(".").props.indent_width, 2);
         assert_eq!(FileTree::new(".").indent_width(1).props.indent_width, 1);
+        assert!(FileTree::new(".").props.show_root);
+        assert!(!FileTree::new(".").show_root(false).props.show_root);
     }
 
     #[test]

@@ -371,55 +371,60 @@ impl Component for FileTreeComponent {
 
         let has_explorer = ctx.props.explorer;
 
-        let mut tree = Tree::new(projection.root)
-            .indent(ctx.props.indent_width)
-            .show_arrows(ctx.props.show_arrows)
-            .expanded_arrow(ctx.props.expanded_arrow.clone())
-            .collapsed_arrow(ctx.props.collapsed_arrow.clone())
-            .arrow_style(ctx.props.arrow_style)
-            .content_gap(ctx.props.content_gap)
-            .indent_style(ctx.props.indent_style)
-            .indent_guide_style(ctx.props.indent_guide_style)
-            .indent_guide_start_depth(ctx.props.indent_guide_start_depth)
-            .style(ctx.props.style)
-            .hover_style_slot(ctx.props.hover_style)
-            .item_hover_style_slot(ctx.props.item_hover_style)
-            .selection_style_slot(ctx.props.selection_style)
-            .unfocused_selection_style_slot(ctx.props.unfocused_selection_style)
-            .selection_full_width(true)
-            .unselected_symbol(Some(""))
-            .scrollbar(ctx.props.scrollbar)
-            .scrollbar_config(ctx.props.scrollbar_config.clone())
-            .scroll_keys(ctx.props.scroll_keys)
-            .scroll_wheel(ctx.props.scroll_wheel)
-            .show_scroll_indicators(ctx.props.show_scroll_indicators)
-            .scroll_indicator_style(ctx.props.scroll_indicator_style)
-            .width(ctx.props.width)
-            .height(ctx.props.height)
-            .force_scroll_to_selected(ctx.props.force_scroll_to_selected)
-            .activate_on_click(ctx.props.activate_on_click)
-            .focusable(ctx.props.focusable)
-            .tab_stop(ctx.props.tab_stop)
-            .focus_key(ctx.props.tree_focus_key.clone())
-            .keymap(ctx.props.keymap)
-            .on_select(
-                ctx.link()
-                    .callback(move |event: TreeEvent| FileTreeMsg::TreeSelected {
-                        entry: select_lookup.get(&event.path).cloned(),
-                    }),
-            )
-            .on_activate(
-                ctx.link()
-                    .callback(move |event: TreeEvent| FileTreeMsg::TreeActivated {
-                        entry: activate_lookup.get(&event.path).cloned(),
-                    }),
-            )
-            .on_toggle(ctx.link().callback(move |event: TreeToggleEvent| {
-                FileTreeMsg::TreeToggled {
+        let mut tree = if ctx.props.show_root {
+            Tree::new(projection.root)
+        } else {
+            Tree::forest(projection.root.children)
+        }
+        .indent(ctx.props.indent_width)
+        .show_arrows(ctx.props.show_arrows)
+        .expanded_arrow(ctx.props.expanded_arrow.clone())
+        .collapsed_arrow(ctx.props.collapsed_arrow.clone())
+        .arrow_style(ctx.props.arrow_style)
+        .content_gap(ctx.props.content_gap)
+        .indent_style(ctx.props.indent_style)
+        .indent_guide_style(ctx.props.indent_guide_style)
+        .indent_guide_start_depth(ctx.props.indent_guide_start_depth)
+        .style(ctx.props.style)
+        .hover_style_slot(ctx.props.hover_style)
+        .item_hover_style_slot(ctx.props.item_hover_style)
+        .selection_style_slot(ctx.props.selection_style)
+        .unfocused_selection_style_slot(ctx.props.unfocused_selection_style)
+        .selection_full_width(true)
+        .unselected_symbol(Some(""))
+        .scrollbar(ctx.props.scrollbar)
+        .scrollbar_config(ctx.props.scrollbar_config.clone())
+        .scroll_keys(ctx.props.scroll_keys)
+        .scroll_wheel(ctx.props.scroll_wheel)
+        .show_scroll_indicators(ctx.props.show_scroll_indicators)
+        .scroll_indicator_style(ctx.props.scroll_indicator_style)
+        .width(ctx.props.width)
+        .height(ctx.props.height)
+        .force_scroll_to_selected(ctx.props.force_scroll_to_selected)
+        .activate_on_click(ctx.props.activate_on_click)
+        .focusable(ctx.props.focusable)
+        .tab_stop(ctx.props.tab_stop)
+        .focus_key(ctx.props.tree_focus_key.clone())
+        .keymap(ctx.props.keymap)
+        .on_select(
+            ctx.link()
+                .callback(move |event: TreeEvent| FileTreeMsg::TreeSelected {
+                    entry: select_lookup.get(&event.path).cloned(),
+                }),
+        )
+        .on_activate(
+            ctx.link()
+                .callback(move |event: TreeEvent| FileTreeMsg::TreeActivated {
+                    entry: activate_lookup.get(&event.path).cloned(),
+                }),
+        )
+        .on_toggle(
+            ctx.link()
+                .callback(move |event: TreeToggleEvent| FileTreeMsg::TreeToggled {
                     entry: toggle_lookup.get(&event.path).cloned(),
                     expanded: event.expanded,
-                }
-            }));
+                }),
+        );
         if ctx.props.on_context_menu.is_some() {
             let lookup = projection.lookup.clone();
             tree =
@@ -637,12 +642,15 @@ impl Component for FileTreeComponent {
             request_missing_provided_directories(&mut ctx.state, &ctx.props);
         }
 
+        let show_root_changed = old_props.show_root != ctx.props.show_root;
+
         let dirty = root_mode_changed
             || source_changed
             || change_source_changed
             || provided_options_changed
             || local_options_changed
             || local_entry_token_changed
+            || show_root_changed
             || old_props.expanded_paths != ctx.props.expanded_paths
             || should_load_git;
         let command = if should_load_git {
@@ -684,6 +692,9 @@ impl Component for FileTreeComponent {
         // the filter over it changes.
         if !root_mode_changed && old_props.explorer_max_matches != ctx.props.explorer_max_matches {
             ctx.link().send(FileTreeMsg::RerunExplorerSearch);
+        }
+        if show_root_changed {
+            normalize_uncontrolled_selection(&ctx.props, &mut ctx.state);
         }
 
         if dirty {
@@ -1270,7 +1281,14 @@ fn tracks_uncontrolled_selection(props: &FileTreeProps) -> bool {
 }
 
 fn initial_uncontrolled_selected_path(props: &FileTreeProps, root: &FsNode) -> Option<Arc<str>> {
-    tracks_uncontrolled_selection(props).then(|| root.path.clone())
+    if !tracks_uncontrolled_selection(props) {
+        return None;
+    }
+    if props.show_root {
+        Some(root.path.clone())
+    } else {
+        root.children.first().map(|child| child.path.clone())
+    }
 }
 
 fn uses_virtual_root(props: &FileTreeProps) -> bool {
@@ -2822,7 +2840,7 @@ fn build_projection_lifting(
         lookup: &mut lookup,
     };
     let root = build_projected_tree_node(&root, true, Vec::new(), &mut build_ctx);
-    let path_to_visible_index = visible_index_by_path(&root, &lookup);
+    let path_to_visible_index = visible_index_by_path(&root, props.show_root, &lookup);
 
     FileTreeProjection {
         root,
@@ -2984,11 +3002,18 @@ fn merge_unknown_provided_directories(projected: &mut FsNode, unknown: Vec<FsNod
 
 fn visible_index_by_path(
     root: &TreeNode,
+    show_root: bool,
     lookup: &HashMap<crate::widgets::TreePath, VisibleFileTreeEntry>,
 ) -> HashMap<Arc<str>, usize> {
     let mut out = HashMap::new();
     let mut next_index = 0usize;
-    collect_visible_index_by_path(root, Vec::new(), lookup, &mut next_index, &mut out);
+    if show_root {
+        collect_visible_index_by_path(root, Vec::new(), lookup, &mut next_index, &mut out);
+    } else {
+        for (index, child) in root.children.iter().enumerate() {
+            collect_visible_index_by_path(child, vec![index], lookup, &mut next_index, &mut out);
+        }
+    }
     out
 }
 
@@ -3024,17 +3049,19 @@ fn build_projected_tree_node(
 ) -> TreeNode {
     use crate::style::Span;
 
-    ctx.lookup.insert(
-        crate::widgets::TreePath::from(tree_path.clone()),
-        VisibleFileTreeEntry {
-            path: node.path.clone(),
-            kind: node.kind,
-        },
-    );
+    if !is_root || ctx.props.show_root {
+        ctx.lookup.insert(
+            crate::widgets::TreePath::from(tree_path.clone()),
+            VisibleFileTreeEntry {
+                path: node.path.clone(),
+                kind: node.kind,
+            },
+        );
+    }
 
     let mut spans = Vec::new();
 
-    let fixed_root = is_root && !ctx.props.root_collapsible;
+    let fixed_root = is_root && (!ctx.props.root_collapsible || !ctx.props.show_root);
     let is_expanded = fixed_root || ctx.expanded.contains(&node.path);
 
     // Get git decorations for this node
@@ -4230,6 +4257,67 @@ mod tests {
         let projection = build_projection(&props, &state, None);
         assert!(projection.root.show_arrow);
         assert!(projection.root.is_collapsible());
+    }
+
+    #[test]
+    fn hidden_root_maps_visible_indices_from_top_level_children_and_stays_open() {
+        let mut props = crate::widgets::file_tree::FileTree::new("/repo")
+            .change_source(crate::widgets::file_tree::FileTreeChangeSource::Provided(
+                vec![
+                    crate::widgets::file_tree::FileTreeChange::new(
+                        "dir1/dir2/nested.rs",
+                        crate::widgets::file_tree::FileTreeChangeStatus::Modified,
+                    ),
+                    crate::widgets::file_tree::FileTreeChange::new(
+                        "top.rs",
+                        crate::widgets::file_tree::FileTreeChangeStatus::Added,
+                    ),
+                ],
+            ))
+            .change_view(crate::widgets::file_tree::FileTreeChangeView::ChangedOnly)
+            .compact_directories(true)
+            .show_root(false)
+            .root_collapsible(true)
+            .props;
+        let mut state = FileTreeComponent::new().create_state(&props);
+        state.expanded.remove::<str>("/repo");
+        state.expanded.insert(Arc::from("/repo/dir1/dir2"));
+
+        let projection = build_projection(&props, &state, None);
+        assert!(projection.root.expanded);
+        assert!(!projection.path_to_visible_index.contains_key("/repo"));
+        assert_eq!(
+            projection.path_to_visible_index.get("/repo/dir1/dir2"),
+            Some(&0)
+        );
+        assert_eq!(
+            projection
+                .path_to_visible_index
+                .get("/repo/dir1/dir2/nested.rs"),
+            Some(&1)
+        );
+        assert_eq!(
+            projection.path_to_visible_index.get("/repo/top.rs"),
+            Some(&2)
+        );
+        assert!(
+            !projection
+                .lookup
+                .contains_key(&crate::widgets::TreePath::from(Vec::new()))
+        );
+        assert_eq!(
+            projection
+                .lookup
+                .get(&crate::widgets::TreePath::from(vec![0]))
+                .map(|entry| entry.path.as_ref()),
+            Some("/repo/dir1/dir2")
+        );
+
+        props.selected_path = Some(Arc::from("top.rs"));
+        assert_eq!(
+            selected_visible_index_by_path(&props, &state, &projection),
+            Some(2)
+        );
     }
 
     /// An empty directory must be expandable whether or not it has been opened yet. A lazy tree
