@@ -2,7 +2,8 @@
 //!
 //! This formatter supports common markdown structures used in TUI previews:
 //! headings, fenced code blocks, tables, blockquotes, lists, horizontal rules,
-//! and inline styles (emphasis/strong/strikethrough/code/link).
+//! and inline styles (emphasis/strong/strikethrough/code/link). Images become
+//! links to their source, labelled by their alt text.
 
 use std::hash::{Hash, Hasher};
 
@@ -432,7 +433,9 @@ fn parse_inline(
                 Tag::Emphasis => style_stack.push(styles.emphasis_style),
                 Tag::Strong => style_stack.push(styles.strong_style),
                 Tag::Strikethrough => style_stack.push(styles.strikethrough_style),
-                Tag::Link { dest_url, .. } => {
+                // An image cannot be drawn inline, so it reads as a link to its
+                // source, labelled by its alt text.
+                Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. } => {
                     style_stack.push(styles.link_style);
                     link_stack.push((Arc::from(dest_url.as_ref()), byte_cursor));
                 }
@@ -478,7 +481,19 @@ fn parse_inline(
                 });
                 byte_cursor = byte_cursor.saturating_add(1);
             }
-            Event::End(TagEnd::Link) => {
+            Event::End(end @ (TagEnd::Link | TagEnd::Image)) => {
+                if let Some((url, start)) = link_stack.last()
+                    && end == TagEnd::Image
+                    && byte_cursor == *start
+                {
+                    // `![](path)` has no alt text: show the source instead.
+                    spans.push(Span {
+                        content: Arc::clone(url),
+                        style: merge_styles(&style_stack),
+                        row_style_policy: RowStylePolicy::Full,
+                    });
+                    byte_cursor = byte_cursor.saturating_add(url.len());
+                }
                 if style_stack.len() > 1 {
                     style_stack.pop();
                 }
@@ -1616,5 +1631,48 @@ flowchart LR
             Some(crate::style::Paint::Solid(crate::style::Color::Green))
         );
         assert_eq!(paragraph[0].spans[0].style.underline, Some(true));
+    }
+
+    fn paragraph_links(value: &str) -> (String, Vec<FormattedLink>, Vec<Style>) {
+        let styles = DocumentStyles {
+            link_style: Style::new().fg(crate::style::Color::Green).underline(),
+            ..DocumentStyles::default()
+        };
+        let doc = MarkdownFormatter::default().format(FormatInput {
+            value,
+            content_type: Some("markdown"),
+            document_styles: Some(&styles),
+        });
+        let lines = match &doc.blocks[0] {
+            FormattedBlock::Lines(lines) => lines,
+            _ => panic!("expected paragraph block"),
+        };
+        (
+            line_text(&lines[0]),
+            lines[0].links.clone(),
+            lines[0].spans.iter().map(|span| span.style).collect(),
+        )
+    }
+
+    #[test]
+    fn images_read_as_links_to_their_source() {
+        let (text, links, styles) = paragraph_links("See ![Before and after](/tmp/shot.png) here");
+
+        assert_eq!(text, "See Before and after here");
+        assert_eq!(links.len(), 1);
+        assert_eq!(&*links[0].url, "/tmp/shot.png");
+        assert_eq!(&text[links[0].start..links[0].end], "Before and after");
+        assert_eq!(styles[1].underline, Some(true));
+        assert_eq!(styles[2].underline, None);
+    }
+
+    #[test]
+    fn an_image_without_alt_text_shows_its_source() {
+        let (text, links, styles) = paragraph_links("![](https://example.com/a.png)");
+
+        assert_eq!(text, "https://example.com/a.png");
+        assert_eq!(&*links[0].url, "https://example.com/a.png");
+        assert_eq!((links[0].start, links[0].end), (0, text.len()));
+        assert_eq!(styles[0].underline, Some(true));
     }
 }

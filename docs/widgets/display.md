@@ -131,6 +131,12 @@ When using `DocumentView::markdown()`, default heading/link/code/table styling i
 derived from `Theme::document`. Use `.doc_styles(...)` or a custom
 `MarkdownFormatter::styles(...)` only when you want local overrides.
 
+Markdown images cannot be drawn inline, so `![alt](src)` renders as a link to
+`src` labelled `alt` (or `src` itself when the alt text is empty). A click
+reports `src` in `DocumentClickEvent::link`; `callbacks::open_document_link()`
+opens only `http`, `https` and `mailto` links, so a local path is left
+to the app.
+
 With feature `markdown`, you can use `MarkdownFormatter`:
 
 ```rust
