@@ -1006,7 +1006,8 @@ fn document_diff_view_scroll_to_hunk_sets_source_line_target() {
         panic!("expected document backend");
     };
 
-    assert_eq!(doc.scroll_to_source_line, Some(2));
+    // Rows: old, new, the separator for lines 2..=7, then the second hunk.
+    assert_eq!(doc.scroll_to_source_line, Some(3));
 }
 
 #[test]
@@ -2477,6 +2478,48 @@ fn patch_diff_data_cache_reuses_parsed_patch_data() {
     let second = cached_patch_diff_data(patch, context_config);
 
     assert!(Arc::ptr_eq(&first, &second));
+}
+
+#[test]
+fn patch_diff_view_respects_show_context_separator_and_custom_text() {
+    let patch = Arc::<str>::from(concat!(
+        "@@ -1,1 +1,1 @@\n",
+        "-old\n",
+        "+new\n",
+        "@@ -8,1 +8,1 @@\n",
+        "-before\n",
+        "+after\n",
+    ));
+
+    // Populate the patch cache with default separator settings first.
+    let default_el: Element = DiffView::from_patch(Arc::clone(&patch))
+        .mode(DiffViewMode::Unified)
+        .into();
+    let ElementKind::TextArea(default_area) = pane_child_kind(outer_content(default_el)) else {
+        panic!("expected textarea backend");
+    };
+    assert!(default_area.value.contains("↑↓ 6 hidden lines between ↑↓"));
+
+    // Turning separators off must omit the gap separator even for cached patches.
+    let hidden_el: Element = DiffView::from_patch(Arc::clone(&patch))
+        .mode(DiffViewMode::Unified)
+        .show_context_separator(false)
+        .into();
+    let ElementKind::TextArea(hidden_area) = pane_child_kind(outer_content(hidden_el)) else {
+        panic!("expected textarea backend");
+    };
+    assert!(!hidden_area.value.contains("hidden"));
+
+    // Custom separator text must apply to patch gap rows too.
+    let custom_el: Element = DiffView::from_patch(patch)
+        .mode(DiffViewMode::Unified)
+        .context_separator_text("...custom {count} {line_word}...")
+        .into();
+    let ElementKind::TextArea(custom_area) = pane_child_kind(outer_content(custom_el)) else {
+        panic!("expected textarea backend");
+    };
+    assert!(custom_area.value.contains("...custom 6 lines..."));
+    assert!(!custom_area.value.contains("↑↓"));
 }
 
 #[test]

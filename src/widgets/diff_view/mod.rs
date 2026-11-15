@@ -716,12 +716,14 @@ impl DiffView {
         self
     }
 
-    /// Show or hide the placeholder separator line when collapsing context.
+    /// Show or hide placeholder separator lines for hidden lines.
     ///
-    /// When `true` (the default) a context separator line is rendered in place
-    /// of each collapsed region. When `false` the hidden lines are simply
-    /// omitted without any visual placeholder. Only meaningful when
-    /// [`Self::context_lines`] is set.
+    /// When `true` (the default) a separator line is rendered in place of each
+    /// region collapsed by [`Self::context_lines`], and, for a diff built
+    /// [`Self::from_patch`], between two hunks the patch does not join (the
+    /// lines it leaves out). Patch-gap separators are not clickable: the patch
+    /// does not contain the hidden lines. When `false` hidden lines are simply
+    /// omitted without any visual placeholder.
     pub fn show_context_separator(mut self, show: bool) -> Self {
         self.show_context_separator = show;
         self
@@ -1141,7 +1143,12 @@ impl From<DiffView> for Element {
         let diff_data = if let Some(data) = view.diff_data.clone() {
             data
         } else if let Some(patch) = view.patch.as_ref() {
-            cached_patch_diff_data(Arc::clone(patch), config)
+            let patch_config = DiffDataConfig {
+                show_context_separator: view.show_context_separator,
+                context_separator_text: view.context_separator_text.clone(),
+                ..config
+            };
+            cached_patch_diff_data(Arc::clone(patch), patch_config)
         } else {
             cached_diff_data(&view.before, &view.after, config)
         };
