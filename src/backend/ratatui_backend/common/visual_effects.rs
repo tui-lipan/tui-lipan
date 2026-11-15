@@ -988,9 +988,13 @@ fn visual_effect_channels(effect: &VisualEffect) -> (bool, bool) {
     }
 }
 
+/// Shift the rows `wave` crosses within `intersection`, the cells this pass paints. Each row's
+/// shift follows its row in the scope, whose first on-screen row is `scope_top`, so a pass clipped
+/// to some rows shifts them as a full paint does.
 fn apply_retro_crt_refresh_wave(
     buf: &mut Buffer,
     intersection: RRect,
+    scope_top: u16,
     phase: u64,
     wave: &RetroRefreshWave,
     gate: &dyn Fn(u16, u16) -> bool,
@@ -1016,9 +1020,9 @@ fn apply_retro_crt_refresh_wave(
             continue;
         }
 
-        let offset =
-            (((local_y as f32 * 0.8) + phase as f32 * 0.35).sin() * wave.distortion * strength)
-                .round() as isize;
+        let scope_y = f32::from(intersection.y + local_y as u16 - scope_top);
+        let offset = (((scope_y * 0.8) + phase as f32 * 0.35).sin() * wave.distortion * strength)
+            .round() as isize;
         if offset == 0 {
             continue;
         }
@@ -1373,7 +1377,7 @@ pub(crate) fn apply_visual_effects_over_backdrop(
             _ => Vec::new(),
         };
         for wave in &retro_refresh_waves {
-            apply_retro_crt_refresh_wave(buf, intersection, phase, wave, &gate);
+            apply_retro_crt_refresh_wave(buf, intersection, scope_on_screen.y, phase, wave, &gate);
         }
         let quantize_palette = match peeled {
             VisualEffect::PaletteQuantize { palette } => Some(visual_effect_palette(palette)),
