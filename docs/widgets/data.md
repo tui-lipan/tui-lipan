@@ -739,8 +739,8 @@ Plus all `Tree` styling/scrolling props, including `indent_style` and `scrollbar
   resetting expansion or explorer state. The root and currently expanded directories are reread;
   collapsed descendants are unloaded and reread when reopened. Reads run in a background command;
   results for an older token, root, or entry source are ignored. An active explorer query reruns
-  against the refreshed entries, and uncontrolled selection follows its path with the root as the
-  deterministic fallback when that path disappears. This does not refresh Git status; use
+  against the refreshed entries, and uncontrolled selection follows its path, falling back to the
+  first visible row when that path disappears. This does not refresh Git status; use
   `git_refresh_token(...)` separately. Provided entry sources ignore the token because their
   listings are owned by the application.
 - `refresh_policy(FileTreeRefreshPolicy::Polling(interval))` rereads the root, the expanded
