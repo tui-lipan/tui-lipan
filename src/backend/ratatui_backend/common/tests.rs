@@ -1087,3 +1087,83 @@ fn backdrop_background_effect_matches_the_cell_pass() {
         "a foreground-only backdrop leaves pictures alone"
     );
 }
+
+/// A partial repaint clips an effect scope to the rows that changed. The clip limits which cells
+/// the pass paints and must not move the effect: a mask and a ripple stay where the scope puts
+/// them, so a clipped row comes out exactly as a full paint draws it.
+#[test]
+fn a_clip_limits_a_masked_ripple_without_moving_it() {
+    const W: u16 = 12;
+    const H: u16 = 8;
+    let scope = Rect {
+        x: 2,
+        y: 1,
+        w: W - 4,
+        h: H - 2,
+    };
+    // The scope's border: its first and last rows and columns.
+    let (mw, mh) = (usize::from(scope.w), usize::from(scope.h));
+    let mut bits = vec![0u64; (mw * mh).div_ceil(64)];
+    for y in 0..mh {
+        for x in 0..mw {
+            if y == 0 || y + 1 == mh || x == 0 || x + 1 == mw {
+                bits[(y * mw + x) / 64] |= 1 << ((y * mw + x) % 64);
+            }
+        }
+    }
+    let effect = VisualEffect::Clipped {
+        bounds: None,
+        mask: Some(Arc::new(CellMask {
+            origin: (scope.x as u16, scope.y as u16),
+            w: scope.w,
+            h: scope.h,
+            bits: bits.into(),
+        })),
+        inner: Box::new(VisualEffect::Ripple {
+            origin: crate::style::EffectOrigin::cell(f32::from(scope.x) + 6.0, f32::from(scope.y)),
+            radius: RippleRadius::Fixed(3.0),
+            ring_width: 8.0,
+            tint: Color::rgb(255, 0, 0),
+            strength: 1.0,
+        }),
+    };
+    let paint = |clip: Option<Rect>| {
+        let mut terminal = Terminal::new(TestBackend::new(W, H)).expect("terminal");
+        terminal
+            .draw(|f| {
+                for y in 0..H {
+                    for x in 0..W {
+                        let cell = f.buffer_mut().cell_mut((x, y)).unwrap();
+                        cell.fg = RColor::White;
+                        cell.bg = RColor::Black;
+                    }
+                }
+                apply_visual_effects_clipped(
+                    f,
+                    scope,
+                    std::slice::from_ref(&effect),
+                    0,
+                    clip,
+                    None,
+                );
+            })
+            .expect("draw");
+        terminal.backend().buffer().clone()
+    };
+    let full = paint(None);
+    for row in 0..H {
+        let clipped = paint(Some(Rect {
+            x: 0,
+            y: row as i16,
+            w: W,
+            h: 1,
+        }));
+        for x in 0..W {
+            assert_eq!(
+                clipped[(x, row)],
+                full[(x, row)],
+                "row {row} column {x} differs from a full paint"
+            );
+        }
+    }
+}
