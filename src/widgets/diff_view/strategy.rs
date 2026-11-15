@@ -137,10 +137,22 @@ impl TextAreaColorStrategy for DiffColorStrategy {
 
         let mut out = Vec::with_capacity(self.lines.len());
         for (idx, line) in self.lines.iter().enumerate() {
-            let base = base_lines
+            let mut base = base_lines
                 .get(idx)
                 .cloned()
                 .unwrap_or_else(|| vec![Span::new("")]);
+            // Separators and patch metadata are not source code: syntax
+            // highlighting would color e.g. the count in "7 hidden lines".
+            if matches!(
+                line.kind,
+                DiffLineKind::Separator | DiffLineKind::PatchHeader
+            ) {
+                base = vec![Span::new(
+                    base.iter()
+                        .map(|span| span.content.as_ref())
+                        .collect::<String>(),
+                )];
+            }
             let line_style = self.style.line_style(line.kind);
             let content_style = line_overlay_style(line_style);
             let mut spans = apply_line_style(base, content_style);
@@ -403,6 +415,76 @@ fn apply_word_ranges(spans: Vec<Span>, ranges: &[WordRange], word_style: Style) 
 mod tests {
     use super::*;
     use crate::style::{Color, DiffPalette, Style};
+
+    /// Colors every character, as a syntax highlighter would color a number.
+    struct PaintEverything;
+
+    impl TextAreaColorStrategy for PaintEverything {
+        fn highlight(&self, input: TextAreaColorInput<'_>) -> TextAreaColorLines {
+            input
+                .value
+                .lines()
+                .map(|line| {
+                    line.chars()
+                        .map(|ch| Span::new(ch.to_string()).style(Style::new().fg(Color::Red)))
+                        .collect()
+                })
+                .collect()
+        }
+
+        fn cache_key(&self) -> u64 {
+            1
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    #[test]
+    fn separators_are_not_syntax_highlighted() {
+        let line = |text: &str, kind| DiffRenderLine {
+            prefix: Arc::from(""),
+            text: Arc::from(text),
+            kind,
+            old_line: None,
+            new_line: None,
+            word_ranges: Vec::new(),
+            context_separator: None,
+            hunk: None,
+        };
+        let render = DiffRender::new(vec![
+            line("x = 7", DiffLineKind::Context),
+            line("↑↓ 7 hidden lines between ↑↓", DiffLineKind::Separator),
+        ]);
+        let palette = DiffPalette::default();
+        let base: Rc<dyn TextAreaColorStrategy> = Rc::new(PaintEverything);
+        let strategy = DiffColorStrategy::new(render, Some(base), palette, false, false);
+        let lines = strategy.highlight(TextAreaColorInput {
+            value: "",
+            language: None,
+            theme: None,
+        });
+
+        assert!(
+            lines[0]
+                .iter()
+                .any(|s| s.style.fg == Some(Color::Red.into()))
+        );
+        let text: String = lines[1].iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "↑↓ 7 hidden lines between ↑↓");
+        assert!(
+            lines[1]
+                .iter()
+                .all(|s| s.style.fg != Some(Color::Red.into())),
+            "{:?}",
+            lines[1]
+        );
+    }
 
     #[test]
     fn full_width_anchor_uses_line_background_without_padding() {
