@@ -32,6 +32,8 @@ mod file_tree_arrows;
 mod file_tree_collapsed_projection;
 #[path = "suites/widget_behavior/file_tree_explorer_focus.rs"]
 mod file_tree_explorer_focus;
+#[path = "suites/widget_behavior/file_tree_show_root.rs"]
+mod file_tree_show_root;
 #[path = "suites/widget_behavior/file_tree_vim_jump.rs"]
 mod file_tree_vim_jump;
 #[path = "suites/widget_behavior/flow_in_hstack_wraps.rs"]

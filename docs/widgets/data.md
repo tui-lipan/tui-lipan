@@ -655,6 +655,7 @@ entries and git-backed or application-provided change projections.
 | `max_entries_per_dir` | `usize` | Cap entries per directory, keeping the first in display order |
 | `show_icons` | `bool` | Show file and directory icons independently of arrows (default: true) |
 | `show_arrows` | `bool` | Show directory expansion arrows independently of icons (default: true) |
+| `show_root` | `bool` | Show the root directory row; `false` renders top-level entries at depth 0 as a forest (default: true) |
 | `root_collapsible` | `bool` | Let the root row collapse; `false` makes it a fixed, always-open heading with no arrow (default: true) |
 | `expanded_arrow` | `impl Into<Arc<str>>` | Expanded-directory arrow (default: `▼`) |
 | `collapsed_arrow` | `impl Into<Arc<str>>` | Collapsed-directory arrow (default: `▶`) |
@@ -738,8 +739,8 @@ Plus all `Tree` styling/scrolling props, including `indent_style` and `scrollbar
   resetting expansion or explorer state. The root and currently expanded directories are reread;
   collapsed descendants are unloaded and reread when reopened. Reads run in a background command;
   results for an older token, root, or entry source are ignored. An active explorer query reruns
-  against the refreshed entries, and uncontrolled selection follows its path with the root as the
-  deterministic fallback when that path disappears. This does not refresh Git status; use
+  against the refreshed entries, and uncontrolled selection follows its path, falling back to the
+  first visible row when that path disappears. This does not refresh Git status; use
   `git_refresh_token(...)` separately. Provided entry sources ignore the token because their
   listings are owned by the application.
 - `refresh_policy(FileTreeRefreshPolicy::Polling(interval))` rereads the root, the expanded
