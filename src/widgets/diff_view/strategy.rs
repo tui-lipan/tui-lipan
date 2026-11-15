@@ -120,20 +120,70 @@ fn diff_color_strategy_cache_key(
     hasher.finish()
 }
 
+impl DiffColorStrategy {
+    /// Syntax-highlight each patch hunk on its own.
+    ///
+    /// A patch shows fragments of a file. Highlighting them as one text lets
+    /// lexer state leak across the gap between hunks: a hunk that ends inside
+    /// what looks like an open string or block comment would paint every later
+    /// hunk as that string. Each hunk starts from a fresh state instead. Diffs
+    /// without hunks (built from full before/after content) stay one pass.
+    fn highlight_by_hunk(
+        &self,
+        base: &dyn TextAreaColorStrategy,
+        input: TextAreaColorInput<'_>,
+    ) -> TextAreaColorLines {
+        let hunk_of = |line: &DiffRenderLine| line.hunk.map(|hunk| hunk.index);
+        let single_segment = self
+            .lines
+            .windows(2)
+            .all(|pair| hunk_of(&pair[0]) == hunk_of(&pair[1]));
+        if single_segment {
+            let lines = base.highlight(TextAreaColorInput {
+                value: self.raw_text.as_ref(),
+                language: input.language,
+                theme: input.theme,
+            });
+            return normalize_lines(lines, self.lines.len());
+        }
+
+        let mut out = Vec::with_capacity(self.lines.len());
+        let mut start = 0;
+        while start < self.lines.len() {
+            let hunk = hunk_of(&self.lines[start]);
+            let end = self.lines[start..]
+                .iter()
+                .position(|line| hunk_of(line) != hunk)
+                .map_or(self.lines.len(), |offset| start + offset);
+            let segment = &self.lines[start..end];
+            let mut text = segment
+                .iter()
+                .map(|line| line.text.as_ref())
+                .collect::<Vec<_>>()
+                .join("\n");
+            if end < self.lines.len() {
+                text.push('\n');
+            }
+            let lines = base.highlight(TextAreaColorInput {
+                value: &text,
+                language: input.language,
+                theme: input.theme,
+            });
+            out.extend(normalize_lines(lines, segment.len()));
+            start = end;
+        }
+        out
+    }
+}
+
 impl TextAreaColorStrategy for DiffColorStrategy {
     fn highlight(&self, input: TextAreaColorInput<'_>) -> TextAreaColorLines {
         let raw_value = self.raw_text.as_ref();
-        let mut base_lines = if let Some(base) = &self.base {
-            base.highlight(TextAreaColorInput {
-                value: raw_value,
-                language: input.language,
-                theme: input.theme,
-            })
+        let base_lines = if let Some(base) = &self.base {
+            self.highlight_by_hunk(base.as_ref(), input)
         } else {
-            plain_lines(raw_value)
+            normalize_lines(plain_lines(raw_value), self.lines.len())
         };
-
-        base_lines = normalize_lines(base_lines, self.lines.len());
 
         let mut out = Vec::with_capacity(self.lines.len());
         for (idx, line) in self.lines.iter().enumerate() {
@@ -445,6 +495,42 @@ mod tests {
         }
     }
 
+    /// Marks lines after an odd number of `'''` as string, like a lexer would.
+    struct TripleQuoteLexer;
+
+    impl TextAreaColorStrategy for TripleQuoteLexer {
+        fn highlight(&self, input: TextAreaColorInput<'_>) -> TextAreaColorLines {
+            let mut in_string = false;
+            input
+                .value
+                .lines()
+                .map(|line| {
+                    let style = if in_string {
+                        Style::new().fg(Color::Green)
+                    } else {
+                        Style::default()
+                    };
+                    if line.contains("'''") {
+                        in_string = !in_string;
+                    }
+                    vec![Span::new(line.to_string()).style(style)]
+                })
+                .collect()
+        }
+
+        fn cache_key(&self) -> u64 {
+            2
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
     #[test]
     fn separators_are_not_syntax_highlighted() {
         let line = |text: &str, kind| DiffRenderLine {
@@ -484,6 +570,129 @@ mod tests {
             "{:?}",
             lines[1]
         );
+    }
+
+    #[test]
+    fn each_patch_hunk_starts_from_a_fresh_syntax_state() {
+        let patch = concat!(
+            "@@ -40,2 +40,2 @@\n",
+            " x = 1\n",
+            " ''')\n",
+            "@@ -97,2 +97,2 @@\n",
+            "-print(a)\n",
+            "+print(b)\n",
+        );
+        let data = super::super::DiffData::from_patch(patch);
+        let base: Rc<dyn TextAreaColorStrategy> = Rc::new(TripleQuoteLexer);
+        let strategy = DiffColorStrategy::new(
+            data.unified,
+            Some(base),
+            DiffPalette::default(),
+            false,
+            false,
+        );
+        let lines = strategy.highlight(TextAreaColorInput {
+            value: "",
+            language: None,
+            theme: None,
+        });
+        let in_string =
+            |row: &Vec<Span>| row.iter().any(|s| s.style.fg == Some(Color::Green.into()));
+        let texts: Vec<String> = lines
+            .iter()
+            .map(|row| row.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        let print_b = texts
+            .iter()
+            .position(|t| t == "print(b)")
+            .expect("{texts:?}");
+        assert!(!in_string(&lines[print_b]), "{texts:?}");
+        assert!(!in_string(&lines[print_b - 1]), "{texts:?}");
+    }
+
+    /// Distinguishes newline-terminated lines from an EOF-terminated line and
+    /// emits a trailing blank line for a trailing `\n`, like `SyntectStrategy`.
+    struct NewlineTerminatedLexer;
+
+    impl TextAreaColorStrategy for NewlineTerminatedLexer {
+        fn highlight(&self, input: TextAreaColorInput<'_>) -> TextAreaColorLines {
+            let mut out: TextAreaColorLines = input
+                .value
+                .split_inclusive('\n')
+                .map(|line| {
+                    let style = if line.ends_with('\n') {
+                        Style::new().fg(Color::Cyan)
+                    } else {
+                        Style::new().fg(Color::Yellow)
+                    };
+                    let text = line.strip_suffix('\n').unwrap_or(line);
+                    vec![Span::new(text.to_string()).style(style)]
+                })
+                .collect();
+            if input.value.ends_with('\n') {
+                out.push(vec![Span::new("")]);
+            }
+            out
+        }
+
+        fn cache_key(&self) -> u64 {
+            3
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    #[test]
+    fn non_final_hunk_preserves_trailing_newline() {
+        let patch = concat!(
+            "@@ -10,2 +10,2 @@\n",
+            " first_hunk_line_1\n",
+            " first_hunk_last\n",
+            "@@ -40,2 +40,2 @@\n",
+            "-second_hunk_old\n",
+            "+second_hunk_new\n",
+        );
+        let data = super::super::DiffData::from_patch(patch);
+        let base: Rc<dyn TextAreaColorStrategy> = Rc::new(NewlineTerminatedLexer);
+        let strategy = DiffColorStrategy::new(
+            data.unified,
+            Some(base),
+            DiffPalette::default(),
+            false,
+            false,
+        );
+        let lines = strategy.highlight(TextAreaColorInput {
+            value: "",
+            language: None,
+            theme: None,
+        });
+        let texts: Vec<String> = lines
+            .iter()
+            .map(|row| row.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        let fg_of = |row: &[Span]| row.first().and_then(|s| s.style.fg);
+
+        assert_eq!(
+            texts,
+            vec![
+                "first_hunk_line_1",
+                "first_hunk_last",
+                "↑↓ 28 hidden lines between ↑↓",
+                "second_hunk_old",
+                "second_hunk_new",
+            ]
+        );
+        assert_eq!(fg_of(&lines[0]), Some(Color::Cyan.into()));
+        assert_eq!(fg_of(&lines[1]), Some(Color::Cyan.into()));
+        assert_eq!(fg_of(&lines[2]), None);
+        assert_eq!(fg_of(&lines[3]), Some(Color::Cyan.into()));
+        assert_eq!(fg_of(&lines[4]), Some(Color::Yellow.into()));
     }
 
     #[test]
