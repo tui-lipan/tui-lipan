@@ -810,7 +810,7 @@ Line numbers in `DiffView` are source-mapped (git-style), not visual-row counter
 | `scroll_offset` | `usize` | Controlled scroll offset (applies to rendered pane(s)) |
 | `scroll_to_hunk` | `usize` | Scroll rendered pane(s) to a zero-based parsed patch hunk index; resolved after trim/context collapse and before backend wrap layout |
 | `context_lines` | `usize` | Collapse unchanged regions farther than `n` lines from any change into a separator line (default: show all) |
-| `show_context_separator` | `bool` | Show/hide the context separator placeholder when collapsing context (default: `true`) |
+| `show_context_separator` | `bool` | Show/hide separator placeholders for hidden lines: collapsed context, and the lines a patch leaves out between hunks (default: `true`) |
 | `context_separator_text` | `String` | Template for context separator text; supports `{count}`, `{line_word}`, `{direction}`, `{arrow}` |
 | `context_separator_hover_style` | `Style` | Style patched over a context separator while the pointer hovers it |
 | `context_separator_min_lines` | `usize` | Minimum hidden lines before a separator is shown; shorter runs render as normal context (default: `2`) |

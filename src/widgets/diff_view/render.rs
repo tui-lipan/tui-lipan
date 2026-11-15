@@ -488,6 +488,17 @@ pub(crate) fn build_patch_data(patch: &str, config: DiffDataConfig) -> DiffData 
                     .unwrap_or("0")
                     .parse::<usize>()
                     .ok();
+                if config.show_context_separator
+                    && current_hunk.is_some()
+                    && let Some(hidden) =
+                        hunk_gap(old_ln_opt, old_start).or_else(|| hunk_gap(new_ln_opt, new_start))
+                {
+                    let separator =
+                        hunk_gap_separator(hidden, config.context_separator_text.as_ref());
+                    left_lines.push(separator.clone());
+                    right_lines.push(separator.clone());
+                    unified_lines.push(separator);
+                }
                 old_ln_opt = old_start;
                 new_ln_opt = new_start;
             }
@@ -869,6 +880,34 @@ fn revealed_lines_for_range(
         .unwrap_or(0)
 }
 
+/// Lines a patch skips between the previous hunk (ending just before `next`)
+/// and a hunk that starts at `start`.
+fn hunk_gap(next: Option<usize>, start: Option<usize>) -> Option<usize> {
+    let (next, start) = (next?, start?);
+    (start > next).then(|| start - next)
+}
+
+/// Placeholder for lines a patch leaves out between two hunks.
+///
+/// Unlike a collapsed-context separator it carries no expansion range: the
+/// patch does not contain the hidden lines, so there is nothing to reveal.
+fn hunk_gap_separator(hidden: usize, context_separator_text: &str) -> DiffRenderLine {
+    DiffRenderLine {
+        prefix: "".into(),
+        text: format_context_separator_text(
+            context_separator_text,
+            hidden,
+            DiffContextSeparatorDirection::Between,
+        ),
+        kind: DiffLineKind::Separator,
+        old_line: None,
+        new_line: None,
+        word_ranges: Vec::new(),
+        context_separator: None,
+        hunk: None,
+    }
+}
+
 fn push_context_separator(
     result: &mut Vec<DiffRenderLine>,
     skipped_lines: &[DiffRenderLine],
@@ -1057,6 +1096,16 @@ fn pin_range_rows(
     }
 }
 
+/// Patch metadata and hunk-gap separators: always kept, but they do not widen
+/// the context window around neighboring lines.
+fn is_marker(kind: DiffLineKind) -> bool {
+    matches!(kind, DiffLineKind::PatchHeader | DiffLineKind::Separator)
+}
+
+fn is_unchanged_or_marker(kind: DiffLineKind) -> bool {
+    kind == DiffLineKind::Context || is_marker(kind)
+}
+
 /// Collapse context lines in split (left/right) and unified views.
 ///
 /// For split mode the keep-mask is computed from both sides in lockstep (a row
@@ -1089,19 +1138,14 @@ fn collapse_context(
     // Split: row is changed if either side is non-Context and not patch metadata.
     let split_n = left.len();
     let mut split_keep = compute_keep_mask(split_n, context, |i| {
-        left.get(i)
-            .is_some_and(|l| !matches!(l.kind, DiffLineKind::Context | DiffLineKind::PatchHeader))
-            || right.get(i).is_some_and(|r| {
-                !matches!(r.kind, DiffLineKind::Context | DiffLineKind::PatchHeader)
-            })
-    });
-    for (i, keep) in split_keep.iter_mut().enumerate().take(split_n) {
-        if left
-            .get(i)
-            .is_some_and(|l| l.kind == DiffLineKind::PatchHeader)
+        left.get(i).is_some_and(|l| !is_unchanged_or_marker(l.kind))
             || right
                 .get(i)
-                .is_some_and(|r| r.kind == DiffLineKind::PatchHeader)
+                .is_some_and(|r| !is_unchanged_or_marker(r.kind))
+    });
+    for (i, keep) in split_keep.iter_mut().enumerate().take(split_n) {
+        if left.get(i).is_some_and(|l| is_marker(l.kind))
+            || right.get(i).is_some_and(|r| is_marker(r.kind))
         {
             *keep = true;
         }
@@ -1127,19 +1171,16 @@ fn collapse_context(
     let new_left = apply_keep_mask(left, &split_keep, options);
     let new_right = apply_keep_mask(right, &split_keep, options);
 
-    // Unified: unchanged context only; patch metadata is always kept but does not
+    // Unified: unchanged context only; markers are always kept but do not
     // expand the context window around neighboring lines.
     let uni_n = unified.len();
     let mut uni_keep = compute_keep_mask(uni_n, context, |i| {
         unified
             .get(i)
-            .is_some_and(|l| !matches!(l.kind, DiffLineKind::Context | DiffLineKind::PatchHeader))
+            .is_some_and(|l| !is_unchanged_or_marker(l.kind))
     });
     for (i, keep) in uni_keep.iter_mut().enumerate().take(uni_n) {
-        if unified
-            .get(i)
-            .is_some_and(|l| l.kind == DiffLineKind::PatchHeader)
-        {
+        if unified.get(i).is_some_and(|l| is_marker(l.kind)) {
             *keep = true;
         }
     }
@@ -1842,6 +1883,85 @@ mod tests {
                 .iter()
                 .filter(|l| l.kind == DiffLineKind::Separator)
                 .all(|l| l.text.as_ref() == "collapsed")
+        );
+    }
+
+    const TWO_HUNK_PATCH: &str = concat!(
+        "--- a/f.py\n",
+        "+++ b/f.py\n",
+        "@@ -27,2 +27,2 @@\n",
+        " a\n",
+        "-b\n",
+        "+B\n",
+        "@@ -39,2 +39,2 @@\n",
+        "-c\n",
+        "+C\n",
+        " d\n",
+    );
+
+    #[test]
+    fn patch_marks_the_lines_skipped_between_hunks() {
+        let data = build_patch_data(TWO_HUNK_PATCH, DiffDataConfig::default());
+        for render in [&data.unified, &data.left, &data.right] {
+            let separators: Vec<_> = render
+                .lines
+                .iter()
+                .filter(|line| line.kind == DiffLineKind::Separator)
+                .collect();
+            assert_eq!(separators.len(), 1);
+            // The first hunk ends at line 28, so 29..=38 are not in the patch.
+            assert_eq!(separators[0].text.as_ref(), "↑↓ 10 hidden lines between ↑↓");
+            // Nothing to expand: the patch does not carry the hidden lines.
+            assert!(separators[0].context_separator.is_none());
+        }
+        // No separator before the first hunk or after the last.
+        assert_eq!(
+            data.unified.lines.first().unwrap().kind,
+            DiffLineKind::Context
+        );
+        assert_ne!(
+            data.unified.lines.last().unwrap().kind,
+            DiffLineKind::Separator
+        );
+    }
+
+    #[test]
+    fn adjacent_hunks_and_disabled_separators_add_no_gap_marker() {
+        let adjacent = "@@ -1,1 +1,1 @@\n-a\n+b\n@@ -2,1 +2,1 @@\n-c\n+d\n";
+        let data = build_patch_data(adjacent, DiffDataConfig::default());
+        assert!(
+            data.unified
+                .lines
+                .iter()
+                .all(|l| l.kind != DiffLineKind::Separator)
+        );
+
+        let config = DiffDataConfig {
+            show_context_separator: false,
+            ..DiffDataConfig::default()
+        };
+        let data = build_patch_data(TWO_HUNK_PATCH, config);
+        assert!(
+            data.unified
+                .lines
+                .iter()
+                .all(|l| l.kind != DiffLineKind::Separator)
+        );
+    }
+
+    #[test]
+    fn collapsing_context_keeps_a_gap_marker_without_widening_around_it() {
+        let config = DiffDataConfig {
+            context_lines: Some(0),
+            ..DiffDataConfig::default()
+        };
+        let data = build_patch_data(TWO_HUNK_PATCH, config);
+        let kinds: Vec<_> = data.unified.lines.iter().map(|l| l.kind).collect();
+        assert!(kinds.contains(&DiffLineKind::Separator), "{kinds:?}");
+        // Context row `d` after the gap is not pulled back in by the marker.
+        assert!(
+            !data.unified.lines.iter().any(|l| l.text.as_ref() == "d"),
+            "{kinds:?}"
         );
     }
 

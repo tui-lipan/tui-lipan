@@ -536,11 +536,12 @@ pub struct DiffDataConfig {
     /// unchanged lines above and below every changed region and inserts `DiffLineKind::Separator`
     /// lines in place of the hidden ranges.
     pub context_lines: Option<usize>,
-    /// Whether to insert a visible separator line when collapsing context.
+    /// Whether to insert a visible separator line for hidden lines.
     ///
-    /// When `true` (the default) a context separator line is shown in place of
-    /// each collapsed region. When `false` the hidden lines are simply omitted
-    /// without any visual placeholder.
+    /// When `true` (the default) a separator line is shown in place of each
+    /// collapsed region and, for patch input, between hunks that leave lines
+    /// out. When `false` the hidden lines are simply omitted without any visual
+    /// placeholder.
     pub show_context_separator: bool,
     /// Template text for context separators.
     ///

@@ -1006,7 +1006,8 @@ fn document_diff_view_scroll_to_hunk_sets_source_line_target() {
         panic!("expected document backend");
     };
 
-    assert_eq!(doc.scroll_to_source_line, Some(2));
+    // Rows: old, new, the separator for lines 2..=7, then the second hunk.
+    assert_eq!(doc.scroll_to_source_line, Some(3));
 }
 
 #[test]
