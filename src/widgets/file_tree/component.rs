@@ -253,7 +253,6 @@ impl Component for FileTreeComponent {
         let mut expanded = HashSet::new();
         expanded.insert(root.path.clone());
         let git_snapshot = effective_initial_snapshot(props);
-        let uncontrolled_selected_path = initial_uncontrolled_selected_path(props, &root);
         let mut state = Self::State {
             root,
             root_virtual,
@@ -278,7 +277,7 @@ impl Component for FileTreeComponent {
             search_expanded_snapshot: None,
             search_found_dir: None,
             requested_entry_paths: HashSet::new(),
-            uncontrolled_selected_path,
+            uncontrolled_selected_path: None,
             symlink_targets: HashMap::new(),
             tree_focused: false,
             watch: WatchState::default(),
@@ -287,6 +286,7 @@ impl Component for FileTreeComponent {
         apply_initial_expanded_paths(&mut state, props);
         apply_reveal_paths_to_state(&mut state, props);
         sync_symlink_targets(&mut state, props);
+        normalize_uncontrolled_selection(props, &mut state);
         state
     }
 
@@ -693,7 +693,17 @@ impl Component for FileTreeComponent {
         if !root_mode_changed && old_props.explorer_max_matches != ctx.props.explorer_max_matches {
             ctx.link().send(FileTreeMsg::RerunExplorerSearch);
         }
-        if show_root_changed {
+        if !root_mode_changed
+            && (source_changed
+                || change_source_changed
+                || provided_options_changed
+                || show_root_changed
+                || old_props.change_view != ctx.props.change_view
+                || old_props.compact_directories != ctx.props.compact_directories
+                || old_props.expanded_paths != ctx.props.expanded_paths
+                || (tracks_uncontrolled_selection(&ctx.props)
+                    && !tracks_uncontrolled_selection(old_props)))
+        {
             normalize_uncontrolled_selection(&ctx.props, &mut ctx.state);
         }
 
@@ -1105,6 +1115,7 @@ fn update_file_tree(msg: FileTreeMsg, ctx: &mut Context<FileTreeComponent>) -> U
                 expand_changed_only_directories(&mut ctx.state, &changed_paths, provided);
                 ctx.state.changed_only_auto_expand_signature = signature;
             }
+            normalize_uncontrolled_selection(&ctx.props, &mut ctx.state);
             Update::full()
         }
         FileTreeMsg::SyncRootMode => {
@@ -1123,6 +1134,7 @@ fn update_file_tree(msg: FileTreeMsg, ctx: &mut Context<FileTreeComponent>) -> U
                 let signature = change_snapshot_signature(snapshot);
                 expand_changed_only_directories(&mut ctx.state, &changed_paths, provided);
                 ctx.state.changed_only_auto_expand_signature = signature;
+                normalize_uncontrolled_selection(&ctx.props, &mut ctx.state);
                 return Update::full();
             }
             Update::none()
@@ -1280,17 +1292,6 @@ fn tracks_uncontrolled_selection(props: &FileTreeProps) -> bool {
     props.selected.is_none() && props.selected_path.is_none() && props.select_path.is_none()
 }
 
-fn initial_uncontrolled_selected_path(props: &FileTreeProps, root: &FsNode) -> Option<Arc<str>> {
-    if !tracks_uncontrolled_selection(props) {
-        return None;
-    }
-    if props.show_root {
-        Some(root.path.clone())
-    } else {
-        root.children.first().map(|child| child.path.clone())
-    }
-}
-
 fn uses_virtual_root(props: &FileTreeProps) -> bool {
     uses_provided_entries(props) || is_provided_changed_only(props)
 }
@@ -1336,9 +1337,10 @@ fn rebuild_root_for_props(state: &mut FileTreeState, props: &FileTreeProps) {
     state.search_expanded_snapshot = None;
     state.search_found_dir = None;
     state.requested_entry_paths.clear();
-    state.uncontrolled_selected_path = initial_uncontrolled_selected_path(props, &state.root);
+    state.uncontrolled_selected_path = None;
     apply_initial_expanded_paths(state, props);
     sync_symlink_targets(state, props);
+    normalize_uncontrolled_selection(props, state);
 }
 
 /// Seed the tree's own expansion set from `initial_expanded_paths`, at the two moments it has none
@@ -4317,6 +4319,73 @@ mod tests {
         assert_eq!(
             selected_visible_index_by_path(&props, &state, &projection),
             Some(2)
+        );
+    }
+
+    #[test]
+    fn hidden_root_changed_only_seeds_and_preserves_uncontrolled_selection_across_snapshots() {
+        // Provided changes with no filesystem children and compacted directories: uncontrolled
+        // selection must seed from the rendered projection, not `FsNode::children`.
+        let provided_props = crate::widgets::file_tree::FileTree::new("/repo")
+            .change_source(crate::widgets::file_tree::FileTreeChangeSource::Provided(
+                vec![crate::widgets::file_tree::FileTreeChange::new(
+                    "dir1/dir2/nested.rs",
+                    crate::widgets::file_tree::FileTreeChangeStatus::Modified,
+                )],
+            ))
+            .change_view(crate::widgets::file_tree::FileTreeChangeView::ChangedOnly)
+            .compact_directories(true)
+            .show_root(false)
+            .props;
+        let provided_state = FileTreeComponent::new().create_state(&provided_props);
+        assert_eq!(
+            provided_state.uncontrolled_selected_path.as_deref(),
+            Some("/repo/dir1/dir2")
+        );
+
+        // Local Git ChangedOnly with hidden root: initial snapshot seeds the first visible row, and
+        // a later snapshot inserting an earlier row keeps selection on the original path.
+        let local_props = crate::widgets::file_tree::FileTree::new("/repo")
+            .change_view(crate::widgets::file_tree::FileTreeChangeView::ChangedOnly)
+            .show_root(false)
+            .props;
+        let mut runtime = file_tree_runtime(local_props);
+        assert_eq!(runtime.ctx.state.uncontrolled_selected_path, None);
+
+        let mut initial = GitStatusSnapshot::default();
+        initial.changed_paths.push(Arc::from("/repo/b.rs"));
+        runtime.component.update(
+            FileTreeMsg::GitSnapshotLoaded {
+                generation: runtime.ctx.state.git_load_generation,
+                snapshot: Some(initial),
+                cache_request: None,
+            },
+            &mut runtime.ctx,
+        );
+        assert_eq!(
+            runtime.ctx.state.uncontrolled_selected_path.as_deref(),
+            Some("/repo/b.rs")
+        );
+
+        let mut updated = GitStatusSnapshot::default();
+        updated.changed_paths.push(Arc::from("/repo/a.rs"));
+        updated.changed_paths.push(Arc::from("/repo/b.rs"));
+        runtime.component.update(
+            FileTreeMsg::GitSnapshotLoaded {
+                generation: runtime.ctx.state.git_load_generation,
+                snapshot: Some(updated),
+                cache_request: None,
+            },
+            &mut runtime.ctx,
+        );
+        assert_eq!(
+            runtime.ctx.state.uncontrolled_selected_path.as_deref(),
+            Some("/repo/b.rs")
+        );
+        let projection = build_projection(&runtime.ctx.props, &runtime.ctx.state, None);
+        assert_eq!(
+            effective_selected_index(&runtime.ctx.props, &runtime.ctx.state, &projection),
+            Some(1)
         );
     }
 

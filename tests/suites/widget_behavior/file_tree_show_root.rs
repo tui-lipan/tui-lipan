@@ -97,3 +97,65 @@ fn show_root_false_omits_root_row_and_keeps_selection_and_events_aligned() {
         &["/remote/repo/dir1/dir2/nested.rs"]
     );
 }
+
+struct UncontrolledChangedTree {
+    activated: Rc<RefCell<Vec<String>>>,
+}
+
+impl Component for UncontrolledChangedTree {
+    type Message = Vec<FileTreeChange>;
+    type Properties = ();
+    type State = Vec<FileTreeChange>;
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {
+        vec![FileTreeChange::new("b.rs", FileTreeChangeStatus::Modified)]
+    }
+
+    fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+        ctx.state = msg;
+        Update::full()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        let activated = self.activated.clone();
+        FileTree::new("/remote/repo")
+            .change_source(FileTreeChangeSource::provided(ctx.state.clone()))
+            .change_view(FileTreeChangeView::ChangedOnly)
+            .show_root(false)
+            .show_icons(false)
+            .show_arrows(false)
+            .git_status(false)
+            .on_activate(Callback::new(move |event: FileTreeEvent| {
+                activated.borrow_mut().push(event.path.to_string());
+            }))
+            .into()
+    }
+}
+
+#[test]
+fn show_root_false_changed_only_preserves_uncontrolled_selection_when_earlier_row_is_inserted() {
+    let activated = Rc::new(RefCell::new(Vec::new()));
+    let mut backend = TestBackend::new(UncontrolledChangedTree {
+        activated: activated.clone(),
+    });
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 40,
+        h: 10,
+    });
+    backend.render();
+
+    backend
+        .dispatch(vec![
+            FileTreeChange::new("a.rs", FileTreeChangeStatus::Added),
+            FileTreeChange::new("b.rs", FileTreeChangeStatus::Modified),
+        ])
+        .unwrap();
+    backend.render();
+
+    backend.focus_next();
+    backend.send_key(key(KeyCode::Enter)).unwrap();
+    backend.render();
+    assert_eq!(activated.borrow().as_slice(), &["/remote/repo/b.rs"]);
+}
