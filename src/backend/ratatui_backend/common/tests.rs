@@ -1087,3 +1087,110 @@ fn backdrop_background_effect_matches_the_cell_pass() {
         "a foreground-only backdrop leaves pictures alone"
     );
 }
+
+/// Paint `effect` over a scope at `phase`, under `clip` or none. Every cell holds a different
+/// character, so an effect that moves cells shows where it took them from.
+fn paint_scope(
+    effect: &VisualEffect,
+    scope: Rect,
+    phase: u64,
+    clip: Option<Rect>,
+) -> ratatui::buffer::Buffer {
+    let (w, h) = (scope.w + 4, scope.h + 2);
+    let mut terminal = Terminal::new(TestBackend::new(w, h)).expect("terminal");
+    terminal
+        .draw(|f| {
+            for y in 0..h {
+                for x in 0..w {
+                    let cell = f.buffer_mut().cell_mut((x, y)).unwrap();
+                    let symbol = char::from(b'!' + ((x + y * w) % 90) as u8);
+                    cell.set_char(symbol);
+                    cell.fg = RColor::White;
+                    cell.bg = RColor::Black;
+                }
+            }
+            apply_visual_effects_clipped(f, scope, std::slice::from_ref(effect), phase, clip, None);
+        })
+        .expect("draw");
+    terminal.backend().buffer().clone()
+}
+
+/// A partial repaint clips an effect scope to the rows that changed. The clip limits which cells
+/// the pass paints and must not move the effect, so each row painted alone comes out exactly as a
+/// full paint draws it.
+fn assert_rows_paint_alone_as_in_a_full_paint(effect: &VisualEffect, scope: Rect, phase: u64) {
+    let full = paint_scope(effect, scope, phase, None);
+    let area = *full.area();
+    for row in 0..area.height {
+        let clip = Rect {
+            x: 0,
+            y: row as i16,
+            w: area.width,
+            h: 1,
+        };
+        let alone = paint_scope(effect, scope, phase, Some(clip));
+        for x in 0..area.width {
+            assert_eq!(
+                alone[(x, row)],
+                full[(x, row)],
+                "phase {phase}: row {row} column {x} differs from a full paint"
+            );
+        }
+    }
+}
+
+fn offset_scope() -> Rect {
+    Rect {
+        x: 2,
+        y: 1,
+        w: 20,
+        h: 8,
+    }
+}
+
+#[test]
+fn a_clip_limits_a_masked_ripple_without_moving_it() {
+    let scope = offset_scope();
+    // The scope's border, in scope-local cells: its first and last rows and columns.
+    let (w, h) = (usize::from(scope.w), usize::from(scope.h));
+    let mut bits = vec![0u64; (w * h).div_ceil(64)];
+    for y in 0..h {
+        for x in 0..w {
+            if y == 0 || y + 1 == h || x == 0 || x + 1 == w {
+                bits[(y * w + x) / 64] |= 1 << ((y * w + x) % 64);
+            }
+        }
+    }
+    let effect = VisualEffect::Clipped {
+        bounds: None,
+        mask: Some(Arc::new(CellMask {
+            origin: (0, 0),
+            w: scope.w,
+            h: scope.h,
+            bits: bits.into(),
+        })),
+        inner: Box::new(VisualEffect::Ripple {
+            origin: crate::style::EffectOrigin::cell(f32::from(scope.w) - 4.0, 0.0),
+            radius: RippleRadius::Fixed(6.0),
+            ring_width: 8.0,
+            tint: Color::rgb(255, 0, 0),
+            strength: 1.0,
+        }),
+    };
+    assert_rows_paint_alone_as_in_a_full_paint(&effect, scope, 0);
+}
+
+#[test]
+fn a_clip_limits_crt_refresh_waves_without_moving_them() {
+    let scope = offset_scope();
+    for preset in [RetroPreset::Amber, RetroPreset::VaultTec] {
+        let effect = VisualEffect::RetroCrt {
+            preset,
+            flicker: 0.6,
+            scanline_strength: 0.5,
+        };
+        for phase in (0..800).step_by(3) {
+            assert_rows_paint_alone_as_in_a_full_paint(&effect, scope, phase);
+        }
+    }
+}

@@ -988,9 +988,13 @@ fn visual_effect_channels(effect: &VisualEffect) -> (bool, bool) {
     }
 }
 
+/// Shift the rows `wave` crosses within `intersection`, the cells this pass paints. Each row's
+/// shift follows its row in the scope, whose first on-screen row is `scope_top`, so a pass clipped
+/// to some rows shifts them as a full paint does.
 fn apply_retro_crt_refresh_wave(
     buf: &mut Buffer,
     intersection: RRect,
+    scope_top: u16,
     phase: u64,
     wave: &RetroRefreshWave,
     gate: &dyn Fn(u16, u16) -> bool,
@@ -1016,9 +1020,9 @@ fn apply_retro_crt_refresh_wave(
             continue;
         }
 
-        let offset =
-            (((local_y as f32 * 0.8) + phase as f32 * 0.35).sin() * wave.distortion * strength)
-                .round() as isize;
+        let scope_y = f32::from(intersection.y + local_y as u16 - scope_top);
+        let offset = (((scope_y * 0.8) + phase as f32 * 0.35).sin() * wave.distortion * strength)
+            .round() as isize;
         if offset == 0 {
             continue;
         }
@@ -1314,8 +1318,12 @@ pub(crate) fn apply_visual_effects_over_backdrop(
         return;
     }
 
-    let r_rect = to_ratatui_rect(draw_rect);
-    let intersection = f.area().intersection(r_rect);
+    // `clip_rect` limits which cells this pass paints; it never moves the effect. A partial
+    // repaint clips to the damaged rows, and an effect placed by the clipped rect would draw its
+    // mask, ripple, or gradient relative to those rows instead of the scope.
+    let r_rect = to_ratatui_rect(rect);
+    let scope_on_screen = f.area().intersection(r_rect);
+    let intersection = f.area().intersection(to_ratatui_rect(draw_rect));
     if intersection.width == 0 || intersection.height == 0 {
         return;
     }
@@ -1327,7 +1335,7 @@ pub(crate) fn apply_visual_effects_over_backdrop(
         // Late-bound transform strengths resolve once for the pass, not once per cell.
         let resolved = effect.with_resolved_amounts();
         let effect = resolved.as_ref().unwrap_or(effect);
-        let gate = |x: u16, y: u16| cell_passes_visual_clip(effect, draw_rect, x as i16, y as i16);
+        let gate = |x: u16, y: u16| cell_passes_visual_clip(effect, rect, x as i16, y as i16);
 
         let peeled = strip_effect_wrappers(effect);
         let (apply_foreground, apply_background) = visual_effect_channels(effect);
@@ -1359,7 +1367,7 @@ pub(crate) fn apply_visual_effects_over_backdrop(
 
         let retro_refresh_waves = match peeled {
             VisualEffect::RetroCrt { flicker, .. } => retro_crt_refresh_waves(
-                intersection,
+                scope_on_screen,
                 phase,
                 retro_crt
                     .map(|params| params.refresh_wave_cadence)
@@ -1369,7 +1377,7 @@ pub(crate) fn apply_visual_effects_over_backdrop(
             _ => Vec::new(),
         };
         for wave in &retro_refresh_waves {
-            apply_retro_crt_refresh_wave(buf, intersection, phase, wave, &gate);
+            apply_retro_crt_refresh_wave(buf, intersection, scope_on_screen.y, phase, wave, &gate);
         }
         let quantize_palette = match peeled {
             VisualEffect::PaletteQuantize { palette } => Some(visual_effect_palette(palette)),
