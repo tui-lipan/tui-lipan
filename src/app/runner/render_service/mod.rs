@@ -3522,4 +3522,107 @@ mod tests {
 
         let _ = std::fs::remove_file(&path);
     }
+
+    #[cfg(feature = "image")]
+    #[test]
+    fn more_than_1024_corrupt_images_converge_without_thrashing_failed_cache() {
+        use std::io::Cursor;
+
+        use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
+
+        use crate::widgets::{Image, VStack};
+
+        let rgba = RgbaImage::from_pixel(47, 37, Rgba([0x22, 0x44, 0x88, 0xFF]));
+        let mut out = Cursor::new(Vec::new());
+        DynamicImage::ImageRgba8(rgba)
+            .write_to(&mut out, ImageFormat::Png)
+            .expect("png encoding should succeed");
+        let mut template = out.into_inner();
+        let idat = template
+            .windows(4)
+            .position(|w| w == b"IDAT")
+            .expect("png should contain an IDAT chunk");
+        template.truncate(idat + 8);
+
+        let sources: Vec<Vec<u8>> = (0..1025u16)
+            .map(|idx| {
+                let mut bytes = template.clone();
+                bytes.extend_from_slice(&idx.to_le_bytes());
+                bytes
+            })
+            .collect();
+
+        struct ManyBrokenImagesView(Vec<Vec<u8>>);
+
+        impl Component for ManyBrokenImagesView {
+            type Message = ();
+            type Properties = ();
+            type State = ();
+
+            fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+            fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+                Update::none()
+            }
+
+            fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
+                let mut stack = VStack::new();
+                for bytes in &self.0 {
+                    stack = stack.child(Image::from_bytes(bytes.clone()).alt("broken"));
+                }
+                stack.into()
+            }
+        }
+
+        let viewport = Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 2000,
+        };
+        let mut runner = AppRunner::new(
+            App::new().mouse(false),
+            ManyBrokenImagesView(sources.clone()),
+            (),
+        );
+        runner.core = RuntimeCore::new_test(
+            ManyBrokenImagesView(sources),
+            (),
+            viewport,
+            Theme::default(),
+            SurfaceMode::Fullscreen,
+            Rc::new(Cell::new(false)),
+        )
+        .into();
+        runner.core.init();
+
+        runner
+            .render_element_until_scroll_stable(viewport)
+            .expect("1025 corrupt images should converge within pass cap");
+        assert!(
+            !runner.render_stability_pending,
+            "first render with 1025 corrupt images must settle without arming another frame"
+        );
+
+        let epoch_after_first = crate::widgets::internal::image_measure_invalidation_epoch();
+        runner
+            .render_element_until_scroll_stable(viewport)
+            .expect("subsequent render should stay settled");
+        assert!(
+            !runner.render_stability_pending,
+            "subsequent render must stay settled"
+        );
+        assert_eq!(
+            crate::widgets::internal::image_measure_invalidation_epoch(),
+            epoch_after_first,
+            "failed-source cache must not evict and re-bump epoch across passes"
+        );
+
+        let children = &runner.core.tree.node(runner.core.tree.root).children;
+        assert_eq!(children.len(), 1025);
+        for &child_id in &[children[0], children[1024]] {
+            let node = runner.core.tree.node(child_id);
+            assert_eq!((node.rect.w, node.rect.h), (6, 1));
+        }
+    }
 }

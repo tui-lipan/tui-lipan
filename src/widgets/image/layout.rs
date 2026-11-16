@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
+use rustc_hash::FxHashSet;
 use unicode_width::UnicodeWidthStr;
 
 use super::{Image, ImageFit, ImageSource};
@@ -9,7 +10,7 @@ use crate::style::Length;
 #[derive(Default)]
 struct ImageMeasureCache {
     entries: Vec<(u64, (u32, u32))>,
-    failed: Vec<u64>,
+    failed: FxHashSet<u64>,
 }
 
 impl ImageMeasureCache {
@@ -25,12 +26,7 @@ impl ImageMeasureCache {
     }
 
     fn insert_dims(&mut self, key: u64, value: (u32, u32)) -> bool {
-        let was_failed = if let Some(idx) = self.failed.iter().position(|k| *k == key) {
-            self.failed.remove(idx);
-            true
-        } else {
-            false
-        };
+        let was_failed = self.failed.remove(&key);
         let mut dims_changed = false;
         if let Some(idx) = self.entries.iter().position(|(k, _)| *k == key) {
             dims_changed = self.entries[idx].1 != value;
@@ -47,17 +43,7 @@ impl ImageMeasureCache {
         if let Some(idx) = self.entries.iter().position(|(k, _)| *k == key) {
             self.entries.remove(idx);
         }
-        let was_failed = if let Some(idx) = self.failed.iter().position(|k| *k == key) {
-            self.failed.remove(idx);
-            true
-        } else {
-            false
-        };
-        self.failed.push(key);
-        if self.failed.len() > 1024 {
-            self.failed.remove(0);
-        }
-        !was_failed
+        self.failed.insert(key)
     }
 }
 
