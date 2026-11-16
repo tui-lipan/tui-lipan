@@ -10,6 +10,11 @@ use crate::style::Length;
 #[derive(Default)]
 struct ImageMeasureCache {
     entries: Vec<(u64, (u32, u32))>,
+    /// Source hashes whose pixel decode failed. Kept separate from the 128-entry `entries` cache
+    /// and intentionally non-evicting: `Image::layout_hash` hashes failure status, so evicting an
+    /// active failed source while it is still rendered causes header-vs-alt layout thrashing across
+    /// passes. Tradeoff: unique failed `ImageSource::Bytes` hashes stay in this set for the
+    /// process lifetime (8 bytes per hash) until failure state is moved to runtime/tree ownership.
     failed: FxHashSet<u64>,
 }
 
