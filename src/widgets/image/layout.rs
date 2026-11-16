@@ -1,7 +1,6 @@
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
-use image::GenericImageView;
 use unicode_width::UnicodeWidthStr;
 
 use super::{Image, ImageFit, ImageSource};
@@ -121,14 +120,19 @@ pub(crate) fn source_pixel_size(source: &ImageSource, key: u64) -> Option<(u32, 
     }
 
     let dims = match source {
+        // The header holds the size; decoding every pixel here doubled the cost of showing an
+        // image, on the UI thread, before reconcile decoded it again.
         ImageSource::Path(path) => image::ImageReader::open(Path::new(path.as_ref()))
             .ok()?
-            .decode()
-            .ok()
-            .map(|img| img.dimensions()),
-        ImageSource::Bytes(bytes) => image::load_from_memory(bytes.as_ref())
-            .ok()
-            .map(|img| img.dimensions()),
+            .with_guessed_format()
+            .ok()?
+            .into_dimensions()
+            .ok(),
+        ImageSource::Bytes(bytes) => image::ImageReader::new(std::io::Cursor::new(bytes.as_ref()))
+            .with_guessed_format()
+            .ok()?
+            .into_dimensions()
+            .ok(),
     }?;
 
     if let Ok(mut cache) = measure_cache().lock() {
@@ -254,5 +258,21 @@ mod tests {
             .width(Length::Px(10))
             .height(Length::Px(4));
         assert_eq!(measure_image(&image), (10, 4));
+    }
+
+    #[test]
+    fn source_size_comes_from_the_header_without_decoding_pixels() {
+        let image = DynamicImage::ImageRgba8(RgbaImage::from_pixel(37, 23, Rgba([1, 2, 3, 255])));
+        let mut png = Cursor::new(Vec::new());
+        image.write_to(&mut png, ImageFormat::Png).unwrap();
+        // Cut a few bytes into the pixel data: the header survives, but a full decode fails.
+        let png = png.into_inner();
+        let idat = png.windows(4).position(|w| w == b"IDAT").unwrap();
+        let header: std::sync::Arc<[u8]> = png[..idat + 8].into();
+        assert!(image::load_from_memory(&header).is_err());
+
+        let size =
+            super::source_pixel_size(&crate::widgets::ImageSource::Bytes(header), 0x5eed_0033);
+        assert_eq!(size, Some((37, 23)));
     }
 }
