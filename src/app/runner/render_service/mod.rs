@@ -3344,4 +3344,182 @@ mod tests {
             .expect("image node should exist");
         assert_eq!((image_node.rect.w, image_node.rect.h), (6, 1));
     }
+
+    #[cfg(feature = "image")]
+    #[test]
+    fn corrupt_pixel_stream_settles_with_more_than_128_unique_images() {
+        use std::io::Cursor;
+
+        use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
+
+        use crate::widgets::{Image, VStack};
+
+        let rgba = RgbaImage::from_pixel(49, 39, Rgba([0x22, 0x44, 0x88, 0xFF]));
+        let mut out = Cursor::new(Vec::new());
+        DynamicImage::ImageRgba8(rgba)
+            .write_to(&mut out, ImageFormat::Png)
+            .expect("png encoding should succeed");
+        let mut broken_png = out.into_inner();
+        let idat = broken_png
+            .windows(4)
+            .position(|w| w == b"IDAT")
+            .expect("png should contain an IDAT chunk");
+        broken_png.truncate(idat + 8);
+
+        let mut images = Vec::with_capacity(130);
+        images.push((broken_png, Some("broken")));
+        for idx in 1..=129u16 {
+            let rgba = RgbaImage::from_pixel(1, 1, Rgba([idx as u8, (idx >> 8) as u8, 0x55, 0xFF]));
+            let mut buf = Cursor::new(Vec::new());
+            DynamicImage::ImageRgba8(rgba)
+                .write_to(&mut buf, ImageFormat::Png)
+                .expect("png encoding should succeed");
+            images.push((buf.into_inner(), None));
+        }
+
+        struct ManyImagesView(Vec<(Vec<u8>, Option<&'static str>)>);
+
+        impl Component for ManyImagesView {
+            type Message = ();
+            type Properties = ();
+            type State = ();
+
+            fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+            fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+                Update::none()
+            }
+
+            fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
+                let mut stack = VStack::new();
+                for (bytes, alt) in &self.0 {
+                    let mut img = Image::from_bytes(bytes.clone());
+                    if let Some(alt) = alt {
+                        img = img.alt(*alt);
+                    }
+                    stack = stack.child(img);
+                }
+                stack.into()
+            }
+        }
+
+        let viewport = Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 200,
+        };
+        let mut runner =
+            AppRunner::new(App::new().mouse(false), ManyImagesView(images.clone()), ());
+        runner.core = RuntimeCore::new_test(
+            ManyImagesView(images),
+            (),
+            viewport,
+            Theme::default(),
+            SurfaceMode::Fullscreen,
+            Rc::new(Cell::new(false)),
+        )
+        .into();
+        runner.core.init();
+        runner
+            .render_element_until_scroll_stable(viewport)
+            .expect("first runner render should settle");
+
+        let first_image_id = runner.core.tree.node(runner.core.tree.root).children[0];
+        let first_image_node = runner.core.tree.node(first_image_id);
+        assert_eq!((first_image_node.rect.w, first_image_node.rect.h), (6, 1));
+    }
+
+    #[cfg(feature = "image")]
+    #[test]
+    fn recovered_image_path_invalidates_failed_decode_cache() {
+        use std::io::Cursor;
+
+        use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
+
+        use crate::widgets::{Image, VStack};
+
+        let path = std::env::temp_dir().join(format!(
+            "tui-lipan-image-recover-{}.png",
+            std::process::id()
+        ));
+
+        let rgba = RgbaImage::from_pixel(40, 40, Rgba([0x22, 0x44, 0x88, 0xFF]));
+        let mut out = Cursor::new(Vec::new());
+        DynamicImage::ImageRgba8(rgba)
+            .write_to(&mut out, ImageFormat::Png)
+            .expect("png encoding should succeed");
+        let valid_png = out.into_inner();
+
+        let idat = valid_png
+            .windows(4)
+            .position(|w| w == b"IDAT")
+            .expect("png should contain an IDAT chunk");
+        std::fs::write(&path, &valid_png[..idat + 8]).expect("write truncated png");
+
+        struct PathImageView(String);
+
+        impl Component for PathImageView {
+            type Message = ();
+            type Properties = ();
+            type State = ();
+
+            fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+            fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+                Update::none()
+            }
+
+            fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
+                VStack::new()
+                    .child(Image::new(self.0.clone()).alt("broken"))
+                    .into()
+            }
+        }
+
+        let viewport = Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 20,
+        };
+        let path_str = path.to_string_lossy().into_owned();
+        let mut runner =
+            AppRunner::new(App::new().mouse(false), PathImageView(path_str.clone()), ());
+        runner.core = RuntimeCore::new_test(
+            PathImageView(path_str),
+            (),
+            viewport,
+            Theme::default(),
+            SurfaceMode::Fullscreen,
+            Rc::new(Cell::new(false)),
+        )
+        .into();
+        runner.core.init();
+
+        runner
+            .render_element_until_scroll_stable(viewport)
+            .expect("initial broken render should settle");
+        let broken_node = runner
+            .core
+            .tree
+            .iter()
+            .find(|node| matches!(node.kind, crate::core::node::NodeKind::Image(_)))
+            .expect("image node should exist");
+        assert_eq!((broken_node.rect.w, broken_node.rect.h), (6, 1));
+
+        std::fs::write(&path, &valid_png).expect("write valid png");
+        runner
+            .render_element_until_scroll_stable(viewport)
+            .expect("recovered image render should settle");
+        let recovered_node = runner
+            .core
+            .tree
+            .iter()
+            .find(|node| matches!(node.kind, crate::core::node::NodeKind::Image(_)))
+            .expect("image node should exist");
+        assert_eq!((recovered_node.rect.w, recovered_node.rect.h), (4, 2));
+
+        let _ = std::fs::remove_file(&path);
+    }
 }

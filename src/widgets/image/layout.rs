@@ -8,25 +8,56 @@ use crate::style::Length;
 
 #[derive(Default)]
 struct ImageMeasureCache {
-    entries: Vec<(u64, Option<(u32, u32)>)>,
+    entries: Vec<(u64, (u32, u32))>,
+    failed: Vec<u64>,
 }
 
 impl ImageMeasureCache {
-    fn get(&self, key: u64) -> Option<Option<(u32, u32)>> {
+    fn get_dims(&self, key: u64) -> Option<(u32, u32)> {
         self.entries
             .iter()
             .find(|(k, _)| *k == key)
             .map(|(_, v)| *v)
     }
 
-    fn insert(&mut self, key: u64, value: Option<(u32, u32)>) {
+    fn is_failed(&self, key: u64) -> bool {
+        self.failed.contains(&key)
+    }
+
+    fn insert_dims(&mut self, key: u64, value: (u32, u32)) -> bool {
+        let was_failed = if let Some(idx) = self.failed.iter().position(|k| *k == key) {
+            self.failed.remove(idx);
+            true
+        } else {
+            false
+        };
+        let mut dims_changed = false;
         if let Some(idx) = self.entries.iter().position(|(k, _)| *k == key) {
+            dims_changed = self.entries[idx].1 != value;
             self.entries.remove(idx);
         }
         self.entries.push((key, value));
         if self.entries.len() > 128 {
             self.entries.remove(0);
         }
+        was_failed || dims_changed
+    }
+
+    fn insert_failed(&mut self, key: u64) -> bool {
+        if let Some(idx) = self.entries.iter().position(|(k, _)| *k == key) {
+            self.entries.remove(idx);
+        }
+        let was_failed = if let Some(idx) = self.failed.iter().position(|k| *k == key) {
+            self.failed.remove(idx);
+            true
+        } else {
+            false
+        };
+        self.failed.push(key);
+        if self.failed.len() > 1024 {
+            self.failed.remove(0);
+        }
+        !was_failed
     }
 }
 
@@ -124,16 +155,17 @@ pub(crate) fn is_source_decode_failed(key: u64) -> bool {
     measure_cache()
         .lock()
         .ok()
-        .is_some_and(|cache| matches!(cache.get(key), Some(None)))
+        .is_some_and(|cache| cache.is_failed(key))
 }
 
 /// Record whether a full decode succeeded for `key`, so layout stops trusting a header once the
-/// pixel stream is known to be corrupt.
+/// pixel stream is known to be corrupt (and resumes using dimensions if a source later recovers).
 pub(crate) fn record_source_decode_result(key: u64, pixels: Option<(u32, u32)>) {
     let invalidated = if let Ok(mut cache) = measure_cache().lock() {
-        let was_measured = cache.get(key).flatten().is_some();
-        cache.insert(key, pixels);
-        pixels.is_none() && was_measured
+        match pixels {
+            Some(dims) => cache.insert_dims(key, dims),
+            None => cache.insert_failed(key),
+        }
     } else {
         false
     };
@@ -144,10 +176,13 @@ pub(crate) fn record_source_decode_result(key: u64, pixels: Option<(u32, u32)>) 
 
 /// Pixel dimensions of an undecoded source, cached by `key`.
 pub(crate) fn source_pixel_size(source: &ImageSource, key: u64) -> Option<(u32, u32)> {
-    if let Ok(cache) = measure_cache().lock()
-        && let Some(cached) = cache.get(key)
-    {
-        return cached;
+    if let Ok(cache) = measure_cache().lock() {
+        if cache.is_failed(key) {
+            return None;
+        }
+        if let Some(dims) = cache.get_dims(key) {
+            return Some(dims);
+        }
     }
 
     let dims = match source {
@@ -167,7 +202,7 @@ pub(crate) fn source_pixel_size(source: &ImageSource, key: u64) -> Option<(u32, 
     }?;
 
     if let Ok(mut cache) = measure_cache().lock() {
-        cache.insert(key, Some(dims));
+        cache.insert_dims(key, dims);
     }
 
     Some(dims)
