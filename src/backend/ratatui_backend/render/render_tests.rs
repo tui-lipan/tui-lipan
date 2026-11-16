@@ -5772,6 +5772,86 @@ mod local_layers_over_images {
         );
     }
 
+    struct KittyImageInsideModal {
+        png: Arc<[u8]>,
+    }
+
+    impl Component for KittyImageInsideModal {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn update(&mut self, _msg: (), _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            ZStack::new()
+                .child(Text::new("base"))
+                .child(
+                    Modal::new()
+                        .border(false)
+                        .width(Length::Px(10))
+                        .height(Length::Px(4))
+                        .frame_style(Style::new().bg(Color::Rgb(30, 30, 30)))
+                        .child(
+                            Image::from_bytes(Arc::clone(&self.png))
+                                .protocol(ImageProtocol::Kitty)
+                                .fit(ImageFit::Contain)
+                                .height(Length::Px(4)),
+                        ),
+                )
+                .into()
+        }
+    }
+
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn a_modal_does_not_hide_its_own_kitty_image() {
+        let image = image::RgbImage::from_pixel(80, 80, image::Rgb([255, 0, 0]));
+        let mut png = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+        let viewport = Rect {
+            x: 0,
+            y: 0,
+            w: 12,
+            h: 6,
+        };
+        let mut runtime = RuntimeCore::new_test(
+            KittyImageInsideModal {
+                png: png.into_inner().into(),
+            },
+            (),
+            viewport,
+            Theme::default(),
+            SurfaceMode::Fullscreen,
+            Rc::new(Cell::new(false)),
+        );
+        runtime.init();
+        runtime.render_element(viewport, None, None, None);
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let placeholders = loop {
+            let buffer = render_with_images(&runtime, viewport);
+            let placeholders = buffer
+                .content()
+                .iter()
+                .filter(|cell| cell.symbol().contains('\u{10EEEE}'))
+                .count();
+            if placeholders > 0 || std::time::Instant::now() >= deadline {
+                break placeholders;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+
+        assert!(
+            placeholders > 0,
+            "the modal's own rectangle must not occlude the image it contains"
+        );
+    }
+
     #[cfg(feature = "terminal-images")]
     #[test]
     fn images_drawn_before_a_local_dialog_walk_around_it() {
