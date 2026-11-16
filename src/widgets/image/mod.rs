@@ -4,7 +4,7 @@ mod layout;
 mod node;
 mod reconcile;
 
-pub(crate) use layout::measure_image_constrained;
+pub(crate) use layout::{image_measure_invalidation_epoch, measure_image_constrained};
 pub use node::ImageNode;
 pub use reconcile::reconcile_image;
 
@@ -241,6 +241,7 @@ impl crate::layout::hash::LayoutHash for Image {
         self.repeat.hash(hasher);
         self.speed_percent.hash(hasher);
         self.source.hash(hasher);
+        layout::is_source_decode_failed(node::source_hash(&self.source)).hash(hasher);
         self.alt.hash(hasher);
         Some(())
     }

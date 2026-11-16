@@ -2490,6 +2490,8 @@ impl AsyncEncoder {
             .cache
             .mark_terminal_owner(&request.key, request.terminal_alive.clone());
         protocol_ready_epoch_counter().fetch_add(1, Ordering::Relaxed);
+        drop(inner);
+        wake_for_ready_protocol();
     }
 
     #[cfg(feature = "terminal-images")]
@@ -2527,6 +2529,44 @@ fn protocol_ready_epoch_counter() -> &'static AtomicU64 {
 
 pub(crate) fn image_protocol_ready_epoch() -> u64 {
     protocol_ready_epoch_counter().load(Ordering::Relaxed)
+}
+
+/// The running event loop's wake, so a finished encode is drawn at once.
+///
+/// The loop reads [`image_protocol_ready_epoch`] when it wakes. Without a wake that is the next
+/// unrelated event or idle tick - up to 100 ms with a modal open - so a picture that was ready
+/// sat behind its pending frame.
+static PROTOCOL_READY_WAKE: Mutex<Option<crate::callback::CommandWake>> = Mutex::new(None);
+
+/// Wake `wake` whenever an encode finishes, until the guard drops.
+pub(crate) fn wake_on_protocol_ready(
+    wake: &crate::callback::CommandWake,
+) -> ProtocolReadyWakeGuard {
+    if let Ok(mut slot) = PROTOCOL_READY_WAKE.lock() {
+        *slot = Some(wake.clone());
+    }
+    ProtocolReadyWakeGuard
+}
+
+/// Stops [`wake_on_protocol_ready`] when the event loop exits.
+pub(crate) struct ProtocolReadyWakeGuard;
+
+impl Drop for ProtocolReadyWakeGuard {
+    fn drop(&mut self) {
+        if let Ok(mut slot) = PROTOCOL_READY_WAKE.lock() {
+            *slot = None;
+        }
+    }
+}
+
+fn wake_for_ready_protocol() {
+    let wake = PROTOCOL_READY_WAKE
+        .lock()
+        .ok()
+        .and_then(|slot| slot.clone());
+    if let Some(wake) = wake {
+        wake.notify();
+    }
 }
 
 static ENCODER: OnceLock<Arc<AsyncEncoder>> = OnceLock::new();
@@ -3603,6 +3643,24 @@ pub(crate) fn render_image_inline_fallback(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_finished_encode_wakes_the_event_loop_while_registered() {
+        let wake = crate::callback::CommandWake::default();
+        {
+            let _guard = super::wake_on_protocol_ready(&wake);
+            super::wake_for_ready_protocol();
+            assert!(
+                wake.wait(std::time::Duration::ZERO),
+                "registered loop is woken"
+            );
+        }
+        super::wake_for_ready_protocol();
+        assert!(
+            !wake.wait(std::time::Duration::ZERO),
+            "an exited loop is no longer woken"
+        );
+    }
 
     /// A mark must survive a buffer diff as one narrow cell, round-trip its index, and never match
     /// anything a widget draws, private-use icons included.

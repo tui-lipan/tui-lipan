@@ -113,6 +113,8 @@ impl<C: Component> AppRunner<C> {
         let text_area_drag_snapshot = self.active_text_area_drag_snapshot();
         for _pass in 0..RENDER_STABILITY_MAX_PASSES {
             let scroll_generations = self.core.scroll.view_generations();
+            #[cfg(feature = "image")]
+            let image_measure_epoch = crate::widgets::internal::image_measure_invalidation_epoch();
             self.core.render_element(
                 bounds,
                 self.focus.focused,
@@ -131,7 +133,12 @@ impl<C: Component> AppRunner<C> {
                 .core
                 .scroll
                 .view_dependencies_stale(&scroll_generations);
-            if scroll_stable && !needs_state_rerender {
+            #[cfg(feature = "image")]
+            let image_measure_stable =
+                image_measure_epoch == crate::widgets::internal::image_measure_invalidation_epoch();
+            #[cfg(not(feature = "image"))]
+            let image_measure_stable = true;
+            if scroll_stable && image_measure_stable && !needs_state_rerender {
                 break;
             }
 
@@ -703,6 +710,9 @@ impl<C: Component> AppRunner<C> {
         let needs_full_render = (|| -> Result<bool> {
             for pass in 0..RENDER_STABILITY_MAX_PASSES {
                 let scroll_generations = self.core.scroll.view_generations();
+                #[cfg(feature = "image")]
+                let image_measure_epoch =
+                    crate::widgets::internal::image_measure_invalidation_epoch();
                 let ok = self.core.reconcile_cached_element(
                     bounds,
                     self.focus.focused,
@@ -713,6 +723,12 @@ impl<C: Component> AppRunner<C> {
                     crate::debug::internal_log!(
                         "[tui-lipan] layout-only fallback: reconcile_cached_element failed"
                     );
+                    return Ok(true);
+                }
+                #[cfg(feature = "image")]
+                if image_measure_epoch
+                    != crate::widgets::internal::image_measure_invalidation_epoch()
+                {
                     return Ok(true);
                 }
 
@@ -3256,5 +3272,357 @@ mod tests {
             .cloned()
             .expect("visible metrics should record a frame");
         assert_eq!((frame.memo_hits, frame.memo_misses), (1, 0));
+    }
+
+    #[cfg(feature = "image")]
+    #[test]
+    fn corrupt_pixel_stream_settles_to_alt_size_in_first_runner_render() {
+        use std::io::Cursor;
+
+        use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
+
+        use crate::widgets::{Image, VStack};
+
+        let rgba = RgbaImage::from_pixel(47, 37, Rgba([0x22, 0x44, 0x88, 0xFF]));
+        let mut out = Cursor::new(Vec::new());
+        DynamicImage::ImageRgba8(rgba)
+            .write_to(&mut out, ImageFormat::Png)
+            .expect("png encoding should succeed");
+        let mut png = out.into_inner();
+        let idat = png
+            .windows(4)
+            .position(|w| w == b"IDAT")
+            .expect("png should contain an IDAT chunk");
+        png.truncate(idat + 8);
+
+        struct BrokenImageView(Vec<u8>);
+
+        impl Component for BrokenImageView {
+            type Message = ();
+            type Properties = ();
+            type State = ();
+
+            fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+            fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+                Update::none()
+            }
+
+            fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
+                VStack::new()
+                    .child(Image::from_bytes(self.0.clone()).alt("broken"))
+                    .into()
+            }
+        }
+
+        let viewport = Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 20,
+        };
+        let mut runner = AppRunner::new(App::new().mouse(false), BrokenImageView(png.clone()), ());
+        runner.core = RuntimeCore::new_test(
+            BrokenImageView(png),
+            (),
+            viewport,
+            Theme::default(),
+            SurfaceMode::Fullscreen,
+            Rc::new(Cell::new(false)),
+        )
+        .into();
+        runner.core.init();
+        runner
+            .render_element_until_scroll_stable(viewport)
+            .expect("first runner render should settle");
+
+        let image_node = runner
+            .core
+            .tree
+            .iter()
+            .find(|node| matches!(node.kind, crate::core::node::NodeKind::Image(_)))
+            .expect("image node should exist");
+        assert_eq!((image_node.rect.w, image_node.rect.h), (6, 1));
+    }
+
+    #[cfg(feature = "image")]
+    #[test]
+    fn corrupt_pixel_stream_settles_with_more_than_128_unique_images() {
+        use std::io::Cursor;
+
+        use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
+
+        use crate::widgets::{Image, VStack};
+
+        let rgba = RgbaImage::from_pixel(49, 39, Rgba([0x22, 0x44, 0x88, 0xFF]));
+        let mut out = Cursor::new(Vec::new());
+        DynamicImage::ImageRgba8(rgba)
+            .write_to(&mut out, ImageFormat::Png)
+            .expect("png encoding should succeed");
+        let mut broken_png = out.into_inner();
+        let idat = broken_png
+            .windows(4)
+            .position(|w| w == b"IDAT")
+            .expect("png should contain an IDAT chunk");
+        broken_png.truncate(idat + 8);
+
+        let mut images = Vec::with_capacity(130);
+        images.push((broken_png, Some("broken")));
+        for idx in 1..=129u16 {
+            let rgba = RgbaImage::from_pixel(1, 1, Rgba([idx as u8, (idx >> 8) as u8, 0x55, 0xFF]));
+            let mut buf = Cursor::new(Vec::new());
+            DynamicImage::ImageRgba8(rgba)
+                .write_to(&mut buf, ImageFormat::Png)
+                .expect("png encoding should succeed");
+            images.push((buf.into_inner(), None));
+        }
+
+        struct ManyImagesView(Vec<(Vec<u8>, Option<&'static str>)>);
+
+        impl Component for ManyImagesView {
+            type Message = ();
+            type Properties = ();
+            type State = ();
+
+            fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+            fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+                Update::none()
+            }
+
+            fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
+                let mut stack = VStack::new();
+                for (bytes, alt) in &self.0 {
+                    let mut img = Image::from_bytes(bytes.clone());
+                    if let Some(alt) = alt {
+                        img = img.alt(*alt);
+                    }
+                    stack = stack.child(img);
+                }
+                stack.into()
+            }
+        }
+
+        let viewport = Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 200,
+        };
+        let mut runner =
+            AppRunner::new(App::new().mouse(false), ManyImagesView(images.clone()), ());
+        runner.core = RuntimeCore::new_test(
+            ManyImagesView(images),
+            (),
+            viewport,
+            Theme::default(),
+            SurfaceMode::Fullscreen,
+            Rc::new(Cell::new(false)),
+        )
+        .into();
+        runner.core.init();
+        runner
+            .render_element_until_scroll_stable(viewport)
+            .expect("first runner render should settle");
+
+        let first_image_id = runner.core.tree.node(runner.core.tree.root).children[0];
+        let first_image_node = runner.core.tree.node(first_image_id);
+        assert_eq!((first_image_node.rect.w, first_image_node.rect.h), (6, 1));
+    }
+
+    #[cfg(feature = "image")]
+    #[test]
+    fn recovered_image_path_invalidates_failed_decode_cache() {
+        use std::io::Cursor;
+
+        use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
+
+        use crate::widgets::{Image, VStack};
+
+        let path = std::env::temp_dir().join(format!(
+            "tui-lipan-image-recover-{}.png",
+            std::process::id()
+        ));
+
+        let rgba = RgbaImage::from_pixel(40, 40, Rgba([0x22, 0x44, 0x88, 0xFF]));
+        let mut out = Cursor::new(Vec::new());
+        DynamicImage::ImageRgba8(rgba)
+            .write_to(&mut out, ImageFormat::Png)
+            .expect("png encoding should succeed");
+        let valid_png = out.into_inner();
+
+        let idat = valid_png
+            .windows(4)
+            .position(|w| w == b"IDAT")
+            .expect("png should contain an IDAT chunk");
+        std::fs::write(&path, &valid_png[..idat + 8]).expect("write truncated png");
+
+        struct PathImageView(String);
+
+        impl Component for PathImageView {
+            type Message = ();
+            type Properties = ();
+            type State = ();
+
+            fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+            fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+                Update::none()
+            }
+
+            fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
+                VStack::new()
+                    .child(Image::new(self.0.clone()).alt("broken"))
+                    .into()
+            }
+        }
+
+        let viewport = Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 20,
+        };
+        let path_str = path.to_string_lossy().into_owned();
+        let mut runner =
+            AppRunner::new(App::new().mouse(false), PathImageView(path_str.clone()), ());
+        runner.core = RuntimeCore::new_test(
+            PathImageView(path_str),
+            (),
+            viewport,
+            Theme::default(),
+            SurfaceMode::Fullscreen,
+            Rc::new(Cell::new(false)),
+        )
+        .into();
+        runner.core.init();
+
+        runner
+            .render_element_until_scroll_stable(viewport)
+            .expect("initial broken render should settle");
+        let broken_node = runner
+            .core
+            .tree
+            .iter()
+            .find(|node| matches!(node.kind, crate::core::node::NodeKind::Image(_)))
+            .expect("image node should exist");
+        assert_eq!((broken_node.rect.w, broken_node.rect.h), (6, 1));
+
+        std::fs::write(&path, &valid_png).expect("write valid png");
+        runner
+            .render_element_until_scroll_stable(viewport)
+            .expect("recovered image render should settle");
+        let recovered_node = runner
+            .core
+            .tree
+            .iter()
+            .find(|node| matches!(node.kind, crate::core::node::NodeKind::Image(_)))
+            .expect("image node should exist");
+        assert_eq!((recovered_node.rect.w, recovered_node.rect.h), (4, 2));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[cfg(feature = "image")]
+    #[test]
+    fn more_than_1024_corrupt_images_converge_without_thrashing_failed_cache() {
+        use std::io::Cursor;
+
+        use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
+
+        use crate::widgets::{Image, VStack};
+
+        let rgba = RgbaImage::from_pixel(47, 37, Rgba([0x22, 0x44, 0x88, 0xFF]));
+        let mut out = Cursor::new(Vec::new());
+        DynamicImage::ImageRgba8(rgba)
+            .write_to(&mut out, ImageFormat::Png)
+            .expect("png encoding should succeed");
+        let mut template = out.into_inner();
+        let idat = template
+            .windows(4)
+            .position(|w| w == b"IDAT")
+            .expect("png should contain an IDAT chunk");
+        template.truncate(idat + 8);
+
+        let sources: Vec<Vec<u8>> = (0..1025u16)
+            .map(|idx| {
+                let mut bytes = template.clone();
+                bytes.extend_from_slice(&idx.to_le_bytes());
+                bytes
+            })
+            .collect();
+
+        struct ManyBrokenImagesView(Vec<Vec<u8>>);
+
+        impl Component for ManyBrokenImagesView {
+            type Message = ();
+            type Properties = ();
+            type State = ();
+
+            fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+            fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+                Update::none()
+            }
+
+            fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
+                let mut stack = VStack::new();
+                for bytes in &self.0 {
+                    stack = stack.child(Image::from_bytes(bytes.clone()).alt("broken"));
+                }
+                stack.into()
+            }
+        }
+
+        let viewport = Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 2000,
+        };
+        let mut runner = AppRunner::new(
+            App::new().mouse(false),
+            ManyBrokenImagesView(sources.clone()),
+            (),
+        );
+        runner.core = RuntimeCore::new_test(
+            ManyBrokenImagesView(sources),
+            (),
+            viewport,
+            Theme::default(),
+            SurfaceMode::Fullscreen,
+            Rc::new(Cell::new(false)),
+        )
+        .into();
+        runner.core.init();
+
+        runner
+            .render_element_until_scroll_stable(viewport)
+            .expect("1025 corrupt images should converge within pass cap");
+        assert!(
+            !runner.render_stability_pending,
+            "first render with 1025 corrupt images must settle without arming another frame"
+        );
+
+        let epoch_after_first = crate::widgets::internal::image_measure_invalidation_epoch();
+        runner
+            .render_element_until_scroll_stable(viewport)
+            .expect("subsequent render should stay settled");
+        assert!(
+            !runner.render_stability_pending,
+            "subsequent render must stay settled"
+        );
+        assert_eq!(
+            crate::widgets::internal::image_measure_invalidation_epoch(),
+            epoch_after_first,
+            "failed-source cache must not evict and re-bump epoch across passes"
+        );
+
+        let children = &runner.core.tree.node(runner.core.tree.root).children;
+        assert_eq!(children.len(), 1025);
+        for &child_id in &[children[0], children[1024]] {
+            let node = runner.core.tree.node(child_id);
+            assert_eq!((node.rect.w, node.rect.h), (6, 1));
+        }
     }
 }

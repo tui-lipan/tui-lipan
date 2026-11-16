@@ -115,8 +115,12 @@ pub(crate) fn element_layout_hash(el: &Element) -> Option<u64> {
     // so the per-element cache must be skipped when a collapse hint is active
     // (the cached hash is from the previous drag state).
     let skip_cache = is_drag_source_with_active_collapse(el) || has_split_wrap_dynamic_state(el);
+    let image_epoch = current_image_measure_epoch();
 
-    if !skip_cache && let Some(hash) = el.layout_hash_cache.get() {
+    if !skip_cache
+        && el.layout_hash_image_epoch.get() == image_epoch
+        && let Some(hash) = el.layout_hash_cache.get()
+    {
         return Some(hash);
     }
 
@@ -128,9 +132,20 @@ pub(crate) fn element_layout_hash(el: &Element) -> Option<u64> {
 
     let hash = hasher.finish();
     if !skip_cache {
+        el.layout_hash_image_epoch.set(image_epoch);
         el.layout_hash_cache.set(Some(hash));
     }
     Some(hash)
+}
+
+#[cfg(feature = "image")]
+fn current_image_measure_epoch() -> u64 {
+    crate::widgets::internal::image_measure_invalidation_epoch()
+}
+
+#[cfg(not(feature = "image"))]
+fn current_image_measure_epoch() -> u64 {
+    0
 }
 
 fn is_drag_source_with_active_collapse(el: &Element) -> bool {

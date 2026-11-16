@@ -2521,6 +2521,11 @@ impl<C: Component> AppRunner<C> {
             let _command_wake_hook = platform_input.sender().map(|sender| {
                 CommandWakeHook::install(&self.core.command_wake, &command_wake_pending, sender)
             });
+            #[cfg(feature = "image")]
+            let _image_ready_wake =
+                crate::backend::ratatui_backend::renderers::image::wake_on_protocol_ready(
+                    &self.core.command_wake,
+                );
             #[cfg(unix)]
             let mut host_hung_up_at: Option<Instant> = None;
 

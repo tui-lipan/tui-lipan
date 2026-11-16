@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
-use image::GenericImageView;
+use rustc_hash::FxHashSet;
 use unicode_width::UnicodeWidthStr;
 
 use super::{Image, ImageFit, ImageSource};
@@ -10,24 +10,45 @@ use crate::style::Length;
 #[derive(Default)]
 struct ImageMeasureCache {
     entries: Vec<(u64, (u32, u32))>,
+    /// Source hashes whose pixel decode failed. Kept separate from the 128-entry `entries` cache
+    /// and intentionally non-evicting: `Image::layout_hash` hashes failure status, so evicting an
+    /// active failed source while it is still rendered causes header-vs-alt layout thrashing across
+    /// passes. Tradeoff: unique failed `ImageSource::Bytes` hashes stay in this set for the
+    /// process lifetime (8 bytes per hash) until failure state is moved to runtime/tree ownership.
+    failed: FxHashSet<u64>,
 }
 
 impl ImageMeasureCache {
-    fn get(&self, key: u64) -> Option<(u32, u32)> {
+    fn get_dims(&self, key: u64) -> Option<(u32, u32)> {
         self.entries
             .iter()
             .find(|(k, _)| *k == key)
             .map(|(_, v)| *v)
     }
 
-    fn insert(&mut self, key: u64, value: (u32, u32)) {
+    fn is_failed(&self, key: u64) -> bool {
+        self.failed.contains(&key)
+    }
+
+    fn insert_dims(&mut self, key: u64, value: (u32, u32)) -> bool {
+        let was_failed = self.failed.remove(&key);
+        let mut dims_changed = false;
         if let Some(idx) = self.entries.iter().position(|(k, _)| *k == key) {
+            dims_changed = self.entries[idx].1 != value;
             self.entries.remove(idx);
         }
         self.entries.push((key, value));
         if self.entries.len() > 128 {
             self.entries.remove(0);
         }
+        was_failed || dims_changed
+    }
+
+    fn insert_failed(&mut self, key: u64) -> bool {
+        if let Some(idx) = self.entries.iter().position(|(k, _)| *k == key) {
+            self.entries.remove(idx);
+        }
+        self.failed.insert(key)
     }
 }
 
@@ -112,27 +133,67 @@ pub(crate) fn image_cells(
     )
 }
 
+thread_local! {
+    static IMAGE_MEASURE_INVALIDATION_EPOCH: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+pub(crate) fn image_measure_invalidation_epoch() -> u64 {
+    IMAGE_MEASURE_INVALIDATION_EPOCH.with(std::cell::Cell::get)
+}
+
+/// Whether `key` is already known to have failed a full pixel decode.
+pub(crate) fn is_source_decode_failed(key: u64) -> bool {
+    measure_cache()
+        .lock()
+        .ok()
+        .is_some_and(|cache| cache.is_failed(key))
+}
+
+/// Record whether a full decode succeeded for `key`, so layout stops trusting a header once the
+/// pixel stream is known to be corrupt (and resumes using dimensions if a source later recovers).
+pub(crate) fn record_source_decode_result(key: u64, pixels: Option<(u32, u32)>) {
+    let invalidated = if let Ok(mut cache) = measure_cache().lock() {
+        match pixels {
+            Some(dims) => cache.insert_dims(key, dims),
+            None => cache.insert_failed(key),
+        }
+    } else {
+        false
+    };
+    if invalidated {
+        IMAGE_MEASURE_INVALIDATION_EPOCH.with(|epoch| epoch.set(epoch.get().wrapping_add(1)));
+    }
+}
+
 /// Pixel dimensions of an undecoded source, cached by `key`.
 pub(crate) fn source_pixel_size(source: &ImageSource, key: u64) -> Option<(u32, u32)> {
-    if let Ok(cache) = measure_cache().lock()
-        && let Some(size) = cache.get(key)
-    {
-        return Some(size);
+    if let Ok(cache) = measure_cache().lock() {
+        if cache.is_failed(key) {
+            return None;
+        }
+        if let Some(dims) = cache.get_dims(key) {
+            return Some(dims);
+        }
     }
 
     let dims = match source {
+        // The header holds the size; decoding every pixel here doubled the cost of showing an
+        // image, on the UI thread, before reconcile decoded it again.
         ImageSource::Path(path) => image::ImageReader::open(Path::new(path.as_ref()))
             .ok()?
-            .decode()
-            .ok()
-            .map(|img| img.dimensions()),
-        ImageSource::Bytes(bytes) => image::load_from_memory(bytes.as_ref())
-            .ok()
-            .map(|img| img.dimensions()),
+            .with_guessed_format()
+            .ok()?
+            .into_dimensions()
+            .ok(),
+        ImageSource::Bytes(bytes) => image::ImageReader::new(std::io::Cursor::new(bytes.as_ref()))
+            .with_guessed_format()
+            .ok()?
+            .into_dimensions()
+            .ok(),
     }?;
 
     if let Ok(mut cache) = measure_cache().lock() {
-        cache.insert(key, dims);
+        cache.insert_dims(key, dims);
     }
 
     Some(dims)
@@ -254,5 +315,21 @@ mod tests {
             .width(Length::Px(10))
             .height(Length::Px(4));
         assert_eq!(measure_image(&image), (10, 4));
+    }
+
+    #[test]
+    fn source_size_comes_from_the_header_without_decoding_pixels() {
+        let image = DynamicImage::ImageRgba8(RgbaImage::from_pixel(37, 23, Rgba([1, 2, 3, 255])));
+        let mut png = Cursor::new(Vec::new());
+        image.write_to(&mut png, ImageFormat::Png).unwrap();
+        // Cut a few bytes into the pixel data: the header survives, but a full decode fails.
+        let png = png.into_inner();
+        let idat = png.windows(4).position(|w| w == b"IDAT").unwrap();
+        let header: std::sync::Arc<[u8]> = png[..idat + 8].into();
+        assert!(image::load_from_memory(&header).is_err());
+
+        let size =
+            super::source_pixel_size(&crate::widgets::ImageSource::Bytes(header), 0x5eed_0033);
+        assert_eq!(size, Some((37, 23)));
     }
 }

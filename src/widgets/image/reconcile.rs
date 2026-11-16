@@ -12,7 +12,7 @@ use crate::core::node::{NodeId, NodeKind, NodeTree};
 use crate::layout::reconcile::{apply_constraints, reuse_or_replace_kind};
 use crate::style::{LayoutConstraints, Length, Rect};
 
-use super::layout::{ImageAxis, sized_with_alt, source_pixel_size};
+use super::layout::{ImageAxis, record_source_decode_result, sized_with_alt, source_pixel_size};
 use super::node::{ImageAnimation, ImageNode, source_hash};
 use super::{Image, ImageSource};
 
@@ -196,12 +196,27 @@ pub fn reconcile_image(
                 decoded = img;
                 animation = animated;
                 decode_error = None;
+                let pixels = animation
+                    .as_ref()
+                    .and_then(|anim| {
+                        anim.current_image()
+                            .map(|frame| (frame.width(), frame.height()))
+                    })
+                    .or_else(|| decoded.as_ref().map(|img| (img.width(), img.height())));
+                if pixels.is_some() {
+                    record_source_decode_result(hash, pixels);
+                }
             }
-            Err(err) => decode_error = Some(err),
+            Err(err) => {
+                decode_error = Some(err);
+                record_source_decode_result(hash, None);
+            }
         }
     }
 
-    let pixels = if let Some(animated) = &animation {
+    let pixels = if decode_error.is_some() {
+        None
+    } else if let Some(animated) = &animation {
         animated
             .current_image()
             .map(|frame| (frame.width(), frame.height()))
@@ -617,5 +632,83 @@ mod tests {
         };
 
         assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    fn truncated_png_bytes(width: u32, height: u32) -> Vec<u8> {
+        let mut png = png_bytes(width, height);
+        let idat = png
+            .windows(4)
+            .position(|w| w == b"IDAT")
+            .expect("png should contain an IDAT chunk");
+        png.truncate(idat + 8);
+        png
+    }
+
+    #[test]
+    fn corrupt_pixel_stream_falls_back_to_alt_dimensions_after_decode_fails() {
+        let widget = Image::from_bytes(truncated_png_bytes(41, 29)).alt("broken");
+
+        // Before decode runs, layout reads only the header without decoding pixels.
+        assert_eq!(
+            super::super::layout::measure_image_constrained(&widget, None, None),
+            (5, 2)
+        );
+
+        let mut tree = NodeTree::new();
+        let id = tree.alloc();
+        let rect = Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 20,
+        };
+
+        reconcile_image(&mut tree, id, &widget, rect, &LayoutConstraints::default());
+
+        let node = tree.node(id);
+        assert_eq!((node.rect.w, node.rect.h), (6, 1));
+        let NodeKind::Image(image_node) = &node.kind else {
+            panic!("expected image node");
+        };
+        assert!(image_node.decode_error.is_some());
+
+        // Once decode has failed, layout measurement stops trusting the header and matches alt.
+        assert_eq!(
+            super::super::layout::measure_image_constrained(&widget, None, None),
+            (6, 1)
+        );
+    }
+
+    #[test]
+    fn corrupt_pixel_stream_layout_and_reconcile_settle_to_alt_size() {
+        use crate::core::element::Element;
+        use crate::layout::LayoutEngine;
+        use crate::layout::measure::min_size_constrained;
+        use crate::widgets::VStack;
+
+        let widget = Image::from_bytes(truncated_png_bytes(43, 31)).alt("broken");
+        let root: Element = VStack::new().child(widget).into();
+
+        let mut tree = NodeTree::new();
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 20,
+        };
+
+        LayoutEngine::reconcile_with_overlays(&mut tree, &root, bounds, None, &[]);
+        let image_id = tree.node(tree.root).children[0];
+        let image_node = tree.node(image_id);
+        // Pass 1 laid out VStack from the header (5x2) before decode ran, clamping "broken" to w=5.
+        assert_eq!((image_node.rect.w, image_node.rect.h), (5, 1));
+
+        // Now that decode failure is recorded, measurement and subsequent layout settle to alt (6x1).
+        assert_eq!(min_size_constrained(&root, Some(40), Some(20)), (6, 1));
+
+        LayoutEngine::reconcile_with_overlays(&mut tree, &root, bounds, None, &[]);
+        let image_id = tree.node(tree.root).children[0];
+        let image_node = tree.node(image_id);
+        assert_eq!((image_node.rect.w, image_node.rect.h), (6, 1));
     }
 }
