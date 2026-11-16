@@ -113,6 +113,8 @@ impl<C: Component> AppRunner<C> {
         let text_area_drag_snapshot = self.active_text_area_drag_snapshot();
         for _pass in 0..RENDER_STABILITY_MAX_PASSES {
             let scroll_generations = self.core.scroll.view_generations();
+            #[cfg(feature = "image")]
+            let image_measure_epoch = crate::widgets::internal::image_measure_invalidation_epoch();
             self.core.render_element(
                 bounds,
                 self.focus.focused,
@@ -131,7 +133,12 @@ impl<C: Component> AppRunner<C> {
                 .core
                 .scroll
                 .view_dependencies_stale(&scroll_generations);
-            if scroll_stable && !needs_state_rerender {
+            #[cfg(feature = "image")]
+            let image_measure_stable =
+                image_measure_epoch == crate::widgets::internal::image_measure_invalidation_epoch();
+            #[cfg(not(feature = "image"))]
+            let image_measure_stable = true;
+            if scroll_stable && image_measure_stable && !needs_state_rerender {
                 break;
             }
 
@@ -703,6 +710,9 @@ impl<C: Component> AppRunner<C> {
         let needs_full_render = (|| -> Result<bool> {
             for pass in 0..RENDER_STABILITY_MAX_PASSES {
                 let scroll_generations = self.core.scroll.view_generations();
+                #[cfg(feature = "image")]
+                let image_measure_epoch =
+                    crate::widgets::internal::image_measure_invalidation_epoch();
                 let ok = self.core.reconcile_cached_element(
                     bounds,
                     self.focus.focused,
@@ -713,6 +723,12 @@ impl<C: Component> AppRunner<C> {
                     crate::debug::internal_log!(
                         "[tui-lipan] layout-only fallback: reconcile_cached_element failed"
                     );
+                    return Ok(true);
+                }
+                #[cfg(feature = "image")]
+                if image_measure_epoch
+                    != crate::widgets::internal::image_measure_invalidation_epoch()
+                {
                     return Ok(true);
                 }
 
@@ -3256,5 +3272,76 @@ mod tests {
             .cloned()
             .expect("visible metrics should record a frame");
         assert_eq!((frame.memo_hits, frame.memo_misses), (1, 0));
+    }
+
+    #[cfg(feature = "image")]
+    #[test]
+    fn corrupt_pixel_stream_settles_to_alt_size_in_first_runner_render() {
+        use std::io::Cursor;
+
+        use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
+
+        use crate::widgets::{Image, VStack};
+
+        let rgba = RgbaImage::from_pixel(47, 37, Rgba([0x22, 0x44, 0x88, 0xFF]));
+        let mut out = Cursor::new(Vec::new());
+        DynamicImage::ImageRgba8(rgba)
+            .write_to(&mut out, ImageFormat::Png)
+            .expect("png encoding should succeed");
+        let mut png = out.into_inner();
+        let idat = png
+            .windows(4)
+            .position(|w| w == b"IDAT")
+            .expect("png should contain an IDAT chunk");
+        png.truncate(idat + 8);
+
+        struct BrokenImageView(Vec<u8>);
+
+        impl Component for BrokenImageView {
+            type Message = ();
+            type Properties = ();
+            type State = ();
+
+            fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+            fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+                Update::none()
+            }
+
+            fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
+                VStack::new()
+                    .child(Image::from_bytes(self.0.clone()).alt("broken"))
+                    .into()
+            }
+        }
+
+        let viewport = Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 20,
+        };
+        let mut runner = AppRunner::new(App::new().mouse(false), BrokenImageView(png.clone()), ());
+        runner.core = RuntimeCore::new_test(
+            BrokenImageView(png),
+            (),
+            viewport,
+            Theme::default(),
+            SurfaceMode::Fullscreen,
+            Rc::new(Cell::new(false)),
+        )
+        .into();
+        runner.core.init();
+        runner
+            .render_element_until_scroll_stable(viewport)
+            .expect("first runner render should settle");
+
+        let image_node = runner
+            .core
+            .tree
+            .iter()
+            .find(|node| matches!(node.kind, crate::core::node::NodeKind::Image(_)))
+            .expect("image node should exist");
+        assert_eq!((image_node.rect.w, image_node.rect.h), (6, 1));
     }
 }

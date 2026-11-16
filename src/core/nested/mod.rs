@@ -489,6 +489,7 @@ impl ElementMetadata {
             kind,
             layout,
             layout_hash_cache: Cell::new(None),
+            layout_hash_image_epoch: Cell::new(0),
             measure_cache: Cell::new([None::<MeasureCacheEntry>, None]),
             split_wrap_probe_cache: Cell::new(None),
             visibility_layout_probe_cache: Cell::new(None),

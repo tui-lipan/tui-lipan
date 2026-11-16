@@ -8,18 +8,18 @@ use crate::style::Length;
 
 #[derive(Default)]
 struct ImageMeasureCache {
-    entries: Vec<(u64, (u32, u32))>,
+    entries: Vec<(u64, Option<(u32, u32)>)>,
 }
 
 impl ImageMeasureCache {
-    fn get(&self, key: u64) -> Option<(u32, u32)> {
+    fn get(&self, key: u64) -> Option<Option<(u32, u32)>> {
         self.entries
             .iter()
             .find(|(k, _)| *k == key)
             .map(|(_, v)| *v)
     }
 
-    fn insert(&mut self, key: u64, value: (u32, u32)) {
+    fn insert(&mut self, key: u64, value: Option<(u32, u32)>) {
         if let Some(idx) = self.entries.iter().position(|(k, _)| *k == key) {
             self.entries.remove(idx);
         }
@@ -111,12 +111,43 @@ pub(crate) fn image_cells(
     )
 }
 
+thread_local! {
+    static IMAGE_MEASURE_INVALIDATION_EPOCH: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+pub(crate) fn image_measure_invalidation_epoch() -> u64 {
+    IMAGE_MEASURE_INVALIDATION_EPOCH.with(std::cell::Cell::get)
+}
+
+/// Whether `key` is already known to have failed a full pixel decode.
+pub(crate) fn is_source_decode_failed(key: u64) -> bool {
+    measure_cache()
+        .lock()
+        .ok()
+        .is_some_and(|cache| matches!(cache.get(key), Some(None)))
+}
+
+/// Record whether a full decode succeeded for `key`, so layout stops trusting a header once the
+/// pixel stream is known to be corrupt.
+pub(crate) fn record_source_decode_result(key: u64, pixels: Option<(u32, u32)>) {
+    let invalidated = if let Ok(mut cache) = measure_cache().lock() {
+        let was_measured = cache.get(key).flatten().is_some();
+        cache.insert(key, pixels);
+        pixels.is_none() && was_measured
+    } else {
+        false
+    };
+    if invalidated {
+        IMAGE_MEASURE_INVALIDATION_EPOCH.with(|epoch| epoch.set(epoch.get().wrapping_add(1)));
+    }
+}
+
 /// Pixel dimensions of an undecoded source, cached by `key`.
 pub(crate) fn source_pixel_size(source: &ImageSource, key: u64) -> Option<(u32, u32)> {
     if let Ok(cache) = measure_cache().lock()
-        && let Some(size) = cache.get(key)
+        && let Some(cached) = cache.get(key)
     {
-        return Some(size);
+        return cached;
     }
 
     let dims = match source {
@@ -136,7 +167,7 @@ pub(crate) fn source_pixel_size(source: &ImageSource, key: u64) -> Option<(u32, 
     }?;
 
     if let Ok(mut cache) = measure_cache().lock() {
-        cache.insert(key, dims);
+        cache.insert(key, Some(dims));
     }
 
     Some(dims)

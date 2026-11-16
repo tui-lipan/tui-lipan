@@ -55,7 +55,7 @@ fn requested_measure_bound(len: Length, available: u16) -> Option<u16> {
     }
 }
 
-type GlobalMeasureCacheKey = (u64, Option<u16>, Option<u16>, MeasureContext);
+type GlobalMeasureCacheKey = (u64, Option<u16>, Option<u16>, MeasureContext, u64);
 type GlobalMeasureCache = crate::utils::gen_cache::GenerationalCache<
     GlobalMeasureCacheKey,
     (u16, u16),
@@ -91,6 +91,16 @@ fn with_measure_context<T>(context: MeasureContext, f: impl FnOnce() -> T) -> T 
 
 fn current_measure_context() -> MeasureContext {
     CURRENT_MEASURE_CONTEXT.with(Cell::get)
+}
+
+#[cfg(feature = "image")]
+fn current_image_measure_epoch() -> u64 {
+    crate::widgets::internal::image_measure_invalidation_epoch()
+}
+
+#[cfg(not(feature = "image"))]
+fn current_image_measure_epoch() -> u64 {
+    0
 }
 
 pub(crate) fn with_frame_measure_context<T>(frame: &Frame, f: impl FnOnce() -> T) -> T {
@@ -195,20 +205,26 @@ pub(crate) fn min_size_constrained(
     max_h: Option<u16>,
 ) -> (u16, u16) {
     let measure_context = current_measure_context();
+    let image_measure_epoch = current_image_measure_epoch();
     let split_wrap_measure_state = element_has_split_wrap_measure_state(el);
     let skip_local_cache = split_wrap_measure_state || drag_source_should_skip_measure_cache(el);
     let skip_global_cache = drag_source_should_skip_measure_cache(el);
 
     if !skip_local_cache {
         for entry in el.measure_cache.get().into_iter().flatten() {
-            if entry.max_w == max_w && entry.max_h == max_h && entry.context == measure_context {
+            if entry.max_w == max_w
+                && entry.max_h == max_h
+                && entry.context == measure_context
+                && entry.image_measure_epoch == image_measure_epoch
+            {
                 return entry.size;
             }
         }
     }
 
     let global_cache_key = if !skip_global_cache {
-        element_layout_hash(el).map(|hash| (hash, max_w, max_h, measure_context))
+        element_layout_hash(el)
+            .map(|hash| (hash, max_w, max_h, measure_context, image_measure_epoch))
     } else {
         None
     };
@@ -220,6 +236,7 @@ pub(crate) fn min_size_constrained(
                 max_w,
                 max_h,
                 context: measure_context,
+                image_measure_epoch,
                 size,
             });
             let mut slots = el.measure_cache.get();
@@ -246,6 +263,7 @@ pub(crate) fn min_size_constrained(
             max_w,
             max_h,
             context: measure_context,
+            image_measure_epoch,
             size,
         });
         let mut slots = el.measure_cache.get();

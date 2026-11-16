@@ -40,6 +40,7 @@ pub(crate) struct MeasureCacheEntry {
     pub max_w: Option<u16>,
     pub max_h: Option<u16>,
     pub context: MeasureContext,
+    pub image_measure_epoch: u64,
     pub size: (u16, u16),
 }
 
@@ -106,6 +107,8 @@ pub struct Element {
     pub(crate) layout: LayoutConstraints,
     /// Cached layout hash for repeated layout-only reconciles.
     pub(crate) layout_hash_cache: Cell<Option<u64>>,
+    /// Image measure-invalidation epoch when `layout_hash_cache` was computed.
+    pub(crate) layout_hash_image_epoch: Cell<u64>,
     /// Small MRU cache for repeated min-size measurements.
     pub(crate) measure_cache: Cell<[Option<MeasureCacheEntry>; 2]>,
     /// Memoized [`crate::widgets::element_subtree_has_split_wrap_sync`] result for this subtree.
@@ -131,6 +134,7 @@ impl Element {
             kind,
             layout: LayoutConstraints::default(),
             layout_hash_cache: Cell::new(None),
+            layout_hash_image_epoch: Cell::new(0),
             measure_cache: Cell::new([None, None]),
             split_wrap_probe_cache: Cell::new(None),
             visibility_layout_probe_cache: Cell::new(None),
@@ -906,6 +910,7 @@ mod tests {
                 max_w: Some(1),
                 max_h: Some(1),
                 context: MeasureContext::NONE,
+                image_measure_epoch: 0,
                 size: (1, 1),
             }),
             None,
