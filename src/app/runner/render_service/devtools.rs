@@ -78,6 +78,10 @@ impl<C: Component> AppRunner<C> {
         if self.devtools_metrics_suppressed {
             return;
         }
+        // Input aimed at the panel caused this frame, and nothing the app did joined it.
+        if std::mem::take(&mut self.devtools_input_frame) && pending.is_empty() {
+            return;
+        }
         if !self.devtools_config.metrics {
             return;
         }
@@ -146,8 +150,10 @@ impl<C: Component> AppRunner<C> {
             });
 
         // The panel just drawn shows the *previous* frame's metrics (it was built
-        // before this record), so it is behind until its next refresh.
-        self.devtools_panel_stale = true;
+        // before this record). Only the Stats tab shows them.
+        if self.devtools_state.borrow().is_stats_tab_active() {
+            self.devtools_panel_stale = true;
+        }
     }
 
     /// How long until the panel should be rebuilt on its own: `Some(ZERO)` when due now, `None`
@@ -166,6 +172,9 @@ impl<C: Component> AppRunner<C> {
         }
         if state.expire_fps_samples(now) && state.is_stats_tab_active() {
             self.devtools_panel_stale = true;
+        }
+        if self.devtools_panel_refresh_now {
+            return Some(Duration::ZERO);
         }
         if self.devtools_panel_stale {
             let due = self
@@ -194,13 +203,20 @@ impl<C: Component> AppRunner<C> {
             return Ok(());
         }
         self.devtools_panel_stale = false;
+        self.devtools_panel_refresh_now = false;
         self.devtools_panel_refreshed_at = Some(Instant::now());
+        // The host is shown DevTools' cells, not an app frame: paint observers, captures and frame
+        // pacing must not count it, so the app frame state this iteration had is put back after.
+        let app_frame_rendered = self.frame_rendered;
+        let app_frame_presented = self.host_frame_presented;
         // Framework log lines written while DevTools refreshes itself would mark it stale again.
         let _log_guard = crate::debug::suppress_devtools_log();
         self.devtools_metrics_suppressed = true;
         crate::core::nested::set_frame_diagnostics_enabled(false);
         let result = self.refresh_devtools_panel(terminal);
         self.devtools_metrics_suppressed = false;
+        self.frame_rendered = app_frame_rendered;
+        self.host_frame_presented = app_frame_presented;
         // Nothing gathered while the panel rebuilt belongs to the app's next frame.
         let _ = crate::core::nested::take_memo_frame_stats();
         let _ = crate::core::nested::take_view_timings();
@@ -250,10 +266,38 @@ impl<C: Component> AppRunner<C> {
         Ok(())
     }
 
+    /// Whether `node` is the panel's frame or inside it.
+    #[cfg(feature = "devtools")]
+    pub(crate) fn devtools_panel_contains(&self, node: crate::core::node::NodeId) -> bool {
+        let tree = &self.core.tree;
+        let Some(panel) = tree
+            .iter()
+            .find(|candidate| {
+                candidate
+                    .key
+                    .as_ref()
+                    .is_some_and(|key| key.as_ref() == crate::devtools::DEVTOOLS_KEY)
+            })
+            .map(|candidate| candidate.id)
+        else {
+            return false;
+        };
+        let mut stack = vec![panel];
+        while let Some(id) = stack.pop() {
+            if id == node {
+                return true;
+            }
+            if tree.is_valid(id) {
+                stack.extend(tree.node(id).children.iter().copied());
+            }
+        }
+        false
+    }
+
     /// Where the panel's frame sits, which is all of the panel that paints anything: the stack
     /// around it spans the viewport only to anchor it to the bottom.
     #[cfg(feature = "devtools")]
-    fn devtools_panel_rect(&self) -> Option<crate::style::Rect> {
+    pub(crate) fn devtools_panel_rect(&self) -> Option<crate::style::Rect> {
         self.core
             .tree
             .iter()

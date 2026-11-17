@@ -737,6 +737,15 @@ pub struct AppRunner<C: Component> {
     /// When the panel was last rebuilt on its own, which paces the next rebuild.
     #[cfg(feature = "devtools")]
     pub(crate) devtools_panel_refreshed_at: Option<Instant>,
+    /// The panel handled a message of its own (a tab, the log filter, pause): rebuild it now,
+    /// without waiting out the refresh interval and without an app frame.
+    #[cfg(feature = "devtools")]
+    pub(crate) devtools_panel_refresh_now: bool,
+    /// Input aimed at the panel dirtied the next frame. Input still takes the ordinary path, since
+    /// it can move focus or hover off the app, but the frame it causes is not the app's and is not
+    /// recorded unless the app had work of its own in it.
+    #[cfg(feature = "devtools")]
+    pub(crate) devtools_input_frame: bool,
     /// True only while the panel is rebuilt on its own. That frame is DevTools' own work, not the
     /// app's, so it records no metrics, attributions or view timings.
     #[cfg(feature = "devtools")]
@@ -1046,6 +1055,10 @@ impl<C: Component> AppRunner<C> {
             devtools_panel_stale: false,
             #[cfg(feature = "devtools")]
             devtools_panel_refreshed_at: None,
+            #[cfg(feature = "devtools")]
+            devtools_panel_refresh_now: false,
+            #[cfg(feature = "devtools")]
+            devtools_input_frame: false,
             #[cfg(feature = "devtools")]
             devtools_metrics_suppressed: false,
             #[cfg(feature = "devtools")]
@@ -1436,7 +1449,37 @@ impl<C: Component> AppRunner<C> {
         label: &'static str,
     ) {
         apply_dirty_level(dirty, level);
+        if !matches!(level, DirtyLevel::None) && self.input_targets_devtools(label) {
+            self.devtools_input_frame = true;
+            return;
+        }
         self.note_attribution(crate::devtools::state::UpdateSource::Input(label), level);
+    }
+
+    /// Whether input with this attribution label went to the DevTools panel: a key to a widget
+    /// inside it, or the pointer over it. The panel is the top layer, so the pointer over its
+    /// frame cannot be reaching the app.
+    #[cfg(feature = "devtools")]
+    fn input_targets_devtools(&self, label: &'static str) -> bool {
+        if !self.devtools_state.borrow().visible {
+            return false;
+        }
+        if label == "input:key" {
+            return self
+                .focus
+                .focused
+                .is_some_and(|focused| self.devtools_panel_contains(focused));
+        }
+        let Some((x, y)) = self.mouse.last_mouse.get() else {
+            return false;
+        };
+        self.devtools_panel_rect().is_some_and(|rect| {
+            let (x, y) = (i32::from(x), i32::from(y));
+            x >= i32::from(rect.x)
+                && x < i32::from(rect.x) + i32::from(rect.w)
+                && y >= i32::from(rect.y)
+                && y < i32::from(rect.y) + i32::from(rect.h)
+        })
     }
 
     /// Update host-window focus and invoke the root lifecycle exactly once per transition.

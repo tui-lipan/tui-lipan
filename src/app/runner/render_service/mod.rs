@@ -3064,7 +3064,8 @@ mod tests {
         // Nothing new to show: nothing to wake for.
         assert_eq!(runner.devtools_panel_refresh_wait(Instant::now()), None);
 
-        // A new app frame waits out the refresh interval instead of refreshing at once.
+        // On Stats, a new app frame waits out the refresh interval instead of refreshing at once.
+        runner.devtools_state.borrow_mut().set_active_tab(0);
         runner.record_devtools_frame_metrics(
             DrawMode::Full,
             Duration::from_millis(1),
@@ -3075,6 +3076,118 @@ mod tests {
             .devtools_panel_refresh_wait(Instant::now())
             .expect("a recorded frame makes the panel stale");
         assert!(wait > Duration::ZERO && wait <= Duration::from_millis(250));
+    }
+
+    /// Using the panel is DevTools' business, not the app's: a panel message rebuilds only the
+    /// panel, at once, and neither it nor input aimed at the panel counts as an app frame or shows
+    /// up as a painted app frame.
+    #[cfg(feature = "devtools")]
+    #[test]
+    fn devtools_panel_interaction_is_not_an_app_frame() {
+        let publications = Rc::new(Cell::new(0));
+        let mut runner = AppRunner::new(
+            App::new().mouse(false),
+            ViewMetricsPublisher {
+                publications: Rc::clone(&publications),
+            },
+            (),
+        );
+        assert!(runner.set_devtools_visible(true));
+        runner.core.init();
+        let mut terminal =
+            crate::backend::ratatui_backend::create_test_terminal(60, 20).expect("test terminal");
+        runner.render(&mut terminal).expect("app frame");
+        runner
+            .render_devtools_panel_refresh(&mut terminal)
+            .expect("catch up");
+        let frames = runner.devtools_state.borrow().frame_history.len();
+
+        let scope = runner
+            .core
+            .extra_root_scope()
+            .expect("the panel is mounted");
+        runner.core.queue.borrow_mut().push_back((
+            scope,
+            Box::new(crate::devtools::component::DevToolsMsg::TabChanged(
+                crate::widgets::TabsEvent { index: 1 },
+            )),
+        ));
+        let mut dirty = DirtyTracker::default();
+        runner
+            .process_pending_messages(&mut dirty)
+            .expect("panel message");
+        assert_eq!(
+            dirty.level(),
+            DirtyLevel::None,
+            "no app frame for a tab switch"
+        );
+        assert_eq!(
+            runner.devtools_panel_refresh_wait(Instant::now()),
+            Some(Duration::ZERO),
+            "a tab switch is shown at once, not after the refresh interval"
+        );
+
+        runner.frame_rendered = false;
+        runner.host_frame_presented = false;
+        runner
+            .render_devtools_panel_refresh(&mut terminal)
+            .expect("panel refresh");
+        assert!(
+            !runner.frame_rendered && !runner.host_frame_presented,
+            "a panel refresh is not a painted app frame"
+        );
+        assert_eq!(publications.get(), 1, "the app's view must not run");
+        assert_eq!(runner.devtools_state.borrow().frame_history.len(), frames);
+        let panel = runner.devtools_panel_rect().expect("panel");
+        assert_eq!(panel.w, 60, "the Logs tab spans the width");
+        let cursor = std::cell::Cell::new(None);
+        let expected = runner.with_render_context(&cursor, |ctx| {
+            let mut oracle = Terminal::new(TestBackend::new(60, 20)).expect("oracle");
+            oracle
+                .draw(|f| crate::backend::ratatui_backend::render(f, ctx))
+                .expect("full paint")
+                .buffer
+                .clone()
+        });
+        assert_eq!(runner.last_frame_snapshot.as_ref(), Some(&expected));
+
+        // An app frame changes nothing the Logs tab shows.
+        runner.record_devtools_frame_metrics(
+            DrawMode::Full,
+            Duration::from_millis(1),
+            Duration::ZERO,
+            Duration::ZERO,
+        );
+        assert_eq!(runner.devtools_panel_refresh_wait(Instant::now()), None);
+        let frames = runner.devtools_state.borrow().frame_history.len();
+
+        // The pointer over the panel: its frame is not the app's. Elsewhere it is.
+        let inside = (
+            u16::try_from(panel.x).expect("x") + 1,
+            u16::try_from(panel.y).expect("y") + 1,
+        );
+        for (pointer, recorded) in [(inside, 0), ((0, 0), 1)] {
+            runner.mouse.last_mouse.set(Some(pointer));
+            let mut dirty = DirtyTracker::default();
+            runner.apply_input_dirty(&mut dirty, DirtyLevel::Full, "input:mouse");
+            assert_eq!(dirty.level(), DirtyLevel::Full, "input is still handled");
+            let before = runner.devtools_state.borrow().frame_history.len();
+            runner.record_devtools_frame_metrics(
+                DrawMode::Full,
+                Duration::from_millis(1),
+                Duration::ZERO,
+                Duration::ZERO,
+            );
+            assert_eq!(
+                runner.devtools_state.borrow().frame_history.len() - before,
+                recorded,
+                "pointer at {pointer:?}"
+            );
+        }
+        assert_eq!(
+            runner.devtools_state.borrow().frame_history.len(),
+            frames + 1
+        );
     }
 
     #[cfg(feature = "devtools")]

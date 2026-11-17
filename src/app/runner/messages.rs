@@ -43,6 +43,17 @@ impl<C: Component> AppRunner<C> {
         scope: ScopeId,
         update_level: UpdateLevel,
     ) {
+        // The DevTools panel's own state changed. Only its view reads that state, so it is rebuilt
+        // on its own, at once, and nothing about it is the app's frame.
+        #[cfg(feature = "devtools")]
+        if !matches!(update_level, UpdateLevel::None)
+            && scope != ScopeId(1)
+            && self.core.extra_root_scope() == Some(scope)
+        {
+            self.devtools_panel_stale = true;
+            self.devtools_panel_refresh_now = true;
+            return;
+        }
         match update_level {
             UpdateLevel::None => {}
             UpdateLevel::Paint => {

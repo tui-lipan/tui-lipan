@@ -482,8 +482,9 @@ close it.
 An open panel costs the app almost nothing, so its numbers describe the app
 rather than DevTools. It rebuilds itself apart from the app: only its own view
 runs and only its own cells are repainted, at most four times a second, and only
-while it has something new to show. Its own redraws are not counted as frames,
-and an idle app with DevTools open draws nothing at all.
+while it has something new to show. Neither its own redraws nor using the panel
+count as app frames or reach paint observers, and an idle app with DevTools
+open draws nothing at all.
 
 The stats panel renders a fixed set of rows so nothing appears or disappears
 between frames, and every value aggregates over the last 60 recorded frames
