@@ -106,6 +106,41 @@ pub(crate) fn record_view_timing(scope: ScopeId, name: Arc<str>, duration: std::
     });
 }
 
+/// Frame diagnostics gathered so far, set aside while work that is not the app's runs.
+#[cfg(feature = "devtools")]
+pub(crate) struct SetAsideDiagnostics {
+    enabled: bool,
+    hits: u32,
+    misses: u32,
+    reasons: Vec<(MemoMissReason, u32)>,
+    timings: Vec<ViewTimingSample>,
+}
+
+/// Take what the frame has gathered so far and stop gathering, until
+/// [`restore_frame_diagnostics`].
+#[cfg(feature = "devtools")]
+pub(crate) fn set_aside_frame_diagnostics() -> SetAsideDiagnostics {
+    let saved = SetAsideDiagnostics {
+        enabled: frame_diagnostics_enabled(),
+        hits: MEMO_HIT_COUNT.with(|count| count.replace(0)),
+        misses: MEMO_MISS_COUNT.with(|count| count.replace(0)),
+        reasons: MEMO_MISS_REASONS.with(|reasons| std::mem::take(&mut *reasons.borrow_mut())),
+        timings: take_view_timings(),
+    };
+    set_frame_diagnostics_enabled(false);
+    saved
+}
+
+/// Drop whatever was gathered since [`set_aside_frame_diagnostics`] and put back what it took.
+#[cfg(feature = "devtools")]
+pub(crate) fn restore_frame_diagnostics(saved: SetAsideDiagnostics) {
+    MEMO_HIT_COUNT.with(|count| count.set(saved.hits));
+    MEMO_MISS_COUNT.with(|count| count.set(saved.misses));
+    MEMO_MISS_REASONS.with(|reasons| *reasons.borrow_mut() = saved.reasons);
+    VIEW_TIMINGS.with(|timings| *timings.borrow_mut() = saved.timings);
+    set_frame_diagnostics_enabled(saved.enabled);
+}
+
 #[cfg(feature = "devtools")]
 pub(crate) fn take_view_timings() -> Vec<ViewTimingSample> {
     VIEW_TIMINGS.with(|timings| std::mem::take(&mut *timings.borrow_mut()))

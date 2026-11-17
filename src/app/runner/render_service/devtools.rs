@@ -66,6 +66,11 @@ impl<C: Component> AppRunner<C> {
         reconcile_duration: std::time::Duration,
         draw_duration: std::time::Duration,
     ) {
+        // A reconcile held back from the screen while more input is queued is not a frame.
+        // What it gathered stays pending for the frame that is drawn.
+        if self.skip_draw {
+            return;
+        }
         // Drain first so pending attributions / memo stats never leak across
         // early returns (panel refreshes, metrics disabled, panel hidden).
         let pending = mem::take(&mut self.pending_attributions);
@@ -221,14 +226,13 @@ impl<C: Component> AppRunner<C> {
         // Framework log lines written while DevTools refreshes itself would mark it stale again.
         let _log_guard = crate::debug::suppress_devtools_log();
         self.devtools_metrics_suppressed = true;
-        crate::core::nested::set_frame_diagnostics_enabled(false);
+        // What the app's frame has gathered so far stays its own, and the panel adds nothing.
+        let diagnostics = crate::core::nested::set_aside_frame_diagnostics();
         let result = self.refresh_devtools_panel(terminal);
+        crate::core::nested::restore_frame_diagnostics(diagnostics);
         self.devtools_metrics_suppressed = false;
         self.frame_rendered = app_frame_rendered;
         self.host_frame_presented = app_frame_presented;
-        // Nothing gathered while the panel rebuilt belongs to the app's next frame.
-        let _ = crate::core::nested::take_memo_frame_stats();
-        let _ = crate::core::nested::take_view_timings();
         result
     }
 

@@ -3190,38 +3190,135 @@ mod tests {
         );
         assert_eq!(runner.devtools_panel_refresh_wait(Instant::now()), None);
 
-        // The pointer over the panel: its frame is not the app's, unless the app had work of its
-        // own in it, before or after the input. Elsewhere it is the app's.
+        // Every input event the panel receives dirties only DevTools' frame, whatever the branch
+        // handling it marks; the same event elsewhere, or app work joining it in either order,
+        // makes the frame the app's.
+        use crossterm::event::{
+            Event as CEvent, KeyCode as CKeyCode, KeyEvent as CKeyEvent, KeyModifiers,
+            MouseButton as CMouseButton, MouseEvent as CMouseEvent, MouseEventKind,
+        };
+        let filter = runner
+            .core
+            .tree
+            .iter()
+            .find(|node| {
+                node.key
+                    .as_ref()
+                    .is_some_and(|key| key.as_ref() == "devtools-filter")
+            })
+            .expect("the Logs tab has a filter")
+            .id;
         let inside = (
             u16::try_from(panel.x).expect("x") + 1,
             u16::try_from(panel.y).expect("y") + 1,
         );
-        // (case, pointer, app work before the input, app work after it, frames recorded)
+        let mouse = |kind, (column, row)| {
+            CEvent::Mouse(CMouseEvent {
+                kind,
+                column,
+                row,
+                modifiers: KeyModifiers::NONE,
+            })
+        };
+        let key = CEvent::Key(CKeyEvent::new(CKeyCode::Char('x'), KeyModifiers::NONE));
+        let paste = CEvent::Paste("pasted".into());
+        let scroll = MouseEventKind::ScrollDown;
+        let drag = MouseEventKind::Drag(CMouseButton::Left);
+        // (case, event, focus in the filter, pointer, DevTools' alone)
         let cases = [
-            ("panel input alone", inside, false, false, 0),
-            ("input elsewhere", (0, 0), false, false, 1),
-            ("app work, then panel input", inside, true, false, 1),
-            ("panel input, then app work", inside, false, true, 1),
+            ("key in the filter", key.clone(), true, None, true),
+            ("paste in the filter", paste.clone(), true, None, true),
+            (
+                "scroll over the panel",
+                mouse(scroll, inside),
+                false,
+                Some(inside),
+                true,
+            ),
+            (
+                "move over the panel",
+                mouse(MouseEventKind::Moved, inside),
+                false,
+                Some(inside),
+                true,
+            ),
+            (
+                "drag over the panel",
+                mouse(drag, inside),
+                false,
+                Some(inside),
+                true,
+            ),
+            ("key to the app", key, false, None, false),
+            ("paste to the app", paste, false, None, false),
+            (
+                "scroll over the app",
+                mouse(scroll, (0, 0)),
+                false,
+                Some((0, 0)),
+                false,
+            ),
         ];
-        for (case, pointer, app_before, app_after, recorded) in cases {
-            runner.mouse.last_mouse.set(Some(pointer));
+        for (case, event, focus_in_filter, pointer, devtools_only) in cases {
+            for (app_before, app_after) in [(false, false), (true, false), (false, true)] {
+                runner.focus.focused = focus_in_filter.then_some(filter);
+                runner.mouse.last_mouse.set(None);
+                let mut dirty = DirtyTracker::default();
+                if app_before {
+                    dirty.mark_damage_paint();
+                }
+                let started = runner.begin_devtools_event(&event, &dirty);
+                // What the loop's branch for the event leaves behind: the pointer where the event
+                // is, and some mark. Which mark does not matter.
+                runner.mouse.last_mouse.set(pointer);
+                dirty.mark_layout();
+                runner.end_devtools_event(started, &mut dirty);
+                // Later in the same pass, such as a spinner coming due.
+                if app_after {
+                    dirty.mark_damage_paint();
+                }
+                let expected = devtools_only && !app_before && !app_after;
+                assert_eq!(
+                    dirty.devtools_input_only(),
+                    expected,
+                    "{case}, app work before: {app_before}, after: {app_after}"
+                );
+            }
+        }
+        runner.focus.focused = None;
+
+        // A frame held for the frame clock or behind queued keys keeps what dirtied it.
+        for continuous in [true, false] {
             let mut dirty = DirtyTracker::default();
-            if app_before {
-                dirty.mark_damage_paint();
-            }
-            runner.apply_input_dirty(&mut dirty, DirtyLevel::Full, "input:mouse");
-            if app_after {
-                dirty.mark_damage_paint();
-            }
-            assert_eq!(
-                dirty.level(),
-                DirtyLevel::Full,
-                "{case}: input is still handled"
+            dirty.merge_held_frame(DirtyLevel::PaintOnly, continuous, true);
+            assert!(
+                dirty.devtools_input_only(),
+                "held, continuous: {continuous}"
             );
+            dirty.mark_damage_paint();
+            assert!(
+                !dirty.devtools_input_only(),
+                "joined, continuous: {continuous}"
+            );
+            let mut dirty = DirtyTracker::default();
+            dirty.merge_held_frame(DirtyLevel::PaintOnly, continuous, false);
+            assert!(
+                !dirty.devtools_input_only(),
+                "app, continuous: {continuous}"
+            );
+        }
+
+        // A DevTools-only frame is not recorded; one the app joined is.
+        for (app_work, recorded) in [(false, 0), (true, 1)] {
+            let mut dirty = DirtyTracker::default();
+            dirty.mark_devtools_input(DirtyTracker::mark_paint);
+            if app_work {
+                dirty.mark_damage_paint();
+            }
             runner.note_devtools_frame_provenance(&dirty);
             let before = runner.devtools_state.borrow().frame_history.len();
             runner.record_devtools_frame_metrics(
-                DrawMode::Full,
+                DrawMode::PaintOnly,
                 Duration::from_millis(1),
                 Duration::ZERO,
                 Duration::ZERO,
@@ -3229,7 +3326,7 @@ mod tests {
             assert_eq!(
                 runner.devtools_state.borrow().frame_history.len() - before,
                 recorded,
-                "{case}"
+                "app work: {app_work}"
             );
         }
     }
@@ -3268,6 +3365,7 @@ mod tests {
             .id;
         runner.focus.focused = Some(filter);
 
+        let frames = runner.devtools_state.borrow().frame_history.len();
         // The event loop's per-key steps while more keys are queued: dispatch, drain the update,
         // reconcile without drawing.
         for ch in "fallback".chars() {
@@ -3291,6 +3389,11 @@ mod tests {
                 .expect("reconcile");
         }
         assert_eq!(runner.devtools_state.borrow().log_filter.text(), "fallback");
+        assert_eq!(
+            runner.devtools_state.borrow().frame_history.len(),
+            frames,
+            "nothing drawn mid-burst is a frame"
+        );
     }
 
     #[cfg(feature = "devtools")]
