@@ -157,7 +157,7 @@ pub enum ManagedTerminalStatus {
     Starting,
     /// PTY is ready and accepting input
     Ready,
-    /// Shell exited with status code
+    /// Shell exited with status code, `128` plus the signal number when a signal ended it
     Exited(i32),
     /// Error occurred (contains error message)
     Error(Arc<str>),

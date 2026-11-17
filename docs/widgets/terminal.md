@@ -69,7 +69,7 @@ apply each resize immediately.
 |---------|---------|
 | `Starting` | PTY is being initialized |
 | `Ready` | PTY is ready and accepting input |
-| `Exited(i32)` | Shell exited with status code |
+| `Exited(i32)` | Shell exited with status code; `128` plus the signal number when a signal ended it, as a shell reports it |
 | `Error(Arc<str>)` | Error occurred |
 
 ```rust

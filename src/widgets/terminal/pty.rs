@@ -598,11 +598,7 @@ impl TerminalPty {
             let on_event = on_event.clone();
             let thread_inner = inner.clone();
             std::thread::spawn(move || {
-                let exit_code = child
-                    .wait()
-                    .ok()
-                    .map(|status| status.exit_code() as i32)
-                    .unwrap_or(-1);
+                let exit_code = child.wait().ok().map_or(-1, |status| exit_code(&status));
                 // Publish rather than emit: `wait` returns the instant the child dies, which is
                 // usually before the reader has picked up the bytes it left behind. The reader
                 // emits the exit once it has drained them; this thread only steps in when the
@@ -905,6 +901,32 @@ fn unix_wait_readable(fd: RawFd, active: &AtomicBool) -> PtyReadiness {
     PtyReadiness::Stop
 }
 
+/// The status a shell would report for `status`: the exit code, or `128` plus the signal number
+/// for a child a signal ended, so an interrupted command reads `130` rather than a bare failure.
+fn exit_code(status: &portable_pty::ExitStatus) -> i32 {
+    #[cfg(unix)]
+    if let Some(number) = status.signal().and_then(signal_number) {
+        return 128 + number;
+    }
+    status.exit_code() as i32
+}
+
+/// The signal `portable_pty` named. It keeps only the `strsignal` description, so this looks the
+/// number up the same way, falling back to the `Signal N` form it uses when there is none.
+#[cfg(unix)]
+fn signal_number(name: &str) -> Option<i32> {
+    if let Some(number) = name.strip_prefix("Signal ") {
+        return number.parse().ok();
+    }
+    (1..65).find(|&number| {
+        // SAFETY: `strsignal` returns null or a NUL-terminated string that stays valid until the
+        // next call on this thread, and it is copied out before then.
+        let description = unsafe { libc::strsignal(number) };
+        !description.is_null()
+            && unsafe { std::ffi::CStr::from_ptr(description) }.to_bytes() == name.as_bytes()
+    })
+}
+
 /// PTY runtime event.
 ///
 /// `Exited` is delivered after every `Output` the child produced, so a consumer can treat it as
@@ -915,7 +937,8 @@ fn unix_wait_readable(fd: RawFd, active: &AtomicBool) -> PtyReadiness {
 pub enum TerminalPtyEvent {
     /// Raw bytes emitted by PTY stdout/stderr stream.
     Output(Arc<[u8]>),
-    /// Child process exited with status code (or -1 when unavailable).
+    /// Child process exited with status code, `128` plus the signal number when a signal ended
+    /// it, or -1 when unavailable.
     Exited(i32),
     /// Runtime error message.
     Error(Arc<str>),
@@ -1189,6 +1212,23 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         panic!("a killed pty must report its exit without waiting out the drain grace");
+    }
+
+    #[test]
+    fn a_child_a_signal_ends_reports_the_shell_status() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let _pty = TerminalPty::spawn(
+            TerminalPtyConfig::new("/bin/sh")
+                .arg("-c")
+                .arg("kill -TERM $$"),
+            move |event| {
+                if let TerminalPtyEvent::Exited(code) = event {
+                    let _ = sender.send(code);
+                }
+            },
+        )
+        .expect("spawn");
+        assert_eq!(receiver.recv_timeout(Duration::from_secs(5)), Ok(143));
     }
 
     #[test]
