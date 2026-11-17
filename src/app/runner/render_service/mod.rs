@@ -3151,6 +3151,36 @@ mod tests {
         });
         assert_eq!(runner.last_frame_snapshot.as_ref(), Some(&expected));
 
+        // A component inside the panel, such as the Logs tab's log view, is the panel's too.
+        let log_view = (2..4096)
+            .map(crate::callback::ScopeId)
+            .find(|&scope| {
+                runner
+                    .core
+                    .components
+                    .display_name_for_scope(scope)
+                    .is_some_and(|name| name.as_ref() == "LogViewComponent")
+            })
+            .expect("the Logs tab mounts a log view component");
+        let mut dirty = DirtyTracker::default();
+        runner.apply_component_update(
+            &mut dirty,
+            log_view,
+            crate::core::component::UpdateLevel::Layout,
+        );
+        assert_eq!(
+            dirty.level(),
+            DirtyLevel::None,
+            "no app frame for the log view"
+        );
+        assert_eq!(
+            runner.devtools_panel_refresh_wait(Instant::now()),
+            Some(Duration::ZERO)
+        );
+        runner
+            .render_devtools_panel_refresh(&mut terminal)
+            .expect("panel refresh");
+
         // An app frame changes nothing the Logs tab shows.
         runner.record_devtools_frame_metrics(
             DrawMode::Full,
@@ -3159,18 +3189,36 @@ mod tests {
             Duration::ZERO,
         );
         assert_eq!(runner.devtools_panel_refresh_wait(Instant::now()), None);
-        let frames = runner.devtools_state.borrow().frame_history.len();
 
-        // The pointer over the panel: its frame is not the app's. Elsewhere it is.
+        // The pointer over the panel: its frame is not the app's, unless the app had work of its
+        // own in it, before or after the input. Elsewhere it is the app's.
         let inside = (
             u16::try_from(panel.x).expect("x") + 1,
             u16::try_from(panel.y).expect("y") + 1,
         );
-        for (pointer, recorded) in [(inside, 0), ((0, 0), 1)] {
+        // (case, pointer, app work before the input, app work after it, frames recorded)
+        let cases = [
+            ("panel input alone", inside, false, false, 0),
+            ("input elsewhere", (0, 0), false, false, 1),
+            ("app work, then panel input", inside, true, false, 1),
+            ("panel input, then app work", inside, false, true, 1),
+        ];
+        for (case, pointer, app_before, app_after, recorded) in cases {
             runner.mouse.last_mouse.set(Some(pointer));
             let mut dirty = DirtyTracker::default();
+            if app_before {
+                dirty.mark_damage_paint();
+            }
             runner.apply_input_dirty(&mut dirty, DirtyLevel::Full, "input:mouse");
-            assert_eq!(dirty.level(), DirtyLevel::Full, "input is still handled");
+            if app_after {
+                dirty.mark_damage_paint();
+            }
+            assert_eq!(
+                dirty.level(),
+                DirtyLevel::Full,
+                "{case}: input is still handled"
+            );
+            runner.note_devtools_frame_provenance(&dirty);
             let before = runner.devtools_state.borrow().frame_history.len();
             runner.record_devtools_frame_metrics(
                 DrawMode::Full,
@@ -3181,13 +3229,68 @@ mod tests {
             assert_eq!(
                 runner.devtools_state.borrow().frame_history.len() - before,
                 recorded,
-                "pointer at {pointer:?}"
+                "{case}"
             );
         }
-        assert_eq!(
-            runner.devtools_state.borrow().frame_history.len(),
-            frames + 1
+    }
+
+    /// Keys queued behind one another while typing in the panel's log filter: the next key edits
+    /// the value this one fed back, so the panel has to be brought up to date between them even
+    /// though no app frame is drawn.
+    #[cfg(feature = "devtools")]
+    #[test]
+    fn queued_keys_typed_into_the_devtools_filter_all_land() {
+        use crate::core::event::{KeyCode, KeyEvent, KeyMods};
+
+        let mut runner = AppRunner::new(
+            App::new().mouse(false),
+            ViewMetricsPublisher {
+                publications: Rc::new(Cell::new(0)),
+            },
+            (),
         );
+        assert!(runner.set_devtools_visible(true));
+        runner.devtools_state.borrow_mut().set_active_tab(1);
+        runner.core.init();
+        let mut terminal =
+            crate::backend::ratatui_backend::create_test_terminal(60, 20).expect("test terminal");
+        runner.render(&mut terminal).expect("app frame");
+        let filter = runner
+            .core
+            .tree
+            .iter()
+            .find(|node| {
+                node.key
+                    .as_ref()
+                    .is_some_and(|key| key.as_ref() == "devtools-filter")
+            })
+            .expect("the Logs tab has a filter")
+            .id;
+        runner.focus.focused = Some(filter);
+
+        // The event loop's per-key steps while more keys are queued: dispatch, drain the update,
+        // reconcile without drawing.
+        for ch in "fallback".chars() {
+            let result = runner.dispatch_layered_key(KeyEvent {
+                code: KeyCode::Char(ch),
+                mods: KeyMods::NONE,
+            });
+            let mut dirty = DirtyTracker::default();
+            runner
+                .drain_messages_and_commands(&mut dirty)
+                .expect("drain");
+            let level = if result.mark_full {
+                DirtyLevel::Full
+            } else if result.mark_layout {
+                DirtyLevel::LayoutOnly
+            } else {
+                result.dirty_override.unwrap_or(dirty.level())
+            };
+            runner
+                .reconcile_for_queued_input(&mut terminal, level)
+                .expect("reconcile");
+        }
+        assert_eq!(runner.devtools_state.borrow().log_filter.text(), "fallback");
     }
 
     #[cfg(feature = "devtools")]

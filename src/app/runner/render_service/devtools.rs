@@ -79,7 +79,7 @@ impl<C: Component> AppRunner<C> {
             return;
         }
         // Input aimed at the panel caused this frame, and nothing the app did joined it.
-        if std::mem::take(&mut self.devtools_input_frame) && pending.is_empty() {
+        if std::mem::take(&mut self.devtools_input_frame) {
             return;
         }
         if !self.devtools_config.metrics {
@@ -154,6 +154,15 @@ impl<C: Component> AppRunner<C> {
         if self.devtools_state.borrow().is_stats_tab_active() {
             self.devtools_panel_stale = true;
         }
+    }
+
+    /// Remember, for the frame about to be drawn, whether it is the app's at all.
+    #[cfg(feature = "devtools")]
+    pub(crate) fn note_devtools_frame_provenance(
+        &mut self,
+        dirty: &crate::app::interaction_state::DirtyTracker,
+    ) {
+        self.devtools_input_frame = dirty.devtools_input_only();
     }
 
     /// How long until the panel should be rebuilt on its own: `Some(ZERO)` when due now, `None`

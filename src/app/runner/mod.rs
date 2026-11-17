@@ -741,9 +741,9 @@ pub struct AppRunner<C: Component> {
     /// without waiting out the refresh interval and without an app frame.
     #[cfg(feature = "devtools")]
     pub(crate) devtools_panel_refresh_now: bool,
-    /// Input aimed at the panel dirtied the next frame. Input still takes the ordinary path, since
-    /// it can move focus or hover off the app, but the frame it causes is not the app's and is not
-    /// recorded unless the app had work of its own in it.
+    /// The frame about to be drawn was dirtied only by input aimed at the panel (see
+    /// `DirtyTracker::devtools_input_only`). Such input still takes the ordinary path, since it can
+    /// move focus or hover off the app, but the frame is not the app's and is not recorded.
     #[cfg(feature = "devtools")]
     pub(crate) devtools_input_frame: bool,
     /// True only while the panel is rebuilt on its own. That frame is DevTools' own work, not the
@@ -1448,11 +1448,11 @@ impl<C: Component> AppRunner<C> {
         level: DirtyLevel,
         label: &'static str,
     ) {
-        apply_dirty_level(dirty, level);
         if !matches!(level, DirtyLevel::None) && self.input_targets_devtools(label) {
-            self.devtools_input_frame = true;
+            dirty.mark_devtools_input(|dirty| apply_dirty_level(dirty, level));
             return;
         }
+        apply_dirty_level(dirty, level);
         self.note_attribution(crate::devtools::state::UpdateSource::Input(label), level);
     }
 
@@ -2586,7 +2586,9 @@ impl<C: Component> AppRunner<C> {
             let mut host_color_refresh_quiet_until: Option<Instant> = None;
             // The dirty level of a pass whose draw waits for queued input, and whether it
             // was continuous work.
-            let mut deferred_frame: Option<(DirtyLevel, bool)> = None;
+            // A held-back frame: its level, whether it is continuous, and whether only input
+            // aimed at the DevTools panel dirtied it.
+            let mut deferred_frame: Option<(DirtyLevel, bool, bool)> = None;
             // When queued input first held back a frame; cleared once one is presented.
             let mut input_batch_started: Option<Instant> = None;
             // Continuous work shares one phase-preserving presentation deadline.
@@ -2620,11 +2622,18 @@ impl<C: Component> AppRunner<C> {
                 }
                 #[cfg(feature = "devtools")]
                 self.ingest_pending_devtools_logs();
-                if let Some((level, continuous)) = deferred_frame.take() {
-                    if continuous {
-                        dirty.merge_continuous_level(level);
+                if let Some((level, continuous, devtools_only)) = deferred_frame.take() {
+                    let merge = |dirty: &mut DirtyTracker| {
+                        if continuous {
+                            dirty.merge_continuous_level(level);
+                        } else {
+                            dirty.merge_immediate_level(level);
+                        }
+                    };
+                    if devtools_only {
+                        dirty.mark_devtools_input(merge);
                     } else {
-                        dirty.merge_immediate_level(level);
+                        merge(&mut dirty);
                     }
                 }
                 // The last partial paint kept a terminal's previous native image. Present the
@@ -3466,8 +3475,11 @@ impl<C: Component> AppRunner<C> {
                 {
                     input_batch_started.get_or_insert(now);
                     let carried = self.reconcile_for_queued_input(&mut terminal, frame_level)?;
-                    deferred_frame =
-                        Some((carried, dirty.continuous_frame() || pointer_motion_only));
+                    deferred_frame = Some((
+                        carried,
+                        dirty.continuous_frame() || pointer_motion_only,
+                        dirty.devtools_input_only(),
+                    ));
                     #[cfg(feature = "profiling-tracing")]
                     tracing::trace!(
                         target: "tui_lipan::perf",
@@ -3488,6 +3500,8 @@ impl<C: Component> AppRunner<C> {
 
                 self.frame_rendered = false;
                 self.host_frame_presented = false;
+                #[cfg(feature = "devtools")]
+                self.note_devtools_frame_provenance(&dirty);
                 match frame_level {
                     DirtyLevel::Full => {
                         if force_host_redraw {
@@ -3765,11 +3779,24 @@ impl<C: Component> AppRunner<C> {
             // Paint-only levels leave the tree as it is; the whole draw can wait.
             _ => None,
         };
-        #[cfg_attr(not(feature = "terminal"), allow(unused_mut))]
+        #[cfg_attr(
+            not(any(feature = "terminal", feature = "devtools")),
+            allow(unused_mut)
+        )]
         let mut reconciled = false;
         if let Some(reconcile) = reconcile {
             self.skip_draw = true;
             let result = reconcile(self, terminal);
+            self.skip_draw = false;
+            result?;
+            reconciled = true;
+        }
+        // The DevTools panel's own state changed outside the app's dirty scopes, typically its log
+        // filter fed back by this key. The next key edits that value, so rebuild the panel too.
+        #[cfg(feature = "devtools")]
+        if self.devtools_panel_refresh_now {
+            self.skip_draw = true;
+            let result = self.render_devtools_panel_refresh(terminal);
             self.skip_draw = false;
             result?;
             reconciled = true;
