@@ -35,6 +35,7 @@ ignore = [
     { id = "RUSTSEC-2024-0320", reason = "yaml-rust - pulled by syntect for theme parsing; will be removed when syntect bumps to yaml-rust2." },
     { id = "RUSTSEC-2024-0436", reason = "paste - pulled deep through image → ravif → rav1e (proc-macro only)." },
     { id = "RUSTSEC-2026-0192", reason = "ttf-parser unmaintained - used directly and by fontdb for PNG snapshot font rendering; parses installed system fonts and an app-chosen font_path, not untrusted input. Revisit when fontdb migrates." },
+    { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained - no known vulnerability; used only by the devtools feature to read the local clock and format log timestamps. Revisit when moving to jiff or time." },
 ]
 
 [sources]
