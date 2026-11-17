@@ -4803,43 +4803,6 @@ fn fill_background_uses_app_root_theme_when_devtools_extra_root_is_present() {
 
 #[cfg(feature = "devtools")]
 #[test]
-fn devtools_catch_up_frame_records_no_metrics_and_terminates() {
-    use super::render_service::DrawMode;
-
-    let dur = Duration::from_millis(1);
-    let mut runner = AppRunner::new(App::new().mouse(false), RunnerKeymapSmoke, ());
-    runner.devtools_state.borrow_mut().set_visible(true);
-
-    // An app frame records metrics and arms exactly one catch-up refresh.
-    assert!(!runner.devtools_refresh_pending);
-    runner.record_devtools_frame_metrics(DrawMode::Full, dur, dur, dur);
-    assert_eq!(runner.devtools_state.borrow().frame_history.len(), 1);
-    assert!(
-        runner.devtools_refresh_pending,
-        "recording a frame should request one catch-up refresh"
-    );
-
-    // The loop consumes the flag and runs a suppressed catch-up frame.
-    let refresh = std::mem::take(&mut runner.devtools_refresh_pending);
-    assert!(refresh);
-    runner.devtools_metrics_suppressed = true;
-
-    // The catch-up frame rebuilds the panel (with the metric above) but records
-    // nothing and does not re-arm the flag, so the refresh stops after one frame.
-    runner.record_devtools_frame_metrics(DrawMode::Full, dur, dur, dur);
-    assert_eq!(
-        runner.devtools_state.borrow().frame_history.len(),
-        1,
-        "catch-up frame must not push a metric"
-    );
-    assert!(
-        !runner.devtools_refresh_pending,
-        "catch-up frame must not re-arm the refresh (no infinite loop)"
-    );
-}
-
-#[cfg(feature = "devtools")]
-#[test]
 fn attribution_records_component_full_update() {
     use super::render_service::DrawMode;
     use crate::devtools::state::UpdateSource;

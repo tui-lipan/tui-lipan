@@ -1,5 +1,3 @@
-#[cfg(feature = "devtools")]
-use std::cell::Cell;
 use std::time::Duration;
 use web_time::Instant;
 
@@ -8,11 +6,6 @@ use crate::backend::ratatui_backend::image_support;
 use crate::core::component::Component;
 
 use super::{AppRunner, DirtyTracker};
-
-#[cfg(feature = "devtools")]
-thread_local! {
-    static LAST_DEVTOOLS_PAINT_TICK: Cell<Option<Instant>> = const { Cell::new(None) };
-}
 
 impl<C: Component> AppRunner<C> {
     fn clock_now(&self) -> Instant {
@@ -121,42 +114,10 @@ impl<C: Component> AppRunner<C> {
             poll_timeout = poll_timeout.min(until_due);
         }
 
+        // The DevTools panel refreshes itself, outside any app frame; wake the loop when it is due.
         #[cfg(feature = "devtools")]
-        {
-            const DEVTOOLS_IDLE_PAINT_INTERVAL: Duration = Duration::from_millis(250);
-
-            if self.devtools_state.borrow().visible {
-                let logs_active = self.devtools_state.borrow().is_logs_tab_active();
-                LAST_DEVTOOLS_PAINT_TICK.with(|last_tick| {
-                    let now = self.clock_now();
-                    match last_tick.get() {
-                        Some(last) => {
-                            let elapsed = now.saturating_duration_since(last);
-                            if elapsed >= DEVTOOLS_IDLE_PAINT_INTERVAL {
-                                if logs_active {
-                                    // Logs tab needs reconciliation to pick up
-                                    // new entries but we only do it on the idle
-                                    // tick to avoid per-log flickering.
-                                    dirty.mark_full();
-                                } else {
-                                    dirty.mark_paint();
-                                }
-                                last_tick.set(Some(now));
-                            } else {
-                                poll_timeout = poll_timeout
-                                    .min(DEVTOOLS_IDLE_PAINT_INTERVAL.saturating_sub(elapsed));
-                            }
-                        }
-                        None => {
-                            last_tick.set(Some(now));
-                        }
-                    }
-                });
-            } else {
-                LAST_DEVTOOLS_PAINT_TICK.with(|last_tick| {
-                    last_tick.set(None);
-                });
-            }
+        if let Some(wait) = self.devtools_panel_refresh_wait(Instant::now()) {
+            poll_timeout = poll_timeout.min(wait);
         }
 
         if self.core.tree.has_spinners() {

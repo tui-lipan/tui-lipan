@@ -359,6 +359,17 @@ where
         self.extra_root_element = element;
     }
 
+    /// The scope of the component the extra root mounts (the DevTools panel), once it is mounted.
+    #[cfg(feature = "devtools")]
+    pub(crate) fn extra_root_scope(&self) -> Option<ScopeId> {
+        self.extra_root_element.as_ref()?;
+        self.extra_root_host
+            .slots_prev
+            .values()
+            .flatten()
+            .find_map(|&id| self.components.scope_for_id(id))
+    }
+
     #[cfg(test)]
     pub(crate) fn new_test(
         component: C,

@@ -3,11 +3,18 @@ use std::mem;
 #[cfg(feature = "devtools")]
 use std::rc::Rc;
 #[cfg(feature = "devtools")]
+use std::time::Duration;
+#[cfg(feature = "devtools")]
 use web_time::Instant;
 
 use crate::core::component::Component;
 
 use super::{AppRunner, DrawMode};
+
+/// The most often DevTools rebuilds its panel to show what changed. Each rebuild runs only the
+/// panel's view and repaints only its cells.
+#[cfg(feature = "devtools")]
+const DEVTOOLS_PANEL_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 
 #[cfg(feature = "devtools")]
 fn dirty_level_label(draw_mode: DrawMode) -> &'static str {
@@ -60,15 +67,14 @@ impl<C: Component> AppRunner<C> {
         draw_duration: std::time::Duration,
     ) {
         // Drain first so pending attributions / memo stats never leak across
-        // early returns (suppressed catch-up frames, metrics disabled, panel hidden).
+        // early returns (panel refreshes, metrics disabled, panel hidden).
         let pending = mem::take(&mut self.pending_attributions);
         let memo_stats = crate::core::nested::take_memo_frame_stats();
         let view_samples = crate::core::nested::take_view_timings();
 
-        // A catch-up refresh frame only re-renders the panel with the metrics
-        // recorded by the previous app frame. Recording here would both mislead
-        // (it would time the refresh, not app work) and re-arm the refresh flag,
-        // looping forever. Draw the panel, record nothing.
+        // A panel refresh only re-renders the panel with metrics app frames
+        // recorded. Recording here would both mislead (it would time DevTools,
+        // not the app) and mark the panel stale again, refreshing forever.
         if self.devtools_metrics_suppressed {
             return;
         }
@@ -140,8 +146,123 @@ impl<C: Component> AppRunner<C> {
             });
 
         // The panel just drawn shows the *previous* frame's metrics (it was built
-        // before this record). Request one idle catch-up frame to surface these.
-        self.devtools_refresh_pending = true;
+        // before this record), so it is behind until its next refresh.
+        self.devtools_panel_stale = true;
+    }
+
+    /// How long until the panel should be rebuilt on its own: `Some(ZERO)` when due now, `None`
+    /// when it shows everything there is to show and nothing needs to wake the loop for it.
+    ///
+    /// Folds in the staleness sources that are polled rather than pushed: app metric rows the host
+    /// published and frame samples ageing out of the FPS window.
+    #[cfg(feature = "devtools")]
+    pub(crate) fn devtools_panel_refresh_wait(&mut self, now: Instant) -> Option<Duration> {
+        let mut state = self.devtools_state.borrow_mut();
+        if !state.visible {
+            return None;
+        }
+        if state.app_metrics.take_changed() && state.is_app_tab_active() {
+            self.devtools_panel_stale = true;
+        }
+        if state.expire_fps_samples(now) && state.is_stats_tab_active() {
+            self.devtools_panel_stale = true;
+        }
+        if self.devtools_panel_stale {
+            let due = self
+                .devtools_panel_refreshed_at
+                .map_or(now, |at| at + DEVTOOLS_PANEL_REFRESH_INTERVAL);
+            return Some(due.saturating_duration_since(now));
+        }
+        state
+            .next_fps_expiry()
+            .filter(|_| state.is_stats_tab_active())
+            .map(|expiry| expiry.saturating_duration_since(now))
+    }
+
+    /// Rebuild the DevTools panel alone and repaint only the cells it covers.
+    ///
+    /// Only the panel's own view runs, so the app's `view()` is not called, and the draw is
+    /// confined to the panel's area before and after the rebuild, so the rest of the screen is
+    /// neither repainted nor compared. Anything that rules out a partial repaint falls back to an
+    /// ordinary draw of the tree. The frame is DevTools' own work: it records no metrics.
+    #[cfg(feature = "devtools")]
+    pub(crate) fn render_devtools_panel_refresh(
+        &mut self,
+        terminal: &mut crate::backend::ratatui_backend::Terminal,
+    ) -> crate::Result<()> {
+        if self.surface.is_transcript() && self.surface.inline.transcript_reset_pending {
+            return Ok(());
+        }
+        self.devtools_panel_stale = false;
+        self.devtools_panel_refreshed_at = Some(Instant::now());
+        // Framework log lines written while DevTools refreshes itself would mark it stale again.
+        let _log_guard = crate::debug::suppress_devtools_log();
+        self.devtools_metrics_suppressed = true;
+        crate::core::nested::set_frame_diagnostics_enabled(false);
+        let result = self.refresh_devtools_panel(terminal);
+        self.devtools_metrics_suppressed = false;
+        // Nothing gathered while the panel rebuilt belongs to the app's next frame.
+        let _ = crate::core::nested::take_memo_frame_stats();
+        let _ = crate::core::nested::take_view_timings();
+        result
+    }
+
+    #[cfg(feature = "devtools")]
+    fn refresh_devtools_panel(
+        &mut self,
+        terminal: &mut crate::backend::ratatui_backend::Terminal,
+    ) -> crate::Result<()> {
+        let Some(scope) = self.core.extra_root_scope() else {
+            return self.render(terminal);
+        };
+        let size = terminal.size()?;
+        let bounds = self.content_bounds(size.width, size.height);
+        let before = self.devtools_panel_rect();
+        if !self
+            .core
+            .refresh_cached_scopes(&[scope], bounds, self.mouse.hovered)
+            || !self.core.reconcile_cached_element(
+                bounds,
+                self.focus.focused,
+                self.focus.focused_key.as_ref(),
+                self.mouse.hovered,
+            )
+        {
+            return self.render(terminal);
+        }
+        self.settle_after_reconcile()?;
+        if self.skip_draw {
+            return Ok(());
+        }
+        let frame_area = terminal.get_frame().area();
+        let areas: Vec<_> = [before, self.devtools_panel_rect()]
+            .into_iter()
+            .flatten()
+            .collect();
+        match self.plan_area_damage(&areas, frame_area) {
+            Ok(plan) => self.draw_row_damage(terminal, &plan)?,
+            Err(super::row_damage::DamageRejection::NothingVisible) => {}
+            Err(_) => {
+                self.draw_current_tree(terminal, DrawMode::LayoutOnly)?;
+            }
+        }
+        self.sync_mouse_motion_capture(terminal)?;
+        Ok(())
+    }
+
+    /// Where the panel's frame sits, which is all of the panel that paints anything: the stack
+    /// around it spans the viewport only to anchor it to the bottom.
+    #[cfg(feature = "devtools")]
+    fn devtools_panel_rect(&self) -> Option<crate::style::Rect> {
+        self.core
+            .tree
+            .iter()
+            .find(|node| {
+                node.key
+                    .as_ref()
+                    .is_some_and(|key| key.as_ref() == crate::devtools::DEVTOOLS_KEY)
+            })
+            .map(|node| node.rect)
     }
 
     #[cfg(feature = "devtools")]

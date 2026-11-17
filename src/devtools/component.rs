@@ -110,7 +110,8 @@ impl Component for DevToolsPanel {
             }
             DevToolsMsg::CopySelected | DevToolsMsg::CopyEntry(_) => unreachable!(),
         }
-        Update::full()
+        // Only the panel's own view reads this state.
+        Update::layout()
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {

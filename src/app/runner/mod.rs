@@ -728,17 +728,17 @@ pub struct AppRunner<C: Component> {
     pub(crate) devtools_log_queue: Arc<Mutex<VecDeque<crate::debug::DevLogEntry>>>,
     #[cfg(feature = "devtools")]
     pub(crate) devtools_config: DevToolsConfig,
-    /// Set after an app frame records new DevTools metrics. The panel's extra
-    /// root is built *before* those metrics are recorded (install happens at the
-    /// top of a render, recording at the bottom), so the just-drawn panel shows
-    /// the previous frame. This requests exactly one idle "catch-up" frame that
-    /// rebuilds the panel with the freshly recorded metrics. The catch-up frame
-    /// records no metrics (see `devtools_metrics_suppressed`), so it cannot
-    /// re-arm this flag and the refresh terminates after a single frame.
+    /// Whether the DevTools panel shows something older than what it would show if rebuilt now:
+    /// a frame was recorded, a log line arrived, or the app published new rows since the panel
+    /// last ran its view. The panel is rebuilt on its own, never with the app (see
+    /// `render_devtools_panel_refresh`), and at most once per `DEVTOOLS_PANEL_REFRESH_INTERVAL`.
     #[cfg(feature = "devtools")]
-    devtools_refresh_pending: bool,
-    /// True only for the duration of a catch-up refresh frame. Suppresses metric
-    /// recording so the refresh does not feed back into `devtools_refresh_pending`.
+    pub(crate) devtools_panel_stale: bool,
+    /// When the panel was last rebuilt on its own, which paces the next rebuild.
+    #[cfg(feature = "devtools")]
+    pub(crate) devtools_panel_refreshed_at: Option<Instant>,
+    /// True only while the panel is rebuilt on its own. That frame is DevTools' own work, not the
+    /// app's, so it records no metrics, attributions or view timings.
     #[cfg(feature = "devtools")]
     devtools_metrics_suppressed: bool,
     /// Pending update attributions coalesced until the next recorded metrics frame.
@@ -1043,7 +1043,9 @@ impl<C: Component> AppRunner<C> {
             #[cfg(feature = "devtools")]
             devtools_config: app.devtools_config,
             #[cfg(feature = "devtools")]
-            devtools_refresh_pending: false,
+            devtools_panel_stale: false,
+            #[cfg(feature = "devtools")]
+            devtools_panel_refreshed_at: None,
             #[cfg(feature = "devtools")]
             devtools_metrics_suppressed: false,
             #[cfg(feature = "devtools")]
@@ -1341,6 +1343,14 @@ impl<C: Component> AppRunner<C> {
         }
 
         let visible = self.devtools_state.borrow().visible;
+        // New lines only change what the panel shows on the Logs tab, and only while it follows
+        // them; a paused log keeps its rows.
+        if visible && !pending.is_empty() {
+            let state = self.devtools_state.borrow();
+            if state.is_logs_tab_active() && !state.log_paused {
+                self.devtools_panel_stale = true;
+            }
+        }
 
         while let Some(entry) = pending.pop_front() {
             let mut state = self.devtools_state.borrow_mut();
@@ -3386,23 +3396,6 @@ impl<C: Component> AppRunner<C> {
                     dirty.mark_full();
                 }
 
-                // DevTools metrics for a frame are recorded *after* its panel was
-                // built, so the last app frame's numbers are only shown once a
-                // later frame rebuilds the panel. When an app frame leaves other
-                // work pending the panel already advances on its own, so honor the
-                // pending refresh only on an otherwise-idle iteration: schedule a
-                // single full "catch-up" frame that rebuilds the panel with the
-                // latest metrics. That frame is marked suppressed so it records no
-                // metrics and cannot re-arm the flag (see `record_devtools_frame_metrics`).
-                #[cfg(feature = "devtools")]
-                {
-                    let refresh = std::mem::take(&mut self.devtools_refresh_pending);
-                    self.devtools_metrics_suppressed = refresh && dirty.level() == DirtyLevel::None;
-                    if self.devtools_metrics_suppressed {
-                        dirty.mark_full();
-                    }
-                }
-
                 let now = Instant::now();
                 // A held-back frame joins whatever this pass dirtied, or draws on its own once due.
                 if let Some((level, _)) =
@@ -3480,6 +3473,11 @@ impl<C: Component> AppRunner<C> {
                         self.render_terminal_paint_only(&mut terminal)?;
                     }
                     DirtyLevel::None => {}
+                }
+
+                #[cfg(feature = "devtools")]
+                if self.devtools_panel_refresh_wait(Instant::now()) == Some(Duration::ZERO) {
+                    self.render_devtools_panel_refresh(&mut terminal)?;
                 }
 
                 if self.host_frame_presented {

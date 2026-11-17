@@ -193,6 +193,9 @@ struct PaneCfg {
     toast: u8,
     /// Run the runtime on a controlled clock, so a test steps time itself.
     controlled_clock: bool,
+    /// Open the DevTools panel on its Logs tab, which docks a few rows at the bottom.
+    #[cfg(feature = "devtools")]
+    devtools: bool,
 }
 
 impl PaneCfg {
@@ -650,6 +653,12 @@ fn build(cfg: PaneCfg, setup: &[u8]) -> Harness {
     )
     .into();
     runner.core.init();
+    #[cfg(feature = "devtools")]
+    if cfg.devtools {
+        assert!(runner.set_devtools_visible(true));
+        runner.devtools_state.borrow_mut().set_active_tab(1);
+        runner.install_devtools_overlay();
+    }
     runner.core.render_element(viewport(), None, None, None);
     runner.core.tree.refresh_live_terminals();
     // The first reconcile fills the node straight from the live snapshot and marks it current
@@ -1746,6 +1755,40 @@ fn a_notice_with_a_backdrop_is_rejected_as_a_composite_surface() {
         plan_for(&mut harness),
         Err(DamageRejection::CompositeSurface)
     );
+}
+
+/// The DevTools panel is part of the tree, so a row repaint paints it over the terminal exactly as
+/// a full paint does: output beside it shows, output under it stays hidden.
+#[cfg(feature = "devtools")]
+#[test]
+fn rows_beside_and_under_the_devtools_panel_match_a_full_paint() {
+    let cfg = PaneCfg {
+        devtools: true,
+        ..PaneCfg::new()
+    };
+    let mut harness = build(cfg, SETUP);
+    let panel = harness
+        .runner
+        .core
+        .tree
+        .iter()
+        .find(|node| {
+            node.key
+                .as_ref()
+                .is_some_and(|key| key.as_ref() == crate::devtools::DEVTOOLS_KEY)
+        })
+        .expect("the panel is mounted")
+        .rect;
+    assert!(
+        panel.y > 0 && panel.y + i16::try_from(panel.h).expect("rows") == ROWS as i16,
+        "the panel docks at the bottom below the first row: {panel:?}"
+    );
+    harness
+        .screen
+        .borrow_mut()
+        .process_bytes(format!("\x1b[1;1Hbeside\x1b[{};1Hunder", ROWS).as_bytes());
+    let plan = assert_harness_patch_matches_full_paint(&mut harness);
+    assert!(plan.rows.contains(&0), "rows {:?}", plan.rows);
 }
 
 // ─── Ratatui bookkeeping ─────────────────────────────────────────────────────

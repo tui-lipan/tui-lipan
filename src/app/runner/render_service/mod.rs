@@ -893,6 +893,19 @@ impl<C: Component> AppRunner<C> {
         terminal: &mut crate::backend::ratatui_backend::Terminal,
         draw_mode: DrawMode,
     ) -> Result<std::time::Duration> {
+        self.settle_after_reconcile()?;
+        let draw_duration = if self.skip_draw {
+            std::time::Duration::ZERO
+        } else {
+            self.draw_current_tree(terminal, draw_mode)?
+        };
+        self.sync_mouse_motion_capture(terminal)?;
+        Ok(draw_duration)
+    }
+
+    /// Bring focus, hover, drags and the caches that follow the tree up to date with a tree just
+    /// reconciled, before it is drawn.
+    fn settle_after_reconcile(&mut self) -> Result<()> {
         self.sync_runtime_keymap_config();
         #[cfg(feature = "image")]
         self.refresh_image_layout_suspension();
@@ -953,14 +966,7 @@ impl<C: Component> AppRunner<C> {
         if self.core.tree.has_spinners() {
             self.update_spinner_frames();
         }
-
-        let draw_duration = if self.skip_draw {
-            std::time::Duration::ZERO
-        } else {
-            self.draw_current_tree(terminal, draw_mode)?
-        };
-        self.sync_mouse_motion_capture(terminal)?;
-        Ok(draw_duration)
+        Ok(())
     }
 
     /// Paint-only fast path: skip the full component-view → expand →
@@ -1105,13 +1111,15 @@ impl<C: Component> AppRunner<C> {
                     metrics.graphics_widened_terminal += 1
                 });
             }
+            #[cfg(feature = "devtools")]
+            let draw_start = Instant::now();
             self.draw_row_damage(terminal, &plan)?;
             #[cfg(feature = "devtools")]
             self.record_devtools_frame_metrics(
                 DrawMode::PaintOnly,
                 total_start.elapsed(),
                 std::time::Duration::ZERO,
-                std::time::Duration::ZERO,
+                draw_start.elapsed(),
             );
             return Ok(());
         }
@@ -2997,6 +3005,76 @@ mod tests {
         assert_eq!(publications.get(), 2);
         assert!(tree_contains_text(&runner.core.tree, "2 ms"));
         assert!(!runner.apply_pending_devtools_request());
+    }
+
+    /// DevTools rebuilds its panel on its own: the app's view does not run, the frame is not
+    /// counted as the app's, the result is exactly what a full paint would show, and an idle panel
+    /// asks the loop for nothing.
+    #[cfg(feature = "devtools")]
+    #[test]
+    fn devtools_panel_refreshes_alone_and_matches_a_full_paint() {
+        let publications = Rc::new(Cell::new(0));
+        let mut runner = AppRunner::new(
+            App::new().mouse(false),
+            ViewMetricsPublisher {
+                publications: Rc::clone(&publications),
+            },
+            (),
+        );
+        assert!(runner.set_devtools_visible(true));
+        runner.devtools_state.borrow_mut().set_active_tab(2);
+        runner.core.init();
+        let mut terminal =
+            crate::backend::ratatui_backend::create_test_terminal(60, 20).expect("test terminal");
+        runner.render(&mut terminal).expect("app frame");
+        assert_eq!(publications.get(), 1);
+        assert_eq!(runner.devtools_state.borrow().frame_history.len(), 1);
+
+        // Rows published outside `view()` reach the panel without an app frame.
+        runner
+            .core
+            .ctx
+            .set_devtools_metrics(|| [crate::DevToolsMetric::new("Age", "from update")]);
+        assert_eq!(
+            runner.devtools_panel_refresh_wait(Instant::now()),
+            Some(Duration::ZERO)
+        );
+        runner
+            .render_devtools_panel_refresh(&mut terminal)
+            .expect("panel refresh");
+
+        assert!(tree_contains_text(&runner.core.tree, "from update"));
+        assert_eq!(publications.get(), 1, "the app's view must not run");
+        assert_eq!(
+            runner.devtools_state.borrow().frame_history.len(),
+            1,
+            "a panel refresh is not an app frame"
+        );
+        let cursor = std::cell::Cell::new(None);
+        let expected = runner.with_render_context(&cursor, |ctx| {
+            let mut oracle = Terminal::new(TestBackend::new(60, 20)).expect("oracle");
+            oracle
+                .draw(|f| crate::backend::ratatui_backend::render(f, ctx))
+                .expect("full paint")
+                .buffer
+                .clone()
+        });
+        assert_eq!(runner.last_frame_snapshot.as_ref(), Some(&expected));
+
+        // Nothing new to show: nothing to wake for.
+        assert_eq!(runner.devtools_panel_refresh_wait(Instant::now()), None);
+
+        // A new app frame waits out the refresh interval instead of refreshing at once.
+        runner.record_devtools_frame_metrics(
+            DrawMode::Full,
+            Duration::from_millis(1),
+            Duration::ZERO,
+            Duration::ZERO,
+        );
+        let wait = runner
+            .devtools_panel_refresh_wait(Instant::now())
+            .expect("a recorded frame makes the panel stale");
+        assert!(wait > Duration::ZERO && wait <= Duration::from_millis(250));
     }
 
     #[cfg(feature = "devtools")]

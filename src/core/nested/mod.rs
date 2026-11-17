@@ -588,6 +588,12 @@ impl ComponentRegistry {
         Some(Arc::clone(&self.arena.get(id).display_name))
     }
 
+    /// The scope of a mounted component id, if still valid.
+    #[cfg(feature = "devtools")]
+    pub(crate) fn scope_for_id(&self, id: ComponentId) -> Option<ScopeId> {
+        self.is_valid(id).then(|| self.arena.get(id).scope)
+    }
+
     /// Full `type_name` for a mounted component id, if still valid.
     #[allow(dead_code)] // consumed by DevTools / profiling spans
     pub(crate) fn full_name_for_id(&self, id: ComponentId) -> Option<&'static str> {

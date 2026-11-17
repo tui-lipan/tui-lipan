@@ -479,6 +479,12 @@ claims no keys of its own beyond `ctrl+c` on a selected Logs row; use the
 `toggle_devtools` binding (`F12` by default) or `Context::hide_devtools()` to
 close it.
 
+An open panel costs the app almost nothing, so its numbers describe the app
+rather than DevTools. It rebuilds itself apart from the app: only its own view
+runs and only its own cells are repainted, at most four times a second, and only
+while it has something new to show. Its own redraws are not counted as frames,
+and an idle app with DevTools open draws nothing at all.
+
 The stats panel renders a fixed set of rows so nothing appears or disappears
 between frames, and every value aggregates over the last 60 recorded frames
 rather than the latest one (per-frame data at full frame rate is unreadable).
@@ -506,10 +512,9 @@ Rows top to bottom:
 The App tab shows host-defined `DevToolsMetric` label/value rows in the order
 returned by the factory passed to `Context::set_devtools_metrics`. Publishing
 replaces the whole small snapshot; returning no rows clears it. The factory is
-not invoked without the `devtools` feature. Publication does not schedule a
-frame: calls from the host `view()` are consumed by the DevTools extra root
-later in that frame, and other calls remain stored until a host-requested frame
-rebuilds the panel. The tab grows its width and height to fit content within the
+not invoked without the `devtools` feature. Publication never schedules an app
+frame: rows that changed reach an open App tab on the panel's next refresh, so
+publishing from `update()` or a timer works as well as from `view()`. The tab grows its width and height to fit content within the
 viewport, never shrinking below the panel's shared minimum, then scrolls
 vertically instead of truncating rows. With no registered metrics it shows a
 hint naming `set_devtools_metrics`. Keep values preformatted and cheap to clone—DevTools never invokes host callbacks while

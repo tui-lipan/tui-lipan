@@ -43,12 +43,23 @@ pub(crate) enum DevToolsRequest {
 pub(crate) struct DevToolsMetrics {
     pub(crate) rows: RefCell<Vec<crate::app::DevToolsMetric>>,
     visible: Cell<bool>,
+    /// Set when [`replace`](Self::replace) stores rows that differ from the ones it replaced.
+    changed: Cell<bool>,
 }
 
 #[cfg(feature = "devtools")]
 impl DevToolsMetrics {
     pub(crate) fn replace(&self, rows: Vec<crate::app::DevToolsMetric>) {
-        *self.rows.borrow_mut() = rows;
+        let mut current = self.rows.borrow_mut();
+        if *current != rows {
+            *current = rows;
+            self.changed.set(true);
+        }
+    }
+
+    /// Whether the rows changed since the last call.
+    pub(crate) fn take_changed(&self) -> bool {
+        self.changed.replace(false)
     }
 
     pub(crate) fn set_visible(&self, visible: bool) {
