@@ -2230,10 +2230,10 @@ impl<C: Component> Context<C> {
     /// application rows. This stores only the supplied values; it never invokes
     /// host callbacks while DevTools renders.
     ///
-    /// Publishing is render-neutral: it does not schedule a frame. Calls made
-    /// from `view()` are consumed by the DevTools extra root later in that same
-    /// frame. Calls made elsewhere remain stored until a host-requested frame
-    /// rebuilds the panel.
+    /// Publishing never schedules an app frame. Rows that differ from the
+    /// previous ones reach an open `App` tab on DevTools' next panel refresh,
+    /// which rebuilds only the panel, so this can be called from `update()` or
+    /// a timer as well as from `view()`.
     ///
     /// Without the `devtools` feature this is a no-op, so the same application
     /// code continues to compile without constructing or formatting metrics.

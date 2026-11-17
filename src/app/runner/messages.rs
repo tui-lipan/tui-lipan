@@ -37,12 +37,20 @@ impl<C: Component> AppRunner<C> {
         self.apply_component_update(dirty, ScopeId(1), update_level);
     }
 
-    fn apply_component_update(
+    pub(super) fn apply_component_update(
         &mut self,
         dirty: &mut DirtyTracker,
         scope: ScopeId,
         update_level: UpdateLevel,
     ) {
+        // The DevTools panel's own state changed. Only its view reads that state, so it is rebuilt
+        // on its own, at once, and nothing about it is the app's frame.
+        #[cfg(feature = "devtools")]
+        if !matches!(update_level, UpdateLevel::None) && self.devtools_owns_scope(scope) {
+            self.devtools_panel_stale = true;
+            self.devtools_panel_refresh_now = true;
+            return;
+        }
         match update_level {
             UpdateLevel::None => {}
             UpdateLevel::Paint => {
@@ -111,6 +119,25 @@ impl<C: Component> AppRunner<C> {
                 level,
             );
         }
+    }
+
+    /// Whether `scope` is the DevTools panel or a component inside it, such as its log view.
+    #[cfg(feature = "devtools")]
+    pub(super) fn devtools_owns_scope(&self, scope: ScopeId) -> bool {
+        let Some(panel) = self.core.extra_root_scope() else {
+            return false;
+        };
+        let mut current = scope;
+        while current != ScopeId(1) {
+            if current == panel {
+                return true;
+            }
+            match self.core.components.parent_scope(current) {
+                Some(parent) => current = parent,
+                None => return false,
+            }
+        }
+        false
     }
 
     /// Record that `scope`'s view must run again, so a layout-only frame refreshes exactly it.

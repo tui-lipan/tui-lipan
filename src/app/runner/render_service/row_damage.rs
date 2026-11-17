@@ -44,8 +44,9 @@ pub(crate) enum DamageRejection {
     /// There is no retained frame to patch, or it does not match the current geometry.
     NoMatchingRetainedFrame,
     /// An overlay painting on a damaged row, an overlay with a backdrop or partial opacity, a
-    /// devtools panel, drag preview or inline surface composites over the tree, so a terminal row
-    /// is not the only thing that could occupy those cells.
+    /// drag preview or inline surface composites over the tree, so a terminal row is not the only
+    /// thing that could occupy those cells. The DevTools panel is not one: it is part of the tree,
+    /// and a row repaint paints it over the row exactly as a full paint does.
     CompositeSurface,
     /// The terminal is showing scrollback rather than the live viewport.
     #[cfg(feature = "terminal")]
@@ -132,10 +133,6 @@ where
         // Overlays are checked against the damaged rows once those are known: one that paints
         // none of them leaves them exactly as the base tree paints them.
         if self.surface.is_inline() {
-            return Err(DamageRejection::CompositeSurface);
-        }
-        #[cfg(feature = "devtools")]
-        if self.devtools_state.borrow().visible {
             return Err(DamageRejection::CompositeSurface);
         }
         if !matches!(self.drag.active, crate::app::runner::ActiveDrag::None) {
@@ -310,6 +307,18 @@ where
         let mut rows = Vec::new();
         self.add_node_damage(&mut rows, &damage.nodes, frame_area)?;
         self.finish_damage_plan(rows, &damage.areas, damage.nodes.is_empty(), frame_area)
+    }
+
+    /// Repaint exactly `areas`, which nothing but the tree inside them changed. The caret stays
+    /// where it was unless a focused widget inside them places it.
+    #[cfg(feature = "devtools")]
+    pub(crate) fn plan_area_damage(
+        &self,
+        areas: &[crate::style::Rect],
+        frame_area: ratatui::layout::Rect,
+    ) -> Result<RowDamagePlan, DamageRejection> {
+        self.validate_damage_surface(frame_area)?;
+        self.finish_damage_plan(Vec::new(), areas, true, frame_area)
     }
 
     fn add_node_damage(

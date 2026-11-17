@@ -337,6 +337,18 @@ fn apply_dirty_level(dirty: &mut DirtyTracker, level: DirtyLevel) {
     }
 }
 
+/// What [`AppRunner::end_devtools_event`] needs to tell whether an input event went to the
+/// DevTools panel.
+#[derive(Clone, Copy, Debug)]
+struct DevtoolsEvent {
+    #[cfg_attr(not(feature = "devtools"), allow(dead_code))]
+    app_work_before: bool,
+    #[cfg(feature = "devtools")]
+    to_focus: bool,
+    #[cfg(feature = "devtools")]
+    pointer: bool,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct KeyDispatchResult {
     handled: bool,
@@ -728,17 +740,26 @@ pub struct AppRunner<C: Component> {
     pub(crate) devtools_log_queue: Arc<Mutex<VecDeque<crate::debug::DevLogEntry>>>,
     #[cfg(feature = "devtools")]
     pub(crate) devtools_config: DevToolsConfig,
-    /// Set after an app frame records new DevTools metrics. The panel's extra
-    /// root is built *before* those metrics are recorded (install happens at the
-    /// top of a render, recording at the bottom), so the just-drawn panel shows
-    /// the previous frame. This requests exactly one idle "catch-up" frame that
-    /// rebuilds the panel with the freshly recorded metrics. The catch-up frame
-    /// records no metrics (see `devtools_metrics_suppressed`), so it cannot
-    /// re-arm this flag and the refresh terminates after a single frame.
+    /// Whether the DevTools panel shows something older than what it would show if rebuilt now:
+    /// a frame was recorded, a log line arrived, or the app published new rows since the panel
+    /// last ran its view. The panel is rebuilt on its own, never with the app (see
+    /// `render_devtools_panel_refresh`), and at most once per `DEVTOOLS_PANEL_REFRESH_INTERVAL`.
     #[cfg(feature = "devtools")]
-    devtools_refresh_pending: bool,
-    /// True only for the duration of a catch-up refresh frame. Suppresses metric
-    /// recording so the refresh does not feed back into `devtools_refresh_pending`.
+    pub(crate) devtools_panel_stale: bool,
+    /// When the panel was last rebuilt on its own, which paces the next rebuild.
+    #[cfg(feature = "devtools")]
+    pub(crate) devtools_panel_refreshed_at: Option<Instant>,
+    /// The panel handled a message of its own (a tab, the log filter, pause): rebuild it now,
+    /// without waiting out the refresh interval and without an app frame.
+    #[cfg(feature = "devtools")]
+    pub(crate) devtools_panel_refresh_now: bool,
+    /// The frame about to be drawn was dirtied only by input aimed at the panel (see
+    /// `DirtyTracker::devtools_input_only`). Such input still takes the ordinary path, since it can
+    /// move focus or hover off the app, but the frame is not the app's and is not recorded.
+    #[cfg(feature = "devtools")]
+    pub(crate) devtools_input_frame: bool,
+    /// True only while the panel is rebuilt on its own. That frame is DevTools' own work, not the
+    /// app's, so it records no metrics, attributions or view timings.
     #[cfg(feature = "devtools")]
     devtools_metrics_suppressed: bool,
     /// Pending update attributions coalesced until the next recorded metrics frame.
@@ -1043,7 +1064,13 @@ impl<C: Component> AppRunner<C> {
             #[cfg(feature = "devtools")]
             devtools_config: app.devtools_config,
             #[cfg(feature = "devtools")]
-            devtools_refresh_pending: false,
+            devtools_panel_stale: false,
+            #[cfg(feature = "devtools")]
+            devtools_panel_refreshed_at: None,
+            #[cfg(feature = "devtools")]
+            devtools_panel_refresh_now: false,
+            #[cfg(feature = "devtools")]
+            devtools_input_frame: false,
             #[cfg(feature = "devtools")]
             devtools_metrics_suppressed: false,
             #[cfg(feature = "devtools")]
@@ -1341,6 +1368,14 @@ impl<C: Component> AppRunner<C> {
         }
 
         let visible = self.devtools_state.borrow().visible;
+        // New lines only change what the panel shows on the Logs tab, and only while it follows
+        // them; a paused log keeps its rows.
+        if visible && !pending.is_empty() {
+            let state = self.devtools_state.borrow();
+            if state.is_logs_tab_active() && !state.log_paused {
+                self.devtools_panel_stale = true;
+            }
+        }
 
         while let Some(entry) = pending.pop_front() {
             let mut state = self.devtools_state.borrow_mut();
@@ -1427,6 +1462,60 @@ impl<C: Component> AppRunner<C> {
     ) {
         apply_dirty_level(dirty, level);
         self.note_attribution(crate::devtools::state::UpdateSource::Input(label), level);
+    }
+
+    /// Start an input event, noting what decides whether it goes to the DevTools panel: keys and
+    /// pastes by the focus they arrive at, read now, before they can move it.
+    #[cfg_attr(not(feature = "devtools"), allow(unused_variables))]
+    fn begin_devtools_event(&self, event: &CEvent, dirty: &DirtyTracker) -> DevtoolsEvent {
+        DevtoolsEvent {
+            app_work_before: dirty.begin_devtools_input(),
+            #[cfg(feature = "devtools")]
+            to_focus: matches!(event, CEvent::Key(_) | CEvent::Paste(_))
+                && self.focus_in_devtools(),
+            #[cfg(feature = "devtools")]
+            pointer: matches!(event, CEvent::Mouse(_)),
+        }
+    }
+
+    /// Finish an input event: whatever it dirtied is DevTools' own when it went to the panel. The
+    /// pointer is judged where the event left it.
+    fn end_devtools_event(&self, event: DevtoolsEvent, dirty: &mut DirtyTracker) {
+        #[cfg(feature = "devtools")]
+        if event.to_focus || (event.pointer && self.pointer_over_devtools()) {
+            dirty.end_devtools_input(event.app_work_before);
+        }
+        #[cfg(not(feature = "devtools"))]
+        let _ = (event, dirty);
+    }
+
+    /// Whether the focused widget is inside the DevTools panel, so keys and pastes go to it.
+    #[cfg(feature = "devtools")]
+    fn focus_in_devtools(&self) -> bool {
+        self.devtools_state.borrow().visible
+            && self
+                .focus
+                .focused
+                .is_some_and(|focused| self.devtools_panel_contains(focused))
+    }
+
+    /// Whether the pointer is over the DevTools panel. The panel is the top layer, so pointer
+    /// input there cannot be reaching the app.
+    #[cfg(feature = "devtools")]
+    fn pointer_over_devtools(&self) -> bool {
+        if !self.devtools_state.borrow().visible {
+            return false;
+        }
+        let Some((x, y)) = self.mouse.last_mouse.get() else {
+            return false;
+        };
+        self.devtools_panel_rect().is_some_and(|rect| {
+            let (x, y) = (i32::from(x), i32::from(y));
+            x >= i32::from(rect.x)
+                && x < i32::from(rect.x) + i32::from(rect.w)
+                && y >= i32::from(rect.y)
+                && y < i32::from(rect.y) + i32::from(rect.h)
+        })
     }
 
     /// Update host-window focus and invoke the root lifecycle exactly once per transition.
@@ -2533,11 +2622,15 @@ impl<C: Component> AppRunner<C> {
             let mut host_color_refresh_quiet_until: Option<Instant> = None;
             // The dirty level of a pass whose draw waits for queued input, and whether it
             // was continuous work.
-            let mut deferred_frame: Option<(DirtyLevel, bool)> = None;
+            // A held-back frame: its level, whether it is continuous, and whether only input
+            // aimed at the DevTools panel dirtied it.
+            let mut deferred_frame: Option<(DirtyLevel, bool, bool)> = None;
             // When queued input first held back a frame; cleared once one is presented.
             let mut input_batch_started: Option<Instant> = None;
             // Continuous work shares one phase-preserving presentation deadline.
-            let mut paced_frame: Option<(DirtyLevel, Instant)> = None;
+            // A frame held for the frame clock: its level, when it is due, and whether only input
+            // aimed at the DevTools panel dirtied it.
+            let mut paced_frame: Option<(DirtyLevel, Instant, bool)> = None;
             let mut frame_clock = frame_clock::FrameClock::new(self.frame_interval);
             let mut input_answer_until: Option<Instant> = None;
             // A snapshot callback ran after the last paint and may have queued a message.
@@ -2567,12 +2660,8 @@ impl<C: Component> AppRunner<C> {
                 }
                 #[cfg(feature = "devtools")]
                 self.ingest_pending_devtools_logs();
-                if let Some((level, continuous)) = deferred_frame.take() {
-                    if continuous {
-                        dirty.merge_continuous_level(level);
-                    } else {
-                        dirty.merge_immediate_level(level);
-                    }
+                if let Some((level, continuous, devtools_only)) = deferred_frame.take() {
+                    dirty.merge_held_frame(level, continuous, devtools_only);
                 }
                 // The last partial paint kept a terminal's previous native image. Present the
                 // pending replacement now rather than when unrelated input next arrives.
@@ -2585,7 +2674,7 @@ impl<C: Component> AppRunner<C> {
                     self.core.tree.set_terminal_mutation_waker(wake.clone());
                 }
                 let mut poll_timeout = self.update_animation_cycle(&mut dirty);
-                if let Some((_, due)) = paced_frame {
+                if let Some((_, due, _)) = paced_frame {
                     poll_timeout = poll_timeout.min(due.saturating_duration_since(Instant::now()));
                 }
                 if let Some(remaining) = host_color_refresh_wait_remaining(
@@ -2745,6 +2834,8 @@ impl<C: Component> AppRunner<C> {
                     if answer_window {
                         input_answer_until = Some(Instant::now() + Duration::from_millis(50));
                     }
+                    // Whatever this event dirties is DevTools' own when it goes to the panel.
+                    let devtools_event = self.begin_devtools_event(&event, &dirty);
                     match event {
                         CEvent::FocusGained => {
                             self.set_window_focused(true, &mut dirty);
@@ -3307,6 +3398,7 @@ impl<C: Component> AppRunner<C> {
                         }
                         _ => {}
                     }
+                    self.end_devtools_event(devtools_event, &mut dirty);
                 }
 
                 self.drain_messages_and_commands(&mut dirty)?;
@@ -3386,29 +3478,12 @@ impl<C: Component> AppRunner<C> {
                     dirty.mark_full();
                 }
 
-                // DevTools metrics for a frame are recorded *after* its panel was
-                // built, so the last app frame's numbers are only shown once a
-                // later frame rebuilds the panel. When an app frame leaves other
-                // work pending the panel already advances on its own, so honor the
-                // pending refresh only on an otherwise-idle iteration: schedule a
-                // single full "catch-up" frame that rebuilds the panel with the
-                // latest metrics. That frame is marked suppressed so it records no
-                // metrics and cannot re-arm the flag (see `record_devtools_frame_metrics`).
-                #[cfg(feature = "devtools")]
-                {
-                    let refresh = std::mem::take(&mut self.devtools_refresh_pending);
-                    self.devtools_metrics_suppressed = refresh && dirty.level() == DirtyLevel::None;
-                    if self.devtools_metrics_suppressed {
-                        dirty.mark_full();
-                    }
-                }
-
                 let now = Instant::now();
                 // A held-back frame joins whatever this pass dirtied, or draws on its own once due.
-                if let Some((level, _)) =
-                    paced_frame.take_if(|(_, due)| dirty.is_dirty() || now >= *due)
+                if let Some((level, _, devtools_only)) =
+                    paced_frame.take_if(|(_, due, _)| dirty.is_dirty() || now >= *due)
                 {
-                    dirty.merge_continuous_level(level);
+                    dirty.merge_held_frame(level, true, devtools_only);
                 }
                 let frame_level = dirty.level();
 
@@ -3430,8 +3505,11 @@ impl<C: Component> AppRunner<C> {
                 {
                     input_batch_started.get_or_insert(now);
                     let carried = self.reconcile_for_queued_input(&mut terminal, frame_level)?;
-                    deferred_frame =
-                        Some((carried, dirty.continuous_frame() || pointer_motion_only));
+                    deferred_frame = Some((
+                        carried,
+                        dirty.continuous_frame() || pointer_motion_only,
+                        dirty.devtools_input_only(),
+                    ));
                     #[cfg(feature = "profiling-tracing")]
                     tracing::trace!(
                         target: "tui_lipan::perf",
@@ -3446,12 +3524,14 @@ impl<C: Component> AppRunner<C> {
                     && !force_host_redraw
                     && !input_answering;
                 if let Some(due) = frame_clock.due(continuous, now) {
-                    paced_frame = Some((frame_level, due));
+                    paced_frame = Some((frame_level, due, dirty.devtools_input_only()));
                     continue;
                 }
 
                 self.frame_rendered = false;
                 self.host_frame_presented = false;
+                #[cfg(feature = "devtools")]
+                self.note_devtools_frame_provenance(&dirty);
                 match frame_level {
                     DirtyLevel::Full => {
                         if force_host_redraw {
@@ -3480,6 +3560,11 @@ impl<C: Component> AppRunner<C> {
                         self.render_terminal_paint_only(&mut terminal)?;
                     }
                     DirtyLevel::None => {}
+                }
+
+                #[cfg(feature = "devtools")]
+                if self.devtools_panel_refresh_wait(Instant::now()) == Some(Duration::ZERO) {
+                    self.render_devtools_panel_refresh(&mut terminal)?;
                 }
 
                 if self.host_frame_presented {
@@ -3724,11 +3809,24 @@ impl<C: Component> AppRunner<C> {
             // Paint-only levels leave the tree as it is; the whole draw can wait.
             _ => None,
         };
-        #[cfg_attr(not(feature = "terminal"), allow(unused_mut))]
+        #[cfg_attr(
+            not(any(feature = "terminal", feature = "devtools")),
+            allow(unused_mut)
+        )]
         let mut reconciled = false;
         if let Some(reconcile) = reconcile {
             self.skip_draw = true;
             let result = reconcile(self, terminal);
+            self.skip_draw = false;
+            result?;
+            reconciled = true;
+        }
+        // The DevTools panel's own state changed outside the app's dirty scopes, typically its log
+        // filter fed back by this key. The next key edits that value, so rebuild the panel too.
+        #[cfg(feature = "devtools")]
+        if self.devtools_panel_refresh_now {
+            self.skip_draw = true;
+            let result = self.render_devtools_panel_refresh(terminal);
             self.skip_draw = false;
             result?;
             reconciled = true;

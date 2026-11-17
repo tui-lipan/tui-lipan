@@ -107,32 +107,52 @@ impl DirtyLevel {
 pub(crate) struct DirtyTracker {
     level: DirtyLevel,
     immediate_layout: bool,
+    /// Something other than input aimed at the DevTools panel dirtied this frame.
+    #[cfg(feature = "devtools")]
+    app_work: bool,
+    /// Input aimed at the DevTools panel dirtied this frame.
+    #[cfg(feature = "devtools")]
+    devtools_input: bool,
 }
 
 impl DirtyTracker {
+    /// Every mark is app work unless it is made inside [`Self::mark_devtools_input`].
+    #[inline]
+    fn note_app_work(&mut self) {
+        #[cfg(feature = "devtools")]
+        {
+            self.app_work = true;
+        }
+    }
+
     pub fn mark_damage_paint(&mut self) {
+        self.note_app_work();
         self.level.merge(DirtyLevel::DamagePaintOnly);
     }
 
     #[inline]
     pub fn mark_full(&mut self) {
+        self.note_app_work();
         self.immediate_layout = true;
         self.level.set_full();
     }
 
     #[inline]
     pub fn mark_layout(&mut self) {
+        self.note_app_work();
         self.immediate_layout = true;
         self.level.set_layout();
     }
 
     #[inline]
     pub fn mark_paint(&mut self) {
+        self.note_app_work();
         self.level.set_paint();
     }
 
     #[cfg(feature = "terminal")]
     pub fn mark_terminal_graphics(&mut self) {
+        self.note_app_work();
         self.level.set_terminal_graphics();
     }
 
@@ -140,21 +160,84 @@ impl DirtyTracker {
     #[cfg(feature = "terminal")]
     #[inline]
     pub fn mark_terminal_paint(&mut self) {
+        self.note_app_work();
         self.level.set_terminal_paint();
     }
 
     /// Animation and deferred continuous work keep the same frame deadline even when they
     /// require layout or rebuilding a view. Explicit layout/full updates still bypass that gate.
     pub fn merge_continuous_level(&mut self, level: DirtyLevel) {
+        if level.is_dirty() {
+            self.note_app_work();
+        }
         self.level.merge(level);
     }
 
     /// Merge a level that is presented without waiting for the frame clock.
     pub fn merge_immediate_level(&mut self, level: DirtyLevel) {
         if level.is_dirty() {
+            self.note_app_work();
             self.immediate_layout = true;
             self.level.merge(level);
         }
+    }
+
+    /// Make the marks `mark` makes on behalf of input aimed at the DevTools panel. They dirty the
+    /// frame as usual, but do not count as app work.
+    pub fn mark_devtools_input(&mut self, mark: impl FnOnce(&mut Self)) {
+        let before = self.begin_devtools_input();
+        mark(self);
+        self.end_devtools_input(before);
+    }
+
+    /// Bring back a frame held over from an earlier pass, keeping whether only input aimed at the
+    /// DevTools panel dirtied it.
+    pub fn merge_held_frame(&mut self, level: DirtyLevel, continuous: bool, devtools_only: bool) {
+        let merge = |dirty: &mut Self| {
+            if continuous {
+                dirty.merge_continuous_level(level);
+            } else {
+                dirty.merge_immediate_level(level);
+            }
+        };
+        if devtools_only {
+            self.mark_devtools_input(merge);
+        } else {
+            merge(self);
+        }
+    }
+
+    /// Start marks that may turn out to be for input aimed at the DevTools panel. Pass the result
+    /// to [`Self::end_devtools_input`] once they are known to be.
+    pub fn begin_devtools_input(&self) -> bool {
+        #[cfg(feature = "devtools")]
+        {
+            self.app_work
+        }
+        #[cfg(not(feature = "devtools"))]
+        false
+    }
+
+    /// The marks made since [`Self::begin_devtools_input`] were for input aimed at the DevTools
+    /// panel: they keep the frame dirty but are not app work.
+    pub fn end_devtools_input(&mut self, app_work_before: bool) {
+        #[cfg(feature = "devtools")]
+        {
+            self.app_work = app_work_before;
+            self.devtools_input |= self.is_dirty();
+        }
+        #[cfg(not(feature = "devtools"))]
+        let _ = app_work_before;
+    }
+
+    /// Whether input aimed at the DevTools panel is all that dirtied this frame, in either order.
+    pub fn devtools_input_only(&self) -> bool {
+        #[cfg(feature = "devtools")]
+        {
+            self.devtools_input && !self.app_work
+        }
+        #[cfg(not(feature = "devtools"))]
+        false
     }
 
     pub fn continuous_frame(&self) -> bool {

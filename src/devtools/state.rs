@@ -289,6 +289,30 @@ impl DevToolsState {
         self.active_tab == LOGS_TAB_INDEX
     }
 
+    pub(crate) fn is_app_tab_active(&self) -> bool {
+        self.active_tab == APP_TAB_INDEX
+    }
+
+    pub(crate) fn is_stats_tab_active(&self) -> bool {
+        !self.is_logs_tab_active() && !self.is_app_tab_active()
+    }
+
+    /// Drop frame samples older than the FPS window, reporting whether any were dropped. Without
+    /// this an app that stops drawing would keep showing the rate it last drew at.
+    pub(crate) fn expire_fps_samples(&mut self, now: Instant) -> bool {
+        let before = self.fps_samples.len();
+        self.prune_fps_samples(now);
+        self.fps_samples.len() != before
+    }
+
+    /// When the oldest frame sample has left the FPS window: just past its edge, since a sample
+    /// exactly at the edge is still counted.
+    pub(crate) fn next_fps_expiry(&self) -> Option<Instant> {
+        self.fps_samples
+            .front()
+            .map(|sample| *sample + FPS_WINDOW + Duration::from_millis(1))
+    }
+
     /// Width policy shared by every content-sized tab: grow to fit the widest
     /// row, never below [`PANEL_MIN_WIDTH`], never past the viewport.
     ///
