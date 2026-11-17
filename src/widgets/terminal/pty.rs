@@ -598,11 +598,7 @@ impl TerminalPty {
             let on_event = on_event.clone();
             let thread_inner = inner.clone();
             std::thread::spawn(move || {
-                let exit_code = child
-                    .wait()
-                    .ok()
-                    .map(|status| status.exit_code() as i32)
-                    .unwrap_or(-1);
+                let exit_code = wait_for_exit_code(&mut child);
                 // Publish rather than emit: `wait` returns the instant the child dies, which is
                 // usually before the reader has picked up the bytes it left behind. The reader
                 // emits the exit once it has drained them; this thread only steps in when the
@@ -905,6 +901,28 @@ fn unix_wait_readable(fd: RawFd, active: &AtomicBool) -> PtyReadiness {
     PtyReadiness::Stop
 }
 
+/// Wait for the child and return the status a shell would report: its exit code, or `128` plus the
+/// signal number when a signal ended it, so an interrupted command reads `130` rather than `1`.
+/// `-1` when the status cannot be read.
+///
+/// `portable_pty::ExitStatus` keeps only a signal's description, so a Unix child, which
+/// `portable_pty` spawns as a [`std::process::Child`], is waited on directly to keep the number.
+fn wait_for_exit_code(child: &mut Box<dyn portable_pty::Child + Send + Sync>) -> i32 {
+    #[cfg(unix)]
+    if let Some(child) =
+        (&mut **child as &mut dyn portable_pty::Child).downcast_mut::<std::process::Child>()
+    {
+        use std::os::unix::process::ExitStatusExt;
+        return child.wait().map_or(-1, |status| {
+            status
+                .code()
+                .or_else(|| status.signal().map(|signal| 128 + signal))
+                .unwrap_or(-1)
+        });
+    }
+    child.wait().map_or(-1, |status| status.exit_code() as i32)
+}
+
 /// PTY runtime event.
 ///
 /// `Exited` is delivered after every `Output` the child produced, so a consumer can treat it as
@@ -915,7 +933,8 @@ fn unix_wait_readable(fd: RawFd, active: &AtomicBool) -> PtyReadiness {
 pub enum TerminalPtyEvent {
     /// Raw bytes emitted by PTY stdout/stderr stream.
     Output(Arc<[u8]>),
-    /// Child process exited with status code (or -1 when unavailable).
+    /// Child process exited with status code, `128` plus the signal number when a signal ended
+    /// it, or -1 when unavailable.
     Exited(i32),
     /// Runtime error message.
     Error(Arc<str>),
@@ -1189,6 +1208,23 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         panic!("a killed pty must report its exit without waiting out the drain grace");
+    }
+
+    #[test]
+    fn a_child_a_signal_ends_reports_the_shell_status() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let _pty = TerminalPty::spawn(
+            TerminalPtyConfig::new("/bin/sh")
+                .arg("-c")
+                .arg("kill -TERM $$"),
+            move |event| {
+                if let TerminalPtyEvent::Exited(code) = event {
+                    let _ = sender.send(code);
+                }
+            },
+        )
+        .expect("spawn");
+        assert_eq!(receiver.recv_timeout(Duration::from_secs(5)), Ok(143));
     }
 
     #[test]
