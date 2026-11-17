@@ -598,7 +598,7 @@ impl TerminalPty {
             let on_event = on_event.clone();
             let thread_inner = inner.clone();
             std::thread::spawn(move || {
-                let exit_code = child.wait().ok().map_or(-1, |status| exit_code(&status));
+                let exit_code = wait_for_exit_code(&mut child);
                 // Publish rather than emit: `wait` returns the instant the child dies, which is
                 // usually before the reader has picked up the bytes it left behind. The reader
                 // emits the exit once it has drained them; this thread only steps in when the
@@ -901,30 +901,26 @@ fn unix_wait_readable(fd: RawFd, active: &AtomicBool) -> PtyReadiness {
     PtyReadiness::Stop
 }
 
-/// The status a shell would report for `status`: the exit code, or `128` plus the signal number
-/// for a child a signal ended, so an interrupted command reads `130` rather than a bare failure.
-fn exit_code(status: &portable_pty::ExitStatus) -> i32 {
+/// Wait for the child and return the status a shell would report: its exit code, or `128` plus the
+/// signal number when a signal ended it, so an interrupted command reads `130` rather than `1`.
+/// `-1` when the status cannot be read.
+///
+/// `portable_pty::ExitStatus` keeps only a signal's description, so a Unix child, which
+/// `portable_pty` spawns as a [`std::process::Child`], is waited on directly to keep the number.
+fn wait_for_exit_code(child: &mut Box<dyn portable_pty::Child + Send + Sync>) -> i32 {
     #[cfg(unix)]
-    if let Some(number) = status.signal().and_then(signal_number) {
-        return 128 + number;
+    if let Some(child) =
+        (&mut **child as &mut dyn portable_pty::Child).downcast_mut::<std::process::Child>()
+    {
+        use std::os::unix::process::ExitStatusExt;
+        return child.wait().map_or(-1, |status| {
+            status
+                .code()
+                .or_else(|| status.signal().map(|signal| 128 + signal))
+                .unwrap_or(-1)
+        });
     }
-    status.exit_code() as i32
-}
-
-/// The signal `portable_pty` named. It keeps only the `strsignal` description, so this looks the
-/// number up the same way, falling back to the `Signal N` form it uses when there is none.
-#[cfg(unix)]
-fn signal_number(name: &str) -> Option<i32> {
-    if let Some(number) = name.strip_prefix("Signal ") {
-        return number.parse().ok();
-    }
-    (1..65).find(|&number| {
-        // SAFETY: `strsignal` returns null or a NUL-terminated string that stays valid until the
-        // next call on this thread, and it is copied out before then.
-        let description = unsafe { libc::strsignal(number) };
-        !description.is_null()
-            && unsafe { std::ffi::CStr::from_ptr(description) }.to_bytes() == name.as_bytes()
-    })
+    child.wait().map_or(-1, |status| status.exit_code() as i32)
 }
 
 /// PTY runtime event.
