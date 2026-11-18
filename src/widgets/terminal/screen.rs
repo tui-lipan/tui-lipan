@@ -356,6 +356,7 @@ pub struct TerminalScreen {
     semantic_events_seen: usize,
     /// Start of the prompt currently being edited, cleared when command execution begins.
     active_prompt_mark: Option<ActivePromptMark>,
+    prompt_redraw_on_resize: bool,
     /// Splits `APC _G` graphics commands out of the byte stream before the grid parser sees it.
     #[cfg(feature = "terminal-images")]
     graphics_scanner: GraphicsScanner,
@@ -1123,6 +1124,7 @@ impl TerminalScreen {
             semantic_marks: VecDeque::new(),
             semantic_events_seen: 0,
             active_prompt_mark: None,
+            prompt_redraw_on_resize: true,
             #[cfg(feature = "terminal-images")]
             graphics_scanner: GraphicsScanner::default(),
             #[cfg(feature = "terminal-images")]
@@ -2424,6 +2426,14 @@ impl TerminalScreen {
         result
     }
 
+    /// Set whether the program repaints an OSC 133 prompt and its input after a resize.
+    ///
+    /// Enabled by default for shells that redraw on SIGWINCH. Disable for ConPTY
+    /// so the screen reflows the active input without waiting for a shell redraw.
+    pub fn set_prompt_redraw_on_resize(&mut self, enabled: bool) {
+        self.prompt_redraw_on_resize = enabled;
+    }
+
     /// Resize screen dimensions.
     ///
     pub fn resize(&mut self, rows: u16, cols: u16) {
@@ -2457,7 +2467,10 @@ impl TerminalScreen {
         let outcome = self.engine.resize(ResizeRequest {
             rows,
             cols,
-            prompt: self.active_prompt_mark.take(),
+            prompt: self
+                .active_prompt_mark
+                .take()
+                .filter(|_| self.prompt_redraw_on_resize),
             track: track.as_deref(),
         });
         self.active_prompt_mark = outcome.prompt;
@@ -5295,6 +5308,22 @@ mod tests {
             );
             assert_eq!((snapshot.cursor_row, snapshot.cursor_col), (2, 54));
         }
+    }
+
+    #[test]
+    fn resize_reflows_a_marked_prompt_when_the_shell_does_not_redraw() {
+        let mut screen = TerminalScreen::new(4, 40, 20);
+        screen.set_prompt_redraw_on_resize(false);
+        screen
+            .process_bytes(b"previous output\r\n\x1b]133;A\x1b\\PS> \x1b]133;B\x1b\\echo pending");
+        screen.resize(4, 12);
+
+        let snapshot = screen.render_snapshot();
+        let visible: Vec<_> = snapshot.text.lines().map(str::trim_end).take(2).collect();
+        assert_eq!(visible, ["PS> echo pen", "ding"]);
+        screen.resize(4, 40);
+        screen.process_bytes(b"!");
+        assert!(screen.render_snapshot().text.contains("PS> echo pending!"));
     }
 
     #[test]

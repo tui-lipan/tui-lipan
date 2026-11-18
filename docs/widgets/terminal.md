@@ -539,6 +539,10 @@ let replay = screen.export_replay_bytes();
 screen.write_replay_bytes(&mut destination)?;
 ```
 
+Call `screen.set_prompt_redraw_on_resize(false)` when the child does not repaint its OSC 133
+prompt and input after resize, as with Windows ConPTY. `ManagedTerminal` sets this automatically
+for its local PTY.
+
 `TerminalScreen` answers the XTVERSION query (`CSI > 0 q`) through `drain_responses()`. Its default
 identity is `tui-lipan <crate version>`. An embedding terminal or multiplexer should call
 `set_terminal_identity(...)` once when constructing each child-facing screen, using an identity
