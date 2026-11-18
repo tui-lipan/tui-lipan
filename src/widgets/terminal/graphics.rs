@@ -1552,8 +1552,13 @@ impl GraphicsCommand {
         }
     }
 
-    /// Whether a report about this command goes back to the child.
+    /// Whether a report about this command goes back to the child. As in Kitty, only a command that
+    /// names its image, by `i=` or `I=`, gets one: a client that sent neither cannot match a reply
+    /// to its command, and a shell that never reads replies would get it as typed input.
     fn reports(&self, ok: bool) -> bool {
+        if self.id == 0 && self.number == 0 {
+            return false;
+        }
         match self.quiet {
             0 => true,
             1 => !ok,
@@ -6018,12 +6023,23 @@ mod tests {
         let payload = BASE64.encode([1u8, 2, 3]);
         let (_, commands) = scan_all(
             &mut scanner,
-            format!("\x1b_Ga=T,f=24,s=30,v=40,t=d;{payload}\x1b\\").as_bytes(),
+            format!(
+                "\x1b_Ga=T,f=24,s=30,v=40,t=d;{payload}\x1b\\\
+                 \x1b_Ga=T,i=7,f=24,s=30,v=40,t=d;{payload}\x1b\\"
+            )
+            .as_bytes(),
         );
 
-        let outcome = graphics.apply(commands[0].clone(), context());
+        // As in Kitty, a command that names no image gets no report, which a shell would read as
+        // typed input.
+        let unnamed = graphics.apply(commands[0].clone(), context());
+        assert_eq!(unnamed.response, None);
+        let outcome = graphics.apply(commands[1].clone(), context());
         let response = String::from_utf8(outcome.response.expect("a refusal is reported")).unwrap();
-        assert!(response.contains("EINVAL"), "unexpected report: {response}");
+        assert!(
+            response.starts_with("\x1b_Gi=7;EINVAL"),
+            "unexpected report: {response}"
+        );
         assert!(graphics.visible(0, 0, 24, false).is_empty());
     }
 }
