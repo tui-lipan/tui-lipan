@@ -391,9 +391,9 @@ impl Component for ManagedTerminal {
     type State = ManagedTerminalState;
 
     fn create_state(&self, props: &Self::Properties) -> Self::State {
-        #[cfg_attr(not(feature = "terminal-images"), allow(unused_mut))]
         let mut screen =
             TerminalScreen::new(props.initial_rows, props.initial_cols, props.scrollback);
+        screen.set_prompt_redraw_on_resize(cfg!(unix));
         // Size images against the host's real cell, and tell the child the same thing through the
         // PTY, so a picture the child sized for itself lands on the cells it reserved.
         #[cfg(feature = "terminal-images")]
