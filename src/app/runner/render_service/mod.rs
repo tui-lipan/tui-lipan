@@ -1335,6 +1335,9 @@ impl<C: Component> AppRunner<C> {
         if let Some(title) = &self.title {
             terminal.backend_mut().set_title(title)?;
         }
+        terminal
+            .backend_mut()
+            .set_default_background(self.core.ctx.host_default_background());
         execute!(terminal.backend_mut(), Print("\x1b[?2026h"))?;
         #[cfg(any(feature = "devtools", feature = "profiling-tracing"))]
         let draw_start = Instant::now();
