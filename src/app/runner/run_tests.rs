@@ -381,21 +381,6 @@ fn termina_runtime_refresh_ignores_equal_resolved_colors() {
 }
 
 #[test]
-fn host_default_background_change_requests_full_repaint() {
-    // A repaint resends every cell, which unchanged cells otherwise never get after a change.
-    let runner = AppRunner::new(App::new(), RunnerKeymapSmoke, ());
-    let ctx = &runner.core.ctx;
-    let bg = Color::rgb(10, 11, 12);
-
-    ctx.set_host_default_background(Some(bg));
-    assert!(runner.core.take_full_repaint_request());
-    ctx.set_host_default_background(Some(bg));
-    assert!(!runner.core.take_full_repaint_request());
-    ctx.set_host_default_background(None);
-    assert!(runner.core.take_full_repaint_request());
-}
-
-#[test]
 fn previous_frame_invalidation_repaints_without_physically_clearing_first() {
     let mut terminal = RatatuiTerminal::new(TestBackend::new(6, 1)).unwrap();
     let draw = |frame: &mut ratatui::Frame<'_>| {

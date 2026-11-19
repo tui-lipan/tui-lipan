@@ -166,7 +166,7 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
 | `ctx.theme()` | Clone the active theme for this subtree |
 | `ctx.theme_extension::<T>()` | Clone a typed app-specific theme extension |
 | `ctx.host_terminal_colors()` | Read the runner-managed `HostTerminalColors` cache when live host colors are enabled |
-| `ctx.set_host_default_background(color)` | Write cells whose background is `color` as the host terminal's default background, so a translucent terminal shows through them; `None` turns it off. Unlike `App::terminal_bg`, which gives blending a concrete color, this changes only the bytes sent to the host. It does not follow host color changes, so set it again from `update` when `host_terminal_colors().bg` changes |
+| `ctx.set_host_default_background(color)` | Write cells whose background is `color` as the host terminal's default background, so a translucent terminal shows through them; `None` turns it off. Unlike `App::terminal_bg`, which gives blending a concrete color, this changes only the bytes sent to the host. It does not follow host color changes on its own; a host color refresh re-runs `view`, so call it there with `host_terminal_colors()` to keep up. An unchanged value costs nothing |
 | `ctx.host_drag_and_drop()` | Send drag-and-drop commands to the host terminal; events arrive at `on_host_drag_and_drop` (see [Drag and drop](drag-and-drop.md)) |
 | `ctx.host_cursor_style()` | Read the host cursor shape and blink from the startup probe, or `None` when the host did not answer |
 | `ctx.host_color_scheme()` | Read the light or dark `ColorScheme` the host reported through DEC mode 2031, or `None` before it reports one |

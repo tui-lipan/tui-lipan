@@ -2200,13 +2200,15 @@ impl<C: Component> Context<C> {
     /// Pass the host's own background (from [`Context::host_terminal_colors`]) to let a
     /// translucent terminal show through wherever the UI paints that color, as it does for an
     /// unstyled cell. Cells keep their concrete color for blending and capture; only the bytes
-    /// sent to the host change. `None` turns this off. Changing the value redraws the screen.
-    /// The value does not follow the host's colors: set it again when the host background changes.
+    /// sent to the host change. `None` turns this off.
+    ///
+    /// The value does not follow the host's colors. A host color refresh re-runs `view`, not
+    /// `update`, so set it from `view` to keep up with the host background. Setting an unchanged
+    /// value is free; a changed one redraws every cell in the next frame.
     pub fn set_host_default_background(&self, color: Option<Color>) {
-        let color = color.filter(|color| !color.is_sentinel());
-        if self.env.host_default_background.replace(color) != color {
-            self.request_full_repaint();
-        }
+        self.env
+            .host_default_background
+            .set(color.filter(|color| !color.is_sentinel()));
     }
 
     pub(crate) fn host_default_background(&self) -> Option<Color> {

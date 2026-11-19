@@ -1290,6 +1290,18 @@ impl<C: Component> AppRunner<C> {
             crate::animation::registry::PaintExtent::Partial,
         );
 
+        // Before anything is drawn, inline inserts included. Every cell has to be resent after a
+        // change, since ratatui would skip the ones whose buffer contents did not change.
+        if terminal
+            .backend_mut()
+            .set_default_background(self.core.ctx.host_default_background())
+        {
+            super::invalidate_previous_frame(terminal);
+            self.last_frame_snapshot = None;
+            self.scroll_diff_snapshot = None;
+            self.host_patched_rows.clear();
+        }
+
         self.flush_inline_inserts(terminal)?;
         if !(draw_mode == DrawMode::PaintOnly && self.surface.is_inline()) {
             terminal.autoresize()?;
@@ -1335,9 +1347,6 @@ impl<C: Component> AppRunner<C> {
         if let Some(title) = &self.title {
             terminal.backend_mut().set_title(title)?;
         }
-        terminal
-            .backend_mut()
-            .set_default_background(self.core.ctx.host_default_background());
         execute!(terminal.backend_mut(), Print("\x1b[?2026h"))?;
         #[cfg(any(feature = "devtools", feature = "profiling-tracing"))]
         let draw_start = Instant::now();
@@ -3510,6 +3519,55 @@ mod tests {
             );
             assert!(!output.contains("\x1b]2;start"), "{output:?}");
         }
+    }
+
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn changing_the_host_default_background_resends_unchanged_cells() {
+        use crate::prelude::*;
+
+        const HOST_BG: Color = Color::Rgb(10, 11, 12);
+
+        struct OnHostBackground;
+
+        impl Component for OnHostBackground {
+            type Message = ();
+            type Properties = ();
+            type State = ();
+
+            fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+            fn update(&mut self, _msg: (), _ctx: &mut Context<Self>) -> Update {
+                Update::none()
+            }
+
+            fn view(&self, _ctx: &Context<Self>) -> Element {
+                Text::new("Q").style(Style::new().bg(HOST_BG)).into()
+            }
+        }
+
+        let mut runner = AppRunner::new(App::new().mouse(false), OnHostBackground, ());
+        let mut terminal = crate::backend::ratatui_backend::create_test_terminal(8, 2).unwrap();
+        runner.core.init();
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            w: 8,
+            h: 2,
+        };
+        runner.core.render_element(bounds, None, None, None);
+        runner.render_paint_only(&mut terminal).unwrap();
+        let first = terminal.backend().test_output().len();
+
+        runner.core.ctx.set_host_default_background(Some(HOST_BG));
+        runner.render_paint_only(&mut terminal).unwrap();
+        let output = terminal.backend().test_output();
+        let second = String::from_utf8_lossy(&output[first..]).into_owned();
+        assert!(
+            second.contains('Q'),
+            "the unchanged cell must be sent again: {second:?}"
+        );
+        assert!(!second.contains("48;2;10;11;12"), "{second:?}");
     }
 
     #[test]
