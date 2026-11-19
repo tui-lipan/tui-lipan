@@ -288,6 +288,8 @@ pub(crate) struct HostBackend<W: io::Write> {
     /// Where the caret was last shown, once [`Self::parking_hidden_caret`] asked for it.
     parked_caret: Option<ratatui::layout::Position>,
     parks_hidden_caret: bool,
+    /// Cells with this background are written with the host's default background instead.
+    default_background: Option<ratatui::style::Color>,
     #[cfg(test)]
     test_flush_action: u8,
     /// The size a test terminal reports, so tests never ask a host that may not be a tty.
@@ -322,6 +324,7 @@ impl<W: io::Write> HostBackend<W> {
             pending_title: None,
             parked_caret: None,
             parks_hidden_caret: false,
+            default_background: None,
             #[cfg(test)]
             test_flush_action: 0,
             #[cfg(test)]
@@ -359,6 +362,21 @@ impl<W: io::Write> HostBackend<W> {
     pub(crate) fn parking_hidden_caret(mut self) -> Self {
         self.parks_hidden_caret = true;
         self
+    }
+
+    /// Write cells whose background is `color` with the host's default background (SGR 49), so a
+    /// translucent terminal shows through them. Returns whether the value changed, in which case
+    /// the caller must redraw every cell.
+    pub(crate) fn set_default_background(&mut self, color: Option<crate::style::Color>) -> bool {
+        let color = color.map(super::common::to_ratatui_color);
+        let changed = self.default_background != color;
+        self.default_background = color;
+        changed
+    }
+
+    /// Whether [`Self::set_default_background`] would change the value.
+    pub(crate) fn default_background_differs(&self, color: Option<crate::style::Color>) -> bool {
+        self.default_background != color.map(super::common::to_ratatui_color)
     }
 
     pub(crate) fn set_title(&mut self, title: &str) -> io::Result<()> {
@@ -630,6 +648,16 @@ impl<W: io::Write> io::Write for HostBackend<W> {
     }
 }
 
+/// Point a cell drawn on the host background at the host's default background instead.
+fn use_default_background(
+    cell: &mut std::borrow::Cow<'_, ratatui::buffer::Cell>,
+    background: ratatui::style::Color,
+) {
+    if cell.bg == background {
+        cell.to_mut().bg = ratatui::style::Color::Reset;
+    }
+}
+
 impl<W: io::Write> Backend for HostBackend<W> {
     type Error = io::Error;
 
@@ -657,6 +685,11 @@ impl<W: io::Write> Backend for HostBackend<W> {
             }
             self.retired_native_epoch = Some(epoch);
             let mut prepared = self.kitty_uploads.prepare(content)?;
+            if let Some(background) = self.default_background {
+                for (_, _, cell) in &mut prepared.cells {
+                    use_default_background(cell, background);
+                }
+            }
             for delete in self
                 .composed_scene
                 .prepare(&mut prepared, epoch, &self.kitty_uploads)
@@ -683,7 +716,20 @@ impl<W: io::Write> Backend for HostBackend<W> {
             Ok(())
         }
         #[cfg(not(feature = "terminal-images"))]
-        self.backend.draw(content)
+        {
+            let Some(background) = self.default_background else {
+                return self.backend.draw(content);
+            };
+            let cells: Vec<_> = content
+                .map(|(x, y, cell)| {
+                    let mut cell = std::borrow::Cow::Borrowed(cell);
+                    use_default_background(&mut cell, background);
+                    (x, y, cell)
+                })
+                .collect();
+            self.backend
+                .draw(cells.iter().map(|(x, y, cell)| (*x, *y, cell.as_ref())))
+        }
     }
 
     fn append_lines(&mut self, n: u16) -> io::Result<()> {
@@ -1445,5 +1491,56 @@ mod hidden_caret_tests {
             "nothing moves the cursor after hiding it: {:?}",
             String::from_utf8_lossy(&output),
         );
+    }
+}
+
+#[cfg(test)]
+mod default_background_tests {
+    use super::HostBackend;
+    use crate::style::Color;
+    use ratatui::backend::Backend;
+    use ratatui::buffer::Cell;
+    use ratatui::style::Color as RColor;
+
+    #[derive(Clone, Default)]
+    struct Output(std::rc::Rc<std::cell::RefCell<Vec<u8>>>);
+
+    impl std::io::Write for Output {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn written(default_background: Option<Color>) -> String {
+        let output = Output::default();
+        let mut backend = HostBackend::new(output.clone());
+        backend.set_default_background(default_background);
+        let mut raised = Cell::new("X");
+        raised.bg = RColor::Rgb(40, 50, 60);
+        let mut host = Cell::new("Y");
+        host.bg = RColor::Rgb(10, 20, 30);
+        backend
+            .draw([(0, 0, &raised), (1, 0, &host)].into_iter())
+            .unwrap();
+        let output = String::from_utf8_lossy(&output.0.borrow()).into_owned();
+        // Only what is written between the two cells: the draw always ends with a reset.
+        let start = output.find('X').expect("first cell");
+        let end = output.find('Y').expect("second cell");
+        output[start..end].to_string()
+    }
+
+    #[test]
+    fn cells_on_the_host_background_use_the_default_background() {
+        let between = written(Some(Color::Rgb(10, 20, 30)));
+        assert!(between.contains("49m"), "{between:?}");
+        assert!(!between.contains("48;2;10;20;30"), "{between:?}");
+
+        let between = written(None);
+        assert!(between.contains("48;2;10;20;30"), "{between:?}");
     }
 }

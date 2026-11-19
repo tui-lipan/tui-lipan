@@ -69,6 +69,7 @@ fn new_registry() -> ComponentRegistry {
             memo_dependency_recorder: Rc::new(RefCell::new(None)),
             full_repaint: Rc::new(Cell::new(false)),
             title_request: Default::default(),
+            host_default_background: Default::default(),
             host_drag_and_drop: Default::default(),
             devtools_request: Rc::new(RefCell::new(None)),
             #[cfg(feature = "devtools")]

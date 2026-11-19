@@ -3462,7 +3462,11 @@ impl<C: Component> AppRunner<C> {
                     dirty.mark_full();
                 }
 
-                if self.apply_pending_title_request() {
+                if self.apply_pending_title_request()
+                    || terminal
+                        .backend()
+                        .default_background_differs(self.core.ctx.host_default_background())
+                {
                     dirty.mark_paint();
                 }
 

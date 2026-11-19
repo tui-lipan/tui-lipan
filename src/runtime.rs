@@ -276,6 +276,7 @@ where
             full_repaint,
             devtools_request,
             title_request: Rc::default(),
+            host_default_background: Rc::default(),
             host_drag_and_drop: Rc::default(),
             #[cfg(feature = "devtools")]
             devtools_metrics,
