@@ -2201,6 +2201,7 @@ impl<C: Component> Context<C> {
     /// translucent terminal show through wherever the UI paints that color, as it does for an
     /// unstyled cell. Cells keep their concrete color for blending and capture; only the bytes
     /// sent to the host change. `None` turns this off. Changing the value redraws the screen.
+    /// The value does not follow the host's colors: set it again when the host background changes.
     pub fn set_host_default_background(&self, color: Option<Color>) {
         let color = color.filter(|color| !color.is_sentinel());
         if self.env.host_default_background.replace(color) != color {
