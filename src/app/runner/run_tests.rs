@@ -13206,3 +13206,85 @@ fn palette_offers_devtools_only_when_the_feature_is_built() {
         .any(|entry| entry.id.as_str() == "app.toggle-devtools");
     assert_eq!(listed, cfg!(feature = "devtools"));
 }
+
+/// Switches the app theme from `update`, as a theme picker does.
+struct ThemeSwitchSmoke;
+
+impl Component for ThemeSwitchSmoke {
+    type Message = Option<Theme>;
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, theme: Self::Message, ctx: &mut Context<Self>) -> Update {
+        match theme {
+            Some(theme) => ctx.set_theme(theme),
+            None => ctx.follow_system_theme(),
+        }
+        Update::full()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        Text::new("themed").into()
+    }
+}
+
+#[test]
+fn components_switch_between_a_fixed_and_the_system_theme() {
+    let mut runner = AppRunner::new(App::new().system_theme(), ThemeSwitchSmoke, ());
+    let host = host_colors(Color::rgb(10, 11, 12));
+    runner.apply_host_terminal_colors(host, false);
+    let mut dirty = DirtyTracker::default();
+
+    runner.core.ctx.link().send(Some(Theme::nord()));
+    runner
+        .drain_messages_and_commands(&mut dirty)
+        .expect("drain");
+    assert_eq!(runner.core.theme, Theme::nord());
+    assert_eq!(runner.core.ctx.theme(), Theme::nord());
+    assert!(runner.core.take_full_repaint_request());
+
+    // A fixed theme stops following the host palette.
+    let changed = host_colors(Color::rgb(40, 41, 42));
+    runner.apply_host_terminal_colors(changed, true);
+    assert_eq!(runner.core.theme, Theme::nord());
+
+    runner.core.ctx.link().send(None);
+    runner
+        .drain_messages_and_commands(&mut dirty)
+        .expect("drain");
+    assert_eq!(runner.core.theme, Theme::from_host_colors(changed));
+    assert_eq!(runner.core.ctx.theme(), Theme::from_host_colors(changed));
+}
+
+/// Switches the app theme while returning `Update::none()` to verify repaint requests drive renders.
+struct QuietThemeSwitch;
+
+impl Component for QuietThemeSwitch {
+    type Message = Theme;
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, theme: Self::Message, ctx: &mut Context<Self>) -> Update {
+        ctx.set_theme(theme);
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        Text::new("themed").into()
+    }
+}
+
+#[test]
+fn test_backend_pumps_a_render_on_set_theme_even_with_update_none() {
+    let mut backend = crate::TestBackend::new(QuietThemeSwitch);
+    backend.render();
+
+    backend.core.ctx.link().send(Theme::nord());
+    assert!(backend.pump().expect("pump"));
+    assert_eq!(backend.core.theme, Theme::nord());
+    assert_eq!(backend.core.ctx.theme(), Theme::nord());
+}

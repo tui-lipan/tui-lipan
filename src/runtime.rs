@@ -155,6 +155,19 @@ impl<C> RuntimeCore<C>
 where
     C: Component,
 {
+    /// Make `theme` the app-wide theme. Returns whether it changed.
+    pub(crate) fn set_app_theme(&mut self, theme: Theme, request_repaint: bool) -> bool {
+        if self.theme == theme {
+            return false;
+        }
+        self.theme = theme.clone();
+        self.ctx.set_active_theme(theme);
+        if request_repaint {
+            self.ctx.request_full_repaint();
+        }
+        true
+    }
+
     /// Full root component type name for diagnostics and tracing.
     #[cfg_attr(not(feature = "devtools"), allow(dead_code))]
     pub(crate) fn root_component_name(&self) -> &'static str {
@@ -260,6 +273,7 @@ where
             clipboard_config,
             clipboard_config_changed,
             framework_keymap_request: Rc::default(),
+            theme_request: Rc::default(),
             active_theme,
             active_theme_generation,
             effect_phase,

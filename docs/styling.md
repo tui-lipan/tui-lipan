@@ -664,6 +664,21 @@ query that gets no answer keeps the last one reported.
 pure and non-blocking, while host color probing remains an opt-in app/runner
 operation.
 
+### Switching Themes at Runtime
+
+`ctx.set_theme(theme)` replaces the app-wide theme after the current update: toasts, portals,
+and every subtree without its own `ThemeProvider` follow it. It stops an app started with
+`App::system_theme()` from following the host palette; `ctx.follow_system_theme()` goes back,
+using the last probed host colors. Host colors are only probed when the app enabled
+`App::system_theme()` or `App::live_host_terminal_colors(true)` at startup.
+
+```rust
+match choice {
+    Some(name) => ctx.set_theme(preset_by_name(name).unwrap_or_default()),
+    None => ctx.follow_system_theme(),
+}
+```
+
 ### Builder API for Custom Themes
 
 ```rust
