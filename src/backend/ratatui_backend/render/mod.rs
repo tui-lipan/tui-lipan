@@ -1114,8 +1114,9 @@ fn render_subtree(
 #[cfg(feature = "terminal-images")]
 type EffectImageScope =
     Option<crate::backend::ratatui_backend::renderers::image::ImageOcclusionScope>;
+/// Without terminal images an effect scope never has image holes: the mask is always `None`.
 #[cfg(not(feature = "terminal-images"))]
-type EffectImageScope = ();
+type EffectImageScope = Option<std::convert::Infallible>;
 
 #[cfg(not(feature = "terminal-images"))]
 fn effect_scope_image_mask(
@@ -1123,6 +1124,7 @@ fn effect_scope_image_mask(
     _node: &crate::core::node::Node,
     _offset: RenderOffset,
 ) -> EffectImageScope {
+    None
 }
 
 /// The scope's image holes, over its whole rect: the same bounds its cell effects get. Not cut to
