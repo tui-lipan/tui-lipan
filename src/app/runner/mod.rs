@@ -798,27 +798,35 @@ impl<C: Component> AppRunner<C> {
     pub(crate) fn sync_runtime_keymap_config(&mut self) {
         self.sync_clipboard_config();
         self.sync_framework_keymap();
-        self.sync_theme_request();
+        self.sync_theme_request(true);
     }
 
-    fn sync_theme_request(&mut self) {
+    pub(crate) fn sync_runtime_config_after_init(&mut self) {
+        self.sync_clipboard_config();
+        self.sync_framework_keymap();
+        self.sync_theme_request(false);
+    }
+
+    pub(super) fn sync_theme_request(&mut self, request_repaint: bool) -> bool {
         use crate::core::runtime_env::ThemeRequest;
         let Some(request) = self.core.ctx.env().take_theme_request() else {
-            return;
+            return false;
         };
         match request {
             ThemeRequest::Fixed(theme) => {
                 self.system_theme = false;
-                self.core.set_app_theme(*theme, true);
+                self.core.set_app_theme(*theme, request_repaint)
             }
             ThemeRequest::System => {
                 self.system_theme = true;
                 match self.core.ctx.env().host_terminal_colors() {
-                    Some(colors) => {
-                        self.core
-                            .set_app_theme(Theme::from_host_colors(colors), true);
+                    Some(colors) => self
+                        .core
+                        .set_app_theme(Theme::from_host_colors(colors), request_repaint),
+                    None => {
+                        self.core.ctx.env().request_host_terminal_color_refresh();
+                        false
                     }
-                    None => self.core.ctx.env().request_host_terminal_color_refresh(),
                 }
             }
         }
@@ -1172,12 +1180,30 @@ impl<C: Component> AppRunner<C> {
                 .core
                 .set_app_theme(Theme::from_host_colors(colors), false);
         }
+        if colors_changed && self.core.is_initialized() {
+            let update_level = self.core.on_host_theme_changed();
+            theme_changed |= self.sync_theme_request(false);
+            if !matches!(update_level, crate::core::component::UpdateLevel::None) {
+                theme_changed = true;
+            }
+        }
 
         if !(colors_changed || terminal_bg_changed || theme_changed) {
             return false;
         }
         if request_repaint {
             self.core.ctx.request_full_repaint();
+        }
+        true
+    }
+
+    fn apply_host_color_scheme(&mut self, scheme: crate::style::ColorScheme) -> bool {
+        if !self.core.ctx.env().set_host_color_scheme(scheme) {
+            return false;
+        }
+        if self.core.is_initialized() {
+            let _update_level = self.core.on_host_theme_changed();
+            self.sync_theme_request(false);
         }
         true
     }
@@ -2184,6 +2210,7 @@ impl<C: Component> AppRunner<C> {
         self.core.ctx.set_viewport(bounds);
         self.last_bounds = bounds;
         self.core.init();
+        self.sync_runtime_config_after_init();
         self.headless_render(bounds);
 
         self.notify_focus_change();
@@ -2340,6 +2367,7 @@ impl<C: Component> AppRunner<C> {
         self.core.ctx.set_viewport(bounds);
         self.last_bounds = bounds;
         self.core.init();
+        self.sync_runtime_config_after_init();
 
         for frame in 0..config.frames {
             self.headless_render(bounds);
@@ -2430,6 +2458,7 @@ impl<C: Component> AppRunner<C> {
         self.core.set_viewport(bounds);
         self.last_bounds = bounds;
         self.core.init();
+        self.sync_runtime_config_after_init();
         self.headless_render(bounds);
 
         let (event_tx, event_rx) = mpsc::channel();
@@ -2562,6 +2591,7 @@ impl<C: Component> AppRunner<C> {
                 self.core.ctx.set_viewport(bounds);
                 self.last_bounds = bounds;
                 self.core.init();
+                self.sync_runtime_config_after_init();
 
                 if self.apply_pending_devtools_request() {
                     self.core.ctx.request_full_repaint();
@@ -2795,7 +2825,7 @@ impl<C: Component> AppRunner<C> {
                     }
                     Some(RunnerEvent::HostColorScheme(scheme)) => {
                         // A scheme change usually comes with a new palette: keep the re-probe.
-                        if self.core.ctx.env().set_host_color_scheme(scheme) {
+                        if self.apply_host_color_scheme(scheme) {
                             dirty.mark_full();
                         }
                         host_color_refresh_quiet_until =

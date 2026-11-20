@@ -18,6 +18,9 @@ impl<C: Component> AppRunner<C> {
     pub(super) fn process_pending_messages(&mut self, dirty: &mut DirtyTracker) -> Result<()> {
         while let Some((scope, msg)) = { self.core.queue.borrow_mut().pop_front() } {
             let update_level = self.core.update_from_boxed(scope, msg)?;
+            if self.sync_theme_request(true) {
+                dirty.mark_full();
+            }
             if scope == ScopeId(1) {
                 self.apply_root_update(dirty, update_level);
             } else {
@@ -34,6 +37,9 @@ impl<C: Component> AppRunner<C> {
         dirty: &mut DirtyTracker,
         update_level: UpdateLevel,
     ) {
+        if self.sync_theme_request(true) {
+            dirty.mark_full();
+        }
         self.apply_component_update(dirty, ScopeId(1), update_level);
     }
 

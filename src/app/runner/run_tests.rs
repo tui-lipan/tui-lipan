@@ -13344,6 +13344,183 @@ fn test_backend_pumps_a_render_on_set_theme_even_with_update_none() {
 
     backend.core.ctx.link().send(Theme::nord());
     assert!(backend.pump().expect("pump"));
-    assert_eq!(backend.core.theme, Theme::nord());
+    assert_eq!(backend.theme(), &Theme::nord());
     assert_eq!(backend.core.ctx.theme(), Theme::nord());
+}
+
+struct InitThemeComponent {
+    initial: Theme,
+}
+
+impl Component for InitThemeComponent {
+    type Message = Theme;
+    type Properties = ();
+    type State = Vec<Theme>;
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {
+        Vec::new()
+    }
+
+    fn init(&mut self, ctx: &mut Context<Self>) -> Option<crate::Command> {
+        ctx.set_theme(self.initial.clone());
+        let seen = ctx.with_theme(Clone::clone);
+        ctx.state.push(seen);
+        None
+    }
+
+    fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+        // Record the theme already in scope before switching, then verify `theme_ref()` reflects
+        // the new theme synchronously inside the same update.
+        let before = ctx.theme_ref().clone();
+        ctx.state.push(before);
+        ctx.set_theme(msg);
+        let after = ctx.theme_ref().clone();
+        ctx.state.push(after);
+        Update::none()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        let fg = ctx
+            .theme_ref()
+            .primary
+            .resolved_fg()
+            .unwrap_or(Color::White);
+        Text::new("init").style(Style::new().fg(fg)).into()
+    }
+}
+
+#[test]
+fn set_theme_from_init_applies_to_first_frame_and_updates_theme_ref_synchronously() {
+    let mut backend = crate::TestBackend::new(InitThemeComponent {
+        initial: Theme::dracula(),
+    });
+    assert_eq!(backend.theme(), &Theme::dracula());
+    assert_eq!(backend.state(), &[Theme::dracula()]);
+    let frame = backend.capture_frame();
+    assert_eq!(
+        frame.cell(0, 0).fg,
+        Theme::dracula().primary.resolved_fg().unwrap()
+    );
+
+    // Two queued messages in one drain: the second must see the theme the first installed.
+    backend.core.ctx.link().send(Theme::nord());
+    backend.core.ctx.link().send(Theme::tokyo_night());
+    assert!(backend.pump().expect("pump"));
+    assert_eq!(backend.theme(), &Theme::tokyo_night());
+    assert_eq!(
+        backend.state(),
+        &[
+            Theme::dracula(),
+            Theme::dracula(),
+            Theme::nord(),
+            Theme::nord(),
+            Theme::tokyo_night(),
+        ]
+    );
+}
+
+struct HostThemeObserver;
+
+#[derive(Default)]
+struct HostThemeObserverState {
+    notifications: usize,
+    last_scheme: Option<crate::style::ColorScheme>,
+    last_bg: Option<Color>,
+}
+
+impl Component for HostThemeObserver {
+    type Message = ();
+    type Properties = ();
+    type State = HostThemeObserverState;
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {
+        Self::State::default()
+    }
+
+    fn on_host_theme_changed(&mut self, ctx: &mut Context<Self>) -> Update {
+        ctx.state.notifications += 1;
+        ctx.state.last_scheme = ctx.host_color_scheme();
+        ctx.state.last_bg = ctx.host_terminal_colors().map(|c| c.bg);
+        if ctx.host_color_scheme() == Some(crate::style::ColorScheme::Light) {
+            ctx.set_theme(Theme::solarized_light());
+        } else if let Some(colors) = ctx.host_terminal_colors() {
+            let mut derived = Theme::from_host_colors(colors);
+            derived.border_active = Color::rgb(123, 45, 67);
+            ctx.set_theme(derived);
+        }
+        Update::full()
+    }
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        let fg = ctx.theme_ref().border_active;
+        Text::new("host").style(Style::new().fg(fg)).into()
+    }
+}
+
+#[test]
+fn on_host_theme_changed_runs_for_colors_and_scheme_in_runner_and_test_backend() {
+    use crate::style::ColorScheme;
+
+    // AppRunner: does not fire before init(), fires once per distinct color or scheme report after.
+    let mut runner = AppRunner::new(
+        App::new().live_host_terminal_colors(true),
+        HostThemeObserver,
+        (),
+    );
+    let startup = host_colors(Color::rgb(10, 11, 12));
+    assert!(runner.apply_host_terminal_colors(startup, false));
+    assert_eq!(runner.core.ctx.state.notifications, 0);
+
+    runner.core.init();
+    runner.sync_runtime_config_after_init();
+
+    let updated = host_colors(Color::rgb(20, 21, 22));
+    assert!(runner.apply_host_terminal_colors(updated, true));
+    assert_eq!(runner.core.ctx.state.notifications, 1);
+    assert_eq!(runner.core.ctx.state.last_bg, Some(Color::rgb(20, 21, 22)));
+    assert_eq!(runner.core.theme.border_active, Color::rgb(123, 45, 67));
+    // Duplicate report does not re-fire.
+    assert!(!runner.apply_host_terminal_colors(updated, true));
+    assert_eq!(runner.core.ctx.state.notifications, 1);
+
+    assert!(runner.apply_host_color_scheme(ColorScheme::Light));
+    assert_eq!(runner.core.ctx.state.notifications, 2);
+    assert_eq!(runner.core.ctx.state.last_scheme, Some(ColorScheme::Light));
+    assert_eq!(runner.core.theme, Theme::solarized_light());
+    assert!(!runner.apply_host_color_scheme(ColorScheme::Light));
+    assert_eq!(runner.core.ctx.state.notifications, 2);
+
+    // TestBackend: matching simulation helpers drive the same callback and re-render.
+    let mut backend = crate::TestBackend::new_with_app(
+        App::new().live_host_terminal_colors(true),
+        HostThemeObserver,
+        (),
+    );
+    assert!(
+        backend
+            .set_host_terminal_colors(updated)
+            .expect("host colors")
+    );
+    assert_eq!(backend.state().notifications, 1);
+    assert_eq!(backend.theme().border_active, Color::rgb(123, 45, 67));
+    assert_eq!(
+        backend.capture_frame().cell(0, 0).fg,
+        Color::rgb(123, 45, 67)
+    );
+    assert!(
+        !backend
+            .set_host_terminal_colors(updated)
+            .expect("unchanged host colors")
+    );
+    assert!(
+        backend
+            .set_host_color_scheme(ColorScheme::Light)
+            .expect("host scheme")
+    );
+    assert_eq!(backend.state().notifications, 2);
+    assert_eq!(backend.theme(), &Theme::solarized_light());
 }

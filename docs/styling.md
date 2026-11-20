@@ -671,11 +671,18 @@ operation.
 
 ### Switching Themes at Runtime
 
-`ctx.set_theme(theme)` replaces the app-wide theme after the current update: toasts, portals,
-and every subtree without its own `ThemeProvider` follow it. It stops an app started with
-`App::system_theme()` from following the host palette; `ctx.follow_system_theme()` goes back,
-using the last probed host colors. Host colors are only probed when the app enabled
-`App::system_theme()` or `App::live_host_terminal_colors(true)` at startup.
+`ctx.set_theme(theme)` replaces the app-wide theme immediately for `ctx.theme()` /
+`ctx.theme_ref()` and applies across the whole app — toasts, portals, and every subtree without
+its own `ThemeProvider` — before the next render (including frame 0 when called from `init()`).
+It stops an app started with `App::system_theme()` from following the host palette;
+`ctx.follow_system_theme()` goes back, using the last probed host colors. Host colors are only
+probed when the app enabled `App::system_theme()` or `App::live_host_terminal_colors(true)` at
+startup.
+
+Apps that derive a custom theme from host colors or light/dark reports (rather than using the
+default `Theme::from_host_colors` directly) can implement `Component::on_host_theme_changed` on
+the root component to react to changes immediately and call `ctx.set_theme(...)` instead of polling
+`ctx.host_terminal_color_generation()` in `view()`.
 
 ```rust
 match choice {

@@ -503,6 +503,10 @@ where
         self.unmounted = true;
     }
 
+    pub(crate) fn is_initialized(&self) -> bool {
+        self.initialized && !self.unmounted
+    }
+
     pub(crate) fn is_shutdown(&self) -> bool {
         self.unmounted
     }
@@ -628,6 +632,13 @@ where
         let update = self
             .component
             .on_window_focus_changed(focused, &mut self.ctx);
+        self.run_root_update(update)
+    }
+
+    /// Invoke the root-only host terminal color / color-scheme change callback.
+    pub(crate) fn on_host_theme_changed(&mut self) -> UpdateLevel {
+        self.ctx.set_active_theme(self.theme.clone());
+        let update = self.component.on_host_theme_changed(&mut self.ctx);
         self.run_root_update(update)
     }
 

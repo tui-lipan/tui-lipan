@@ -59,6 +59,15 @@ Background commands remain asynchronous; call `pump()`
 later to process messages they produce. `window_focused()` exposes the current simulated value.
 This is independent of widget focus and `focused_key()`.
 
+### Host theme and colors
+
+`theme() -> &Theme` returns the active app-wide theme (including any `Context::set_theme` called
+from `init()`). `set_host_terminal_colors(HostTerminalColors) -> Result<bool>` and
+`set_host_color_scheme(ColorScheme) -> Result<bool>` simulate runtime host palette and DEC mode
+2031 reports: they return `false` when unchanged, otherwise update the cache (and the app theme
+when following the system theme), call the root component's `on_host_theme_changed`, drain
+messages, and re-render.
+
 ### Host window title
 
 `host_title() -> Option<&str>` is the window title the runner would write with the last rendered

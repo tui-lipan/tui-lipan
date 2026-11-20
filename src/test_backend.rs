@@ -96,6 +96,7 @@ pub struct TestBackend<C: Component> {
     key_dispatch_state: RuntimeKeyDispatchState,
     framework_effects: Vec<FrameworkSideEffect>,
     host_title: Option<String>,
+    system_theme: bool,
 }
 
 impl<C> TestBackend<C>
@@ -285,9 +286,11 @@ where
             key_dispatch_state,
             framework_effects: Vec::new(),
             host_title: app.title.clone(),
+            system_theme: app.system_theme,
         };
 
         backend.core.init();
+        backend.sync_runtime_config_after_init();
         backend.drain_copy_feedback_requests();
         backend.render();
         backend
@@ -306,6 +309,58 @@ where
             crate::automation::ClockMode::Controlled,
             DEFAULT_VIEWPORT,
         )
+    }
+
+    /// The active app-wide theme: [`App::theme`], as updated since by
+    /// [`Context::set_theme`](crate::Context::set_theme),
+    /// [`Context::follow_system_theme`](crate::Context::follow_system_theme), or host palette
+    /// reports.
+    pub fn theme(&self) -> &crate::style::Theme {
+        &self.core.theme
+    }
+
+    /// Simulate a host terminal palette report (as OSC 4/10/11 replies deliver at runtime).
+    ///
+    /// Returns `false` when the colors match the last cached report. Otherwise updates the cache,
+    /// updates the app theme when following the system theme, invokes the root component's
+    /// [`Component::on_host_theme_changed`] callback, drains messages already available, and
+    /// renders.
+    pub fn set_host_terminal_colors(
+        &mut self,
+        colors: crate::style::HostTerminalColors,
+    ) -> Result<bool> {
+        if !self.core.ctx.env().set_host_terminal_colors(Some(colors)) {
+            return Ok(false);
+        }
+        if self.system_theme {
+            self.core
+                .set_app_theme(crate::Theme::from_host_colors(colors), false);
+        }
+        let _level = self.core.on_host_theme_changed();
+        self.sync_theme_request(false);
+        let pump_dirty = self.pump()?;
+        if !pump_dirty {
+            self.render();
+        }
+        Ok(true)
+    }
+
+    /// Simulate a host terminal light/dark color-scheme report (DEC mode 2031).
+    ///
+    /// Returns `false` when the scheme matches the last cached report. Otherwise updates the
+    /// cache, invokes the root component's [`Component::on_host_theme_changed`] callback, drains
+    /// messages already available, and renders.
+    pub fn set_host_color_scheme(&mut self, scheme: crate::style::ColorScheme) -> Result<bool> {
+        if !self.core.ctx.env().set_host_color_scheme(scheme) {
+            return Ok(false);
+        }
+        let _level = self.core.on_host_theme_changed();
+        self.sync_theme_request(false);
+        let pump_dirty = self.pump()?;
+        if !pump_dirty {
+            self.render();
+        }
+        Ok(true)
     }
 
     /// The host terminal window title the runner would write with the last rendered frame: the
@@ -1063,20 +1118,32 @@ where
     fn sync_runtime_keymap_config(&mut self) {
         self.sync_clipboard_config();
         self.sync_framework_keymap();
-        self.sync_theme_request();
+        self.sync_theme_request(true);
     }
 
-    fn sync_theme_request(&mut self) {
+    fn sync_runtime_config_after_init(&mut self) {
+        self.sync_clipboard_config();
+        self.sync_framework_keymap();
+        self.sync_theme_request(false);
+    }
+
+    fn sync_theme_request(&mut self, request_repaint: bool) {
         use crate::core::runtime_env::ThemeRequest;
         let theme = match self.core.ctx.env().take_theme_request() {
             None => return,
-            Some(ThemeRequest::Fixed(theme)) => *theme,
-            Some(ThemeRequest::System) => match self.core.ctx.env().host_terminal_colors() {
-                Some(colors) => crate::Theme::from_host_colors(colors),
-                None => return,
-            },
+            Some(ThemeRequest::Fixed(theme)) => {
+                self.system_theme = false;
+                *theme
+            }
+            Some(ThemeRequest::System) => {
+                self.system_theme = true;
+                match self.core.ctx.env().host_terminal_colors() {
+                    Some(colors) => crate::Theme::from_host_colors(colors),
+                    None => return,
+                }
+            }
         };
-        self.core.set_app_theme(theme, true);
+        self.core.set_app_theme(theme, request_repaint);
     }
 
     /// Process all queued messages and any messages produced by background commands.
@@ -1116,6 +1183,7 @@ where
                 self.core.update_from_boxed(scope, msg)?,
                 crate::core::component::UpdateLevel::None
             );
+            self.sync_theme_request(true);
         }
 
         self.sync_runtime_keymap_config();
