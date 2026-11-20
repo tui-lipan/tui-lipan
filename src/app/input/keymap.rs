@@ -885,8 +885,11 @@ impl Keymap {
         }
 
         match normalized_key.code {
+            // A modified key is a shortcut, not text: it falls through to the app's bindings.
+            // Characters that need Option or AltGr arrive as the character itself.
             KeyCode::Char(c) => {
-                if normalized_key.mods.ctrl || normalized_key.mods.super_key {
+                let mods = normalized_key.mods;
+                if mods.ctrl || mods.alt || mods.super_key {
                     Action::None
                 } else {
                     Action::InsertChar(c)
@@ -1243,6 +1246,37 @@ mod tests {
             keymap.resolve_action(key_upper),
             Action::Paste,
             "Ctrl+V (uppercase) should resolve to Paste"
+        );
+    }
+
+    #[test]
+    fn alt_letters_are_shortcuts_not_text() {
+        let keymap = default_keymap();
+        let key = |mods| KeyEvent {
+            code: KeyCode::Char('d'),
+            mods,
+        };
+
+        assert_eq!(keymap.resolve_action(key(KeyMods::ALT)), Action::None);
+        assert_eq!(
+            keymap.resolve_action(key(KeyMods {
+                alt: true,
+                alt_side: crate::AltSide::Left,
+                ..KeyMods::NONE
+            })),
+            Action::None
+        );
+        assert_eq!(
+            keymap.resolve_action(key(KeyMods::SHIFT)),
+            Action::InsertChar('d')
+        );
+        // Composed Option / AltGr text arrives without Alt (including from KittyText).
+        assert_eq!(
+            keymap.resolve_action(KeyEvent {
+                code: KeyCode::Char('ł'),
+                mods: KeyMods::NONE,
+            }),
+            Action::InsertChar('ł')
         );
     }
 

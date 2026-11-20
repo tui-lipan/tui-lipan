@@ -140,8 +140,9 @@ impl KittyText {
         let mut chars = text.chars();
         let first = chars.next()?;
         if chars.next().is_none() {
-            // Preserve Alt for physical-side tracking; consume AltGr's synthetic Ctrl.
-            Some(format!("\x1b[{};{}u", u32::from(first), (modifiers & (1 | 2)) + 1).into_bytes())
+            // Consume AltGr's Alt and synthetic Ctrl so composed text arrives as plain text,
+            // keeping Shift. Shortcuts with no generated text returned `None` above.
+            Some(format!("\x1b[{};{}u", u32::from(first), (modifiers & 1) + 1).into_bytes())
         } else {
             Some(format!("\x1b[200~{text}\x1b[201~").into_bytes())
         }
@@ -176,8 +177,14 @@ mod tests {
         decoder.push_with_mode(b"\x1b[57449;3u", true);
         assert_eq!(
             decoder.push_with_mode(b"\x1b[108;3;322u", true),
-            b"\x1b[322;3u"
+            b"\x1b[322;1u"
         );
+        assert_eq!(
+            decoder.push_with_mode(b"\x1b[108;4;321u", true),
+            b"\x1b[321;2u"
+        );
+        // Right-Alt without generated text stays a shortcut even after AltGr text.
+        assert_eq!(decoder.push_with_mode(b"\x1b[106;3u", true), b"\x1b[106;3u");
         assert_eq!(decoder.push_with_mode(b"\x1b[97;5u", true), b"\x1b[97;5u");
     }
 
