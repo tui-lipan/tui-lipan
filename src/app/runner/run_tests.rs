@@ -13193,3 +13193,16 @@ fn only_queued_keyboard_input_holds_back_a_frame() {
         .unwrap()
     );
 }
+
+#[test]
+fn palette_offers_devtools_only_when_the_feature_is_built() {
+    let runner = AppRunner::new(App::new(), HeadlessSnapshotSmoke, ());
+    let listed = runner
+        .core
+        .ctx
+        .command_registry()
+        .entries()
+        .iter()
+        .any(|entry| entry.id.as_str() == "app.toggle-devtools");
+    assert_eq!(listed, cfg!(feature = "devtools"));
+}

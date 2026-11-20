@@ -170,6 +170,7 @@ impl<C: Component> AppRunner<C> {
                     self.core.ctx.quit();
                     dirty = true;
                 }
+                #[cfg(feature = "devtools")]
                 FrameworkCommandAction::ToggleDevtools => {
                     self.core.ctx.toggle_devtools();
                     dirty = true;

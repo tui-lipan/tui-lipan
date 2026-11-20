@@ -210,6 +210,7 @@ pub(super) fn spinner_frame_for_speed(frame: usize, speed: SpinnerSpeed) -> usiz
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum FrameworkCommandAction {
     Quit,
+    #[cfg(feature = "devtools")]
     ToggleDevtools,
     FocusNext,
     FocusPrev,
@@ -909,6 +910,8 @@ impl<C: Component> AppRunner<C> {
                 ))
                 .build(),
         );
+        // Without the feature there is no panel to show, so the palette offers nothing.
+        #[cfg(feature = "devtools")]
         command_registry.register(
             CommandEntry::builder("app.toggle-devtools")
                 .label("Toggle DevTools")
