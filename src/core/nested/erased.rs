@@ -26,7 +26,7 @@ pub(crate) trait ErasedComponent {
     /// without cloning.
     fn props_equal(&self, props: &AnyProps) -> bool;
     fn set_props(&mut self, props: AnyProps) -> Update;
-    fn set_active_theme(&mut self, theme: Theme);
+    fn set_scoped_theme(&mut self, theme: Theme, has_provider: bool);
     fn set_contexts(
         &mut self,
         contexts: rustc_hash::FxHashMap<TypeId, Arc<dyn Any>>,
@@ -82,8 +82,8 @@ impl<C: Component> ErasedComponent for Mounted<C> {
         }
     }
 
-    fn set_active_theme(&mut self, theme: Theme) {
-        self.ctx.set_active_theme(theme);
+    fn set_scoped_theme(&mut self, theme: Theme, has_provider: bool) {
+        self.ctx.set_scoped_theme(theme, has_provider);
     }
 
     fn set_contexts(
@@ -174,7 +174,7 @@ impl ErasedComponent for EmptyComponent {
         Update::none()
     }
 
-    fn set_active_theme(&mut self, _theme: Theme) {}
+    fn set_scoped_theme(&mut self, _theme: Theme, _has_provider: bool) {}
 
     fn set_contexts(
         &mut self,

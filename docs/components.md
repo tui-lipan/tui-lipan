@@ -25,6 +25,7 @@ impl Component for MyApp {
 | `on_key` | No | `(&mut self, KeyEvent, &mut Context<Self>) -> KeyUpdate` | Handle unhandled key events |
 | `on_modifiers_changed` | No, root only | `(&mut self, KeyMods, &mut Context<Self>) -> Update` | React to physically held modifier keys |
 | `on_window_focus_changed` | No, root only | `(&mut self, bool, &mut Context<Self>) -> Update` | React to host terminal/window focus transitions |
+| `on_host_theme_changed` | No, root only | `(&mut self, &mut Context<Self>) -> Update` | React to host terminal palette or light/dark scheme changes |
 | `on_props_changed` | No | `(&mut self, &Props, &mut Context<Self>) -> Update` | React to property changes |
 | `unmount` | No | `(&mut self, &mut Context<Self>)` | Teardown before removal |
 
@@ -164,6 +165,10 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
 | `ctx.toggle_mouse_capture()` | Toggle mouse capture, returns new state |
 | `ctx.suspend_to_shell()` | Stop the app to the shell like `ctrl+z`, releasing and restoring the terminal around the stop (see [External programs](external-programs.md#suspending-to-the-shell-ctrlz)) |
 | `ctx.theme()` | Clone the active theme for this subtree |
+| `ctx.theme_ref()` | Borrow the active theme for this subtree without cloning (`Ref<'_, Theme>`) |
+| `ctx.with_theme(f)` | Run `f(&Theme)` against the active theme without cloning |
+| `ctx.set_theme(theme)` | Replace the app-wide theme immediately (including from `init()`) and stop following the host palette |
+| `ctx.follow_system_theme()` | Resume following the host terminal palette when `App::system_theme()` or `App::live_host_terminal_colors(true)` is enabled |
 | `ctx.theme_extension::<T>()` | Clone a typed app-specific theme extension |
 | `ctx.host_terminal_colors()` | Read the runner-managed `HostTerminalColors` cache when live host colors are enabled |
 | `ctx.set_host_default_background(color)` | Write cells whose background is `color` as the host terminal's default background, so a translucent terminal shows through them; `None` turns it off. Unlike `App::terminal_bg`, which gives blending a concrete color, this changes only the bytes sent to the host. It does not follow host color changes on its own; a host color refresh re-runs `view`, so call it there with `host_terminal_colors()` to keep up. An unchanged value costs nothing |

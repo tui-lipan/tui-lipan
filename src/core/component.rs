@@ -690,6 +690,18 @@ pub trait Component: Sized + 'static {
         Update::none()
     }
 
+    /// Called on the root component when the host terminal reports new colors or a new
+    /// light/dark color scheme (when [`App::system_theme`](crate::App::system_theme) or
+    /// [`App::live_host_terminal_colors`](crate::App::live_host_terminal_colors) is enabled).
+    ///
+    /// Read [`Context::host_terminal_colors`] and [`Context::host_color_scheme`] for the latest
+    /// values. When the app is currently following the system theme, the framework updates its
+    /// default theme before calling this hook; call [`Context::set_theme`] to customize or
+    /// replace it. Nested components do not receive this callback.
+    fn on_host_theme_changed(&mut self, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
     /// Produce a root message after framework widget focus changes.
     ///
     /// Nested components do not receive this callback. The returned message is appended to the
@@ -1290,10 +1302,17 @@ impl<C: Component> Context<C> {
 
     /// Replace the app-wide theme, the one [`App::theme`](crate::App::theme) set at startup.
     ///
-    /// It applies after the current update, to the whole app: toasts, portals and every subtree
-    /// without its own [`ThemeProvider`](crate::widgets::ThemeProvider). The app stops following
-    /// the host palette if it was; [`follow_system_theme`](Self::follow_system_theme) goes back.
+    /// Takes effect immediately for [`theme`](Self::theme) / [`theme_ref`](Self::theme_ref) when
+    /// this component inherits the app-wide theme (subtrees under their own
+    /// [`ThemeProvider`](crate::widgets::ThemeProvider) keep their scoped provider theme), and
+    /// applies across the whole app — including toasts, portals, and every subtree without its
+    /// own `ThemeProvider` — before the next render (including frame 0 when called from root or
+    /// nested [`Component::init`]). The app stops following the host palette if it was;
+    /// [`follow_system_theme`](Self::follow_system_theme) goes back.
     pub fn set_theme(&mut self, theme: Theme) {
+        if !self.env.has_provider_theme.get() {
+            self.set_active_theme(theme.clone());
+        }
         *self.env.theme_request.borrow_mut() = Some(crate::core::runtime_env::ThemeRequest::Fixed(
             Box::new(theme),
         ));
@@ -1306,6 +1325,11 @@ impl<C: Component> Context<C> {
     /// `App::live_host_terminal_colors(true)`; otherwise the current theme stays. Until the first
     /// probe answers, the current theme stays too.
     pub fn follow_system_theme(&mut self) {
+        if !self.env.has_provider_theme.get()
+            && let Some(colors) = self.env.host_terminal_colors()
+        {
+            self.set_active_theme(Theme::from_host_colors(colors));
+        }
         *self.env.theme_request.borrow_mut() = Some(crate::core::runtime_env::ThemeRequest::System);
     }
 
@@ -1405,8 +1429,19 @@ impl<C: Component> Context<C> {
 
     /// Returns the active theme for this component's subtree.
     pub fn theme(&self) -> Theme {
+        self.theme_ref().clone()
+    }
+
+    /// Borrow the active theme for this component's subtree without cloning.
+    pub fn theme_ref(&self) -> std::cell::Ref<'_, Theme> {
         self.env.note_memo_dependency(MemoDependency::Theme);
-        self.env.active_theme.borrow().clone()
+        self.env.active_theme.borrow()
+    }
+
+    /// Run `f` with a reference to the active theme for this component's subtree without cloning.
+    pub fn with_theme<R>(&self, f: impl FnOnce(&Theme) -> R) -> R {
+        let theme = self.theme_ref();
+        f(&theme)
     }
 
     /// Returns a cloned typed theme extension from the active theme.
@@ -2108,6 +2143,11 @@ impl<C: Component> Context<C> {
 
     pub(crate) fn set_viewport(&mut self, viewport: Rect) {
         self.viewport = viewport;
+    }
+
+    pub(crate) fn set_scoped_theme(&mut self, theme: Theme, has_provider: bool) {
+        self.env.has_provider_theme.set(has_provider);
+        self.set_active_theme(theme);
     }
 
     pub(crate) fn set_active_theme(&mut self, theme: Theme) {

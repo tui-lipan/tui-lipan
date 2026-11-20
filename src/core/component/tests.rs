@@ -57,6 +57,7 @@ fn new_registry() -> ComponentRegistry {
             theme_request: Rc::default(),
             active_theme: Rc::new(RefCell::new(Theme::default())),
             active_theme_generation: Rc::new(Cell::new(1)),
+            has_provider_theme: Rc::new(Cell::new(false)),
             effect_phase: Rc::new(Cell::new(0)),
             contexts: Rc::new(RefCell::new(FxHashMap::default())),
             context_generations: Rc::new(RefCell::new(FxHashMap::default())),

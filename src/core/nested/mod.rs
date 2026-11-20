@@ -362,9 +362,9 @@ struct ComponentEntry {
     /// Full `type_name` for tracing spans.
     full_name: &'static str,
     initialized: bool,
-    /// Theme from an ancestor `ThemeProvider`, recorded during expansion
-    /// so that `refresh_scope_in_place` can re-apply it.
-    active_theme: Option<crate::style::Theme>,
+    /// Theme override from the nearest ancestor `ThemeProvider`, if any.
+    /// `None` means this component inherits the current app-wide theme (`self.env.active_theme`).
+    provider_theme: Option<crate::style::Theme>,
     /// Typed context values visible to this component from ancestor
     /// `ContextProvider` wrappers.
     active_contexts: FxHashMap<TypeId, Arc<dyn Any>>,
@@ -391,7 +391,7 @@ impl ComponentEntry {
             display_name: Arc::from("<mount-failed>"),
             full_name: "<mount-failed>",
             initialized: false,
-            active_theme: None,
+            provider_theme: None,
             active_contexts: FxHashMap::default(),
             active_context_generations: FxHashMap::default(),
             cached_element: None,
@@ -431,7 +431,7 @@ impl ComponentEntry {
         self.display_name = Arc::from("<mount-failed>");
         self.full_name = "<mount-failed>";
         self.initialized = false;
-        self.active_theme = None;
+        self.provider_theme = None;
         self.active_contexts.clear();
         self.active_context_generations.clear();
         self.cached_element = None;
@@ -638,6 +638,16 @@ impl ComponentRegistry {
         Some(self.arena.get(id).full_name)
     }
 
+    fn resolve_entry_theme(
+        &self,
+        provider_theme: Option<&crate::style::Theme>,
+    ) -> (crate::style::Theme, bool) {
+        match provider_theme {
+            Some(theme) => (theme.clone(), true),
+            None => (self.env.active_theme.borrow().clone(), false),
+        }
+    }
+
     pub(crate) fn update_by_scope(
         &mut self,
         scope: ScopeId,
@@ -649,10 +659,10 @@ impl ComponentRegistry {
         if !self.is_valid(id) {
             return Ok(Update::none());
         }
+        let (theme, has_provider) =
+            self.resolve_entry_theme(self.arena.get(id).provider_theme.as_ref());
         let entry = self.arena.get_mut(id);
-        if let Some(theme) = entry.active_theme.clone() {
-            entry.component.set_active_theme(theme);
-        }
+        entry.component.set_scoped_theme(theme, has_provider);
         entry.component.set_contexts(
             entry.active_contexts.clone(),
             entry.active_context_generations.clone(),
@@ -671,10 +681,10 @@ impl ComponentRegistry {
         if !self.is_valid(id) {
             return KeyUpdate::unhandled(Update::none());
         }
+        let (theme, has_provider) =
+            self.resolve_entry_theme(self.arena.get(id).provider_theme.as_ref());
         let entry = self.arena.get_mut(id);
-        if let Some(theme) = entry.active_theme.clone() {
-            entry.component.set_active_theme(theme);
-        }
+        entry.component.set_scoped_theme(theme, has_provider);
         entry.component.set_contexts(
             entry.active_contexts.clone(),
             entry.active_context_generations.clone(),
@@ -698,10 +708,10 @@ impl ComponentRegistry {
         if !self.is_valid(id) {
             return KeyUpdate::unhandled(Update::none());
         }
+        let (theme, has_provider) =
+            self.resolve_entry_theme(self.arena.get(id).provider_theme.as_ref());
         let entry = self.arena.get_mut(id);
-        if let Some(theme) = entry.active_theme.clone() {
-            entry.component.set_active_theme(theme);
-        }
+        entry.component.set_scoped_theme(theme, has_provider);
         entry.component.set_contexts(
             entry.active_contexts.clone(),
             entry.active_context_generations.clone(),
@@ -749,11 +759,8 @@ impl ComponentRegistry {
         reuse: Option<ComponentId>,
         epoch: u32,
     ) -> ComponentId {
-        let current_theme = self
-            .theme_stack
-            .last()
-            .cloned()
-            .unwrap_or_else(|| self.env.active_theme.borrow().clone());
+        let provider_theme = self.theme_stack.last().cloned();
+        let (current_theme, has_provider) = self.resolve_entry_theme(provider_theme.as_ref());
         let (current_contexts, current_context_generations) = self.current_contexts();
 
         if let Some(id) = reuse
@@ -778,10 +785,12 @@ impl ComponentRegistry {
                 }
                 self.update_state_key_on_entry(id, element.state_key.clone());
                 let entry = self.arena.get_mut(id);
-                entry.active_theme = Some(current_theme.clone());
+                entry.provider_theme = provider_theme;
                 entry.active_contexts = current_contexts.clone();
                 entry.active_context_generations = current_context_generations.clone();
-                entry.component.set_active_theme(current_theme);
+                entry
+                    .component
+                    .set_scoped_theme(current_theme, has_provider);
                 entry
                     .component
                     .set_contexts(current_contexts, current_context_generations);
@@ -808,8 +817,9 @@ impl ComponentRegistry {
         self.next_scope = self.next_scope.wrapping_add(1).max(2);
 
         let mut env = self.env.clone();
-        env.active_theme = std::rc::Rc::new(std::cell::RefCell::new(current_theme.clone()));
+        env.active_theme = std::rc::Rc::new(std::cell::RefCell::new(current_theme));
         env.active_theme_generation = std::rc::Rc::new(std::cell::Cell::new(1));
+        env.has_provider_theme = std::rc::Rc::new(std::cell::Cell::new(has_provider));
         env.contexts = std::rc::Rc::new(std::cell::RefCell::new(current_contexts.clone()));
         env.context_generations =
             std::rc::Rc::new(std::cell::RefCell::new(current_context_generations.clone()));
@@ -846,7 +856,7 @@ impl ComponentRegistry {
             display_name,
             full_name,
             initialized: false,
-            active_theme: Some(current_theme),
+            provider_theme,
             active_contexts: current_contexts,
             active_context_generations: current_context_generations,
             cached_element: None,
@@ -959,10 +969,10 @@ impl ComponentRegistry {
         let mut dep_mismatch = None;
 
         let can_retain = {
-            let fallback_theme = self.env.active_theme.borrow().clone();
+            let (active_theme, has_provider) =
+                self.resolve_entry_theme(self.arena.get(id).provider_theme.as_ref());
             let entry = self.arena.get_mut(id);
-            let active_theme = entry.active_theme.clone().unwrap_or(fallback_theme);
-            entry.component.set_active_theme(active_theme);
+            entry.component.set_scoped_theme(active_theme, has_provider);
             entry.component.set_contexts(
                 entry.active_contexts.clone(),
                 entry.active_context_generations.clone(),
@@ -1076,12 +1086,7 @@ impl ComponentRegistry {
             return None;
         }
 
-        let theme = self
-            .arena
-            .get(id)
-            .active_theme
-            .clone()
-            .unwrap_or_else(|| self.env.active_theme.borrow().clone());
+        let (theme, _) = self.resolve_entry_theme(self.arena.get(id).provider_theme.as_ref());
         #[cfg(feature = "profiling-tracing")]
         let _refresh_span = {
             let full_name = self.arena.get(id).full_name;
@@ -1383,22 +1388,20 @@ impl ComponentRegistry {
                     let id = self.mount(&component, key.clone(), parent, reuse, epoch);
                     next_ids.push(id);
 
-                    // Record the active theme from the nearest ancestor ThemeProvider
-                    // so that `refresh_scope_in_place` can re-apply it later.
-                    let active_theme = self
-                        .theme_stack
-                        .last()
-                        .cloned()
-                        .unwrap_or_else(|| self.env.active_theme.borrow().clone());
+                    // Record any ancestor ThemeProvider override so scoped refreshes and
+                    // updates resolve `provider_theme.unwrap_or(app_theme)`.
+                    let provider_theme = self.theme_stack.last().cloned();
+                    let (active_theme, has_provider) =
+                        self.resolve_entry_theme(provider_theme.as_ref());
                     let (active_contexts, active_context_generations) = self.current_contexts();
-                    self.arena.get_mut(id).active_theme = Some(active_theme.clone());
+                    self.arena.get_mut(id).provider_theme = provider_theme;
                     self.arena.get_mut(id).active_contexts = active_contexts.clone();
                     self.arena.get_mut(id).active_context_generations =
                         active_context_generations.clone();
                     self.arena
                         .get_mut(id)
                         .component
-                        .set_active_theme(active_theme);
+                        .set_scoped_theme(active_theme, has_provider);
                     self.arena
                         .get_mut(id)
                         .component
@@ -1679,6 +1682,7 @@ mod tests {
                 theme_request: Rc::default(),
                 active_theme: Rc::new(RefCell::new(Theme::default())),
                 active_theme_generation: Rc::new(Cell::new(1)),
+                has_provider_theme: Rc::new(Cell::new(false)),
                 effect_phase: Rc::new(Cell::new(0)),
                 contexts: Rc::new(RefCell::new(rustc_hash::FxHashMap::default())),
                 context_generations: Rc::new(RefCell::new(rustc_hash::FxHashMap::default())),
@@ -1997,6 +2001,7 @@ mod tests {
                 theme_request: Rc::default(),
                 active_theme: Rc::new(RefCell::new(crate::style::Theme::default())),
                 active_theme_generation: Rc::new(Cell::new(1)),
+                has_provider_theme: Rc::new(Cell::new(false)),
                 effect_phase: Rc::new(Cell::new(0)),
                 contexts: Rc::new(RefCell::new(rustc_hash::FxHashMap::default())),
                 context_generations: Rc::new(RefCell::new(rustc_hash::FxHashMap::default())),
@@ -2226,6 +2231,7 @@ mod tests {
                 theme_request: Rc::default(),
                 active_theme: Rc::new(RefCell::new(crate::style::Theme::default())),
                 active_theme_generation: Rc::new(Cell::new(1)),
+                has_provider_theme: Rc::new(Cell::new(false)),
                 effect_phase: Rc::new(Cell::new(0)),
                 contexts: Rc::new(RefCell::new(rustc_hash::FxHashMap::default())),
                 context_generations: Rc::new(RefCell::new(rustc_hash::FxHashMap::default())),
