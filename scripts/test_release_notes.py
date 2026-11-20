@@ -1,7 +1,10 @@
+import tempfile
 import unittest
+from pathlib import Path
 
 from scripts.release_notes import (
     SUMMARY_MAX_CHARS,
+    Commit,
     ReleaseNotesError,
     check_pull_request,
     commit_summary,
@@ -12,6 +15,7 @@ from scripts.release_notes import (
     select_previous_release,
     validate_coverage,
     validate_notes,
+    write_input,
 )
 
 
@@ -271,6 +275,18 @@ class CoverageTests(unittest.TestCase):
         with self.assertRaisesRegex(ReleaseNotesError, "#9 is not in this release range"):
             validate_coverage(notes, [range_commit("fix: x (#7)")])
 
+    def test_input_marks_the_entries_the_validator_requires(self):
+        commits = [
+            Commit("a", "fix(render): x (#7)", "No behavior change.", ("src/a.rs",), True, None),
+            Commit("b", "refactor: y (#8)", "", ("src/b.rs",), True, None),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory, "input.md")
+            write_input(path, "o/r", "v1", "1", "v2", "2", commits)
+            text = path.read_text(encoding="utf-8")
+        self.assertEqual(text.count("Must appear: yes"), 1)
+        self.assertLess(text.index("Must appear: yes"), text.index("Candidate 2"))
+
     def test_does_not_require_commits_without_a_pull_request(self):
         validate_coverage(notes_with(("Fixed", "Other.")), [range_commit("fix: pushed directly")])
 
@@ -363,8 +379,12 @@ class ValidationTests(unittest.TestCase):
     def test_rejects_ai_tell_punctuation(self):
         with self.assertRaises(ReleaseNotesError):
             validate_notes("## Fixed\n\n- Lists wrap — without skipping disabled rows.\n")
-        with self.assertRaises(ReleaseNotesError):
-            validate_notes('## Changed\n\n- The API calls this mode “capturing”.\n')
+
+    def test_straightens_typographic_quotes(self):
+        self.assertEqual(
+            validate_notes("## Changed\n\n- The API calls this mode “capturing” and it’s on.\n"),
+            "## Changed\n\n- The API calls this mode \"capturing\" and it's on.\n",
+        )
 
 
 if __name__ == "__main__":
