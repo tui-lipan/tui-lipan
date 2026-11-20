@@ -14,9 +14,13 @@ non-user-facing work. These are fixed release facts. Do not fetch GitHub release
 source or diffs, alter the range, add excluded commits, or build another commit list.
 
 Write each entry from the Summary. The subject is the category and a short label, not the note.
-When a user-facing candidate's Summary is `(none)`, write its entry from the subject. Never skip a
-`feat`, `fix`, or `perf` candidate that changes library code, and never skip one marked
-`Breaking: yes`.
+When a candidate's Summary is `(none)`, write its entry from the subject.
+
+Every candidate marked `Must appear: yes` needs an entry with its PR link. The release is rejected
+when one is missing, and this rule overrides every skip rule below. When such a Summary says
+nothing visible changed, write one short entry about the concrete effect it does name, such as a
+build or lint failure that no longer happens. Candidates marked `Must appear: no` may be skipped
+under the inclusion rules.
 Describe the user-visible effect: what broke or changed, and what happens now. Do not restate the
 subject. Do not start every bullet with "`tui-lipan` now...". Drop implementation, tests, reviewer
 notes, and checklists even when they appear in a Summary. Changed-file lists are only for grouping
@@ -76,3 +80,7 @@ Do not choose or alter the release version, tags, crate versions, artifact names
 publication order, feature policy, MSRV, or security policy.
 
 Write the final Markdown to `release-notes.md`. Do not modify any other file.
+
+If the text below reports a rejected previous draft, fix every listed problem in the new draft:
+
+$ARGUMENTS

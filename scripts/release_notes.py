@@ -16,11 +16,9 @@ from typing import Any, Callable, Sequence
 SECTIONS = ("Added", "Changed", "Fixed", "Compatibility", "Security")
 FORBIDDEN_PUNCTUATION = {
     "—": "em dash",
-    "“": "curly double quote",
-    "”": "curly double quote",
-    "‘": "curly single quote",
-    "’": "curly single quote",
 }
+# Typographic quotes have one correct ASCII spelling, so they are straightened, not rejected.
+STRAIGHT_QUOTES = str.maketrans({"“": '"', "”": '"', "‘": "'", "’": "'"})
 RELEASE_METADATA_PATHS = {
     "Cargo.lock",
     "Cargo.toml",
@@ -398,6 +396,8 @@ def write_input(
                 "",
                 f"Breaking: {'yes' if commit.breaking else 'no'}",
                 "",
+                f"Must appear: {'yes' if requires_note(asdict(commit)) else 'no'}",
+                "",
                 f"PR: {pull_request_url(repository, commit.subject) or '(none)'}",
                 "",
                 "Summary:",
@@ -422,7 +422,7 @@ def write_input(
 
 
 def normalize_notes(raw: str) -> str:
-    notes = raw.replace("\r\n", "\n").strip()
+    notes = raw.replace("\r\n", "\n").translate(STRAIGHT_QUOTES).strip()
     if not notes:
         raise ReleaseNotesError("generated release notes are empty")
     if len(notes.encode("utf-8")) > 32_768:
