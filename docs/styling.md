@@ -672,12 +672,13 @@ operation.
 ### Switching Themes at Runtime
 
 `ctx.set_theme(theme)` replaces the app-wide theme immediately for `ctx.theme()` /
-`ctx.theme_ref()` and applies across the whole app — toasts, portals, and every subtree without
-its own `ThemeProvider` — before the next render (including frame 0 when called from `init()`).
-It stops an app started with `App::system_theme()` from following the host palette;
-`ctx.follow_system_theme()` goes back, using the last probed host colors. Host colors are only
-probed when the app enabled `App::system_theme()` or `App::live_host_terminal_colors(true)` at
-startup.
+`ctx.theme_ref()` in any component inheriting the app-wide theme (subtrees inside their own
+`ThemeProvider` keep their scoped provider theme) and applies across the whole app — toasts,
+portals, and every subtree without its own `ThemeProvider` — before the next render (including
+frame 0 when called from root or nested `init()`). It stops an app started with
+`App::system_theme()` from following the host palette; `ctx.follow_system_theme()` goes back,
+using the last probed host colors. Host colors are only probed when the app enabled
+`App::system_theme()` or `App::live_host_terminal_colors(true)` at startup.
 
 Apps that derive a custom theme from host colors or light/dark reports (rather than using the
 default `Theme::from_host_colors` directly) can implement `Component::on_host_theme_changed` on

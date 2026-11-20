@@ -13524,3 +13524,264 @@ fn on_host_theme_changed_runs_for_colors_and_scheme_in_runner_and_test_backend()
     assert_eq!(backend.state().notifications, 2);
     assert_eq!(backend.theme(), &Theme::solarized_light());
 }
+
+#[derive(Clone)]
+struct SharedThemeLog(std::rc::Rc<std::cell::RefCell<Vec<Theme>>>);
+
+impl PartialEq for SharedThemeLog {
+    fn eq(&self, other: &Self) -> bool {
+        std::rc::Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+struct NestedInitThemeChild;
+
+impl Component for NestedInitThemeChild {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn init(&mut self, ctx: &mut Context<Self>) -> Option<crate::Command> {
+        ctx.set_theme(Theme::nord());
+        None
+    }
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        let fg = ctx
+            .theme_ref()
+            .primary
+            .resolved_fg()
+            .unwrap_or(Color::White);
+        Text::new("child").style(Style::new().fg(fg)).into()
+    }
+}
+
+struct NestedInitSibling;
+
+impl Component for NestedInitSibling {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        let fg = ctx
+            .theme_ref()
+            .primary
+            .resolved_fg()
+            .unwrap_or(Color::White);
+        Text::new("sib").style(Style::new().fg(fg)).into()
+    }
+}
+
+struct NestedInitThemeRoot;
+
+impl Component for NestedInitThemeRoot {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        let fg = ctx
+            .theme_ref()
+            .primary
+            .resolved_fg()
+            .unwrap_or(Color::White);
+        VStack::new()
+            .child(Text::new("root").style(Style::new().fg(fg)))
+            .child(crate::child(|| NestedInitSibling, ()))
+            .child(crate::child(|| NestedInitThemeChild, ()))
+            .into()
+    }
+}
+
+#[test]
+fn set_theme_from_nested_init_applies_to_first_frame_for_root_and_siblings() {
+    let backend = crate::TestBackend::new(NestedInitThemeRoot);
+    let expected_fg = Theme::nord().primary.resolved_fg().unwrap();
+    assert_eq!(backend.theme(), &Theme::nord());
+
+    let frame = backend.capture_frame();
+    assert_eq!(frame.cell(0, 0).fg, expected_fg, "root row");
+    assert_eq!(frame.cell(0, 1).fg, expected_fg, "earlier sibling row");
+    assert_eq!(frame.cell(0, 2).fg, expected_fg, "nested init child row");
+}
+
+#[derive(Clone)]
+enum NestedThemeMsg {
+    SetFixed(Box<Theme>),
+    FollowSystem,
+    ReadTheme,
+}
+
+#[derive(Clone)]
+struct NestedThemeChildProps {
+    log: SharedThemeLog,
+    link_slot: std::rc::Rc<std::cell::RefCell<Option<crate::Link<NestedThemeMsg>>>>,
+}
+
+impl PartialEq for NestedThemeChildProps {
+    fn eq(&self, other: &Self) -> bool {
+        self.log == other.log && std::rc::Rc::ptr_eq(&self.link_slot, &other.link_slot)
+    }
+}
+
+struct NestedThemeChild;
+
+impl Component for NestedThemeChild {
+    type Message = NestedThemeMsg;
+    type Properties = NestedThemeChildProps;
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn init(&mut self, ctx: &mut Context<Self>) -> Option<crate::Command> {
+        *ctx.props.link_slot.borrow_mut() = Some(ctx.link().clone());
+        None
+    }
+
+    fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+        match msg {
+            NestedThemeMsg::SetFixed(theme) => {
+                ctx.set_theme(*theme);
+                ctx.props.log.0.borrow_mut().push(ctx.theme_ref().clone());
+            }
+            NestedThemeMsg::FollowSystem => {
+                ctx.follow_system_theme();
+                ctx.props.log.0.borrow_mut().push(ctx.theme_ref().clone());
+            }
+            NestedThemeMsg::ReadTheme => {
+                ctx.props.log.0.borrow_mut().push(ctx.theme_ref().clone());
+            }
+        }
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        Text::new("nested").into()
+    }
+}
+
+struct NestedThemeHost {
+    plain_props: NestedThemeChildProps,
+    provider_props: NestedThemeChildProps,
+}
+
+impl Component for NestedThemeHost {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        VStack::new()
+            .child(crate::child(|| NestedThemeChild, self.plain_props.clone()))
+            .child(
+                crate::widgets::ThemeProvider::new(Theme::dracula()).child(crate::child(
+                    || NestedThemeChild,
+                    self.provider_props.clone(),
+                )),
+            )
+            .into()
+    }
+}
+
+#[test]
+fn queued_nested_messages_see_app_theme_while_theme_provider_stays_scoped() {
+    let plain_log = SharedThemeLog(std::rc::Rc::new(std::cell::RefCell::new(Vec::new())));
+    let plain_link = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let provider_log = SharedThemeLog(std::rc::Rc::new(std::cell::RefCell::new(Vec::new())));
+    let provider_link = std::rc::Rc::new(std::cell::RefCell::new(None));
+
+    let mut backend = crate::TestBackend::new_with_app(
+        App::new().live_host_terminal_colors(true),
+        NestedThemeHost {
+            plain_props: NestedThemeChildProps {
+                log: plain_log.clone(),
+                link_slot: plain_link.clone(),
+            },
+            provider_props: NestedThemeChildProps {
+                log: provider_log.clone(),
+                link_slot: provider_link.clone(),
+            },
+        },
+        (),
+    );
+
+    let host = host_colors(Color::rgb(12, 34, 56));
+    backend
+        .set_host_terminal_colors(host)
+        .expect("seed host colors");
+
+    let plain = plain_link.borrow().clone().expect("plain child link");
+    let scoped = provider_link.borrow().clone().expect("scoped child link");
+
+    // Two messages queued in one drain on the plain nested child: the second must see Nord.
+    plain.send(NestedThemeMsg::SetFixed(Box::new(Theme::nord())));
+    plain.send(NestedThemeMsg::ReadTheme);
+    assert!(backend.pump().expect("pump plain child"));
+    assert_eq!(backend.theme(), &Theme::nord());
+    assert_eq!(
+        *plain_log.0.borrow(),
+        vec![Theme::nord(), Theme::nord()],
+        "plain nested child sees Nord synchronously and on the next queued message"
+    );
+
+    // A child inside `ThemeProvider::new(Dracula)` calling `set_theme(TokyoNight)` updates the
+    // app-wide theme without bypassing its own enclosing `ThemeProvider`.
+    scoped.send(NestedThemeMsg::SetFixed(Box::new(Theme::tokyo_night())));
+    scoped.send(NestedThemeMsg::ReadTheme);
+    plain.send(NestedThemeMsg::ReadTheme);
+    assert!(backend.pump().expect("pump scoped child"));
+    assert_eq!(backend.theme(), &Theme::tokyo_night());
+    assert_eq!(
+        *provider_log.0.borrow(),
+        vec![Theme::dracula(), Theme::dracula()],
+        "scoped child keeps its ThemeProvider immediately and on the next queued message"
+    );
+    assert_eq!(
+        plain_log.0.borrow().last(),
+        Some(&Theme::tokyo_night()),
+        "unscoped sibling sees the updated app theme in the same drain"
+    );
+
+    // Same for `follow_system_theme()` from inside a `ThemeProvider`.
+    provider_log.0.borrow_mut().clear();
+    scoped.send(NestedThemeMsg::FollowSystem);
+    plain.send(NestedThemeMsg::ReadTheme);
+    assert!(backend.pump().expect("pump follow_system_theme"));
+    let expected_host = Theme::from_host_colors(host);
+    assert_eq!(backend.theme(), &expected_host);
+    assert_eq!(
+        *provider_log.0.borrow(),
+        vec![Theme::dracula()],
+        "follow_system_theme inside ThemeProvider does not clobber scoped theme"
+    );
+    assert_eq!(
+        plain_log.0.borrow().last(),
+        Some(&expected_host),
+        "unscoped sibling sees host system theme in the same drain"
+    );
+}

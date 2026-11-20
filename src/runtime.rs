@@ -109,6 +109,7 @@ pub(crate) struct RuntimeCore<C: Component> {
     pub(crate) component: C,
     pub(crate) surface_mode: SurfaceMode,
     pub(crate) theme: Theme,
+    pub(crate) system_theme: bool,
     pub(crate) ctx: Context<C>,
     pub(crate) queue: MsgQueue,
     pub(crate) pending_transcript_entries: PendingTranscriptQueue,
@@ -143,6 +144,7 @@ pub(crate) struct RuntimeCore<C: Component> {
 pub(crate) struct RuntimeCoreConfig {
     pub viewport: Rect,
     pub theme: Theme,
+    pub system_theme: bool,
     pub surface_mode: SurfaceMode,
     pub clock_mode: crate::automation::ClockMode,
     pub mouse_capture: Rc<Cell<bool>>,
@@ -168,6 +170,33 @@ where
         true
     }
 
+    /// Consume any pending `Context::set_theme` / `Context::follow_system_theme` request and
+    /// update the app-wide theme. Returns whether the theme changed.
+    pub(crate) fn sync_theme_request(&mut self, request_repaint: bool) -> bool {
+        use crate::core::runtime_env::ThemeRequest;
+        let Some(request) = self.ctx.env().take_theme_request() else {
+            return false;
+        };
+        match request {
+            ThemeRequest::Fixed(theme) => {
+                self.system_theme = false;
+                self.set_app_theme(*theme, request_repaint)
+            }
+            ThemeRequest::System => {
+                self.system_theme = true;
+                match self.ctx.env().host_terminal_colors() {
+                    Some(colors) => {
+                        self.set_app_theme(Theme::from_host_colors(colors), request_repaint)
+                    }
+                    None => {
+                        self.ctx.env().request_host_terminal_color_refresh();
+                        false
+                    }
+                }
+            }
+        }
+    }
+
     /// Full root component type name for diagnostics and tracing.
     #[cfg_attr(not(feature = "devtools"), allow(dead_code))]
     pub(crate) fn root_component_name(&self) -> &'static str {
@@ -191,6 +220,7 @@ where
         let RuntimeCoreConfig {
             viewport,
             theme,
+            system_theme,
             surface_mode,
             clock_mode,
             mouse_capture,
@@ -276,6 +306,7 @@ where
             theme_request: Rc::default(),
             active_theme,
             active_theme_generation,
+            has_provider_theme: Rc::new(Cell::new(false)),
             effect_phase,
             contexts,
             context_generations,
@@ -332,6 +363,7 @@ where
             component,
             surface_mode,
             theme,
+            system_theme,
             ctx,
             queue,
             pending_transcript_entries,
@@ -420,6 +452,7 @@ where
             RuntimeCoreConfig {
                 viewport,
                 theme,
+                system_theme: false,
                 surface_mode,
                 clock_mode,
                 mouse_capture,
@@ -443,6 +476,7 @@ where
             RuntimeCoreConfig {
                 viewport,
                 theme,
+                system_theme: false,
                 surface_mode: SurfaceMode::InlineTranscript {
                     height: crate::app::context::InlineHeight::Fixed(8),
                     startup: crate::app::context::InlineStartupPolicy::PreserveHost,
@@ -775,6 +809,7 @@ where
 
         loop {
             let KeyUpdate { handled, update } = dispatch(self, cur);
+            dirty |= self.sync_theme_request(true);
 
             if let Some(cmd) = update.command {
                 cmd.run(CommandRuntime {
@@ -876,41 +911,63 @@ where
 
         #[cfg(feature = "profiling-tracing")]
         let view_start = web_time::Instant::now();
-        #[cfg(feature = "devtools")]
-        let view_start_devtools =
-            crate::core::nested::frame_diagnostics_enabled().then(web_time::Instant::now);
-        self.scroll.begin_view(ScopeId(1));
-        self.ctx.env().animations.note_view(ScopeId(1));
-        self.ctx.begin_memo_dependency_capture();
-        let element = {
-            crate::probe_bucket!(crate::alloc_probe::VIEW);
-            self.component.view(&self.ctx)
-        };
-        self.root_memo_deps = self.ctx.finish_memo_dependency_capture();
-        #[cfg(feature = "devtools")]
-        if let Some(start) = view_start_devtools {
-            use crate::core::nested::{record_view_timing, short_type_name};
-            record_view_timing(
-                ScopeId(1),
-                Arc::from(short_type_name(self.root_component_name())),
-                start.elapsed(),
+        #[cfg(feature = "profiling-tracing")]
+        let mut expand_ms = 0.0;
+        const MAX_THEME_INIT_PASSES: usize = 4;
+        let mut pass = 0;
+        let (element, app_root_theme, epoch) = loop {
+            self.ctx.set_active_theme(self.theme.clone());
+            #[cfg(feature = "devtools")]
+            let view_start_devtools =
+                crate::core::nested::frame_diagnostics_enabled().then(web_time::Instant::now);
+            self.scroll.begin_view(ScopeId(1));
+            self.ctx.env().animations.note_view(ScopeId(1));
+            self.ctx.begin_memo_dependency_capture();
+            let root_element = {
+                crate::probe_bucket!(crate::alloc_probe::VIEW);
+                self.component.view(&self.ctx)
+            };
+            self.root_memo_deps = self.ctx.finish_memo_dependency_capture();
+            #[cfg(feature = "devtools")]
+            if let Some(start) = view_start_devtools {
+                use crate::core::nested::{record_view_timing, short_type_name};
+                record_view_timing(
+                    ScopeId(1),
+                    Arc::from(short_type_name(self.root_component_name())),
+                    start.elapsed(),
+                );
+            }
+
+            #[cfg(debug_assertions)]
+            {
+                self.debug_last_root_view_before_expand = Some(root_element.clone());
+            }
+
+            #[cfg(feature = "profiling-tracing")]
+            let expand_start = web_time::Instant::now();
+            let epoch = self.components.begin_epoch();
+            let app_root_theme = root_active_theme_for_extra_root(&self.theme, &root_element);
+            let expanded = self.components.expand_in_host(
+                &mut self.root_host,
+                None,
+                root_element,
+                epoch,
+                bounds,
             );
-        }
+            #[cfg(feature = "profiling-tracing")]
+            {
+                expand_ms += expand_start.elapsed().as_secs_f64() * 1000.0;
+            }
+            pass += 1;
+            // A newly mounted nested component's `init()` can call `Context::set_theme` or
+            // `Context::follow_system_theme` during expansion; apply it and rebuild so frame 0
+            // (and every mount frame) renders the whole tree in the new theme.
+            if pass >= MAX_THEME_INIT_PASSES || !self.sync_theme_request(false) {
+                break (expanded, app_root_theme, epoch);
+            }
+        };
         #[cfg(feature = "profiling-tracing")]
         let view_ms = view_start.elapsed().as_secs_f64() * 1000.0;
-
-        #[cfg(debug_assertions)]
-        {
-            self.debug_last_root_view_before_expand = Some(element.clone());
-        }
-
-        #[cfg(feature = "profiling-tracing")]
-        let expand_start = web_time::Instant::now();
-        let epoch = self.components.begin_epoch();
-        let app_root_theme = root_active_theme_for_extra_root(&self.theme, &element);
-        let element =
-            self.components
-                .expand_in_host(&mut self.root_host, None, element, epoch, bounds);
         let element = {
             crate::probe_bucket!(crate::alloc_probe::THEME_CARVE_OUT);
             crate::style::apply_document_theme_carve_out(&self.theme, element)
@@ -936,8 +993,6 @@ where
             crate::probe_bucket!(crate::alloc_probe::SWEEP);
             self.components.sweep(epoch);
         }
-        #[cfg(feature = "profiling-tracing")]
-        let expand_ms = expand_start.elapsed().as_secs_f64() * 1000.0;
 
         let overlays = {
             crate::probe_bucket!(crate::alloc_probe::OVERLAY_SNAPSHOT);
@@ -1096,6 +1151,9 @@ where
             let element =
                 self.components
                     .expand_in_host(&mut self.root_host, None, element, epoch, viewport);
+            if self.sync_theme_request(false) {
+                return false;
+            }
             let element = crate::style::apply_document_theme_carve_out(&self.theme, element);
             self.ctx.set_active_theme(app_root_theme.clone());
             let extra = self.extra_root_element.clone().map(|extra| {
@@ -1132,6 +1190,9 @@ where
             let Some(refreshed) = self.components.refresh_scope_in_place(scope, viewport) else {
                 return false;
             };
+            if self.sync_theme_request(false) {
+                return false;
+            }
             let expanded =
                 crate::style::apply_document_theme_carve_out(&refreshed.theme, refreshed.expanded);
             replacements.push((refreshed.scope, expanded));

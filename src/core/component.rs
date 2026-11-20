@@ -1302,13 +1302,17 @@ impl<C: Component> Context<C> {
 
     /// Replace the app-wide theme, the one [`App::theme`](crate::App::theme) set at startup.
     ///
-    /// Takes effect immediately for [`theme`](Self::theme) / [`theme_ref`](Self::theme_ref) and
+    /// Takes effect immediately for [`theme`](Self::theme) / [`theme_ref`](Self::theme_ref) when
+    /// this component inherits the app-wide theme (subtrees under their own
+    /// [`ThemeProvider`](crate::widgets::ThemeProvider) keep their scoped provider theme), and
     /// applies across the whole app — including toasts, portals, and every subtree without its
-    /// own [`ThemeProvider`](crate::widgets::ThemeProvider) — before the next render (including
-    /// frame 0 when called from [`Component::init`]). The app stops following the host palette if
-    /// it was; [`follow_system_theme`](Self::follow_system_theme) goes back.
+    /// own `ThemeProvider` — before the next render (including frame 0 when called from root or
+    /// nested [`Component::init`]). The app stops following the host palette if it was;
+    /// [`follow_system_theme`](Self::follow_system_theme) goes back.
     pub fn set_theme(&mut self, theme: Theme) {
-        self.set_active_theme(theme.clone());
+        if !self.env.has_provider_theme.get() {
+            self.set_active_theme(theme.clone());
+        }
         *self.env.theme_request.borrow_mut() = Some(crate::core::runtime_env::ThemeRequest::Fixed(
             Box::new(theme),
         ));
@@ -1321,7 +1325,9 @@ impl<C: Component> Context<C> {
     /// `App::live_host_terminal_colors(true)`; otherwise the current theme stays. Until the first
     /// probe answers, the current theme stays too.
     pub fn follow_system_theme(&mut self) {
-        if let Some(colors) = self.env.host_terminal_colors() {
+        if !self.env.has_provider_theme.get()
+            && let Some(colors) = self.env.host_terminal_colors()
+        {
             self.set_active_theme(Theme::from_host_colors(colors));
         }
         *self.env.theme_request.borrow_mut() = Some(crate::core::runtime_env::ThemeRequest::System);
@@ -2137,6 +2143,11 @@ impl<C: Component> Context<C> {
 
     pub(crate) fn set_viewport(&mut self, viewport: Rect) {
         self.viewport = viewport;
+    }
+
+    pub(crate) fn set_scoped_theme(&mut self, theme: Theme, has_provider: bool) {
+        self.env.has_provider_theme.set(has_provider);
+        self.set_active_theme(theme);
     }
 
     pub(crate) fn set_active_theme(&mut self, theme: Theme) {

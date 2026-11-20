@@ -96,7 +96,6 @@ pub struct TestBackend<C: Component> {
     key_dispatch_state: RuntimeKeyDispatchState,
     framework_effects: Vec<FrameworkSideEffect>,
     host_title: Option<String>,
-    system_theme: bool,
 }
 
 impl<C> TestBackend<C>
@@ -193,7 +192,7 @@ where
         let clipboard_provider = app.clipboard_provider;
         let clipboard_reporter = app.clipboard_reporter.clone();
         let mouse_capture = Rc::new(Cell::new(app.mouse_enabled.unwrap_or(true)));
-        let core = if inline_transcript_mode {
+        let mut core = if inline_transcript_mode {
             RuntimeCore::new_test_transcript(
                 component,
                 props,
@@ -212,6 +211,7 @@ where
                 clock_mode,
             )
         };
+        core.system_theme = app.system_theme;
         if let Some(provider) = clipboard_provider {
             core.ctx.env().clipboard.replace_provider(provider);
         }
@@ -286,7 +286,6 @@ where
             key_dispatch_state,
             framework_effects: Vec::new(),
             host_title: app.title.clone(),
-            system_theme: app.system_theme,
         };
 
         backend.core.init();
@@ -332,7 +331,7 @@ where
         if !self.core.ctx.env().set_host_terminal_colors(Some(colors)) {
             return Ok(false);
         }
-        if self.system_theme {
+        if self.core.system_theme {
             self.core
                 .set_app_theme(crate::Theme::from_host_colors(colors), false);
         }
@@ -1128,22 +1127,7 @@ where
     }
 
     fn sync_theme_request(&mut self, request_repaint: bool) {
-        use crate::core::runtime_env::ThemeRequest;
-        let theme = match self.core.ctx.env().take_theme_request() {
-            None => return,
-            Some(ThemeRequest::Fixed(theme)) => {
-                self.system_theme = false;
-                *theme
-            }
-            Some(ThemeRequest::System) => {
-                self.system_theme = true;
-                match self.core.ctx.env().host_terminal_colors() {
-                    Some(colors) => crate::Theme::from_host_colors(colors),
-                    None => return,
-                }
-            }
-        };
-        self.core.set_app_theme(theme, request_repaint);
+        self.core.sync_theme_request(request_repaint);
     }
 
     /// Process all queued messages and any messages produced by background commands.

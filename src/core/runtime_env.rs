@@ -382,6 +382,9 @@ pub(crate) struct RuntimeEnv {
     pub theme_request: Rc<RefCell<Option<ThemeRequest>>>,
     pub active_theme: Rc<RefCell<Theme>>,
     pub active_theme_generation: Rc<Cell<u64>>,
+    /// Whether `active_theme` is overridden by an enclosing `ThemeProvider` rather than inheriting
+    /// the app-wide theme.
+    pub has_provider_theme: Rc<Cell<bool>>,
     pub effect_phase: Rc<Cell<u64>>,
     pub contexts: Rc<RefCell<FxHashMap<TypeId, Arc<dyn Any>>>>,
     pub context_generations: Rc<RefCell<FxHashMap<TypeId, u64>>>,
