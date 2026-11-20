@@ -54,6 +54,10 @@ toggle_devtools = f12
 | App | `quit`, `dismiss_overlay`, `focus_next`, `focus_prev`, `toggle_devtools` |
 
 Every action can also be bound from Rust with `FrameworkKeymap::bind(FrameworkAction::…, bindings)`.
+`FrameworkAction::ALL` lists them, `name()` gives the canonical name above (`select_all`), and
+`FrameworkAction::from_name` or `str::parse` read a name or alias back, ignoring case and `-`/`_`.
+An app with its own keymap file can accept editing keys there and pass them on through
+`FrameworkKeymap`.
 Binding an action replaces all of its default keys, so list any it should keep, for example
 `"ctrl-w, ctrl-backspace, alt-backspace"` for `DeleteWordLeft`. A Rust binding takes its key away from
 any default or keymap-file binding, so binding `ctrl-c` to another action also stops `Ctrl+C` from
