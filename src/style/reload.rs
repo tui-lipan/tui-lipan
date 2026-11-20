@@ -9,7 +9,7 @@ use notify::event::{CreateKind, DataChange, EventKind, ModifyKind};
 use notify::{RecursiveMode, Watcher};
 use serde::Deserialize;
 
-use crate::style::presets::preset_by_name;
+use crate::style::presets::{PRESET_NAMES, preset_by_name};
 use crate::style::{
     CaretPalette, CaretShape, Color, DiffPalette, DocumentPalette, DocumentViewPalette,
     FileIconPalette, GitStatusPalette, HexAreaPalette, InputPalette, Paint, ScrollbarPalette,
@@ -17,43 +17,13 @@ use crate::style::{
     TextAreaPalette, Theme,
 };
 
-/// Preset names advertised when a theme file's `extends` does not resolve.
-///
-/// Kept in sync with `presets::preset_by_name`; that function is the authority
-/// on what actually resolves, including the pre-0.2 aliases `catppuccin` and
-/// `gruvbox`, which are omitted here in favor of their explicit names.
-const SUPPORTED_PRESET_NAMES: &[&str] = &[
-    "ansi",
-    "one_dark",
-    "dracula",
-    "nord",
-    "gruvbox_dark",
-    "gruvbox_light",
-    "catppuccin_mocha",
-    "catppuccin_macchiato",
-    "catppuccin_frappe",
-    "catppuccin_latte",
-    "tokyo_night",
-    "tokyo_night_day",
-    "solarized_dark",
-    "solarized_light",
-    "monokai",
-    "lipan",
-    "rose_pine",
-    "rose_pine_moon",
-    "rose_pine_dawn",
-    "kanagawa",
-    "everforest",
-    "ayu_dark",
-    "ayu_mirage",
-    "ayu_light",
-    "nightfox",
-    "nordfox",
-    "night_owl",
-    "material_palenight",
-    "oxocarbon",
-    "zenburn",
-];
+fn supported_preset_names_list() -> String {
+    PRESET_NAMES
+        .iter()
+        .map(|name| name.replace('-', "_"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 
 fn theme_reload_error(message: impl Into<String>) -> crate::Error {
     crate::Error::ThemeReload {
@@ -898,7 +868,7 @@ impl TomlTheme {
             preset_by_name(extends).ok_or_else(|| {
                 theme_reload_error(format!(
                     "unknown theme preset `{extends}`; supported presets: {}",
-                    SUPPORTED_PRESET_NAMES.join(", ")
+                    supported_preset_names_list()
                 ))
             })?
         } else {

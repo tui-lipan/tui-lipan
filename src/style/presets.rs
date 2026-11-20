@@ -960,6 +960,42 @@ fn normalize_name(name: &str) -> String {
         .collect()
 }
 
+/// The name of every built-in preset, in kebab case, each accepted by [`preset_by_name`].
+///
+/// Light presets come last. Legacy aliases such as `gruvbox` are left out.
+pub const PRESET_NAMES: &[&str] = &[
+    "one-dark",
+    "dracula",
+    "nord",
+    "gruvbox-dark",
+    "catppuccin-mocha",
+    "catppuccin-frappe",
+    "catppuccin-macchiato",
+    "tokyo-night",
+    "solarized-dark",
+    "monokai",
+    "rose-pine",
+    "rose-pine-moon",
+    "kanagawa",
+    "everforest",
+    "ayu-dark",
+    "ayu-mirage",
+    "nightfox",
+    "nordfox",
+    "night-owl",
+    "material-palenight",
+    "oxocarbon",
+    "zenburn",
+    "lipan",
+    "ansi",
+    "solarized-light",
+    "gruvbox-light",
+    "tokyo-night-day",
+    "catppuccin-latte",
+    "rose-pine-dawn",
+    "ayu-light",
+];
+
 /// Return a built-in theme preset by normalized name.
 ///
 /// Name matching is case-insensitive and ignores `-`, `_`, and spaces.
@@ -1004,43 +1040,25 @@ mod tests {
     use super::{Color, Theme, preset_by_name};
 
     #[test]
+    fn every_preset_name_resolves_to_a_distinct_theme() {
+        let themes: Vec<Theme> = super::PRESET_NAMES
+            .iter()
+            .map(|name| preset_by_name(name).unwrap_or_else(|| panic!("{name}")))
+            .collect();
+        for (index, theme) in themes.iter().enumerate() {
+            assert!(
+                !themes[..index].contains(theme),
+                "{}",
+                super::PRESET_NAMES[index]
+            );
+        }
+    }
+
+    #[test]
     fn preset_by_name_resolves_lipan() {
         assert_eq!(preset_by_name("lipan"), Some(Theme::lipan()));
         assert_eq!(preset_by_name("Lipan"), Some(Theme::lipan()));
     }
-
-    /// Every preset reachable through [`preset_by_name`], by its canonical name.
-    const ALL_PRESETS: &[&str] = &[
-        "one_dark",
-        "dracula",
-        "nord",
-        "gruvbox_dark",
-        "catppuccin_mocha",
-        "tokyo_night",
-        "solarized_dark",
-        "monokai",
-        "lipan",
-        "solarized_light",
-        "gruvbox_light",
-        "tokyo_night_day",
-        "catppuccin_latte",
-        "catppuccin_frappe",
-        "catppuccin_macchiato",
-        "rose_pine",
-        "rose_pine_moon",
-        "rose_pine_dawn",
-        "kanagawa",
-        "everforest",
-        "ayu_dark",
-        "ayu_mirage",
-        "ayu_light",
-        "nightfox",
-        "nordfox",
-        "night_owl",
-        "material_palenight",
-        "oxocarbon",
-        "zenburn",
-    ];
 
     #[test]
     fn renamed_presets_still_resolve_under_their_old_names() {
@@ -1056,7 +1074,7 @@ mod tests {
 
     #[test]
     fn every_preset_resolves_by_name() {
-        for name in ALL_PRESETS {
+        for &name in super::PRESET_NAMES {
             assert!(
                 preset_by_name(name).is_some(),
                 "{name} is not reachable through preset_by_name"
@@ -1069,7 +1087,8 @@ mod tests {
         // Rec. 601 luminance delta, not a WCAG contrast ratio: this is a floor
         // that catches a preset whose text would wash out on its own
         // background, not a full accessibility check.
-        for name in ALL_PRESETS {
+        // Skip `ansi`, which uses the terminal's own 16 palette slots rather than fixed RGB.
+        for &name in super::PRESET_NAMES.iter().filter(|&&name| name != "ansi") {
             let theme = preset_by_name(name).expect("preset resolves");
             let fg = theme.primary.fg.map(|p| p.color()).expect("preset sets fg");
             let bg = theme.primary.bg.map(|p| p.color()).expect("preset sets bg");
@@ -1085,7 +1104,8 @@ mod tests {
     fn every_preset_elevates_surfaces_away_from_its_backdrop() {
         // Dark themes lighten as they elevate, light themes darken. Either way
         // each step must stay distinguishable from the one below it.
-        for name in ALL_PRESETS {
+        // Skip `ansi`, which delegates surface colors to the terminal's palette.
+        for &name in super::PRESET_NAMES.iter().filter(|&&name| name != "ansi") {
             let theme = preset_by_name(name).expect("preset resolves");
             let s = &theme.surface;
             assert!(
