@@ -2162,9 +2162,12 @@ impl<C: Component> AppRunner<C> {
         self.core.init();
         self.headless_render(bounds);
 
+        self.notify_focus_change();
         let mut dirty = DirtyTracker::default();
         self.drain_messages_and_commands(&mut dirty)?;
-        self.headless_render(bounds);
+        if dirty.is_dirty() {
+            self.headless_render(bounds);
+        }
 
         let title = self
             .title
@@ -2326,6 +2329,15 @@ impl<C: Component> AppRunner<C> {
                 // script's own `sleep:` action, which keeps placement with the author - settling again
                 // here would run every animation the script triggered to completion, making a
                 // mid-animation capture impossible.
+                // Focus callbacks for the widget `init()` focused, and the messages they send,
+                // belong to startup. A live event loop delivers them before any input arrives;
+                // deferred, they would land after the script's first key and undo it.
+                self.notify_focus_change();
+                let mut startup = DirtyTracker::default();
+                self.drain_messages_and_commands(&mut startup)?;
+                if startup.is_dirty() {
+                    self.headless_render(bounds);
+                }
                 if !config.settle.is_zero() {
                     self.headless_settle(config.settle, bounds)?;
                 }
