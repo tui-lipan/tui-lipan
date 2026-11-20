@@ -13624,6 +13624,123 @@ fn set_theme_from_nested_init_applies_to_first_frame_for_root_and_siblings() {
     assert_eq!(frame.cell(0, 2).fg, expected_fg, "nested init child row");
 }
 
+struct ChainThemeSetter {
+    next: Theme,
+}
+
+impl Component for ChainThemeSetter {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn init(&mut self, ctx: &mut Context<Self>) -> Option<crate::Command> {
+        ctx.set_theme(self.next.clone());
+        None
+    }
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        let fg = ctx
+            .theme_ref()
+            .primary
+            .resolved_fg()
+            .unwrap_or(Color::White);
+        Text::new("step").style(Style::new().fg(fg)).into()
+    }
+}
+
+struct FourStepThemeChainRoot;
+
+impl Component for FourStepThemeChainRoot {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        let active = ctx.theme_ref().clone();
+        let fg = active.primary.resolved_fg().unwrap_or(Color::White);
+        let child = if active == Theme::default() {
+            crate::child(
+                || ChainThemeSetter {
+                    next: Theme::nord(),
+                },
+                (),
+            )
+            .key("step-1")
+        } else if active == Theme::nord() {
+            crate::child(
+                || ChainThemeSetter {
+                    next: Theme::dracula(),
+                },
+                (),
+            )
+            .key("step-2")
+        } else if active == Theme::dracula() {
+            crate::child(
+                || ChainThemeSetter {
+                    next: Theme::tokyo_night(),
+                },
+                (),
+            )
+            .key("step-3")
+        } else if active == Theme::tokyo_night() {
+            crate::child(
+                || ChainThemeSetter {
+                    next: Theme::solarized_light(),
+                },
+                (),
+            )
+            .key("step-4")
+        } else {
+            Text::new("final").style(Style::new().fg(fg)).into()
+        };
+        VStack::new()
+            .child(Text::new("root").style(Style::new().fg(fg)))
+            .child(child)
+            .into()
+    }
+}
+
+#[test]
+fn four_step_nested_init_theme_chain_stabilizes_on_first_frame() {
+    let backend = crate::TestBackend::new(FourStepThemeChainRoot);
+    let expected = Theme::solarized_light();
+    let expected_fg = expected.primary.resolved_fg().unwrap();
+    assert_eq!(backend.theme(), &expected);
+    assert!(
+        !backend.core.take_full_repaint_request(),
+        "stabilized chain leaves no pending repaint request"
+    );
+
+    let frame = backend.capture_frame();
+    assert_eq!(
+        frame.cell(0, 0).fg,
+        expected_fg,
+        "root rendered in final theme"
+    );
+    assert_eq!(
+        frame.cell(0, 1).fg,
+        expected_fg,
+        "final child rendered in final theme"
+    );
+    assert_eq!(
+        frame.cell(0, 1).symbol,
+        "f",
+        "final branch mounted on frame 0"
+    );
+}
+
 #[derive(Clone)]
 enum NestedThemeMsg {
     SetFixed(Box<Theme>),

@@ -913,8 +913,8 @@ where
         let view_start = web_time::Instant::now();
         #[cfg(feature = "profiling-tracing")]
         let mut expand_ms = 0.0;
-        const MAX_THEME_INIT_PASSES: usize = 4;
-        let mut pass = 0;
+        const MAX_THEME_INIT_CHANGES: usize = 8;
+        let mut theme_changes = 0;
         let (element, app_root_theme, epoch) = loop {
             self.ctx.set_active_theme(self.theme.clone());
             #[cfg(feature = "devtools")]
@@ -958,11 +958,17 @@ where
             {
                 expand_ms += expand_start.elapsed().as_secs_f64() * 1000.0;
             }
-            pass += 1;
             // A newly mounted nested component's `init()` can call `Context::set_theme` or
-            // `Context::follow_system_theme` during expansion; apply it and rebuild so frame 0
-            // (and every mount frame) renders the whole tree in the new theme.
-            if pass >= MAX_THEME_INIT_PASSES || !self.sync_theme_request(false) {
+            // `Context::follow_system_theme` during expansion; always consume the request and
+            // rebuild so frame 0 (and every mount frame) renders the whole tree in the final
+            // theme. Bound the count against oscillating cycles, scheduling a follow-up full
+            // repaint if the cap is exceeded.
+            if !self.sync_theme_request(false) {
+                break (expanded, app_root_theme, epoch);
+            }
+            theme_changes += 1;
+            if theme_changes > MAX_THEME_INIT_CHANGES {
+                self.ctx.request_full_repaint();
                 break (expanded, app_root_theme, epoch);
             }
         };
