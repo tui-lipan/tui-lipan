@@ -380,6 +380,11 @@ class ValidationTests(unittest.TestCase):
         with self.assertRaises(ReleaseNotesError):
             validate_notes("## Fixed\n\n- Lists wrap — without skipping disabled rows.\n")
 
+    def test_rejects_a_placeholder_pull_request_link(self):
+        for link in ("([none])", "((none))"):
+            with self.assertRaisesRegex(ReleaseNotesError, "none"):
+                validate_notes(f"## Fixed\n\n- A fix. {link}\n")
+
     def test_straightens_typographic_quotes(self):
         self.assertEqual(
             validate_notes("## Changed\n\n- The API calls this mode “capturing” and it’s on.\n"),
