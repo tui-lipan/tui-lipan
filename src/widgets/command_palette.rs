@@ -90,7 +90,8 @@ impl Component for CommandPaletteComponent {
             .input_border(false)
             .list_border(false)
             .list_selection_full_width(true)
-            .preserve_groups(true)
+            // Categories head the unfiltered list; a query ranks matches by score, so a command
+            // whose name matches leads one that only matches through its description.
             .on_activate(on_activate);
 
         let mut modal = Modal::new()

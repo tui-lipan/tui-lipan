@@ -477,6 +477,10 @@ SearchPalette is **not** an overlay by itself - wrap it in `Modal` for the class
 
 Use `ctx.register_command(...)` inside a component to register component-scoped commands, or `ctx.command_registry().register(...)` for app-wide commands.
 
+With an empty query the palette lists commands under their categories. Typing ranks every match
+by score in one list: a command whose label matches leads one that only matches through its
+description or keybinding hint.
+
 | Prop | Type | Description |
 |------|------|-------------|
 | `on_close` | `Callback<()>` | Fired when the modal closes or a command executes |
