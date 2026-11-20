@@ -1288,6 +1288,27 @@ impl<C: Component> Context<C> {
         *self.env.framework_keymap_request.borrow_mut() = Some(keymap);
     }
 
+    /// Replace the app-wide theme, the one [`App::theme`](crate::App::theme) set at startup.
+    ///
+    /// It applies after the current update, to the whole app: toasts, portals and every subtree
+    /// without its own [`ThemeProvider`](crate::widgets::ThemeProvider). The app stops following
+    /// the host palette if it was; [`follow_system_theme`](Self::follow_system_theme) goes back.
+    pub fn set_theme(&mut self, theme: Theme) {
+        *self.env.theme_request.borrow_mut() = Some(crate::core::runtime_env::ThemeRequest::Fixed(
+            Box::new(theme),
+        ));
+    }
+
+    /// Follow the host terminal palette from now on, as [`App::system_theme`](crate::App::system_theme)
+    /// does.
+    ///
+    /// Host colors are only probed when the app was started with `App::system_theme()` or
+    /// `App::live_host_terminal_colors(true)`; otherwise the current theme stays. Until the first
+    /// probe answers, the current theme stays too.
+    pub fn follow_system_theme(&mut self) {
+        *self.env.theme_request.borrow_mut() = Some(crate::core::runtime_env::ThemeRequest::System);
+    }
+
     /// Access the command registry API.
     pub fn command_registry(&self) -> CommandRegistry {
         self.env.command_registry.clone()

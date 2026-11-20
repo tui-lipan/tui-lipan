@@ -798,6 +798,30 @@ impl<C: Component> AppRunner<C> {
     pub(crate) fn sync_runtime_keymap_config(&mut self) {
         self.sync_clipboard_config();
         self.sync_framework_keymap();
+        self.sync_theme_request();
+    }
+
+    fn sync_theme_request(&mut self) {
+        use crate::core::runtime_env::ThemeRequest;
+        let Some(request) = self.core.ctx.env().take_theme_request() else {
+            return;
+        };
+        match request {
+            ThemeRequest::Fixed(theme) => {
+                self.system_theme = false;
+                self.core.set_app_theme(*theme, true);
+            }
+            ThemeRequest::System => {
+                self.system_theme = true;
+                match self.core.ctx.env().host_terminal_colors() {
+                    Some(colors) => {
+                        self.core
+                            .set_app_theme(Theme::from_host_colors(colors), true);
+                    }
+                    None => self.core.ctx.env().request_host_terminal_color_refresh(),
+                }
+            }
+        }
     }
 
     pub(crate) fn new(app: App, component: C, props: C::Properties) -> Self {
@@ -1144,12 +1168,9 @@ impl<C: Component> AppRunner<C> {
             self.terminal_bg = Some(colors.bg);
         }
         if self.system_theme {
-            let theme = Theme::from_host_colors(colors);
-            if self.core.theme != theme {
-                self.core.theme = theme.clone();
-                self.core.ctx.set_active_theme(theme);
-                theme_changed = true;
-            }
+            theme_changed = self
+                .core
+                .set_app_theme(Theme::from_host_colors(colors), false);
         }
 
         if !(colors_changed || terminal_bg_changed || theme_changed) {

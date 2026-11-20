@@ -1063,6 +1063,20 @@ where
     fn sync_runtime_keymap_config(&mut self) {
         self.sync_clipboard_config();
         self.sync_framework_keymap();
+        self.sync_theme_request();
+    }
+
+    fn sync_theme_request(&mut self) {
+        use crate::core::runtime_env::ThemeRequest;
+        let theme = match self.core.ctx.env().take_theme_request() {
+            None => return,
+            Some(ThemeRequest::Fixed(theme)) => *theme,
+            Some(ThemeRequest::System) => match self.core.ctx.env().host_terminal_colors() {
+                Some(colors) => crate::Theme::from_host_colors(colors),
+                None => return,
+            },
+        };
+        self.core.set_app_theme(theme, true);
     }
 
     /// Process all queued messages and any messages produced by background commands.
@@ -1105,6 +1119,8 @@ where
         }
 
         self.sync_runtime_keymap_config();
+
+        dirty |= self.core.take_full_repaint_request();
 
         dirty |= self.drain_copy_feedback_requests();
 

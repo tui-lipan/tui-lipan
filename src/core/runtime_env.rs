@@ -27,6 +27,15 @@ use crate::runtime::FocusRequest;
 use crate::style::{HostTerminalColors, Rect, RichText, TerminalCursorStyle, Theme};
 use crate::utils::GridSelection;
 
+/// A change to the app-wide theme requested by a component.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum ThemeRequest {
+    /// Use this theme and stop following the host palette.
+    Fixed(Box<Theme>),
+    /// Follow the host terminal palette, as `App::system_theme()` does.
+    System,
+}
+
 /// A queued copy-flash request: the target node and, optionally, an explicit range
 /// to paint instead of the node's live selection.
 pub(crate) type CopyFeedbackRequest = (NodeId, Option<GridSelection>);
@@ -369,6 +378,8 @@ pub(crate) struct RuntimeEnv {
     pub clipboard_config_changed: Rc<Cell<bool>>,
     /// Pending replacement for the Rust [`FrameworkKeymap`] overlay.
     pub framework_keymap_request: Rc<RefCell<Option<FrameworkKeymap>>>,
+    /// Pending change to the app-wide theme, from `Context::set_theme`.
+    pub theme_request: Rc<RefCell<Option<ThemeRequest>>>,
     pub active_theme: Rc<RefCell<Theme>>,
     pub active_theme_generation: Rc<Cell<u64>>,
     pub effect_phase: Rc<Cell<u64>>,
@@ -573,6 +584,10 @@ impl RuntimeEnv {
 
     pub(crate) fn take_copy_feedback_requests(&self) -> Vec<CopyFeedbackRequest> {
         std::mem::take(&mut *self.copy_feedback_request.borrow_mut())
+    }
+
+    pub(crate) fn take_theme_request(&self) -> Option<ThemeRequest> {
+        self.theme_request.borrow_mut().take()
     }
 
     pub(crate) fn take_framework_keymap_request(&self) -> Option<FrameworkKeymap> {
