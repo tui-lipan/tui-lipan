@@ -10747,6 +10747,65 @@ fn headless_snapshot_key_script_settles_between_keys() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// A single-column shell: the shown pane follows both focus callbacks and a pane-switch key, so a
+/// focus callback left over from startup would switch it back.
+struct PaneSwitchSnapshotSmoke;
+
+impl Component for PaneSwitchSnapshotSmoke {
+    type Message = &'static str;
+    type Properties = ();
+    type State = &'static str;
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {
+        "first"
+    }
+
+    fn init(&mut self, ctx: &mut Context<Self>) -> Option<crate::Command> {
+        ctx.request_focus("first");
+        None
+    }
+
+    fn update(&mut self, pane: Self::Message, ctx: &mut Context<Self>) -> Update {
+        ctx.state = pane;
+        Update::full()
+    }
+
+    fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> crate::KeyUpdate {
+        if key.code == KeyCode::Char('n') {
+            ctx.state = "second";
+            ctx.request_focus("second");
+            return crate::KeyUpdate::handled(Update::full());
+        }
+        crate::KeyUpdate::unhandled(Update::none())
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        let pane = ctx.state;
+        List::new()
+            .items([ListItem::new(format!("pane:{pane}"))])
+            .on_focus(ctx.link().callback(move |()| pane))
+            .key(pane)
+    }
+}
+
+#[test]
+fn headless_snapshot_key_script_runs_after_startup_messages() {
+    let dir = std::env::temp_dir().join(format!("tui-lipan-paneswitch-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let path = dir.join("switch.md");
+
+    AppRunner::new(App::new(), PaneSwitchSnapshotSmoke, ())
+        .run_headless_snapshot(key_script_config(path.clone(), vec![char_key('n')]))
+        .expect("headless snapshot succeeds");
+
+    let written = std::fs::read_to_string(&path).expect("snapshot file exists");
+    assert!(
+        written.contains("pane:second") && written.contains("focus_key: `second`"),
+        "startup focus callbacks must land before the script, not undo it: {written}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 struct ChordRevealSnapshotSmoke;
 
 impl Component for ChordRevealSnapshotSmoke {
