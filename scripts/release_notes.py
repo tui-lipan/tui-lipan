@@ -63,6 +63,7 @@ NON_USER_FACING_PATH_PREFIXES = (
     "tests/",
 )
 PR_LINK_RE = re.compile(r"/pull/(\d+)\b")
+PLACEHOLDER_LINK_RE = re.compile(r"\(\[?none\]?\)", re.IGNORECASE)
 TRAILER_RE = re.compile(
     r"^(Signed-off-by|Co-authored-by|Reviewed-by|Acked-by):",
     re.IGNORECASE,
@@ -432,6 +433,10 @@ def normalize_notes(raw: str) -> str:
     for character, label in FORBIDDEN_PUNCTUATION.items():
         if character in notes:
             raise ReleaseNotesError(f"generated release notes contain a {label}")
+    if PLACEHOLDER_LINK_RE.search(notes):
+        raise ReleaseNotesError(
+            "generated release notes contain a `(none)` PR link: omit the link instead"
+        )
     return notes
 
 
