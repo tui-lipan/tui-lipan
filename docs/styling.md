@@ -614,6 +614,8 @@ Theme::night_owl()
 Theme::material_palenight()
 Theme::oxocarbon()
 Theme::zenburn()
+Theme::lipan()
+Theme::ansi()   // the terminal's own 16 colors
 ```
 
 Light:
@@ -630,6 +632,9 @@ Theme::ayu_light()
 Every preset above also resolves through `preset_by_name`, which is
 case-insensitive and ignores `-`, `_`, and spaces, so `"rose pine dawn"`,
 `"rose-pine-dawn"`, and `"RosePineDawn"` are equivalent.
+
+`tui_lipan::style::presets::PRESET_NAMES` lists every preset name, dark ones before light ones,
+for theme pickers and config validation messages.
 
 The pre-0.2 names `catppuccin` and `gruvbox` still resolve through
 `preset_by_name`, so theme TOML and config files written against 0.1 keep
