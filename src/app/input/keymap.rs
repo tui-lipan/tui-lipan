@@ -100,7 +100,7 @@ pub enum Action {
 
 /// Generates [`FrameworkAction`] and the config-file names from one table, so a bindable action
 /// cannot be missing from either. `Action::framework_action` matches exhaustively, so an [`Action`]
-/// left out of the table fails to compile. Names are in the `-` form config names normalize to.
+/// left out of the table fails to compile. Names are in the `_` form config names normalize to.
 macro_rules! bindable_actions {
     ($($(#[$meta:meta])* $variant:ident = $name:literal $(| $alias:literal)*;)+) => {
         /// Actions that can be bound from Rust through [`FrameworkKeymap`] or `App` builders.
@@ -114,8 +114,15 @@ macro_rules! bindable_actions {
         }
 
         impl FrameworkAction {
-            #[cfg(test)]
-            const ALL: &'static [(Self, &'static str)] = &[$((Self::$variant, $name),)+];
+            /// Every bindable action, in `keymap.conf` documentation order.
+            pub const ALL: &'static [Self] = &[$(Self::$variant,)+];
+
+            /// The canonical `keymap.conf` name, such as `select_all`.
+            pub fn name(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $name,)+
+                }
+            }
 
             fn action(self) -> Action {
                 match self {
@@ -130,7 +137,7 @@ macro_rules! bindable_actions {
                 if name.is_empty() {
                     return None;
                 }
-                name = name.replace('_', "-");
+                name = name.replace('-', "_");
                 match name.as_str() {
                     $($name $(| $alias)* => Some(Self::$variant),)+
                     "none" | "unbind" | "disabled" => Some(Self::None),
@@ -139,7 +146,6 @@ macro_rules! bindable_actions {
             }
 
             /// The bindable action this runs as, if it is one.
-            #[cfg_attr(not(test), allow(dead_code))]
             fn framework_action(self) -> Option<FrameworkAction> {
                 match self {
                     $(Self::$variant => Some(FrameworkAction::$variant),)+
@@ -152,17 +158,17 @@ macro_rules! bindable_actions {
 
 bindable_actions! {
     /// Quit the application.
-    Quit = "quit" | "exit" | "app-quit" | "app-exit";
+    Quit = "quit" | "exit" | "app_quit" | "app_exit";
     /// Dismiss the top-most overlay.
-    DismissOverlay = "dismiss-overlay" | "dismiss" | "close" | "cancel" | "escape";
+    DismissOverlay = "dismiss_overlay" | "dismiss" | "close" | "cancel" | "escape";
     /// Move focus to the next focusable widget.
-    FocusNext = "focus-next" | "next-focus" | "next-widget" | "focus-forward";
+    FocusNext = "focus_next" | "next_focus" | "next_widget" | "focus_forward";
     /// Move focus to the previous focusable widget.
-    FocusPrev = "focus-prev" | "focus-previous" | "prev-focus" | "previous-focus" | "prev-widget"
-        | "focus-backward";
+    FocusPrev = "focus_prev" | "focus_previous" | "prev_focus" | "previous_focus" | "prev_widget"
+        | "focus_backward";
     /// Toggle DevTools visibility.
-    ToggleDevTools = "toggle-devtools" | "devtools-toggle" | "devtools" | "toggle-dev-tools"
-        | "toggle-debug" | "debug-toggle";
+    ToggleDevTools = "toggle_devtools" | "devtools_toggle" | "devtools" | "toggle_dev_tools"
+        | "toggle_debug" | "debug_toggle";
     /// Copy the selection to the clipboard.
     Copy = "copy";
     /// Cut the selection to the clipboard.
@@ -170,84 +176,84 @@ bindable_actions! {
     /// Paste from the clipboard.
     Paste = "paste";
     /// Paste from the primary selection, where supported.
-    PasteFromSelection = "paste-selection" | "paste-from-selection" | "paste-primary"
-        | "paste-primary-selection";
+    PasteFromSelection = "paste_selection" | "paste_from_selection" | "paste_primary"
+        | "paste_primary_selection";
     /// Copy an image to the clipboard.
-    CopyImage = "copy-image";
+    CopyImage = "copy_image";
     /// Paste an image from the clipboard.
-    PasteImage = "paste-image";
+    PasteImage = "paste_image";
     /// Undo the last edit.
     Undo = "undo";
     /// Redo the last undone edit.
     Redo = "redo";
     /// Select all text.
-    SelectAll = "select-all";
+    SelectAll = "select_all";
     /// Clear all text.
-    Clear = "clear" | "clear-text" | "clear-input";
+    Clear = "clear" | "clear_text" | "clear_input";
     /// Move the cursor left.
-    MoveLeft = "move-left";
+    MoveLeft = "move_left";
     /// Move the cursor right.
-    MoveRight = "move-right";
+    MoveRight = "move_right";
     /// Move the cursor up.
-    MoveUp = "move-up";
+    MoveUp = "move_up";
     /// Move the cursor down.
-    MoveDown = "move-down";
+    MoveDown = "move_down";
     /// Move to the start of the line.
-    MoveHome = "move-home";
+    MoveHome = "move_home";
     /// Move to the end of the line.
-    MoveEnd = "move-end";
+    MoveEnd = "move_end";
     /// Move to the previous word.
-    MoveWordLeft = "move-word-left";
+    MoveWordLeft = "move_word_left";
     /// Move to the next word.
-    MoveWordRight = "move-word-right";
+    MoveWordRight = "move_word_right";
     /// Move to the start of the wrapped row; the line start where text does not wrap.
-    MoveVisualLineHome = "move-visual-line-home";
+    MoveVisualLineHome = "move_visual_line_home";
     /// Move to the end of the wrapped row; the line end where text does not wrap.
-    MoveVisualLineEnd = "move-visual-line-end";
+    MoveVisualLineEnd = "move_visual_line_end";
     /// Move to the start of the text.
-    MoveBufferHome = "move-buffer-home";
+    MoveBufferHome = "move_buffer_home";
     /// Move to the end of the text.
-    MoveBufferEnd = "move-buffer-end";
+    MoveBufferEnd = "move_buffer_end";
     /// Extend the selection left.
-    SelectLeft = "select-left";
+    SelectLeft = "select_left";
     /// Extend the selection right.
-    SelectRight = "select-right";
+    SelectRight = "select_right";
     /// Extend the selection up.
-    SelectUp = "select-up";
+    SelectUp = "select_up";
     /// Extend the selection down.
-    SelectDown = "select-down";
+    SelectDown = "select_down";
     /// Extend the selection to the start of the line.
-    SelectHome = "select-home";
+    SelectHome = "select_home";
     /// Extend the selection to the end of the line.
-    SelectEnd = "select-end";
+    SelectEnd = "select_end";
     /// Extend the selection to the previous word.
-    SelectWordLeft = "select-word-left";
+    SelectWordLeft = "select_word_left";
     /// Extend the selection to the next word.
-    SelectWordRight = "select-word-right";
+    SelectWordRight = "select_word_right";
     /// Extend the selection to the start of the wrapped row.
-    SelectVisualLineHome = "select-visual-line-home";
+    SelectVisualLineHome = "select_visual_line_home";
     /// Extend the selection to the end of the wrapped row.
-    SelectVisualLineEnd = "select-visual-line-end";
+    SelectVisualLineEnd = "select_visual_line_end";
     /// Extend the selection to the start of the text.
-    SelectBufferHome = "select-buffer-home";
+    SelectBufferHome = "select_buffer_home";
     /// Extend the selection to the end of the text.
-    SelectBufferEnd = "select-buffer-end";
+    SelectBufferEnd = "select_buffer_end";
     /// Delete the previous character or the selection.
     Backspace = "backspace";
     /// Delete the next character or the selection.
     Delete = "delete";
     /// Delete the previous word or the selection.
-    DeleteWordLeft = "delete-word-left";
+    DeleteWordLeft = "delete_word_left";
     /// Delete the next word or the selection.
-    DeleteWordRight = "delete-word-right";
+    DeleteWordRight = "delete_word_right";
     /// Delete from the cursor to the start of the line, or the selection if any.
-    DeleteToLineStart = "delete-to-line-start";
+    DeleteToLineStart = "delete_to_line_start";
     /// Delete from the cursor to the end of the line, or the selection if any.
-    DeleteToLineEnd = "delete-to-line-end";
+    DeleteToLineEnd = "delete_to_line_end";
     /// Delete the current line, or the selection if any.
-    DeleteLine = "delete-line";
+    DeleteLine = "delete_line";
     /// Insert a newline.
-    InsertNewline = "insert-newline" | "newline" | "enter";
+    InsertNewline = "insert_newline" | "newline" | "enter";
 }
 
 /// Enables or disables loading user keymap files from env/default paths.
@@ -272,6 +278,40 @@ enum FrameworkBindingOverride {
 #[derive(Debug, Clone, Default)]
 pub struct FrameworkKeymap {
     overrides: Vec<(FrameworkAction, FrameworkBindingOverride)>,
+}
+
+impl FrameworkAction {
+    /// Parse a `keymap.conf` action name or alias. Case, `-` and `_` do not matter, so
+    /// `select-all`, `select_all` and `Select_All` all name [`FrameworkAction::SelectAll`].
+    pub fn from_name(name: &str) -> Option<Self> {
+        Action::from_config_name(name).and_then(Action::framework_action)
+    }
+}
+
+impl std::fmt::Display for FrameworkAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+/// Error for a string that names no [`FrameworkAction`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownFrameworkAction(pub String);
+
+impl std::fmt::Display for UnknownFrameworkAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "unknown framework action \"{}\"", self.0)
+    }
+}
+
+impl std::error::Error for UnknownFrameworkAction {}
+
+impl FromStr for FrameworkAction {
+    type Err = UnknownFrameworkAction;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        Self::from_name(name).ok_or_else(|| UnknownFrameworkAction(name.to_owned()))
+    }
 }
 
 impl FrameworkKeymap {
@@ -1265,16 +1305,22 @@ mod tests {
     #[test]
     fn every_bindable_action_round_trips_through_its_config_name_and_is_documented() {
         let docs = include_str!("../../../docs/keybindings.md");
-        for &(framework_action, name) in FrameworkAction::ALL {
+        for &framework_action in FrameworkAction::ALL {
+            let name = framework_action.name();
             let action = framework_action.action();
             assert_eq!(Action::from_config_name(name), Some(action), "{name}");
             assert_eq!(
-                Action::from_config_name(&name.replace('-', "_")),
-                Some(action),
+                FrameworkAction::from_name(&name.replace('_', "-").to_uppercase()),
+                Some(framework_action),
+                "{name}"
+            );
+            assert_eq!(
+                name.parse::<FrameworkAction>(),
+                Ok(framework_action),
                 "{name}"
             );
             assert_eq!(action.framework_action(), Some(framework_action), "{name}");
-            let documented = format!("`{}`", name.replace('-', "_"));
+            let documented = format!("`{name}`");
             assert!(docs.contains(&documented), "{documented} in keybindings.md");
         }
     }
