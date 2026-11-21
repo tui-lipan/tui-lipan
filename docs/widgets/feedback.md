@@ -251,7 +251,7 @@ Small status indicator overlaid on an element.
 | `position` | `BadgePosition` | Corner to attach to |
 | `width` | `Length` | Inner badge-frame width; caps are composed outside it |
 | `height` | `Length` | Badge height |
-| `cap` | `CapStyle` | Segment treatment (`Padded`, `Half`, `Round`, or `Arrow`) |
+| `cap` | `CapStyle` | Segment treatment (`Padded`, `Half`, `Round`, `Arrow`, `Slant`, or `Trapezoid`) |
 | `cap_sides` | `CapSides` | Which segment ends receive caps (`Both` by default) |
 | `cap_behind` | `Color` | Background painted behind cap glyphs |
 | `cap_same_color` | `bool` | Use a contrasting thin left separator for equal-color neighbors |

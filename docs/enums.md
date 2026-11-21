@@ -258,7 +258,8 @@ renderer, as terminals draw them: lines meet the cell edges exactly and join
 their neighbors, light lines follow the underline thickness and heavy ones are
 twice that, double lines keep their outer strokes around corners, `╭╮╯╰` are
 anti-aliased arcs, diagonals are anti-aliased, and eighths, quadrants and shades
-fill exact fractions of the cell. The few characters mixing single and double
+fill exact fractions of the cell. The half-cell triangles `◢◣◤◥` are drawn the same
+way. The few characters mixing single and double
 lines are left to the font.
 
 Powerline separators (U+E0B0-U+E0BF) are drawn from geometry the same way, so
@@ -565,13 +566,17 @@ named sets through `CapStyle::chars()` passed to `.caps(...)`.
 | `CapStyle::Half` | Font-safe half-block caps (`U+2590` / `U+258C`) |
 | `CapStyle::Round` | Rounded Powerline caps (`U+E0B6` / `U+E0B4`) |
 | `CapStyle::Arrow` | Pointed Powerline caps (`U+E0B2` / `U+E0B0`) |
+| `CapStyle::Slant` | Font-safe slanted triangle caps (`◢` / `◤`) |
+| `CapStyle::Trapezoid` | Font-safe triangle caps that widen toward the bottom (`◢` / `◣`) |
+| `CapStyle::Custom { left, right }` | Any pair of single-width characters |
 
 `CapSides::Both` (default) draws both ends; `Left` and `Right` draw one end,
-while `None` disables both. `CapStyle::requires_nerd_font()` identifies `Round`
-and `Arrow`; `font_safe()` degrades either to `Padded`. An explicitly selected
-`Half` remains unchanged. `CapStyle::all()` returns the canonical style cycle.
-`CapStyle::chars()` returns `Option<(char, char)>` for tab widgets (`None` for
-`Padded`); `glyphs()` returns the string form used by `Badge`.
+while `None` disables both. `CapStyle::requires_nerd_font()` identifies `Round`,
+`Arrow`, and a `Custom` pair with a Private Use Area character; `font_safe()`
+degrades those to `Padded` and leaves every other style unchanged.
+`CapStyle::all()` returns the named styles in cycle order, without `Custom`.
+`CapStyle::chars()` returns the `(left, right)` caps, or `None` for `Padded`.
+`CapStyle` is `#[non_exhaustive]`, so a `match` on it needs a wildcard arm.
 
 ### `Overflow`
 
