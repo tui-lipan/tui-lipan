@@ -116,6 +116,22 @@ struct Coverage {
     alpha: Vec<u8>,
 }
 
+impl Coverage {
+    /// Keep the natural advance-based placement when the ink fits there.
+    fn horizontal_origin(&self, cell: CellPixels, bold_offset: u32) -> i32 {
+        let centered = ((cell.width as f32 - self.advance).max(0.0) / 2.0).round() as i32;
+        let max_left = cell.width.saturating_sub(self.width + bold_offset) as i32;
+        let ink_left = (centered + self.left).clamp(0, max_left);
+        cell.x0 as i32 + ink_left - self.left
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct OutlineSize {
+    pixels: u32,
+    max_width: Option<u32>,
+}
+
 pub(super) struct FontRenderer {
     db: Database,
     /// Faces tried first, in order: the explicit font file, the requested family, then the
@@ -126,7 +142,7 @@ pub(super) struct FontRenderer {
     /// Every face in the order a coverage search tries them, built on the first search.
     candidates: Option<Vec<ID>>,
     sources: HashMap<(char, bool), Option<GlyphSource>>,
-    glyphs: HashMap<(ID, GlyphId, u32), Option<Arc<Coverage>>>,
+    glyphs: HashMap<(ID, GlyphId, OutlineSize), Option<Arc<Coverage>>>,
     images: HashMap<(ID, GlyphId, u32, u32), Option<Arc<RgbaImage>>>,
 }
 
@@ -197,12 +213,16 @@ impl FontRenderer {
         if super::is_private_use(base) {
             return self.draw_icon(image, cell_rect, room, face, glyph, size, color);
         }
-        let Some(coverage) = self.outline(face, glyph, size) else {
+        let base_size = OutlineSize {
+            pixels: size,
+            max_width: Some(cell_rect.width),
+        };
+        let Some(coverage) = self.outline(face, glyph, base_size) else {
             return false;
         };
-        let origin = cell_rect.x0 as i32
-            + ((cell_rect.width as f32 - coverage.advance).max(0.0) / 2.0).round() as i32;
-        let bold_offset = bold.then(|| bold_offset(cell_rect).max(1) as i32);
+        let bold_offset = bold.then(|| bold_offset(cell_rect).max(1));
+        let origin = coverage.horizontal_origin(cell_rect, bold_offset.unwrap_or(0));
+        let bold_offset = bold_offset.map(|offset| offset as i32);
         blit(
             image,
             cell_rect,
@@ -232,7 +252,7 @@ impl FontRenderer {
             else {
                 continue;
             };
-            if let Some(mark_coverage) = self.outline(mark_face, mark_glyph, size) {
+            if let Some(mark_coverage) = self.outline_unfitted(mark_face, mark_glyph, size) {
                 let (mark_origin, mark_baseline) =
                     place_mark(cell_rect, &coverage, origin, &mark_coverage, baseline);
                 blit(
@@ -261,7 +281,7 @@ impl FontRenderer {
         size: u32,
         color: Rgb8,
     ) -> bool {
-        let Some(mut coverage) = self.outline(face, glyph, size) else {
+        let Some(mut coverage) = self.outline_unfitted(face, glyph, size) else {
             return false;
         };
         let (fit_w, fit_h) = (room.width, cell_rect.height);
@@ -269,7 +289,7 @@ impl FontRenderer {
             let shrink = (fit_w as f32 / coverage.width.max(1) as f32)
                 .min(fit_h as f32 / coverage.height.max(1) as f32);
             let smaller = ((size as f32 * shrink).floor() as u32).max(1);
-            match self.outline(face, glyph, smaller) {
+            match self.outline_unfitted(face, glyph, smaller) {
                 Some(fitted) => coverage = fitted,
                 None => return false,
             }
@@ -378,7 +398,18 @@ impl FontRenderer {
             .unwrap_or_default()
     }
 
-    fn outline(&mut self, face: ID, glyph: GlyphId, size: u32) -> Option<Arc<Coverage>> {
+    fn outline_unfitted(&mut self, face: ID, glyph: GlyphId, pixels: u32) -> Option<Arc<Coverage>> {
+        self.outline(
+            face,
+            glyph,
+            OutlineSize {
+                pixels,
+                max_width: None,
+            },
+        )
+    }
+
+    fn outline(&mut self, face: ID, glyph: GlyphId, size: OutlineSize) -> Option<Arc<Coverage>> {
         if self.glyphs.len() >= MAX_GLYPHS {
             self.glyphs.clear();
         }
@@ -545,8 +576,8 @@ fn fit_image(picture: &RgbaImage, width: u32, height: u32) -> RgbaImage {
     })
 }
 
-fn rasterize(face: &Face<'_>, glyph: GlyphId, size: u32) -> Option<Coverage> {
-    let scale = size as f32 / f32::from(face.units_per_em());
+fn rasterize(face: &Face<'_>, glyph: GlyphId, size: OutlineSize) -> Option<Coverage> {
+    let mut scale = size.pixels as f32 / f32::from(face.units_per_em());
     let advance = face
         .glyph_hor_advance(glyph)
         .map_or(0.0, |advance| f32::from(advance) * scale);
@@ -561,16 +592,24 @@ fn rasterize(face: &Face<'_>, glyph: GlyphId, size: u32) -> Option<Coverage> {
             alpha: Vec::new(),
         });
     };
-    let left = (f32::from(bounds.x_min) * scale).floor() as i32;
-    let right = (f32::from(bounds.x_max) * scale).ceil() as i32;
+    let (x_min, x_max) = (f32::from(bounds.x_min), f32::from(bounds.x_max));
+    let left = (x_min * scale).floor();
+    let right = (x_max * scale).ceil();
+    let mut width = (right - left) as u32;
+    let mut raster_left = left;
+    if let Some(max_width) = size.max_width.filter(|&limit| width > limit) {
+        // Use the actual ink bounds so a fractional side bearing does not cost a pixel.
+        scale = scale.min(max_width as f32 / (x_max - x_min));
+        raster_left = x_min * scale;
+        width = max_width;
+    }
     let top = -(f32::from(bounds.y_max) * scale).ceil() as i32;
     let bottom = -(f32::from(bounds.y_min) * scale).floor() as i32;
-    let width = u32::try_from(right - left).ok()?;
     let height = u32::try_from(bottom - top).ok()?;
-    let mut builder = RasterBuilder::new(width, height, scale, left as f32, top as f32);
+    let mut builder = RasterBuilder::new(width, height, scale, raster_left, top as f32);
     face.outline_glyph(glyph, &mut builder)?;
     Some(Coverage {
-        left,
+        left: raster_left.floor() as i32,
         top,
         width,
         height,
@@ -690,6 +729,33 @@ impl OutlineBuilder for RasterBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn horizontal_origin_keeps_wide_advance_and_negative_bearing_inside_the_cell() {
+        let cell = CellPixels {
+            x0: 40,
+            y0: 0,
+            width: 8,
+            height: 16,
+        };
+        let mut glyph = Coverage {
+            left: 3,
+            top: -8,
+            width: 8,
+            height: 8,
+            advance: 15.6,
+            alpha: Vec::new(),
+        };
+        assert_eq!(glyph.horizontal_origin(cell, 0) + glyph.left, 40);
+
+        glyph.left = -2;
+        glyph.width = 5;
+        glyph.advance = 8.0;
+        assert_eq!(glyph.horizontal_origin(cell, 0) + glyph.left, 40);
+
+        glyph.left = 1;
+        assert_eq!(glyph.horizontal_origin(cell, 0) + glyph.left, 41);
+    }
 
     #[test]
     fn combining_mark_is_centered_and_kept_inside_the_cell() {

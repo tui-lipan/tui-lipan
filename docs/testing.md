@@ -266,7 +266,8 @@ call rather than as a zero-byte file.
 
 The PNG renderer uses antialiased real-font text by default when a system font is
 available, falling back to any installed font for characters such as CJK and
-emoji, with font8x8 bitmap rendering as the last resort. See
+emoji, with font8x8 bitmap rendering as the last resort. Glyph outlines that are
+too wide for their terminal cells are fitted to the available width. See
 [`PngTextRenderer`](enums.md#pngtextrenderer-ui-snapshot-png) for coverage and cost. `PngOptions` is a
 crate-root import (not prelude) and can select `PngTextRenderer::Auto`, `Font`,
 or `Bitmap`; `font_family` / `font_path` let captures use system or Nerd Fonts.
