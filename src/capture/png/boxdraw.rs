@@ -77,7 +77,7 @@ pub(super) fn handles(ch: char) -> bool {
             }
             None => true,
         },
-        '\u{2580}'..='\u{259F}' | '\u{E0B0}'..='\u{E0BF}' => true,
+        '\u{2580}'..='\u{259F}' | '\u{25E2}'..='\u{25E5}' | '\u{E0B0}'..='\u{E0BF}' => true,
         _ => false,
     }
 }
@@ -90,6 +90,7 @@ pub(super) fn draw(image: &mut RgbImage, cell: CellPixels, ch: char, color: Rgb8
     }
     let light = decoration_thickness(cell);
     let mut canvas = Canvas { image, cell, color };
+    let ch = same_as_powerline_triangle(ch);
     match ch {
         '\u{2504}'..='\u{250B}' | '\u{254C}'..='\u{254F}' => canvas.dashes(ch, light),
         '\u{256D}'..='\u{2570}' => canvas.arc(ch, light),
@@ -102,6 +103,17 @@ pub(super) fn draw(image: &mut RgbImage, cell: CellPixels, ch: char, color: Rgb8
         },
     }
     true
+}
+
+/// U+25E2..=U+25E5 (`◢◣◤◥`) fill the same half cells as the solid Powerline corner triangles.
+fn same_as_powerline_triangle(ch: char) -> char {
+    match ch {
+        '\u{25E2}' => '\u{E0BA}',
+        '\u{25E3}' => '\u{E0B8}',
+        '\u{25E4}' => '\u{E0BC}',
+        '\u{25E5}' => '\u{E0BE}',
+        other => other,
+    }
 }
 
 fn line_arms(ch: char) -> Option<[Weight; 4]> {
@@ -648,6 +660,18 @@ mod tests {
         assert_ne!(thin[0].chars().next(), Some('.'));
         assert_ne!(thin[7].chars().last(), Some('.'));
         assert_eq!(thin[7].chars().next(), Some('.'));
+        for (geometric, powerline) in [
+            ('◢', '\u{E0BA}'),
+            ('◣', '\u{E0B8}'),
+            ('◤', '\u{E0BC}'),
+            ('◥', '\u{E0BE}'),
+        ] {
+            assert_eq!(
+                render(geometric, 8, 8),
+                render(powerline, 8, 8),
+                "{geometric}"
+            );
+        }
     }
 
     #[test]

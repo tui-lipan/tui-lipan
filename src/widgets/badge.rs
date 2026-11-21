@@ -126,8 +126,9 @@ impl Badge {
 
     /// Set the cap style used around the badge segment.
     ///
-    /// [`CapStyle::Round`] and [`CapStyle::Arrow`] use Nerd Font Powerline glyphs;
-    /// call [`CapStyle::font_safe`] when a font-independent fallback is needed.
+    /// [`CapStyle::Round`], [`CapStyle::Arrow`], and a [`CapStyle::Custom`] pair from the Private
+    /// Use Area need a Nerd Font; call [`CapStyle::font_safe`] when a font-independent fallback is
+    /// needed.
     /// With automatic width, each rendered cap can replace one cell of padding
     /// or one edge space in the label. Caps sit outside an explicit inner width.
     pub fn cap(mut self, cap_style: CapStyle) -> Self {
@@ -229,7 +230,7 @@ fn replace_padding_with_caps(
     cap_sides: CapSides,
     same_color_left: bool,
 ) -> (Arc<str>, Padding) {
-    let has_glyphs = cap_style.glyphs().is_some();
+    let has_glyphs = cap_style.chars().is_some();
     let replace_left = cap_sides.has_left() && (has_glyphs || same_color_left);
     let replace_right = cap_sides.has_right() && has_glyphs;
 

@@ -759,7 +759,7 @@ impl DraggableTabBar {
     /// Each cap replaces one of the tab's two padding cells, so the tab keeps its measured width
     /// and hit region. The glyphs are painted in the tab's own background color over the strip
     /// background, so the tab reads as a rounded or pointed pill. Pass
-    /// [`crate::widgets::CapStyle::chars`] for the named padded, half, round, and arrow sets.
+    /// [`crate::widgets::CapStyle::chars`] for a named or custom set.
     /// `None` (the default) keeps flat space padding on every tab.
     ///
     /// A tab falls back to flat padding when its background matches the strip's, or when either cap

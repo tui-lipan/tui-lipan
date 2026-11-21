@@ -78,6 +78,12 @@ impl Component for PowerlineBar {
                     .child(style_demo("Half", CapStyle::Half, ctx.state.nerd_font))
                     .child(style_demo("Round", CapStyle::Round, ctx.state.nerd_font))
                     .child(style_demo("Arrow", CapStyle::Arrow, ctx.state.nerd_font))
+                    .child(style_demo("Slant", CapStyle::Slant, ctx.state.nerd_font))
+                    .child(style_demo(
+                        "Trapez",
+                        CapStyle::Trapezoid,
+                        ctx.state.nerd_font,
+                    ))
                     .child(same_color_demo(ctx.state.nerd_font))
                     .child(standalone_demo(ctx.state.nerd_font))
                     .child(side_demo(ctx.state.nerd_font)),
