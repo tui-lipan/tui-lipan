@@ -543,22 +543,26 @@ fn default_keymap_path() -> Option<PathBuf> {
     None
 }
 
+// Per thread, so one test's override cannot leak into another test or the shared `DEFAULT_KEYMAP`.
 #[cfg(test)]
-static TEST_KEYMAP_ENV: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+thread_local! {
+    static TEST_KEYMAP_ENV: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
 
 #[cfg(test)]
 fn set_test_keymap_env(path: impl Into<PathBuf>) {
-    *TEST_KEYMAP_ENV.lock().expect("test env lock") = Some(path.into());
+    TEST_KEYMAP_ENV.set(Some(path.into()));
 }
 
 #[cfg(test)]
 fn remove_test_keymap_env() {
-    *TEST_KEYMAP_ENV.lock().expect("test env lock") = None;
+    TEST_KEYMAP_ENV.set(None);
 }
 
 #[cfg(test)]
 fn env_keymap_path() -> Option<PathBuf> {
-    TEST_KEYMAP_ENV.lock().expect("test env lock").clone()
+    TEST_KEYMAP_ENV.with_borrow(Clone::clone)
 }
 
 #[cfg(not(test))]
@@ -985,7 +989,7 @@ pub(crate) fn keymap_for_test(bindings: Vec<Binding>) -> Keymap {
 mod tests {
     use super::*;
     use std::fs;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn plain_key(c: char) -> KeyEvent {
         KeyEvent {
@@ -1077,11 +1081,12 @@ mod tests {
     }
 
     fn write_temp_keymap(contents: &str) -> PathBuf {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("time should move forward")
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!("tui-lipan-keymap-{unique}.conf"));
+        static NEXT_FILE: AtomicUsize = AtomicUsize::new(0);
+        let unique = NEXT_FILE.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "tui-lipan-keymap-{}-{unique}.conf",
+            std::process::id()
+        ));
         fs::write(&path, contents).expect("write test keymap");
         path
     }
@@ -1834,12 +1839,7 @@ mod tests {
 
     #[test]
     fn user_keymap_can_remap_and_disable_focus_actions() {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("time should move forward")
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!("tui-lipan-keymap-{unique}.conf"));
-        fs::write(&path, "focus-next = ctrl-j\nfocus-prev = none\n").expect("write test keymap");
+        let path = write_temp_keymap("focus-next = ctrl-j\nfocus-prev = none\n");
 
         let keymap = Keymap::new(
             KeymapConfig::from_clipboard_config(&ClipboardConfig::default()).keymap_path(&path),
@@ -1875,12 +1875,7 @@ mod tests {
 
     #[test]
     fn user_clear_binding_overrides_default_copy_combo() {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("time should move forward")
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!("tui-lipan-keymap-clear-{unique}.conf"));
-        fs::write(&path, "clear = ctrl-c\n").expect("write test keymap");
+        let path = write_temp_keymap("clear = ctrl-c\n");
 
         let keymap = Keymap::new(
             KeymapConfig::from_clipboard_config(&ClipboardConfig::default()).keymap_path(&path),
