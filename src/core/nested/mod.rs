@@ -806,6 +806,12 @@ impl ComponentRegistry {
         }
     }
 
+    pub(crate) fn ancestor_scopes(&self, scope: ScopeId) -> impl Iterator<Item = ScopeId> + '_ {
+        std::iter::successors(self.parent_scope(scope), |&parent| {
+            self.parent_scope(parent)
+        })
+    }
+
     pub(crate) fn mount(
         &mut self,
         element: &ComponentElement,
@@ -1226,6 +1232,12 @@ impl ComponentRegistry {
             }
         }
         out
+    }
+
+    fn memo_root_needs_refresh(&self, id: ComponentId, parent: Option<ComponentId>) -> bool {
+        self.is_valid(id)
+            && self.arena.get(id).parent == parent
+            && self.component_subtree_needs_refresh(id)
     }
 
     fn component_subtree_needs_refresh(&self, id: ComponentId) -> bool {

@@ -721,7 +721,7 @@ pub struct AppRunner<C: Component> {
     /// Tracks the last tree epoch for post-reconcile cache pruning.
     pub(crate) last_post_reconcile_epoch: u32,
     /// Nested component scopes whose cached subtree must be refreshed before
-    /// the next layout-only reconcile. Deduplicated at insert time via `dirty_scope_set`.
+    /// the next layout-only reconcile. A queued ancestor covers its descendants.
     pub(crate) dirty_component_scopes: Vec<ScopeId>,
     /// Tracks which scopes are already in `dirty_component_scopes` for O(1) dedup.
     dirty_scope_set: FxHashSet<ScopeId>,

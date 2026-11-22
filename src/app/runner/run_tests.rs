@@ -5307,6 +5307,182 @@ fn render_layout_only_frame<C: Component>(runner: &mut AppRunner<C>, viewport: R
     );
 }
 
+type ScopeViews = Rc<RefCell<Vec<(&'static str, usize)>>>;
+
+const DIRTY_SCOPE_VIEWPORT: Rect = Rect {
+    x: 0,
+    y: 0,
+    w: 30,
+    h: 8,
+};
+
+#[derive(Clone)]
+struct DirtyScopeProbe {
+    name: &'static str,
+    views: ScopeViews,
+    children: Vec<Self>,
+    wrap_middle_in_memo: bool,
+}
+
+impl DirtyScopeProbe {
+    fn new(name: &'static str, views: &ScopeViews) -> Self {
+        Self {
+            name,
+            views: Rc::clone(views),
+            children: Vec::new(),
+            wrap_middle_in_memo: false,
+        }
+    }
+
+    fn element(self) -> Element {
+        let name = self.name;
+        crate::child(move || self.clone(), ()).key(name)
+    }
+}
+
+impl Component for DirtyScopeProbe {
+    type Message = ();
+    type Properties = ();
+    type State = usize;
+
+    fn create_state(&self, _: &()) -> usize {
+        0
+    }
+
+    fn memo_key(&self, _: &(), _: &Context<Self>) -> Option<u64> {
+        matches!(self.name, "ancestor" | "middle").then_some(0)
+    }
+
+    fn on_window_focus_changed(&mut self, _: bool, ctx: &mut Context<Self>) -> Update {
+        match self.name {
+            "root" | "middle" => Update::none(),
+            _ => self.update((), ctx),
+        }
+    }
+
+    fn update(&mut self, _: (), ctx: &mut Context<Self>) -> Update {
+        ctx.state += 1;
+        Update::render()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        self.views.borrow_mut().push((self.name, ctx.state));
+        let mut stack = VStack::new().child(Text::new(ctx.state.to_string()));
+        for child in &self.children {
+            let element = if self.wrap_middle_in_memo && child.name == "middle" {
+                let child = child.clone();
+                crate::Memo::new(0).build(move || child.clone().element())
+            } else {
+                child.clone().element()
+            };
+            stack = stack.child(element);
+        }
+        stack.into()
+    }
+}
+
+fn dirty_scope_runner(wrap_middle_in_memo: bool) -> AppRunner<DirtyScopeProbe> {
+    let views = Rc::default();
+    let mut root = DirtyScopeProbe::new("root", &views);
+    let mut ancestor = DirtyScopeProbe::new("ancestor", &views);
+    ancestor.wrap_middle_in_memo = wrap_middle_in_memo;
+    let mut middle = DirtyScopeProbe::new("middle", &views);
+    middle.children.push(DirtyScopeProbe::new("leaf", &views));
+    ancestor.children.push(middle);
+    root.children = vec![ancestor, DirtyScopeProbe::new("sibling", &views)];
+
+    let mut runner = AppRunner::new(App::new().mouse(false), root.clone(), ());
+    init_runner(&mut runner, root, DIRTY_SCOPE_VIEWPORT);
+    views.borrow_mut().clear();
+    runner
+}
+
+fn probe_scope(runner: &AppRunner<DirtyScopeProbe>, key: &str) -> ScopeId {
+    let tree = &runner.core.tree;
+    let id = node_id_by_key(tree, key);
+    let NodeKind::Group(group) = &tree.node(id).kind else {
+        panic!("{key} should be a component group");
+    };
+    group.scope
+}
+
+fn assert_dirty_scope_frame(runner: &mut AppRunner<DirtyScopeProbe>) {
+    render_layout_only_frame(runner, DIRTY_SCOPE_VIEWPORT);
+    let views = runner.core.component.views.borrow();
+    assert_eq!(
+        views.as_slice(),
+        [("ancestor", 1), ("leaf", 1), ("sibling", 1)]
+    );
+    assert_eq!(text_under_key(runner, "leaf"), "1");
+    assert_eq!(text_under_key(runner, "sibling"), "1");
+}
+
+#[test]
+fn dirty_scope_coalescing_refreshes_each_view_once_after_a_hook_broadcast() {
+    let mut runner = dirty_scope_runner(false);
+    let mut dirty = DirtyTracker::default();
+    assert!(runner.set_window_focused(false, &mut dirty));
+    assert_eq!(dirty.level(), DirtyLevel::LayoutOnly);
+    assert_dirty_scope_frame(&mut runner);
+}
+
+#[test]
+fn dirty_scope_coalescing_replaces_a_recorded_descendant_with_its_ancestor() {
+    let mut runner = dirty_scope_runner(false);
+    for key in ["leaf", "ancestor", "sibling"] {
+        let scope = probe_scope(&runner, key);
+        runner
+            .core
+            .queue
+            .borrow_mut()
+            .push_back((scope, Box::new(())));
+    }
+    let mut dirty = DirtyTracker::default();
+    runner.process_pending_messages(&mut dirty).unwrap();
+    assert_eq!(dirty.level(), DirtyLevel::LayoutOnly);
+    assert_dirty_scope_frame(&mut runner);
+}
+
+#[test]
+fn dirty_scope_coalescing_refreshes_a_leaf_inside_a_retained_memo_subtree_once() {
+    let mut runner = dirty_scope_runner(true);
+    let mut dirty = DirtyTracker::default();
+    assert!(runner.set_window_focused(false, &mut dirty));
+    assert_eq!(dirty.level(), DirtyLevel::LayoutOnly);
+    assert_dirty_scope_frame(&mut runner);
+}
+
+#[cfg(feature = "devtools")]
+#[test]
+fn dirty_scope_coalescing_subsumes_the_extra_root_only_for_the_application_root() {
+    let mut runner = dirty_scope_runner(false);
+    let views = &runner.core.component.views;
+    let extra = DirtyScopeProbe::new("extra", views).element();
+    runner.core.set_extra_root_element(Some(extra));
+    runner
+        .core
+        .render_element(DIRTY_SCOPE_VIEWPORT, None, None, None);
+    let extra = runner.core.extra_root_scope().expect("mounted extra root");
+    let leaf = probe_scope(&runner, "leaf");
+
+    runner.mark_dirty_scope(leaf);
+    runner.mark_dirty_scope(extra);
+    assert_eq!(runner.dirty_component_scopes, [leaf, extra]);
+
+    let root = ScopeId(1);
+    runner.mark_dirty_scope(root);
+    runner.mark_dirty_scope(extra);
+    runner.mark_dirty_scope(leaf);
+    assert_eq!(runner.dirty_component_scopes, [root]);
+
+    for scope in [extra, leaf] {
+        runner.core.update_from_boxed(scope, Box::new(())).unwrap();
+    }
+    render_layout_only_frame(&mut runner, DIRTY_SCOPE_VIEWPORT);
+    assert_eq!(text_under_key(&runner, "leaf"), "1");
+    assert_eq!(text_under_key(&runner, "extra"), "1");
+}
+
 /// The layout pass a crossing asks for has to actually land, twice over: the view it re-runs must
 /// see the hover position that made it dirty, and the questions asked during that partial pass must
 /// outlive the frame so the *next* crossing is priced as a view pass too.

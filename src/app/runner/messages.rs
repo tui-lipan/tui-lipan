@@ -158,18 +158,36 @@ impl<C: Component> AppRunner<C> {
         false
     }
 
-    /// Record that `scope`'s view must run again, so a layout-only frame refreshes exactly it.
-    ///
-    /// The root subsumes every other scope, so marking it discards the rest.
+    /// Queue the outermost dirty scopes. Expanding one also refreshes its dirty descendants.
     pub(super) fn mark_dirty_scope(&mut self, scope: ScopeId) {
-        if scope == ScopeId(1) {
+        let root = ScopeId(1);
+        if self.dirty_scope_set.contains(&root) || self.dirty_scope_set.contains(&scope) {
+            return;
+        }
+        if scope == root {
             self.dirty_component_scopes.clear();
             self.dirty_scope_set.clear();
-            self.dirty_scope_set.insert(ScopeId(1));
-            self.dirty_component_scopes.push(ScopeId(1));
-        } else if self.dirty_scope_set.insert(scope) {
-            self.dirty_component_scopes.push(scope);
+        } else {
+            let components = &self.core.components;
+            if components
+                .ancestor_scopes(scope)
+                .any(|ancestor| self.dirty_scope_set.contains(&ancestor))
+            {
+                return;
+            }
+            self.dirty_component_scopes.retain(|&queued| {
+                if components
+                    .ancestor_scopes(queued)
+                    .any(|ancestor| ancestor == scope)
+                {
+                    self.dirty_scope_set.remove(&queued);
+                    return false;
+                }
+                true
+            });
         }
+        self.dirty_scope_set.insert(scope);
+        self.dirty_component_scopes.push(scope);
     }
 
     pub(super) fn apply_framework_commands(&mut self) -> bool {
