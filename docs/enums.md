@@ -337,7 +337,7 @@ Actions configurable from Rust via `FrameworkKeymap` and `App::framework_keymap(
 
 | Common variant | Default binding (typical) | Use |
 |---------|---------------------------|------------------------|
-| `Quit` | `ctrl-q`, fallback `ctrl-c` | `.unbind(FrameworkAction::Quit)` or rebind (`ctrl-c` only quits if nothing else handles it) |
+| `Quit` | `ctrl-q`, fallback `ctrl-c` | `.unbind(FrameworkAction::Quit)` or rebind (plain `ctrl-c` always runs as lowest-priority fallback regardless of source; chords like `ctrl-c x` and other keys stay normal) |
 | `DismissOverlay` | `esc` | Overlay dismissal |
 | `FocusNext` | `tab` | Tab traversal |
 | `FocusPrev` | `shift-tab` | Reverse tab traversal |

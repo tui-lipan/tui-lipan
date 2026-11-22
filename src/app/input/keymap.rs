@@ -1,5 +1,5 @@
 use crate::clipboard::{ClipboardConfig, PasteShiftInsertBehavior};
-use crate::core::event::{KeyCode, KeyEvent};
+use crate::core::event::{KeyCode, KeyEvent, KeyMods};
 use crate::input::{
     ChordMatcher, ChordResult, KeyBinding, KeyBindingParseError, KeyBindings, is_none_binding,
 };
@@ -7,9 +7,6 @@ use std::collections::{HashMap as StdHashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::LazyLock;
-
-#[cfg(test)]
-use crate::core::event::KeyMods;
 
 #[cfg(not(test))]
 const KEYMAP_ENV: &str = "TUI_LIPAN_KEYMAP";
@@ -502,9 +499,19 @@ fn parse_binding(raw: &str) -> Result<KeyBinding, KeyBindingParseError> {
     KeyBinding::from_str(raw)
 }
 
-fn binding_mode_for(action: Action, _combination: &KeyBinding) -> BindingMode {
+fn is_plain_ctrl_c(combination: &KeyBinding) -> bool {
+    const PLAIN_CTRL_C: [KeyEvent; 1] = [KeyEvent {
+        code: KeyCode::Char('c'),
+        mods: KeyMods::CTRL,
+    }];
+    combination.matches_sequence(&PLAIN_CTRL_C)
+}
+
+fn binding_mode_for(action: Action, combination: &KeyBinding) -> BindingMode {
     if action.is_clipboard() {
         BindingMode::Performable
+    } else if action == Action::Quit && is_plain_ctrl_c(combination) {
+        BindingMode::Fallback
     } else {
         BindingMode::Always
     }
@@ -691,21 +698,27 @@ fn apply_framework_keymap_overrides(bindings: &mut Vec<Binding>, keymap: &Framew
         let action = framework_action.action();
         bindings.retain(|binding| binding.action != action);
         if let FrameworkBindingOverride::Bind(key_bindings) = override_ {
-            // Some dispatch paths act on every binding for a key, so a key this bind claims must
-            // not keep a default, file, or earlier Rust binding.
-            bindings.retain(|binding| {
-                !key_bindings
-                    .iter()
-                    .any(|claimed| *claimed == binding.combination)
-            });
-            bindings.splice(
-                0..0,
-                key_bindings.iter().cloned().map(|combination| Binding {
+            let new_bindings: Vec<Binding> = key_bindings
+                .iter()
+                .cloned()
+                .map(|combination| Binding {
                     mode: binding_mode_for(action, &combination),
                     combination,
                     action,
-                }),
-            );
+                })
+                .collect();
+            // Some dispatch paths act on every binding for a key, so a non-fallback bind claims
+            // its key away from any default, file, or earlier Rust binding. Fallback bindings
+            // (plain `ctrl-c` for `Quit`) yield to higher-priority actions such as performable
+            // `Copy`, so they only replace other fallback bindings on the same key.
+            bindings.retain(|binding| {
+                !new_bindings.iter().any(|claimed| {
+                    claimed.combination == binding.combination
+                        && (claimed.mode != BindingMode::Fallback
+                            || binding.mode == BindingMode::Fallback)
+                })
+            });
+            bindings.splice(0..0, new_bindings);
         }
     }
 }
@@ -804,6 +817,7 @@ fn default_bindings(config: &KeymapConfig) -> Vec<Binding> {
 
     // --- App ---
     bind("ctrl-q", Action::Quit);
+    bind("ctrl-c", Action::Quit);
 
     // --- Overlays ---
     bind("esc", Action::DismissOverlay);
@@ -814,16 +828,6 @@ fn default_bindings(config: &KeymapConfig) -> Vec<Binding> {
 
     // --- DevTools ---
     bind("f12", Action::ToggleDevTools);
-
-    // Lowest-priority fallback quit: only acts after copy, focused widgets (including terminals),
-    // component `on_key` bubbling, app commands, and normal framework bindings decline `Ctrl+C`.
-    if let Ok(comb) = parse_binding("ctrl-c") {
-        bindings.push(Binding {
-            combination: comb,
-            action: Action::Quit,
-            mode: BindingMode::Fallback,
-        });
-    }
 
     bindings
 }
@@ -852,10 +856,9 @@ impl Keymap {
         let defaults = default_bindings(&config);
         for binding in defaults {
             if user_keymap.overridden_actions.contains(&binding.action)
-                || user_keymap
-                    .bindings
-                    .iter()
-                    .any(|user| user.combination == binding.combination)
+                || user_keymap.bindings.iter().any(|user| {
+                    user.mode != BindingMode::Fallback && user.combination == binding.combination
+                })
             {
                 continue;
             }
@@ -1720,6 +1723,112 @@ mod tests {
                 .matches(ctrl_key('c'))
                 .iter()
                 .all(|binding| binding.action != Action::Quit)
+        );
+    }
+
+    #[test]
+    fn plain_ctrl_c_quit_is_always_fallback_across_file_and_rust_api() {
+        // 1. Keymap file: `quit = ctrl-q, ctrl-c` -> ctrl-q Always, ctrl-c Fallback, Copy preserved.
+        let path = write_temp_keymap("quit = ctrl-q, ctrl-c\n");
+        let file_keymap = Keymap::new(
+            KeymapConfig::from_clipboard_config(&ClipboardConfig::default()).keymap_path(&path),
+        );
+        let _ = fs::remove_file(&path);
+
+        assert!(file_keymap.matches(ctrl_key('q')).iter().any(|binding| {
+            binding.action == Action::Quit && binding.mode == BindingMode::Always
+        }));
+        assert!(file_keymap.matches(ctrl_key('c')).iter().any(|binding| {
+            binding.action == Action::Quit && binding.mode == BindingMode::Fallback
+        }));
+        assert!(file_keymap.matches(ctrl_key('c')).iter().any(|binding| {
+            binding.action == Action::Copy && binding.mode == BindingMode::Performable
+        }));
+
+        // 2. Rust API (`FrameworkKeymap::bind` / `App::global_quit(Some(..))`): same rule.
+        let rust_both = rust_keymap(FrameworkKeymap::default().bind(
+            FrameworkAction::Quit,
+            KeyBindings::from_str("ctrl-q, ctrl-c").unwrap(),
+        ));
+        assert!(rust_both.matches(ctrl_key('q')).iter().any(|binding| {
+            binding.action == Action::Quit && binding.mode == BindingMode::Always
+        }));
+        assert!(rust_both.matches(ctrl_key('c')).iter().any(|binding| {
+            binding.action == Action::Quit && binding.mode == BindingMode::Fallback
+        }));
+        assert!(rust_both.matches(ctrl_key('c')).iter().any(|binding| {
+            binding.action == Action::Copy && binding.mode == BindingMode::Performable
+        }));
+
+        // 3. `quit = ctrl-c` alone (file and Rust): ctrl-q unbound, ctrl-c Fallback, Copy kept.
+        let path = write_temp_keymap("quit = ctrl-c\n");
+        let file_only_c = Keymap::new(
+            KeymapConfig::from_clipboard_config(&ClipboardConfig::default()).keymap_path(&path),
+        );
+        let _ = fs::remove_file(&path);
+        assert!(
+            file_only_c
+                .matches(ctrl_key('q'))
+                .iter()
+                .all(|binding| binding.action != Action::Quit)
+        );
+        assert!(file_only_c.matches(ctrl_key('c')).iter().any(|binding| {
+            binding.action == Action::Quit && binding.mode == BindingMode::Fallback
+        }));
+        assert!(file_only_c.matches(ctrl_key('c')).iter().any(|binding| {
+            binding.action == Action::Copy && binding.mode == BindingMode::Performable
+        }));
+
+        let rust_only_c = rust_keymap(FrameworkKeymap::default().bind(
+            FrameworkAction::Quit,
+            KeyBindings::from_str("ctrl-c").unwrap(),
+        ));
+        assert!(
+            rust_only_c
+                .matches(ctrl_key('q'))
+                .iter()
+                .all(|binding| binding.action != Action::Quit)
+        );
+        assert!(rust_only_c.matches(ctrl_key('c')).iter().any(|binding| {
+            binding.action == Action::Quit && binding.mode == BindingMode::Fallback
+        }));
+        assert!(rust_only_c.matches(ctrl_key('c')).iter().any(|binding| {
+            binding.action == Action::Copy && binding.mode == BindingMode::Performable
+        }));
+
+        // 4. Chords such as `ctrl-c x` and other keys stay Always.
+        let chord = parse_binding("ctrl-c x").unwrap();
+        let ctrl_shift_c = parse_binding("ctrl-shift-c").unwrap();
+        let plain_ctrl_c = parse_binding("ctrl-c").unwrap();
+        assert_eq!(binding_mode_for(Action::Quit, &chord), BindingMode::Always);
+        assert_eq!(
+            binding_mode_for(Action::Quit, &ctrl_shift_c),
+            BindingMode::Always
+        );
+        assert_eq!(
+            binding_mode_for(Action::Quit, &plain_ctrl_c),
+            BindingMode::Fallback
+        );
+        assert_eq!(
+            binding_mode_for(Action::Clear, &plain_ctrl_c),
+            BindingMode::Always
+        );
+
+        // 5. Rebinding ctrl-c to another action (file and Rust) claims it from Copy and Quit.
+        let path = write_temp_keymap("clear = ctrl-c\n");
+        let file_rebound = Keymap::new(
+            KeymapConfig::from_clipboard_config(&ClipboardConfig::default()).keymap_path(&path),
+        );
+        let _ = fs::remove_file(&path);
+        assert_eq!(actions_on(&file_rebound, ctrl_key('c')), [Action::Clear]);
+
+        let rust_rebound = rust_keymap(FrameworkKeymap::default().bind(
+            FrameworkAction::DeleteToLineStart,
+            KeyBindings::from_str("ctrl-c").unwrap(),
+        ));
+        assert_eq!(
+            actions_on(&rust_rebound, ctrl_key('c')),
+            [Action::DeleteToLineStart]
         );
     }
 

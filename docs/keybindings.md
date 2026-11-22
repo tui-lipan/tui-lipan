@@ -60,8 +60,9 @@ An app with its own keymap file can accept editing keys there and pass them on t
 `FrameworkKeymap`.
 Binding an action replaces all of its default keys, so list any it should keep, for example
 `"ctrl-w, ctrl-backspace, alt-backspace"` for `DeleteWordLeft`. A Rust binding takes its key away from
-any default or keymap-file binding, so binding `ctrl-c` to another action also stops `Ctrl+C` from
-copying. When two Rust bindings share a key the later `bind` wins.
+any default or keymap-file binding (except fallback `quit` on plain `ctrl-c`, which yields to
+higher-priority bindings such as `copy`), so binding `ctrl-c` to another action also stops `Ctrl+C`
+from copying and quitting. When two Rust bindings share a key the later `bind` wins.
 
 The text-widget `clear` action also accepts `clear-text` and `clear-input`
 aliases. It has no default binding; users or apps opt in, for example
@@ -140,12 +141,16 @@ focus_prev = none
 ```
 
 By default `quit` binds `Ctrl+Q` as a normal framework shortcut and `Ctrl+C` as a lowest-priority
-fallback: `Ctrl+C` only quits after copy (when a selection exists), the focused widget (including
-an embedded `Terminal` forwarding `Ctrl+C` to its child per `TerminalKeyPolicy`), component
-`on_key` bubbling, and app command shortcuts all decline it. Setting `quit = none` in `keymap.conf`
-or calling `App::global_quit(None)` / `FrameworkKeymap::default().unbind(FrameworkAction::Quit)`
-disables both `Ctrl+Q` and fallback `Ctrl+C`; rebinding `quit` replaces both defaults with your
-explicit bindings.
+fallback. Single-step plain `ctrl-c` bound to `quit` always runs in fallback mode regardless of
+where it is configured (built-in defaults, `keymap.conf`, `FrameworkKeymap::bind`, or
+`App::global_quit(Some(...))`): it only quits after copy (when a selection exists), the focused
+widget (including an embedded `Terminal` forwarding `Ctrl+C` to its child per `TerminalKeyPolicy`),
+component `on_key` bubbling, app command shortcuts, and normal framework bindings all decline it,
+and it does not displace performable `copy` on `Ctrl+C`. Every other key bound to `quit` —
+including `ctrl-q`, modified variants such as `ctrl-shift-c`, and chords such as `ctrl-c x` — runs
+as a normal framework shortcut. Setting `quit = none` in `keymap.conf` or calling
+`App::global_quit(None)` / `FrameworkKeymap::default().unbind(FrameworkAction::Quit)` disables both
+`Ctrl+Q` and fallback `Ctrl+C`; rebinding `quit` replaces both defaults with your explicit bindings.
 
 To remap focus traversal instead of disabling it:
 

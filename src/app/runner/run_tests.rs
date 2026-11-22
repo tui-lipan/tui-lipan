@@ -7706,6 +7706,152 @@ fn focused_terminal_receives_ctrl_c_without_quitting() {
 
 #[cfg(feature = "terminal")]
 #[test]
+fn file_configured_quit_keeps_ctrl_c_fallback_for_terminal_and_selection_copy() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct SelectedInputSmoke;
+
+    impl Component for SelectedInputSmoke {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            crate::widgets::Input::new("copied")
+                .cursor(6)
+                .anchor(Some(0))
+                .key("input")
+        }
+    }
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time should move forward")
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("tui-lipan-file-quit-{unique}.conf"));
+    std::fs::write(&path, "quit = ctrl-q, ctrl-c\n").expect("write test keymap");
+
+    // 1. Focused interactive Terminal with file-configured `quit = ctrl-q, ctrl-c` (TestBackend).
+    let terminal_keys = Rc::new(RefCell::new(Vec::new()));
+    let mut backend = crate::TestBackend::new_with_app(
+        App::new().mouse(false).keymap_path(&path),
+        TerminalKeyPolicySmoke {
+            keys: Rc::clone(&terminal_keys),
+        },
+        (),
+    );
+    backend.render();
+    let terminal_id = backend
+        .core
+        .tree
+        .iter()
+        .find_map(|node| matches!(node.kind, NodeKind::Terminal(_)).then_some(node.id))
+        .expect("terminal widget");
+    backend.set_focused(terminal_id);
+
+    backend.send_key(ctrl_char('c')).expect("send ctrl-c");
+    assert!(
+        !backend.core.ctx.should_quit(),
+        "file-configured quit = ctrl-q, ctrl-c must let focused Terminal consume Ctrl+C"
+    );
+    assert_eq!(terminal_keys.borrow().as_slice(), &[ctrl_char('c')]);
+
+    // 2. Same on AppRunner::dispatch_layered_key directly.
+    let runner_keys = Rc::new(RefCell::new(Vec::new()));
+    let mut runner = AppRunner::new(
+        App::new().mouse(false).keymap_path(&path),
+        TerminalKeyPolicySmoke {
+            keys: Rc::clone(&runner_keys),
+        },
+        (),
+    );
+    runner.core.render_element(
+        Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 10,
+        },
+        None,
+        None,
+        None,
+    );
+    let terminal_id = runner
+        .core
+        .tree
+        .iter()
+        .find_map(|node| matches!(node.kind, NodeKind::Terminal(_)).then_some(node.id))
+        .expect("terminal widget");
+    runner.focus.focused = Some(terminal_id);
+    let res = runner.dispatch_layered_key(ctrl_char('c'));
+    assert!(res.consumed);
+    assert!(
+        !res.quit,
+        "AppRunner must let focused Terminal consume Ctrl+C under file-configured quit"
+    );
+    assert_eq!(runner_keys.borrow().as_slice(), &[ctrl_char('c')]);
+
+    // 3. Selection copy still wins over file-configured `quit = ctrl-q, ctrl-c` (TestBackend).
+    let writes = Rc::new(RefCell::new(Vec::new()));
+    let mut copy_backend = crate::TestBackend::new_with_app(
+        App::new()
+            .mouse(false)
+            .keymap_path(&path)
+            .clipboard_provider(RecordingClipboardProvider {
+                writes: Rc::clone(&writes),
+            }),
+        SelectedInputSmoke,
+        (),
+    );
+    copy_backend.render();
+    copy_backend.focus_key(&crate::Key::from("input"));
+    copy_backend.send_key(ctrl_char('c')).expect("send ctrl-c");
+    assert!(
+        !copy_backend.core.ctx.should_quit(),
+        "selection copy must win over file-configured fallback Ctrl+C quit"
+    );
+    assert_eq!(writes.borrow().as_slice(), &["copied"]);
+
+    // 4. Rust API (`App::global_quit(Some("ctrl-q, ctrl-c"))`) behaves identically on TestBackend.
+    let rust_terminal_keys = Rc::new(RefCell::new(Vec::new()));
+    let mut rust_backend = crate::TestBackend::new_with_app(
+        App::new()
+            .mouse(false)
+            .user_keymap_policy(crate::UserKeymapPolicy::Disabled)
+            .global_quit(Some(
+                crate::input::KeyBindings::from_str("ctrl-q, ctrl-c").expect("bindings"),
+            )),
+        TerminalKeyPolicySmoke {
+            keys: Rc::clone(&rust_terminal_keys),
+        },
+        (),
+    );
+    rust_backend.render();
+    let terminal_id = rust_backend
+        .core
+        .tree
+        .iter()
+        .find_map(|node| matches!(node.kind, NodeKind::Terminal(_)).then_some(node.id))
+        .expect("terminal widget");
+    rust_backend.set_focused(terminal_id);
+    rust_backend.send_key(ctrl_char('c')).expect("send ctrl-c");
+    assert!(
+        !rust_backend.core.ctx.should_quit(),
+        "App::global_quit(Some(ctrl-q, ctrl-c)) must keep Ctrl+C as fallback for focused Terminal"
+    );
+    assert_eq!(rust_terminal_keys.borrow().as_slice(), &[ctrl_char('c')]);
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[cfg(feature = "terminal")]
+#[test]
 fn forward_prefix_replays_swallowed_prefix_on_pending_chord_mismatch() {
     let terminal_keys = Rc::new(RefCell::new(Vec::new()));
     let app = App::new()
