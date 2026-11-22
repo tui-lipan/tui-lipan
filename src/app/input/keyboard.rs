@@ -378,7 +378,21 @@ fn dispatch_selection_clipboard_request(
                             id,
                         )
                     };
-                    ctx.record_copy_feedback_dispatch(dispatch)
+                    let reported =
+                        dispatch
+                            .mutated
+                            .then(|| crate::utils::text::ReportedTextState {
+                                value: std::sync::Arc::from(input.text().to_owned()),
+                                cursor: input.cursor(),
+                                anchor: input.anchor(),
+                            });
+                    let handled = ctx.record_copy_feedback_dispatch(dispatch);
+                    if let Some(reported) = reported
+                        && let NodeKind::Input(node) = &mut tree.node_mut(id).kind
+                    {
+                        node.last_reported = Some(reported);
+                    }
+                    handled
                 } else {
                     let mut context = ReadOnlyClipboardContext::new(
                         value.as_ref(),
@@ -450,7 +464,21 @@ fn dispatch_selection_clipboard_request(
                             id,
                         )
                     };
-                    ctx.record_copy_feedback_dispatch(dispatch)
+                    let reported =
+                        dispatch
+                            .mutated
+                            .then(|| crate::utils::text::ReportedTextState {
+                                value: std::sync::Arc::from(editor.text().to_owned()),
+                                cursor: editor.cursor(),
+                                anchor: editor.anchor(),
+                            });
+                    let handled = ctx.record_copy_feedback_dispatch(dispatch);
+                    if let Some(reported) = reported
+                        && let NodeKind::TextArea(node) = &mut tree.node_mut(id).kind
+                    {
+                        node.last_reported = Some(reported);
+                    }
+                    handled
                 } else {
                     let excluded: &[(usize, usize)] = copy_excluded_bytes
                         .as_deref()

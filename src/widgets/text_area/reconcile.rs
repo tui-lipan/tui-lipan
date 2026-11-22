@@ -20,10 +20,23 @@ pub fn reconcile_text_area(
     rect: Rect,
     constraints: &LayoutConstraints,
 ) -> NodeId {
-    let normalized_cursor = crate::utils::text::clamp_cursor(&text_area.value, text_area.cursor);
-    let normalized_anchor = text_area
-        .anchor
-        .map(|anchor| crate::utils::text::clamp_cursor(&text_area.value, anchor));
+    let prev_cursor_state = match &tree.node(id).kind {
+        NodeKind::TextArea(existing) => Some((
+            existing.value.as_ref(),
+            existing.cursor,
+            existing.anchor,
+            existing.last_reported.as_ref(),
+        )),
+        _ => None,
+    };
+    let (normalized_cursor, normalized_anchor) =
+        crate::utils::text::resolve_uncontrolled_cursor_and_anchor(
+            &text_area.value,
+            text_area.cursor,
+            text_area.anchor,
+            text_area.cursor_controlled,
+            prev_cursor_state,
+        );
     let normalized_text_area;
     let text_area =
         if normalized_cursor != text_area.cursor || normalized_anchor != text_area.anchor {

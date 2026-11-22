@@ -130,6 +130,14 @@ pub(super) fn emit_text_area_editor_change(
         editor.remember_text_area_sentinels(&new_value, &pruned);
     }
 
+    if let NodeKind::TextArea(ta) = &mut tree.node_mut(id).kind {
+        ta.last_reported = Some(crate::utils::text::ReportedTextState {
+            value: new_value,
+            cursor: editor.cursor(),
+            anchor: editor.anchor(),
+        });
+    }
+
     cancel_text_area_smooth_scroll(tree, id);
     true
 }

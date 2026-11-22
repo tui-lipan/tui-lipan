@@ -851,6 +851,13 @@ impl<C: Component> AppRunner<C> {
             if let NodeKind::TextArea(node) = &mut self.core.tree.node_mut(change.node_id).kind {
                 node.cursor = new_cursor;
                 node.anchor = new_anchor;
+                if change.on_change.is_some() {
+                    node.last_reported = Some(crate::utils::text::ReportedTextState {
+                        value: change.value.clone(),
+                        cursor: new_cursor,
+                        anchor: new_anchor,
+                    });
+                }
             }
 
             self.sync_textarea_vim_external_selection(
@@ -1144,6 +1151,13 @@ impl<C: Component> AppRunner<C> {
             });
 
             if let Some(cb) = &change.on_change {
+                if let NodeKind::Input(node) = &mut self.core.tree.node_mut(change.node_id).kind {
+                    node.last_reported = Some(crate::utils::text::ReportedTextState {
+                        value: change.value.clone(),
+                        cursor: new_cursor,
+                        anchor: new_anchor,
+                    });
+                }
                 cb.emit(InputEvent {
                     value: change.value,
                     cursor: new_cursor,

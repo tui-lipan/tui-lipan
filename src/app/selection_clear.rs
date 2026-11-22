@@ -61,6 +61,13 @@ pub(crate) fn clear_node_selection(tree: &mut NodeTree, id: NodeId) -> bool {
 
     if let Some((on_change, value, cursor)) = clear_input {
         if let Some(cb) = on_change {
+            if let NodeKind::Input(node) = &mut tree.node_mut(id).kind {
+                node.last_reported = Some(crate::utils::text::ReportedTextState {
+                    value: value.clone(),
+                    cursor,
+                    anchor: None,
+                });
+            }
             cb.emit(crate::widgets::InputEvent {
                 value,
                 cursor,
@@ -74,6 +81,13 @@ pub(crate) fn clear_node_selection(tree: &mut NodeTree, id: NodeId) -> bool {
 
     if let Some((on_change, value, cursor)) = clear_text_area {
         if let Some(cb) = on_change {
+            if let NodeKind::TextArea(node) = &mut tree.node_mut(id).kind {
+                node.last_reported = Some(crate::utils::text::ReportedTextState {
+                    value: value.clone(),
+                    cursor,
+                    anchor: None,
+                });
+            }
             cb.emit(crate::widgets::TextAreaEvent {
                 value,
                 cursor,

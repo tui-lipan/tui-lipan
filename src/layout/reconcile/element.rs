@@ -152,12 +152,11 @@ pub(crate) fn reconcile_element(ctx: &mut ReconcileCtx<'_>, args: ElementReconci
             let node = ctx.tree.node_mut(id);
             node.rect = rect;
             node.children.clear();
-            // Trivial payload: replace each reconcile.
-            reuse_or_replace_kind(
-                &mut node.kind,
-                |_existing| false,
-                || NodeKind::from((**input).clone()),
-            );
+            let prev = match &node.kind {
+                NodeKind::Input(existing) => Some(existing),
+                _ => None,
+            };
+            node.kind = NodeKind::Input(crate::widgets::internal::reconcile_input(input, prev));
 
             id
         }

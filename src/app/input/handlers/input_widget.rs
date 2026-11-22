@@ -94,7 +94,19 @@ pub(crate) fn handle_key(
                 ctx.copy_feedback,
                 id,
             );
+            let reported = dispatch
+                .mutated
+                .then(|| crate::utils::text::ReportedTextState {
+                    value: Arc::from(input.text().to_owned()),
+                    cursor: input.cursor(),
+                    anchor: input.anchor(),
+                });
             clipboard_handled = ctx.record_copy_feedback_dispatch(dispatch);
+            if let Some(reported) = reported
+                && let NodeKind::Input(node) = &mut tree.node_mut(id).kind
+            {
+                node.last_reported = Some(reported);
+            }
         }
     }
 
@@ -132,10 +144,20 @@ pub(crate) fn handle_key(
             {
                 cb.emit(edit);
             }
+            let next_value: Arc<str> = Arc::from(input.text().to_owned());
+            let next_cursor = input.cursor();
+            let next_anchor = input.anchor();
+            if let NodeKind::Input(node) = &mut tree.node_mut(id).kind {
+                node.last_reported = Some(crate::utils::text::ReportedTextState {
+                    value: next_value.clone(),
+                    cursor: next_cursor,
+                    anchor: next_anchor,
+                });
+            }
             cb.emit(InputEvent {
-                value: Arc::from(input.text().to_owned()),
-                cursor: input.cursor(),
-                anchor: input.anchor(),
+                value: next_value,
+                cursor: next_cursor,
+                anchor: next_anchor,
             });
             true
         } else if let Some(cb) = on_key.as_ref() {
@@ -188,14 +210,27 @@ pub(crate) fn handle_paste(
     input.sync_history_scope(history_scope.as_ref());
     input.sync_from(value.as_ref(), cursor, anchor);
 
-    let mut context = InputClipboardContext::new(
-        input,
-        on_change.as_ref(),
-        on_edit.as_ref(),
-        !is_masked,
-        true,
-        is_masked,
-    );
+    let handled = {
+        let mut context = InputClipboardContext::new(
+            input,
+            on_change.as_ref(),
+            on_edit.as_ref(),
+            !is_masked,
+            true,
+            is_masked,
+        );
 
-    router::dispatch_text_paste(text, &mut context, ctx.clipboard_config.paste_max_bytes)
+        router::dispatch_text_paste(text, &mut context, ctx.clipboard_config.paste_max_bytes)
+    };
+    if handled {
+        let reported = crate::utils::text::ReportedTextState {
+            value: Arc::from(input.text().to_owned()),
+            cursor: input.cursor(),
+            anchor: input.anchor(),
+        };
+        if let NodeKind::Input(node) = &mut tree.node_mut(id).kind {
+            node.last_reported = Some(reported);
+        }
+    }
+    handled
 }

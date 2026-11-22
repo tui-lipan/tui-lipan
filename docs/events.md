@@ -706,9 +706,10 @@ pub struct InputEvent {
 }
 ```
 
-Use `Input::bound(&TextInput)` (recommended) or `Input::new("").bind(&TextInput)` and
-`InputEvent::apply_to(&mut TextInput)` to keep value, cursor, and selection in sync across
-rerenders. `bound` is a shorthand that creates and binds in one call.
+With `Input::new(value)`, updating your string from `ev.value` is enough — the runtime preserves
+cursor and selection across rerenders. Use `Input::bound(&TextInput)` (or
+`Input::new("").bind(&TextInput)`) with `InputEvent::apply_to(&mut TextInput)` when your app needs
+to own cursor and selection directly.
 
 ### `SentinelEvent`
 

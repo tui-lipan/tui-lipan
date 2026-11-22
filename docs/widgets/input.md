@@ -308,16 +308,15 @@ input needs an explicit override. `SearchPalette` query inputs follow the same
 inheritance unless their `input_caret_shape(...)` or `input_caret_color(...)`
 setter is used.
 
-> **State binding:** Use `Input::bound(&state)` to create an `Input` that reads value, cursor, and anchor from a `TextInput` state bundle, and `InputEvent::apply_to(&mut state)` in your `update` handler to write changes back. This preserves cursor position and selection across rerenders. Using `Input::new(value)` resets the cursor to the end on every render.
+> **Cursor and state:** `Input::new(value)` is the normal path — store a plain `String` in component state and update it from `on_change`. The runtime preserves cursor position and selection across rerenders, and moves the cursor to the end when your app replaces the value externally. Use `Input::bound(&state)` (or `.bind(&state)`) with a `TextInput` state bundle when your app needs to own, inspect, or drive cursor and selection directly.
 
 | Prop | Type | Description |
 |------|------|-------------|
-| *(constructor)* | `impl Into<Arc<str>>` | `Input::new(value)` — current text (cursor at end) |
-| *(constructor)* | `&TextInput` | `Input::bound(state)` — bind value, cursor, and anchor from state |
-| `.bind(state)` | `&TextInput` | Apply cursor, anchor, and value from state onto an existing `Input` |
-| `value` | `impl Into<Arc<str>>` | Current text value (use `bound`/`bind` instead for cursor preservation) |
-| `cursor` | `usize` | Byte cursor position |
-| `anchor` | `Option<usize>` | Selection anchor (for text selection) |
+| *(constructor)* | `impl Into<Arc<str>>` | `Input::new(value)` — current text (cursor starts at end, then preserved by the runtime) |
+| *(constructor)* | `&TextInput` | `Input::bound(state)` — controlled value, cursor, and anchor from state |
+| `.bind(state)` | `&TextInput` | Apply controlled cursor, anchor, and value from state onto an existing `Input` |
+| `cursor` | `usize` | Controlled byte cursor position |
+| `anchor` | `Option<usize>` | Controlled selection anchor (for text selection) |
 | `caret_shape` | `CaretShape` | Override the active theme's cursor shape (`Block`, `Bar`, or `Underline`) |
 | `caret_color` | `Option<Color>` | Override the active theme's OSC 12 cursor color (terminal support required) |
 | `style` | `Style` | Idle style |
@@ -340,7 +339,23 @@ setter is used.
 | `on_edit` | `Callback<TextEditEvent>` | Emits structured edit events |
 | `key_interceptor` | `KeyHandler` | Runs before text insertion |
 
-**Recommended pattern** — store a `TextInput` in component state and use `Input::bound`:
+**Standard pattern** — store a `String` in component state and use `Input::new`:
+
+```rust
+struct State {
+    query: String,
+}
+
+fn view(&self, ctx: &Context<Self>) -> Element {
+    Input::new(ctx.state.query.clone())
+        .placeholder("Search...")
+        .style(Style::new().fg(Color::White))
+        .focus_style(Style::new().fg(Color::White).bg(Color::indexed(237)))
+        .on_change(ctx.link().callback(|ev: InputEvent| Msg::QueryChanged(ev.value.to_string())))
+}
+```
+
+**Controlled cursor/selection** — store a `TextInput` in component state and use `Input::bound` when your app needs to inspect or drive the cursor/selection:
 
 ```rust
 struct State {
@@ -354,8 +369,6 @@ fn create_state(&self, _props: &Self::Properties) -> Self::State {
 fn view(&self, ctx: &Context<Self>) -> Element {
     Input::bound(&ctx.state.query)
         .placeholder("Search...")
-        .style(Style::new().fg(Color::White))
-        .focus_style(Style::new().fg(Color::White).bg(Color::indexed(237)))
         .on_change(ctx.link().callback(Msg::QueryChanged))
 }
 
@@ -367,14 +380,6 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
         }
     }
 }
-```
-
-**Legacy pattern** (cursor resets to end on each render — avoid for editable inputs):
-
-```rust
-Input::new(self.query.clone())
-    .placeholder("Search...")
-    .on_change(ctx.link().callback(Msg::QueryChanged))
 ```
 
 > `caret_color` uses OSC 12. Set `TUI_LIPAN_OSC12=0` to disable if your terminal doesn't support it.
@@ -389,16 +394,16 @@ Input::new(self.query.clone())
 
 Multi-line text editor.
 
-> **State binding:** Use `TextArea::bound(&state)` to create a `TextArea` that reads value, cursor, and anchor from a `TextEditor` state bundle, and `TextAreaEvent::apply_to(&mut state)` in your `update` handler to write changes back. This preserves cursor position and selection across rerenders. Using `TextArea::new(value)` resets the cursor on every render.
+> **Cursor and state:** `TextArea::new(value)` is the normal path — store a plain `String` in component state and update it from `on_change`. The runtime preserves cursor position and selection across rerenders, and moves the cursor to the end when your app replaces the value externally. Use `TextArea::bound(&state)` (or `.bind(&state)`) with a `TextEditor` state bundle when your app needs to own, inspect, or drive cursor and selection directly.
 
 | Prop | Type | Description |
 |------|------|-------------|
-| *(constructor)* | `impl Into<Arc<str>>` | `TextArea::new(value)` — current text |
-| *(constructor)* | `&TextEditor` | `TextArea::bound(state)` — bind value, cursor, and anchor from state |
-| `.bind(state)` | `&TextEditor` | Apply cursor, anchor, and value from state onto an existing `TextArea` |
-| `value` | `impl Into<Arc<str>>` | Current text value (use `bound`/`bind` instead for cursor preservation) |
-| `cursor` | `usize` | Byte cursor position |
-| `anchor` | `Option<usize>` | Selection anchor |
+| *(constructor)* | `impl Into<Arc<str>>` | `TextArea::new(value)` — current text (cursor preserved by the runtime) |
+| *(constructor)* | `&TextEditor` | `TextArea::bound(state)` — controlled value, cursor, and anchor from state |
+| `.bind(state)` | `&TextEditor` | Apply controlled cursor, anchor, and value from state onto an existing `TextArea` |
+| `value` | `impl Into<Arc<str>>` | Current text value |
+| `cursor` | `usize` | Controlled byte cursor position |
+| `anchor` | `Option<usize>` | Controlled selection anchor |
 | `caret_shape` | `CaretShape` | Override the active theme's cursor shape; Vim-enabled TextAreas use mode-aware defaults when the resolved shape is `Block` |
 | `caret_color` | `Option<Color>` | Override the active theme's OSC 12 cursor color |
 | `line_numbers` | `bool` | Show line number gutter |
@@ -485,12 +490,12 @@ that key. Clear emits the normal `on_change` and `on_edit` callbacks with a
 replace edit.
 
 ```rust
-// Recommended: use TextArea::bound to preserve cursor & selection
-TextArea::bound(&ctx.state.editor)
+// Standard path: runtime preserves cursor & selection across rerenders
+TextArea::new(ctx.state.content.clone())
     .line_numbers(true)
     .wrap(false)
     .h_scrollbar(true)
-    .on_change(ctx.link().callback(Msg::TextChanged))
+    .on_change(ctx.link().callback(|ev: TextAreaEvent| Msg::TextChanged(ev.value.to_string())))
 ```
 
 ### TextArea editor primitives

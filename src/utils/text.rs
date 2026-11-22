@@ -12,6 +12,61 @@ use std::sync::Arc;
 /// Custom sentinel range: base codepoint, end exclusive, display widths, labels.
 type CustomSentinelTuple = (u32, u32, Vec<usize>, Vec<Arc<str>>);
 
+/// Snapshot of the last value, cursor, and selection anchor reported by a text
+/// widget through `on_change`, used to preserve uncontrolled cursor/selection
+/// state across rerenders while resetting to the end on external value edits.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ReportedTextState {
+    pub(crate) value: Arc<str>,
+    pub(crate) cursor: usize,
+    pub(crate) anchor: Option<usize>,
+}
+
+/// Resolve the effective `(cursor, anchor)` for `Input` and `TextArea`.
+///
+/// When `cursor_controlled` is `true` (`.cursor(..)`, `.anchor(..)`, or
+/// `.bind(..)` was called), the caller-supplied values win directly.
+/// Otherwise, if an existing node is being reconciled:
+/// - matching `last_reported.value` keeps the reported cursor and anchor,
+/// - unchanged `prev_value` keeps the previous node's cursor and anchor,
+/// - any other value change is an external replacement and moves the cursor to
+///   the end of `value` with no selection.
+pub(crate) fn resolve_uncontrolled_cursor_and_anchor(
+    value: &str,
+    widget_cursor: usize,
+    widget_anchor: Option<usize>,
+    cursor_controlled: bool,
+    prev: Option<(&str, usize, Option<usize>, Option<&ReportedTextState>)>,
+) -> (usize, Option<usize>) {
+    if cursor_controlled {
+        let cursor = clamp_cursor(value, widget_cursor);
+        let anchor = widget_anchor.map(|a| clamp_cursor(value, a));
+        return (cursor, anchor);
+    }
+
+    let Some((prev_value, prev_cursor, prev_anchor, last_reported)) = prev else {
+        let cursor = clamp_cursor(value, widget_cursor);
+        let anchor = widget_anchor.map(|a| clamp_cursor(value, a));
+        return (cursor, anchor);
+    };
+
+    if let Some(reported) = last_reported
+        && reported.value.as_ref() == value
+    {
+        let cursor = clamp_cursor(value, reported.cursor);
+        let anchor = reported.anchor.map(|a| clamp_cursor(value, a));
+        return (cursor, anchor);
+    }
+
+    if prev_value == value {
+        let cursor = clamp_cursor(value, prev_cursor);
+        let anchor = prev_anchor.map(|a| clamp_cursor(value, a));
+        return (cursor, anchor);
+    }
+
+    (value.len(), None)
+}
+
 /// Combined sentinel metadata for inline placeholder expansion.
 ///
 /// Covers two independent PUA ranges:

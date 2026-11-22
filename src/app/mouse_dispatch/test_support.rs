@@ -1248,6 +1248,15 @@ pub(crate) fn dispatch_active_drag_test_backend<C: Component>(
                     },
                 );
                 if let Some(cb) = on_change {
+                    if let NodeKind::TextArea(node) =
+                        &mut backend.core.tree.node_mut(drag_state.id).kind
+                    {
+                        node.last_reported = Some(crate::utils::text::ReportedTextState {
+                            value: value.clone(),
+                            cursor,
+                            anchor: anchor_opt,
+                        });
+                    }
                     cb.emit(crate::widgets::TextAreaEvent {
                         value,
                         cursor,
@@ -1268,6 +1277,15 @@ pub(crate) fn dispatch_active_drag_test_backend<C: Component>(
                 drag::handle_input_drag(&backend.core.tree, x, drag_state.id, drag_state.anchor)
             {
                 if let Some(cb) = on_change {
+                    if let NodeKind::Input(node) =
+                        &mut backend.core.tree.node_mut(drag_state.id).kind
+                    {
+                        node.last_reported = Some(crate::utils::text::ReportedTextState {
+                            value: value.clone(),
+                            cursor,
+                            anchor: anchor_opt,
+                        });
+                    }
                     cb.emit(crate::widgets::InputEvent {
                         value,
                         cursor,

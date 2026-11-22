@@ -1198,6 +1198,13 @@ impl<C: Component> AppRunner<C> {
         let on_editor_state_change = node.on_editor_state_change.clone();
 
         if let Some(cb) = on_change {
+            if let NodeKind::TextArea(node) = &mut self.core.tree.node_mut(id).kind {
+                node.last_reported = Some(crate::utils::text::ReportedTextState {
+                    value: value.clone(),
+                    cursor,
+                    anchor,
+                });
+            }
             cb.emit(TextAreaEvent {
                 value: value.clone(),
                 cursor,
@@ -1233,6 +1240,13 @@ impl<C: Component> AppRunner<C> {
             }
 
             if let Some(cb) = on_change {
+                if let NodeKind::Input(node) = &mut self.core.tree.node_mut(id).kind {
+                    node.last_reported = Some(crate::utils::text::ReportedTextState {
+                        value: value.clone(),
+                        cursor,
+                        anchor: anchor_opt,
+                    });
+                }
                 cb.emit(InputEvent {
                     value,
                     cursor,

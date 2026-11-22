@@ -1,16 +1,27 @@
 use crate::widgets::Input;
 use crate::widgets::internal::InputNode;
 
-pub(crate) fn reconcile_input(widget: &Input) -> InputNode {
-    let cursor = crate::utils::text::clamp_cursor(&widget.value, widget.cursor);
-    let anchor = widget
-        .anchor
-        .map(|anchor| crate::utils::text::clamp_cursor(&widget.value, anchor));
+pub(crate) fn reconcile_input(widget: &Input, prev: Option<&InputNode>) -> InputNode {
+    let (cursor, anchor) = crate::utils::text::resolve_uncontrolled_cursor_and_anchor(
+        &widget.value,
+        widget.cursor,
+        widget.anchor,
+        widget.cursor_controlled,
+        prev.map(|existing| {
+            (
+                existing.value.as_ref(),
+                existing.cursor,
+                existing.anchor,
+                existing.last_reported.as_ref(),
+            )
+        }),
+    );
 
     InputNode {
         value: widget.value.clone(),
         cursor,
         anchor,
+        last_reported: None,
         placeholder: widget.placeholder.clone(),
         prefix: widget.prefix.clone(),
         prefix_style: widget.prefix_style,
@@ -69,7 +80,7 @@ mod tests {
         let input = Input::new(value)
             .cursor(cursor_inside_s)
             .anchor(Some(cursor_inside_s));
-        let node = reconcile_input(&input);
+        let node = reconcile_input(&input, None);
 
         assert_eq!(node.cursor, 4);
         assert_eq!(node.anchor, Some(4));

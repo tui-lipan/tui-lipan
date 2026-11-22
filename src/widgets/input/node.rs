@@ -18,6 +18,7 @@ pub struct InputNode {
     pub value: Arc<str>,
     pub cursor: usize,
     pub anchor: Option<usize>,
+    pub(crate) last_reported: Option<crate::utils::text::ReportedTextState>,
     pub placeholder: Option<Arc<str>>,
     pub prefix: Option<Arc<str>>,
     pub prefix_style: Style,

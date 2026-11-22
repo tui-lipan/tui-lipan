@@ -19,15 +19,17 @@ use crate::text::input::TextInput;
 
 /// A single-line text input.
 ///
-/// Recommended state binding:
-/// `Input::bound(&state).on_change(ctx.link().callback(Msg::Changed))`
-/// and then `ev.apply_to(&mut state)` in the handler.
-/// Storing only the raw text value breaks cursor navigation and selection across rerenders.
+/// Pass the current value to [`Input::new`] and update it from [`Input::on_change`]:
+/// the runtime preserves cursor position and selection across rerenders, and moves
+/// the cursor to the end when the value is replaced externally. Use [`Input::bound`]
+/// with a [`TextInput`] state bundle when your component needs to own or inspect
+/// cursor and selection directly.
 #[derive(Clone)]
 pub struct Input {
     pub(crate) value: Arc<str>,
     pub(crate) cursor: usize,
     pub(crate) anchor: Option<usize>,
+    pub(crate) cursor_controlled: bool,
     pub(crate) placeholder: Option<Arc<str>>,
     pub(crate) prefix: Option<Arc<str>>,
     pub(crate) suffix: Option<Arc<str>>,
@@ -89,6 +91,7 @@ impl Input {
             value,
             cursor,
             anchor: None,
+            cursor_controlled: false,
             placeholder: None,
             prefix: None,
             suffix: None,
@@ -147,6 +150,7 @@ impl Input {
     /// Set the cursor position (byte index).
     pub fn cursor(mut self, cursor: usize) -> Self {
         self.cursor = cursor;
+        self.cursor_controlled = true;
         self
     }
 
@@ -154,6 +158,7 @@ impl Input {
     /// When set, text between anchor and cursor is selected.
     pub fn anchor(mut self, anchor: Option<usize>) -> Self {
         self.anchor = anchor;
+        self.cursor_controlled = true;
         self
     }
 
@@ -162,6 +167,7 @@ impl Input {
         self.value = state.text().into();
         self.cursor = state.cursor();
         self.anchor = state.anchor();
+        self.cursor_controlled = true;
         self
     }
 

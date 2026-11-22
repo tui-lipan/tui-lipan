@@ -114,6 +114,7 @@ Source: `src/widgets/input/mod.rs` (`Input`).
 | `value` | `constructor/local value (not a default)` |
 | `cursor` | `constructor/local value (not a default)` |
 | `anchor` | `None` |
+| `cursor_controlled` | `false` |
 | `placeholder` | `None` |
 | `prefix` | `None` |
 | `suffix` | `None` |
@@ -166,6 +167,7 @@ Source: `src/widgets/text_area/mod.rs` (`TextArea`).
 | `value` | `constructor/local value (not a default)` |
 | `cursor` | `0` |
 | `anchor` | `None` |
+| `cursor_controlled` | `false` |
 | `placeholder` | `None` |
 | `style` | `Style::default()` |
 | `hover_style` | `StyleSlot::Inherit` |
