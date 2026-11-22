@@ -180,7 +180,6 @@ impl Component for UncontrolledAreaApp {
                     .callback(|ev: TextAreaEvent| AreaMsg::Changed(ev.value.to_string())),
             )
             .key("area")
-            .into()
     }
 }
 

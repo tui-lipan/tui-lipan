@@ -77,7 +77,7 @@ impl Component for SubmitApp {
         if self.wire_submit {
             input = input.on_submit(ctx.link().callback(Msg::Submitted));
         }
-        input.key("input").into()
+        input.key("input")
     }
 }
 
