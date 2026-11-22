@@ -441,9 +441,9 @@ impl Component for FigletEditor {
 
     fn create_state(&self, _props: &Self::Properties) -> Self::State {}
 
-    fn init(&mut self, _ctx: &mut Context<Self>) -> Option<Command> {
+    fn init(&mut self, _ctx: &mut Context<Self>) -> Update {
         self.update_all_chars_preview();
-        None
+        Update::none()
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {
@@ -737,31 +737,31 @@ impl Component for FigletEditor {
                 self.editor.set_text(ev.value.to_string());
                 self.editor.set_cursor(ev.cursor);
                 self.editor.set_anchor(ev.anchor);
-                Update::full()
+                Update::render()
             }
             Msg::AllCharsChanged(ev) => {
                 self.all_chars_editor.set_text(ev.value.to_string());
                 self.all_chars_editor.set_cursor(ev.cursor);
                 self.all_chars_editor.set_anchor(ev.anchor);
-                Update::full()
+                Update::render()
             }
             Msg::PreviewTextChanged(ev) => {
                 self.preview_text = ev.value.to_string();
                 self.preview_text_cursor = ev.cursor;
                 self.preview_text_anchor = ev.anchor;
-                Update::full()
+                Update::render()
             }
             Msg::ExportFilenameChanged(ev) => {
                 self.export_filename = ev.value.to_string();
                 self.export_filename_cursor = ev.cursor;
                 self.export_filename_anchor = ev.anchor;
-                Update::full()
+                Update::render()
             }
             Msg::ImportFilenameChanged(ev) => {
                 self.import_filename = ev.value.to_string();
                 self.import_filename_cursor = ev.cursor;
                 self.import_filename_anchor = ev.anchor;
-                Update::full()
+                Update::render()
             }
             Msg::SelectChar(idx) => {
                 self.selected_index = Some(idx);
@@ -772,7 +772,7 @@ impl Component for FigletEditor {
                     self.save_current_char(ctx);
                     self.load_char(ch);
                 }
-                Update::full()
+                Update::render()
             }
             Msg::SelectChange(idx) => {
                 self.selected_index = Some(idx);
@@ -782,63 +782,63 @@ impl Component for FigletEditor {
                     self.save_current_char(ctx);
                     self.load_char(ch);
                 }
-                Update::full()
+                Update::render()
             }
             Msg::SelectToggle(expanded) => {
                 self.select_expanded = expanded;
-                Update::full()
+                Update::render()
             }
             Msg::PrevChar => {
                 self.prev_char(ctx);
-                Update::full()
+                Update::render()
             }
             Msg::NextChar => {
                 self.next_char(ctx);
-                Update::full()
+                Update::render()
             }
             Msg::SaveCurrentChar => {
                 self.save_current_char(ctx);
-                Update::full()
+                Update::render()
             }
             Msg::ClearCurrentChar => {
                 self.clear_current_char(ctx);
-                Update::full()
+                Update::render()
             }
             Msg::ShowExportModal => {
                 self.show_export_modal = true;
-                Update::full()
+                Update::render()
             }
             Msg::CloseExportModal => {
                 self.show_export_modal = false;
-                Update::full()
+                Update::render()
             }
             Msg::ConfirmExport => {
                 self.export_to_file(ctx);
-                Update::full()
+                Update::render()
             }
             Msg::ShowImportModal => {
                 self.show_import_modal = true;
-                Update::full()
+                Update::render()
             }
             Msg::CloseImportModal => {
                 self.show_import_modal = false;
-                Update::full()
+                Update::render()
             }
             Msg::ConfirmImport => {
                 self.import_from_file(ctx);
-                Update::full()
+                Update::render()
             }
             Msg::NewFont => {
                 self.new_font(ctx);
-                Update::full()
+                Update::render()
             }
             Msg::ShowHelp => {
                 self.show_help_modal = true;
-                Update::full()
+                Update::render()
             }
             Msg::CloseHelp => {
                 self.show_help_modal = false;
-                Update::full()
+                Update::render()
             }
             Msg::ScrollTo(_offset) => Update::none(),
         }
@@ -848,44 +848,44 @@ impl Component for FigletEditor {
         match key.code {
             KeyCode::Char('q') if !key.mods.ctrl && !key.mods.alt && !key.mods.shift => {
                 ctx.quit();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('s') if key.mods.ctrl => {
                 self.save_current_char(ctx);
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('e') if key.mods.ctrl => {
                 self.show_export_modal = true;
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('i') if key.mods.ctrl => {
                 self.show_import_modal = true;
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('n') if key.mods.ctrl => {
                 self.new_font(ctx);
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('1') if key.mods.ctrl => {
                 self.active_tab = 0;
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('2') if key.mods.ctrl => {
                 self.active_tab = 1;
                 self.update_all_chars_preview();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Tab if self.active_tab == 0 => {
                 self.next_char(ctx);
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::BackTab if self.active_tab == 0 => {
                 self.prev_char(ctx);
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('?') => {
                 self.show_help_modal = true;
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             _ => KeyUpdate::unhandled(Update::none()),
         }

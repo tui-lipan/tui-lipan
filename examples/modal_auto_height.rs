@@ -37,7 +37,7 @@ impl Component for Demo {
             Msg::Open(n) => Some(n),
             Msg::Close => None,
         };
-        Update::full()
+        Update::render()
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {

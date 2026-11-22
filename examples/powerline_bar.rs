@@ -38,14 +38,14 @@ impl Component for PowerlineBar {
         match msg {
             Msg::ToggleFont => ctx.state.nerd_font = !ctx.state.nerd_font,
         }
-        Update::full()
+        Update::render()
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
         match key.code {
             KeyCode::Char('n') => {
                 self.update(Msg::ToggleFont, ctx);
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('q') | KeyCode::Esc => {
                 ctx.quit();

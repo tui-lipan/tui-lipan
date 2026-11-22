@@ -43,9 +43,9 @@ impl Component for CommandPaletteComponent {
         CommandPaletteState::default()
     }
 
-    fn init(&mut self, ctx: &mut Context<Self>) -> Option<crate::core::component::Command> {
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
         rebuild_state(ctx);
-        None
+        Update::none()
     }
 
     fn on_props_changed(

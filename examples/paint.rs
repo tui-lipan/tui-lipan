@@ -100,14 +100,14 @@ impl Component for PaintDemo {
                 ctx.state.status = "Canvas cleared.".into();
             }
         }
-        Update::full()
+        Update::render()
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => {
                 ctx.quit();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('e') => KeyUpdate::handled(self.update(Msg::PickTool(Tool::Eraser), ctx)),
             KeyCode::Char('p') => KeyUpdate::handled(self.update(Msg::PickTool(Tool::Pencil), ctx)),

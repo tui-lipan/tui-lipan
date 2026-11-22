@@ -39,7 +39,7 @@ impl Component for AutoHeightDemo {
                 ctx.state.show_details = !ctx.state.show_details;
             }
         }
-        Update::full()
+        Update::render()
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {

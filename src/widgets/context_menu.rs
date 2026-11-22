@@ -343,11 +343,11 @@ impl crate::Component for MenuList {
         if old.0.items != ctx.props.0.items {
             ctx.state = List::nearest_selectable_index(&ctx.props.0.items, ctx.state.unwrap_or(0));
         }
-        crate::Update::layout()
+        crate::Update::render()
     }
     fn update(&mut self, selected: usize, ctx: &mut crate::Context<Self>) -> crate::Update {
         ctx.state = Some(selected);
-        crate::Update::layout()
+        crate::Update::render()
     }
     fn view(&self, ctx: &crate::Context<Self>) -> Element {
         ctx.props

@@ -579,8 +579,11 @@ fn interactive_splitter_pointers_follow_the_handle_axis_during_hover_and_drag() 
         fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
             Update::none()
         }
-        fn view(&self, ctx: &Context<Self>) -> Element {
+        fn init(&mut self, ctx: &mut Context<Self>) -> Update {
             ctx.set_pointer_mode(PointerMode::Interactive);
+            Update::none()
+        }
+        fn view(&self, _ctx: &Context<Self>) -> Element {
             let splitter = if self.0 {
                 Splitter::horizontal()
             } else {

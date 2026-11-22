@@ -48,27 +48,27 @@ impl Component for InlineChoices {
         match msg {
             Msg::ThemeChanged(index) => {
                 ctx.state.theme = index.min(THEMES.len().saturating_sub(1));
-                Update::full()
+                Update::render()
             }
             Msg::TargetToggle(expanded) => {
                 ctx.state.target_expanded = expanded;
-                Update::full()
+                Update::render()
             }
             Msg::TargetSelected(index) | Msg::TargetChanged(index) => {
                 ctx.state.target = Some(index.min(TARGETS.len().saturating_sub(1)));
                 ctx.state.target_expanded = false;
-                Update::full()
+                Update::render()
             }
             Msg::NoteChanged(event) => {
                 ctx.state.note.set_text(event.value.as_ref());
                 ctx.state.note.set_cursor_keep_anchor(event.cursor);
                 ctx.state.note.set_anchor(event.anchor);
-                Update::full()
+                Update::render()
             }
             Msg::Apply => {
                 let Some(target_idx) = ctx.state.target else {
                     ctx.state.status = "Pick a deployment target first".to_string();
-                    return Update::full();
+                    return Update::render();
                 };
 
                 let next = ctx.state.applied.saturating_add(1);
@@ -83,7 +83,7 @@ impl Component for InlineChoices {
 
                 ctx.state.applied = next;
                 ctx.state.status = format!("Applied target '{target}' with theme '{theme}'");
-                Update::full()
+                Update::render()
             }
         }
     }
@@ -92,11 +92,11 @@ impl Component for InlineChoices {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('Q') => {
                 ctx.quit();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('m') | KeyCode::Char('M') => {
                 ctx.toggle_mouse_capture();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             _ => KeyUpdate::unhandled(Update::none()),
         }

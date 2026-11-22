@@ -77,15 +77,15 @@ impl Component for LogViewer {
                 ctx.state.filter = ev.value.to_string();
                 ctx.state.filter_cursor = ev.cursor;
                 ctx.state.filter_anchor = ev.anchor;
-                Update::full()
+                Update::render()
             }
             Msg::ToggleAutoFollow => {
                 ctx.state.auto_follow = !ctx.state.auto_follow;
-                Update::full()
+                Update::render()
             }
             Msg::TogglePaused => {
                 ctx.state.paused = !ctx.state.paused;
-                Update::full()
+                Update::render()
             }
             Msg::CycleFilterMode => {
                 ctx.state.filter_mode = match ctx.state.filter_mode {
@@ -93,18 +93,18 @@ impl Component for LogViewer {
                     LogFilterMode::Substring => LogFilterMode::Exact,
                     LogFilterMode::Exact => LogFilterMode::Fuzzy,
                 };
-                Update::full()
+                Update::render()
             }
             Msg::LogSelected(ev) => {
                 ctx.state.selected_log = Some(ev.entry);
                 ctx.state.selected_index = ev.visible_index;
-                Update::full()
+                Update::render()
             }
             Msg::ClearFilter => {
                 ctx.state.filter.clear();
                 ctx.state.filter_cursor = 0;
                 ctx.state.filter_anchor = None;
-                Update::full()
+                Update::render()
             }
         }
     }
@@ -112,7 +112,7 @@ impl Component for LogViewer {
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
         if key.code == KeyCode::Char('q') {
             ctx.quit();
-            return KeyUpdate::handled(Update::full());
+            return KeyUpdate::handled(Update::render());
         }
         KeyUpdate::unhandled(Update::none())
     }

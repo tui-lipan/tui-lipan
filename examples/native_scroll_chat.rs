@@ -42,20 +42,20 @@ impl Component for NativeScrollChat {
                 ctx.state.draft.set_text(event.value.as_ref());
                 ctx.state.draft.set_cursor_keep_anchor(event.cursor);
                 ctx.state.draft.set_anchor(event.anchor);
-                Update::full()
+                Update::render()
             }
             Msg::Submit => {
                 if ctx.state.active_request_id.is_some() {
                     ctx.state.status =
                         "Wait for the current response to finish before sending another."
                             .to_string();
-                    return Update::full();
+                    return Update::render();
                 }
 
                 let prompt = ctx.state.draft.text().trim().to_string();
                 if prompt.is_empty() {
                     ctx.state.status = "Type something first.".to_string();
-                    return Update::full();
+                    return Update::render();
                 }
 
                 let request_id = ctx.state.next_request_id.saturating_add(1);
@@ -78,7 +78,7 @@ impl Component for NativeScrollChat {
                     thread::sleep(Duration::from_millis(80));
                     link.send(Msg::StreamDone { request_id });
                 });
-                Update::with_command(cmd)
+                Update::render_with_command(cmd)
             }
             Msg::StreamChunk { request_id, chunk } => {
                 if ctx.state.active_request_id != Some(request_id) {
@@ -92,7 +92,7 @@ impl Component for NativeScrollChat {
                 // viewport only holds the current in-progress paragraph.
                 flush_completed_paragraphs(ctx);
 
-                Update::full()
+                Update::render()
             }
             Msg::StreamDone { request_id } => {
                 if ctx.state.active_request_id != Some(request_id) {
@@ -110,7 +110,7 @@ impl Component for NativeScrollChat {
                 ctx.state.status =
                     "Response committed. Use terminal scrolling to review prior messages."
                         .to_string();
-                Update::full()
+                Update::render()
             }
         }
     }
@@ -119,7 +119,7 @@ impl Component for NativeScrollChat {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('Q') => {
                 ctx.quit();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             _ => KeyUpdate::unhandled(Update::none()),
         }

@@ -298,24 +298,24 @@ impl Component for TabsHubDemo {
         match msg {
             Msg::SectionChanged(event) => {
                 ctx.state.section_tab = event.index.min(1);
-                Update::full()
+                Update::render()
             }
             Msg::ClassicTabChanged(ev) => {
                 ctx.state.classic_tab = ev.index;
-                Update::full()
+                Update::render()
             }
             Msg::MinimalTabChanged(ev) => {
                 ctx.state.minimal_tab = ev.index;
-                Update::full()
+                Update::render()
             }
             Msg::CustomTabChanged(ev) => {
                 ctx.state.custom_tab = ev.index;
-                Update::full()
+                Update::render()
             }
             Msg::BorderedChange(event) => {
                 ctx.state.bordered_active = event.index;
                 ctx.state.status = Arc::from(format!("Bordered active: {}", event.index));
-                Update::full()
+                Update::render()
             }
             Msg::BorderedClose(event) => {
                 close_tab(
@@ -324,7 +324,7 @@ impl Component for TabsHubDemo {
                     event.index,
                 );
                 ctx.state.status = Arc::from(format!("Bordered close: {}", event.index));
-                Update::full()
+                Update::render()
             }
             Msg::BorderedReorder(event) => {
                 if apply_reorder(
@@ -335,7 +335,7 @@ impl Component for TabsHubDemo {
                 ) {
                     ctx.state.status =
                         Arc::from(format!("Bordered reorder: {} -> {}", event.from, event.to));
-                    Update::full()
+                    Update::render()
                 } else {
                     Update::none()
                 }
@@ -343,7 +343,7 @@ impl Component for TabsHubDemo {
             Msg::FrameChange(event) => {
                 ctx.state.frame_active = event.index;
                 ctx.state.status = Arc::from(format!("FrameLine active: {}", event.index));
-                Update::full()
+                Update::render()
             }
             Msg::FrameClose(event) => {
                 close_tab(
@@ -352,7 +352,7 @@ impl Component for TabsHubDemo {
                     event.index,
                 );
                 ctx.state.status = Arc::from(format!("FrameLine close: {}", event.index));
-                Update::full()
+                Update::render()
             }
             Msg::FrameReorder(event) => {
                 if apply_reorder(
@@ -363,7 +363,7 @@ impl Component for TabsHubDemo {
                 ) {
                     ctx.state.status =
                         Arc::from(format!("FrameLine reorder: {} -> {}", event.from, event.to));
-                    Update::full()
+                    Update::render()
                 } else {
                     Update::none()
                 }
@@ -381,7 +381,7 @@ impl Component for TabsHubDemo {
                         "Transfer {}:{} -> {}:{}",
                         event.from_bar, event.from, event.to_bar, event.to
                     ));
-                    Update::full()
+                    Update::render()
                 } else {
                     Update::none()
                 }
@@ -399,7 +399,7 @@ impl Component for TabsHubDemo {
                 ctx.state.bordered_tabs.push(item.clone());
                 ctx.state.frame_tabs.push(item);
                 ctx.state.status = Arc::from("Added tab to both variants".to_string());
-                Update::full()
+                Update::render()
             }
         }
     }
@@ -414,23 +414,23 @@ impl Component for TabsHubDemo {
                 ctx.state.classic_tab = 0;
                 ctx.state.minimal_tab = 0;
                 ctx.state.custom_tab = 0;
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('2') if ctx.state.section_tab == 0 => {
                 ctx.state.classic_tab = 1;
                 ctx.state.minimal_tab = 1;
                 ctx.state.custom_tab = 1;
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('3') if ctx.state.section_tab == 0 => {
                 ctx.state.classic_tab = 2;
                 ctx.state.minimal_tab = 2;
                 ctx.state.custom_tab = 2;
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('n') if ctx.state.section_tab == 1 => {
                 ctx.link().send(Msg::AddTab);
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('q') | KeyCode::Esc => {
                 ctx.quit();

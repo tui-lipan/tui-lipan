@@ -67,8 +67,8 @@ impl Component for AnimatedShowcase {
         }
     }
 
-    fn init(&mut self, _ctx: &mut Context<Self>) -> Option<Command> {
-        Some(schedule_tick())
+    fn init(&mut self, _ctx: &mut Context<Self>) -> Update {
+        Update::command_only(schedule_tick())
     }
 
     fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
@@ -99,13 +99,13 @@ impl Component for AnimatedShowcase {
                     ctx.state.pulse_open = !ctx.state.pulse_open;
                     ctx.state.pulse_height_layout_idle = false;
                 }
-                return Update::with_command(schedule_tick());
+                return Update::render_with_command(schedule_tick());
             }
             Msg::RevealHeightSettled => ctx.state.reveal_height_layout_idle = true,
             Msg::ComboHeightSettled => ctx.state.combo_height_layout_idle = true,
             Msg::PulseHeightSettled => ctx.state.pulse_height_layout_idle = true,
         }
-        Update::full()
+        Update::render()
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
@@ -120,13 +120,13 @@ impl Component for AnimatedShowcase {
             KeyCode::Char('e') => Some(Msg::CycleEasing),
             KeyCode::Char('q') | KeyCode::Esc => {
                 ctx.quit();
-                return KeyUpdate::handled(Update::full());
+                return KeyUpdate::handled(Update::render());
             }
             _ => return KeyUpdate::unhandled(Update::none()),
         };
 
         self.update(update.expect("key match should produce message"), ctx);
-        KeyUpdate::handled(Update::full())
+        KeyUpdate::handled(Update::render())
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {

@@ -110,7 +110,7 @@ impl Component for FlowBadgesDemo {
         match key.code {
             KeyCode::Char('q') => {
                 ctx.quit();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             _ => KeyUpdate::unhandled(Update::none()),
         }

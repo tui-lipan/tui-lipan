@@ -290,18 +290,21 @@ impl Component for FileTreeComponent {
         state
     }
 
-    fn init(&mut self, ctx: &mut Context<Self>) -> Option<Command> {
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
         request_missing_provided_directories(&mut ctx.state, &ctx.props);
         if refresh_policy_active(&ctx.props) {
             ctx.link().send(FileTreeMsg::RefreshPolicyRestart);
         }
 
         if !needs_git_snapshot(&ctx.props) {
-            return None;
+            return Update::none();
         }
 
-        let repo_root = discover_git_root(Path::new(ctx.props.root.as_ref()))
-            .map(|path| Arc::<str>::from(path.to_string_lossy().as_ref()))?;
+        let Some(repo_root) = discover_git_root(Path::new(ctx.props.root.as_ref()))
+            .map(|path| Arc::<str>::from(path.to_string_lossy().as_ref()))
+        else {
+            return Update::none();
+        };
 
         let (cached, cache_request) = prepare_git_cache(&ctx.props, Path::new(repo_root.as_ref()));
         if let Some(snapshot) = cached.as_ref() {
@@ -311,7 +314,7 @@ impl Component for FileTreeComponent {
         // A root outside any repository returns above: there is nothing to wait for, and the
         // changed-only view can say so immediately.
         ctx.state.git_snapshot_pending = cached.is_none();
-        Some(git_snapshot_command(
+        Update::command_only(git_snapshot_command(
             ctx.link().clone(),
             repo_root,
             ctx.props.git_diff_stats,
@@ -708,7 +711,7 @@ impl Component for FileTreeComponent {
         }
 
         if dirty {
-            Update::with_command(command)
+            Update::full_with_command(command)
         } else {
             Update::none()
         }
@@ -761,7 +764,7 @@ fn update_file_tree(msg: FileTreeMsg, ctx: &mut Context<FileTreeComponent>) -> U
             }
 
             let link = ctx.link().clone();
-            Update::with_command(start_explorer_search(&ctx.props, &mut ctx.state, link))
+            Update::full_with_command(start_explorer_search(&ctx.props, &mut ctx.state, link))
         }
         FileTreeMsg::ExplorerResultsReady {
             query_id,
@@ -806,11 +809,11 @@ fn update_file_tree(msg: FileTreeMsg, ctx: &mut Context<FileTreeComponent>) -> U
         FileTreeMsg::ExplorerIgnoreRulesChanged => {
             forget_explorer_index(&mut ctx.state);
             let link = ctx.link().clone();
-            Update::with_command(restart_explorer_search(&ctx.props, &mut ctx.state, link))
+            Update::full_with_command(restart_explorer_search(&ctx.props, &mut ctx.state, link))
         }
         FileTreeMsg::RerunExplorerSearch => {
             let link = ctx.link().clone();
-            Update::with_command(restart_explorer_search(&ctx.props, &mut ctx.state, link))
+            Update::full_with_command(restart_explorer_search(&ctx.props, &mut ctx.state, link))
         }
         FileTreeMsg::RequestEntryRefresh(token) => {
             let options = entry_refresh_options(&ctx.props);
@@ -860,7 +863,7 @@ fn update_file_tree(msg: FileTreeMsg, ctx: &mut Context<FileTreeComponent>) -> U
                 });
             }
             let command = restart_explorer_search(&ctx.props, &mut ctx.state, link);
-            Update::with_command(command)
+            Update::full_with_command(command)
         }
         FileTreeMsg::TreeFocusChanged(focused) => {
             ctx.state.tree_focused = focused;
@@ -1876,7 +1879,7 @@ fn start_git_refresh(ctx: &mut Context<FileTreeComponent>) -> Update {
     let include_diff_stats = ctx.props.git_diff_stats;
     let generation = ctx.state.git_load_generation;
     let (_, cache_request) = prepare_git_cache(&ctx.props, Path::new(repo_root.as_ref()));
-    Update::with_command(git_snapshot_command(
+    Update::full_with_command(git_snapshot_command(
         ctx.link().clone(),
         repo_root,
         include_diff_stats,
@@ -4655,7 +4658,7 @@ mod tests {
             .component
             .on_props_changed(&old_props, &mut runtime.ctx);
 
-        assert!(update.dirty);
+        assert!(update.is_dirty());
         assert!(
             runtime
                 .ctx
@@ -4880,7 +4883,9 @@ mod tests {
         let reload = runtime.component.update(reload, &mut runtime.ctx);
         let loaded = run_command_until(
             &mut runtime,
-            reload.command.expect("the reopened directory is reread"),
+            reload
+                .into_command()
+                .expect("the reopened directory is reread"),
             |message| matches!(message, FileTreeMsg::WatchDirectoriesLoaded { .. }),
         )
         .pop()
@@ -4928,7 +4933,9 @@ mod tests {
         let reload = runtime.component.update(reload, &mut runtime.ctx);
         let loaded = run_command_until(
             &mut runtime,
-            reload.command.expect("the reopened directory is reread"),
+            reload
+                .into_command()
+                .expect("the reopened directory is reread"),
             |message| matches!(message, FileTreeMsg::WatchDirectoriesLoaded { .. }),
         )
         .pop()
@@ -4963,7 +4970,7 @@ mod tests {
             .update(FileTreeMsg::RefreshPolicyRestart, &mut runtime.ctx);
         let started = run_command_until(
             &mut runtime,
-            restart.command.expect("watching starts a watcher"),
+            restart.into_command().expect("watching starts a watcher"),
             |message| matches!(message, FileTreeMsg::WatchStarted { .. }),
         )
         .pop()
@@ -4990,7 +4997,9 @@ mod tests {
             .update(FileTreeMsg::WatchFlush { generation }, &mut runtime.ctx);
         let loaded = run_command_until(
             &mut runtime,
-            flush.command.expect("a new file rereads its directory"),
+            flush
+                .into_command()
+                .expect("a new file rereads its directory"),
             |message| matches!(message, FileTreeMsg::WatchDirectoriesLoaded { .. }),
         )
         .pop()
@@ -5046,7 +5055,7 @@ mod tests {
         let request = runtime
             .component
             .update(FileTreeMsg::RequestEntryRefresh(1), &mut runtime.ctx);
-        assert!(request.command.is_some());
+        assert!(request.into_command().is_some());
         let result = local_refresh_result(
             &runtime.ctx.state,
             &runtime.ctx.props,
@@ -5087,7 +5096,7 @@ mod tests {
         let first = runtime
             .component
             .update(FileTreeMsg::RequestEntryRefresh(1), &mut runtime.ctx);
-        assert!(first.command.is_some());
+        assert!(first.into_command().is_some());
         let stale_generation = runtime.ctx.state.entry_refresh_generation;
         let stale =
             local_refresh_result(&runtime.ctx.state, &runtime.ctx.props, stale_generation, 1);
@@ -5101,7 +5110,7 @@ mod tests {
                 .entry_refresh_token(1)
                 .props,
         );
-        assert!(options_update.dirty);
+        assert!(options_update.is_dirty());
         let _ = runtime.component.view(&runtime.ctx);
         let (_, message) = runtime
             .queue
@@ -5113,13 +5122,13 @@ mod tests {
             .expect("expected a FileTree message");
         std::assert_matches!(request, FileTreeMsg::RequestEntryRefresh(1));
         let second = runtime.component.update(request, &mut runtime.ctx);
-        assert!(second.command.is_some());
+        assert!(second.into_command().is_some());
         assert_ne!(runtime.ctx.state.entry_refresh_generation, stale_generation);
 
         let ignored = runtime
             .component
             .update(FileTreeMsg::EntryRefreshLoaded(stale), &mut runtime.ctx);
-        assert!(!ignored.dirty);
+        assert!(!ignored.is_dirty());
         assert!(runtime.ctx.state.entry_refresh_pending);
 
         let fresh = local_refresh_result(
@@ -5187,7 +5196,7 @@ mod tests {
         let restart = runtime
             .component
             .update(FileTreeMsg::EntryRefreshLoaded(stale), &mut runtime.ctx);
-        assert!(restart.command.is_some());
+        assert!(restart.into_command().is_some());
         assert!(runtime.ctx.state.entry_refresh_pending);
         assert_ne!(runtime.ctx.state.entry_refresh_generation, stale_generation);
 
@@ -5232,7 +5241,7 @@ mod tests {
         let first = runtime
             .component
             .update(FileTreeMsg::RequestEntryRefresh(1), &mut runtime.ctx);
-        assert!(first.command.is_some());
+        assert!(first.into_command().is_some());
         let stale = local_refresh_result(
             &runtime.ctx.state,
             &runtime.ctx.props,
@@ -5251,12 +5260,12 @@ mod tests {
         let second = runtime
             .component
             .update(FileTreeMsg::RequestEntryRefresh(2), &mut runtime.ctx);
-        assert!(second.command.is_some());
+        assert!(second.into_command().is_some());
 
         let ignored = runtime
             .component
             .update(FileTreeMsg::EntryRefreshLoaded(stale), &mut runtime.ctx);
-        assert!(!ignored.dirty);
+        assert!(!ignored.is_dirty());
         assert!(runtime.ctx.state.root.children.iter().all(|child| {
             child.name.as_ref() != "first.rs" && child.name.as_ref() != "second.rs"
         }));
@@ -5325,7 +5334,7 @@ mod tests {
             .component
             .update(FileTreeMsg::EntryRefreshLoaded(stale), &mut runtime.ctx);
 
-        assert!(!ignored.dirty);
+        assert!(!ignored.is_dirty());
         assert_eq!(runtime.ctx.state.root.path.as_ref(), second.as_str());
         assert!(
             runtime
@@ -5456,7 +5465,7 @@ mod tests {
                     }),
                     &mut runtime.ctx,
                 )
-                .command
+                .into_command()
                 .expect("a query starts a search")
         };
 
@@ -5473,7 +5482,9 @@ mod tests {
             .component
             .update(FileTreeMsg::ExplorerIgnoreRulesChanged, &mut runtime.ctx);
         assert!(!Arc::ptr_eq(&walked, &runtime.ctx.state.explorer_index));
-        let command = restart.command.expect("an active query searches again");
+        let command = restart
+            .into_command()
+            .expect("an active query searches again");
         assert_eq!(search(&mut runtime, command), 0);
 
         let _ = std::fs::remove_dir_all(dir);
@@ -5512,7 +5523,7 @@ mod tests {
             }),
             &mut runtime.ctx,
         );
-        assert_eq!(ready(&mut runtime, typed.command.unwrap()), (3, 3));
+        assert_eq!(ready(&mut runtime, typed.into_command().unwrap()), (3, 3));
         let walked = Arc::clone(&runtime.ctx.state.explorer_index);
 
         for (limit, shown) in [(1, 1), (3, 3)] {
@@ -5523,7 +5534,10 @@ mod tests {
             .pop()
             .unwrap();
             let rerun = runtime.component.update(rerun, &mut runtime.ctx);
-            assert_eq!(ready(&mut runtime, rerun.command.unwrap()), (shown, 3));
+            assert_eq!(
+                ready(&mut runtime, rerun.into_command().unwrap()),
+                (shown, 3)
+            );
             assert!(Arc::ptr_eq(&walked, &runtime.ctx.state.explorer_index));
         }
 
@@ -5591,7 +5605,7 @@ mod tests {
         );
         let ready = run_command_until(
             &mut runtime,
-            typed.command.expect("a query starts a search"),
+            typed.into_command().expect("a query starts a search"),
             |message| matches!(message, FileTreeMsg::ExplorerResultsReady { .. }),
         )
         .pop()
@@ -5656,7 +5670,7 @@ mod tests {
         let request = runtime
             .component
             .update(FileTreeMsg::RequestEntryRefresh(1), &mut runtime.ctx);
-        assert!(request.command.is_some());
+        assert!(request.into_command().is_some());
         assert_eq!(runtime.ctx.state.explorer_query_id, 11);
         let stale = runtime.component.update(
             FileTreeMsg::ExplorerResultsReady {
@@ -5666,7 +5680,7 @@ mod tests {
             },
             &mut runtime.ctx,
         );
-        assert!(!stale.dirty);
+        assert!(!stale.is_dirty());
 
         let result = local_refresh_result(
             &runtime.ctx.state,
@@ -5677,7 +5691,7 @@ mod tests {
         let restart = runtime
             .component
             .update(FileTreeMsg::EntryRefreshLoaded(result), &mut runtime.ctx);
-        assert!(restart.command.is_some());
+        assert!(restart.into_command().is_some());
         assert_eq!(
             runtime.ctx.state.uncontrolled_selected_path,
             Some(selected.clone())
@@ -5701,7 +5715,7 @@ mod tests {
             },
             &mut runtime.ctx,
         );
-        assert!(current.dirty);
+        assert!(current.is_dirty());
         assert_eq!(
             runtime.ctx.state.uncontrolled_selected_path,
             Some(selected.clone())
@@ -5763,7 +5777,7 @@ mod tests {
             .component
             .update(FileTreeMsg::RequestEntryRefresh(5), &mut runtime.ctx);
 
-        assert!(!update.dirty);
+        assert!(!update.is_dirty());
         assert_eq!(runtime.ctx.state.entry_refresh_completed_token, 4);
         assert_eq!(runtime.ctx.state.root.children.len(), 1);
         assert_eq!(runtime.ctx.state.root.children[0].name.as_ref(), "old.rs");
@@ -5779,7 +5793,7 @@ mod tests {
         let completion = runtime
             .component
             .update(FileTreeMsg::EntryRefreshLoaded(stale), &mut runtime.ctx);
-        assert!(!completion.dirty);
+        assert!(!completion.is_dirty());
     }
 
     #[test]
@@ -5824,7 +5838,7 @@ mod tests {
             .component
             .on_props_changed(&old_props, &mut runtime.ctx);
 
-        assert!(update.dirty);
+        assert!(update.is_dirty());
         assert!(runtime.ctx.state.expanded.contains("/remote/repo/src"));
         assert!(
             node_by_path_mut(&mut runtime.ctx.state.root, "/remote/repo/src")
@@ -5912,7 +5926,7 @@ mod tests {
             &mut runtime.ctx,
         );
 
-        assert!(!update.dirty);
+        assert!(!update.is_dirty());
         assert!(
             runtime
                 .ctx
@@ -5960,7 +5974,7 @@ mod tests {
             Rc::new(std::cell::Cell::new(false)),
         );
 
-        let command = runtime.component.init(&mut runtime.ctx);
+        let command = runtime.component.init(&mut runtime.ctx).into_command();
 
         assert!(
             command.is_some(),

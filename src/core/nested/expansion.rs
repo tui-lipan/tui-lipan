@@ -868,6 +868,9 @@ impl ComponentRegistry {
         };
 
         let descendant_ids = collect_component_ids_in_element(&child, &self.scope_to_id);
+        for &id in &descendant_ids {
+            self.keep_mounted(id, epoch);
+        }
         host.set_next_memo(
             path,
             memo.call_site,

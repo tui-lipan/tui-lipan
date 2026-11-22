@@ -31,8 +31,8 @@ impl Component for SparklineShowcase {
         }
     }
 
-    fn init(&mut self, _ctx: &mut Context<Self>) -> Option<Command> {
-        Some(schedule_tick())
+    fn init(&mut self, _ctx: &mut Context<Self>) -> Update {
+        Update::command_only(schedule_tick())
     }
 
     fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
@@ -49,7 +49,7 @@ impl Component for SparklineShowcase {
                 trim_history(&mut ctx.state.live_net_dl, 4096);
                 trim_history(&mut ctx.state.live_net_ul, 4096);
 
-                Update::with_command(schedule_tick())
+                Update::render_with_command(schedule_tick())
             }
         }
     }

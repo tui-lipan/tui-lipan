@@ -363,7 +363,7 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
     match msg {
         Msg::QueryChanged(ev) => {
             ev.apply_to(&mut ctx.state.query);
-            Update::layout()
+            Update::render()
         }
     }
 }

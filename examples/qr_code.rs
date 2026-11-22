@@ -78,11 +78,11 @@ impl Component for QrCodeExample {
             KeyCode::Char('i') => state.inverted = !state.inverted,
             KeyCode::Char('q') | KeyCode::Esc => {
                 ctx.quit();
-                return KeyUpdate::handled(Update::full());
+                return KeyUpdate::handled(Update::render());
             }
             _ => return KeyUpdate::unhandled(Update::none()),
         }
-        KeyUpdate::handled(Update::full())
+        KeyUpdate::handled(Update::render())
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {

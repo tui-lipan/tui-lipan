@@ -211,7 +211,7 @@ fn host_color_scheme_advances_the_color_generation_only_on_change() {
 
 #[test]
 fn host_terminal_color_refresh_request_is_opt_in() {
-    let disabled = AppRunner::new(App::new(), RunnerKeymapSmoke, ());
+    let mut disabled = AppRunner::new(App::new(), RunnerKeymapSmoke, ());
     disabled.core.ctx.request_host_terminal_color_refresh();
     assert!(
         !disabled
@@ -221,7 +221,7 @@ fn host_terminal_color_refresh_request_is_opt_in() {
             .take_host_terminal_color_refresh_request()
     );
 
-    let enabled = AppRunner::new(
+    let mut enabled = AppRunner::new(
         App::new().live_host_terminal_colors(true),
         RunnerKeymapSmoke,
         (),
@@ -235,7 +235,7 @@ fn host_terminal_color_refresh_request_is_opt_in() {
             .take_host_terminal_color_refresh_request()
     );
 
-    let system_theme = AppRunner::new(App::new().system_theme(), RunnerKeymapSmoke, ());
+    let mut system_theme = AppRunner::new(App::new().system_theme(), RunnerKeymapSmoke, ());
     system_theme.core.ctx.request_host_terminal_color_refresh();
     assert!(
         system_theme
@@ -6682,7 +6682,7 @@ fn process_pending_messages_routes_root_layout_to_layout_scope_refresh() {
 
         fn update(&mut self, msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
             match msg {
-                Msg::RootLayout => Update::layout(),
+                Msg::RootLayout => Update::render(),
             }
         }
 
@@ -6742,7 +6742,7 @@ fn root_window_focus_lifecycle_applies_each_update_level_once_per_transition() {
             match self.requested {
                 RequestedUpdate::None => Update::none(),
                 RequestedUpdate::Paint => Update::paint(),
-                RequestedUpdate::Layout => Update::layout(),
+                RequestedUpdate::Layout => Update::render(),
                 RequestedUpdate::Full => Update::full(),
             }
         }
@@ -6824,12 +6824,12 @@ fn controlled_text_area_input_remains_layout_only() {
         fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
             match msg {
                 Msg::Changed(event) => event.apply_to(&mut ctx.state),
-                Msg::SentinelsChanged | Msg::VimModeChanged => return Update::layout(),
+                Msg::SentinelsChanged | Msg::VimModeChanged => return Update::render(),
                 Msg::AsyncAutocomplete => {
-                    return Update::layout_with_command(crate::Command::new(|| {}));
+                    return Update::render_with_command(crate::Command::new(|| {}));
                 }
             }
-            Update::layout()
+            Update::render()
         }
 
         fn view(&self, ctx: &Context<Self>) -> Element {
@@ -6910,7 +6910,7 @@ fn scroll_dependency_probe_stale_after_edits(mode: ScrollReadMode, edits: &[KeyC
             match msg {
                 Msg::Changed(event) => event.apply_to(&mut ctx.state),
             }
-            Update::layout()
+            Update::render()
         }
 
         fn view(&self, ctx: &Context<Self>) -> Element {
@@ -10760,9 +10760,9 @@ impl Component for PaneSwitchSnapshotSmoke {
         "first"
     }
 
-    fn init(&mut self, ctx: &mut Context<Self>) -> Option<crate::Command> {
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
         ctx.request_focus("first");
-        None
+        Update::none()
     }
 
     fn update(&mut self, pane: Self::Message, ctx: &mut Context<Self>) -> Update {
@@ -11333,8 +11333,8 @@ impl Component for DeferredRevealSmoke {
         false
     }
 
-    fn init(&mut self, _ctx: &mut Context<Self>) -> Option<crate::Command> {
-        Some(crate::Command::after(Duration::from_millis(120), |link| {
+    fn init(&mut self, _ctx: &mut Context<Self>) -> Update {
+        Update::command_only(crate::Command::after(Duration::from_millis(120), |link| {
             link.send(());
         }))
     }
@@ -11362,8 +11362,8 @@ impl Component for AsyncArrivalSmoke {
         false
     }
 
-    fn init(&mut self, _ctx: &mut Context<Self>) -> Option<crate::Command> {
-        Some(crate::Command::spawn(|link| {
+    fn init(&mut self, _ctx: &mut Context<Self>) -> Update {
+        Update::command_only(crate::Command::spawn(|link| {
             std::thread::sleep(Duration::from_millis(80));
             link.send(());
         }))
@@ -12030,9 +12030,9 @@ impl Component for ClosingModalHost {
         false
     }
 
-    fn init(&mut self, ctx: &mut Context<Self>) -> Option<crate::core::component::Command> {
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
         *self.link.borrow_mut() = Some(ctx.link().clone());
-        None
+        Update::none()
     }
 
     fn update(&mut self, open: bool, ctx: &mut Context<Self>) -> Update {
@@ -13104,7 +13104,7 @@ impl Component for QueuedTypingSmoke {
         self.updates.set(self.updates.get() + 1);
         event.apply_to(&mut ctx.state);
         if self.layout_only {
-            Update::layout()
+            Update::render()
         } else {
             Update::full()
         }
@@ -13361,11 +13361,11 @@ impl Component for InitThemeComponent {
         Vec::new()
     }
 
-    fn init(&mut self, ctx: &mut Context<Self>) -> Option<crate::Command> {
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
         ctx.set_theme(self.initial.clone());
         let seen = ctx.with_theme(Clone::clone);
         ctx.state.push(seen);
-        None
+        Update::none()
     }
 
     fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
@@ -13543,9 +13543,9 @@ impl Component for NestedInitThemeChild {
 
     fn create_state(&self, _props: &Self::Properties) -> Self::State {}
 
-    fn init(&mut self, ctx: &mut Context<Self>) -> Option<crate::Command> {
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
         ctx.set_theme(Theme::nord());
-        None
+        Update::none()
     }
 
     fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
@@ -13635,9 +13635,9 @@ impl Component for ChainThemeSetter {
 
     fn create_state(&self, _props: &Self::Properties) -> Self::State {}
 
-    fn init(&mut self, ctx: &mut Context<Self>) -> Option<crate::Command> {
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
         ctx.set_theme(self.next.clone());
-        None
+        Update::none()
     }
 
     fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
@@ -13769,9 +13769,9 @@ impl Component for NestedThemeChild {
 
     fn create_state(&self, _props: &Self::Properties) -> Self::State {}
 
-    fn init(&mut self, ctx: &mut Context<Self>) -> Option<crate::Command> {
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
         *ctx.props.link_slot.borrow_mut() = Some(ctx.link().clone());
-        None
+        Update::none()
     }
 
     fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {

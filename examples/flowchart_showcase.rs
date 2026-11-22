@@ -28,7 +28,7 @@ impl Component for FlowchartShowcase {
             Msg::EdgeClicked(event) => format!("clicked edge {} -> {}", event.from, event.to),
             Msg::ItemHovered(label) => format!("hovered {label}"),
         };
-        Update::full()
+        Update::render()
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {

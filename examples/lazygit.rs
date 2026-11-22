@@ -837,7 +837,7 @@ impl Component for LazygitDemo {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => {
                 ctx.quit();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char(c @ '0'..='6') => {
                 let viewport = ctx.viewport();
@@ -848,7 +848,7 @@ impl Component for LazygitDemo {
                         return KeyUpdate::unhandled(Update::none());
                     }
                     ctx.request_focus(pane.key());
-                    KeyUpdate::handled(Update::full())
+                    KeyUpdate::handled(Update::render())
                 } else {
                     KeyUpdate::unhandled(Update::none())
                 }
@@ -856,30 +856,30 @@ impl Component for LazygitDemo {
             KeyCode::Char('[') => match active_pane {
                 Pane::Files => {
                     ctx.state.files_tab = ctx.state.files_tab.saturating_sub(1);
-                    KeyUpdate::handled(Update::full())
+                    KeyUpdate::handled(Update::render())
                 }
                 Pane::Branches => {
                     ctx.state.branches_tab = ctx.state.branches_tab.saturating_sub(1);
-                    KeyUpdate::handled(Update::full())
+                    KeyUpdate::handled(Update::render())
                 }
                 Pane::Commits => {
                     ctx.state.commits_tab = ctx.state.commits_tab.saturating_sub(1);
-                    KeyUpdate::handled(Update::full())
+                    KeyUpdate::handled(Update::render())
                 }
                 _ => KeyUpdate::unhandled(Update::none()),
             },
             KeyCode::Char(']') => match active_pane {
                 Pane::Files => {
                     ctx.state.files_tab = (ctx.state.files_tab + 1).min(2);
-                    KeyUpdate::handled(Update::full())
+                    KeyUpdate::handled(Update::render())
                 }
                 Pane::Branches => {
                     ctx.state.branches_tab = (ctx.state.branches_tab + 1).min(2);
-                    KeyUpdate::handled(Update::full())
+                    KeyUpdate::handled(Update::render())
                 }
                 Pane::Commits => {
                     ctx.state.commits_tab = (ctx.state.commits_tab + 1).min(1);
-                    KeyUpdate::handled(Update::full())
+                    KeyUpdate::handled(Update::render())
                 }
                 _ => KeyUpdate::unhandled(Update::none()),
             },
@@ -891,59 +891,59 @@ impl Component for LazygitDemo {
         match msg {
             Msg::FilesSelected(ev) => {
                 ctx.state.files_selected = ev.index;
-                Update::full()
+                Update::render()
             }
             Msg::WorktreesSelected(ev) => {
                 ctx.state.worktrees_selected = ev.index;
-                Update::full()
+                Update::render()
             }
             Msg::SubmodulesSelected(ev) => {
                 ctx.state.submodules_selected = ev.index;
-                Update::full()
+                Update::render()
             }
             Msg::FilesTabChanged(ev) => {
                 ctx.state.files_tab = ev.index;
-                Update::full()
+                Update::render()
             }
             Msg::BranchesSelected(ev) => {
                 ctx.state.branches_selected = ev.index;
-                Update::full()
+                Update::render()
             }
             Msg::RemotesSelected(ev) => {
                 ctx.state.remotes_selected = ev.index;
-                Update::full()
+                Update::render()
             }
             Msg::TagsSelected(ev) => {
                 ctx.state.tags_selected = ev.index;
-                Update::full()
+                Update::render()
             }
             Msg::BranchesTabChanged(ev) => {
                 ctx.state.branches_tab = ev.index;
-                Update::full()
+                Update::render()
             }
             Msg::CommitsSelected(ev) => {
                 ctx.state.commits_selected = ev.index;
-                Update::full()
+                Update::render()
             }
             Msg::ReflogSelected(ev) => {
                 ctx.state.reflog_selected = ev.index;
-                Update::full()
+                Update::render()
             }
             Msg::CommitsTabChanged(ev) => {
                 ctx.state.commits_tab = ev.index;
-                Update::full()
+                Update::render()
             }
             Msg::StashSelected(ev) => {
                 ctx.state.stash_selected = ev.index;
-                Update::full()
+                Update::render()
             }
             Msg::CmdSelected(ev) => {
                 ctx.state.cmd_selected = ev.index;
-                Update::full()
+                Update::render()
             }
             Msg::LogScroll(ev) => {
                 ctx.state.log_scroll_offset = ev.offset;
-                Update::full()
+                Update::render()
             }
         }
     }

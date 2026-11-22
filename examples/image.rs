@@ -69,19 +69,19 @@ impl Component for ImageDemo {
         match key.code {
             KeyCode::Char(' ') => {
                 ctx.state.paused = !ctx.state.paused;
-                return KeyUpdate::handled(Update::full());
+                return KeyUpdate::handled(Update::render());
             }
             KeyCode::Char('l') | KeyCode::Char('L') => {
                 ctx.state.looped = !ctx.state.looped;
-                return KeyUpdate::handled(Update::full());
+                return KeyUpdate::handled(Update::render());
             }
             KeyCode::Char('+') | KeyCode::Char('=') => {
                 ctx.state.speed_percent = ctx.state.speed_percent.saturating_add(25).min(400);
-                return KeyUpdate::handled(Update::full());
+                return KeyUpdate::handled(Update::render());
             }
             KeyCode::Char('-') | KeyCode::Char('_') => {
                 ctx.state.speed_percent = ctx.state.speed_percent.saturating_sub(25).max(25);
-                return KeyUpdate::handled(Update::full());
+                return KeyUpdate::handled(Update::render());
             }
             _ => {}
         }

@@ -42,28 +42,28 @@ impl Component for GradientWidgets {
         match msg {
             Msg::ProgressChanged(event) => {
                 ctx.state.progress = event.progress;
-                Update::full()
+                Update::render()
             }
             Msg::ThroughputChanged(event) => {
                 ctx.state.throughput = event.progress;
-                Update::full()
+                Update::render()
             }
             Msg::SliderChanged(value) => {
                 ctx.state.slider_value = value;
-                Update::full()
+                Update::render()
             }
             Msg::TableSelected(event) => {
                 ctx.state.table_selected = event.index;
-                Update::full()
+                Update::render()
             }
             Msg::TogglePalette(show) => {
                 ctx.state.show_palette = show;
-                Update::full()
+                Update::render()
             }
             Msg::PaletteActivated(event) => {
                 ctx.state.last_action = Some(event.item.value.clone());
                 ctx.state.show_palette = false;
-                Update::full()
+                Update::render()
             }
         }
     }
@@ -72,20 +72,20 @@ impl Component for GradientWidgets {
         match key.code {
             KeyCode::Char('/') => {
                 ctx.state.show_palette = true;
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Esc => {
                 if ctx.state.show_palette {
                     ctx.state.show_palette = false;
-                    KeyUpdate::handled(Update::full())
+                    KeyUpdate::handled(Update::render())
                 } else {
                     ctx.quit();
-                    KeyUpdate::handled(Update::full())
+                    KeyUpdate::handled(Update::render())
                 }
             }
             KeyCode::Char('q') => {
                 ctx.quit();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             _ => KeyUpdate::unhandled(Update::none()),
         }

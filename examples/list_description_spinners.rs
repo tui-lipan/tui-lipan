@@ -96,11 +96,11 @@ impl Component for DescriptionSpinnersDemo {
         match key.code {
             KeyCode::Char('p') | KeyCode::Char('P') => {
                 ctx.state.placement_idx = (ctx.state.placement_idx + 1) % PLACEMENTS.len();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('q') | KeyCode::Char('Q') => {
                 ctx.quit();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             _ => KeyUpdate::unhandled(Update::none()),
         }
@@ -110,7 +110,7 @@ impl Component for DescriptionSpinnersDemo {
         match msg {
             Msg::Select(event) => {
                 ctx.state.selected = event.index;
-                Update::full()
+                Update::render()
             }
         }
     }

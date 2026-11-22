@@ -234,7 +234,7 @@ impl Component for Counter {
             Msg::Increment => ctx.state.count += 1,
             Msg::Decrement => ctx.state.count -= 1,
         }
-        Update::full()  // (needs_redraw, optional_command)
+        Update::render()
     }
 }
 

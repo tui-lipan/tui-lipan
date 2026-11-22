@@ -1,12 +1,13 @@
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::any::{Any, TypeId};
 use std::cell::Cell;
 #[cfg(feature = "devtools")]
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use crate::callback::{CommandTx, Dispatcher, ScopeId};
-use crate::core::component::{KeyUpdate, Update};
+use crate::core::component::{KeyUpdate, Update, UpdateLevel};
 use crate::core::element::MeasureCacheEntry;
 use crate::core::element::{Element, ElementKind, Group, Key};
 use crate::core::event::KeyEvent;
@@ -23,7 +24,7 @@ pub mod host;
 mod expansion;
 
 pub(crate) use element::ComponentElement;
-pub(crate) use erased::{ComponentMount, EmptyComponent, ErasedComponent};
+pub(crate) use erased::{ComponentEvent, ComponentMount, EmptyComponent, ErasedComponent};
 pub(crate) use host::{ComponentId, HostState};
 
 use host::{ContainerPath, ContainerTag, MemoCacheEntry, PathSegment, SegmentId, segment_id};
@@ -464,6 +465,7 @@ pub(crate) struct ComponentRegistry {
     state_key_index: FxHashMap<Key, ComponentId>,
     epoch: u32,
     next_scope: u32,
+    mount_requests_full: bool,
     /// Theme stack used during expansion. When a `ThemeProvider` is being
     /// expanded, its theme is pushed here so that child `Component` entries
     /// can record it for later use in `refresh_scope_in_place`.
@@ -598,6 +600,7 @@ impl ComponentRegistry {
             state_key_index: FxHashMap::default(),
             epoch: 0,
             next_scope: 2,
+            mount_requests_full: false,
             theme_stack: Vec::new(),
             context_stack: Vec::new(),
             context_generation: 1,
@@ -662,13 +665,13 @@ impl ComponentRegistry {
         let (theme, has_provider) =
             self.resolve_entry_theme(self.arena.get(id).provider_theme.as_ref());
         let entry = self.arena.get_mut(id);
-        entry.component.set_scoped_theme(theme, has_provider);
+        entry.component.set_scoped_theme(&theme, has_provider);
         entry.component.set_contexts(
             entry.active_contexts.clone(),
             entry.active_context_generations.clone(),
         );
         let update = entry.component.update(msg)?;
-        if update.dirty {
+        if update.is_dirty() {
             self.mark_dirty_path(id);
         }
         Ok(update)
@@ -684,13 +687,13 @@ impl ComponentRegistry {
         let (theme, has_provider) =
             self.resolve_entry_theme(self.arena.get(id).provider_theme.as_ref());
         let entry = self.arena.get_mut(id);
-        entry.component.set_scoped_theme(theme, has_provider);
+        entry.component.set_scoped_theme(&theme, has_provider);
         entry.component.set_contexts(
             entry.active_contexts.clone(),
             entry.active_context_generations.clone(),
         );
         let update = entry.component.on_key(key);
-        if update.update.dirty {
+        if update.update.is_dirty() {
             self.mark_dirty_path(id);
         }
         update
@@ -711,16 +714,68 @@ impl ComponentRegistry {
         let (theme, has_provider) =
             self.resolve_entry_theme(self.arena.get(id).provider_theme.as_ref());
         let entry = self.arena.get_mut(id);
-        entry.component.set_scoped_theme(theme, has_provider);
+        entry.component.set_scoped_theme(&theme, has_provider);
         entry.component.set_contexts(
             entry.active_contexts.clone(),
             entry.active_context_generations.clone(),
         );
         let update = entry.component.on_paste(text, origin);
-        if update.update.dirty {
+        if update.update.is_dirty() {
             self.mark_dirty_path(id);
         }
         update
+    }
+
+    /// Walk the expanded trees in order, including children of retained components.
+    pub(crate) fn broadcast<'a>(
+        &mut self,
+        trees: impl IntoIterator<Item = &'a Element>,
+        event: ComponentEvent<'_>,
+        updates: &mut VecDeque<(ScopeId, UpdateLevel)>,
+    ) {
+        let mut visited = FxHashSet::default();
+        visited.reserve(self.scope_to_id.len());
+        for tree in trees {
+            visit_component_scopes(tree, &mut |scope| {
+                if visited.insert(scope) {
+                    self.deliver_event(scope, event, updates);
+                }
+            });
+        }
+    }
+
+    fn deliver_event(
+        &mut self,
+        scope: ScopeId,
+        event: ComponentEvent<'_>,
+        updates: &mut VecDeque<(ScopeId, UpdateLevel)>,
+    ) {
+        let Some(id) = self.scope_to_id.get(&scope).copied() else {
+            return;
+        };
+        if !self.is_valid(id) || !self.arena.get(id).initialized {
+            return;
+        }
+        let entry = self.arena.get_mut(id);
+        if let Some(theme) = &entry.provider_theme {
+            entry.component.set_scoped_theme(theme, true);
+        } else {
+            entry
+                .component
+                .set_scoped_theme(&self.env.active_theme.borrow(), false);
+        }
+        let level = entry
+            .component
+            .on_event(event)
+            .run(scope, &self.command_tx, &self.env);
+        if level != UpdateLevel::None {
+            self.mark_dirty_path(id);
+            updates.push_back((scope, level));
+        }
+    }
+
+    pub(crate) fn take_mount_requests_full(&mut self) -> bool {
+        std::mem::take(&mut self.mount_requests_full)
     }
 
     /// Whether `scope` names a mounted component: the root, or a nested instance that survived the
@@ -790,24 +845,14 @@ impl ComponentRegistry {
                 entry.active_context_generations = current_context_generations.clone();
                 entry
                     .component
-                    .set_scoped_theme(current_theme, has_provider);
+                    .set_scoped_theme(&current_theme, has_provider);
                 entry
                     .component
                     .set_contexts(current_contexts, current_context_generations);
                 if !entry.component.props_equal(&element.props) {
                     let update = entry.component.set_props(element.props.clone());
                     entry.self_dirty = true;
-                    if let Some(cmd) = update.command {
-                        cmd.run(crate::core::component::CommandRuntime {
-                            scope: entry.scope,
-                            tx: self.command_tx.clone(),
-                            runtime_id: self.env.runtime_id,
-                            now: self.env.now(),
-                            clock_mode: self.env.clock.mode(),
-                            clock: self.env.clock.clone(),
-                            activity: std::sync::Arc::clone(&self.env.activity),
-                        });
-                    }
+                    update.run(entry.scope, &self.command_tx, &self.env);
                 }
                 return id;
             }
@@ -972,7 +1017,9 @@ impl ComponentRegistry {
             let (active_theme, has_provider) =
                 self.resolve_entry_theme(self.arena.get(id).provider_theme.as_ref());
             let entry = self.arena.get_mut(id);
-            entry.component.set_scoped_theme(active_theme, has_provider);
+            entry
+                .component
+                .set_scoped_theme(&active_theme, has_provider);
             entry.component.set_contexts(
                 entry.active_contexts.clone(),
                 entry.active_context_generations.clone(),
@@ -980,17 +1027,11 @@ impl ComponentRegistry {
             entry.component.set_viewport(viewport);
 
             if !entry.initialized {
-                if let Some(cmd) = entry.component.init() {
-                    cmd.run(crate::core::component::CommandRuntime {
-                        scope: entry.scope,
-                        tx: self.command_tx.clone(),
-                        runtime_id: self.env.runtime_id,
-                        now: self.env.now(),
-                        clock_mode: self.env.clock.mode(),
-                        clock: self.env.clock.clone(),
-                        activity: std::sync::Arc::clone(&self.env.activity),
-                    });
-                }
+                let level = entry
+                    .component
+                    .init()
+                    .run(entry.scope, &self.command_tx, &self.env);
+                self.mount_requests_full |= level == UpdateLevel::Full;
                 entry.initialized = true;
             }
 
@@ -1045,6 +1086,14 @@ impl ComponentRegistry {
                 record_memo_miss(MemoMissReason::RetainedChildRefreshFailed);
                 return self.render_component_instance(id, epoch, viewport);
             }
+
+            // The cached subtree still contains mounted children, even when their
+            // views and the parent's view were all skipped.
+            visit_component_scopes(&cached, &mut |scope| {
+                if let Some(id) = self.scope_to_id.get(&scope).copied() {
+                    self.keep_mounted(id, epoch);
+                }
+            });
 
             // Count the hit only once the retain actually succeeded; the
             // fallback above records a miss instead.
@@ -1401,7 +1450,7 @@ impl ComponentRegistry {
                     self.arena
                         .get_mut(id)
                         .component
-                        .set_scoped_theme(active_theme, has_provider);
+                        .set_scoped_theme(&active_theme, has_provider);
                     self.arena
                         .get_mut(id)
                         .component
@@ -1552,6 +1601,12 @@ impl ComponentRegistry {
             .alloc_with(ComponentEntry::empty, ComponentEntry::reset_for_reuse)
     }
 
+    fn keep_mounted(&mut self, id: ComponentId, epoch: u32) {
+        if self.is_valid(id) {
+            self.arena.get_mut(id).epoch = epoch;
+        }
+    }
+
     pub(crate) fn sweep(&mut self, current_epoch: u32) {
         let scope_to_id = &mut self.scope_to_id;
         let state_key_index = &mut self.state_key_index;
@@ -1574,34 +1629,27 @@ impl ComponentRegistry {
     }
 }
 
+fn visit_component_scopes(element: &Element, visit: &mut impl FnMut(ScopeId)) {
+    if let ElementKind::Group(group) = &element.kind {
+        visit(group.scope);
+    }
+    for child in element.kind.children() {
+        visit_component_scopes(child, visit);
+    }
+}
+
 fn collect_component_ids_in_element(
     element: &Element,
     scope_to_id: &FxHashMap<ScopeId, ComponentId>,
 ) -> Vec<ComponentId> {
-    fn walk(
-        element: &Element,
-        scope_to_id: &FxHashMap<ScopeId, ComponentId>,
-        out: &mut Vec<ComponentId>,
-    ) {
-        match &element.kind {
-            ElementKind::Group(group) => {
-                if let Some(id) = scope_to_id.get(&group.scope).copied()
-                    && !out.contains(&id)
-                {
-                    out.push(id);
-                }
-                walk(group.child.as_ref(), scope_to_id, out);
-            }
-            _ => {
-                for child in element.kind.children() {
-                    walk(child, scope_to_id, out);
-                }
-            }
-        }
-    }
-
     let mut out = Vec::new();
-    walk(element, scope_to_id, &mut out);
+    visit_component_scopes(element, &mut |scope| {
+        if let Some(id) = scope_to_id.get(&scope).copied()
+            && !out.contains(&id)
+        {
+            out.push(id);
+        }
+    });
     out
 }
 
@@ -2058,7 +2106,7 @@ mod tests {
             registry
                 .update_by_scope(scope_a, Box::new(Msg::Inc))
                 .expect("update should succeed")
-                .dirty
+                .is_dirty()
         );
 
         let epoch2 = registry.begin_epoch();
@@ -2104,7 +2152,7 @@ mod tests {
             registry
                 .update_by_scope(scope1, Box::new(Msg::Inc))
                 .expect("update should succeed")
-                .dirty
+                .is_dirty()
         );
 
         // Render 2: wrap the Counter in an extra VStack. This changes its
@@ -2293,7 +2341,7 @@ mod tests {
             registry
                 .update_by_scope(leaf1_scope, Box::new(Msg::Inc))
                 .expect("leaf update should succeed")
-                .dirty
+                .is_dirty()
         );
 
         let epoch2 = registry.begin_epoch();
@@ -2823,7 +2871,7 @@ mod tests {
             registry
                 .update_by_scope(child_scope, Box::new(Msg::Inc))
                 .expect("child update should succeed")
-                .dirty
+                .is_dirty()
         );
 
         let epoch2 = registry.begin_epoch();
@@ -2831,6 +2879,7 @@ mod tests {
         let expanded2 = registry.expand_in_host(&mut host, None, root2, epoch2, Rect::default());
         registry.sweep(epoch2);
 
+        assert!(registry.is_mounted_scope(child_scope));
         assert_eq!(build_count.get(), 1);
         assert_eq!(child_view_count.get(), 2);
         assert_eq!(texts_in_order(&expanded1), vec!["child:0"]);
@@ -2867,7 +2916,7 @@ mod tests {
             registry
                 .update_by_scope(child_scope, Box::new(Msg::Inc))
                 .expect("child update should succeed")
-                .dirty
+                .is_dirty()
         );
 
         let epoch2 = registry.begin_epoch();
@@ -2922,7 +2971,7 @@ mod tests {
             registry
                 .update_by_scope(child_scope, Box::new(Msg::Inc))
                 .expect("child update should succeed")
-                .dirty
+                .is_dirty()
         );
         let replacement = registry
             .refresh_scope_in_place(child_scope, Rect::default())
@@ -3167,7 +3216,7 @@ mod tests {
             registry
                 .update_by_scope(child_scope, Box::new(Msg::Inc))
                 .expect("child update should succeed")
-                .dirty
+                .is_dirty()
         );
 
         // In-place refresh of the child.
@@ -3381,7 +3430,7 @@ mod tests {
             registry
                 .update_by_scope(scope1, Box::new(Msg::Inc))
                 .expect("ok")
-                .dirty
+                .is_dirty()
         );
 
         // Epoch 2: render BranchB instead; Counter should reuse the same

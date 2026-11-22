@@ -226,7 +226,7 @@ impl Component for Transitions {
             }
             Msg::CycleStyle => ctx.state.style = (ctx.state.style + 1) % STYLES.len(),
         }
-        Update::full()
+        Update::render()
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {

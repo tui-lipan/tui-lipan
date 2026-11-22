@@ -24,10 +24,10 @@ impl Component for DevtoolsDemo {
         State::default()
     }
 
-    fn init(&mut self, ctx: &mut Context<Self>) -> Option<Command> {
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
         tui_lipan::debug_log!("[devtools] app init");
         publish_metrics(ctx);
-        Some(schedule_tick())
+        Update::command_only(schedule_tick())
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
@@ -58,7 +58,7 @@ impl Component for DevtoolsDemo {
                     );
                 }
 
-                Update::with_command(schedule_tick())
+                Update::render_with_command(schedule_tick())
             }
             Msg::Quit => {
                 tui_lipan::debug_log!("[devtools] quit requested");

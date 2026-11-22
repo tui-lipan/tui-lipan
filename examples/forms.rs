@@ -167,23 +167,23 @@ impl Component for FormsDemo {
         match msg {
             Msg::ThemeChanged(idx) => {
                 self.theme = idx;
-                Update::full()
+                Update::render()
             }
             Msg::CountryToggle(expanded) => {
                 self.country_expanded = expanded;
-                Update::full()
+                Update::render()
             }
             Msg::CountrySelect(idx) => {
                 self.country_idx = Some(idx);
-                Update::full()
+                Update::render()
             }
             Msg::CountryChange(idx) => {
                 self.country_idx = Some(idx);
-                Update::full()
+                Update::render()
             }
             Msg::VolumeChanged(val) => {
                 self.volume = val;
-                Update::full()
+                Update::render()
             }
             Msg::PrevMonth => {
                 let (year, month) = prev_month(self.year, self.month);
@@ -193,7 +193,7 @@ impl Component for FormsDemo {
                 if self.day > max_day {
                     self.day = max_day;
                 }
-                Update::full()
+                Update::render()
             }
             Msg::NextMonth => {
                 let (year, month) = next_month(self.year, self.month);
@@ -203,25 +203,25 @@ impl Component for FormsDemo {
                 if self.day > max_day {
                     self.day = max_day;
                 }
-                Update::full()
+                Update::render()
             }
             Msg::DateSelected(ev) => {
                 self.year = ev.year;
                 self.month = ev.month;
                 self.day = ev.day;
-                Update::full()
+                Update::render()
             }
             Msg::ComboQueryChanged(query) => {
                 self.combo_query = query.to_string();
-                Update::full()
+                Update::render()
             }
             Msg::ComboOpenChanged(open) => {
                 self.combo_open = open;
-                Update::full()
+                Update::render()
             }
             Msg::ComboHighlightChanged(index) => {
                 self.combo_active = index;
-                Update::full()
+                Update::render()
             }
             Msg::ComboCommit(event) => {
                 self.combo_selected = event.index;
@@ -236,7 +236,7 @@ impl Component for FormsDemo {
                         event.value
                     )
                 };
-                Update::full()
+                Update::render()
             }
         }
     }

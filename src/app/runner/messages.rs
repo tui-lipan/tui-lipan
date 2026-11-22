@@ -27,8 +27,20 @@ impl<C: Component> AppRunner<C> {
                 self.apply_component_update(dirty, scope, update_level);
             }
         }
+        self.apply_lifecycle_updates(dirty);
         self.sync_runtime_keymap_config();
         Ok(())
+    }
+
+    pub(super) fn apply_lifecycle_updates(&mut self, dirty: &mut DirtyTracker) {
+        while let Some((scope, level)) = self.core.take_lifecycle_update() {
+            if self.core.components.is_mounted_scope(scope) {
+                self.apply_component_update(dirty, scope, level);
+            }
+        }
+        if self.sync_theme_request(true) {
+            dirty.mark_full();
+        }
     }
 
     /// Apply an [`UpdateLevel`] returned by a root lifecycle or message callback.
@@ -76,7 +88,7 @@ impl<C: Component> AppRunner<C> {
                 }
                 dirty.mark_terminal_paint();
             }
-            UpdateLevel::Layout => {
+            UpdateLevel::Render => {
                 self.mark_dirty_scope(scope);
                 dirty.mark_layout();
             }
@@ -101,7 +113,7 @@ impl<C: Component> AppRunner<C> {
                 UpdateLevel::TerminalGraphics => super::DirtyLevel::TerminalGraphicsOnly,
                 #[cfg(feature = "terminal")]
                 UpdateLevel::TerminalPaint => super::DirtyLevel::TerminalPaintOnly,
-                UpdateLevel::Layout => super::DirtyLevel::LayoutOnly,
+                UpdateLevel::Render => super::DirtyLevel::LayoutOnly,
                 UpdateLevel::Full => super::DirtyLevel::Full,
                 UpdateLevel::None => unreachable!(),
             };

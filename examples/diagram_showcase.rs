@@ -57,7 +57,7 @@ impl Component for DiagramShowcase {
             AppMsg::ItemClicked(event) => ctx.state.last_clicked = Some(event),
             AppMsg::ItemHovered(event) => ctx.state.last_hovered = Some(event),
         }
-        Update::full()
+        Update::render()
     }
 }
 

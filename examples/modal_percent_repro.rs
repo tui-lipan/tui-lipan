@@ -30,7 +30,7 @@ impl Component for ModalPercentRepro {
         match msg {
             Msg::Close => {
                 ctx.state.show_modal = false;
-                Update::full()
+                Update::render()
             }
         }
     }
@@ -39,29 +39,29 @@ impl Component for ModalPercentRepro {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('Q') => {
                 ctx.quit();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('m') | KeyCode::Char('M') => {
                 ctx.state.show_modal = !ctx.state.show_modal;
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('1') => {
                 ctx.state.scope = OverlayScope::RootPortal;
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('2') => {
                 ctx.state.scope = OverlayScope::Local;
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Up | KeyCode::Char('+') | KeyCode::Char('=') => {
                 ctx.state.modal_height_percent =
                     ctx.state.modal_height_percent.saturating_add(5).min(100);
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Down | KeyCode::Char('-') => {
                 ctx.state.modal_height_percent =
                     ctx.state.modal_height_percent.saturating_sub(5).max(5);
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             _ => KeyUpdate::unhandled(Update::none()),
         }

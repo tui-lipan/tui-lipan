@@ -13,7 +13,7 @@ impl Component for Menus {
     }
     fn update(&mut self, open: bool, ctx: &mut Context<Self>) -> Update {
         ctx.state = open;
-        Update::layout()
+        Update::render()
     }
     fn view(&self, ctx: &Context<Self>) -> Element {
         let selected = self.0.clone();

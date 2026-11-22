@@ -802,11 +802,11 @@ impl Component for RuntimeKeymapInput {
         }
     }
 
-    fn init(&mut self, ctx: &mut Context<Self>) -> Option<Command> {
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
         if let Some(keymap) = self.init_keymap.clone() {
             ctx.set_framework_keymap(keymap);
         }
-        None
+        Update::none()
     }
 
     fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {

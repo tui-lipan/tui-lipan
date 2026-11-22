@@ -80,7 +80,7 @@ impl Component for TerminalImages {
             _ => return KeyUpdate::unhandled(Update::none()),
         };
         ctx.link().send(msg);
-        KeyUpdate::handled(Update::full())
+        KeyUpdate::handled(Update::render())
     }
 
     fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
@@ -125,7 +125,7 @@ impl Component for TerminalImages {
             }
         }
         ctx.state.snapshot = ctx.state.screen.render_snapshot();
-        Update::full()
+        Update::render()
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {

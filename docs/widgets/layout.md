@@ -459,7 +459,7 @@ portion respectively.
 Performance note: `on_viewport_change` can fire during fast wheel scrolling or
 scrollbar dragging. If the callback only mirrors `event.offset` into parent
 state, return `Update::none()` from your component update handler. Use
-`Update::layout()` when visible-child metadata changes the emitting component's
+`Update::render()` when visible-child metadata changes the emitting component's
 view or mounted subtree, such as a sticky header. Use `Update::full()` only when
 the change affects other scopes or root-level composition.
 

@@ -412,7 +412,7 @@ impl Component for ManagedTerminal {
         }
     }
 
-    fn init(&mut self, ctx: &mut Context<Self>) -> Option<Command> {
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
         // Emit initial status
         if let Some(on_status) = &ctx.props.on_status {
             on_status.emit(ManagedTerminalStatus::Starting);
@@ -420,11 +420,11 @@ impl Component for ManagedTerminal {
 
         if ctx.props.auto_start {
             let config = ctx.props.config.clone();
-            Some(ctx.link().command(move |link| {
+            Update::command_only(ctx.link().command(move |link| {
                 Self::spawn_pty(link, &config);
             }))
         } else {
-            None
+            Update::none()
         }
     }
 
@@ -534,7 +534,7 @@ impl Component for ManagedTerminal {
             ManagedTerminalMsg::Start => {
                 if ctx.state.pty.is_none() {
                     let config = ctx.props.config.clone();
-                    return Update::with_command(ctx.link().command(move |link| {
+                    return Update::full_with_command(ctx.link().command(move |link| {
                         Self::spawn_pty(link, &config);
                     }));
                 }

@@ -318,7 +318,7 @@ impl Component for DiffHub {
             }
         }
 
-        Update::full()
+        Update::render()
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {

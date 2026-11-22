@@ -117,7 +117,7 @@ impl Component for ImageModesDemo {
                 ctx.state.attach_images.clear();
             }
         }
-        Update::full()
+        Update::render()
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {

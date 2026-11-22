@@ -251,7 +251,7 @@ impl Component for MyComponent {
         match msg {
             Msg::Increment => ctx.state.count += 1,
         }
-        Update::full() // use Update::with_command(...) when update starts async work
+        Update::render() // use Update::render_with_command(...) when update starts async work
     }
     
     fn view(&self, ctx: &Context<Self>) -> Element { 

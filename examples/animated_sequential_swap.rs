@@ -219,7 +219,7 @@ impl Component for Demo {
             }
             Msg::Quit => ctx.quit(),
         }
-        Update::full()
+        Update::render()
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
@@ -235,7 +235,7 @@ impl Component for Demo {
         match msg {
             Some(m) => {
                 self.update(m, ctx);
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             None => KeyUpdate::unhandled(Update::none()),
         }

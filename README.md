@@ -96,8 +96,8 @@ impl Component for Counter {
 
     fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
         match msg {
-            Msg::Inc  => { ctx.state.value += 1; Update::full() }
-            Msg::Quit => { ctx.quit();            Update::full() }
+            Msg::Inc  => { ctx.state.value += 1; Update::render() }
+            Msg::Quit => { ctx.quit();            Update::render() }
         }
     }
 }

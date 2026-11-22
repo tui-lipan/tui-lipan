@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use smallvec::SmallVec;
 
-use crate::app::context::{FocusChanged, FocusChangedHook, FocusEntry, FocusPolicy};
+use crate::app::context::{FocusChanged, FocusEntry, FocusPolicy};
 use crate::app::input::focus::{self, FocusDirection};
 use crate::callback::Callback;
 use crate::core::element::Key;
@@ -601,15 +601,13 @@ fn same_leaf_identity(old: &NotifiedFocus, new_id: NodeId, new_key: Option<&Key>
             .is_some_and(|(old, new)| old == new)
 }
 
-/// Deliver `on_blur` / `on_focus` / the app hook for a completed transition.
+/// Emit widget blur/focus callbacks and return the completed transition.
 ///
-/// Callbacks are emitted onto the normal queue, so handlers run on the next pump
-/// and can never re-enter reconcile.
+/// Messages sent by widget callbacks run on the next pump.
 pub(crate) fn notify_focus_change(
     tree: &NodeTree,
     focused: Option<NodeId>,
     last_notified: &mut Option<NotifiedFocus>,
-    hook: Option<&FocusChangedHook>,
 ) -> Option<FocusChanged> {
     let current = focused
         .filter(|id| tree.is_valid(*id))
@@ -647,12 +645,8 @@ pub(crate) fn notify_focus_change(
         }
     }
 
-    let change = FocusChanged {
+    Some(FocusChanged {
         old: previous.map(|old| old.entry),
         new: current.map(|new| new.entry),
-    };
-    if let Some(hook) = hook {
-        hook(&change);
-    }
-    Some(change)
+    })
 }

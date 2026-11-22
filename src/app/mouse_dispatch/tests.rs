@@ -899,8 +899,12 @@ impl Component for RemovableRegionRoot {
         true
     }
 
-    fn view(&self, ctx: &Context<Self>) -> Element {
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
         ctx.set_pointer_mode(self.mode);
+        Update::none()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
         let log = |name: &'static str| {
             ctx.link()
                 .callback(move |event: MouseDragEvent| RemovableRegionMsg::Log(name, event))
@@ -5089,7 +5093,7 @@ fn context_menu_consumes_the_entire_terminal_right_button_gesture() {
         }
         fn update(&mut self, enabled: bool, ctx: &mut Context<Self>) -> Update {
             ctx.state = enabled;
-            Update::layout()
+            Update::render()
         }
         fn view(&self, ctx: &Context<Self>) -> Element {
             let forwarded = self.forwarded.clone();
@@ -5301,7 +5305,7 @@ fn middle_click_consumes_the_entire_terminal_gesture() {
         }
         fn update(&mut self, enabled: bool, ctx: &mut Context<Self>) -> Update {
             ctx.state = enabled;
-            Update::layout()
+            Update::render()
         }
         fn view(&self, ctx: &Context<Self>) -> Element {
             let forwarded = self.forwarded.clone();
@@ -5470,7 +5474,7 @@ fn tab_middle_close_owns_drag_and_release_after_terminal_replaces_bar() {
         }
         fn update(&mut self, open: bool, ctx: &mut Context<Self>) -> Update {
             ctx.state = open;
-            Update::layout()
+            Update::render()
         }
         fn view(&self, ctx: &Context<Self>) -> Element {
             if ctx.state {

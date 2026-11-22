@@ -140,7 +140,7 @@ impl Component for Studio {
             Msg::Quit => ctx.quit(),
             Msg::Tour(_, _) => {}
         }
-        Update::full()
+        Update::render()
     }
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
         const KEYS: [(char, Msg); 10] = [
@@ -286,7 +286,7 @@ fn tour_step(ctx: &mut Context<Studio>, generation: u64, step: u8) -> Update {
         6 => ctx.state.details = false,
         _ => {
             ctx.state.tour = false;
-            return Update::full();
+            return Update::render();
         }
     }
     let delay = if step == 4 {
@@ -296,7 +296,7 @@ fn tour_step(ctx: &mut Context<Studio>, generation: u64, step: u8) -> Update {
     } else {
         900
     };
-    Update::with_command(Command::after(Duration::from_millis(delay), move |link| {
+    Update::render_with_command(Command::after(Duration::from_millis(delay), move |link| {
         link.send(Msg::Tour(generation, step + 1))
     }))
 }

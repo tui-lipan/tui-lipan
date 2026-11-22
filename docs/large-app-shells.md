@@ -55,7 +55,7 @@ overlay is open: the framework defers the latest destination outside the capture
 while overlay-local requests continue to work immediately.
 
 Route widget `on_focus`/`on_blur` callbacks into messages when focus changes affect state. Use
-`App::on_focus_changed` for diagnostics or cross-cutting observation, and key dynamic focusables so
+`Component::on_focus_changed` for diagnostics or cross-cutting observation, and key dynamic focusables so
 remount deduplication has stable identity.
 
 ## Terminal apps
