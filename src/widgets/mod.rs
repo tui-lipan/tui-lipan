@@ -207,9 +207,9 @@ pub use file_tree::{
 };
 pub use flow::Flow;
 pub use flowchart::{
-    Edge, EdgeArrow, EdgeStyle, FlowDirection, Flowchart, FlowchartEdgeEvent, FlowchartItemEvent,
-    FlowchartItemPath, FlowchartNodeEvent, FlowchartSubgraphEvent, FlowchartTheme, NodeId,
-    NodeShape,
+    EdgeArrow, EdgeStyle, FlowDirection, Flowchart, FlowchartEdge, FlowchartEdgeEvent,
+    FlowchartItemEvent, FlowchartItemPath, FlowchartNodeEvent, FlowchartNodeId,
+    FlowchartSubgraphEvent, FlowchartTheme, NodeShape,
 };
 pub use frame::{
     BorderLabels, BorderMergeMode, DecorationGlyph, DecorationPlacement, EdgeDecoration, Frame,
@@ -279,9 +279,9 @@ pub use select::Select;
 pub use selection::TripleClickSelectionMode;
 pub use sequence_diagram::{
     ActivationTheme, ActorKind, ActorRef, AutonumberTheme, FragmentGlyphs, FragmentKind,
-    LifelineTheme, MessageGlyphs, MessageStyle, Msg, NotePlacement, SequenceDiagram,
+    LifelineTheme, MessageGlyphs, MessageStyle, NotePlacement, SequenceDiagram,
     SequenceDiagramTheme, SequenceDiagramVariant, SequenceItemEvent, SequenceItemPath,
-    SequenceMessage, SequenceStep, Step,
+    SequenceMessage, SequenceStep,
 };
 pub use slider::Slider;
 pub use spacer::Spacer;

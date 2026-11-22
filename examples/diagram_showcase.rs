@@ -91,8 +91,8 @@ fn sequence_tab(ctx: &Context<DiagramShowcase>) -> Element {
         .actor_kind("Scheduler", ActorKind::Actor)
         .message(SequenceMessage::async_("Scheduler", "Q", "enqueue job"))
         .message(SequenceMessage::async_("Q", "Worker", "deliver job").activate_target(true))
-        .step(Step::self_msg("Worker", "validate cache"))
-        .step(Step::note_over(
+        .step(SequenceStep::self_msg("Worker", "validate cache"))
+        .step(SequenceStep::note_over(
             ["Worker"],
             "Self messages stay anchored to one lifeline",
         ))
@@ -107,16 +107,16 @@ fn sequence_tab(ctx: &Context<DiagramShowcase>) -> Element {
         .height(Length::Auto);
 
     let branching_steps: Vec<SequenceStep> = vec![
-        Step::message(SequenceMessage::sync("Client", "Service", "poll status")),
-        Step::fragment_begin(FragmentKind::Loop, "while pending"),
-        Step::message(SequenceMessage::sync("Service", "Cache", "read state")),
-        Step::fragment_begin(FragmentKind::Alt, "cache hit"),
-        Step::message(SequenceMessage::reply("Cache", "Service", "pending")),
-        Step::fragment_branch(FragmentKind::Alt, "else cache miss"),
-        Step::message(SequenceMessage::sync("Service", "Store", "load state")),
-        Step::message(SequenceMessage::reply("Store", "Service", "pending")),
-        Step::fragment_end(),
-        Step::fragment_end(),
+        SequenceStep::message(SequenceMessage::sync("Client", "Service", "poll status")),
+        SequenceStep::fragment_begin(FragmentKind::Loop, "while pending"),
+        SequenceStep::message(SequenceMessage::sync("Service", "Cache", "read state")),
+        SequenceStep::fragment_begin(FragmentKind::Alt, "cache hit"),
+        SequenceStep::message(SequenceMessage::reply("Cache", "Service", "pending")),
+        SequenceStep::fragment_branch(FragmentKind::Alt, "else cache miss"),
+        SequenceStep::message(SequenceMessage::sync("Service", "Store", "load state")),
+        SequenceStep::message(SequenceMessage::reply("Store", "Service", "pending")),
+        SequenceStep::fragment_end(),
+        SequenceStep::fragment_end(),
     ];
 
     let loop_alt = branching_steps
@@ -142,29 +142,29 @@ fn sequence_tab(ctx: &Context<DiagramShowcase>) -> Element {
         .participant("Coordinator")
         .participant("Index")
         .participant("BlobStore")
-        .step(Step::note_over(
+        .step(SequenceStep::note_over(
             ["Coordinator", "BlobStore"],
             "Notes can span multiple participants",
         ))
-        .step(Step::fragment_begin(FragmentKind::Par, "fan out"))
+        .step(SequenceStep::fragment_begin(FragmentKind::Par, "fan out"))
         .message(SequenceMessage::async_(
             "Coordinator",
             "Index",
             "rebuild index",
         ))
-        .step(Step::fragment_branch(FragmentKind::Par, "and"))
+        .step(SequenceStep::fragment_branch(FragmentKind::Par, "and"))
         .message(SequenceMessage::async_(
             "Coordinator",
             "BlobStore",
             "compact blobs",
         ))
-        .step(Step::fragment_end())
-        .step(Step::note(
+        .step(SequenceStep::fragment_end())
+        .step(SequenceStep::note(
             NotePlacement::RightOf,
             ["BlobStore"],
             "Right-of note",
         ))
-        .step(Step::activate("Coordinator"))
+        .step(SequenceStep::activate("Coordinator"))
         .message(SequenceMessage::sync(
             "Coordinator",
             "Index",
@@ -175,7 +175,7 @@ fn sequence_tab(ctx: &Context<DiagramShowcase>) -> Element {
             "BlobStore",
             "collect result",
         ))
-        .step(Step::deactivate("Coordinator"))
+        .step(SequenceStep::deactivate("Coordinator"))
         .autonumber(true)
         .item_hover_style(hover_style)
         .on_item_click(click.clone())
@@ -256,7 +256,7 @@ fn sequence_tab(ctx: &Context<DiagramShowcase>) -> Element {
                 "POL",
                 "evaluate risk score with long rule explanation",
             ))
-            .step(Step::note_over(
+            .step(SequenceStep::note_over(
                 ["GW", "POL"],
                 "This note intentionally wraps across several visual lines so the diagram has to preserve message rows after tall annotations.",
             ))
@@ -289,7 +289,7 @@ fn sequence_tab(ctx: &Context<DiagramShowcase>) -> Element {
         .participant("Primary")
         .participant("Replica")
         .message(SequenceMessage::sync("CLI", "Controller", "sync workspace"))
-        .step(Step::fragment_begin(
+        .step(SequenceStep::fragment_begin(
             FragmentKind::Loop,
             "for each open file",
         ))
@@ -298,28 +298,38 @@ fn sequence_tab(ctx: &Context<DiagramShowcase>) -> Element {
             "Cache",
             "lookup digest",
         ))
-        .step(Step::fragment_begin(FragmentKind::Alt, "digest changed"))
+        .step(SequenceStep::fragment_begin(
+            FragmentKind::Alt,
+            "digest changed",
+        ))
         .message(
             SequenceMessage::sync("Controller", "Primary", "write patch").activate_target(true),
         )
-        .step(Step::fragment_begin(FragmentKind::Par, "replicate"))
+        .step(SequenceStep::fragment_begin(FragmentKind::Par, "replicate"))
         .message(SequenceMessage::async_(
             "Primary",
             "Replica",
             "stream delta",
         ))
-        .step(Step::fragment_branch(FragmentKind::Par, "and"))
+        .step(SequenceStep::fragment_branch(FragmentKind::Par, "and"))
         .message(SequenceMessage::async_(
             "Primary",
             "Cache",
             "invalidate digest",
         ))
-        .step(Step::fragment_end())
+        .step(SequenceStep::fragment_end())
         .message(SequenceMessage::reply("Primary", "Controller", "ok").deactivate_source(true))
-        .step(Step::fragment_branch(FragmentKind::Alt, "else unchanged"))
-        .step(Step::note(NotePlacement::RightOf, ["Cache"], "Skip write"))
-        .step(Step::fragment_end())
-        .step(Step::fragment_end())
+        .step(SequenceStep::fragment_branch(
+            FragmentKind::Alt,
+            "else unchanged",
+        ))
+        .step(SequenceStep::note(
+            NotePlacement::RightOf,
+            ["Cache"],
+            "Skip write",
+        ))
+        .step(SequenceStep::fragment_end())
+        .step(SequenceStep::fragment_end())
         .message(SequenceMessage::reply(
             "Controller",
             "CLI",
@@ -347,8 +357,8 @@ fn sequence_tab(ctx: &Context<DiagramShowcase>) -> Element {
         .message(SequenceMessage::async_("A", "B", "publish jobs"))
         .message(SequenceMessage::async_("B", "W1", "job #1").activate_target(true))
         .message(SequenceMessage::async_("B", "W2", "job #2").activate_target(true))
-        .step(Step::self_msg("W1", "dedupe"))
-        .step(Step::self_msg("W2", "validate"))
+        .step(SequenceStep::self_msg("W1", "dedupe"))
+        .step(SequenceStep::self_msg("W2", "validate"))
         .message(SequenceMessage::sync("W1", "S", "write artifact"))
         .message(SequenceMessage::sync("W2", "S", "write artifact"))
         .message(SequenceMessage::reply("S", "W1", "etag"))

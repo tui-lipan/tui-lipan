@@ -15,19 +15,23 @@ Key characteristics:
 ```rust
 // Recommended: start here for typical app-author code
 use tui_lipan::prelude::*;
+
+// Or import any public widget, event, style, or runtime type directly from the crate root
+use tui_lipan::{Button, Input, List, ListItem, Modal, Tabs, VStack};
 ```
 
-The prelude is intentionally curated for app authors. It re-exports the common
-component/runtime types, styling primitives, macros, and a broad set of
-user-facing widgets and widget event types. For framework internals or unusual
-helpers, prefer explicit imports from `tui_lipan`.
+The crate root (`tui_lipan::*`) is the complete public surface: every public
+widget, event, styling primitive, helper, and runtime type is re-exported there.
+`tui_lipan::prelude::*` is a curated subset of the crate root covering the most
+common types, widgets, and macros without re-exporting broad internal modules
+like `core` or `utils` wholesale.
 
 Representative `prelude::*` re-exports:
 
 | Symbol | Category |
 |--------|----------|
 | `App`, `AppRunner`, `ContrastPolicy`, `CursorTrail`, `CursorTrailTrigger`, `CursorTrailMotion`, `CursorTrailSpring`, `CursorTrailFill`, `CursorTrailGlyphs`, `CursorTrailParticles`, `CursorTrailSettle`, `TextAreaNewlineBinding` | App runner |
-| `Component`, `Context`, `Update`, `Command`, `Breakpoint`, `KeyUpdate`, `TaskPolicy` | Component trait |
+| `Component`, `Context`, `Update`, `Command`, `Breakpoint`, `KeyUpdate`, `TaskPolicy`, `NodeId` | Component trait & core node identity |
 | `Element`, `IntoElement`, `Key` | Tree primitives |
 | `Callback`, `CommandLink`, `KeyHandler`, `Link` | Messaging |
 | `KeyCode`, `KeyEvent`, `KeyMods`, `MouseEvent`, `MouseMoveEvent` | Events |
@@ -44,17 +48,14 @@ Representative `prelude::*` re-exports:
 | `child`, `mockup!`, `rsx!`, `ui!` | Macros & helpers |
 | `VStack`, `HStack`, `ZStack`, `Canvas`, `Frame`, `Button`, `Text`, `Input`, `List`, `Tabs`, `Table`, `Modal`, `TextArea`, `Tree`, `DocumentView`, `FileTree`, `Animated`, `AsciiCanvas` | Common and advanced widgets |
 
-The prelude no longer re-exports broad internal modules like `core`, `utils`,
-or `widgets::*` wholesale.
-
-Extra imports **not** in `prelude::*`:
+Extra imports at the crate root **not** in `prelude::*`:
 
 ```rust
 // Clipboard image support (requires feature "image" or "clipboard-images")
 use tui_lipan::{ImageContent, ImageFormat, ClipboardProvider, ClipboardError};
 
-// Lower-level framework or specialized APIs
-use tui_lipan::NodeId;
+// Specialized widgets and configuration types
+use tui_lipan::{Heatmap, HexArea, TripleClickSelectionMode};
 ```
 
 ## Feature Flags

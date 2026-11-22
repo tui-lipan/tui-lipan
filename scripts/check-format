@@ -33,6 +33,7 @@ check() {
 }
 
 check "Widget variant parity" python3 scripts/check-widget-variant-parity.py
+check "Crate-root / prelude export parity" python3 scripts/check-export-parity.py
 check "Generated NodeKind delegation" python3 scripts/generate-node-kind-delegate-arms.py
 check "Generated widget defaults" python3 scripts/generate-widget-defaults.py --check
 check "Widget style slots" python3 scripts/check-widget-style-slots.py
