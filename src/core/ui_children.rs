@@ -7,10 +7,14 @@ use crate::widgets::{
     Splitter, StatusBar, Tab, Tabs, ThemeProvider, Tooltip, TreeNode, VStack, ZStack,
 };
 
-/// Connects a builder's child method to `ui!` and `rsx!`.
+/// Connects a builder's child method to [`ui!`](crate::ui) and [`rsx!`](crate::rsx).
 ///
-/// Implement this for both values of `ADDITIONAL` to accept multiple siblings in
-/// a macro block. Implement it for the default `false` alone for a single child.
+/// Implement this on a custom builder that accepts child nodes in either macro.
+/// `Child` is the accepted builder or element type. Use a generic
+/// `const ADDITIONAL: bool` to accept multiple direct children in a block.
+/// For a builder that accepts one child, use the default `false`.
+///
+/// A builder at the root of a macro invocation must also convert into [`Element`].
 ///
 /// ```compile_fail,E0277
 /// use tui_lipan::prelude::*;

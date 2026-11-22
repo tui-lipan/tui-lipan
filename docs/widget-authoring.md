@@ -111,8 +111,9 @@ For a container with a child builder method, add an implementation to
 its accepted child type. Use the default cardinality for a single child and
 implement both values of `ADDITIONAL` for a builder that appends siblings. If
 `rsx!` needs a named constructor key, update `CONSTRUCTOR_KEYS` in
-`tui-lipan-macro/src/rsx_expand.rs` and the table in the [macro guide](macros.md).
-The macro tests check that the tables agree.
+`tui-lipan-macro/src/rsx_expand.rs`, the table in the [macro guide](macros.md),
+and the compile cases in `tests/suites/contracts/rsx_constructors.rs`. The
+tests check that the three lists agree.
 
 Before submitting, run the lightweight plumbing guard:
 

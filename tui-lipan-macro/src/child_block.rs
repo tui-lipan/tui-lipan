@@ -20,7 +20,7 @@ impl<'a> ChildBlock<'a> {
         let Self { lipan, parent, .. } = *self;
         let additional = std::mem::replace(&mut self.has_child, true);
         quote_spanned! { span=>
-            #parent = <_ as #lipan::__macro_support::UiChildren<_, #additional>>::ui_child(
+            #parent = <_ as #lipan::UiChildren<_, #additional>>::ui_child(
                 #parent, #child,
             );
         }

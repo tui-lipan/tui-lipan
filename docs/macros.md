@@ -208,12 +208,11 @@ to `content`.
 | `DocumentView` | `value` | `DocumentView { value: text.clone() }` |
 | `Tab` | `label` | `Tab { label: "Tab 1" }` |
 | `DraggableTab` | `label` | `DraggableTab { label: "file.rs" }` |
-| `AccordionItem` | `title` | `AccordionItem { title: "Section" }` |
+| `AccordionItem` | `title` | `AccordionItem { title: "Section", Text { content: "Body" } }` |
 | `ListItem` | `content` | `ListItem { content: "Item 1" }` |
 | `Checkbox` | `checked` | `Checkbox { checked: true }` |
 | `ProgressBar` | `progress` | `ProgressBar { progress: 0.75 }` |
-| `Radio` | `options` | `Radio { options: vec!["A".into(), "B".into()] }` |
-| `Grid` | `columns` | `Grid { columns: 3 }` |
+| `Radio` | `options` | `Radio { options: ["A", "B"] }` |
 | `Heatmap` | `data` | `Heatmap { data: values.clone() }` |
 | `Sparkline` | `data` | `Sparkline { data: [1, 2, 3] }` |
 | `Tree` | `root` | `Tree { root: node }` |
@@ -230,8 +229,14 @@ to `content`.
 | `Splitter` | `orientation` | `Splitter { orientation: Orientation::Vertical }` |
 | `AsciiCanvas` | `lines` | `AsciiCanvas { lines: vec!["..."] }` |
 | `ContextMenu` | `trigger` | `ContextMenu { trigger: btn }` |
-| `HexArea` | `bytes` | `HexArea { bytes: data.into() }` |
+| `HexArea` | `bytes` | `HexArea { bytes: vec![0u8, 1] }` |
 | `PaginationBar` | `state` | `PaginationBar { state: pg.clone() }` |
+
+### Grid
+
+`Grid::new()` takes no arguments. Use `uniform_columns: 3` for three
+auto-sized columns, or pass specific widths through the `columns` builder
+property.
 
 ### DiffView
 
@@ -423,14 +428,14 @@ fn view(&self, ctx: &Context<Self>) -> Element {
 
 ### Custom containers
 
-Implement `tui_lipan::__macro_support::UiChildren` for a custom builder that
+Implement `tui_lipan::UiChildren` for a custom builder that
 accepts macro children. The first trait parameter is the accepted child type.
 Use a generic `const ADDITIONAL: bool` to accept multiple siblings or leave
 that parameter at its default for a single-child builder. An implementation
 can use a bound such as `C: Into<Element>` to accept several child types.
 
 ```rust
-use tui_lipan::{__macro_support::UiChildren, prelude::*};
+use tui_lipan::{UiChildren, prelude::*};
 
 struct Rows(List);
 

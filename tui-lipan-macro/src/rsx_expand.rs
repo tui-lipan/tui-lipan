@@ -100,9 +100,15 @@ impl Node {
             ));
         }
 
+        let builder = if ty == "AccordionItem" {
+            // The declared child replaces the constructor's initial content.
+            quote! { #path::new(#constructor_arg, #lipan::prelude::Spacer::new()) }
+        } else {
+            quote! { #path::new(#constructor_arg) }
+        };
         let finish = finish_node(lipan, &ty, &node_ident, key_expr, constraint_exprs)?;
         Ok(quote! {{
-            let mut #node_ident = #path::new(#constructor_arg);
+            let mut #node_ident = #builder;
             #(#stmts)*
             #finish
         }})
@@ -193,7 +199,6 @@ const CONSTRUCTOR_KEYS: &[(&str, &str)] = &[
     ("DraggableTab", "label"),
     ("FileTree", "root"),
     ("Flowchart", "direction"),
-    ("Grid", "columns"),
     ("Heatmap", "data"),
     ("HexArea", "bytes"),
     ("Image", "src"),

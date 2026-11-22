@@ -235,6 +235,7 @@ pub use crate::core::mask::CellMask;
 pub use crate::core::memo::Memo;
 pub use crate::core::nested::any_props::ThemableProps;
 pub use crate::core::node::NodeId;
+pub use crate::core::ui_children::UiChildren;
 pub use crate::input::{
     ChordMatcher, ChordResult, KeyBinding, KeyBindingParseError, KeyBindings,
     KeyEventExpansionError, format_binding, format_binding_lowercase, format_bindings,
@@ -537,9 +538,3 @@ pub use widgets::{TerminalReadGate, TerminalReadGateStats};
 pub use widgets::{TerminalGraphicsMetrics, terminal_graphics_metrics};
 
 extern crate self as tui_lipan;
-
-/// Implementation support for the UI macros.
-#[doc(hidden)]
-pub mod __macro_support {
-    pub use crate::core::ui_children::UiChildren;
-}
