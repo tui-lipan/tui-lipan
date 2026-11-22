@@ -48,6 +48,8 @@ mod gantt_diagram_render;
 mod host_drag_and_drop;
 #[path = "suites/widget_behavior/host_drag_out.rs"]
 mod host_drag_out;
+#[path = "suites/widget_behavior/input_submit.rs"]
+mod input_submit;
 #[path = "suites/widget_behavior/list_click_events.rs"]
 mod list_click_events;
 #[path = "suites/widget_behavior/list_description_fit_render.rs"]

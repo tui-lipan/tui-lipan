@@ -181,11 +181,7 @@ impl Component for TodoApp {
                                 hover_border_style: BorderStyle::Thick,
                                 focus_style: Style::new().fg(Color::LightCyan),
                                 on_change: ctx.link().callback(Msg::DraftChanged),
-                                on_key: ctx.link()
-                                    .key_handler(|k: KeyEvent| match k.code {
-                                        KeyCode::Enter => Some(Msg::Add),
-                                        _ => None,
-                                    }),
+                                on_submit: ctx.link().callback(|_| Msg::Add),
                                 key: "draft",
                                 automation_id: "draft",
                             },

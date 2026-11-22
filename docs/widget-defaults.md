@@ -147,6 +147,7 @@ Source: `src/widgets/input/mod.rs` (`Input`).
 | `width` | `Length::Flex(1)` |
 | `height` | `Length::Auto` |
 | `on_change` | `None` |
+| `on_submit` | `None` |
 | `on_edit` | `None` |
 | `on_click` | `None` |
 | `on_context_menu` | `None` |

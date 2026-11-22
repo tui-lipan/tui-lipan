@@ -52,6 +52,7 @@ pub(crate) fn reconcile_input(widget: &Input, prev: Option<&InputNode>) -> Input
         error_style: widget.error_style,
         reserve_error_row: widget.reserve_error_row,
         on_change: widget.on_change.clone(),
+        on_submit: widget.on_submit.clone(),
         on_edit: widget.on_edit.clone(),
         on_click: widget.on_click.clone(),
         on_context_menu: widget.on_context_menu.clone(),

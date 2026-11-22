@@ -37,6 +37,7 @@ pub(crate) fn handle_key(
     let has_on_change = node.on_change.is_some();
     let is_masked = node.mask.is_some();
     let on_change = node.on_change.clone();
+    let on_submit = node.on_submit.clone();
     let history_scope = node.history_scope.clone();
     let on_edit = node.on_edit.clone();
     let on_key = node.on_key.clone();
@@ -114,14 +115,31 @@ pub(crate) fn handle_key(
         return true;
     }
 
-    // ── Phase 2: read-only / no on_change fast path ─────────────────────
-    if read_only || !has_on_change {
+    // ── Phase 2: read-only fast path ────────────────────────────────────
+    if disabled || read_only {
         return on_key.as_ref().map(handle_on_key).unwrap_or(false);
     }
 
     // ── Phase 2.5: pre-insertion key interceptor ────────────────────────
     if !from_chord && handle_key_interceptor(key_interceptor.as_ref(), key) {
         return true;
+    }
+
+    // ── Phase 2.75: plain Enter submit ──────────────────────────────────
+    if !from_chord
+        && key.is(crate::core::event::KeyCode::Enter)
+        && let Some(cb) = on_submit.as_ref()
+    {
+        cb.emit(InputEvent {
+            value,
+            cursor,
+            anchor,
+        });
+        return true;
+    }
+
+    if !has_on_change {
+        return on_key.as_ref().map(handle_on_key).unwrap_or(false);
     }
 
     // ── Phase 3: editable – forward key to TextInput ────────────────────

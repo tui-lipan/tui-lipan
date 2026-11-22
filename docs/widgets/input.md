@@ -335,6 +335,7 @@ setter is used.
 | `width` | `Length` | Width |
 | `height` | `Length` | Height |
 | `on_change` | `Callback<InputEvent>` | Emits value, cursor, and anchor on each edit |
+| `on_submit` | `Callback<InputEvent>` | Emits current value, cursor, and anchor on plain `Enter` (no modifiers) and consumes the key |
 | `on_context_menu` | `Callback<MouseEvent>` | Right-button press in the content viewport before clipboard handling; preserves caret and selection |
 | `on_edit` | `Callback<TextEditEvent>` | Emits structured edit events |
 | `key_interceptor` | `KeyHandler` | Runs before text insertion |

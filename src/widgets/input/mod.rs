@@ -70,6 +70,7 @@ pub struct Input {
     /// Default: `Length::Auto`.
     pub(crate) height: Length,
     pub(crate) on_change: Option<Callback<InputEvent>>,
+    pub(crate) on_submit: Option<Callback<InputEvent>>,
     pub(crate) on_edit: Option<Callback<TextEditEvent>>,
     pub(crate) on_click: Option<Callback<MouseEvent>>,
     pub(crate) on_context_menu: Option<Callback<crate::core::event::MouseEvent>>,
@@ -129,6 +130,7 @@ impl Input {
             width: Length::Flex(1),
             height: Length::Auto,
             on_change: None,
+            on_submit: None,
             on_edit: None,
             on_click: None,
             on_context_menu: None,
@@ -384,6 +386,16 @@ impl Input {
     /// Callback fired when the input value or cursor changes.
     pub fn on_change(mut self, cb: Callback<InputEvent>) -> Self {
         self.on_change = Some(cb);
+        self
+    }
+
+    /// Callback fired when plain Enter (without modifiers) is pressed while focused.
+    ///
+    /// When set, plain Enter emits this callback with the current value, cursor,
+    /// and anchor and consumes the key. When unset, Enter falls through to
+    /// [`Self::on_key`] and parent handlers.
+    pub fn on_submit(mut self, cb: Callback<InputEvent>) -> Self {
+        self.on_submit = Some(cb);
         self
     }
 

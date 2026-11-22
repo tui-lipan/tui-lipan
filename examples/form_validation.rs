@@ -206,10 +206,7 @@ impl Component for LoginForm {
                 .anchor(self.username_anchor)
                 .placeholder("Enter username")
                 .on_change(ctx.link().callback(Msg::UsernameChanged))
-                .on_key(ctx.link().key_handler(|key| match key.code {
-                    KeyCode::Enter => Some(Msg::Submit),
-                    _ => None,
-                }))
+                .on_submit(ctx.link().callback(|_| Msg::Submit))
                 .error(self.username_error.clone())
                 .reserve_error_row(true)
                 .width(Length::Px(LOGIN_WIDTH)),
@@ -222,10 +219,7 @@ impl Component for LoginForm {
                 .placeholder("Enter password")
                 .mask(Some('●'))
                 .on_change(ctx.link().callback(Msg::PasswordChanged))
-                .on_key(ctx.link().key_handler(|key| match key.code {
-                    KeyCode::Enter => Some(Msg::Submit),
-                    _ => None,
-                }))
+                .on_submit(ctx.link().callback(|_| Msg::Submit))
                 .error(self.password_error.clone())
                 .reserve_error_row(true)
                 .width(Length::Px(LOGIN_WIDTH)),

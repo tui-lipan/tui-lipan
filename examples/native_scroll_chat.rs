@@ -167,10 +167,7 @@ impl Component for NativeScrollChat {
                     .placeholder("Ask something...")
                     .border(true)
                     .on_change(ctx.link().callback(Msg::DraftChanged))
-                    .on_key(ctx.link().key_handler(|key| match key.code {
-                        KeyCode::Enter => Some(Msg::Submit),
-                        _ => None,
-                    })),
+                    .on_submit(ctx.link().callback(|_| Msg::Submit)),
             )
             .into()
     }
