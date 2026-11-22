@@ -97,7 +97,7 @@ impl Component for TerminalSearchHighlight {
             .gap(1)
             .child(
                 Frame::new()
-                    .header_left("Terminal search / snapshot decorations")
+                    .title("Terminal search / snapshot decorations")
                     .border(true)
                     .padding(0)
                     .child(Terminal::new().snapshot(snapshot).focusable(false)),

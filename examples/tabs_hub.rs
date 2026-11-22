@@ -263,14 +263,14 @@ impl TabsHubDemo {
             ))
             .child(
                 Frame::new()
-                    .header_left("Bordered Variant")
+                    .title("Bordered Variant")
                     .border(true)
                     .padding(1)
                     .child(bordered),
             )
             .child(
                 Frame::new()
-                    .header_left("FrameLine Variant")
+                    .title("FrameLine Variant")
                     .border(true)
                     .padding(1)
                     .child(frame_line),

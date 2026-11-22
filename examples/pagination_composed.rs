@@ -48,7 +48,7 @@ impl Component for PaginationDemo {
             .collect::<Vec<_>>();
 
         Frame::new()
-            .header_left("Pagination (Composed Controls)")
+            .title("Pagination (Composed Controls)")
             .border(true)
             .padding(1)
             .child(

@@ -250,22 +250,22 @@ fn panel_frame() -> Frame {
         .border_style(BorderStyle::Rounded)
         .style(panel_chrome_style())
         .focus_style(panel_focus_style())
-        .header_style(panel_chrome_style())
-        .header_padding(1)
+        .title_style(panel_chrome_style())
+        .title_padding(1)
         .footer_padding(1)
-        .focused_header_style(panel_focused_header_style())
+        .focus_title_style(panel_focused_header_style())
         .footer_style(panel_chrome_style())
         .focused_footer_style(panel_focus_style())
         .padding(0)
 }
 
 fn numbered_panel_frame(pane: Pane) -> Frame {
-    panel_frame().header_left(format!("[{}]", pane.number()))
+    panel_frame().title(format!("[{}]", pane.number()))
 }
 
-// `header_left` holds one label, so the number and title share it.
+// `title` holds one label, so the number and title share it.
 fn titled_panel_frame(pane: Pane) -> Frame {
-    panel_frame().header_left(format!("[{}]─{}", pane.number(), pane.title()))
+    panel_frame().title(format!("[{}]─{}", pane.number(), pane.title()))
 }
 
 fn panel_list(
@@ -665,7 +665,7 @@ impl Component for LazygitDemo {
         let log_panel = log_panel.key(Pane::Log.key());
 
         let cmd_panel: Element = panel_frame()
-            .header_left(Pane::CommandLog.title())
+            .title(Pane::CommandLog.title())
             .height(Length::Flex(1))
             .unfocused_height(Length::Px(3))
             .focus_min_height(FOCUSED_PANEL_MIN_HEIGHT)

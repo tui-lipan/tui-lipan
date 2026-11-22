@@ -460,7 +460,7 @@ impl Component for FigletEditor {
                         gap: 1,
                         width: Length::Flex(1),
                         Frame {
-                            header_left: "Select Character",
+                            title: "Select Character",
                             border: true,
                             height: Length::Auto,
                             Select {
@@ -474,7 +474,7 @@ impl Component for FigletEditor {
                             },
                         },
                         Frame {
-                            header_left: format!("Edit '{}'", self.current_char),
+                            title: format!("Edit '{}'", self.current_char),
                             border: true,
                             height: Length::Flex(1),
                             VStack {
@@ -502,7 +502,7 @@ impl Component for FigletEditor {
                         gap: 1,
                         width: Length::Flex(1),
                         Frame {
-                            header_left: "Font Info",
+                            title: "Font Info",
                             border: true,
                             height: Length::Auto,
                             VStack {
@@ -513,7 +513,7 @@ impl Component for FigletEditor {
                             },
                         },
                         Frame {
-                            header_left: "Live Preview",
+                            title: "Live Preview",
                             border: true,
                             height: Length::Flex(1),
                             VStack {
@@ -537,7 +537,7 @@ impl Component for FigletEditor {
         } else {
             rsx! {
                 Frame {
-                    header_left: "All Characters",
+                    title: "All Characters",
                     border: true,
                     height: Length::Flex(1),
                     TextArea {
@@ -664,7 +664,7 @@ impl Component for FigletEditor {
 
         rsx! {
             Frame {
-                header_left: "FIGlet Font Editor",
+                title: "FIGlet Font Editor",
                 padding: 1,
                 tab_titles: vec!["Editor".to_string(), "Preview".to_string()],
                 active_tab: self.active_tab,

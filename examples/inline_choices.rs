@@ -104,7 +104,7 @@ impl Component for InlineChoices {
 
     fn view(&self, ctx: &Context<Self>) -> Element {
         Frame::new()
-            .header_left("Inline choices")
+            .title("Inline choices")
             .border(true)
             .border_style(BorderStyle::Rounded)
             .padding(1)

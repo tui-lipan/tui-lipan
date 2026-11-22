@@ -71,7 +71,7 @@ fn view(&self, ctx: &Context<Self>) -> Element {
         .gap(0)
         .child(
             Frame::new()
-                .header_left("Items")
+                .title("Items")
                 .border(true)
                 .border_style(if sidebar_focused { BorderStyle::Thick } else { BorderStyle::Rounded })
                 .width(Length::Px(30))
@@ -88,7 +88,7 @@ fn view(&self, ctx: &Context<Self>) -> Element {
         )
         .child(
             Frame::new()
-                .header_left("Detail")
+                .title("Detail")
                 .border(true)
                 .border_style(if detail_focused { BorderStyle::Thick } else { BorderStyle::Rounded })
                 .padding(1)

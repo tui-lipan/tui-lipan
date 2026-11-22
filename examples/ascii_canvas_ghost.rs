@@ -80,7 +80,7 @@ impl Component for GhostCanvas {
             .style(Style::new().fg(GHOST_BASE_FG));
 
         Frame::new()
-            .header_left("Ghost (AsciiCanvas)")
+            .title("Ghost (AsciiCanvas)")
             .footer_left(format!(
                 "frame {}/{}",
                 ctx.state.current_frame + 1,

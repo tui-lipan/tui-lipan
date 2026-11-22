@@ -447,7 +447,7 @@ mod tests {
         let mut tree = NodeTree::new();
 
         let top: Element = Frame::new()
-            .header_left("Top")
+            .title("Top")
             .border(true)
             .height(Length::Percent(50))
             .child(
@@ -455,21 +455,21 @@ mod tests {
                     .gap(1)
                     .child(
                         Frame::new()
-                            .header_left("A")
+                            .title("A")
                             .border(true)
                             .width(Length::Percent(25))
                             .key("a"),
                     )
                     .child(
                         Frame::new()
-                            .header_left("B")
+                            .title("B")
                             .border(true)
                             .width(Length::Percent(35))
                             .key("b"),
                     )
                     .child(
                         Frame::new()
-                            .header_left("C")
+                            .title("C")
                             .border(true)
                             .width(Length::Flex(1))
                             .key("c"),
@@ -563,14 +563,14 @@ mod tests {
             .gap(1)
             .child(
                 Frame::new()
-                    .header_left("Bordered")
+                    .title("Bordered")
                     .border(true)
                     .width(Length::Flex(1))
                     .key("bordered"),
             )
             .child(
                 Frame::new()
-                    .header_left("Plain")
+                    .title("Plain")
                     .border(false)
                     .width(Length::Flex(1))
                     .key("plain"),

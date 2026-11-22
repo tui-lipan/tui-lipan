@@ -95,7 +95,7 @@ impl Component for TodoApp {
             HStack {
                 gap: 1,
                 Frame {
-                    header_left: "Todos",
+                    title: "Todos",
                     footer_left: "Tab to focus • Enter adds • Ctrl+Q quits",
                     border: true,
                     border_style: panel_border_style(sidebar_active),
@@ -161,7 +161,7 @@ impl Component for TodoApp {
                     },
                 },
                 Frame {
-                    header_left: "New Task",
+                    title: "New Task",
                     border: true,
                     border_style: panel_border_style(main_active),
                     style: panel_style(main_active),

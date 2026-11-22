@@ -64,7 +64,7 @@ impl Component for InlineDemo {
 
     fn view(&self, ctx: &Context<Self>) -> Element {
         Frame::new()
-            .header_left("Inline mode")
+            .title("Inline mode")
             .border(true)
             .border_style(BorderStyle::Rounded)
             .padding(1)

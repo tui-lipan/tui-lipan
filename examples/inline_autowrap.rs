@@ -61,7 +61,7 @@ impl Component for AutoWrapDemo {
 
     fn view(&self, ctx: &Context<Self>) -> Element {
         Frame::new()
-            .header_left("Inline Transcript mode")
+            .title("Inline Transcript mode")
             .border(true)
             .border_style(BorderStyle::Rounded)
             .padding(1)

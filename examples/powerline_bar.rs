@@ -63,7 +63,7 @@ impl Component for PowerlineBar {
         };
 
         Frame::new()
-            .header_left("Powerline segment chains")
+            .title("Powerline segment chains")
             .footer_left("n toggle Nerd Font fallback • q quit")
             .border(true)
             .padding(1)

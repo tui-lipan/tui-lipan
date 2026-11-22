@@ -1184,7 +1184,7 @@ impl Component for TuiLipanShowcase {
         );
 
         Frame::new()
-            .header_left(title)
+            .title(title)
             .border_style(BorderStyle::Rounded)
             .padding(1)
             .child(

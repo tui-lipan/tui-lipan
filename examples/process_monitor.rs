@@ -427,7 +427,7 @@ fn monitor_frame(title: &'static str) -> Frame {
 
 fn monitor_frame_rich(title: RichText) -> Frame {
     Frame::new()
-        .header_left(title)
+        .title(title)
         .style(Style::new().bg(PANEL).fg(BORDER))
 }
 

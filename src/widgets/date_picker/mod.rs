@@ -592,7 +592,7 @@ impl From<DatePicker> for Element {
 
         if let Some(title) = picker.title.clone() {
             frame = frame
-                .header(BorderLabels::new().left(FrameLabel::new(title).style(picker.title_style)));
+                .titles(BorderLabels::new().left(FrameLabel::new(title).style(picker.title_style)));
         }
 
         frame.into()

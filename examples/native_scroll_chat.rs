@@ -191,7 +191,7 @@ fn flush_completed_paragraphs(ctx: &mut Context<NativeScrollChat>) {
 
 fn user_message_card(request_id: u64, prompt: &str) -> Element {
     Frame::new()
-        .header_left(format!("You #{request_id}"))
+        .title(format!("You #{request_id}"))
         .border(true)
         .border_style(BorderStyle::Rounded)
         .padding(1)

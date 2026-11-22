@@ -366,7 +366,7 @@ pub use tui_lipan_macro::ui;
 /// fn main() -> Result<()> {
 ///     mockup!("Dashboard", {
 ///         Frame::new()
-///             .header_left("Panel")
+///             .title("Panel")
 ///             .border(true)
 ///             .child(Text::new("Hello!"))
 ///     })
@@ -383,7 +383,7 @@ pub use tui_lipan_macro::ui;
 ///
 /// fn sidebar(items: &[&str], sel: usize) -> Element {
 ///     Frame::new()
-///         .header_left("Nav")
+///         .title("Nav")
 ///         .border(true)
 ///         .child(List::new()
 ///             .items(items.iter().map(|s| ListItem::new(*s)))

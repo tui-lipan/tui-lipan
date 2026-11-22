@@ -184,11 +184,11 @@ in declaration order, so later children appear visually on top.
 Canvas::new()
     .child_at(
         Rect { x: 2, y: 1, w: 26, h: 6 },
-        Frame::new().header_left("Logs").child(log_panel),
+        Frame::new().title("Logs").child(log_panel),
     )
     .child_at(
         Rect { x: 18, y: 4, w: 24, h: 7 },
-        Frame::new().header_left("Inspector").child(inspector),
+        Frame::new().title("Inspector").child(inspector),
     )
 ```
 
@@ -213,15 +213,15 @@ example.
 
 ## Frame
 
-Container with border, positional header/footer labels, and tab affordances.
+Container with border, positional title/footer labels, and tab affordances.
 
 Border labels are organized into two independent groups. Each group has `left`,
-`center`, and `right` positions. The grouped API is canonical; the
-`header_left`/`footer_right` methods are thin convenience setters.
+`center`, and `right` positions. Use `.title("...")` for the common left-aligned
+heading, or `.titles(BorderLabels)` / `.footer(BorderLabels)` for grouped labels:
 
 ```rust
 Frame::new()
-    .header(BorderLabels::new().left("Title").right("Status"))
+    .titles(BorderLabels::new().left("Title").right("Status"))
     .footer(
         BorderLabels::new()
             .left("Mode")
@@ -231,10 +231,10 @@ Frame::new()
 ```
 
 For custom styles, group styles provide defaults and per-label styles extend
-them. Focused styles are applied only while the frame is focused:
+them. Focus styles are applied only while the frame is focused:
 
 ```rust
-Frame::new().header(
+Frame::new().titles(
     BorderLabels::new()
         .left(
             FrameLabel::new("Project")
@@ -251,9 +251,14 @@ Frame::new().header(
 
 | Prop | Type | Description |
 |------|------|-------------|
-| `header` | `BorderLabels` | Top border labels (`left` / `center` / `right`) |
-| `footer` | `BorderLabels` | Bottom border labels (`left` / `center` / `right`) |
-| `header_content` | `impl Into<Element>` | Optional content row inside a borderless frame |
+| `title` / `title_center` / `title_right` | `impl Into<FrameLabel>` | Top border title labels (`left` / `center` / `right`) |
+| `titles` | `BorderLabels` | Grouped top border labels (`left` / `center` / `right`) |
+| `title_style` / `focus_title_style` | `Style` | Top border title group style (idle / focused) |
+| `title_padding` | `impl Into<Padding>` | Horizontal padding around top border title labels |
+| `title_content` | `impl Into<Element>` | Optional content row inside a borderless frame |
+| `footer` / `footer_left` / `footer_center` / `footer_right` | `BorderLabels` / `impl Into<FrameLabel>` | Bottom border labels (`left` / `center` / `right`) |
+| `footer_style` / `focused_footer_style` | `Style` | Bottom border footer group style (idle / focused) |
+| `footer_padding` | `impl Into<Padding>` | Horizontal padding around bottom border footer labels |
 | `focus_style` | `Style` | Frame style when focused |
 | `extend_focus_style` / `inherit_focus_style` | `Style` / `()` | Extend or inherit the focus theme role instead of replacing it |
 | `hover_style` | `Style` | Frame style when hovered |
@@ -285,7 +290,7 @@ beside `footer_left` / `footer_right` while the header labels keep the top line 
 
 ```rust
 Frame::new()
-    .header_left("DevTools")
+    .title("DevTools")
     .tab_titles(["Stats", "Logs", "App"])
     .tab_edge(TabEdge::Bottom)
     .active_tab(active)

@@ -141,7 +141,7 @@ impl Component for InlineListPicker {
         });
 
         Frame::new()
-            .header_left("Inline list picker")
+            .title("Inline list picker")
             .border(true)
             .border_style(BorderStyle::Rounded)
             .padding(1)

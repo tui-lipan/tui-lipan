@@ -194,7 +194,7 @@ impl Component for DiffInlineComments {
             .gap(1)
             .child(
                 Frame::new()
-                    .header_left("Inline diff comments")
+                    .title("Inline diff comments")
                     .footer_left("Drag line numbers for range • Ctrl+Enter save • Esc cancel")
                     .border(true)
                     .height(Length::Px(3))
@@ -254,7 +254,7 @@ fn comment_editor(range: DiffLineRange, ctx: &Context<DiffInlineComments>) -> El
         .into();
 
     Frame::new()
-        .header_left(format!("New comment on {}", range_label(range)))
+        .title(format!("New comment on {}", range_label(range)))
         .border(true)
         .border_style(BorderStyle::Rounded)
         .padding(1)
@@ -283,7 +283,7 @@ fn saved_comment(comment: &ReviewComment, ctx: &Context<DiffInlineComments>) -> 
     let edit_pane = comment.pane;
     let delete_range = comment.range;
     Frame::new()
-        .header_left(format!("Review comment on {}", range_label(comment.range)))
+        .title(format!("Review comment on {}", range_label(comment.range)))
         .border(true)
         .border_style(BorderStyle::Rounded)
         .padding((0, 1))

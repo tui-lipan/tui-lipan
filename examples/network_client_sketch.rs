@@ -218,12 +218,12 @@ fn top_bar(scenario: SketchScenario) -> Element {
 
 fn collections_panel(scenario: SketchScenario) -> Element {
     Frame::new()
-        .header_left("Collections")
+        .title("Collections")
         .border(true)
         .border_style(BorderStyle::Rounded)
         .width(Length::Px(28))
         .style(surface())
-        .header_style(Style::new().fg(accent()).bold())
+        .title_style(Style::new().fg(accent()).bold())
         .footer_left("Tab | Enter")
         .footer_style(muted())
         .child(
@@ -287,12 +287,12 @@ fn request_item(method: &str, path: &str, meta: &str, color: Color) -> ListItem 
 
 fn request_panel(scenario: SketchScenario) -> Element {
     Frame::new()
-        .header_left("Request")
+        .title("Request")
         .border(true)
         .border_style(BorderStyle::Rounded)
         .height(Length::Px(10))
         .style(surface())
-        .header_style(Style::new().fg(Color::rgb(125, 211, 252)).bold())
+        .title_style(Style::new().fg(Color::rgb(125, 211, 252)).bold())
         .child(
             VStack::new()
                 .gap(1)
@@ -380,8 +380,8 @@ fn chip(label: &'static str, value: &'static str, color: Color) -> Element {
         .border(true)
         .border_style(BorderStyle::Rounded)
         .style(Style::new().bg(Color::indexed(236)).fg(Color::indexed(250)))
-        .header_left(label)
-        .header_style(Style::new().fg(color).bold())
+        .title(label)
+        .title_style(Style::new().fg(color).bold())
         .height(Length::Px(2))
         .child(Text::new(value).style(muted()).overflow(Overflow::Ellipsis))
         .into()
@@ -419,11 +419,11 @@ fn body_panel(scenario: SketchScenario) -> Element {
 
 fn response_panel(scenario: SketchScenario) -> Element {
     Frame::new()
-        .header_left("Response")
+        .title("Response")
         .border(true)
         .border_style(BorderStyle::Rounded)
         .style(surface())
-        .header_style(status_style(scenario.status()).bold())
+        .title_style(status_style(scenario.status()).bold())
         .footer_left(response_status_line(scenario.status()))
         .footer_style(status_style(scenario.status()))
         .child(
@@ -479,8 +479,8 @@ fn metric(label: &'static str, value: &'static str, value_style: Style) -> Eleme
         .border(true)
         .border_style(BorderStyle::Rounded)
         .style(Style::new().bg(Color::indexed(236)).fg(Color::indexed(250)))
-        .header_left(label)
-        .header_style(muted())
+        .title(label)
+        .title_style(muted())
         .child(Text::new(value).style(value_style.bold()))
         .into()
 }

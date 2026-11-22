@@ -43,7 +43,7 @@ impl Component for InputsDemo {
     fn view(&self, ctx: &Context<Self>) -> Element {
         rsx! {
             Frame {
-                header: BorderLabels::new().left("Inputs & TextAreas Demo"),
+                titles: BorderLabels::new().left("Inputs & TextAreas Demo"),
                 padding: 1,
                 VStack {
                     gap: 1,

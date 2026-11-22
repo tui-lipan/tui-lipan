@@ -94,11 +94,11 @@ impl Component for WidgetDemo {
         };
 
         Frame::new()
-            .header_left("Widgets")
+            .title("Widgets")
             .footer_left(ctx.state.status.clone())
             .padding(1)
             .style(panel_style)
-            .header_style(Style::new().fg(Color::rgb(88, 166, 255)).bold())
+            .title_style(Style::new().fg(Color::rgb(88, 166, 255)).bold())
             .footer_style(Style {
                 fg: Some(Paint::from(Color::indexed(244))),
                 dim: Some(true),
@@ -335,14 +335,14 @@ impl Component for WidgetDemo {
                             )
                             .child(
                                 Frame::new()
-                                    .header_left("Details")
+                                    .title("Details")
                                     .padding(1)
                                     .style(
                                         Style::new()
                                             .bg(Color::indexed(236))
                                             .fg(Color::indexed(252)),
                                     )
-                                    .header_style(Style::new().fg(Color::rgb(249, 115, 22)).bold())
+                                    .title_style(Style::new().fg(Color::rgb(249, 115, 22)).bold())
                                     .border_style(border_style)
                                     .child(
                                         VStack::new()

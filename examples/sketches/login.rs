@@ -10,7 +10,7 @@ use tui_lipan::{Result, Sketch};
 /// The composition under design. No state, no messages - only layout and style.
 fn view() -> Element {
     Frame::new()
-        .header_left("Sign In")
+        .title("Sign In")
         .border(true)
         .child(
             VStack::new()

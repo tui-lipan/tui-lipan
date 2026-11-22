@@ -98,7 +98,7 @@ impl Component for Screen {
             "LICENSE",
         ];
         let sidebar = Frame::new()
-            .header_left("Explorer")
+            .title("Explorer")
             .border(true)
             .border_style(BorderStyle::Rounded)
             .width(Length::Px(24))
@@ -147,7 +147,7 @@ impl Component for Screen {
             .label("Indexing");
 
         let center = Frame::new()
-            .header_left("Inspector")
+            .title("Inspector")
             .border(true)
             .border_style(BorderStyle::Rounded)
             .width(Length::Flex(2))
@@ -168,7 +168,7 @@ impl Component for Screen {
 
         // ── Right: a popover/menu surface + role swatches ───────────────────
         let menu = Frame::new()
-            .header_left("Menu")
+            .title("Menu")
             .border(true)
             .border_style(BorderStyle::Rounded)
             .style(Style::new().bg(theme.surface.menu))
@@ -182,7 +182,7 @@ impl Component for Screen {
             );
 
         let details = Frame::new()
-            .header_left("Roles")
+            .title("Roles")
             .border(true)
             .border_style(BorderStyle::Rounded)
             .width(Length::Flex(1))

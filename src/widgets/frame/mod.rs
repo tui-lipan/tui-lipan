@@ -481,25 +481,25 @@ impl Frame {
     }
 
     /// Set labels rendered in the top border.
-    pub fn header(mut self, header: BorderLabels) -> Self {
-        self.props.header = Box::new(header);
+    pub fn titles(mut self, titles: BorderLabels) -> Self {
+        self.props.header = Box::new(titles);
         self
     }
 
-    /// Set the left header label.
-    pub fn header_left(mut self, label: impl Into<FrameLabel>) -> Self {
+    /// Set the main (left) title label in the top border.
+    pub fn title(mut self, label: impl Into<FrameLabel>) -> Self {
         self.props.header.left = Some(label.into());
         self
     }
 
-    /// Set the centered header label.
-    pub fn header_center(mut self, label: impl Into<FrameLabel>) -> Self {
+    /// Set the centered title label in the top border.
+    pub fn title_center(mut self, label: impl Into<FrameLabel>) -> Self {
         self.props.header.center = Some(label.into());
         self
     }
 
-    /// Set the right header label.
-    pub fn header_right(mut self, label: impl Into<FrameLabel>) -> Self {
+    /// Set the right title label in the top border.
+    pub fn title_right(mut self, label: impl Into<FrameLabel>) -> Self {
         self.props.header.right = Some(label.into());
         self
     }
@@ -622,7 +622,7 @@ impl Frame {
     }
 
     /// Set a content header element rendered inside the frame.
-    pub fn header_content(mut self, header: impl Into<Element>) -> Self {
+    pub fn title_content(mut self, header: impl Into<Element>) -> Self {
         self.header = Some(Box::new(header.into()));
         self.props.has_header = true;
         self
@@ -698,14 +698,14 @@ impl Frame {
         self
     }
 
-    /// Set the header group style.
-    pub fn header_style(mut self, style: Style) -> Self {
+    /// Set the title group style.
+    pub fn title_style(mut self, style: Style) -> Self {
         self.props.header.style = style;
         self
     }
 
-    /// Set the focused header group style.
-    pub fn focused_header_style(mut self, style: Style) -> Self {
+    /// Set the focused title group style.
+    pub fn focus_title_style(mut self, style: Style) -> Self {
         self.props.header.focused_style = Some(style);
         self
     }
@@ -722,8 +722,8 @@ impl Frame {
         self
     }
 
-    /// Set header label padding.
-    pub fn header_padding(mut self, padding: impl Into<Padding>) -> Self {
+    /// Set title label padding.
+    pub fn title_padding(mut self, padding: impl Into<Padding>) -> Self {
         self.props.header.padding = padding.into();
         self
     }
@@ -899,7 +899,7 @@ mod tests {
         let focused_header_style = Style::new().bold();
         let left_style = Style::new().fg(Color::Yellow);
         let focused_left_style = Style::new().underline();
-        let frame = Frame::new().header(
+        let frame = Frame::new().titles(
             BorderLabels::new()
                 .left(
                     FrameLabel::new("left")
@@ -944,9 +944,9 @@ mod tests {
     #[test]
     fn repeated_group_setters_replace_the_previous_group() {
         let frame = Frame::new()
-            .header(BorderLabels::new().left("old").right("removed"))
+            .titles(BorderLabels::new().left("old").right("removed"))
             .footer(BorderLabels::new().center("old footer"))
-            .header(BorderLabels::new().center("new"))
+            .titles(BorderLabels::new().center("new"))
             .footer(BorderLabels::new().right("new footer"));
 
         assert!(frame.props.header.left.is_none());

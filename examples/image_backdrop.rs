@@ -161,7 +161,7 @@ impl Component for ImageBackdrop {
         ]);
 
         let terminal = Frame::new()
-            .header(BorderLabels::new().center(FrameLabel::new(" terminal pane ")))
+            .titles(BorderLabels::new().center(FrameLabel::new(" terminal pane ")))
             .child(
                 Terminal::new()
                     .snapshot(ctx.state.snapshot.clone())
@@ -174,7 +174,7 @@ impl Component for ImageBackdrop {
             .height(Length::Flex(1));
 
         let widget = Frame::new()
-            .header(BorderLabels::new().center(FrameLabel::new(" Image widget ")))
+            .titles(BorderLabels::new().center(FrameLabel::new(" Image widget ")))
             .child(
                 VStack::new()
                     .child(

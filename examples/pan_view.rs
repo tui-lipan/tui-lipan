@@ -73,12 +73,12 @@ impl Component for PanViewExample {
         ui! {
             VStack::new().gap(1).padding(1) => {
                 Frame::new()
-                    .header_left("PanView diagram preview")
+                    .title("PanView diagram preview")
                     .border(true)
                     .padding(1)
                     .child(pan_view),
                 Frame::new()
-                    .header_left("Controls")
+                    .title("Controls")
                     .border(true)
                     .height(Length::Auto)
                     .padding((0, 1))

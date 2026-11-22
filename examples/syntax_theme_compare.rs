@@ -63,7 +63,7 @@ impl Component for SyntaxThemeCompare {
             .gap(1)
             .child(
                 Frame::new()
-                    .header_left("Syntax Theme Compare")
+                    .title("Syntax Theme Compare")
                     .border(true)
                     .border_style(BorderStyle::Rounded)
                     .padding(1)
@@ -105,7 +105,7 @@ fn syntax_panel(title: &str, theme: Theme) -> Element {
     ThemeProvider::new(theme.clone())
         .child(
             Frame::new()
-                .header_left(title)
+                .title(title)
                 .border(true)
                 .border_style(BorderStyle::Rounded)
                 .width(Length::Flex(1))
