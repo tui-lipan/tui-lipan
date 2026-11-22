@@ -16,15 +16,15 @@ Key characteristics:
 // Recommended: start here for typical app-author code
 use tui_lipan::prelude::*;
 
-// Or import any public widget, event, style, or runtime type directly from the crate root
+// Or import widgets and curated prelude items directly from the crate root
 use tui_lipan::{Button, Input, List, ListItem, Modal, Tabs, VStack};
 ```
 
-The crate root (`tui_lipan::*`) is the complete public surface: every public
-widget, event, styling primitive, helper, and runtime type is re-exported there.
-`tui_lipan::prelude::*` is a curated subset of the crate root covering the most
-common types, widgets, and macros without re-exporting broad internal modules
-like `core` or `utils` wholesale.
+Every public widget export and everything in `tui_lipan::prelude::*` is
+available at the crate root (`tui_lipan::*`). `tui_lipan::prelude::*` is a
+curated subset of the crate root covering common types, widgets, and macros;
+specialized modules (such as `tui_lipan::animation`, `tui_lipan::style`, and
+`tui_lipan::utils`) keep their own nested paths for lower-level APIs.
 
 Representative `prelude::*` re-exports:
 
