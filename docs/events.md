@@ -706,8 +706,10 @@ pub struct InputEvent {
 }
 ```
 
-`Input::on_submit` fires on plain `Enter` (no modifiers) while focused and consumes the key; when
-unset, `Enter` falls through to `Input::on_key` and parent handlers.
+`Input::on_submit` fires on plain `Enter` (no modifiers) while focused and editable and consumes
+the key; disabled and read-only inputs do not submit, and `Input::key_interceptor` runs first and
+may consume `Enter`. When `on_submit` is unset, `Enter` falls through to `Input::on_key` and
+parent handlers.
 
 With `Input::new(value)`, updating your string from `ev.value` is enough — the runtime preserves
 cursor and selection across rerenders. Use `Input::bound(&TextInput)` (or

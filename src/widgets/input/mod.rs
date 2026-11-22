@@ -389,10 +389,13 @@ impl Input {
         self
     }
 
-    /// Callback fired when plain Enter (without modifiers) is pressed while focused.
+    /// Callback fired when plain Enter (without modifiers) is pressed while
+    /// focused and editable.
     ///
-    /// When set, plain Enter emits this callback with the current value, cursor,
-    /// and anchor and consumes the key. When unset, Enter falls through to
+    /// Disabled and read-only inputs do not submit. [`Self::key_interceptor`]
+    /// runs first and may consume Enter before `on_submit` is reached. When
+    /// reached, `on_submit` emits this callback with the current value, cursor,
+    /// and anchor and consumes the key; when unset, Enter falls through to
     /// [`Self::on_key`] and parent handlers.
     pub fn on_submit(mut self, cb: Callback<InputEvent>) -> Self {
         self.on_submit = Some(cb);
