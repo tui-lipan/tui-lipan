@@ -40,6 +40,18 @@ def run_checker(lib_rs: str, prelude_rs: str, widgets_rs: str) -> tuple[int, str
 
 
 class ExportParityTests(unittest.TestCase):
+    def test_same_name_exported_twice_fails(self):
+        widgets_rs = "mod button;\npub use button::Button;\n"
+        lib_rs = """
+            #[cfg(feature = "a")]
+            pub use crate::style::Button;
+            #[cfg(not(feature = "a"))]
+            pub use crate::widgets::Button;
+        """
+        code, output = run_checker(lib_rs, "", widgets_rs)
+        self.assertEqual(code, 1)
+        self.assertIn("exports `Button` more than once", output)
+
     def test_widgets_vs_root_same_name_different_type_fails(self):
         widgets_rs = """
             mod flowchart;

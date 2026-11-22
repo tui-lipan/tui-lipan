@@ -138,6 +138,11 @@ def parse_module(text: str, mod_path: str) -> tuple[dict[str, ExportEntry], set[
     i, n = 0, len(src)
     attrs: list[str] = []
 
+    def add(entry: ExportEntry) -> None:
+        if entry.name in exports:
+            raise ResolutionError(f"`{mod_path}` exports `{entry.name}` more than once")
+        exports[entry.name] = entry
+
     def read_balanced(pos: int, open_ch: str, close_ch: str) -> int:
         depth, in_str = 0, False
         while pos < n:
@@ -206,20 +211,16 @@ def parse_module(text: str, mod_path: str) -> tuple[dict[str, ExportEntry], set[
                 raise ResolutionError(f"unterminated pub use in {mod_path}")
             body = src[i + m_use.end() : semi].strip()
             for name, raw_src, is_aliased in expand_use_tree("", body):
-                exports[name] = ExportEntry(name, cfgs, raw_src, False, is_aliased)
+                add(ExportEntry(name, cfgs, raw_src, False, is_aliased))
             i = semi + 1
         elif m_pub := PUB_ITEM_RE.match(src, i):
             name = m_pub.group(1)
-            exports.setdefault(
-                name, ExportEntry(name, cfgs, f"{mod_path}::{name}", True, False)
-            )
+            add(ExportEntry(name, cfgs, f"{mod_path}::{name}", True, False))
             i = skip_tail(m_pub.end())
         elif m_macro := MACRO_RE.match(src, i):
             if is_macro_export:
                 name = m_macro.group(1)
-                exports[name] = ExportEntry(
-                    name, cfgs, f"{mod_path}::{name}", True, False
-                )
+                add(ExportEntry(name, cfgs, f"{mod_path}::{name}", True, False))
             i = skip_tail(m_macro.end())
         else:
             i = skip_tail(i)
