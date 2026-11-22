@@ -106,6 +106,14 @@ Before finishing, verify direct imports for promoted types, for example
 `src/layout/hash.rs` dispatch are also generated from `src/widget_manifest.rs`.
 Do not add one-off arms there; choose the correct manifest category instead.
 
+For a container with a child builder method, add an implementation to
+`src/core/ui_children.rs`. Forward to the builder's existing method and keep
+its accepted child type. Use the default cardinality for a single child and
+implement both values of `ADDITIONAL` for a builder that appends siblings. If
+`rsx!` needs a named constructor key, update `CONSTRUCTOR_KEYS` in
+`tui-lipan-macro/src/rsx_expand.rs` and the table in the [macro guide](macros.md).
+The macro tests check that the tables agree.
+
 Before submitting, run the lightweight plumbing guard:
 
 ```bash

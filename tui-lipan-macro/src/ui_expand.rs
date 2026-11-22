@@ -1,7 +1,8 @@
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
-use syn::{Expr, Ident};
+use syn::spanned::Spanned;
 
+use crate::child_block::ChildBlock;
 use crate::ui_ast::{UiInput, UiItem};
 
 impl UiInput {
@@ -19,11 +20,11 @@ impl UiItem {
                 key,
                 children,
             } => {
-                let add_method = infer_add_method(expr);
-                let node = format_ident!("__ui_node");
+                let node = format_ident!("__ui_node", span = Span::mixed_site());
+                let mut block = ChildBlock::new(lipan, &node);
                 let stmts: Vec<_> = children
                     .iter()
-                    .map(|c| c.expand_child(lipan, &node, &add_method))
+                    .map(|c| c.expand_child(&mut block))
                     .collect();
 
                 let finish = if let Some(key_expr) = key {
@@ -59,17 +60,13 @@ impl UiItem {
         }
     }
 
-    fn expand_child(&self, lipan: &TokenStream2, node: &Ident, add_method: &Ident) -> TokenStream2 {
+    fn expand_child(&self, block: &mut ChildBlock<'_>) -> TokenStream2 {
         match self {
-            Self::Parent { .. } | Self::Leaf(..) => {
-                let value = self.expand(lipan);
-                quote! { #node = #node.#add_method(#value); }
+            Self::Parent { expr, .. } | Self::Leaf(expr, _) => {
+                block.append(expr.span(), self.expand(block.lipan))
             }
             Self::For { pat, iter, body } => {
-                let stmts: Vec<_> = body
-                    .iter()
-                    .map(|c| c.expand_child(lipan, node, add_method))
-                    .collect();
+                let stmts = block.nested(body, Self::expand_child);
                 quote! {
                     for #pat in #iter {
                         #(#stmts)*
@@ -81,16 +78,10 @@ impl UiItem {
                 then_body,
                 else_body,
             } => {
-                let then_stmts: Vec<_> = then_body
-                    .iter()
-                    .map(|c| c.expand_child(lipan, node, add_method))
-                    .collect();
+                let then_stmts = block.nested(then_body, Self::expand_child);
 
                 if let Some(else_body) = else_body {
-                    let else_stmts: Vec<_> = else_body
-                        .iter()
-                        .map(|c| c.expand_child(lipan, node, add_method))
-                        .collect();
+                    let else_stmts = block.nested(else_body, Self::expand_child);
                     quote! {
                         if #cond {
                             #(#then_stmts)*
@@ -107,37 +98,5 @@ impl UiItem {
                 }
             }
         }
-    }
-}
-
-/// Infer the correct add method (`.child()`, `.item()`, `.tab()`, etc.) by
-/// extracting the widget type name from the root of a builder chain expression.
-fn infer_add_method(expr: &Expr) -> Ident {
-    match extract_root_type_name(expr).as_deref() {
-        Some("Tabs") => Ident::new("tab", Span::call_site()),
-        Some("List") => Ident::new("item", Span::call_site()),
-        Some("Accordion") => Ident::new("item", Span::call_site()),
-        Some("DraggableTabBar") => Ident::new("tab", Span::call_site()),
-        Some("AccordionItem") => Ident::new("content", Span::call_site()),
-        _ => Ident::new("child", Span::call_site()),
-    }
-}
-
-/// Walk a builder chain (`Type::new().method().method()`) back to its root
-/// constructor call and return the type name (the path segment before `::new`).
-fn extract_root_type_name(expr: &Expr) -> Option<String> {
-    match expr {
-        Expr::MethodCall(mc) => extract_root_type_name(&mc.receiver),
-        Expr::Call(call) => {
-            if let Expr::Path(ep) = call.func.as_ref() {
-                let segs = &ep.path.segments;
-                if segs.len() >= 2 {
-                    return Some(segs[segs.len() - 2].ident.to_string());
-                }
-            }
-            None
-        }
-        Expr::Path(ep) => ep.path.segments.last().map(|s| s.ident.to_string()),
-        _ => None,
     }
 }

@@ -1,7 +1,9 @@
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
+use syn::spanned::Spanned;
 use syn::{Expr, Ident, Result};
 
+use crate::child_block::ChildBlock;
 use crate::rsx_ast::{Child, Entry, IfChild, Node, NodeOrExpr, RsxInput};
 
 impl RsxInput {
@@ -38,43 +40,17 @@ impl Node {
 
     fn expand_value_impl(&self, lipan: &TokenStream2) -> Result<TokenStream2> {
         let ty = self.type_name();
-        let ctor_keys = constructor_keys_for_type(&ty);
+        let constructor_key = CONSTRUCTOR_KEYS
+            .iter()
+            .find_map(|&(widget, key)| (widget == ty).then_some(key));
 
-        let mut ctor_args: Vec<Option<TokenStream2>> = vec![None; ctor_keys.len()];
+        let mut constructor_arg = None;
         let mut key_expr: Option<(Ident, Expr)> = None;
         let mut constraint_exprs: Vec<(Ident, Expr)> = Vec::new();
 
-        let node_ident = format_ident!("__rsx_node");
-        let add_method = add_method_for_parent(&ty);
-
-        let mut stmts: Vec<TokenStream2> = Vec::new();
-
-        let child_count = self
-            .entries
-            .iter()
-            .filter(|entry| matches!(entry, Entry::Child(_)))
-            .count();
-
-        if let Some(limit) = max_children_for_type(&ty)
-            && child_count > limit
-        {
-            let hint = if limit == 0 {
-                format!("`{ty}` does not accept child nodes")
-            } else {
-                "Note: Use VStack or HStack for multiple children".to_string()
-            };
-            return Err(syn::Error::new_spanned(
-                &self.path,
-                format!(
-                    "`{}` can only have {} child{}, but {} were provided\n{}",
-                    ty,
-                    limit,
-                    if limit == 1 { "" } else { "ren" },
-                    child_count,
-                    hint,
-                ),
-            ));
-        }
+        let node_ident = format_ident!("__rsx_node", span = Span::mixed_site());
+        let mut block = ChildBlock::new(lipan, &node_ident);
+        let mut stmts = Vec::new();
 
         for entry in &self.entries {
             match entry {
@@ -103,99 +79,73 @@ impl Node {
                         continue;
                     }
 
-                    if let Some(pos) = ctor_keys.iter().position(|key| *key == name_str.as_str())
-                        && ctor_args[pos].is_none()
-                    {
-                        ctor_args[pos] = Some(value.expand_value(lipan));
-                        continue;
-                    }
-
-                    let method = map_prop_method(name);
                     let value = value.expand_value(lipan);
-                    stmts.push(quote! { #node_ident = #node_ident.#method(#value); });
+                    if constructor_key == Some(name_str.as_str()) && constructor_arg.is_none() {
+                        constructor_arg = Some(value);
+                    } else {
+                        stmts.push(quote! { #node_ident = #node_ident.#name(#value); });
+                    }
                 }
-                Entry::Child(child) => {
-                    stmts.push(child.expand_apply(lipan, &node_ident, &add_method)?);
-                }
+                Entry::Child(child) => stmts.push(child.expand_apply(&mut block)),
             }
         }
 
         let path = &self.path;
+        if let Some(key) = constructor_key
+            && constructor_arg.is_none()
+        {
+            return Err(syn::Error::new_spanned(
+                path,
+                format!("`{ty}` requires `{key}: ...` property"),
+            ));
+        }
 
-        let base = if !ctor_keys.is_empty() {
-            let mut resolved = Vec::with_capacity(ctor_keys.len());
-            for (key, arg) in ctor_keys.iter().zip(ctor_args.iter()) {
-                let Some(arg) = arg else {
-                    return Err(syn::Error::new_spanned(
-                        path,
-                        format!("`{ty}` requires `{key}: ...` property"),
-                    ));
-                };
-                resolved.push(quote! { #arg });
-            }
-            quote! { #path::new(#(#resolved),*) }
-        } else {
-            quote! { #path::new() }
-        };
-
-        let has_element_modifiers = key_expr.is_some() || !constraint_exprs.is_empty();
-
-        let finish = if has_element_modifiers {
-            if matches!(ty.as_str(), "Tab" | "ListItem")
-                && let Some((ident, _)) = &key_expr
-            {
-                return Err(syn::Error::new(
-                    ident.span(),
-                    format!("`key:` is not supported for `{ty}`"),
-                ));
-            }
-
-            let mut chain = quote! { ::core::convert::Into::<#lipan::Element>::into(#node_ident) };
-
-            for (name, expr) in constraint_exprs {
-                chain = quote! { #chain.#name(#expr) };
-            }
-
-            if let Some((_key_ident, key_expr)) = key_expr {
-                chain = quote! { #chain.key(#key_expr) };
-            }
-
-            chain
-        } else {
-            quote! { #node_ident }
-        };
-
+        let finish = finish_node(lipan, &ty, &node_ident, key_expr, constraint_exprs)?;
         Ok(quote! {{
-            let mut #node_ident = #base;
+            let mut #node_ident = #path::new(#constructor_arg);
             #(#stmts)*
             #finish
         }})
     }
 }
 
+fn finish_node(
+    lipan: &TokenStream2,
+    ty: &str,
+    node: &Ident,
+    key: Option<(Ident, Expr)>,
+    constraints: Vec<(Ident, Expr)>,
+) -> Result<TokenStream2> {
+    if key.is_none() && constraints.is_empty() {
+        return Ok(quote! { #node });
+    }
+
+    let mut chain = quote! { ::core::convert::Into::<#lipan::Element>::into(#node) };
+    for (name, expr) in constraints {
+        chain = quote! { #chain.#name(#expr) };
+    }
+
+    if let Some((ident, expr)) = key {
+        if matches!(ty, "Tab" | "ListItem") {
+            return Err(syn::Error::new(
+                ident.span(),
+                format!("`key:` is not supported for `{ty}`"),
+            ));
+        }
+        chain = quote! { #chain.key(#expr) };
+    }
+    Ok(chain)
+}
+
 impl Child {
-    fn expand_apply(
-        &self,
-        lipan: &TokenStream2,
-        node_ident: &Ident,
-        add_method: &Ident,
-    ) -> Result<TokenStream2> {
-        Ok(match self {
-            Self::Node(node) => {
-                let value = node.expand_value(lipan);
-                quote! { #node_ident = #node_ident.#add_method(#value); }
-            }
-            Self::Expr(expr) => {
-                quote! { #node_ident = #node_ident.#add_method(#expr); }
-            }
+    fn expand_apply(&self, block: &mut ChildBlock<'_>) -> TokenStream2 {
+        match self {
+            Self::Node(node) => block.append(node.path.span(), node.expand_value(block.lipan)),
+            Self::Expr(expr) => block.append(expr.span(), quote! { #expr }),
             Self::For(for_child) => {
                 let pat = &for_child.pat;
                 let expr = &for_child.expr;
-
-                let mut body = Vec::new();
-                for child in &for_child.body {
-                    body.push(child.expand_apply(lipan, node_ident, add_method)?);
-                }
+                let body = block.nested(&for_child.body, Self::expand_apply);
 
                 quote! {
                     for #pat in #expr {
@@ -203,62 +153,23 @@ impl Child {
                     }
                 }
             }
-            Self::If(if_child) => expand_if_child(if_child, lipan, node_ident, add_method)?,
-        })
+            Self::If(if_child) => expand_if_child(if_child, block),
+        }
     }
 }
 
-fn expand_if_child(
-    if_child: &IfChild,
-    lipan: &TokenStream2,
-    node_ident: &Ident,
-    add_method: &Ident,
-) -> Result<TokenStream2> {
+fn expand_if_child(if_child: &IfChild, block: &ChildBlock<'_>) -> TokenStream2 {
     let cond = &if_child.cond;
+    let then_body = block.nested(&if_child.then_body, Child::expand_apply);
+    let else_clause = if_child.else_body.as_ref().map(|else_body| {
+        let body = block.nested(else_body, Child::expand_apply);
+        quote! { else { #(#body)* } }
+    });
 
-    let mut then_body = Vec::new();
-    for child in &if_child.then_body {
-        then_body.push(child.expand_apply(lipan, node_ident, add_method)?);
-    }
-
-    Ok(if let Some(else_body) = &if_child.else_body {
-        let mut else_tokens = Vec::new();
-        for child in else_body {
-            else_tokens.push(child.expand_apply(lipan, node_ident, add_method)?);
-        }
-
-        quote! {
-            if #cond {
-                #(#then_body)*
-            } else {
-                #(#else_tokens)*
-            }
-        }
-    } else {
-        quote! {
-            if #cond {
-                #(#then_body)*
-            }
-        }
-    })
-}
-
-fn map_prop_method(name: &Ident) -> Ident {
-    match name.to_string().as_str() {
-        "alignment" => Ident::new("align", name.span()),
-        "spacing" => Ident::new("gap", name.span()),
-        _ => name.clone(),
-    }
-}
-
-fn add_method_for_parent(parent_ty: &str) -> Ident {
-    match parent_ty {
-        "Tabs" => Ident::new("tab", Span::call_site()),
-        "List" => Ident::new("item", Span::call_site()),
-        "Accordion" => Ident::new("item", Span::call_site()),
-        "DraggableTabBar" => Ident::new("tab", Span::call_site()),
-        "AccordionItem" => Ident::new("content", Span::call_site()),
-        _ => Ident::new("child", Span::call_site()),
+    quote! {
+        if #cond {
+            #(#then_body)*
+        } #else_clause
     }
 }
 
@@ -269,62 +180,61 @@ fn is_element_constraint(name: &str) -> bool {
     )
 }
 
-fn constructor_keys_for_type(ty: &str) -> &'static [&'static str] {
-    match ty {
-        "Text" => &["content"],
-        "Button" => &["label"],
-        "Input" => &["value"],
-        "Tab" => &["label"],
-        "ListItem" => &["text"],
-        "Checkbox" => &["checked"],
-        "ProgressBar" => &["progress"],
-        "TextArea" => &["value"],
-        "Radio" => &["options"],
-        "Grid" => &["columns"],
-        "Heatmap" => &["data"],
-        "Sparkline" => &["data"],
-        "Tree" => &["root"],
-        "FileTree" => &["root"],
-        "Modal" => &[],
-        "Toast" => &["message"],
-        "Tooltip" => &["text"],
-        "ThemeProvider" => &["theme"],
-        "Badge" => &["content"],
-        "Slider" => &["value"],
-        "Image" => &["src"],
-        "Divider" => &["orientation"],
-        "Splitter" => &["orientation"],
-        "AsciiCanvas" => &["lines"],
-        "AccordionItem" => &["title"],
-        "ContextMenu" => &["trigger"],
-        "DocumentView" => &["value"],
-        "DraggableTab" => &["label"],
-        "Flowchart" => &["direction"],
-        "HexArea" => &["bytes"],
-        "PaginationBar" => &["state"],
-        "DiffView" => &[],
-        _ => &[],
-    }
-}
+const CONSTRUCTOR_KEYS: &[(&str, &str)] = &[
+    ("AccordionItem", "title"),
+    ("AsciiCanvas", "lines"),
+    ("Badge", "content"),
+    ("Button", "label"),
+    ("Checkbox", "checked"),
+    ("ContextMenu", "trigger"),
+    ("ContextProvider", "value"),
+    ("Divider", "orientation"),
+    ("DocumentView", "value"),
+    ("DraggableTab", "label"),
+    ("FileTree", "root"),
+    ("Flowchart", "direction"),
+    ("Grid", "columns"),
+    ("Heatmap", "data"),
+    ("HexArea", "bytes"),
+    ("Image", "src"),
+    ("Input", "value"),
+    ("ListItem", "content"),
+    ("PaginationBar", "state"),
+    ("ProgressBar", "progress"),
+    ("Radio", "options"),
+    ("Slider", "value"),
+    ("Sparkline", "data"),
+    ("Splitter", "orientation"),
+    ("Tab", "label"),
+    ("Text", "content"),
+    ("TextArea", "value"),
+    ("ThemeProvider", "theme"),
+    ("Toast", "content"),
+    ("Tooltip", "content"),
+    ("Tree", "root"),
+];
 
-fn max_children_for_type(ty: &str) -> Option<usize> {
-    match ty {
-        "Center" | "Frame" | "Group" | "Portal" => Some(1),
-        "CenterPin" => Some(0),
-        "AccordionItem" | "Badge" | "DragSource" | "DropTarget" | "Modal" | "MouseRegion"
-        | "ThemeProvider" | "Tooltip" => Some(1),
-        "VStack" | "HStack" | "ZStack" | "List" | "Tabs" | "Grid" | "Tree" | "ScrollView"
-        | "Splitter" => None,
-        "Accordion" | "DraggableTabBar" | "StatusBar" => None,
-        "Text" | "BigText" | "Button" | "Input" | "TextArea" | "Checkbox" | "ProgressBar"
-        | "Slider" | "Spinner" | "Divider" | "Spacer" | "Tab" | "ListItem" | "LogView"
-        | "Terminal" | "FileTree" | "Image" | "AsciiCanvas" => Some(0),
-        "Breadcrumb" | "Chart" | "ComboBox" | "ContextMenu" | "DatePicker" | "DiffView"
-        | "DocumentView" | "DraggableTab" | "Flowchart" | "Graph" | "Heatmap" | "HexArea"
-        | "ManagedTerminal" | "MultiSelect" | "PaginationBar" | "Popover" | "Radio"
-        | "SearchPalette" | "Select" | "SequenceDiagram" | "Sparkline" | "Table" | "Toast" => {
-            Some(0)
-        }
-        _ => None,
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::CONSTRUCTOR_KEYS;
+
+    #[test]
+    fn documented_constructor_keys_match_expansion() {
+        let docs = include_str!("../../docs/macros.md");
+        let (_, constructor_section) = docs.split_once("### Constructor Keys\n").unwrap();
+        let table = constructor_section.split("\n### ").next().unwrap();
+
+        let documented: BTreeSet<_> = table
+            .lines()
+            .filter_map(|line| {
+                let mut cells = line.strip_prefix("| `")?.split("` | `");
+                Some((cells.next()?, cells.next()?))
+            })
+            .collect();
+        let implemented = CONSTRUCTOR_KEYS.iter().copied().collect();
+        assert_eq!(documented, implemented);
+        assert_eq!(documented.len(), CONSTRUCTOR_KEYS.len());
     }
 }

@@ -535,3 +535,14 @@ pub use widgets::TerminalEngineKind;
 pub use widgets::{TerminalReadGate, TerminalReadGateStats};
 
 pub use widgets::{TerminalGraphicsMetrics, terminal_graphics_metrics};
+
+extern crate self as tui_lipan;
+
+#[path = "core/ui_children.rs"]
+mod ui_children;
+
+/// Implementation support for the UI macros.
+#[doc(hidden)]
+pub mod __macro_support {
+    pub use crate::ui_children::UiChildren;
+}

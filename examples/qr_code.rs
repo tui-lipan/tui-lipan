@@ -158,7 +158,7 @@ impl Component for QrCodeExample {
         rsx! {
             VStack {
                 padding: 1,
-                spacing: 1,
+                gap: 1,
                 Text {
                     content: "QR Code Widget",
                     style: Style::new().bold().fg(Color::Rgb(126, 190, 255)),

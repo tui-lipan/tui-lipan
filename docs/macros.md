@@ -1,13 +1,12 @@
 # UI Macros (`ui!` and `rsx!`)
 
-Two macros are available for building `Element` trees. **`ui!` is recommended** - it provides full rust-analyzer autocomplete with standard Rust builder syntax.
+Both macros build `Element` trees and can be mixed in the same file. Use `ui!`
+for standard Rust builder syntax and rust-analyzer autocomplete.
 
-| Macro | Syntax style | Autocomplete | Formatter support | Recommended |
+| Macro | Syntax style | Autocomplete | Formatter support | Use |
 |-------|-------------|-------------|-------------------|-------------|
-| **`ui!`** | Builder chains with `=> { children }` | **Full** (standard Rust) | `ui-fmt` for macro body; `rustfmt` preserves body and formats surrounding Rust | **Yes** |
-| `rsx!` | Struct-literal DSL (`Widget { prop: val }`) | No (custom DSL) | `rsx-fmt` for macro body; `rustfmt` for surrounding Rust | For reading/reviewing |
-
-Both produce `Element` and are fully interchangeable - mix freely in the same file.
+| **`ui!`** | Builder chains with `=> { children }` | **Full** (standard Rust) | `ui-fmt` for macro body; `rustfmt` preserves body and formats surrounding Rust | Recommended |
+| `rsx!` | Struct-literal DSL (`Widget { prop: val }`) | No (custom DSL) | `rsx-fmt` for macro body; `rustfmt` for surrounding Rust | Optional builder syntax sugar |
 
 ---
 
@@ -30,9 +29,9 @@ ui! {
 }
 ```
 
-- Everything **before** `=>` is a normal Rust expression (builder chain).
-- `=> { child1, child2, ... }` desugars to `.child(child1).child(child2)...`.
-- Leaf widgets (no children) need no `=> { }` - just write the expression.
+- Everything before `=>` is a Rust expression.
+- `=> { child1, child2, ... }` adds children using the parent type's `UiChildren` implementation.
+- Write leaf widgets as expressions without a children block.
 - Items are separated by `,` or `;`.
 
 ### Nesting
@@ -62,7 +61,7 @@ ui! {
     VStack::new() => {
         for item in &items {
             Text::new(item.to_string()),
-        }
+        },
         if ctx.state.loading {
             Spinner::new().label("Loading..."),
         } else {
@@ -72,24 +71,19 @@ ui! {
 }
 ```
 
-### Add Method Inference
+### Child dispatch
 
-The macro infers the correct child-add method from the builder chain root:
-
-| Root type | Inferred method |
-|-----------|----------------|
-| `List` | `.item(...)` |
-| `Tabs` | `.tab(...)` |
-| `Accordion` | `.item(...)` |
-| `DraggableTabBar` | `.tab(...)` |
-| `AccordionItem` | `.content(...)` |
-| Everything else | `.child(...)` |
-
-For example, `List::new() => { ... }` automatically uses `.item()`:
+The expression before `=>` can be a builder chain, a helper that returns a
+builder, or a variable. The parent type determines how children are added.
+Here, `list()` returns a `List`, so each child goes through `List::item`.
 
 ```rust
+fn list() -> List {
+    List::new().selected(0)
+}
+
 ui! {
-    List::new().selected(0).on_select(handler) => {
+    list() => {
         ListItem::new("Alpha"),
         ListItem::new("Beta"),
     }
@@ -155,10 +149,10 @@ fn view(&self, ctx: &Context<Self>) -> Element {
 rsx! {
     VStack {
         gap: 1,
-        alignment: Align::Center,
+        align: Align::Center,
         justify: Justify::Center,
 
-        Text { content: "Hello World" }
+        Text { content: "Hello World" },
 
         Button {
             label: "Click Me",
@@ -171,18 +165,14 @@ rsx! {
 
 ### Property Mappings
 
-Most property names map directly to their builder method (e.g., `border: true` → `.border(true)`). Two names are remapped:
-
-| RSX key | Builder method |
-|---------|---------------|
-| `alignment` | `.align(...)` |
-| `spacing` | `.gap(...)` |
-
-All other keys (including `justify`, `style`, `on_click`, etc.) pass through unchanged.
+Properties use the builder method name. For example, `border: true` calls
+`.border(true)`. Constructor keys, `key`, and element constraints have their own
+rules below. If you used `alignment` or `spacing` for a stack, use `align` or
+`gap`.
 
 ### Layout Constraints
 
-Four special props apply to the resulting `Element` rather than the widget builder:
+These properties apply to the resulting `Element`.
 
 ```rust
 rsx! {
@@ -200,12 +190,14 @@ rsx! {
 | `max_width` | Maximum column width |
 | `min_height` | Minimum row height |
 | `max_height` | Maximum row height |
+| `automation_id` | Tree-wide automation identity |
 
 ### Constructor Keys
 
-Some widgets require positional arguments in their `new()` constructor. In `rsx!`, pass them using named keys.
-
-#### Single-argument constructors
+Use the named key below to pass an argument to a widget's `new()` constructor.
+Text bodies use `content`, labels use `label`, and edited values use `value`.
+For `ListItem`, `Tooltip`, and `Toast`, migrate the old `text` or `message` key
+to `content`.
 
 | Widget | Key | Example |
 |--------|-----|---------|
@@ -217,18 +209,19 @@ Some widgets require positional arguments in their `new()` constructor. In `rsx!
 | `Tab` | `label` | `Tab { label: "Tab 1" }` |
 | `DraggableTab` | `label` | `DraggableTab { label: "file.rs" }` |
 | `AccordionItem` | `title` | `AccordionItem { title: "Section" }` |
-| `ListItem` | `text` | `ListItem { text: "Item 1" }` |
+| `ListItem` | `content` | `ListItem { content: "Item 1" }` |
 | `Checkbox` | `checked` | `Checkbox { checked: true }` |
 | `ProgressBar` | `progress` | `ProgressBar { progress: 0.75 }` |
 | `Radio` | `options` | `Radio { options: vec!["A".into(), "B".into()] }` |
 | `Grid` | `columns` | `Grid { columns: 3 }` |
 | `Heatmap` | `data` | `Heatmap { data: values.clone() }` |
-| `Sparkline` | `data` | `Sparkline::new([1, 2, 3])` (stores `Arc<[u64]>`; use `data_arc` to share) |
+| `Sparkline` | `data` | `Sparkline { data: [1, 2, 3] }` |
 | `Tree` | `root` | `Tree { root: node }` |
 | `FileTree` | `root` | `FileTree { root: "/home/user" }` |
-| `Toast` | `message` | `Toast { message: "Saved!" }` |
-| `Tooltip` | `text` | `Tooltip { text: "Help text" }` |
-| `ThemeProvider` | `theme` | `ThemeProvider { theme: Theme::nord() }` |
+| `Flowchart` | `direction` | `Flowchart { direction: FlowDirection::LeftRight }` |
+| `Toast` | `content` | `Toast { content: "Saved!" }` |
+| `Tooltip` | `content` | `Tooltip { content: "Help text" }` |
+| `ThemeProvider` | `theme` | `ThemeProvider { theme: Theme::default() }` |
 | `ContextProvider` | `value` | `ContextProvider { value: 42u32 }` |
 | `Badge` | `content` | `Badge { content: "New" }` |
 | `Slider` | `value` | `Slider { value: 0.5 }` |
@@ -240,13 +233,10 @@ Some widgets require positional arguments in their `new()` constructor. In `rsx!
 | `HexArea` | `bytes` | `HexArea { bytes: data.into() }` |
 | `PaginationBar` | `state` | `PaginationBar { state: pg.clone() }` |
 
-#### Multi-argument constructors
+### DiffView
 
-Some widgets take more than one positional argument. All required keys must be provided:
-
-| Widget | Keys (in order) | Example |
-|--------|----------------|---------|
-| `DiffView` | `before`, `after` | `DiffView { before: old.clone(), after: new.clone() }` |
+`DiffView::new()` takes no arguments. Use the `before` and `after` builder
+properties to set the two texts.
 
 ```rust
 rsx! {
@@ -261,18 +251,26 @@ rsx! {
 
 ### Children & Nesting
 
-Children are declared inside the block, after properties. The macro picks the correct add method based on the parent widget type:
+Declare children inside the block. Both macros use the parent's `UiChildren`
+implementation, so aliases and qualified paths work for child dispatch.
+The `rsx!` constructor keys above still use the widget name. Use a builder
+expression or `ui!` for an alias whose constructor takes arguments.
 
-| Widget | Child method |
-|--------|-------------|
-| `VStack`, `HStack`, `ZStack`, `Frame`, `Group`, `Portal`, `Modal`, `MouseRegion`, `ThemeProvider`, `ContextProvider`, `Tooltip`, `ScrollView`, `Grid`, `StatusBar`, `Center` | `.child(...)` |
-| `List` | `.item(...)` |
-| `Tabs` | `.tab(...)` |
-| `Accordion` | `.item(...)` |
-| `DraggableTabBar` | `.tab(...)` |
-| `AccordionItem` | `.content(...)` |
+| Parent | Child method |
+|--------|--------------|
+| `Flow`, `Grid`, `HStack`, `ScrollView`, `Splitter`, `StatusBar`, `VStack`, `ZStack` | `.child(...)` |
+| `Animated`, `Badge`, `Center`, `ContextProvider`, `DragSource`, `DropTarget`, `EffectScope`, `Frame`, `Modal`, `MouseRegion`, `PanView`, `ThemeProvider`, `Tooltip` | `.child(...)` (single child) |
+| `List`, `Accordion` | `.item(...)` |
+| `Tabs`, `DraggableTabBar` | `.tab(...)` |
+| `AccordionItem`, `Popover` | `.content(...)` (single child) |
+| `Canvas` | `.child_at(...)` with a `CanvasItem` |
+| `Graph` | `.root(...)` (single root) |
+| `GraphNode`, `TreeNode` | `.child(...)` (typed node) |
 
-Single-child widgets (`Frame`, `Center`, `Group`, `Portal`, `Modal`, `MouseRegion`, `ThemeProvider`, `ContextProvider`, `Tooltip`, `AccordionItem`, `Badge`) accept exactly one child. Use `VStack` or `HStack` to group multiple elements:
+For a single-child builder, the macros reject a second direct child in the
+same block. A child added by control flow follows the builder's behavior: if
+several calls run, the last child replaces the previous one. Use a `VStack`
+or `HStack` to group siblings.
 
 ```rust
 rsx! {
@@ -280,10 +278,10 @@ rsx! {
         title: "Confirm",
         VStack {
             gap: 1,
-            Text { content: "Delete this item?" }
+            Text { content: "Delete this item?" },
             HStack {
                 gap: 1,
-                Button { label: "Cancel" }
+                Button { label: "Cancel" },
                 Button { label: "Delete" }
             }
         }
@@ -295,10 +293,10 @@ rsx! {
 rsx! {
     VStack {
         gap: 1,
-        Frame { header_left: "Panel", border: true }
+        Frame { header_left: "Panel", border: true },
         HStack {
             gap: 1,
-            Text { content: "Left" }
+            Text { content: "Left" },
             Text { content: "Right" }
         }
     }
@@ -307,7 +305,9 @@ rsx! {
 
 ### CenterPin
 
-`CenterPin` is a layout container that pins one child to the true center of the available area, giving the remaining vertical space above and below to `top` and `bottom` zones. It does **not** accept children in `rsx!`; instead, use the `top`, `center`, and `bottom` props:
+`CenterPin` reserves the true center for one child and shares the remaining
+vertical space across the top and bottom zones. Set the zones explicitly with
+`top`, `center`, and `bottom`.
 
 ```rust
 rsx! {
@@ -344,7 +344,7 @@ rsx! {
             Spinner { label: "Loading..." }
         } else {
             List { items: ctx.state.rows.clone(), selected: 0 }
-        }
+        },
 
         if let Some(error) = &ctx.state.error {
             Text { content: error.clone(), style: Style::new().fg(Color::Red) }
@@ -357,21 +357,23 @@ rsx! {
 
 ```rust
 rsx! {
-    Button {
-        label: "Save",
-        on_click: ctx.link().callback(|_| Msg::Save),
-    }
+    VStack {
+        Button {
+            label: "Save",
+            on_click: ctx.link().callback(|_| Msg::Save),
+        },
 
-    Input {
-        value: ctx.state.text.clone(),
-        on_change: ctx.link().callback(Msg::TextChanged),
-    }
+        Input {
+            value: ctx.state.text.clone(),
+            on_change: ctx.link().callback(Msg::TextChanged),
+        },
 
-    List {
-        items: items.clone(),
-        selected: ctx.state.selected,
-        on_select: ctx.link().callback(|e| Msg::Select(e.index)),
-        on_activate: ctx.link().callback(|e| Msg::Activate(e.index)),
+        List {
+            items: items.clone(),
+            selected: ctx.state.selected,
+            on_select: ctx.link().callback(|e| Msg::Select(e.index)),
+            on_activate: ctx.link().callback(|e| Msg::Activate(e.index)),
+        }
     }
 }
 ```
@@ -382,8 +384,10 @@ Assign stable keys for reconciliation and focus:
 
 ```rust
 rsx! {
-    List { key: "file-list", items: files.clone(), selected: 0 }
-    Input { key: "search-input", value: query.clone() }
+    VStack {
+        List { key: "file-list", items: files.clone(), selected: 0 },
+        Input { key: "search-input", value: query.clone() }
+    }
 }
 ```
 
@@ -415,6 +419,52 @@ fn view(&self, ctx: &Context<Self>) -> Element {
         }
     }
 }
+```
+
+### Custom containers
+
+Implement `tui_lipan::__macro_support::UiChildren` for a custom builder that
+accepts macro children. The first trait parameter is the accepted child type.
+Use a generic `const ADDITIONAL: bool` to accept multiple siblings or leave
+that parameter at its default for a single-child builder. An implementation
+can use a bound such as `C: Into<Element>` to accept several child types.
+
+```rust
+use tui_lipan::{__macro_support::UiChildren, prelude::*};
+
+struct Rows(List);
+
+impl Rows {
+    fn new() -> Self {
+        Self(List::new())
+    }
+}
+
+impl<const ADDITIONAL: bool> UiChildren<ListItem, ADDITIONAL> for Rows {
+    fn ui_child(self, child: ListItem) -> Self {
+        Self(self.0.item(child))
+    }
+}
+
+impl From<Rows> for Element {
+    fn from(rows: Rows) -> Self {
+        rows.0.into()
+    }
+}
+
+let rows = ui! {
+    Rows::new() => {
+        ListItem::new("Alpha"),
+        ListItem::new("Beta"),
+    }
+};
+
+let same_rows = rsx! {
+    Rows {
+        ListItem { content: "Alpha" },
+        ListItem { content: "Beta" }
+    }
+};
 ```
 
 ### Editor Snippets
