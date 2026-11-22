@@ -112,7 +112,7 @@ impl Input {
             caret_blinking: None,
             caret_color: None,
             selection_style: StyleSlot::Inherit,
-            border: true,
+            border: false,
             border_style: BorderStyle::Plain,
             padding: Padding {
                 left: 1,

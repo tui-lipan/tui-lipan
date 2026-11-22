@@ -20,12 +20,14 @@ fn view() -> Element {
                 .child(
                     Input::new("alice@example.com")
                         .placeholder("Email")
+                        .border(true)
                         .key("email"),
                 )
                 .child(
                     Input::new("")
                         .mask(Some('*'))
                         .placeholder("Password")
+                        .border(true)
                         .key("password"),
                 )
                 .child(

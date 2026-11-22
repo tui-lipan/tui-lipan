@@ -186,6 +186,7 @@ impl Component for LogViewer {
                             anchor: ctx.state.filter_anchor,
                             placeholder: "Search logs (regex supported)...",
                             prefix: "🔍 ",
+                            border: true,
                             on_change: ctx.link().callback(Msg::FilterChanged),
                             width: Length::Flex(1),
                         },

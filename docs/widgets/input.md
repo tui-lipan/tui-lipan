@@ -327,6 +327,8 @@ setter is used.
 | `selection_style` | `Style` | Text selection style |
 | `extend_selection_style` / `inherit_selection_style` | `Style` / `()` | Extend or inherit the text-selection theme role instead of replacing it |
 | `placeholder` | `String` | Placeholder when empty |
+| `border` | `bool` | Draw border (default: `false`) |
+| `border_style` | `BorderStyle` | Border appearance when `border` is `true` |
 | `mask` | `Option<char>` | Masking character (e.g., `'*'` for passwords) |
 | `read_only` | `bool` | Allow selection but block keyboard input |
 | `focusable` | `bool` | Whether input accepts focus; mouse selection and copy shortcuts still work when false |
@@ -428,6 +430,8 @@ Multi-line text editor.
 | `show_selection_when_unfocused` | `bool` | Keep the active anchor/cursor selection visible after focus leaves the `TextArea` (`true` by default; pass `false` to opt out) |
 | `unfocused_selection_style` / `inherit_unfocused_selection_style` / `unfocused_selection_style_slot` | `Style` / `()` / `StyleSlot` | Style visible selections while unfocused; inherited/default slots resolve against the text-selection theme role; slot form is for composite forwarding |
 | `placeholder` | `String` | Placeholder when empty |
+| `border` | `bool` | Draw border (default: `false`) |
+| `border_style` | `BorderStyle` | Border appearance when `border` is `true` |
 | `placeholder_style` | `Style` | Placeholder style |
 | `focus_placeholder_style` | `Style` | Placeholder when focused |
 | `read_only` | `bool` | Allow selection but block keyboard input |
@@ -1285,7 +1289,7 @@ Hex/ASCII binary data viewer with keyboard cursor navigation.
 | `extend_selection_style` / `inherit_selection_style` | `Style` / `()` | Extend or inherit the text-selection theme role instead of replacing it |
 | `cursor_style` | `Style` | Cursor byte style |
 | `pending_edit_style` | `Style` | Background/style for half-entered nibble edits |
-| `border` | `bool` | Draw border |
+| `border` | `bool` | Draw border (default: `false`) |
 | `border_style` | `BorderStyle` | Border style |
 | `padding` | `impl Into<Padding>` | Inner padding |
 | `width` | `Length` | Width |
@@ -1381,7 +1385,7 @@ Calendar-based date selection.
 | `day` | `Option<u32>` | Selected day |
 | `title` | `String` | Calendar title |
 | `show_outside_days` | `bool` | Show days from adjacent months |
-| `border` | `bool` | Draw border |
+| `border` | `bool` | Draw border (default: `false`) |
 | `border_style` | `BorderStyle` | Border appearance |
 | `padding` | `impl Into<Padding>` | Padding |
 | `style` | `Style` | Base style |

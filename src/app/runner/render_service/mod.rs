@@ -2259,7 +2259,7 @@ mod tests {
             .incremental_cursor_position()
             .expect("cursor position should be known from widget state");
 
-        assert_eq!(cursor, Position::new(1, 8));
+        assert_eq!(cursor, Position::new(0, 7));
     }
 
     /// Paint the tree the way `draw_current_tree` does, returning the cells and caret it drew.

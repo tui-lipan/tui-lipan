@@ -526,6 +526,7 @@ impl Component for FigletEditor {
                                     value: self.preview_text.clone(),
                                     cursor: self.preview_text_cursor,
                                     anchor: self.preview_text_anchor,
+                                    border: true,
                                     on_change: ctx.link().callback(Msg::PreviewTextChanged),
                                 },
                                 self.render_bigtext_preview(),
@@ -569,6 +570,7 @@ impl Component for FigletEditor {
                                     .cursor(self.export_filename_cursor)
                                     .anchor(self.export_filename_anchor)
                                     .placeholder("myfont.flf")
+                                    .border(true)
                                     .on_change(ctx.link().callback(Msg::ExportFilenameChanged)),
                             )
                             .child(
@@ -604,6 +606,7 @@ impl Component for FigletEditor {
                                     .cursor(self.import_filename_cursor)
                                     .anchor(self.import_filename_anchor)
                                     .placeholder("font.flf")
+                                    .border(true)
                                     .on_change(ctx.link().callback(Msg::ImportFilenameChanged)),
                             )
                             .child(

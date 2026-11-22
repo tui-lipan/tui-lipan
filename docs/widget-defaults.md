@@ -134,7 +134,7 @@ Source: `src/widgets/input/mod.rs` (`Input`).
 | `caret_blinking` | `None` |
 | `caret_color` | `None` |
 | `selection_style` | `StyleSlot::Inherit` |
-| `border` | `true` |
+| `border` | `false` |
 | `border_style` | `BorderStyle::Plain` |
 | `padding` | `Padding { left: 1, right: 1, top: 0, bottom: 0, }` |
 | `mask` | `None` |
@@ -191,7 +191,7 @@ Source: `src/widgets/text_area/mod.rs` (`TextArea`).
 | `color_strategy` | `None` |
 | `language` | `None` |
 | `theme` | `None` |
-| `border` | `true` |
+| `border` | `false` |
 | `border_style` | `BorderStyle::Plain` |
 | `padding` | `Padding::default()` |
 | `width` | `Length::Flex(1)` |
@@ -333,7 +333,7 @@ Source: `src/widgets/list/mod.rs` (`ListConfig`).
 
 | Field | Default initializer |
 |---|---|
-| `border` | `true` |
+| `border` | `false` |
 | `border_style` | `BorderStyle::Plain` |
 | `padding` | `Padding::default()` |
 | `style` | `Style::default()` |
@@ -607,7 +607,7 @@ Source: `src/widgets/multi_select.rs` (`MultiSelect`).
 | `title_style` | `Style::default()` |
 | `width` | `Length::Flex(1)` |
 | `height` | `Length::Flex(1)` |
-| `list_config` | `ListConfig { border: true, border_style: BorderStyle::Plain, padding: Padding::default(), style: Style::default(), selection_style: StyleSlot::Inherit, unfocused_selection_style: StyleSlot::Inherit, selection_full_width: false, selection_symbol: Some("[ ] ".into()), selection_symbol_right: None, selection_symbol_style: None, unfocused_selection_symbol_style: None, symbol_column: true, gutter_gap: 0, gutter_for_non_selectable: false, item_horizontal_padding: Padding::default(), header_horizontal_padding: Padding::default(), empty_text_style: Style::default(), empty_text_padding: Padding::default(), item_hover_style: None, scrollbar: false, scrollbar_config: ScrollbarConfig::default(), }` |
+| `list_config` | `ListConfig { border: false, border_style: BorderStyle::Plain, padding: Padding::default(), style: Style::default(), selection_style: StyleSlot::Inherit, unfocused_selection_style: StyleSlot::Inherit, selection_full_width: false, selection_symbol: Some("[ ] ".into()), selection_symbol_right: None, selection_symbol_style: None, unfocused_selection_symbol_style: None, symbol_column: true, gutter_gap: 0, gutter_for_non_selectable: false, item_horizontal_padding: Padding::default(), header_horizontal_padding: Padding::default(), empty_text_style: Style::default(), empty_text_padding: Padding::default(), item_hover_style: None, scrollbar: false, scrollbar_config: ScrollbarConfig::default(), }` |
 | `active_symbol` | `Some("[x] ".into())` |
 | `active_symbol_style` | `None` |
 | `active_style` | `StyleSlot::Inherit` |
@@ -702,7 +702,7 @@ Source: `src/widgets/hex_area/mod.rs` (`HexArea`).
 | `selection_style` | `StyleSlot::Inherit` |
 | `cursor_style` | `Style::default()` |
 | `pending_edit_style` | `Style::default()` |
-| `border` | `true` |
+| `border` | `false` |
 | `border_style` | `BorderStyle::Plain` |
 | `padding` | `Padding::default()` |
 | `width` | `Length::Flex(1)` |
@@ -983,7 +983,7 @@ Source: `src/widgets/document_view/mod.rs` (`DocumentView`).
 | `line_number_mode` | `DocumentLineNumberMode::default()` |
 | `line_number_style` | `Style::default()` |
 | `highlight_full_width` | `false` |
-| `border` | `true` |
+| `border` | `false` |
 | `border_style` | `BorderStyle::Plain` |
 | `padding` | `Padding::default()` |
 | `table_wrap` | `false` |

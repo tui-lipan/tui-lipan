@@ -375,7 +375,7 @@ impl Default for TextArea {
             color_strategy: None,
             language: None,
             theme: None,
-            border: true,
+            border: false,
             border_style: BorderStyle::Plain,
             padding: Padding::default(),
             width: Length::Flex(1),

@@ -233,6 +233,7 @@ fn collections_panel(scenario: SketchScenario) -> Element {
                     Input::new("acme billing")
                         .placeholder("Filter collections")
                         .prefix("/")
+                        .border(true)
                         .border_style(BorderStyle::Rounded)
                         .style(input_style())
                         .focus_style(focus_surface())
@@ -314,6 +315,7 @@ fn request_panel(scenario: SketchScenario) -> Element {
                         .child(
                             Input::new(scenario.url())
                                 .prefix("URL ")
+                                .border(true)
                                 .border_style(BorderStyle::Rounded)
                                 .style(input_style())
                                 .focus_style(focus_surface())

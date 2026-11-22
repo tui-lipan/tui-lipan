@@ -578,6 +578,7 @@ impl From<ComboBox> for Element {
             .unwrap_or(0);
 
         let mut input = Input::new(combo.query.clone())
+            .border(true)
             .width(combo.width)
             .style(combo.input_style)
             .hover_style_slot(combo.input_hover_style)

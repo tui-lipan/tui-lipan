@@ -131,7 +131,7 @@ impl Default for HexArea {
             selection_style: StyleSlot::Inherit,
             cursor_style: Style::default(),
             pending_edit_style: Style::default(),
-            border: true,
+            border: false,
             border_style: BorderStyle::Plain,
             padding: Padding::default(),
             width: Length::Flex(1),

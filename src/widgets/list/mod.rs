@@ -79,7 +79,7 @@ pub struct ListConfig {
 impl Default for ListConfig {
     fn default() -> Self {
         Self {
-            border: true,
+            border: false,
             border_style: BorderStyle::Plain,
             padding: Padding::default(),
             style: Style::default(),

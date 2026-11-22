@@ -629,6 +629,7 @@ impl Showcase {
                                     .cursor(ctx.state.input_cursor)
                                     .anchor(ctx.state.input_anchor)
                                     .placeholder("Type to edit")
+                                    .border(true)
                                     .on_change(ctx.link().callback(Msg::InputChanged))
                                     .on_edit(ctx.link().callback(Msg::InputEdited))
                             },

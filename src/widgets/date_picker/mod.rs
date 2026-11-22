@@ -89,7 +89,7 @@ impl DatePicker {
             nav_hover_style: StyleSlot::Inherit,
             nav_disabled_style: Style::default(),
             show_outside_days: false,
-            border: true,
+            border: false,
             border_style: BorderStyle::Rounded,
             padding: Padding::default(),
             width: Length::Auto,

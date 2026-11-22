@@ -293,6 +293,7 @@ impl Component for WidgetDemo {
                         Input::new(ctx.state.filter.text().to_owned())
                             .cursor(ctx.state.filter.cursor())
                             .placeholder("Type to filter...")
+                            .border(true)
                             .border_style(border_style)
                             .disabled(disabled)
                             .disabled_style(disabled_style)
