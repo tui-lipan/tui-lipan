@@ -239,12 +239,12 @@ Frame::new().titles(
         .left(
             FrameLabel::new("Project")
                 .style(Style::new().fg(Color::Cyan))
-                .focused_style(Style::new().bold()),
+                .focus_style(Style::new().bold()),
         )
         .center("Workspace 1")
         .right("Connected")
         .style(Style::new().fg(Color::Gray))
-        .focused_style(Style::new().fg(Color::White))
+        .focus_style(Style::new().fg(Color::White))
         .padding(1),
 )
 ```
@@ -257,7 +257,7 @@ Frame::new().titles(
 | `title_padding` | `impl Into<Padding>` | Horizontal padding around top border title labels |
 | `title_content` | `impl Into<Element>` | Optional content row inside a borderless frame |
 | `footer` / `footer_left` / `footer_center` / `footer_right` | `BorderLabels` / `impl Into<FrameLabel>` | Bottom border labels (`left` / `center` / `right`) |
-| `footer_style` / `focused_footer_style` | `Style` | Bottom border footer group style (idle / focused) |
+| `footer_style` / `focus_footer_style` | `Style` | Bottom border footer group style (idle / focused) |
 | `footer_padding` | `impl Into<Padding>` | Horizontal padding around bottom border footer labels |
 | `focus_style` | `Style` | Frame style when focused |
 | `extend_focus_style` / `inherit_focus_style` | `Style` / `()` | Extend or inherit the focus theme role instead of replacing it |

@@ -29,7 +29,7 @@ pub struct FrameLabel {
     /// Optional style layered on top of the containing group style.
     pub style: Option<Style>,
     /// Optional style layered on top of the group focus style while focused.
-    pub focused_style: Option<Style>,
+    pub focus_style: Option<Style>,
 }
 
 impl FrameLabel {
@@ -38,7 +38,7 @@ impl FrameLabel {
         Self {
             content: content.into(),
             style: None,
-            focused_style: None,
+            focus_style: None,
         }
     }
 
@@ -49,8 +49,8 @@ impl FrameLabel {
     }
 
     /// Set the label style while its frame is focused.
-    pub fn focused_style(mut self, style: Style) -> Self {
-        self.focused_style = Some(style);
+    pub fn focus_style(mut self, style: Style) -> Self {
+        self.focus_style = Some(style);
         self
     }
 }
@@ -97,7 +97,7 @@ pub struct BorderLabels {
     /// Default style for labels in this group.
     pub style: Style,
     /// Optional style layered on top while the frame is focused.
-    pub focused_style: Option<Style>,
+    pub focus_style: Option<Style>,
     /// Horizontal padding around each label.
     pub padding: Padding,
 }
@@ -133,8 +133,8 @@ impl BorderLabels {
     }
 
     /// Set the group style while the frame is focused.
-    pub fn focused_style(mut self, style: Style) -> Self {
-        self.focused_style = Some(style);
+    pub fn focus_style(mut self, style: Style) -> Self {
+        self.focus_style = Some(style);
         self
     }
 
@@ -706,7 +706,7 @@ impl Frame {
 
     /// Set the focused title group style.
     pub fn focus_title_style(mut self, style: Style) -> Self {
-        self.props.header.focused_style = Some(style);
+        self.props.header.focus_style = Some(style);
         self
     }
 
@@ -717,8 +717,8 @@ impl Frame {
     }
 
     /// Set the focused footer group style.
-    pub fn focused_footer_style(mut self, style: Style) -> Self {
-        self.props.footer.focused_style = Some(style);
+    pub fn focus_footer_style(mut self, style: Style) -> Self {
+        self.props.footer.focus_style = Some(style);
         self
     }
 
@@ -904,12 +904,12 @@ mod tests {
                 .left(
                     FrameLabel::new("left")
                         .style(left_style)
-                        .focused_style(focused_left_style),
+                        .focus_style(focused_left_style),
                 )
                 .center("center")
                 .right("right")
                 .style(header_style)
-                .focused_style(focused_header_style)
+                .focus_style(focused_header_style)
                 .padding(1),
         );
 
@@ -919,7 +919,7 @@ mod tests {
             Some(left_style)
         );
         assert_eq!(
-            header.left.as_ref().and_then(|label| label.focused_style),
+            header.left.as_ref().and_then(|label| label.focus_style),
             Some(focused_left_style)
         );
         assert_eq!(
@@ -937,7 +937,7 @@ mod tests {
             Some("right".into())
         );
         assert_eq!(header.style, header_style);
-        assert_eq!(header.focused_style, Some(focused_header_style));
+        assert_eq!(header.focus_style, Some(focused_header_style));
         assert_eq!(header.padding, Padding::from(1));
     }
 

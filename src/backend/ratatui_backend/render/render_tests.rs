@@ -443,10 +443,10 @@ fn grouped_label_style_resolution_preserves_each_layer() {
     let label_focused = Style::new().fg(Color::Yellow);
     let group = BorderLabels::new()
         .style(group_style)
-        .focused_style(group_focused);
+        .focus_style(group_focused);
     let label = FrameLabel::new("label")
         .style(label_style)
-        .focused_style(label_focused);
+        .focus_style(label_focused);
 
     let unfocused = crate::backend::ratatui_backend::renderers::frame::render::resolve_label_style(
         base, &group, &label, false,

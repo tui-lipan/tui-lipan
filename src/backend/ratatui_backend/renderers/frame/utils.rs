@@ -34,8 +34,8 @@ pub(crate) fn build_tabs_line<'a>(
         }
     }
     let mut title_style = block_style.patch(labels.style);
-    if active && let Some(focused_style) = labels.focused_style {
-        title_style = title_style.patch(focused_style);
+    if active && let Some(focus_style) = labels.focus_style {
+        title_style = title_style.patch(focus_style);
     }
     let line = border_tabs_title_line(
         &props.tab_titles,

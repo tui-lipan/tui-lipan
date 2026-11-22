@@ -1232,7 +1232,7 @@ Source: `src/widgets/search_palette/mod.rs` (`SearchPalette`).
 | `header_style` | `Style::default()` |
 | `description_style` | `Style::default()` |
 | `active_description_style` | `None` |
-| `focused_description_style` | `None` |
+| `focus_description_style` | `None` |
 | `description_placement` | `DescriptionPlacement::Inline` |
 | `description_separator` | `None` |
 | `description_selection` | `true` |

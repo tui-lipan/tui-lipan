@@ -1934,17 +1934,17 @@ fn render_frame_node(
     .flatten()
     {
         label.style = label.style.map(|style| resolve_base_style(theme, style));
-        label.focused_style = label
-            .focused_style
+        label.focus_style = label
+            .focus_style
             .map(|style| resolve_base_style(theme, style));
     }
-    themed_props.header.focused_style = themed_props
+    themed_props.header.focus_style = themed_props
         .header
-        .focused_style
+        .focus_style
         .map(|style| resolve_base_style(theme, style));
-    themed_props.footer.focused_style = themed_props
+    themed_props.footer.focus_style = themed_props
         .footer
-        .focused_style
+        .focus_style
         .map(|style| resolve_base_style(theme, style));
     themed_props.active_tab_style =
         crate::style::resolve::resolve_accent_style(theme, themed_props.active_tab_style);

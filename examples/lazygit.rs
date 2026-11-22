@@ -255,7 +255,7 @@ fn panel_frame() -> Frame {
         .footer_padding(1)
         .focus_title_style(panel_focused_header_style())
         .footer_style(panel_chrome_style())
-        .focused_footer_style(panel_focus_style())
+        .focus_footer_style(panel_focus_style())
         .padding(0)
 }
 

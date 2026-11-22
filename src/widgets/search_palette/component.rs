@@ -438,7 +438,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                     active_item: ctx.props.active_item_style,
                     description: ctx.props.description_style,
                     active_description: ctx.props.active_description_style,
-                    focused_description: ctx.props.focused_description_style,
+                    focused_description: ctx.props.focus_description_style,
                     description_placement: ctx.props.description_placement,
                     description_separator: ctx.props.description_separator.clone(),
                     description_selection: ctx.props.description_selection,

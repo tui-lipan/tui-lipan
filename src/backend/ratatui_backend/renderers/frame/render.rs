@@ -658,11 +658,11 @@ pub(crate) fn resolve_label_style(
         style = style.patch(label_style);
     }
     if active {
-        if let Some(focused_style) = group.focused_style {
-            style = style.patch(focused_style);
+        if let Some(focus_style) = group.focus_style {
+            style = style.patch(focus_style);
         }
-        if let Some(focused_style) = label.focused_style {
-            style = style.patch(focused_style);
+        if let Some(focus_style) = label.focus_style {
+            style = style.patch(focus_style);
         }
     }
     style
