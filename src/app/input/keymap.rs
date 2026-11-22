@@ -366,6 +366,9 @@ impl Action {
 pub(crate) enum BindingMode {
     Performable,
     Always,
+    /// Lowest-priority binding: only acts after normal dispatch (widgets, terminal passthrough,
+    /// component `on_key` bubbling, app commands, and normal framework bindings) declines the key.
+    Fallback,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -424,6 +427,7 @@ impl KeymapMatcher {
         let entries = keymap
             .bindings
             .iter()
+            .filter(|binding| binding.mode != BindingMode::Fallback)
             .map(|binding| {
                 (
                     binding.combination.clone(),
@@ -811,6 +815,16 @@ fn default_bindings(config: &KeymapConfig) -> Vec<Binding> {
     // --- DevTools ---
     bind("f12", Action::ToggleDevTools);
 
+    // Lowest-priority fallback quit: only acts after copy, focused widgets (including terminals),
+    // component `on_key` bubbling, app commands, and normal framework bindings decline `Ctrl+C`.
+    if let Ok(comb) = parse_binding("ctrl-c") {
+        bindings.push(Binding {
+            combination: comb,
+            action: Action::Quit,
+            mode: BindingMode::Fallback,
+        });
+    }
+
     bindings
 }
 
@@ -879,9 +893,12 @@ impl Keymap {
         let event_binding = KeyBinding::from_key_event(key);
 
         if let Some(indices) = self.index.get(&event_binding)
-            && let Some(&idx) = indices.first()
+            && let Some(binding) = indices
+                .iter()
+                .map(|&idx| &self.bindings[idx])
+                .find(|binding| binding.mode != BindingMode::Fallback)
         {
-            return self.bindings[idx].action;
+            return binding.action;
         }
 
         match normalized_key.code {
@@ -1638,7 +1655,7 @@ mod tests {
     }
 
     #[test]
-    fn default_keymap_does_not_bind_ctrl_c_to_quit() {
+    fn default_keymap_binds_ctrl_c_to_copy_and_fallback_quit() {
         let keymap = default_keymap();
         let matches = keymap.matches(KeyEvent {
             code: KeyCode::Char('c'),
@@ -1648,8 +1665,62 @@ mod tests {
             },
         });
 
-        assert!(matches.iter().any(|binding| binding.action == Action::Copy));
-        assert!(!matches.iter().any(|binding| binding.action == Action::Quit));
+        assert!(matches.iter().any(|binding| {
+            binding.action == Action::Copy && binding.mode == BindingMode::Performable
+        }));
+        assert!(matches.iter().any(|binding| {
+            binding.action == Action::Quit && binding.mode == BindingMode::Fallback
+        }));
+        assert_eq!(
+            keymap.binding_for_action(Action::Quit),
+            Some(&parse_binding("ctrl-q").unwrap())
+        );
+    }
+
+    #[test]
+    fn quit_none_in_keymap_file_disables_ctrl_q_and_ctrl_c_quit() {
+        let path = write_temp_keymap("quit = none\n");
+        let keymap = Keymap::new(
+            KeymapConfig::from_clipboard_config(&ClipboardConfig::default()).keymap_path(&path),
+        );
+        let _ = fs::remove_file(&path);
+
+        assert!(
+            keymap
+                .matches(ctrl_key('q'))
+                .iter()
+                .all(|binding| binding.action != Action::Quit)
+        );
+        assert!(
+            keymap
+                .matches(ctrl_key('c'))
+                .iter()
+                .all(|binding| binding.action != Action::Quit)
+        );
+        assert!(
+            keymap
+                .matches(ctrl_key('c'))
+                .iter()
+                .any(|binding| binding.action == Action::Copy)
+        );
+    }
+
+    #[test]
+    fn rust_unbind_quit_disables_ctrl_q_and_ctrl_c_quit() {
+        let keymap = rust_keymap(FrameworkKeymap::default().unbind(FrameworkAction::Quit));
+
+        assert!(
+            keymap
+                .matches(ctrl_key('q'))
+                .iter()
+                .all(|binding| binding.action != Action::Quit)
+        );
+        assert!(
+            keymap
+                .matches(ctrl_key('c'))
+                .iter()
+                .all(|binding| binding.action != Action::Quit)
+        );
     }
 
     #[test]

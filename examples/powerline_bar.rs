@@ -273,7 +273,7 @@ fn inline_badge(
 fn main() -> Result<()> {
     App::new()
         .title("tui-lipan - Powerline Bar")
-        .terminal_bg(Some(BAR_BG))
+        .host_background_hint(Some(BAR_BG))
         .mount(PowerlineBar)
         .run()
 }

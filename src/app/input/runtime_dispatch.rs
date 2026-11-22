@@ -19,7 +19,7 @@ use crate::app::input::key_dispatch::{
     TerminalPreflightDispatch, dispatch_key,
 };
 use crate::app::input::keyboard;
-use crate::app::input::keymap::{Action, Keymap, KeymapRuntime, KeymapRuntimeResult};
+use crate::app::input::keymap::{Action, BindingMode, Keymap, KeymapRuntime, KeymapRuntimeResult};
 use crate::app::input::text_area_vim::TextAreaVimState;
 use crate::app::interaction_state::DirtyLevel;
 use crate::app::interaction_state::HexPendingEdit;
@@ -313,13 +313,18 @@ impl DispatchOps for RuntimeDispatchOps<'_, '_> {
             KeymapRuntimeResult::None => None,
         };
         let action_from_chord = runtime_match.is_some_and(|binding| binding.is_chord);
-        let matches = runtime_match
-            .map(|binding| vec![binding.binding_match()])
-            .unwrap_or_else(|| self.env.keymap.matches(key));
+        let matches = if action_from_chord {
+            runtime_match
+                .map(|binding| vec![binding.binding_match()])
+                .unwrap_or_default()
+        } else {
+            self.env.keymap.matches(key)
+        };
+        let has_quit = matches
+            .iter()
+            .any(|binding| binding.action == Action::Quit && binding.mode != BindingMode::Fallback);
 
-        if self.overlay.top_overlay_blocks_unfocused()
-            && matches.iter().any(|binding| binding.action == Action::Quit)
-        {
+        if self.overlay.top_overlay_blocks_unfocused() && has_quit {
             return FrameworkDispatch::Quit;
         }
 
@@ -393,7 +398,7 @@ impl DispatchOps for RuntimeDispatchOps<'_, '_> {
             return FrameworkDispatch::Handled;
         }
 
-        if matches.iter().any(|binding| binding.action == Action::Quit) {
+        if has_quit {
             if action_from_chord || !self.overlay.top_overlay_blocks_unfocused() {
                 return FrameworkDispatch::Quit;
             }
@@ -404,6 +409,19 @@ impl DispatchOps for RuntimeDispatchOps<'_, '_> {
             return FrameworkDispatch::Quit;
         }
 
+        FrameworkDispatch::None
+    }
+
+    fn dispatch_framework_fallback(&mut self, key: KeyEvent) -> FrameworkDispatch {
+        if self
+            .env
+            .keymap
+            .matches(key)
+            .iter()
+            .any(|binding| binding.action == Action::Quit && binding.mode == BindingMode::Fallback)
+        {
+            return FrameworkDispatch::Quit;
+        }
         FrameworkDispatch::None
     }
 

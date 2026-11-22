@@ -270,7 +270,7 @@ fn host_terminal_color_change_updates_terminal_bg_and_requests_repaint() {
     let mut runner = AppRunner::new(
         App::new()
             .live_host_terminal_colors(true)
-            .terminal_bg(Some(Color::rgb(9, 9, 9))),
+            .host_background_hint(Some(Color::rgb(9, 9, 9))),
         RunnerKeymapSmoke,
         (),
     );
@@ -309,7 +309,7 @@ fn system_theme_host_color_change_updates_terminal_bg_core_and_context_theme() {
         App::new()
             .theme(Theme::dracula())
             .system_theme()
-            .terminal_bg(Some(Color::rgb(9, 9, 9))),
+            .host_background_hint(Some(Color::rgb(9, 9, 9))),
         RunnerKeymapSmoke,
         (),
     );
@@ -4113,7 +4113,9 @@ fn manual_focus_policy_ignores_queued_framework_traversal() {
 }
 
 #[test]
-fn default_runner_keymap_keeps_ctrl_q_quit_without_ctrl_c() {
+fn default_runner_keymap_binds_ctrl_q_and_fallback_ctrl_c_quit() {
+    use crate::app::input::keymap::{Action, BindingMode};
+
     let runner = App::new().mouse(false).mount(RunnerKeymapSmoke);
 
     let ctrl_c = runner.keymap.matches(KeyEvent {
@@ -4126,12 +4128,13 @@ fn default_runner_keymap_keeps_ctrl_q_quit_without_ctrl_c() {
     assert!(
         ctrl_c
             .iter()
-            .any(|binding| binding.action == crate::app::input::keymap::Action::Copy)
+            .any(|binding| binding.action == Action::Copy
+                && binding.mode == BindingMode::Performable)
     );
     assert!(
-        !ctrl_c
+        ctrl_c
             .iter()
-            .any(|binding| binding.action == crate::app::input::keymap::Action::Quit)
+            .any(|binding| binding.action == Action::Quit && binding.mode == BindingMode::Fallback)
     );
 
     let ctrl_q = runner.keymap.matches(KeyEvent {
@@ -4144,8 +4147,181 @@ fn default_runner_keymap_keeps_ctrl_q_quit_without_ctrl_c() {
     assert!(
         ctrl_q
             .iter()
-            .any(|binding| binding.action == crate::app::input::keymap::Action::Quit)
+            .any(|binding| binding.action == Action::Quit && binding.mode == BindingMode::Always)
     );
+}
+
+#[test]
+fn ctrl_c_copies_active_input_selection_without_quitting_and_quits_when_unhandled() {
+    struct InputSelectionSmoke {
+        has_selection: bool,
+        intercept_ctrl_c: bool,
+        intercepted: Rc<Cell<bool>>,
+    }
+
+    impl Component for InputSelectionSmoke {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+
+        fn on_key(&mut self, key: KeyEvent, _ctx: &mut Context<Self>) -> crate::KeyUpdate {
+            if self.intercept_ctrl_c
+                && key.mods.ctrl
+                && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C'))
+            {
+                self.intercepted.set(true);
+                return crate::KeyUpdate::handled(Update::none());
+            }
+            crate::KeyUpdate::unhandled(Update::none())
+        }
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            let mut input = crate::widgets::Input::new("hello").cursor(5);
+            if self.has_selection {
+                input = input.anchor(Some(0));
+            }
+            input.key("input")
+        }
+    }
+
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 40,
+        h: 6,
+    };
+
+    // 1. Active Input selection: Ctrl+C copies and does not quit (runner + TestBackend).
+    let writes = Rc::new(RefCell::new(Vec::new()));
+    let mut runner = AppRunner::new(
+        App::new()
+            .mouse(false)
+            .user_keymap_policy(crate::UserKeymapPolicy::Disabled)
+            .clipboard_provider(RecordingClipboardProvider {
+                writes: Rc::clone(&writes),
+            }),
+        InputSelectionSmoke {
+            has_selection: true,
+            intercept_ctrl_c: false,
+            intercepted: Rc::new(Cell::new(false)),
+        },
+        (),
+    );
+    runner.core.render_element(viewport, None, None, None);
+    let input_id = runner
+        .core
+        .tree
+        .iter()
+        .find_map(|node| matches!(node.kind, NodeKind::Input(_)).then_some(node.id))
+        .expect("input widget");
+    runner.focus.focused = Some(input_id);
+    let res = runner.dispatch_layered_key(ctrl_char('c'));
+    assert!(res.consumed);
+    assert!(!res.quit, "Ctrl+C with active selection must not quit");
+    assert_eq!(writes.borrow().as_slice(), &["hello"]);
+
+    let backend_writes = Rc::new(RefCell::new(Vec::new()));
+    let mut backend = crate::TestBackend::new_with_app(
+        App::new()
+            .mouse(false)
+            .user_keymap_policy(crate::UserKeymapPolicy::Disabled)
+            .clipboard_provider(RecordingClipboardProvider {
+                writes: Rc::clone(&backend_writes),
+            }),
+        InputSelectionSmoke {
+            has_selection: true,
+            intercept_ctrl_c: false,
+            intercepted: Rc::new(Cell::new(false)),
+        },
+        (),
+    );
+    backend.render();
+    backend.focus_key(&crate::Key::from("input"));
+    backend.send_key(ctrl_char('c')).expect("send ctrl-c");
+    assert!(!backend.core.ctx.should_quit());
+    assert_eq!(backend_writes.borrow().as_slice(), &["hello"]);
+
+    // 2. No selection, nothing handles Ctrl+C: quits (runner + TestBackend).
+    let mut runner = AppRunner::new(
+        App::new()
+            .mouse(false)
+            .user_keymap_policy(crate::UserKeymapPolicy::Disabled),
+        InputSelectionSmoke {
+            has_selection: false,
+            intercept_ctrl_c: false,
+            intercepted: Rc::new(Cell::new(false)),
+        },
+        (),
+    );
+    runner.core.render_element(viewport, None, None, None);
+    let input_id = runner
+        .core
+        .tree
+        .iter()
+        .find_map(|node| matches!(node.kind, NodeKind::Input(_)).then_some(node.id))
+        .expect("input widget");
+    runner.focus.focused = Some(input_id);
+    let res = runner.dispatch_layered_key(ctrl_char('c'));
+    assert!(res.consumed);
+    assert!(res.quit, "unhandled Ctrl+C should quit");
+
+    let mut backend = crate::TestBackend::new_with_app(
+        App::new()
+            .mouse(false)
+            .user_keymap_policy(crate::UserKeymapPolicy::Disabled),
+        InputSelectionSmoke {
+            has_selection: false,
+            intercept_ctrl_c: false,
+            intercepted: Rc::new(Cell::new(false)),
+        },
+        (),
+    );
+    backend.render();
+    backend.send_key(ctrl_char('c')).expect("send ctrl-c");
+    assert!(backend.core.ctx.should_quit());
+
+    // 3. Component on_key handles Ctrl+C: does not quit.
+    let intercepted = Rc::new(Cell::new(false));
+    let mut backend = crate::TestBackend::new_with_app(
+        App::new()
+            .mouse(false)
+            .user_keymap_policy(crate::UserKeymapPolicy::Disabled),
+        InputSelectionSmoke {
+            has_selection: false,
+            intercept_ctrl_c: true,
+            intercepted: Rc::clone(&intercepted),
+        },
+        (),
+    );
+    backend.render();
+    backend.send_key(ctrl_char('c')).expect("send ctrl-c");
+    assert!(intercepted.get());
+    assert!(!backend.core.ctx.should_quit());
+
+    // 4. App::global_quit(None) disables both Ctrl+Q and Ctrl+C.
+    let mut backend = crate::TestBackend::new_with_app(
+        App::new()
+            .mouse(false)
+            .user_keymap_policy(crate::UserKeymapPolicy::Disabled)
+            .global_quit(None),
+        InputSelectionSmoke {
+            has_selection: false,
+            intercept_ctrl_c: false,
+            intercepted: Rc::new(Cell::new(false)),
+        },
+        (),
+    );
+    backend.render();
+    backend.send_key(ctrl_char('q')).expect("send ctrl-q");
+    assert!(!backend.core.ctx.should_quit());
+    backend.send_key(ctrl_char('c')).expect("send ctrl-c");
+    assert!(!backend.core.ctx.should_quit());
 }
 
 #[test]
@@ -4769,7 +4945,10 @@ fn fill_background_uses_app_root_theme_when_devtools_extra_root_is_present() {
     app_theme.surface.backdrop = stale;
     let backdrop = Rc::new(Cell::new(live));
     let mut runner = AppRunner::new(
-        App::new().mouse(false).theme(app_theme).fill_background(),
+        App::new()
+            .mouse(false)
+            .theme(app_theme)
+            .background(crate::ScreenBackground::Theme),
         RunnerDynamicThemeSmoke {
             backdrop: Rc::clone(&backdrop),
         },
@@ -7449,6 +7628,80 @@ fn chord_mismatch_policy_affects_real_dispatch() {
             }
         ]
     );
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn focused_terminal_receives_ctrl_c_without_quitting() {
+    // Under the default TerminalKeyPolicy::FrameworkFirst, Ctrl+C must still reach the
+    // focused terminal (so child processes get SIGINT) instead of triggering fallback quit,
+    // while Ctrl+Q continues to quit as an Always framework shortcut.
+    let terminal_keys = Rc::new(RefCell::new(Vec::new()));
+    let mut backend = crate::TestBackend::new_with_app(
+        App::new()
+            .mouse(false)
+            .user_keymap_policy(crate::UserKeymapPolicy::Disabled),
+        TerminalKeyPolicySmoke {
+            keys: Rc::clone(&terminal_keys),
+        },
+        (),
+    );
+    backend.render();
+    let terminal_id = backend
+        .core
+        .tree
+        .iter()
+        .find_map(|node| matches!(node.kind, NodeKind::Terminal(_)).then_some(node.id))
+        .expect("terminal widget");
+    backend.set_focused(terminal_id);
+
+    backend.send_key(ctrl_char('c')).expect("send ctrl-c");
+    assert!(
+        !backend.core.ctx.should_quit(),
+        "focused terminal must consume Ctrl+C instead of quitting the app"
+    );
+    assert_eq!(terminal_keys.borrow().as_slice(), &[ctrl_char('c')]);
+
+    backend.send_key(ctrl_char('q')).expect("send ctrl-q");
+    assert!(
+        backend.core.ctx.should_quit(),
+        "Ctrl+Q still quits under FrameworkFirst"
+    );
+
+    // Verify the same on AppRunner::dispatch_layered_key directly.
+    let runner_keys = Rc::new(RefCell::new(Vec::new()));
+    let mut runner = AppRunner::new(
+        App::new()
+            .mouse(false)
+            .user_keymap_policy(crate::UserKeymapPolicy::Disabled),
+        TerminalKeyPolicySmoke {
+            keys: Rc::clone(&runner_keys),
+        },
+        (),
+    );
+    runner.core.render_element(
+        Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 10,
+        },
+        None,
+        None,
+        None,
+    );
+    let terminal_id = runner
+        .core
+        .tree
+        .iter()
+        .find_map(|node| matches!(node.kind, NodeKind::Terminal(_)).then_some(node.id))
+        .expect("terminal widget");
+    runner.focus.focused = Some(terminal_id);
+
+    let res = runner.dispatch_layered_key(ctrl_char('c'));
+    assert!(res.consumed);
+    assert!(!res.quit);
+    assert_eq!(runner_keys.borrow().as_slice(), &[ctrl_char('c')]);
 }
 
 #[cfg(feature = "terminal")]

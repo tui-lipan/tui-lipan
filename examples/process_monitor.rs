@@ -434,7 +434,7 @@ fn monitor_frame_rich(title: RichText) -> Frame {
 fn main() -> Result<()> {
     App::new()
         .title("tui-lipan - Process Monitor")
-        .screen_background(BG)
+        .background(BG)
         .mount(ProcessMonitor)
         .run()
 }
