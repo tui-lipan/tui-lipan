@@ -5126,7 +5126,7 @@ impl Component for ConfigurableMouseRegion {
     fn view(&self, _ctx: &Context<Self>) -> Element {
         let changes = Rc::clone(&self.changes);
         MouseRegion::new()
-            .enabled(self.enabled.get())
+            .disabled(!self.enabled.get())
             .on_hover_change(Callback::new(move |hovered| {
                 changes.borrow_mut().push(hovered);
             }))

@@ -28,7 +28,7 @@ impl Component for Regions {
             .child(
                 Frame::new().border(false).padding((1, 2)).child(
                     MouseRegion::new()
-                        .enabled(self.inner_enabled)
+                        .disabled(!self.inner_enabled)
                         .hit_test(|x, _| x < 2)
                         .on_middle_click(Callback::new(move |e| {
                             inner.borrow_mut().push(("inner", e))

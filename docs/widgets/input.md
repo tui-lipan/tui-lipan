@@ -112,7 +112,7 @@ Wrapper that turns a single child into a generic drag source.
 | `preview_max_size` | `(Option<u16>, Option<u16>)` | Set both optional caps (`None` per axis = uncapped) |
 | `threshold` | `u16` | Set the same movement threshold on both axes (default: `3` cells) |
 | `drag_threshold` | `(columns: u16, rows: u16)` | Set axes separately; reaching either starts the drag. Use `(3, 1)` for three columns or one row. A zero threshold starts on the first drag event. |
-| `enabled` | `bool` | Enable/disable drag behavior |
+| `disabled` | `bool` | Disable drag behavior (default: `false`) |
 
 ```rust
 DragSource::new()
@@ -150,7 +150,7 @@ Wrapper that marks a single child as a generic drop zone.
 | `highlight_overlay` | `Style` | `highlight(DropHighlight::Overlay)` + `highlight_style` |
 | `drop_slot` | `DropSlot` | `Child` (render child normally, default) or `SourcePreview` (replace child with the dragged card's snapshot; cursor float is suppressed) |
 | `drop_slot_source_preview` | `()` | Shorthand for `drop_slot(DropSlot::SourcePreview)` |
-| `enabled` | `bool` | Enable/disable drop behavior |
+| `disabled` | `bool` | Disable drop behavior (default: `false`) |
 
 `on_drag_over` is emitted on **every** pointer move while a compatible drag hovers this target (not only on enter). Use `DragOverEvent::local_y` (offset from the drop target’s top edge) with a row-height estimate to place a single insertion line; `local_x`/`local_width` give the horizontal position, e.g. for nesting depth in a tree. `DropEvent` uses the same conventions. Local coordinates are measured from the target's true origin, so they stay correct when the target is scrolled partially out of a `ScrollView`.
 
@@ -192,7 +192,7 @@ Wrapper that adds pointer callbacks to an arbitrary child subtree.
 | `capture_click` | `bool` | Capture clicks over interactive descendants |
 | `capture_requires_mods` | `KeyMods` | Capture pointer handling over descendants while modifiers are held |
 | `hover_style` | `Style` | Style underlay while hovered |
-| `enabled` | `bool` | Enable/disable pointer behavior |
+| `disabled` | `bool` | Disable pointer behavior (default: `false`) |
 
 Hover covers the full wrapped subtree, including interactive descendants.
 Click routing remains child-first unless `capture_click(true)` is set. Plain

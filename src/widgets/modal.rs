@@ -265,7 +265,7 @@ impl From<Modal> for Element {
                     backdrop =
                         backdrop.on_click(Callback::new(move |_: MouseRegionEvent| cb.emit(())));
                 } else {
-                    backdrop = backdrop.enabled(false);
+                    backdrop = backdrop.disabled(true);
                 }
 
                 let local_width = match modal.width {
