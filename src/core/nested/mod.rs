@@ -756,14 +756,14 @@ impl ComponentRegistry {
         if !self.is_valid(id) || !self.arena.get(id).initialized {
             return;
         }
+        let (theme, has_provider) =
+            self.resolve_entry_theme(self.arena.get(id).provider_theme.as_ref());
         let entry = self.arena.get_mut(id);
-        if let Some(theme) = &entry.provider_theme {
-            entry.component.set_scoped_theme(theme, true);
-        } else {
-            entry
-                .component
-                .set_scoped_theme(&self.env.active_theme.borrow(), false);
-        }
+        entry.component.set_scoped_theme(&theme, has_provider);
+        entry.component.set_contexts(
+            entry.active_contexts.clone(),
+            entry.active_context_generations.clone(),
+        );
         let level = entry
             .component
             .on_event(event)
