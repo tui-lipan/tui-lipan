@@ -7,21 +7,18 @@ pub(crate) fn reconcile_input(widget: &Input, prev: Option<&InputNode>) -> Input
         widget.cursor,
         widget.anchor,
         widget.cursor_controlled,
-        prev.map(|existing| {
-            (
-                existing.value.as_ref(),
-                existing.cursor,
-                existing.anchor,
-                existing.last_reported.as_ref(),
-            )
-        }),
+        prev.map(|existing| &existing.uncontrolled),
     );
 
     InputNode {
         value: widget.value.clone(),
         cursor,
         anchor,
-        last_reported: None,
+        uncontrolled: crate::utils::text::UncontrolledTextState::reconciled(
+            widget.value.clone(),
+            cursor,
+            anchor,
+        ),
         placeholder: widget.placeholder.clone(),
         prefix: widget.prefix.clone(),
         prefix_style: widget.prefix_style,

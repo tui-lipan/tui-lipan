@@ -21,12 +21,7 @@ pub fn reconcile_text_area(
     constraints: &LayoutConstraints,
 ) -> NodeId {
     let prev_cursor_state = match &tree.node(id).kind {
-        NodeKind::TextArea(existing) => Some((
-            existing.value.as_ref(),
-            existing.cursor,
-            existing.anchor,
-            existing.last_reported.as_ref(),
-        )),
+        NodeKind::TextArea(existing) => Some(&existing.uncontrolled),
         _ => None,
     };
     let (normalized_cursor, normalized_anchor) =

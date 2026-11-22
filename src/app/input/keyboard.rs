@@ -378,19 +378,22 @@ fn dispatch_selection_clipboard_request(
                             id,
                         )
                     };
-                    let reported =
-                        dispatch
-                            .mutated
-                            .then(|| crate::utils::text::ReportedTextState {
-                                value: std::sync::Arc::from(input.text().to_owned()),
-                                cursor: input.cursor(),
-                                anchor: input.anchor(),
-                            });
+                    let reported = dispatch.mutated.then(|| {
+                        (
+                            std::sync::Arc::from(input.text().to_owned()),
+                            input.cursor(),
+                            input.anchor(),
+                        )
+                    });
                     let handled = ctx.record_copy_feedback_dispatch(dispatch);
-                    if let Some(reported) = reported
+                    if let Some((reported_value, reported_cursor, reported_anchor)) = reported
                         && let NodeKind::Input(node) = &mut tree.node_mut(id).kind
                     {
-                        node.last_reported = Some(reported);
+                        node.uncontrolled.record_reported(
+                            reported_value,
+                            reported_cursor,
+                            reported_anchor,
+                        );
                     }
                     handled
                 } else {
@@ -464,19 +467,22 @@ fn dispatch_selection_clipboard_request(
                             id,
                         )
                     };
-                    let reported =
-                        dispatch
-                            .mutated
-                            .then(|| crate::utils::text::ReportedTextState {
-                                value: std::sync::Arc::from(editor.text().to_owned()),
-                                cursor: editor.cursor(),
-                                anchor: editor.anchor(),
-                            });
+                    let reported = dispatch.mutated.then(|| {
+                        (
+                            std::sync::Arc::from(editor.text().to_owned()),
+                            editor.cursor(),
+                            editor.anchor(),
+                        )
+                    });
                     let handled = ctx.record_copy_feedback_dispatch(dispatch);
-                    if let Some(reported) = reported
+                    if let Some((reported_value, reported_cursor, reported_anchor)) = reported
                         && let NodeKind::TextArea(node) = &mut tree.node_mut(id).kind
                     {
-                        node.last_reported = Some(reported);
+                        node.uncontrolled.record_reported(
+                            reported_value,
+                            reported_cursor,
+                            reported_anchor,
+                        );
                     }
                     handled
                 } else {

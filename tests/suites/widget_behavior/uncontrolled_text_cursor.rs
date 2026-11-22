@@ -1,6 +1,7 @@
 //! Uncontrolled cursor and selection preservation for `Input::new` and `TextArea::new`.
 
 use tui_lipan::TestBackend;
+use tui_lipan::core::event::{MouseButton, MouseKind};
 use tui_lipan::prelude::*;
 
 fn plain(code: KeyCode) -> KeyEvent {
@@ -25,11 +26,13 @@ fn shift(code: KeyCode) -> KeyEvent {
 enum InputMsg {
     Changed(String),
     ReplaceValue(String),
+    SetReject(bool),
     UnrelatedTick,
 }
 
 struct UncontrolledInputState {
     value: String,
+    reject_edits: bool,
     ticks: usize,
 }
 
@@ -45,13 +48,20 @@ impl Component for UncontrolledInputApp {
     fn create_state(&self, _: &()) -> Self::State {
         UncontrolledInputState {
             value: self.initial.to_string(),
+            reject_edits: false,
             ticks: 0,
         }
     }
 
     fn update(&mut self, msg: InputMsg, ctx: &mut Context<Self>) -> Update {
         match msg {
-            InputMsg::Changed(v) | InputMsg::ReplaceValue(v) => ctx.state.value = v,
+            InputMsg::Changed(v) => {
+                if !ctx.state.reject_edits {
+                    ctx.state.value = v;
+                }
+            }
+            InputMsg::ReplaceValue(v) => ctx.state.value = v,
+            InputMsg::SetReject(reject) => ctx.state.reject_edits = reject,
             InputMsg::UnrelatedTick => ctx.state.ticks += 1,
         }
         Update::full()
@@ -100,6 +110,11 @@ fn uncontrolled_input_typing_in_middle_preserves_cursor() {
     backend.send_key(plain(KeyCode::Char('!'))).unwrap();
     backend.render();
     assert_eq!(backend.state().value, "hell!o");
+
+    // Accepted paste in the middle also keeps cursor right after the pasted text.
+    backend.send_paste("?").unwrap();
+    backend.render();
+    assert_eq!(backend.state().value, "hell!?o");
 }
 
 #[test]
@@ -123,9 +138,9 @@ fn uncontrolled_input_preserves_selection_across_unrelated_rerender() {
 fn uncontrolled_input_external_value_replacement_moves_cursor_to_end() {
     let mut backend = input_backend("hello");
 
-    // Move cursor to the middle.
-    backend.send_key(plain(KeyCode::Left)).unwrap();
-    backend.send_key(plain(KeyCode::Left)).unwrap();
+    // Select "lo" so we verify external replacement clears selection too.
+    backend.send_key(shift(KeyCode::Left)).unwrap();
+    backend.send_key(shift(KeyCode::Left)).unwrap();
     backend.render();
 
     // Replace value externally (not via on_change).
@@ -134,10 +149,153 @@ fn uncontrolled_input_external_value_replacement_moves_cursor_to_end() {
         .unwrap();
     backend.render();
 
-    // Cursor should now be at the end of "world".
+    // Cursor should now be at the end of "world" with no selection.
     backend.send_key(plain(KeyCode::Char('!'))).unwrap();
     backend.render();
     assert_eq!(backend.state().value, "world!");
+}
+
+#[test]
+fn uncontrolled_input_rejected_insert_preserves_mid_text_cursor() {
+    let mut backend = input_backend("abc");
+
+    // Move from end (3) to pos 1 (between 'a' and 'b').
+    backend.send_key(plain(KeyCode::Left)).unwrap();
+    backend.send_key(plain(KeyCode::Left)).unwrap();
+
+    // Reject both typed and pasted inserts.
+    backend.dispatch(InputMsg::SetReject(true)).unwrap();
+    backend.send_key(plain(KeyCode::Char('x'))).unwrap();
+    assert_eq!(backend.state().value, "abc");
+    backend.send_paste("y").unwrap();
+    assert_eq!(backend.state().value, "abc");
+
+    // Accepting the next edit proves the cursor stayed at pos 1.
+    backend.dispatch(InputMsg::SetReject(false)).unwrap();
+    backend.send_key(plain(KeyCode::Char('!'))).unwrap();
+    assert_eq!(backend.state().value, "a!bc");
+}
+
+#[test]
+fn uncontrolled_input_rejected_delete_preserves_cursor() {
+    let mut backend = input_backend("abc");
+
+    // Move to pos 1 (between 'a' and 'b').
+    backend.send_key(plain(KeyCode::Left)).unwrap();
+    backend.send_key(plain(KeyCode::Left)).unwrap();
+
+    // Reject Backspace and Delete.
+    backend.dispatch(InputMsg::SetReject(true)).unwrap();
+    backend.send_key(plain(KeyCode::Backspace)).unwrap();
+    assert_eq!(backend.state().value, "abc");
+    backend.send_key(plain(KeyCode::Delete)).unwrap();
+    assert_eq!(backend.state().value, "abc");
+
+    // Cursor stays at pos 1.
+    backend.dispatch(InputMsg::SetReject(false)).unwrap();
+    backend.send_key(plain(KeyCode::Char('!'))).unwrap();
+    assert_eq!(backend.state().value, "a!bc");
+}
+
+#[test]
+fn uncontrolled_input_rejected_selection_replacement_preserves_cursor_and_selection() {
+    let mut backend = input_backend("abcd");
+
+    // Select "bc" (pos 3 -> 1 with anchor 3).
+    backend.send_key(plain(KeyCode::Left)).unwrap();
+    backend.send_key(shift(KeyCode::Left)).unwrap();
+    backend.send_key(shift(KeyCode::Left)).unwrap();
+
+    // Reject typed replacement, paste replacement, and Backspace delete.
+    backend.dispatch(InputMsg::SetReject(true)).unwrap();
+    backend.send_key(plain(KeyCode::Char('x'))).unwrap();
+    assert_eq!(backend.state().value, "abcd");
+    backend.send_paste("y").unwrap();
+    assert_eq!(backend.state().value, "abcd");
+    backend.send_key(plain(KeyCode::Backspace)).unwrap();
+    assert_eq!(backend.state().value, "abcd");
+
+    // Selection "bc" is still intact: typing 'Z' replaces "bc".
+    backend.dispatch(InputMsg::SetReject(false)).unwrap();
+    backend.send_key(plain(KeyCode::Char('Z'))).unwrap();
+    assert_eq!(backend.state().value, "aZd");
+}
+
+#[test]
+fn uncontrolled_input_cursor_move_then_rejected_edit_preserves_moved_cursor() {
+    let mut backend = input_backend("abcd");
+
+    // Move cursor to pos 2 via arrow keys, then reject an edit.
+    backend.send_key(plain(KeyCode::Left)).unwrap();
+    backend.send_key(plain(KeyCode::Left)).unwrap();
+    backend.dispatch(InputMsg::SetReject(true)).unwrap();
+    backend.send_key(plain(KeyCode::Char('x'))).unwrap();
+    assert_eq!(backend.state().value, "abcd");
+
+    // Move cursor again via mouse click (padding left = 1, so x = 2 lands at col 1 -> pos 1),
+    // then reject a paste.
+    backend
+        .send_mouse(MouseEvent {
+            x: 2,
+            y: 0,
+            kind: MouseKind::Down(MouseButton::Left),
+            mods: KeyMods::default(),
+        })
+        .unwrap();
+    backend
+        .send_mouse(MouseEvent {
+            x: 2,
+            y: 0,
+            kind: MouseKind::Up(MouseButton::Left),
+            mods: KeyMods::default(),
+        })
+        .unwrap();
+    backend.send_paste("y").unwrap();
+    assert_eq!(backend.state().value, "abcd");
+
+    // Accepting an insert lands at pos 1 (where the click moved the cursor).
+    backend.dispatch(InputMsg::SetReject(false)).unwrap();
+    backend.send_key(plain(KeyCode::Char('!'))).unwrap();
+    assert_eq!(backend.state().value, "a!bcd");
+}
+
+#[test]
+fn uncontrolled_input_drag_selection_then_rejected_paste_preserves_selection() {
+    let mut backend = input_backend("abcd");
+
+    // Drag from col 1 (x = 2 with left padding 1) to col 3 (x = 4) to select "bc".
+    backend
+        .send_mouse(MouseEvent {
+            x: 2,
+            y: 0,
+            kind: MouseKind::Down(MouseButton::Left),
+            mods: KeyMods::default(),
+        })
+        .unwrap();
+    backend
+        .send_mouse(MouseEvent {
+            x: 4,
+            y: 0,
+            kind: MouseKind::Drag(MouseButton::Left),
+            mods: KeyMods::default(),
+        })
+        .unwrap();
+    backend
+        .send_mouse(MouseEvent {
+            x: 4,
+            y: 0,
+            kind: MouseKind::Up(MouseButton::Left),
+            mods: KeyMods::default(),
+        })
+        .unwrap();
+
+    backend.dispatch(InputMsg::SetReject(true)).unwrap();
+    backend.send_paste("x").unwrap();
+    assert_eq!(backend.state().value, "abcd");
+
+    backend.dispatch(InputMsg::SetReject(false)).unwrap();
+    backend.send_key(plain(KeyCode::Char('Z'))).unwrap();
+    assert_eq!(backend.state().value, "aZd");
 }
 
 // ── Uncontrolled TextArea ───────────────────────────────────────────────────
@@ -145,10 +303,12 @@ fn uncontrolled_input_external_value_replacement_moves_cursor_to_end() {
 enum AreaMsg {
     Changed(String),
     ReplaceValue(String),
+    SetReject(bool),
 }
 
 struct UncontrolledAreaState {
     value: String,
+    reject_edits: bool,
 }
 
 struct UncontrolledAreaApp {
@@ -163,12 +323,19 @@ impl Component for UncontrolledAreaApp {
     fn create_state(&self, _: &()) -> Self::State {
         UncontrolledAreaState {
             value: self.initial.to_string(),
+            reject_edits: false,
         }
     }
 
     fn update(&mut self, msg: AreaMsg, ctx: &mut Context<Self>) -> Update {
         match msg {
-            AreaMsg::Changed(v) | AreaMsg::ReplaceValue(v) => ctx.state.value = v,
+            AreaMsg::Changed(v) => {
+                if !ctx.state.reject_edits {
+                    ctx.state.value = v;
+                }
+            }
+            AreaMsg::ReplaceValue(v) => ctx.state.value = v,
+            AreaMsg::SetReject(reject) => ctx.state.reject_edits = reject,
         }
         Update::full()
     }
@@ -201,23 +368,25 @@ fn area_backend(initial: &'static str) -> TestBackend<UncontrolledAreaApp> {
 fn uncontrolled_text_area_typing_in_middle_preserves_cursor() {
     let mut backend = area_backend("ac");
 
-    // TextArea starts at 0; move right once (between 'a' and 'c') and insert 'b', then '!'.
+    // TextArea starts at 0; move right once (between 'a' and 'c') and insert 'b', '!', and paste "?".
     backend.send_key(plain(KeyCode::Right)).unwrap();
     backend.send_key(plain(KeyCode::Char('b'))).unwrap();
     backend.send_key(plain(KeyCode::Char('!'))).unwrap();
+    backend.send_paste("?").unwrap();
     backend.render();
-    assert_eq!(backend.state().value, "ab!c");
+    assert_eq!(backend.state().value, "ab!?c");
 }
 
 #[test]
 fn uncontrolled_text_area_external_value_replacement_moves_cursor_to_end() {
     let mut backend = area_backend("hello");
 
-    // Cursor starts at 0; move right once.
-    backend.send_key(plain(KeyCode::Right)).unwrap();
+    // Select "he" so we verify external replacement clears selection too.
+    backend.send_key(shift(KeyCode::Right)).unwrap();
+    backend.send_key(shift(KeyCode::Right)).unwrap();
     backend.render();
 
-    // External value replacement moves cursor to the end.
+    // External value replacement moves cursor to the end and clears selection.
     backend
         .dispatch(AreaMsg::ReplaceValue("world".to_string()))
         .unwrap();
@@ -226,4 +395,145 @@ fn uncontrolled_text_area_external_value_replacement_moves_cursor_to_end() {
     backend.send_key(plain(KeyCode::Char('!'))).unwrap();
     backend.render();
     assert_eq!(backend.state().value, "world!");
+}
+
+#[test]
+fn uncontrolled_text_area_rejected_insert_preserves_mid_text_cursor() {
+    let mut backend = area_backend("abc");
+
+    // Move from 0 to pos 1 (between 'a' and 'b').
+    backend.send_key(plain(KeyCode::Right)).unwrap();
+
+    // Reject both typed and pasted inserts (paste goes through sync_text_area_node_from_editor).
+    backend.dispatch(AreaMsg::SetReject(true)).unwrap();
+    backend.send_key(plain(KeyCode::Char('x'))).unwrap();
+    assert_eq!(backend.state().value, "abc");
+    backend.send_paste("y").unwrap();
+    assert_eq!(backend.state().value, "abc");
+
+    // Accepting the next edit proves the cursor stayed at pos 1 rather than jumping to the end.
+    backend.dispatch(AreaMsg::SetReject(false)).unwrap();
+    backend.send_key(plain(KeyCode::Char('!'))).unwrap();
+    assert_eq!(backend.state().value, "a!bc");
+}
+
+#[test]
+fn uncontrolled_text_area_rejected_delete_preserves_cursor() {
+    let mut backend = area_backend("abc");
+
+    // Move to pos 1 (between 'a' and 'b').
+    backend.send_key(plain(KeyCode::Right)).unwrap();
+
+    // Reject Backspace and Delete.
+    backend.dispatch(AreaMsg::SetReject(true)).unwrap();
+    backend.send_key(plain(KeyCode::Backspace)).unwrap();
+    assert_eq!(backend.state().value, "abc");
+    backend.send_key(plain(KeyCode::Delete)).unwrap();
+    assert_eq!(backend.state().value, "abc");
+
+    // Cursor stays at pos 1.
+    backend.dispatch(AreaMsg::SetReject(false)).unwrap();
+    backend.send_key(plain(KeyCode::Char('!'))).unwrap();
+    assert_eq!(backend.state().value, "a!bc");
+}
+
+#[test]
+fn uncontrolled_text_area_rejected_selection_replacement_preserves_cursor_and_selection() {
+    let mut backend = area_backend("abcd");
+
+    // Select "bc" (pos 1 -> 3 with anchor 1).
+    backend.send_key(plain(KeyCode::Right)).unwrap();
+    backend.send_key(shift(KeyCode::Right)).unwrap();
+    backend.send_key(shift(KeyCode::Right)).unwrap();
+
+    // Reject typed replacement, paste replacement, and Backspace delete.
+    backend.dispatch(AreaMsg::SetReject(true)).unwrap();
+    backend.send_key(plain(KeyCode::Char('x'))).unwrap();
+    assert_eq!(backend.state().value, "abcd");
+    backend.send_paste("y").unwrap();
+    assert_eq!(backend.state().value, "abcd");
+    backend.send_key(plain(KeyCode::Backspace)).unwrap();
+    assert_eq!(backend.state().value, "abcd");
+
+    // Selection "bc" is still intact: typing 'Z' replaces "bc".
+    backend.dispatch(AreaMsg::SetReject(false)).unwrap();
+    backend.send_key(plain(KeyCode::Char('Z'))).unwrap();
+    assert_eq!(backend.state().value, "aZd");
+}
+
+#[test]
+fn uncontrolled_text_area_cursor_move_then_rejected_edit_preserves_moved_cursor() {
+    let mut backend = area_backend("abcd");
+
+    // Move cursor to pos 2 via arrows, then reject an edit.
+    backend.send_key(plain(KeyCode::Right)).unwrap();
+    backend.send_key(plain(KeyCode::Right)).unwrap();
+    backend.dispatch(AreaMsg::SetReject(true)).unwrap();
+    backend.send_key(plain(KeyCode::Char('x'))).unwrap();
+    assert_eq!(backend.state().value, "abcd");
+
+    // Move cursor via mouse click (border=false, padding=0 -> x = 1 lands at pos 1),
+    // then reject a paste.
+    backend
+        .send_mouse(MouseEvent {
+            x: 1,
+            y: 0,
+            kind: MouseKind::Down(MouseButton::Left),
+            mods: KeyMods::default(),
+        })
+        .unwrap();
+    backend
+        .send_mouse(MouseEvent {
+            x: 1,
+            y: 0,
+            kind: MouseKind::Up(MouseButton::Left),
+            mods: KeyMods::default(),
+        })
+        .unwrap();
+    backend.send_paste("y").unwrap();
+    assert_eq!(backend.state().value, "abcd");
+
+    // Accepting an insert lands at pos 1 (where the click moved the cursor).
+    backend.dispatch(AreaMsg::SetReject(false)).unwrap();
+    backend.send_key(plain(KeyCode::Char('!'))).unwrap();
+    assert_eq!(backend.state().value, "a!bcd");
+}
+
+#[test]
+fn uncontrolled_text_area_drag_selection_then_rejected_paste_preserves_selection() {
+    let mut backend = area_backend("abcd");
+
+    // Drag from col 1 to col 3 (border=false, padding=0) to select "bc".
+    backend
+        .send_mouse(MouseEvent {
+            x: 1,
+            y: 0,
+            kind: MouseKind::Down(MouseButton::Left),
+            mods: KeyMods::default(),
+        })
+        .unwrap();
+    backend
+        .send_mouse(MouseEvent {
+            x: 3,
+            y: 0,
+            kind: MouseKind::Drag(MouseButton::Left),
+            mods: KeyMods::default(),
+        })
+        .unwrap();
+    backend
+        .send_mouse(MouseEvent {
+            x: 3,
+            y: 0,
+            kind: MouseKind::Up(MouseButton::Left),
+            mods: KeyMods::default(),
+        })
+        .unwrap();
+
+    backend.dispatch(AreaMsg::SetReject(true)).unwrap();
+    backend.send_paste("x").unwrap();
+    assert_eq!(backend.state().value, "abcd");
+
+    backend.dispatch(AreaMsg::SetReject(false)).unwrap();
+    backend.send_key(plain(KeyCode::Char('Z'))).unwrap();
+    assert_eq!(backend.state().value, "aZd");
 }

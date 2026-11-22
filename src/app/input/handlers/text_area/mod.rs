@@ -90,6 +90,8 @@ fn sync_text_area_vim_after_key(
     if let NodeKind::TextArea(ta) = &mut tree.node_mut(id).kind {
         ta.cursor = editor.cursor();
         ta.anchor = editor.anchor();
+        ta.uncontrolled
+            .update_reconciled_cursor(ta.value.as_ref(), ta.cursor, ta.anchor);
     }
 
     // A yank already leaves visual mode on its own terms, so it never asks for the selection to
@@ -109,11 +111,7 @@ fn sync_text_area_node_from_editor(tree: &mut NodeTree, id: NodeId, editor: &Tex
         ta.value = value.clone();
         ta.cursor = cursor;
         ta.anchor = anchor;
-        ta.last_reported = Some(crate::utils::text::ReportedTextState {
-            value,
-            cursor,
-            anchor,
-        });
+        ta.uncontrolled.record_reported(value, cursor, anchor);
     }
 }
 

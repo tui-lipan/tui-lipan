@@ -317,10 +317,17 @@ pub(crate) fn clear_selectable_widget_selections_test_backend<C: Component>(
         match &mut node.kind {
             NodeKind::Input(input) if input.anchor.is_some_and(|a| a != input.cursor) => {
                 input.anchor = None;
+                input.uncontrolled.update_reconciled_cursor(
+                    input.value.as_ref(),
+                    input.cursor,
+                    None,
+                );
                 dirty = true;
             }
             NodeKind::TextArea(ta) if ta.anchor.is_some_and(|a| a != ta.cursor) => {
                 ta.anchor = None;
+                ta.uncontrolled
+                    .update_reconciled_cursor(ta.value.as_ref(), ta.cursor, None);
                 dirty = true;
             }
             NodeKind::HexArea(hex) if hex.anchor.is_some_and(|a| a != hex.cursor) => {
@@ -1234,6 +1241,11 @@ pub(crate) fn dispatch_active_drag_test_backend<C: Component>(
                     on_vim_mode_change = node.on_vim_mode_change.clone();
                     node.cursor = cursor;
                     node.anchor = anchor_opt;
+                    node.uncontrolled.update_reconciled_cursor(
+                        node.value.as_ref(),
+                        cursor,
+                        anchor_opt,
+                    );
                 }
                 sync_textarea_vim_external_selection(
                     backend,
@@ -1251,11 +1263,8 @@ pub(crate) fn dispatch_active_drag_test_backend<C: Component>(
                     if let NodeKind::TextArea(node) =
                         &mut backend.core.tree.node_mut(drag_state.id).kind
                     {
-                        node.last_reported = Some(crate::utils::text::ReportedTextState {
-                            value: value.clone(),
-                            cursor,
-                            anchor: anchor_opt,
-                        });
+                        node.uncontrolled
+                            .record_reported(value.clone(), cursor, anchor_opt);
                     }
                     cb.emit(crate::widgets::TextAreaEvent {
                         value,
@@ -1280,11 +1289,8 @@ pub(crate) fn dispatch_active_drag_test_backend<C: Component>(
                     if let NodeKind::Input(node) =
                         &mut backend.core.tree.node_mut(drag_state.id).kind
                     {
-                        node.last_reported = Some(crate::utils::text::ReportedTextState {
-                            value: value.clone(),
-                            cursor,
-                            anchor: anchor_opt,
-                        });
+                        node.uncontrolled
+                            .record_reported(value.clone(), cursor, anchor_opt);
                     }
                     cb.emit(crate::widgets::InputEvent {
                         value,

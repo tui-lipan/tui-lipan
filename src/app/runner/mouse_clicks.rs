@@ -852,11 +852,14 @@ impl<C: Component> AppRunner<C> {
                 node.cursor = new_cursor;
                 node.anchor = new_anchor;
                 if change.on_change.is_some() {
-                    node.last_reported = Some(crate::utils::text::ReportedTextState {
-                        value: change.value.clone(),
-                        cursor: new_cursor,
-                        anchor: new_anchor,
-                    });
+                    node.uncontrolled
+                        .record_reported(change.value.clone(), new_cursor, new_anchor);
+                } else {
+                    node.uncontrolled.update_reconciled_cursor(
+                        node.value.as_ref(),
+                        new_cursor,
+                        new_anchor,
+                    );
                 }
             }
 
@@ -1152,11 +1155,8 @@ impl<C: Component> AppRunner<C> {
 
             if let Some(cb) = &change.on_change {
                 if let NodeKind::Input(node) = &mut self.core.tree.node_mut(change.node_id).kind {
-                    node.last_reported = Some(crate::utils::text::ReportedTextState {
-                        value: change.value.clone(),
-                        cursor: new_cursor,
-                        anchor: new_anchor,
-                    });
+                    node.uncontrolled
+                        .record_reported(change.value.clone(), new_cursor, new_anchor);
                 }
                 cb.emit(InputEvent {
                     value: change.value,

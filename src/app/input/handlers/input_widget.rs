@@ -95,18 +95,19 @@ pub(crate) fn handle_key(
                 ctx.copy_feedback,
                 id,
             );
-            let reported = dispatch
-                .mutated
-                .then(|| crate::utils::text::ReportedTextState {
-                    value: Arc::from(input.text().to_owned()),
-                    cursor: input.cursor(),
-                    anchor: input.anchor(),
-                });
+            let reported = dispatch.mutated.then(|| {
+                (
+                    Arc::from(input.text().to_owned()),
+                    input.cursor(),
+                    input.anchor(),
+                )
+            });
             clipboard_handled = ctx.record_copy_feedback_dispatch(dispatch);
-            if let Some(reported) = reported
+            if let Some((reported_value, reported_cursor, reported_anchor)) = reported
                 && let NodeKind::Input(node) = &mut tree.node_mut(id).kind
             {
-                node.last_reported = Some(reported);
+                node.uncontrolled
+                    .record_reported(reported_value, reported_cursor, reported_anchor);
             }
         }
     }
@@ -166,11 +167,8 @@ pub(crate) fn handle_key(
             let next_cursor = input.cursor();
             let next_anchor = input.anchor();
             if let NodeKind::Input(node) = &mut tree.node_mut(id).kind {
-                node.last_reported = Some(crate::utils::text::ReportedTextState {
-                    value: next_value.clone(),
-                    cursor: next_cursor,
-                    anchor: next_anchor,
-                });
+                node.uncontrolled
+                    .record_reported(next_value.clone(), next_cursor, next_anchor);
             }
             cb.emit(InputEvent {
                 value: next_value,
@@ -241,13 +239,12 @@ pub(crate) fn handle_paste(
         router::dispatch_text_paste(text, &mut context, ctx.clipboard_config.paste_max_bytes)
     };
     if handled {
-        let reported = crate::utils::text::ReportedTextState {
-            value: Arc::from(input.text().to_owned()),
-            cursor: input.cursor(),
-            anchor: input.anchor(),
-        };
+        let reported_value: Arc<str> = Arc::from(input.text().to_owned());
+        let reported_cursor = input.cursor();
+        let reported_anchor = input.anchor();
         if let NodeKind::Input(node) = &mut tree.node_mut(id).kind {
-            node.last_reported = Some(reported);
+            node.uncontrolled
+                .record_reported(reported_value, reported_cursor, reported_anchor);
         }
     }
     handled

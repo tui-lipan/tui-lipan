@@ -267,6 +267,11 @@ impl<C: Component> AppRunner<C> {
 
         text_area.cursor = snapshot.cursor.min(max_cursor);
         text_area.anchor = snapshot.anchor.map(|anchor| anchor.min(max_cursor));
+        text_area.uncontrolled.update_reconciled_cursor(
+            text_area.value.as_ref(),
+            text_area.cursor,
+            text_area.anchor,
+        );
         text_area.scroll_offset = snapshot.scroll_offset.min(max_scroll_offset);
         text_area.scroll_override = snapshot
             .scroll_override

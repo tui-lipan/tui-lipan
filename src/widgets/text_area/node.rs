@@ -31,7 +31,7 @@ pub struct TextAreaNode {
     pub value: Arc<str>,
     pub cursor: usize,
     pub anchor: Option<usize>,
-    pub(crate) last_reported: Option<crate::utils::text::ReportedTextState>,
+    pub(crate) uncontrolled: crate::utils::text::UncontrolledTextState,
     pub placeholder: Option<Arc<str>>,
     pub style: Style,
     pub hover_style: StyleSlot,
@@ -549,11 +549,16 @@ impl WidgetNode for TextAreaNode {
 impl From<super::TextArea> for TextAreaNode {
     fn from(value: super::TextArea) -> Self {
         let logical_lines_count = logical_line_count(&value.value);
+        let uncontrolled = crate::utils::text::UncontrolledTextState::reconciled(
+            value.value.clone(),
+            value.cursor,
+            value.anchor,
+        );
         Self {
             value: value.value,
             cursor: value.cursor,
             anchor: value.anchor,
-            last_reported: None,
+            uncontrolled,
             placeholder: value.placeholder,
             style: value.style,
             hover_style: value.hover_style,
