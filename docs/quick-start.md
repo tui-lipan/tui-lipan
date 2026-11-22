@@ -246,6 +246,8 @@ fn main() -> tui_lipan::Result<()> {
 }
 ```
 
+Press `Ctrl+Q` to quit, or `Ctrl+C` when nothing else handles it (no selection to copy, and neither the focused widget nor `on_key` claims it); change or disable both with `App::global_quit(...)` or `keymap.conf` (see [`keybindings.md`](keybindings.md)).
+
 ## Fast Prototyping with `mockup!`
 
 Skip all `Component` boilerplate for layout previews:
@@ -280,7 +282,7 @@ fn main() -> tui_lipan::Result<()> {
 ```
 
 **Key behaviors:**
-- Press `Esc` or `q` to quit.
+- Press `Esc`, `q`, or the framework quit keys (`Ctrl+Q`, `Ctrl+C`) to quit.
 - The body expression is auto-wrapped in `.into()` - return any widget builder directly.
 - Interactive widgets (List, Tabs, Inputs) still respond to focus and mouse.
 - The closure uses `move` capture, so local data is accessible.
@@ -327,6 +329,7 @@ fn view(&self, ctx: &Context<Self>) -> Element {
 App::new()
     .title("My App")           // Optional host terminal window title (see ctx.set_title)
     .theme(Theme::one_dark())  // Optional theme override
+    .background(ScreenBackground::Theme) // Optional: paint viewport backdrop (or pass a Color/Style)
     .system_theme()            // Optional: derive theme from host terminal colors
     .inline_ephemeral(8)       // Optional: inline mode (8 terminal rows)
     .mouse(true)               // Mouse capture (default: true in fullscreen, false in inline)
@@ -334,7 +337,7 @@ App::new()
     .scroll_wheel_multiplier(3) // Optional: lines per wheel tick (default: 1)
     .toast_placement(ToastPlacement::BottomEnd)
     .keymap_path("/path/to/keymap.conf")  // see docs/keybindings.md
-    .global_quit(None)                   // disable Ctrl-Q quit without a keymap file
+    .global_quit(None)                   // disable Ctrl-Q and fallback Ctrl-C quit without a keymap file
     .framework_keymap(
         FrameworkKeymap::default().unbind(FrameworkAction::Quit),
     )
@@ -346,7 +349,7 @@ App::new()
     .clipboard_config(ClipboardConfig { .. })
     .contrast_policy(ContrastPolicy::Wcag)
     .cursor_trail(CursorTrail::new()) // Optional: smear the caret when focus moves
-    .terminal_bg(query_host_colors().map(|c| c.bg))  // enables Opacity through Color::Reset
+    .host_background_hint(query_host_colors().map(|c| c.bg)) // enables Opacity through Color::Reset
     .live_host_terminal_colors(true)  // opt-in runner-managed live host palette refresh
     .mount(Root)
     .exit_view(|_component, ctx| {
@@ -360,7 +363,7 @@ App::new()
 `DocumentView::scroll_wheel_multiplier(...)` override the app-wide wheel
 multiplier for a specific widget.
 
-> **`terminal_bg` / live host colors**: `ColorTransform::Opacity` blends foreground colors toward the resolved cell background. When the cell background is `Color::Reset` (terminal default) there is no RGB to blend toward, so opacity has no effect. Calling `.terminal_bg(query_host_colors().map(|c| c.bg))` before `run()` provides the terminal's actual default background color and enables correct opacity blending for static apps. Use `.system_theme()` to opt into a framework-wide theme derived from live host colors, or `.live_host_terminal_colors(true)` when app code wants to read `ctx.host_terminal_colors()` and build its own tokens. The runner probes once at startup, refreshes on terminal focus gained, services `ctx.request_host_terminal_color_refresh()`, and never polls continuously. Opted-in Unix fullscreen apps also enable DEC private mode 2031: compatible terminals send exact palette-change notifications that trigger an immediate OSC 4/10/11 refresh through the persistent input worker. Palette-only changes update all 16 resolved ANSI slots and schedule a complete repaint even when foreground and background are unchanged. Inline, non-Unix, and unsupported terminals retain startup, focus-gained, and manual refresh behavior. Refreshed host backgrounds update `terminal_bg` automatically. Omitting both leaves opacity unchanged on reset-background cells.
+> **`background` vs `host_background_hint` / live host colors**: `App::background(...)` paints the root viewport behind the UI tree (`ScreenBackground::Transparent` by default, `ScreenBackground::Theme` to follow the active theme backdrop, or any `Color`/`Paint`/`Style`). `App::host_background_hint(...)` does not paint anything — it tells `ColorTransform::Opacity`, alpha paints, and contrast resolution what RGB color lies behind `Color::Reset` (terminal default) cells. Calling `.host_background_hint(query_host_colors().map(|c| c.bg))` before `run()` provides the terminal's actual default background color and enables correct opacity blending for static apps. Use `.system_theme()` to opt into a framework-wide theme derived from live host colors, or `.live_host_terminal_colors(true)` when app code wants to read `ctx.host_terminal_colors()` and build its own tokens. The runner probes once at startup, refreshes on terminal focus gained, services `ctx.request_host_terminal_color_refresh()`, and never polls continuously. Opted-in Unix fullscreen apps also enable DEC private mode 2031: compatible terminals send exact palette-change notifications that trigger an immediate OSC 4/10/11 refresh through the persistent input worker. Palette-only changes update all 16 resolved ANSI slots and schedule a complete repaint even when foreground and background are unchanged. Inline, non-Unix, and unsupported terminals retain startup, focus-gained, and manual refresh behavior. Refreshed host backgrounds update the blending hint automatically. Omitting both leaves opacity unchanged on reset-background cells.
 
 > **`cursor_trail`**: Draws a smear that follows the host caret when it jumps: the caret's own shape (block, bar, or underline, including a terminal child's DECSCUSR shape) stretched from the cell it left to the cell it landed on and pulled back into it. `CursorTrailTrigger` decides when (focus changes only by default; `jump()` also follows long moves inside one widget). `CursorTrailMotion::Spring` (the default) pulls the smear's head after the caret with a damped spring and its tail after the head along the path the head took, with values that work as smear-cursor.nvim's (`CursorTrailSpring::SMEAR_CURSOR` is its defaults), so the smear stretches out behind the caret and snaps in; a jump mid-flight swings the head round with its momentum and the smear bends along the way it went in a smooth arc, never wider than the caret, thinning toward its tail like a comet's; `CursorTrailMotion::Glide` puts the head on the caret at once and eases the tail in. `CursorTrailFill::Solid` (the default) draws it anti-aliased, each cell as the glyph and pair of shades that reproduce its coverage best, with `CursorTrailGlyphs` choosing between block elements and the diagonal wedges and octants of Symbols for Legacy Computing (by default the richest set the terminal draws itself); cells it covers evenly keep their text, turning to inverse video, and it draws the caret itself while it moves, hiding the host caret; `CursorTrailFill::Tint` is fainter and leaves text and caret alone: it tints the background of cells with text and draws blank cells anti-aliased. `CursorTrailParticles` throws braille sparks that scatter, fall, and fade without drawing over text. Its color is `CursorTrail::color`, else the focused widget's caret color, else the host terminal's cursor color (OSC 12), else its foreground; over `Color::Reset` it blends against the host background when the runner knows it. Motion runs on a fixed 60 Hz step, so a smear moves the same at any frame rate, and it measures on screen, rows as tall as the host's cells are, so a bend or a taper looks the same in every direction. A caret that hides and reappears (a pending chord, a redraw) trails from where it was last shown. A jump starts its smear at once rather than holding the caret on its old cell while it settles, and every later move retargets the running smear: a shell's newline and then its prompt draw one smear, straight to the prompt when it comes before the smear has set off for the new line, bending toward it when the smear is already on its way. With `CursorTrailSettle::SHELL` (by default nothing waits), a jump to another row or to the widget's left edge instead starts once the caret has held still for a while (50 ms, and at most 200 ms after the jump), straight from where it was to where it settled, so a caret that lands in steps (a shell's newline, then its prompt) gets one smear; a solid trail holds the caret where it was meanwhile, and a caret that goes on along its new row (a held arrow key wrapping onto another line) has landed and starts then. A focus change starts at once. A widget that moves (an animated layout, a drag) carries its caret with it: that move is never a jump, and a smear or sparks from a jump inside it move with the widget, so only what the caret does inside its widget trails. A smear that brought focus to a moving widget keeps its tail where focus left and its head on the caret. Inline surfaces never draw one. `ctx.set_cursor_trail(...)` changes or (with `None`) removes it at runtime, and `ctx.skip_cursor_trail()` draws none for the caret's next move, however many frames later it comes, for a transition such as switching to another screen, where a smear between the two carets would join unrelated places.
 
@@ -448,7 +451,7 @@ debug_log!("Current state: {:?}", ctx.state);
 When content vanishes in tests or mockups, first check the viewport and sizing:
 - `TestBackend` starts at an 80x24 viewport unless you call `set_viewport(...)`; use a fixed viewport for reproducible snapshots.
 - `Mockup` renders at the live terminal size, so a layout can change when the terminal is narrow or short.
-- `VStack`, `HStack`, and `Frame` default to `Length::Flex(1)` on both axes; fixed headers, footers, and side bars usually need `Length::Px(...)`.
+- Containers (`VStack`, `HStack`, `Frame`, `ScrollView`) and fill widgets (inputs, lists, tables, trees, editors, bars) default to `Length::Flex(1)` on their main axes, while content-sized widgets (`Text`, `Button`, `Checkbox`, `Badge`, `Spinner`, …) default to `Length::Auto` (see [`widget-defaults.md`](widget-defaults.md)); fixed headers, footers, and sidebars usually need `Length::Px(...)`.
 - Capture with `UiSnapshotOptions::diagnostic()` to include zero-area nodes, spacers, and dividers; markdown snapshots flag zero-size widgets as `zero-area`.
 
 ### Mouse event diagnostics

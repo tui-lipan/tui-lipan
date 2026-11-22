@@ -267,8 +267,8 @@ Style::new().bg_alpha(Color::rgb(16, 16, 21), 0.8)
 ```
 
 Alpha paint is source-over composited before terminal output. Background paint
-blends over the existing cell background (or `App::terminal_bg()` when the cell
-uses terminal reset and a terminal background is configured). Foreground paint
+blends over the existing cell background (or `App::host_background_hint()` when the cell
+uses terminal reset and a host background hint is configured). Foreground paint
 blends over the resolved cell background; when no RGB backdrop is available the
 renderer falls back to the source pigment so text remains visible. `alpha = 0`
 preserves the backdrop for that channel but is not the same as
@@ -394,7 +394,7 @@ let inherited_dim = Style::new().transform_fg(ColorTransform::dim(0.5));
 let inherited_opacity = Style::new().transform_fg(ColorTransform::opacity(0.6));
 ```
 
-> **Note**: `ColorTransform::Opacity` composes with paint alpha. For opaque colors it behaves like an alpha paint over the resolved cell background. To make opacity work predictably through terminal-default/reset backgrounds, supply the terminal's default background color with `App::terminal_bg(...)` for static apps, or enable `App::system_theme()` / `App::live_host_terminal_colors(true)` so the runner updates the resolved background after startup, focus-gained, or manual host color refreshes.
+> **Note**: `ColorTransform::Opacity` composes with paint alpha. For opaque colors it behaves like an alpha paint over the resolved cell background. To make opacity work predictably through terminal-default/reset backgrounds, supply the terminal's default background color with `App::host_background_hint(...)` for static apps, or enable `App::system_theme()` / `App::live_host_terminal_colors(true)` so the runner updates the resolved background after startup, focus-gained, or manual host color refreshes. To actually paint a solid backdrop behind the whole UI tree instead of letting the host terminal show through, use `App::background(ScreenBackground::Theme)` or `App::background(color)`.
 
 ## Visual Effects
 
@@ -457,7 +457,7 @@ For widgets like `MouseRegion`, these form two distinct layers:
 | `Length::Percent(u16)` | Percentage of available space (clamped to `0..=100`) |
 | `Length::Flex(u16)` | Proportional share of remaining space |
 
-Containers (`VStack`, `HStack`) default to `Flex(1)` for both axes.
+Containers (`VStack`, `HStack`, `Frame`, `ScrollView`) and fill widgets (inputs, editors, lists, tables, trees, progress bars, sliders) default to `Flex(1)` on their main axes, while content-sized widgets (`Text`, `Button`, `Checkbox`, `Badge`, `Spinner`, …) default to `Auto`. See [`widget-defaults.md`](widget-defaults.md) for every widget's exact defaults.
 
 Measurement and reconcile both honor explicit `Px` / `Percent` on a widget's
 `.width` / `.height`, so an `Auto` or `Center` parent can shrink-wrap to

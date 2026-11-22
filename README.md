@@ -107,6 +107,11 @@ fn main() -> tui_lipan::Result<()> {
 }
 ```
 
+Press `Ctrl+Q` to quit any app, or `Ctrl+C` when nothing else handles it (such
+as copying a selection or an embedded terminal); see
+[`docs/keybindings.md`](docs/keybindings.md) to rebind or disable framework
+quit keys.
+
 From here, the [tutorial](docs/tutorial.md) builds a complete multi-panel app.
 Deep trees can also be written with the optional `ui!` macro, which keeps the
 builder syntax and its autocomplete; see [`docs/macros.md`](docs/macros.md).

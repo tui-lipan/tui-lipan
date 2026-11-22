@@ -38,7 +38,7 @@ insert_newline = enter
 dismiss_overlay = esc
 focus_next = tab
 focus_prev = shift-tab
-quit = ctrl-q
+quit = ctrl-q, ctrl-c   # ctrl-c is lowest-priority fallback (after copy, focused widget, and on_key)
 toggle_devtools = f12
 ```
 
@@ -138,6 +138,14 @@ quit = none
 focus_next = none
 focus_prev = none
 ```
+
+By default `quit` binds `Ctrl+Q` as a normal framework shortcut and `Ctrl+C` as a lowest-priority
+fallback: `Ctrl+C` only quits after copy (when a selection exists), the focused widget (including
+an embedded `Terminal` forwarding `Ctrl+C` to its child per `TerminalKeyPolicy`), component
+`on_key` bubbling, and app command shortcuts all decline it. Setting `quit = none` in `keymap.conf`
+or calling `App::global_quit(None)` / `FrameworkKeymap::default().unbind(FrameworkAction::Quit)`
+disables both `Ctrl+Q` and fallback `Ctrl+C`; rebinding `quit` replaces both defaults with your
+explicit bindings.
 
 To remap focus traversal instead of disabling it:
 
