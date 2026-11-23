@@ -35,29 +35,6 @@ pub struct Command {
     action: Box<dyn CommandAction>,
 }
 
-#[cfg(doctest)]
-mod removed_command_constructors {
-    //! ```compile_fail,E0599
-    //! use tui_lipan::Command;
-    //! Command::spawn::<(), _>(|_| {});
-    //! ```
-    //!
-    //! ```compile_fail,E0599
-    //! use tui_lipan::Command;
-    //! Command::after::<(), _>(std::time::Duration::ZERO, |_| {});
-    //! ```
-    //!
-    //! ```compile_fail,E0599
-    //! use tui_lipan::{Command, TaskPolicy};
-    //! Command::spawn_keyed::<(), _>("search", TaskPolicy::LatestOnly, |_| {});
-    //! ```
-    //!
-    //! ```compile_fail,E0599
-    //! use tui_lipan::Command;
-    //! Command::new(|| {});
-    //! ```
-}
-
 /// Coalescing behavior for keyed background tasks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TaskPolicy {

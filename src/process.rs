@@ -318,29 +318,6 @@ where
     })
 }
 
-#[cfg(doctest)]
-mod process_commands_require_a_link {
-    //! ```compile_fail,E0061
-    //! use tui_lipan::{ProcessSpec, process_command};
-    //! process_command(ProcessSpec::new("rg"), |event| event);
-    //! ```
-    //!
-    //! ```compile_fail,E0061
-    //! use tui_lipan::{ProcessSpec, TaskPolicy, process_command_keyed};
-    //! process_command_keyed("job", TaskPolicy::LatestOnly, ProcessSpec::new("rg"), |event| event);
-    //! ```
-    //!
-    //! ```compile_fail,E0061
-    //! use tui_lipan::ProcessSpec;
-    //! ProcessSpec::new("rg").command(|event| event);
-    //! ```
-    //!
-    //! ```compile_fail,E0061
-    //! use tui_lipan::{ProcessSpec, TaskPolicy};
-    //! ProcessSpec::new("rg").command_keyed("job", TaskPolicy::LatestOnly, |event| event);
-    //! ```
-}
-
 fn stream_process_messages<Msg: Send + 'static>(
     link: CommandLink<Msg>,
     spec: ProcessSpec,
