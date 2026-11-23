@@ -489,7 +489,7 @@ pub fn reconcile_document_view(
     // ── Auto height correction ───────────────────────────────────────────
     // `measure_document_view` returns source-line count; for Length::Auto we
     // need the wrap-aware visual-line count now that rebuild_visual has run.
-    if should_use_visual_auto_height(dv.resolved_height()) {
+    if should_use_visual_auto_height(dv.resolved_height()) && available_h > 0 {
         let visual_h = auto_height_for_visual_plan(
             &dv_node,
             dv_node.total_visual_lines,

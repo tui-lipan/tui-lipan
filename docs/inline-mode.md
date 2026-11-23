@@ -34,7 +34,8 @@ App::new()
 Notes on auto height:
 
 - The measured height is the content's natural (minimum) height at the current width; flexible fillers collapse to their minimum.
-- If the content is taller than the terminal (or the cap), the layout keeps its natural height and the viewport shows its top rows, cleanly clipping the bottom. The layout is deliberately not squeezed into the smaller viewport, which would trigger the stack overflow policy (wrapped text truncates, children hide from the top). Apps that want scrolling instead of clipping should give a `ScrollView` an explicit height.
+- If the content exceeds the terminal height or the configured cap, the layout keeps its natural height and the viewport clips the bottom. To scroll through the content, give a `ScrollView` an explicit height. For stacks with limited space in their own layout, see the [the layout guide](widgets/layout.md).
+- Open anchored popovers (`Popover`, `Select`, `ComboBox`, `ContextMenu`, `Tooltip`) temporarily expand an auto-height viewport to fit their popup (up to any configured `max` cap and the terminal height) without stretching or shifting the underlying base layout, and shrink the viewport back when the popover closes. If a popup would still overflow the cap or terminal height below its trigger and more space exists above, it flips above instead of adding blank rows below the content.
 - Growing the viewport near the bottom of the screen scrolls host output up, exactly like printing lines would.
 - On host terminal resize the visible frame stays coherent, but rows the emulator moved into scrollback during its own reflow can remain there as stale copies. This is inherent to inline TUIs (fzf and chat CLIs show the same residue); no app can edit the emulator's scrollback without erasing all of it.
 
@@ -130,9 +131,17 @@ Inline resize behavior is defined by **surface mode semantics**, not by user-fac
 
 The last terminal column is reserved only for ephemeral inline mode, where autowrap stays disabled during resize.
 
+## Popovers and Overlays in Inline Mode
+
+Anchored popovers (`Popover`, `Select`, `ComboBox`, `ContextMenu`, and `Tooltip`) work in both ephemeral and transcript inline surfaces, for both fixed and auto heights:
+
+- **Fixed inline height** (`InlineHeight::Fixed(rows)`): Popovers are placed using the same rules as fullscreen mode, bounded to the inline viewport — opening at their configured placement, flipping to the opposite side when that side offers more space, shrinking to fit the available side if needed, and clamping inside the viewport.
+- **Auto inline height** (`InlineHeight::auto()` / `InlineHeight::auto_capped(max)`): The viewport temporarily grows to accommodate an open popover (up to the cap and terminal height) without stretching the base layout, then shrinks back once the popover closes. When the popup cannot fit below even at the cap or terminal height, it follows the normal auto-flip/clamp rules inside the capped viewport.
+- **Clipped triggers**: A root-portal popover can appear only while some part of its trigger is visible within the viewport and any enclosing `ScrollView`.
+
 ## Limits in Inline Mode
 
-- **Root-level overlays suppressed**: Modal, Popover, and Toast portals are disabled to avoid terminal history corruption. Use local overlays or inline widgets instead.
+- **Modal and Toast portals suppressed**: `Modal`, `CommandPalette`, and `Toast` overlays remain disabled in inline mode to avoid terminal history corruption. Use `OverlayScope::Local` overlays or inline widgets instead.
 - **Image rendering disabled**: Falls back to text placeholders.
 - **Last column reserved**: Avoids width-change soft-wrap artifacts.
 - **Mouse coordinates**: Translated from terminal-space to viewport-space before hit testing.

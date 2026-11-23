@@ -196,8 +196,12 @@ pub(crate) fn reconcile_portal(
         ),
     };
     let bounds = overlay_state.bounds;
-    content_rect.w = constraints.clamp_width(content_rect.w, bounds.w);
-    content_rect.h = constraints.clamp_height(content_rect.h, bounds.h);
+    content_rect.w = constraints
+        .clamp_width(content_rect.w, bounds.w)
+        .min(bounds.w);
+    content_rect.h = constraints
+        .clamp_height(content_rect.h, bounds.h)
+        .min(bounds.h);
     // Re-center after clamping so the modal stays centered when capped.
     content_rect.x = bounds
         .x
@@ -360,14 +364,12 @@ pub(crate) fn reconcile_overlay_entries(ctx: &mut ReconcileCtx<'_>, overlays: &[
             copy_text,
             copy_zone,
             copy_feedback_active: entry.copy_feedback_active(),
+            required_viewport_bottom: 0,
         });
     }
 }
 
 pub(crate) fn collect_popover_overlay_roots(tree: &mut NodeTree, overlay_state: &mut OverlayState) {
-    if !overlay_state.allow_root_overlays {
-        return;
-    }
     let popovers: Vec<_> = tree
         .iter()
         .filter(|node| matches!(node.kind, NodeKind::Popover(_)))
@@ -412,7 +414,7 @@ fn collect_popover_overlay_root(
     if !tree.is_valid(content_id) || !seen.insert(content_id) {
         return;
     }
-    if !trigger_visible_in_scroll_views(tree, *popover_node.trigger) {
+    if !trigger_visible(tree, *popover_node.trigger, overlay_state.bounds) {
         suppress_portal_subtree(tree, content_id);
         return;
     }
@@ -448,10 +450,11 @@ fn collect_popover_overlay_root(
         copy_text: None,
         copy_zone: None,
         copy_feedback_active: false,
+        required_viewport_bottom: popover_node.desired_bottom,
     });
 }
 
-fn trigger_visible_in_scroll_views(tree: &NodeTree, trigger: NodeId) -> bool {
+fn trigger_visible(tree: &NodeTree, trigger: NodeId, bounds: Rect) -> bool {
     let mut visible = tree.node(trigger).rect;
     let mut child = trigger;
     while let Some(parent) = tree.node(child).parent {
@@ -467,7 +470,7 @@ fn trigger_visible_in_scroll_views(tree: &NodeTree, trigger: NodeId) -> bool {
         }
         child = parent;
     }
-    true
+    !visible.intersection(&bounds).is_empty()
 }
 
 fn crosses_root_portal_boundary(node: &crate::core::node::Node, child: NodeId) -> bool {
@@ -548,6 +551,7 @@ pub(crate) fn collect_portal_overlay_roots(tree: &NodeTree, overlay_state: &mut 
             copy_text: None,
             copy_zone: None,
             copy_feedback_active: false,
+            required_viewport_bottom: 0,
         });
     }
 }

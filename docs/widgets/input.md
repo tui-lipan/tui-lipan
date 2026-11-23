@@ -329,6 +329,8 @@ setter is used.
 | `placeholder` | `String` | Placeholder when empty |
 | `border` | `bool` | Draw border (default: `true`) |
 | `border_style` | `BorderStyle` | Border appearance when `border` is `true` |
+| `error` | `Option<impl Into<Arc<str>>>` | Error message below the field when at least two rows fit |
+| `reserve_error_row` | `bool` | Reserve the error row even without a message when at least two rows fit |
 | `mask` | `Option<char>` | Masking character (e.g., `'*'` for passwords) |
 | `read_only` | `bool` | Allow selection but block keyboard input |
 | `focusable` | `bool` | Whether input accepts focus; mouse selection and copy shortcuts still work when false |

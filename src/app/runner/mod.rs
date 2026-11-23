@@ -3701,6 +3701,17 @@ impl<C: Component> AppRunner<C> {
         self.surface.content_bounds(width, height)
     }
 
+    pub(crate) fn overlay_bounds(&self, width: u16, height: u16) -> Rect {
+        self.surface.overlay_bounds(width, height)
+    }
+
+    pub(crate) fn sync_runtime_overlay_bounds(&mut self, width: u16, height: u16) {
+        self.core.set_inline_overlay_bounds(
+            Some(self.surface.overlay_bounds(width, height)),
+            self.surface.auto_popover_expand_bounds(width, height),
+        );
+    }
+
     #[cfg(test)]
     pub(crate) fn convert_mouse_event(
         &self,

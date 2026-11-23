@@ -72,9 +72,9 @@ pub(crate) fn reconcile_terminal(
     };
 
     // Note: Terminal builder should already have handled Length::Auto via measure_terminal,
-    // but we ensure constraints are applied here.
-    rect.w = constraints.clamp_width(rect.w, avail_w);
-    rect.h = constraints.clamp_height(rect.h, avail_h);
+    // but we ensure constraints are applied here without exceeding the parent slot.
+    rect.w = constraints.clamp_width(rect.w, avail_w).min(avail_w);
+    rect.h = constraints.clamp_height(rect.h, avail_h).min(avail_h);
 
     // Compute viewport rows (inner area height).
     let inner = rect.inner(terminal.border, terminal.padding);

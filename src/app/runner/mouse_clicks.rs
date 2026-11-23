@@ -1137,9 +1137,8 @@ impl<C: Component> AppRunner<C> {
             change.node_id,
             change.focusable,
         );
-        let inner = change.rect.inner(change.border, change.padding);
 
-        if is_active && inner.w > 0 && change.rect.contains(x as i16, change.rect.y) {
+        if is_active {
             let (new_cursor, new_anchor, anchor_for_drag) = mouse::process_input_click(
                 &change,
                 x,

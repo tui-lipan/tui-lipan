@@ -608,17 +608,18 @@ pub(crate) fn gather_hit_actions(
 
     let input_change = match &node.kind {
         NodeKind::Input(input_node) => {
-            if input_node.accepts_pointer_text() {
+            let geometry = input_node.geometry(node.rect);
+            if input_node.accepts_pointer_text()
+                && geometry.field.contains(x as i16, y as i16)
+                && !geometry.content.is_empty()
+            {
                 Some(InputChange {
                     on_change: input_node.on_change.clone(),
                     value: input_node.value.clone(),
                     cursor: input_node.cursor,
-                    anchor: input_node.anchor,
                     focusable: input_node.focusable,
                     prefix: input_node.prefix.clone(),
-                    border: input_node.border,
-                    padding: input_node.padding,
-                    rect: node.rect,
+                    content: geometry.content,
                     node_id: node.id,
                     read_only: input_node.read_only,
                     masked: input_node.mask.is_some(),

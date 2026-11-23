@@ -263,18 +263,12 @@ pub(crate) fn process_input_click(
     last_click: &mut Option<ClickState>,
     now: Instant,
 ) -> (usize, Option<usize>, usize) {
-    let inner = change.rect.inner(change.border, change.padding);
-
-    if inner.w == 0 {
-        return (change.cursor, change.anchor, change.cursor);
-    }
-
     let next_cursor = crate::app::input::text::input_cursor_from_coords(
         &change.value,
         change.prefix.as_deref(),
         x,
         change.cursor,
-        inner,
+        change.content,
     );
 
     let click_count = click_count_at(last_click, x, 0, false, now);
