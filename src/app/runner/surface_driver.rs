@@ -16,6 +16,10 @@ pub(crate) struct InlineSurfaceState {
     /// Last content height measured for `InlineHeight::Auto`, in rows.
     /// Zero until the first frame has been measured.
     pub(crate) auto_height_resolved: u16,
+    /// Last on-screen viewport height resolved for `InlineHeight::Auto`, in
+    /// rows. Includes temporary expansion for open root-portal popovers,
+    /// capped to the configured `max` and terminal height.
+    pub(crate) auto_viewport_height_resolved: u16,
 }
 
 pub(crate) struct SurfaceDriver {
@@ -114,6 +118,50 @@ impl SurfaceDriver {
                 h: self.layout_rows(inline_height, height),
             },
         }
+    }
+
+    /// Visible viewport bounds used to place, flip, and clamp overlays.
+    ///
+    /// Matches [`Self::content_bounds`] for fullscreen, fixed inline, and
+    /// expanded transcript surfaces. For `InlineHeight::Auto`, reflects the
+    /// clamped on-screen viewport height (including temporary expansion for
+    /// open popovers) so popovers never position outside the visible viewport.
+    pub(crate) fn overlay_bounds(&self, width: u16, height: u16) -> Rect {
+        if self.is_transcript() && self.inline.transcript_expanded {
+            return self.content_bounds(width, height);
+        }
+        let Some(max_rows) = self.auto_inline_height() else {
+            return self.content_bounds(width, height);
+        };
+        let effective_cap = max_rows.map_or(height, |cap| cap.min(height)).max(1);
+        let resolved_h = if self.inline.auto_viewport_height_resolved > 0 {
+            self.inline.auto_viewport_height_resolved
+        } else {
+            self.inline.auto_height_resolved
+        };
+        Rect {
+            x: 0,
+            y: 0,
+            w: width.saturating_sub(1).max(1),
+            h: resolved_h.min(effective_cap).max(1),
+        }
+    }
+
+    /// Maximum bounds an `InlineHeight::Auto` viewport may grow into to fit
+    /// open root-portal popovers. Returns `None` outside non-expanded auto
+    /// inline surfaces.
+    pub(crate) fn auto_popover_expand_bounds(&self, width: u16, height: u16) -> Option<Rect> {
+        if self.is_transcript() && self.inline.transcript_expanded {
+            return None;
+        }
+        let max_rows = self.auto_inline_height()?;
+        let effective_cap = max_rows.map_or(height, |cap| cap.min(height)).max(1);
+        Some(Rect {
+            x: 0,
+            y: 0,
+            w: width.saturating_sub(1).max(1),
+            h: effective_cap,
+        })
     }
 
     pub(crate) fn convert_mouse_event(
@@ -354,5 +402,49 @@ mod tests {
             SurfaceDriver::new(SurfaceMode::Fullscreen).auto_inline_height(),
             None
         );
+    }
+
+    #[test]
+    fn inline_auto_overlay_bounds_reflect_viewport_and_cap() {
+        let mut driver = SurfaceDriver::new(SurfaceMode::InlineEphemeral {
+            height: InlineHeight::auto_capped(12),
+        });
+        driver.inline.auto_height_resolved = 4;
+        driver.inline.auto_viewport_height_resolved = 10;
+
+        assert_eq!(
+            driver.content_bounds(80, 24),
+            Rect {
+                x: 0,
+                y: 0,
+                w: 79,
+                h: 4,
+            }
+        );
+        assert_eq!(
+            driver.overlay_bounds(80, 24),
+            Rect {
+                x: 0,
+                y: 0,
+                w: 79,
+                h: 10,
+            }
+        );
+        assert_eq!(
+            driver.auto_popover_expand_bounds(80, 24),
+            Some(Rect {
+                x: 0,
+                y: 0,
+                w: 79,
+                h: 12,
+            })
+        );
+
+        // When base content exceeds the cap, layout bounds stay natural while
+        // overlay bounds stay clamped to the visible capped viewport.
+        driver.inline.auto_height_resolved = 20;
+        driver.inline.auto_viewport_height_resolved = 12;
+        assert_eq!(driver.content_bounds(80, 24).h, 20);
+        assert_eq!(driver.overlay_bounds(80, 24).h, 12);
     }
 }

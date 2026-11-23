@@ -28,19 +28,23 @@ pub fn resolve_popover_rect(popover: &super::Popover, trigger: Rect, bounds: Rec
         let (x, y) = pos;
         let x2 = x + width as i32;
         let y2 = y + height as i32;
+        let trigger_top = trigger.y as i32;
+        let trigger_bottom = trigger.y as i32 + trigger.h as i32;
+        let above_space = trigger_top.saturating_sub(bounds_top);
+        let below_space = bounds_bottom.saturating_sub(trigger_bottom);
 
         placement = match placement {
             super::PopoverPlacement::BelowStart
             | super::PopoverPlacement::BelowCenter
             | super::PopoverPlacement::BelowEnd
-                if y2 > bounds_bottom =>
+                if y2 > bounds_bottom && above_space > below_space =>
             {
                 popover_flip_vertical(placement)
             }
             super::PopoverPlacement::AboveStart
             | super::PopoverPlacement::AboveCenter
             | super::PopoverPlacement::AboveEnd
-                if y < bounds_top =>
+                if y < bounds_top && below_space > above_space =>
             {
                 popover_flip_vertical(placement)
             }
@@ -504,5 +508,38 @@ mod tests {
         assert!(clamped.y >= bounds.y);
         assert!(clamped.x + clamped.w as i16 <= bounds.x + bounds.w as i16);
         assert!(clamped.y + clamped.h as i16 <= bounds.y + bounds.h as i16);
+    }
+
+    #[test]
+    fn auto_flip_stays_below_when_above_has_less_space() {
+        // Trigger at y=0..3 inside an 8-row viewport -> 0 rows above, 5 rows below.
+        // A 7-row popover overflows below, so auto_flip must keep it below (shrunk to 5)
+        // instead of flipping above into 0 rows.
+        let trigger = Rect {
+            x: 2,
+            y: 0,
+            w: 10,
+            h: 3,
+        };
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 8,
+        };
+
+        let rect = resolve_popover_rect(
+            &Popover::new()
+                .content(Text::new("1\n2\n3\n4\n5\n6\n7"))
+                .fit_trigger_width(true)
+                .placement(PopoverPlacement::BelowStart)
+                .auto_flip(true)
+                .clamp(true),
+            trigger,
+            bounds,
+        );
+
+        assert_eq!(rect.y, 3);
+        assert_eq!(rect.h, 5);
     }
 }

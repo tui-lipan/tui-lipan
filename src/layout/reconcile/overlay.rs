@@ -360,14 +360,12 @@ pub(crate) fn reconcile_overlay_entries(ctx: &mut ReconcileCtx<'_>, overlays: &[
             copy_text,
             copy_zone,
             copy_feedback_active: entry.copy_feedback_active(),
+            required_viewport_bottom: 0,
         });
     }
 }
 
 pub(crate) fn collect_popover_overlay_roots(tree: &mut NodeTree, overlay_state: &mut OverlayState) {
-    if !overlay_state.allow_root_overlays {
-        return;
-    }
     let popovers: Vec<_> = tree
         .iter()
         .filter(|node| matches!(node.kind, NodeKind::Popover(_)))
@@ -448,6 +446,7 @@ fn collect_popover_overlay_root(
         copy_text: None,
         copy_zone: None,
         copy_feedback_active: false,
+        required_viewport_bottom: popover_node.desired_bottom,
     });
 }
 
@@ -548,6 +547,7 @@ pub(crate) fn collect_portal_overlay_roots(tree: &NodeTree, overlay_state: &mut 
             copy_text: None,
             copy_zone: None,
             copy_feedback_active: false,
+            required_viewport_bottom: 0,
         });
     }
 }
