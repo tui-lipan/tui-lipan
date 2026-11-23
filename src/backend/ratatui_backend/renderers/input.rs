@@ -243,7 +243,8 @@ pub(crate) fn render_input(
     });
 
     let text_w = UnicodeWidthStr::width(line.as_ref()) as u16;
-    let needs_cursor_reserve = is_focused && text_w >= content_w;
+    let narrow = content_w <= 2;
+    let needs_cursor_reserve = is_focused && !narrow && text_w >= content_w;
     let visible_w = if needs_cursor_reserve {
         content_w.saturating_sub(1)
     } else {
@@ -263,7 +264,11 @@ pub(crate) fn render_input(
 
         if let Some(ph) = placeholder {
             let ph_line = ph.lines().next().unwrap_or("");
-            let content = truncate_end_with_ellipsis(ph_line, visible_w);
+            let content = if narrow {
+                Cow::Borrowed(&ph_line[..util::end_at_width(ph_line, 0, visible_w.into())])
+            } else {
+                truncate_end_with_ellipsis(ph_line, visible_w)
+            };
             spans.push(Span::styled(
                 content.to_string(),
                 to_ratatui_style(ph_style),
@@ -296,8 +301,14 @@ pub(crate) fn render_input(
         let mut content: Cow<'_, str> = Cow::Borrowed("");
 
         if visible_w > 0 {
-            let view_cursor = if is_focused { cursor } else { line.len() };
-            if truncate_head {
+            let view_cursor = if is_focused {
+                cursor
+            } else if narrow {
+                0
+            } else {
+                line.len()
+            };
+            if truncate_head && !narrow {
                 display_w = content_w;
                 let (start, end, _) = util::viewport(&line, view_cursor, content_w);
                 viewport_start = start;

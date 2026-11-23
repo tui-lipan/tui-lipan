@@ -393,9 +393,9 @@ fn bordered_widgets_given_fewer_rows_than_chrome_never_paint_outside_rect() {
     }
 }
 
-struct InputWithErrorRow(Element);
+struct FixedView(Element);
 
-impl Component for InputWithErrorRow {
+impl Component for FixedView {
     type Message = ();
     type Properties = ();
     type State = ();
@@ -408,6 +408,78 @@ impl Component for InputWithErrorRow {
 
     fn view(&self, _ctx: &Context<Self>) -> Element {
         self.0.clone()
+    }
+}
+
+#[test]
+fn narrow_bordered_controls_show_text_inside_their_slots() {
+    for w in [1, 2] {
+        let width = Length::Px(w);
+        let element = HStack::new()
+            .align(Align::Start)
+            .child(Text::new("L"))
+            .child(
+                Element::from(
+                    Input::new("hello")
+                        .on_change(Callback::new(|_| {}))
+                        .width(width)
+                        .height(Length::Px(3)),
+                )
+                .min_width(Length::Px(0))
+                .key("input"),
+            )
+            .child(Text::new("M"))
+            .child(
+                Element::from(
+                    Input::new("")
+                        .placeholder("Name")
+                        .width(width)
+                        .height(Length::Px(3)),
+                )
+                .min_width(Length::Px(0))
+                .key("placeholder"),
+            )
+            .child(Text::new("N"))
+            .child(
+                Element::from(Button::outlined("Act").width(width).height(Length::Px(3)))
+                    .min_width(Length::Px(0))
+                    .key("button"),
+            )
+            .child(Text::new("R"));
+        let mut backend = TestBackend::new_with_viewport(
+            FixedView(element.into()),
+            Rect {
+                x: 0,
+                y: 0,
+                w: 3 * w + 4,
+                h: 3,
+            },
+        );
+        backend.render();
+
+        let snapshot = backend.capture_ui_snapshot_with_options(&UiSnapshotOptions::diagnostic());
+        let rows = snapshot.frame.to_fixed_grid_lines();
+        for key in ["input", "placeholder", "button"] {
+            let rect = find_rect(&snapshot.widgets, key);
+            assert_eq!((rect.w, rect.h), (w, 3));
+        }
+        let n = usize::from(w);
+        assert_eq!(
+            rows[0],
+            format!("L{}M{}N{}R", &"hello"[..n], &"Name"[..n], " ".repeat(n)),
+            "{rows:?}"
+        );
+        assert_eq!(
+            rows[1],
+            format!("{}{} ", " ".repeat(2 * n + 3), &"Act"[..n])
+        );
+        assert_eq!(rows[2], " ".repeat(3 * n + 4));
+        assert_eq!(backend.pointer_shape_at(w, 0), Some(PointerShape::Text));
+
+        backend.focus_next();
+        assert_eq!(backend.focused_key().map(|key| key.as_ref()), Some("input"));
+        let focused_rows = backend.capture_ui_snapshot().frame.to_fixed_grid_lines();
+        assert_eq!(&focused_rows[0][1..1 + n], &"hello"[5 - n..]);
     }
 }
 
@@ -434,7 +506,7 @@ fn squeezed_input_keeps_its_field_and_excludes_the_error_row_from_text_hits() {
                     move |_| context_menus.set(context_menus.get() + 1)
                 }));
             let mut backend = TestBackend::new_with_viewport(
-                InputWithErrorRow(Element::from(input).min_height(Length::Px(0)).key("input")),
+                FixedView(Element::from(input).min_height(Length::Px(0)).key("input")),
                 Rect {
                     x: 0,
                     y: 0,

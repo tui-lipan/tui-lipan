@@ -21,11 +21,11 @@ use crate::style::resolve::{
 };
 use crate::style::{BorderStyle, Padding, Rect, ScrollbarVariant, Style, ThemeRole, resolve_slot};
 use crate::utils::scrollbar::ScrollbarMetricsCache;
+use crate::utils::text::viewport;
 use crate::utils::text::{
     self as util, SentinelInfo, char_visual_width, expand_tabs, str_visual_width,
     str_visual_width_with_tabs, visual_col_with_virtual,
 };
-use crate::utils::text::{input_viewport_start, viewport};
 use crate::widgets::{
     IMAGE_SENTINEL_BASE, TextAreaImageMode, TextAreaLineNumberMode, TextAreaVimConfig,
     TextAreaVimCurrentLineHighlight, TextAreaVimMode, sentinel_info_for,
@@ -2811,17 +2811,9 @@ pub(crate) fn input_cursor_position(
         return None;
     }
 
-    let text_w = unicode_width::UnicodeWidthStr::width(line.as_ref()) as u16;
-    let needs_cursor_reserve = text_w >= content_w;
-    let _visible_w = if needs_cursor_reserve {
-        content_w.saturating_sub(1)
-    } else {
-        content_w
-    };
-
     let cursor_x = if line.is_empty() {
         0
-    } else if truncate_head {
+    } else if truncate_head && content_w > 2 {
         let (start, end, _) = viewport(&line, cursor, content_w);
         let left_hidden = start > 0;
         let right_hidden = end < line.len();
@@ -2839,9 +2831,7 @@ pub(crate) fn input_cursor_position(
             }
         }
     } else {
-        let start = input_viewport_start(&line, cursor, content_w);
-        let prefix_slice = &line[start..cursor];
-        unicode_width::UnicodeWidthStr::width(prefix_slice) as u16
+        viewport(&line, cursor, content_w).2
     };
 
     let cx = inner

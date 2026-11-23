@@ -22,10 +22,17 @@ impl InputGeometry {
             }
         });
         let draws_border = border && field.h >= 3 && field.w >= 3;
+        let content = if border {
+            field
+                .inner(draws_border, Padding::default())
+                .inset_preserving_cell(padding)
+        } else {
+            field.inset(padding)
+        };
         Self {
             field,
             draws_border,
-            content: field.inner(draws_border, padding),
+            content,
             error_row,
         }
     }
