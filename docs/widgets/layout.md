@@ -70,6 +70,8 @@ Layout pitfall checklist:
 **Accordion focus sizing:**
 
 ```rust
+use tui_lipan::{FocusAccordion, FocusSizing};
+
 VStack::new()
     .focus_sizing(FocusSizing::Accordion(FocusAccordion {
         focused_min: 10,
@@ -234,6 +236,8 @@ For custom styles, group styles provide defaults and per-label styles extend
 them. Focus styles are applied only while the frame is focused:
 
 ```rust
+use tui_lipan::FrameLabel;
+
 Frame::new().titles(
     BorderLabels::new()
         .left(
@@ -289,6 +293,8 @@ which one. Tabs share their line with that border's own labels, so `TabEdge::Bot
 beside `footer_left` / `footer_right` while the header labels keep the top line to themselves.
 
 ```rust
+use tui_lipan::TabEdge;
+
 Frame::new()
     .title("DevTools")
     .tab_titles(["Stats", "Logs", "App"])
@@ -428,6 +434,8 @@ vertical `ScrollView` does not trap the wheel. Shift+wheel keeps working as the 
 horizontal override on every axis configuration.
 
 ```rust
+use tui_lipan::ScrollAxis;
+
 ScrollView::new()
     .axis(ScrollAxis::Both)
     .scrollbar(true)
@@ -445,6 +453,8 @@ viewport width changes; user wheel, key, or scrollbar movement remains
 authoritative while both values stay unchanged.
 
 ```rust
+use tui_lipan::ScrollAxis;
+
 ScrollView::new()
     .axis(ScrollAxis::Horizontal)
     .reveal_horizontal_range(match_start, match_end)
@@ -471,6 +481,8 @@ the change affects other scopes or root-level composition.
 **One-shot scroll requests**: Use `.scroll_request(...)` for command-driven moves without permanently controlling the settled offset.
 
 ```rust
+use tui_lipan::ScrollRequest;
+
 ScrollView::new()
     .scroll_request(ScrollRequest::half_page_down())
 ```
@@ -519,6 +531,8 @@ For scroll-to-edge flows, prefer built-in edge targets over invisible sentinel
 children:
 
 ```rust
+use tui_lipan::ScrollBehavior;
+
 ScrollView::new()
     .scroll_to_bottom()
     .scroll_behavior(ScrollBehavior::smooth_adaptive())
@@ -738,6 +752,8 @@ Use it when you want to dim an inactive pane, tint a whole section, quantize a s
 | `effects` | `IntoIterator<Item = VisualEffect>` | Append multiple effects in declaration order |
 
 ```rust
+use tui_lipan::EffectAxis;
+
 EffectScope::new()
     .dim_by(0.35)
     .child(sidebar)
@@ -765,6 +781,8 @@ by the renderer while it paints — so the element tree stays identical while th
 the runtime advances it with repaints, never `view()` passes:
 
 ```rust
+use tui_lipan::EffectPulse;
+
 // Fades toward a target the app picks, like `ctx.animated_color` does for colours.
 let alpha = ctx.animated_amount(
     "pane-alert-tint",
@@ -895,6 +913,8 @@ even when the pointer moves over another child. Set an active shape when the dra
 different from the hover:
 
 ```rust
+use tui_lipan::PointerShape;
+
 Splitter::vertical()
     .handle_pointer_shape(PointerShape::EwResize)
     .handle_active_pointer_shape(PointerShape::Grabbing)
@@ -913,6 +933,8 @@ a sidebar that stops widening at 80 columns, a preview that must never swallow t
 declares them with `pane_limits`:
 
 ```rust
+use tui_lipan::SplitterPaneLimits;
+
 Splitter::vertical()
     .pane_limits(vec![
         SplitterPaneLimits::range(16, 80),   // the sidebar
@@ -1025,6 +1047,8 @@ the existing node it already reconciled.
 is the shorthand for a plain fade; the full type describes the exit:
 
 ```rust,ignore
+use tui_lipan::ExitAnimation;
+
 // A toast: slide up a row, fade, and let the toasts below close the gap.
 Animated::new(toast)
     .auto_exit(ExitAnimation::slide(180, 0, -1).with_collapse(true))

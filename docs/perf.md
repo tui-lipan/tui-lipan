@@ -130,6 +130,8 @@ at the pulse's own `frame_rate`, costs one paint per sample and no `view()`
 passes, and needs no app state at all:
 
 ```rust
+use tui_lipan::EffectPulse;
+
 let alpha = ctx.pulsing_amount("pane-alert", EffectPulse::new(0.08, 0.20).frame_rate(10));
 EffectScope::new().tint_by(alert_color, alpha).child(pane)
 ```
@@ -169,6 +171,8 @@ Verify the level you actually get with `TestBackend::update_level`, which report
 what a message's `update()` asked for:
 
 ```rust
+use tui_lipan::UpdateLevel;
+
 assert_eq!(backend.update_level(Msg::PtyOutput(bytes))?, UpdateLevel::Paint);
 ```
 

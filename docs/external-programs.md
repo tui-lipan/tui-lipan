@@ -45,6 +45,8 @@ The framework consumes that request on the next tick: it promotes the frame to a
 Always pair suspend and resume. Prefer an RAII guard in your own code so resume runs on panic or early return:
 
 ```rust
+use tui_lipan::SurfaceMode;
+
 struct Handoff {
     surface_mode: SurfaceMode,
     mouse_enabled: bool,

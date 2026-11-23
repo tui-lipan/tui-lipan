@@ -28,11 +28,13 @@ available at the crate root (`tui_lipan::*`). `tui_lipan::prelude::*` is a
 strictly curated subset (budgeted by `scripts/check-export-parity.py`) covering
 what an ordinary app module names regularly: the component model, `App` and its
 common builder options, input events, core styling/animation types, macros, and
-every widget in [the widget index](widgets/index.md) with the event, item, and
-enum types needed by its common builders.
+every widget entry point in [the widget index](widgets/index.md) plus a
+deliberately small set of high-frequency companion types.
 
-Everything else stays at the crate root (`tui_lipan::*`) — and in its
-specialized submodule (`tui_lipan::automation`, `tui_lipan::animation`,
+Specialised companion types (such as `QrEcc`, `ImageProtocol`, `GraphLayout`,
+`SequenceStep`, `ClassSpec`, `StateSpec`, or `ErEntity`) and lower-level APIs
+import from the crate root (`tui_lipan::*`) — and remain available in their
+specialized submodules (`tui_lipan::automation`, `tui_lipan::animation`,
 `tui_lipan::style`, `tui_lipan::text_motion`, `tui_lipan::input`, etc.) — so
 glob-importing the prelude does not flood your module's namespace.
 
@@ -51,7 +53,7 @@ Representative `prelude::*` re-exports:
 | `RichText`, `Span`, `ScrollbarConfig`, `ScrollbarVariant`, `Theme`, `query_host_colors` | Text, scrollbars & themes |
 | `ColorGradient`, `GradientDirection`, `VisualEffect`, `EffectOrigin`, `RippleRadius`, `RetroPreset`, `Easing`, `TransitionConfig`, `VisibilityAnimation` | Gradients, effects & transitions |
 | `TextEditor`, `TextInput` | Text editing state |
-| `VStack`, `HStack`, `ZStack`, `Canvas`, `Frame`, `Button`, `Text`, `Input`, `List`, `Tabs`, `Table`, `Modal`, `TextArea`, `Tree`, `DocumentView`, `FileTree`, `Heatmap`, `HexArea`, `DiffView`, `ManagedTerminal`, `Terminal`, … | All widgets in `docs/widgets/index.md` + common builder types |
+| `VStack`, `HStack`, `ZStack`, `Canvas`, `Frame`, `Button`, `Text`, `Input`, `List`, `Tabs`, `Table`, `Modal`, `TextArea`, `Tree`, `DocumentView`, `FileTree`, `Heatmap`, `HexArea`, `DiffView`, `ManagedTerminal`, `Terminal`, … | Every widget entry point in `docs/widgets/index.md` + high-frequency companion types |
 
 Specialized types imported from the crate root (`tui_lipan::*`, **not** in `prelude::*`):
 

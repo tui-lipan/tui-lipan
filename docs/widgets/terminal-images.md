@@ -234,6 +234,8 @@ reader may claim them. Readers of an unrelayed stream shared by several clients 
 media and keep only re-readable `t=f`:
 
 ```rust
+use tui_lipan::GraphicsMediaPolicy;
+
 screen.set_image_media_policy(GraphicsMediaPolicy::SHARED);
 ```
 
@@ -256,6 +258,8 @@ A server that records a screen's output for other parsers can read out-of-band s
 hand those parsers something they can read in place of the source's name:
 
 ```rust
+use tui_lipan::{GraphicsMediaPolicy, GraphicsRelayPolicy};
+
 screen.set_image_media_policy(GraphicsMediaPolicy::default());
 screen.set_image_file_storage_enabled(true);
 screen.set_image_relay_policy(GraphicsRelayPolicy::NamedAsFiles);

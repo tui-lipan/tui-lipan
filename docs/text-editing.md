@@ -279,6 +279,8 @@ Clear operations are reported as `TextEditKind::Replace` through the same
 Wire it up via `on_edit`:
 
 ```rust
+use tui_lipan::TextEditEvent;
+
 TextArea {
     editor: ctx.state.editor.clone(),
     on_edit: ctx.link().callback(|ev: TextEditEvent| Msg::OnEdit(ev)),
@@ -292,6 +294,8 @@ coordinates for editor integrations. Build it from the current text and rebuild
 it whenever the text changes:
 
 ```rust
+use tui_lipan::LineIndex;
+
 let index = LineIndex::new(editor.text());
 let pos = index.byte_to_position(editor.text(), editor.cursor());
 let byte = index.position_to_byte(editor.text(), pos);

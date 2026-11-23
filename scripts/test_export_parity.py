@@ -23,6 +23,7 @@ def run_checker(
     prelude_rs: str,
     widgets_rs: str,
     prelude_budget: int | None = None,
+    widgets_index_md: str = "",
 ) -> tuple[int, str]:
     checker = load_checker()
     with tempfile.TemporaryDirectory() as tmp:
@@ -30,13 +31,16 @@ def run_checker(
         lib_path = root / "lib.rs"
         prelude_path = root / "prelude.rs"
         widgets_path = root / "widgets_mod.rs"
+        index_path = root / "widgets_index.md"
         lib_path.write_text(lib_rs, encoding="utf-8")
         prelude_path.write_text(prelude_rs, encoding="utf-8")
         widgets_path.write_text(widgets_rs, encoding="utf-8")
+        index_path.write_text(widgets_index_md, encoding="utf-8")
 
         checker.LIB_RS = lib_path
         checker.PRELUDE_RS = prelude_path
         checker.WIDGETS_MOD_RS = widgets_path
+        checker.WIDGETS_INDEX_MD = index_path
         if prelude_budget is not None:
             checker.PRELUDE_EXPORT_BUDGET = prelude_budget
 
@@ -177,6 +181,90 @@ class ExportParityTests(unittest.TestCase):
         self.assertIn("exports 3 items, exceeding the budget of 2", output)
         self.assertIn("crate root (src/lib.rs)", output)
         self.assertIn("PRELUDE_EXPORT_BUDGET", output)
+
+    def test_indexed_widget_missing_from_prelude_fails(self):
+        widgets_rs = """
+            mod button;
+            mod heatmap;
+            pub use button::Button;
+            pub use heatmap::Heatmap;
+        """
+        lib_rs = """
+            mod widgets;
+            pub use crate::widgets::{Button, Heatmap};
+        """
+        prelude_rs = """
+            pub use crate::widgets::Button;
+        """
+        index_md = """
+            | Widget | Description |
+            |--------|-------------|
+            | `Button` | Interactive button |
+            | `Heatmap` | 2D matrix |
+        """
+        code, output = run_checker(
+            lib_rs, prelude_rs, widgets_rs, widgets_index_md=index_md
+        )
+        self.assertEqual(code, 1, f"expected failure for missing Heatmap:\n{output}")
+        self.assertIn("docs/widgets/index.md", output)
+        self.assertIn("Heatmap", output)
+
+    def test_indexed_feature_gated_widget_in_prelude_passes(self):
+        widgets_rs = """
+            mod button;
+            #[cfg(feature = "qr-code")]
+            mod qr_code;
+            pub use button::Button;
+            #[cfg(feature = "qr-code")]
+            pub use qr_code::QrCode;
+        """
+        lib_rs = """
+            mod widgets;
+            pub use crate::widgets::Button;
+            #[cfg(feature = "qr-code")]
+            pub use crate::widgets::QrCode;
+        """
+        prelude_rs = """
+            pub use crate::widgets::Button;
+            #[cfg(feature = "qr-code")]
+            pub use crate::widgets::QrCode;
+        """
+        index_md = """
+            | Widget | Feature | Description |
+            |--------|---------|-------------|
+            | `Button` | - | Interactive button |
+            | `QrCode` | `qr-code` | Scannable QR symbol |
+        """
+        code, output = run_checker(
+            lib_rs, prelude_rs, widgets_rs, widgets_index_md=index_md
+        )
+        self.assertEqual(code, 0, f"expected pass for feature-gated widget:\n{output}")
+
+    def test_indexed_feature_gated_widget_missing_from_prelude_fails(self):
+        widgets_rs = """
+            #[cfg(feature = "qr-code")]
+            mod qr_code;
+            #[cfg(feature = "qr-code")]
+            pub use qr_code::QrCode;
+        """
+        lib_rs = """
+            mod widgets;
+            #[cfg(feature = "qr-code")]
+            pub use crate::widgets::QrCode;
+        """
+        prelude_rs = ""
+        index_md = """
+            | Widget | Feature | Description |
+            |--------|---------|-------------|
+            | `QrCode` | `qr-code` | Scannable QR symbol |
+        """
+        code, output = run_checker(
+            lib_rs, prelude_rs, widgets_rs, widgets_index_md=index_md
+        )
+        self.assertEqual(
+            code, 1, f"expected failure for missing feature-gated QrCode:\n{output}"
+        )
+        self.assertIn("QrCode", output)
 
 
 if __name__ == "__main__":

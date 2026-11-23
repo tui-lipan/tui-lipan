@@ -180,10 +180,4 @@ mod prelude_hygiene {
         let mut backend = tui_lipan::TestBackend::new(FocusReader);
         backend.render();
     }
-
-    #[test]
-    fn prelude_includes_index_widgets_heatmap_and_hex_area() {
-        let _ = Heatmap::new([[1.0_f64]]);
-        let _ = HexArea::new(vec![0u8]);
-    }
 }

@@ -363,6 +363,8 @@ use tui_lipan::{ImageContent, ImageFormat};
 **TextArea image integration (recommended pattern):**
 
 ```rust
+use tui_lipan::TextAreaImageMode;
+
 // Inline mode: sentinel chars in text value
 TextArea::new(self.input.clone())
     .image_mode(TextAreaImageMode::Inline)
@@ -375,6 +377,8 @@ TextArea::new(self.input.clone())
 **ImageContent API:**
 
 ```rust
+use tui_lipan::ImageContent;
+
 let content: ImageContent = ...;
 content.mime      // e.g. "image/png"
 content.data      // base64-encoded string

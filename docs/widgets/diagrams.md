@@ -250,6 +250,8 @@ that need plain ASCII. The existing flat setters such as
 shortcuts that mutate the corresponding theme slot.
 
 ```rust
+use tui_lipan::{ActorKind, FragmentKind, SequenceStep};
+
 SequenceDiagram::new()
     .participant("Client")
     .participant("Service")
@@ -290,6 +292,8 @@ SequenceDiagram::new()
 Switch to the ASCII preset when box-drawing support is unavailable:
 
 ```rust
+use tui_lipan::SequenceDiagramTheme;
+
 SequenceDiagram::new()
     .participant("Client")
     .participant("API")
@@ -308,6 +312,8 @@ whole diagram. Per-message `SequenceMessage::line_style(...)` and
 `SequenceMessage::label_style(...)` still win for one-off highlights.
 
 ```rust
+use tui_lipan::MessageStyle;
+
 SequenceDiagram::new()
     .participant("Client")
     .participant("API")
@@ -324,6 +330,8 @@ predictable number of terminal cells; Nerd Font symbols are opt-in because cell
 width support depends on the user's terminal and font.
 
 ```rust
+use tui_lipan::ActorKind;
+
 SequenceDiagram::new()
     .participant("Client")
     .participant("API")
@@ -377,6 +385,8 @@ StateDiagram::new()
 ```
 
 ```rust
+use tui_lipan::{ErAttribute, ErEntity};
+
 ErDiagram::new()
     .max_node_width(24)
     .entities([

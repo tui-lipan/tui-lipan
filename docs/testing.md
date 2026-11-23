@@ -275,6 +275,8 @@ or `Bitmap`; `font_family` / `font_path` let captures use system or Nerd Fonts.
 Force `Bitmap` for deterministic coarse cell output and fallback-style reviews.
 
 ```rust
+use tui_lipan::TestBackend;
+
 let mut backend = TestBackend::new(MyApp);
 backend.set_viewport(Rect { x: 0, y: 0, w: 80, h: 24 });
 backend.render();
@@ -289,6 +291,8 @@ std::fs::write("/tmp/ui-snapshot.png", snapshot.to_png_default()?)?;
 For design review captures, prefer fit-to-content margin helpers so flex space is visible without hand-tuning a viewport. The recommended default margin is `(20, 8)`:
 
 ```rust
+use tui_lipan::UiSnapshotOptions;
+
 let snapshot = backend.capture_ui_snapshot_with_margin(
     20,
     8,
@@ -301,6 +305,8 @@ let snapshot = backend.capture_ui_snapshot_with_margin(
 **Live apps:** snapshot export is **queued until after the next paint** (not synchronous from `update()`). A file or slot request replaces any earlier pending one; `request_ui_snapshot(callback)` callbacks accumulate instead, and every one registered before the paint receives that paint's snapshot. Requests schedule a repaint so idle apps still deliver. File routing follows the path extension: `.md` writes markdown, `.json` writes JSON with `ui-snapshot-json`, and `.png` writes the current viewport as PNG with `ui-snapshot-png`.
 
 ```rust
+use tui_lipan::UiSnapshotSlot;
+
 // Store the slot in component state:
 struct State {
     slot: UiSnapshotSlot,
@@ -625,6 +631,8 @@ Raise `PngOptions::scale` (via `Recording::png_options`) for a higher-resolution
 video; the default 2x gives 16x32 pixels per cell.
 
 ```rust
+use tui_lipan::Recording;
+
 Recording::view("demo", view)
     .viewport(90, 26)
     .keys("tab,enter")
@@ -638,6 +646,8 @@ Operations preserve component state and commit a coherent viewport, semantic
 tree, and frame generation after each step.
 
 ```rust
+use tui_lipan::{AutomationOptions, AutomationStep, Selector, WaitCondition};
+
 let mut session = App::new().automation(
     MyApp,
     AutomationOptions::default().viewport(100, 30),
@@ -861,6 +871,8 @@ any baseline that changed - unchanged pixels dimmed for context, changed pixels
 in magenta.
 
 ```rust
+use tui_lipan::Sketch;
+
 #[test]
 fn login_screen_has_not_drifted() -> Result<()> {
     Sketch::view("login", login_screen)
@@ -874,6 +886,8 @@ Apps that need real state use the same affordance on `TestBackend` (or on the
 `UiSnapshot` that `capture_ui_snapshot()` returns):
 
 ```rust
+use tui_lipan::TestBackend;
+
 #[test]
 fn dashboard_has_not_drifted() -> Result<()> {
     let mut backend = TestBackend::new(Dashboard);

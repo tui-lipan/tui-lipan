@@ -193,6 +193,11 @@ Explicit Rust configuration wins over file and environment keymaps:
 Policy builders on `App`:
 
 ```rust
+use tui_lipan::{
+    ChordMismatchPolicy, CommandConflictPolicy, FrameworkAction, FrameworkKeymap,
+    KeyDispatchPolicy, TerminalKeyPolicy, UserKeymapPolicy,
+};
+
 App::new()
     .framework_keymap(FrameworkKeymap::default().unbind(FrameworkAction::Quit))
     .global_quit(None) // sugar for unbinding quit

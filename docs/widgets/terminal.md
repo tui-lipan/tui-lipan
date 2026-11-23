@@ -166,6 +166,8 @@ streaming makes every other pane pay for it.
 `Terminal::screen` avoids that by handing the widget the screen itself:
 
 ```rust
+use tui_lipan::TerminalScreenHandle;
+
 // The app owns the screen and feeds it output.
 let screen: Rc<RefCell<TerminalScreen>> = self.screen.clone();
 
@@ -214,6 +216,8 @@ and shows no caret regardless of what the child asked for.
 Install `on_link_activate` to opt into terminal-style Ctrl-click links:
 
 ```rust
+use tui_lipan::TerminalScreenHandle;
+
 Terminal::new()
     .screen(TerminalScreenHandle::new(screen))
     .on_link_activate(ctx.link().callback(Msg::OpenLink))
@@ -242,6 +246,8 @@ extension, plus bare file names such as `README.md`, each with an optional `:lin
 `:line:column` suffix. A detected path is a link only when your `TerminalPathFilter` accepts it:
 
 ```rust
+use tui_lipan::{TerminalPathFilter, TerminalScreenHandle};
+
 let cwd = self.cwd.clone();
 Terminal::new()
     .screen(TerminalScreenHandle::new(screen))
@@ -271,6 +277,8 @@ behavior. An ancestor `MouseRegion::capture_requires_mods(...)` still takes prec
 Configure how keys are ordered when a terminal pane has focus:
 
 ```rust
+use tui_lipan::TerminalKeyPolicy;
+
 App::new()
     .terminal_key_policy(TerminalKeyPolicy::AppCommandsThenTerminal)
     .mount(MyMuxApp)
@@ -492,6 +500,8 @@ This is intentionally a low-level Unix-only escape hatch for multiplexers and se
 VT100/VT220 screen emulator (wraps `alacritty_terminal`). Maintains scrollback buffer.
 
 ```rust
+use tui_lipan::TerminalColorPalette;
+
 // Create a screen with given dimensions and scrollback
 let mut screen = TerminalScreen::new(rows, cols, scrollback_lines);
 // Embedding terminals and multiplexers should identify themselves, not the outer terminal.
@@ -628,6 +638,8 @@ still treats every row as a line of its own and always returns single-span match
 representation a headless UI capture produces, so every frame serializer applies to it:
 
 ```rust
+use tui_lipan::PngOptions;
+
 let frame = screen.capture_frame();
 let text = frame.plain_text();
 let ansi = frame.to_ansi_text();
@@ -692,6 +704,8 @@ styled line.
 screen integration:
 
 ```rust
+use tui_lipan::{CopyModeAction, SelectionEnd};
+
 match mode.handle_key(key, grid) {
     CopyModeAction::Moved | CopyModeAction::SelectionChanged =>
         screen.set_scrollback(mode.scrollback_offset()),
@@ -721,6 +735,8 @@ key clearing the widget's selection leaves copy mode alone. Leave
 mouse receives the press instead.
 
 ```rust
+use tui_lipan::{CopyModeAction, CopyModeViewport};
+
 // `size` is the `TerminalViewport` the widget last reported through `on_resize`.
 let viewport = CopyModeViewport {
     rows: usize::from(size.rows),
@@ -782,6 +798,8 @@ bytes `process_bytes()` receives. It never touches cell/cursor state and is not 
 `TerminalRenderSnapshot` - it is runtime metadata a host app polls separately:
 
 ```rust
+use tui_lipan::TerminalSemanticEvent;
+
 screen.process_bytes(&bytes);
 
 // Current accumulated state (cwd, command phase, foreground executable).
@@ -1017,6 +1035,8 @@ is never applied to reports sent to a child, which applies its own scroll step.
 Use `on_mouse_forward_event` when forwarding policy needs the mouse event's meaning:
 
 ```rust,ignore
+use tui_lipan::ForwardedMouseEvent;
+
 Terminal::new().on_mouse_forward_event(Callback::new(|event: ForwardedMouseEvent| {
     inspect(event.kind, event.cell, event.mods);
     write_to_child(event.bytes);

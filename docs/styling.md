@@ -401,6 +401,8 @@ let inherited_opacity = Style::new().transform_fg(ColorTransform::opacity(0.6));
 `VisualEffect` is a value-based post-processing model for `EffectScope`. Unlike `Style`, these effects do not describe widget-local text styling; they mutate the already-rendered cells inside an `EffectScope` rect.
 
 ```rust
+use tui_lipan::EffectPalette;
+
 EffectScope::new()
     .effect(VisualEffect::PaletteQuantize {
         palette: EffectPalette::Gameboy,
@@ -695,6 +697,11 @@ match choice {
 ### Builder API for Custom Themes
 
 ```rust
+use tui_lipan::{
+    CaretPalette, CaretShape, DocumentViewPalette, FileIconPalette, GitStatusPalette,
+    InputPalette, ScrollbarPalette, TextAreaPalette, ThemePalette,
+};
+
 // Fast path: define a theme from foreground, background, and accent
 let my_theme = Theme::custom(
     Color::rgb(0xE0, 0xE0, 0xE0),
@@ -908,6 +915,8 @@ is part of that configuration, so `blinking` is ignored while it is active - bot
 at the theme level and per widget.
 
 ```rust
+use tui_lipan::CaretShape;
+
 // Blinking bar for one widget, overriding the theme.
 TextArea::new(text)
     .caret_shape(CaretShape::Bar)

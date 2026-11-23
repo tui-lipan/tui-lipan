@@ -2,14 +2,16 @@
 //!
 //! Includes what an ordinary app module names regularly: the component model,
 //! `App` and its common builder options, keyboard/mouse events, core styling
-//! and animation types, macros, and every widget in `docs/widgets/index.md`
-//! with the event, item, and enum types required by their common builders.
+//! and animation types, macros, and every widget entry point in
+//! `docs/widgets/index.md` plus a deliberately small set of high-frequency
+//! companion types.
 //!
-//! Specialized and lower-level APIs live at the crate root (`tui_lipan::*`)
-//! instead of here - including automation/testing, terminal protocol and image
-//! internals, text-motion helpers, diagram spec/theme sub-types, `CursorTrail`
-//! sub-types, custom `CellEffect` internals, `FileTree` git/cache internals,
-//! and advanced `DiffView`/`TextArea` configuration types.
+//! Specialised companion types and lower-level APIs import from the crate root
+//! (`tui_lipan::*`) instead of here — including automation/testing, terminal
+//! protocol and image internals, text-motion helpers, diagram spec/theme/layout
+//! types, `CursorTrail` sub-types, custom `CellEffect` internals, `FileTree`
+//! git/cache internals, and specialised widget options (such as `QrEcc`,
+//! `ImageProtocol`, `DiffData`, or `TextAreaVimConfig`).
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Core component model & callbacks
@@ -85,9 +87,10 @@ pub use crate::text::editor::TextEditor;
 pub use crate::text::input::TextInput;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Widgets & common builder types
-// Rule: every widget listed in docs/widgets/index.md plus the event, item, and enum types
-// needed by its common builders. Theme/spec/git/cache/internal sub-types live at the crate root.
+// Widgets & high-frequency companion types
+// Rule: every widget entry point in docs/widgets/index.md plus a deliberately
+// small set of high-frequency companion types; specialised companion types
+// (themes, specs, layouts, git/cache/internal sub-types) import from the crate root.
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub use crate::widgets::{
@@ -115,9 +118,10 @@ pub use crate::widgets::{
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Feature-gated widgets & primary builder types
-// Rule: widgets enabled by optional Cargo features plus their primary events/configs.
-// Terminal protocol, history, damage, and graphics internals live at the crate root.
+// Feature-gated widgets & high-frequency companion types
+// Rule: widget entry points enabled by optional Cargo features plus a small set
+// of high-frequency companion types; specialised options and terminal protocol,
+// history, damage, and graphics internals import from the crate root.
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(feature = "big-text")]
