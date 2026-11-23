@@ -2437,7 +2437,8 @@ mod tests {
         assert_eq!(paragraph_line_range(&line_texts, 0), Some((0, 0)));
         assert_eq!(paragraph_line_range(&line_texts, 2), Some((2, 2)));
 
-        let compact_formatter = MarkdownFormatter::default().compact_blocks(true);
+        let compact_formatter = MarkdownFormatter::default()
+            .spacing(crate::widgets::document_view::MarkdownSpacing::Compact);
         let compact_doc = compact_formatter.format(FormatInput {
             value: &markdown,
             content_type: Some("markdown"),

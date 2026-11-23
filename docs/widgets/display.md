@@ -146,16 +146,33 @@ DocumentView::new("# Hello\n\n| A | B |\n|---|---|\n| 1 | 2 |")
     .wrap(true)
 
 DocumentView::new(text)
-    .markdown_compact(true)
+    .markdown_spacing(MarkdownSpacing::Compact)
 ```
 
-`.markdown_compact(true)` drops blank source lines between blocks so the
-rendered output sits flush against itself. Useful for tight previews such as
-chat bubbles, list cells, or narrow side panels where vertical space matters.
-`.markdown()` preserves blank lines and adds a spacer before adjacent fenced
-code/diagram blocks for readable paragraph spacing. The toggle is also
-available directly on the formatter as
-`MarkdownFormatter::compact_blocks(bool)`.
+`MarkdownSpacing` controls vertical spacing between rendered blocks:
+
+- `MarkdownSpacing::Balanced` **(default for `.markdown()`)**: separates sections
+  and distinct paragraphs with a single blank row while keeping headings
+  attached to their following content, keeping colon-terminated lead-in
+  paragraphs (`Bullets:`, `Rust:`, etc.) attached to an immediately following
+  list, code block, diagram, table, or blockquote, absorbing redundant blank
+  rows around horizontal rules, collapsing consecutive blank lines, and trimming
+  leading/trailing blank lines.
+- `MarkdownSpacing::Loose`: preserves explicit blank source lines between blocks
+  (collapsing consecutive blank runs to a single row and trimming leading/trailing
+  blank lines) and adds a spacer before fenced code/diagram blocks that
+  immediately follow non-blank content.
+- `MarkdownSpacing::Compact`: drops blank lines and block spacers so blocks sit
+  flush against each other, suited for dense previews such as chat cards or
+  narrow side panels.
+
+Set it on `DocumentView` via `.markdown_spacing(MarkdownSpacing::...)` (which
+updates an existing `MarkdownFormatter` in place without resetting
+`.render_diagrams(...)` or custom styles) or directly on the formatter via
+`MarkdownFormatter::spacing(MarkdownSpacing)`. Fenced code blocks follow
+CommonMark delimiter matching for both backtick (`` ``` `` / ```` ```` ````)
+and tilde (`~~~` / `~~~~`) fences, so longer outer fences preserve shorter
+nested fences inside them.
 
 Mermaid fenced blocks render as diagrams for the supported subset: flowchart,
 sequence, class, state, ER, pie, and gantt diagrams. To build any of these as a
@@ -184,7 +201,7 @@ now rather than silently ignored.
 
 To render mermaid fences as plain code blocks instead of diagrams, call
 `.render_diagrams(false)` on a `DocumentView` already configured with
-`.markdown()` / `.markdown_compact(...)`. The setting also exists directly on
+`.markdown()` / `.markdown_spacing(...)`. The setting also exists directly on
 `MarkdownFormatter::render_diagrams(bool)` for callers wiring a custom
 formatter. Default is `true`.
 

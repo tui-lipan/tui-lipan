@@ -25,7 +25,7 @@ pub use format::{
     PlainFormatter,
 };
 #[cfg(feature = "markdown")]
-pub use format_markdown::MarkdownFormatter;
+pub use format_markdown::{MarkdownFormatter, MarkdownSpacing};
 pub use layout::measure_document_view;
 pub(crate) use layout::measure_document_view_constrained;
 pub use reconcile::reconcile_document_view;
@@ -941,20 +941,41 @@ impl DocumentView {
         self
     }
 
-    /// Convenience: set markdown formatter with compact block spacing.
+    /// Convenience: set markdown formatting with a specific [`MarkdownSpacing`] policy.
     ///
-    /// When `compact` is `true`, blank lines and Markdown fence spacers are collapsed.
+    /// If the view already uses a [`MarkdownFormatter`], updates its spacing in
+    /// place without discarding other settings such as `render_diagrams` or
+    /// custom `styles`. Otherwise installs [`MarkdownFormatter::default()`] with
+    /// the requested spacing.
     #[cfg(feature = "markdown")]
-    pub fn markdown_compact(mut self, compact: bool) -> Self {
-        self = self
-            .formatter(MarkdownFormatter::default().compact_blocks(compact))
-            .content_type("markdown");
+    pub fn markdown_spacing(mut self, spacing: MarkdownSpacing) -> Self {
+        let updated_existing = if let Some(formatter_rc) = self.formatter.as_mut() {
+            if Rc::get_mut(formatter_rc).is_none() {
+                *formatter_rc = Rc::from(formatter_rc.clone_box());
+            }
+            if let Some(formatter) = Rc::get_mut(formatter_rc)
+                && let Some(md) = formatter.as_any_mut().downcast_mut::<MarkdownFormatter>()
+            {
+                md.spacing = spacing;
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
 
-        #[cfg(feature = "syntax-syntect")]
-        if self.code_syntax_strategy.is_none() {
-            self = self.code_syntax_strategy(
-                crate::widgets::SyntectStrategy::default().default_theme("One Dark (Atom)"),
-            );
+        if !updated_existing {
+            self = self
+                .formatter(MarkdownFormatter::default().spacing(spacing))
+                .content_type("markdown");
+
+            #[cfg(feature = "syntax-syntect")]
+            if self.code_syntax_strategy.is_none() {
+                self = self.code_syntax_strategy(
+                    crate::widgets::SyntectStrategy::default().default_theme("One Dark (Atom)"),
+                );
+            }
         }
 
         self
@@ -962,7 +983,7 @@ impl DocumentView {
 
     /// Toggle Mermaid diagram rendering on the active [`MarkdownFormatter`].
     ///
-    /// Defaults to `true` via `.markdown()` / `.markdown_compact()`. Set to
+    /// Defaults to `true` via `.markdown()` / `.markdown_spacing(...)`. Set to
     /// `false` to render ```mermaid fences as plain code blocks. No effect
     /// if the current formatter is not a [`MarkdownFormatter`].
     #[cfg(feature = "markdown")]

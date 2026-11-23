@@ -242,7 +242,7 @@ pub use crate::widgets::{
 pub use crate::widgets::{Image, ImageFit, ImagePlayback, ImageProtocol, ImageRepeat, ImageSource};
 
 #[cfg(feature = "markdown")]
-pub use crate::widgets::MarkdownFormatter;
+pub use crate::widgets::{MarkdownFormatter, MarkdownSpacing};
 
 #[cfg(feature = "syntax-syntect")]
 pub use crate::widgets::{
