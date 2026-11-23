@@ -70,15 +70,15 @@ impl Component for ListHeadersDemo {
         match key.code {
             KeyCode::Char('f') | KeyCode::Char('F') => {
                 ctx.state.pill_full_width = !ctx.state.pill_full_width;
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('p') | KeyCode::Char('P') => {
                 ctx.state.pill_padding = !ctx.state.pill_padding;
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('q') | KeyCode::Char('Q') => {
                 ctx.quit();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             _ => KeyUpdate::unhandled(Update::none()),
         }
@@ -104,7 +104,7 @@ impl Component for ListHeadersDemo {
             .unwrap_or_else(|| "(none)".to_string());
 
         Frame::new()
-        .header_left("List Headers + Gutters")
+        .title("List Headers + Gutters")
             .padding(1)
             .child(
                 VStack::new()
@@ -182,15 +182,15 @@ impl Component for ListHeadersDemo {
         match msg {
             Msg::Select(event) => {
                 ctx.state.selected = event.index;
-                Update::full()
+                Update::render()
             }
             Msg::Activate(event) => {
                 ctx.state.activated = Some(event.index);
-                Update::full()
+                Update::render()
             }
             Msg::SelectPill(event) => {
                 ctx.state.pill_selected = event.index;
-                Update::full()
+                Update::render()
             }
         }
     }

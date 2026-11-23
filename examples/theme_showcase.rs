@@ -130,7 +130,7 @@ fn preview_body(_theme: &Theme) -> Element {
 /// A bordered panel painted with the theme's panel surface.
 fn panel(theme: &Theme, title: &str) -> Frame {
     Frame::new()
-        .header_left(title)
+        .title(title)
         .border(true)
         .border_style(BorderStyle::Rounded)
         .style(Style::new().bg(theme.surface.panel))
@@ -239,7 +239,7 @@ impl Component for ThemeShowcase {
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
         if key.mods.ctrl && matches!(key.code, KeyCode::Char('q') | KeyCode::Char('Q')) {
             ctx.quit();
-            return KeyUpdate::handled(Update::full());
+            return KeyUpdate::handled(Update::render());
         }
 
         let count = PRESETS.len();
@@ -255,7 +255,7 @@ impl Component for ThemeShowcase {
         match next {
             Some(index) => {
                 ctx.link().send(Msg::SetTheme(index));
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::none())
             }
             None => KeyUpdate::unhandled(Update::none()),
         }
@@ -263,7 +263,10 @@ impl Component for ThemeShowcase {
 
     fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
         match msg {
-            Msg::SetTheme(index) => ctx.state.current = index.min(PRESETS.len() - 1),
+            Msg::SetTheme(index) => {
+                ctx.state.current = index.min(PRESETS.len() - 1);
+                return Update::full();
+            }
             Msg::InputChanged(ev) => {
                 ctx.state.input.set_text(ev.value.to_string());
                 ctx.state.input.set_cursor(ev.cursor);
@@ -273,7 +276,7 @@ impl Component for ThemeShowcase {
             }
             Msg::SliderChanged(value) => ctx.state.slider_value = value,
         }
-        Update::full()
+        Update::render()
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {

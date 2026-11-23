@@ -26,7 +26,7 @@ impl Component for AnsiDemo {
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
         if key.mods.ctrl && matches!(key.code, KeyCode::Char('q') | KeyCode::Char('Q')) {
             ctx.quit();
-            return KeyUpdate::handled(Update::full());
+            return KeyUpdate::handled(Update::render());
         }
         KeyUpdate::unhandled(Update::none())
     }
@@ -64,7 +64,7 @@ impl Component for AnsiDemo {
 
         let section = |title: &str, content: &str| -> Element {
             Frame::new()
-                .header_left(title.to_string())
+                .title(title.to_string())
                 .border(true)
                 .border_style(BorderStyle::Rounded)
                 .padding(1)

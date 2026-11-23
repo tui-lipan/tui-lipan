@@ -192,7 +192,7 @@ impl Component for FileTreeShowcase {
             Msg::ToggleControls => ctx.state.controls_hidden = !ctx.state.controls_hidden,
             Msg::Tree(msg) => update_tree(&mut ctx.state.tree, msg),
         }
-        Update::full()
+        Update::render()
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {

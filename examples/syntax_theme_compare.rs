@@ -41,7 +41,7 @@ impl Component for SyntaxThemeCompare {
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
         if key.mods.ctrl && matches!(key.code, KeyCode::Char('q') | KeyCode::Char('Q')) {
             ctx.quit();
-            return KeyUpdate::handled(Update::full());
+            return KeyUpdate::handled(Update::render());
         }
 
         KeyUpdate::unhandled(Update::none())
@@ -63,7 +63,7 @@ impl Component for SyntaxThemeCompare {
             .gap(1)
             .child(
                 Frame::new()
-                    .header_left("Syntax Theme Compare")
+                    .title("Syntax Theme Compare")
                     .border(true)
                     .border_style(BorderStyle::Rounded)
                     .padding(1)
@@ -105,7 +105,7 @@ fn syntax_panel(title: &str, theme: Theme) -> Element {
     ThemeProvider::new(theme.clone())
         .child(
             Frame::new()
-                .header_left(title)
+                .title(title)
                 .border(true)
                 .border_style(BorderStyle::Rounded)
                 .width(Length::Flex(1))

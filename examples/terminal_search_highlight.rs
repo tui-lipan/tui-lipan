@@ -56,7 +56,7 @@ impl Component for TerminalSearchHighlight {
             _ => return KeyUpdate::unhandled(Update::none()),
         };
         ctx.link().send(msg);
-        KeyUpdate::handled(Update::full())
+        KeyUpdate::handled(Update::render())
     }
 
     fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
@@ -71,7 +71,7 @@ impl Component for TerminalSearchHighlight {
                 return Update::none();
             }
         }
-        Update::full()
+        Update::render()
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {
@@ -97,7 +97,7 @@ impl Component for TerminalSearchHighlight {
             .gap(1)
             .child(
                 Frame::new()
-                    .header_left("Terminal search / snapshot decorations")
+                    .title("Terminal search / snapshot decorations")
                     .border(true)
                     .padding(0)
                     .child(Terminal::new().snapshot(snapshot).focusable(false)),

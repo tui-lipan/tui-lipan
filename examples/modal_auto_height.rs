@@ -37,7 +37,7 @@ impl Component for Demo {
             Msg::Open(n) => Some(n),
             Msg::Close => None,
         };
-        Update::full()
+        Update::render()
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {
@@ -46,7 +46,7 @@ impl Component for Demo {
 
         // Reference: Frame with a long list capped via max_height on the element
         let frame_capped = Frame::new()
-            .header_left("Frame  max_height=10")
+            .title("Frame  max_height=10")
             .border(true)
             .padding(1)
             .height(Length::Auto)

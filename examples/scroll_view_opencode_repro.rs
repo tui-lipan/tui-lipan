@@ -404,11 +404,11 @@ impl Component for OpencodeScrollRepro {
                 ctx.state.active_stream_id = None;
                 ctx.state.stream_step = 0;
                 ctx.state.stream_follow_bottom = false;
-                Update::full()
+                Update::render()
             }
             Msg::ToggleSearch(show) => {
                 ctx.state.show_search = show;
-                Update::full()
+                Update::render()
             }
             Msg::ToggleThemePicker(show) => {
                 if show {
@@ -422,7 +422,7 @@ impl Component for OpencodeScrollRepro {
             Msg::SearchActivated(event) => {
                 ctx.state.selected_search = Some(event.item.value);
                 ctx.state.show_search = false;
-                Update::full()
+                Update::render()
             }
             Msg::ThemePreview(index) => {
                 if ctx.state.theme_index != index {
@@ -454,7 +454,7 @@ impl Component for OpencodeScrollRepro {
             }
             Msg::InputChanged(ev) => {
                 ev.apply_to(&mut ctx.state.input);
-                Update::full()
+                Update::render()
             }
             Msg::StartStreaming => {
                 if ctx.state.active_stream_id.is_some() {
@@ -482,7 +482,7 @@ impl Component for OpencodeScrollRepro {
                     thread::sleep(Duration::from_millis(STREAM_TICK_MS));
                     link.send(Msg::StreamTick { stream_id, step: 0 });
                 });
-                Update::with_command(command)
+                Update::render_with_command(command)
             }
             Msg::StreamTick { stream_id, step } => {
                 if ctx.state.active_stream_id != Some(stream_id) {
@@ -495,7 +495,7 @@ impl Component for OpencodeScrollRepro {
                     finish_streaming_exchange(&mut ctx.state.messages, stream_id, false);
                     ctx.state.active_stream_id = None;
                     ctx.state.stream_follow_bottom = false;
-                    return Update::full();
+                    return Update::render();
                 }
 
                 let next_step = ctx.state.stream_step;
@@ -506,7 +506,7 @@ impl Component for OpencodeScrollRepro {
                         step: next_step,
                     });
                 });
-                Update::with_command(command)
+                Update::render_with_command(command)
             }
             Msg::StopStreaming => {
                 let Some(stream_id) = ctx.state.active_stream_id.take() else {
@@ -514,7 +514,7 @@ impl Component for OpencodeScrollRepro {
                 };
                 finish_streaming_exchange(&mut ctx.state.messages, stream_id, true);
                 ctx.state.stream_follow_bottom = false;
-                Update::full()
+                Update::render()
             }
         }
     }
@@ -524,7 +524,7 @@ impl Component for OpencodeScrollRepro {
             KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => {
                 if ctx.state.show_search {
                     ctx.state.show_search = false;
-                    KeyUpdate::handled(Update::full())
+                    KeyUpdate::handled(Update::render())
                 } else if ctx.state.show_theme_picker {
                     if let Some(original) = ctx.state.original_theme_index.take() {
                         ctx.state.theme_index = original;
@@ -546,11 +546,11 @@ impl Component for OpencodeScrollRepro {
                     SidebarMode::Auto
                 };
                 ctx.state.sidebar_open = !is_visible;
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('i') | KeyCode::Char('I') => {
                 ctx.state.smooth_wheel_scroll = !ctx.state.smooth_wheel_scroll;
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('t') | KeyCode::Char('T') => {
                 ctx.state.theme_provider_on = !ctx.state.theme_provider_on;
@@ -559,31 +559,31 @@ impl Component for OpencodeScrollRepro {
             KeyCode::Char('g') | KeyCode::Char('G') if !ctx.state.show_theme_picker => {
                 ctx.state.original_theme_index = Some(ctx.state.theme_index);
                 ctx.state.show_theme_picker = true;
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('y') | KeyCode::Char('Y') => {
                 ctx.state.syntax_on = !ctx.state.syntax_on;
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('n') | KeyCode::Char('N') => {
                 ctx.state.diff_context_cycle = (ctx.state.diff_context_cycle + 1) % 7;
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('w') | KeyCode::Char('W') => {
                 ctx.state.diff_wrap = !ctx.state.diff_wrap;
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('m') | KeyCode::Char('M') => {
                 ctx.state.diff_split = !ctx.state.diff_split;
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('e') | KeyCode::Char('E') => {
                 ctx.state.diff_show_context_separator = !ctx.state.diff_show_context_separator;
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('h') | KeyCode::Char('H') => {
                 ctx.state.diff_show_git_header = !ctx.state.diff_show_git_header;
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('r') | KeyCode::Char('R') => {
                 KeyUpdate::handled(self.update(Msg::StartStreaming, ctx))
@@ -593,7 +593,7 @@ impl Component for OpencodeScrollRepro {
             }
             KeyCode::Char('/') if !ctx.state.show_search => {
                 ctx.state.show_search = true;
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             _ => KeyUpdate::unhandled(Update::none()),
         }
@@ -891,7 +891,7 @@ impl Component for OpencodeScrollRepro {
                     },
                 },
                 Frame::new()
-                    .header_left("Timeline")
+                    .title("Timeline")
                     .footer_left(status)
                     .border(true)
                     .border_style(BorderStyle::Rounded)

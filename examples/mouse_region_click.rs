@@ -55,14 +55,14 @@ impl Component for MouseRegionClickDemo {
                 ctx.state.last_event = format!("Capture panel button click at ({x}, {y})");
             }
         }
-        Update::full()
+        Update::render()
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => {
                 ctx.quit();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             _ => KeyUpdate::unhandled(Update::none()),
         }
@@ -70,7 +70,7 @@ impl Component for MouseRegionClickDemo {
 
     fn view(&self, ctx: &Context<Self>) -> Element {
         Frame::new()
-            .header_left("MouseRegion click capture")
+            .title("MouseRegion click capture")
             .footer_left(format!("{} | q/esc: quit", ctx.state.last_event))
             .border_style(BorderStyle::Rounded)
             .padding(1)
@@ -95,7 +95,7 @@ impl MouseRegionClickDemo {
             .hover_style(Style::new().bg(Color::indexed(236)))
             .child(
                 Frame::new()
-                    .header_left("capture_click(false)")
+                    .title("capture_click(false)")
                     .border_style(BorderStyle::Rounded)
                     .style(Style::new().bg(Color::indexed(234)))
                     .hover_style(Style::new().bg(Color::indexed(236)))
@@ -134,7 +134,7 @@ impl MouseRegionClickDemo {
             .hover_style(Style::new().bg(Color::indexed(236)))
             .child(
                 Frame::new()
-                    .header_left("capture_click(true)")
+                    .title("capture_click(true)")
                     .border_style(BorderStyle::Rounded)
                     .style(Style::new().bg(Color::indexed(234)))
                     .hover_style(Style::new().bg(Color::indexed(236)))

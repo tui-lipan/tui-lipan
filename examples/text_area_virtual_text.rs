@@ -61,7 +61,7 @@ impl Component for VirtualTextDemo {
 
     fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
         msg.apply_to(&mut ctx.state);
-        Update::full()
+        Update::render()
     }
 }
 

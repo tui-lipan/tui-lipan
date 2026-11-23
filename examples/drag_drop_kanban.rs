@@ -167,14 +167,14 @@ impl Component for KanbanDemo {
             }
         }
 
-        Update::full()
+        Update::render()
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => {
                 ctx.quit();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             _ => KeyUpdate::unhandled(Update::none()),
         }
@@ -190,7 +190,7 @@ impl Component for KanbanDemo {
         );
 
         Frame::new()
-            .header_left("Generic Drag and Drop")
+            .title("Generic Drag and Drop")
             .footer_left(ctx.state.status.clone())
             .border(true)
             .border_style(BorderStyle::Rounded)
@@ -228,7 +228,7 @@ fn kanban_column(ctx: &Context<KanbanDemo>, column_index: usize, column: &Column
     let stack = VStack::new().gap(1).children(elems);
 
     let frame = Frame::new()
-        .header_left(column.title.clone())
+        .title(column.title.clone())
         .border(true)
         .border_style(BorderStyle::Rounded)
         .style(Style::new().fg(column.tint))

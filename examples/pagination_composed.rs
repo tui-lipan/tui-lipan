@@ -48,7 +48,7 @@ impl Component for PaginationDemo {
             .collect::<Vec<_>>();
 
         Frame::new()
-            .header_left("Pagination (Composed Controls)")
+            .title("Pagination (Composed Controls)")
             .border(true)
             .padding(1)
             .child(
@@ -139,13 +139,13 @@ impl Component for PaginationDemo {
                 ctx.state.pagination.first_page();
             }
         }
-        Update::full()
+        Update::render()
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
         if matches!(key.code, KeyCode::Char('q')) {
             ctx.quit();
-            return KeyUpdate::handled(Update::full());
+            return KeyUpdate::handled(Update::render());
         }
         KeyUpdate::unhandled(Update::none())
     }

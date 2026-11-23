@@ -7,7 +7,7 @@ use nucleo::pattern::{CaseMatching, Normalization};
 use unicode_width::UnicodeWidthStr;
 
 use crate::callback::KeyHandler;
-use crate::core::component::{Component, Context, KeyUpdate, TaskPolicy, Update, UpdateLevel};
+use crate::core::component::{Component, Context, KeyUpdate, TaskPolicy, Update};
 use crate::core::element::{Element, IntoElement};
 use crate::core::event::KeyCode;
 use crate::style::Length;
@@ -195,13 +195,13 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
         }
     }
 
-    fn init(&mut self, ctx: &mut Context<Self>) -> Option<crate::core::component::Command> {
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
         sync_current_selection(&ctx.props, &mut ctx.state);
 
         // When all items fit within the cap, create_state already computed the
         // complete result set synchronously - nothing to do.
         if matches_synchronously(&ctx.props) {
-            return None;
+            return Update::none();
         }
 
         // Either (a) there's a non-empty query that needs real fuzzy matching,
@@ -211,7 +211,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
         let query_id = ctx.state.query_id + 1;
         ctx.state.query_id = query_id;
         ctx.state.pending_selection_reset = Some(query_id);
-        Some(spawn_search(
+        Update::command_only(spawn_search(
             ctx.link().clone(),
             query_id,
             query,
@@ -368,7 +368,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
 
         if old_props.sync_selection != ctx.props.sync_selection {
             sync_current_selection(&ctx.props, &mut ctx.state);
-            return Update::layout();
+            return Update::render();
         }
 
         if old_props.primary_truncate_description_first
@@ -376,7 +376,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
             || old_props.primary_description_gap != ctx.props.primary_description_gap
             || old_props.primary_min_label_width != ctx.props.primary_min_label_width
         {
-            return Update::layout();
+            return Update::render();
         }
 
         // Controlled palettes often drive `initial_selected_item_index` from external
@@ -392,7 +392,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
             );
             ctx.state.pending_selection_reset = None;
             sync_current_selection(&ctx.props, &mut ctx.state);
-            return Update::layout();
+            return Update::render();
         }
 
         Update::none()
@@ -438,7 +438,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                     active_item: ctx.props.active_item_style,
                     description: ctx.props.description_style,
                     active_description: ctx.props.active_description_style,
-                    focused_description: ctx.props.focused_description_style,
+                    focused_description: ctx.props.focus_description_style,
                     description_placement: ctx.props.description_placement,
                     description_separator: ctx.props.description_separator.clone(),
                     description_selection: ctx.props.description_selection,
@@ -723,7 +723,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                 ctx.state.pending_selection_reset = None;
                 ctx.state.pending_preserved_selection = None;
                 sync_current_selection(&ctx.props, &mut ctx.state);
-                Update::layout()
+                Update::render()
             }
             SearchPaletteMsg::Selected(result_idx) => {
                 ctx.state.selected = result_idx;
@@ -731,7 +731,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                 ctx.state.pending_preserved_selection = None;
                 emit_search_event(&ctx.props, &ctx.state.results, result_idx, true);
                 remember_current_selection(&ctx.props, &mut ctx.state);
-                Update::layout()
+                Update::render()
             }
             SearchPaletteMsg::Activated(result_idx) => {
                 emit_search_event(&ctx.props, &ctx.state.results, result_idx, false);
@@ -741,13 +741,13 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                 let selected_item_index = current_selected_item_index(&ctx.state);
                 navigate_up(&ctx.props, &mut ctx.state);
                 clear_pending_reset_after_navigation(&mut ctx.state, selected_item_index);
-                Update::layout()
+                Update::render()
             }
             SearchPaletteMsg::NavigateDown => {
                 let selected_item_index = current_selected_item_index(&ctx.state);
                 navigate_down(&ctx.props, &mut ctx.state);
                 clear_pending_reset_after_navigation(&mut ctx.state, selected_item_index);
-                Update::layout()
+                Update::render()
             }
             SearchPaletteMsg::NavigateFirst => {
                 if !ctx.state.results.is_empty() {
@@ -757,7 +757,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                     remember_current_selection(&ctx.props, &mut ctx.state);
                     clear_pending_reset_after_navigation(&mut ctx.state, selected_item_index);
                 }
-                Update::layout()
+                Update::render()
             }
             SearchPaletteMsg::NavigateLast => {
                 let len = ctx.state.results.len();
@@ -768,7 +768,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                     remember_current_selection(&ctx.props, &mut ctx.state);
                     clear_pending_reset_after_navigation(&mut ctx.state, selected_item_index);
                 }
-                Update::layout()
+                Update::render()
             }
             SearchPaletteMsg::NavigatePageUp => {
                 let len = ctx.state.results.len();
@@ -779,7 +779,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                     remember_current_selection(&ctx.props, &mut ctx.state);
                     clear_pending_reset_after_navigation(&mut ctx.state, selected_item_index);
                 }
-                Update::layout()
+                Update::render()
             }
             SearchPaletteMsg::NavigatePageDown => {
                 let len = ctx.state.results.len();
@@ -790,7 +790,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                     remember_current_selection(&ctx.props, &mut ctx.state);
                     clear_pending_reset_after_navigation(&mut ctx.state, selected_item_index);
                 }
-                Update::layout()
+                Update::render()
             }
             SearchPaletteMsg::ActivateSelected => {
                 emit_search_event(&ctx.props, &ctx.state.results, ctx.state.selected, false);
@@ -870,7 +870,7 @@ fn refresh_results<T: Clone + PartialEq + 'static>(
         if matches_synchronously(&ctx.props) {
             ctx.state.pending_selection_reset = None;
             sync_current_selection(&ctx.props, &mut ctx.state);
-            return Update::layout();
+            return Update::render();
         }
     } else if matches_synchronously(&ctx.props) {
         let results = initial_results(&ctx.props, query.as_ref());
@@ -883,7 +883,7 @@ fn refresh_results<T: Clone + PartialEq + 'static>(
         );
         ctx.state.pending_selection_reset = None;
         sync_current_selection(&ctx.props, &mut ctx.state);
-        return Update::layout();
+        return Update::render();
     } else if selection == SelectionRefresh::ResetToInitial {
         ctx.state.selected =
             resolve_initial_result_index(ctx.props.initial_selected_item_index, &ctx.state.results);
@@ -899,7 +899,7 @@ fn refresh_results<T: Clone + PartialEq + 'static>(
         ctx.state.pending_preserved_selection = Some((item_index, result_index));
         sync_current_selection(&ctx.props, &mut ctx.state);
     }
-    layout_with_command(spawn_search(
+    Update::render_with_command(spawn_search(
         ctx.link().clone(),
         query_id,
         query,
@@ -934,14 +934,6 @@ fn resolve_preserved_selection(
     item_index
         .and_then(|index| results.iter().position(|result| result.item_index == index))
         .unwrap_or_else(|| previous_position.min(results.len().saturating_sub(1)))
-}
-
-fn layout_with_command(command: crate::core::component::Command) -> Update {
-    Update {
-        dirty: true,
-        level: UpdateLevel::Layout,
-        command: Some(command),
-    }
 }
 
 fn effective_search_line_width<T: Clone + PartialEq + 'static>(
@@ -1224,7 +1216,7 @@ mod tests {
         }
         fn update(&mut self, _: (), ctx: &mut Context<Self>) -> Update {
             ctx.state = true;
-            Update::layout()
+            Update::render()
         }
         fn view(&self, ctx: &Context<Self>) -> Element {
             let selected = self.0.clone();
@@ -1268,7 +1260,7 @@ mod tests {
 
         fn update(&mut self, rows: Self::Message, ctx: &mut Context<Self>) -> Update {
             ctx.state = (rows, true);
-            Update::layout()
+            Update::render()
         }
 
         fn view(&self, ctx: &Context<Self>) -> Element {
@@ -1427,7 +1419,7 @@ mod tests {
 
         fn update(&mut self, message: Self::Message, ctx: &mut Context<Self>) -> Update {
             ctx.state = message;
-            Update::layout()
+            Update::render()
         }
 
         fn view(&self, ctx: &Context<Self>) -> Element {
@@ -2181,7 +2173,7 @@ mod tests {
             .update_from_boxed(palette_scope, Box::new(SearchPaletteMsg::NavigateDown))
             .expect("palette navigation should update");
 
-        assert_eq!(level, UpdateLevel::Layout);
+        assert_eq!(level, UpdateLevel::Render);
         assert!(runtime.refresh_cached_scopes(&[palette_scope], bounds, None));
         assert!(runtime.reconcile_cached_element(bounds, None, None, None));
         assert_eq!(view_count.get(), 1);
@@ -2554,7 +2546,7 @@ mod tests {
 
         fn update(&mut self, _msg: Self::Message, ctx: &mut Context<Self>) -> Update {
             ctx.state.prepend = true;
-            Update::layout()
+            Update::render()
         }
 
         fn view(&self, ctx: &Context<Self>) -> Element {
@@ -2619,7 +2611,7 @@ mod tests {
         let level = runtime
             .update_from_boxed(ScopeId(1), Box::new(()))
             .expect("root update should succeed");
-        assert_eq!(level, UpdateLevel::Layout);
+        assert_eq!(level, UpdateLevel::Render);
         runtime.render_element(bounds, None, None, None);
 
         // The palette's internal selection must follow the changed seed (4),
@@ -2660,7 +2652,7 @@ mod tests {
 
         fn update(&mut self, _msg: Self::Message, ctx: &mut Context<Self>) -> Update {
             ctx.state = true;
-            Update::layout()
+            Update::render()
         }
 
         fn view(&self, ctx: &Context<Self>) -> Element {

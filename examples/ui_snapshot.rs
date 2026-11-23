@@ -17,14 +17,14 @@ impl Component for AgentDashboard {
 
     fn update(&mut self, _msg: Self::Message, ctx: &mut Context<Self>) -> Update {
         ctx.state = ctx.state.wrapping_add(1);
-        Update::full()
+        Update::render()
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {
         HStack::new()
             .child(
                 Frame::new()
-                    .header_left("Nav")
+                    .title("Nav")
                     .width(Length::Px(22))
                     .child(
                         List::new()
@@ -36,7 +36,7 @@ impl Component for AgentDashboard {
             )
             .child(
                 Frame::new()
-                    .header_left("Panel")
+                    .title("Panel")
                     .child(Text::new(format!("tick {}", ctx.state)))
                     .key("panel"),
             )

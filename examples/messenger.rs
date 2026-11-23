@@ -222,7 +222,7 @@ impl Component for Messenger {
 
         rsx! {
             Frame {
-                header_left: "Messenger",
+                title: "Messenger",
                 border: true,
                 padding: 0,
                 HStack {
@@ -466,19 +466,19 @@ impl Component for Messenger {
                 chat.input = ev.value.to_string();
                 chat.input_cursor = ev.cursor;
                 chat.input_anchor = ev.anchor;
-                Update::full()
+                Update::render()
             }
             Msg::ImagesChanged(images) => {
                 let chat = &mut ctx.state.chats[ctx.state.selected_chat];
                 chat.images = images;
-                Update::full()
+                Update::render()
             }
             Msg::RemoveImage(ev) => {
                 let chat = &mut ctx.state.chats[ctx.state.selected_chat];
                 if ev.index < chat.images.len() {
                     chat.images.remove(ev.index);
                 }
-                Update::full()
+                Update::render()
             }
             Msg::Send => {
                 let chat = &mut ctx.state.chats[ctx.state.selected_chat];
@@ -511,13 +511,13 @@ impl Component for Messenger {
                     chat.scroll = usize::MAX;
                     chat.pinned_to_bottom = true;
                 }
-                Update::full()
+                Update::render()
             }
             Msg::Scrolled(ev) => {
                 let chat = &mut ctx.state.chats[ctx.state.selected_chat];
                 chat.scroll = ev.offset;
                 chat.pinned_to_bottom = ev.offset == ev.metrics.max_offset;
-                Update::full()
+                Update::render()
             }
             Msg::MessageUpdate(index, ev) => {
                 let chat = &mut ctx.state.chats[ctx.state.selected_chat];
@@ -525,11 +525,11 @@ impl Component for Messenger {
                     msg.cursor = ev.cursor;
                     msg.anchor = ev.anchor;
                 }
-                Update::full()
+                Update::render()
             }
             Msg::SelectChat(index) => {
                 ctx.state.selected_chat = index;
-                Update::full()
+                Update::render()
             }
         }
     }

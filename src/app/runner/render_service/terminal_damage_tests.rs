@@ -3672,9 +3672,10 @@ fn mouse_dispatch_quiets_the_focused_caret_s_jump_only_for_input_inside_it() {
     let trail = Some(CursorTrail::new().trigger(CursorTrailTrigger::jump()));
     let env = runner.core.ctx.env().clone();
     env.cursor_trail.set(trail);
+    let input_y = runner.core.tree.node(input).rect.y as u16;
     let mouse = |x, kind| MouseEvent {
         x,
-        y: 0,
+        y: input_y,
         kind,
         mods: KeyMods::default(),
     };

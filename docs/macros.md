@@ -40,7 +40,7 @@ Nest `=> { }` blocks for deep trees:
 
 ```rust
 ui! {
-    Frame::new().header_left("App").border(true).padding(1) => {
+    Frame::new().title("App").border(true).padding(1) => {
         VStack::new().gap(1) => {
             Text::new("Header").style(Style::new().bold()),
             HStack::new().gap(1) => {
@@ -96,7 +96,7 @@ Use `@ key_expr` after the builder chain to assign a stable reconciliation/focus
 
 ```rust
 ui! {
-    Frame::new().header_left("Sidebar").border(true) @"sidebar" => {
+    Frame::new().title("Sidebar").border(true) @"sidebar" => {
         Text::new("Hello"),
     }
 }
@@ -124,7 +124,7 @@ All three are interchangeable - they all produce `Element`:
 ```rust
 fn view(&self, ctx: &Context<Self>) -> Element {
     ui! {
-        Frame::new().header_left("App").border(true) => {
+        Frame::new().title("App").border(true) => {
             self.sidebar(ctx),                          // builder API helper
             rsx! { Text { content: "Hello" } },         // rsx! inside ui!
             Text::new("World"),                         // leaf expression
@@ -298,7 +298,7 @@ rsx! {
 rsx! {
     VStack {
         gap: 1,
-        Frame { header_left: "Panel", border: true },
+        Frame { title: "Panel", border: true },
         HStack {
             gap: 1,
             Text { content: "Left" },
@@ -406,7 +406,7 @@ They are interchangeable - use whichever is clearer:
 // Builder API
 fn sidebar(items: &[&str]) -> Element {
     Frame::new()
-        .header_left("Nav")
+        .title("Nav")
         .border(true)
         .child(List::new().items(items.iter().map(|s| ListItem::new(*s))))
         .into()

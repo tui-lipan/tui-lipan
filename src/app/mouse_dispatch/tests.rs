@@ -899,8 +899,12 @@ impl Component for RemovableRegionRoot {
         true
     }
 
-    fn view(&self, ctx: &Context<Self>) -> Element {
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
         ctx.set_pointer_mode(self.mode);
+        Update::none()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
         let log = |name: &'static str| {
             ctx.link()
                 .callback(move |event: MouseDragEvent| RemovableRegionMsg::Log(name, event))
@@ -1170,8 +1174,8 @@ fn mouse_region_wrapping_frame_receives_border_clicks() {
                 })
                 .child(
                     Frame::new()
-                        .header_left("hit")
-                        .header_padding(1)
+                        .title("hit")
+                        .title_padding(1)
                         .border(true)
                         .width(Length::Px(11))
                         .height(Length::Px(5))
@@ -1267,8 +1271,8 @@ fn mouse_region_wrapping_frame_receives_border_mouse_down() {
                 })
                 .child(
                     Frame::new()
-                        .header_left("hit")
-                        .header_padding(1)
+                        .title("hit")
+                        .title_padding(1)
                         .border(true)
                         .width(Length::Px(11))
                         .height(Length::Px(5))
@@ -1337,8 +1341,8 @@ fn mouse_region_with_only_mouse_down_receives_inner_content_press() {
                 })
                 .child(
                     Frame::new()
-                        .header_left("hit")
-                        .header_padding(1)
+                        .title("hit")
+                        .title_padding(1)
                         .border(true)
                         .width(Length::Px(11))
                         .height(Length::Px(5))
@@ -2158,7 +2162,7 @@ fn textarea_click_hold_rebases_after_selection_then_wheel_scroll() {
                 area = area.scroll_offset(offset);
             }
             Frame::new()
-                .header_left("Editor")
+                .title("Editor")
                 .border(true)
                 .height(Length::Flex(1))
                 .width(Length::Flex(1))
@@ -5089,7 +5093,7 @@ fn context_menu_consumes_the_entire_terminal_right_button_gesture() {
         }
         fn update(&mut self, enabled: bool, ctx: &mut Context<Self>) -> Update {
             ctx.state = enabled;
-            Update::layout()
+            Update::render()
         }
         fn view(&self, ctx: &Context<Self>) -> Element {
             let forwarded = self.forwarded.clone();
@@ -5301,7 +5305,7 @@ fn middle_click_consumes_the_entire_terminal_gesture() {
         }
         fn update(&mut self, enabled: bool, ctx: &mut Context<Self>) -> Update {
             ctx.state = enabled;
-            Update::layout()
+            Update::render()
         }
         fn view(&self, ctx: &Context<Self>) -> Element {
             let forwarded = self.forwarded.clone();
@@ -5470,7 +5474,7 @@ fn tab_middle_close_owns_drag_and_release_after_terminal_replaces_bar() {
         }
         fn update(&mut self, open: bool, ctx: &mut Context<Self>) -> Update {
             ctx.state = open;
-            Update::layout()
+            Update::render()
         }
         fn view(&self, ctx: &Context<Self>) -> Element {
             if ctx.state {

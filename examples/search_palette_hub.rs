@@ -315,7 +315,7 @@ impl SearchPaletteHub {
         }
 
         Frame::new()
-            .header_left("Uncontrolled SearchPalette")
+            .title("Uncontrolled SearchPalette")
             .border(true)
             .padding(1)
             .child(body)
@@ -372,11 +372,11 @@ impl SearchPaletteHub {
 
         body.child(
             Frame::new()
-                .header_left("Files")
+                .title("Files")
                 .border_style(BorderStyle::Rounded)
                 .height(Length::Flex(1))
-                .header_content(query_input)
-                .header_padding(5)
+                .title_content(query_input)
+                .title_padding(5)
                 .child(VStack::new().gap(0).child(palette)),
         )
         .child(Text::new("↑↓ navigate  Enter open  q quit").style(Style::new().fg(Color::DarkGray)))
@@ -459,7 +459,7 @@ impl SearchPaletteHub {
         }
 
         Frame::new()
-            .header_left("Delete Workflow")
+            .title("Delete Workflow")
             .border(true)
             .padding(1)
             .child(body)
@@ -470,14 +470,14 @@ impl SearchPaletteHub {
         let placement = POPOVER_PLACEMENTS[ctx.state.popover_placement_index];
 
         let popover_content = Frame::new()
-            .header_left("Popover Content")
+            .title("Popover Content")
             .padding(1)
             .child(Text::new("This is a popover!").style(Style::new().fg(Color::Green)))
             .border(true)
             .border_style(BorderStyle::Double);
 
         Frame::new()
-            .header_left("Overlays")
+            .title("Overlays")
             .border(true)
             .padding(1)
             .child(
@@ -565,7 +565,7 @@ impl SearchPaletteHub {
         };
 
         Frame::new()
-            .header_left("Description Placement")
+            .title("Description Placement")
             .border(true)
             .padding(1)
             .child(
@@ -578,7 +578,7 @@ impl SearchPaletteHub {
                             .height(Length::Px(16))
                             .child(
                                 Frame::new()
-                                    .header_left("SearchPalette")
+                                    .title("SearchPalette")
                                     .border(true)
                                     .height(Length::Flex(1))
                                     .child(
@@ -596,7 +596,7 @@ impl SearchPaletteHub {
                             )
                             .child(
                                 Frame::new()
-                                    .header_left("MultiSelect")
+                                    .title("MultiSelect")
                                     .border(true)
                                     .height(Length::Flex(1))
                                     .child(
@@ -662,7 +662,7 @@ impl Component for SearchPaletteHub {
         };
 
         Frame::new()
-            .header_left("Search Palette Hub")
+            .title("Search Palette Hub")
             .border(true)
             .padding(1)
             .child(
@@ -683,21 +683,21 @@ impl Component for SearchPaletteHub {
         match msg {
             Msg::TabChanged(ev) => {
                 ctx.state.active_tab = ev.index.min(4);
-                Update::full()
+                Update::render()
             }
 
             Msg::PaletteToggle(show) => {
                 ctx.state.palette_show = show;
-                Update::full()
+                Update::render()
             }
             Msg::PaletteSelected(event) => {
                 ctx.state.palette_last_selected = Some(event.item.value);
-                Update::full()
+                Update::render()
             }
             Msg::PaletteActivated(event) => {
                 ctx.state.palette_last_selected = Some(event.item.value);
                 ctx.state.palette_show = false;
-                Update::full()
+                Update::render()
             }
 
             Msg::ControlledQueryChanged(ev) => {
@@ -706,22 +706,22 @@ impl Component for SearchPaletteHub {
                     .set_text(ev.value.as_ref().to_string());
                 ctx.state.controlled_query.set_cursor(ev.cursor);
                 ctx.state.controlled_query.set_anchor(ev.anchor);
-                Update::full()
+                Update::render()
             }
             Msg::ControlledActivated(ev) => {
                 ctx.state.controlled_last_activated = Some(ev.item.value);
-                Update::full()
+                Update::render()
             }
 
             Msg::DeleteToggle(show) => {
                 ctx.state.delete_show = show;
                 ctx.state.delete_pending = None;
-                Update::full()
+                Update::render()
             }
             Msg::DeleteSelected(event) => {
                 ctx.state.delete_pending = None;
                 ctx.state.delete_selected_index = Some(event.item.value);
-                Update::full()
+                Update::render()
             }
             Msg::DeleteActivated(_event) => Update::none(),
             Msg::DeleteRequest => {
@@ -742,62 +742,62 @@ impl Component for SearchPaletteHub {
                     ctx.state.delete_pending = Some(selected);
                 }
 
-                Update::full()
+                Update::render()
             }
 
             Msg::NextPlacement => {
                 ctx.state.placement_index = (ctx.state.placement_index + 1) % PLACEMENTS.len();
-                Update::full()
+                Update::render()
             }
             Msg::PrevPlacement => {
                 let len = PLACEMENTS.len();
                 ctx.state.placement_index = (ctx.state.placement_index + len - 1) % len;
-                Update::full()
+                Update::render()
             }
             Msg::ToggleDescriptionHighlight => {
                 ctx.state.description_selection = !ctx.state.description_selection;
-                Update::full()
+                Update::render()
             }
             Msg::ToggleDescriptionOverflow => {
                 ctx.state.description_wrap = !ctx.state.description_wrap;
-                Update::full()
+                Update::render()
             }
             Msg::MultiHighlightChanged(index) => {
                 ctx.state.multi_active_index = index;
-                Update::full()
+                Update::render()
             }
             Msg::MultiChanged(event) => {
                 ctx.state.multi_selected = event.selected_indices;
-                Update::full()
+                Update::render()
             }
             Msg::MultiCommit(event) => {
                 ctx.state.placement_status =
                     format!("Committed {} selected items", event.selected_indices.len());
-                Update::full()
+                Update::render()
             }
             Msg::PlacementActivated(event) => {
                 ctx.state.placement_status = format!("Activated {}", event.item.label);
-                Update::full()
+                Update::render()
             }
 
             Msg::PopoverToggle => {
                 ctx.state.popover_open = !ctx.state.popover_open;
-                Update::full()
+                Update::render()
             }
             Msg::PopoverClose => {
                 ctx.state.popover_open = false;
-                Update::full()
+                Update::render()
             }
             Msg::NextPopoverPlacement => {
                 ctx.state.popover_placement_index =
                     (ctx.state.popover_placement_index + 1) % POPOVER_PLACEMENTS.len();
-                Update::full()
+                Update::render()
             }
             Msg::PrevPopoverPlacement => {
                 let len = POPOVER_PLACEMENTS.len();
                 ctx.state.popover_placement_index =
                     (ctx.state.popover_placement_index + len - 1) % len;
-                Update::full()
+                Update::render()
             }
         }
     }
@@ -816,7 +816,7 @@ impl Component for SearchPaletteHub {
 
             if let Some(index) = tab_index {
                 ctx.state.active_tab = index;
-                return KeyUpdate::handled(Update::full());
+                return KeyUpdate::handled(Update::render());
             }
         }
 
@@ -826,18 +826,18 @@ impl Component for SearchPaletteHub {
                     let plain = key.mods == KeyMods::default();
                     if plain || ctrl_only {
                         ctx.state.palette_transparent_frame = !ctx.state.palette_transparent_frame;
-                        return KeyUpdate::handled(Update::full());
+                        return KeyUpdate::handled(Update::render());
                     }
                 }
 
                 match key.code {
                     KeyCode::Char('/') if !ctx.state.palette_show => {
                         ctx.state.palette_show = true;
-                        KeyUpdate::handled(Update::full())
+                        KeyUpdate::handled(Update::render())
                     }
                     KeyCode::Char('q') if !ctx.state.palette_show => {
                         ctx.quit();
-                        KeyUpdate::handled(Update::full())
+                        KeyUpdate::handled(Update::render())
                     }
                     _ => KeyUpdate::unhandled(Update::none()),
                 }
@@ -845,7 +845,7 @@ impl Component for SearchPaletteHub {
             1 => {
                 if key.code == KeyCode::Char('q') && key.mods == KeyMods::default() {
                     ctx.quit();
-                    KeyUpdate::handled(Update::full())
+                    KeyUpdate::handled(Update::render())
                 } else {
                     KeyUpdate::unhandled(Update::none())
                 }
@@ -853,11 +853,11 @@ impl Component for SearchPaletteHub {
             2 => match key.code {
                 KeyCode::Char('/') if !ctx.state.delete_show => {
                     ctx.state.delete_show = true;
-                    KeyUpdate::handled(Update::full())
+                    KeyUpdate::handled(Update::render())
                 }
                 KeyCode::Char('q') if !ctx.state.delete_show => {
                     ctx.quit();
-                    KeyUpdate::handled(Update::full())
+                    KeyUpdate::handled(Update::render())
                 }
                 _ => KeyUpdate::unhandled(Update::none()),
             },
@@ -873,7 +873,7 @@ impl Component for SearchPaletteHub {
                     KeyCode::Char('w') => Some(Msg::ToggleDescriptionOverflow),
                     KeyCode::Char('q') => {
                         ctx.quit();
-                        return KeyUpdate::handled(Update::full());
+                        return KeyUpdate::handled(Update::render());
                     }
                     _ => None,
                 };
@@ -891,7 +891,7 @@ impl Component for SearchPaletteHub {
 
                 if key.code == KeyCode::Esc && ctx.state.popover_open {
                     ctx.state.popover_open = false;
-                    return KeyUpdate::handled(Update::full());
+                    return KeyUpdate::handled(Update::render());
                 }
 
                 let msg = match key.code {
@@ -900,7 +900,7 @@ impl Component for SearchPaletteHub {
                     KeyCode::Right | KeyCode::Char('l') => Some(Msg::NextPopoverPlacement),
                     KeyCode::Char('q') => {
                         ctx.quit();
-                        return KeyUpdate::handled(Update::full());
+                        return KeyUpdate::handled(Update::render());
                     }
                     _ => None,
                 };

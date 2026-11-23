@@ -658,7 +658,7 @@ pub(crate) struct SearchPaletteProps<T> {
     header_style: Style,
     description_style: Style,
     active_description_style: Option<Style>,
-    focused_description_style: Option<Style>,
+    focus_description_style: Option<Style>,
     description_placement: DescriptionPlacement,
     description_separator: Option<Arc<str>>,
     description_selection: bool,
@@ -763,7 +763,7 @@ impl<T: PartialEq> PartialEq for SearchPaletteProps<T> {
             && self.header_style == other.header_style
             && self.description_style == other.description_style
             && self.active_description_style == other.active_description_style
-            && self.focused_description_style == other.focused_description_style
+            && self.focus_description_style == other.focus_description_style
             && self.description_placement == other.description_placement
             && self.description_separator == other.description_separator
             && self.description_selection == other.description_selection
@@ -960,7 +960,7 @@ impl<T: Clone + PartialEq> Default for SearchPalette<T> {
                 header_style: Style::default(),
                 description_style: Style::default(),
                 active_description_style: None,
-                focused_description_style: None,
+                focus_description_style: None,
                 description_placement: DescriptionPlacement::Inline,
                 description_separator: None,
                 description_selection: true,
@@ -1886,8 +1886,8 @@ impl<T: Clone + PartialEq> SearchPalette<T> {
     /// [`description_style`](Self::description_style). Takes precedence over
     /// [`active_description_style`](Self::active_description_style).
     /// Has no effect when a custom [`render_item`](Self::render_item) renderer is used.
-    pub fn focused_description_style(mut self, style: Style) -> Self {
-        self.props.focused_description_style = Some(style);
+    pub fn focus_description_style(mut self, style: Style) -> Self {
+        self.props.focus_description_style = Some(style);
         self
     }
 

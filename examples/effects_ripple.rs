@@ -33,7 +33,7 @@ impl Component for RippleEffectsDemo {
                 ctx.state.burst_generation = ctx.state.burst_generation.wrapping_add(1);
                 ctx.state.burst_start = Some(ctx.effect_phase());
                 let generation = ctx.state.burst_generation;
-                Update::with_command(ctx.link().command_keyed(
+                Update::render_with_command(ctx.link().command_keyed(
                     "effects-ripple-clear-burst",
                     TaskPolicy::LatestOnly,
                     move |link| {
@@ -44,7 +44,7 @@ impl Component for RippleEffectsDemo {
             }
             Msg::ClearBurst(generation) if generation == ctx.state.burst_generation => {
                 ctx.state.burst_start = None;
-                Update::full()
+                Update::render()
             }
             Msg::ClearBurst(_) => Update::none(),
         }
@@ -54,11 +54,11 @@ impl Component for RippleEffectsDemo {
         match key.code {
             KeyCode::Char('b') | KeyCode::Enter => {
                 ctx.link().send(Msg::Burst);
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('q') | KeyCode::Esc => {
                 ctx.quit();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             _ => KeyUpdate::unhandled(Update::none()),
         }
@@ -85,7 +85,7 @@ impl Component for RippleEffectsDemo {
         }
 
         let shell = Frame::new()
-            .header_left("Ripple Effects")
+            .title("Ripple Effects")
             .footer_left("b/enter burst | q quit")
             .border(true)
             .padding(1)
@@ -116,7 +116,7 @@ fn ripple_panel(ctx: &Context<RippleEffectsDemo>) -> Element {
     });
 
     Frame::new()
-        .header_left("Loop + Once")
+        .title("Loop + Once")
         .border(true)
         .height(Length::Flex(1))
         .style(Style::new().bg(Color::rgb(8, 12, 22)))

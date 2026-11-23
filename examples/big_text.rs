@@ -58,7 +58,7 @@ impl Component for BigTextDemo {
 
         rsx! {
             Frame {
-                header_left: "Big Text Demo",
+                title: "Big Text Demo",
                 ScrollView {
                     gap: 1,
                     padding: 2,

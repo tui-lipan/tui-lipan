@@ -136,62 +136,62 @@ impl Component for Diagnostics {
         match msg {
             Msg::SectionChange(idx) => {
                 ctx.state.section = idx;
-                Update::full()
+                Update::render()
             }
 
             Msg::ActiveInputChange(s) => {
                 ctx.state.active_input_value = s;
-                Update::full()
+                Update::render()
             }
             Msg::ActiveTextAreaChange(s) => {
                 ctx.state.active_textarea_value = s;
-                Update::full()
+                Update::render()
             }
             Msg::ActiveSelect(idx) => {
                 ctx.state.active_selected = idx;
-                Update::full()
+                Update::render()
             }
             Msg::ActiveSliderChange(v) => {
                 ctx.state.active_slider_value = v;
-                Update::full()
+                Update::render()
             }
             Msg::ActiveToggleSpinner => {
                 ctx.state.active_show_spinner = !ctx.state.active_show_spinner;
-                Update::full()
+                Update::render()
             }
             Msg::ActiveReset => {
                 ACTIVE_VIEW_COUNT.store(0, Ordering::SeqCst);
                 ACTIVE_RENDER_WINDOW.with(|w| w.borrow_mut().reset());
                 tui_lipan::debug::reset_mouse_events();
-                Update::full()
+                Update::render()
             }
 
             Msg::IdleSelect(idx) => {
                 ctx.state.idle_selected = idx;
                 ctx.state.idle_last_action = format!("Selected item {}", idx);
-                Update::full()
+                Update::render()
             }
             Msg::IdleReset => {
                 IDLE_VIEW_COUNT.store(0, Ordering::SeqCst);
                 IDLE_RENDER_WINDOW.with(|w| w.borrow_mut().reset());
                 tui_lipan::debug::reset_mouse_events();
                 ctx.state.idle_last_action = "Reset counter".into();
-                Update::full()
+                Update::render()
             }
 
             Msg::TabbedTabChange(idx) => {
                 ctx.state.tabbed_active_tab = idx;
-                Update::full()
+                Update::render()
             }
             Msg::TabbedSelect(idx) => {
                 ctx.state.tabbed_selected = idx;
-                Update::full()
+                Update::render()
             }
             Msg::TabbedReset => {
                 TABBED_VIEW_COUNT.store(0, Ordering::SeqCst);
                 TABBED_RENDER_WINDOW.with(|w| w.borrow_mut().reset());
                 tui_lipan::debug::reset_mouse_events();
-                Update::full()
+                Update::render()
             }
         }
     }
@@ -200,15 +200,15 @@ impl Component for Diagnostics {
         match key.code {
             KeyCode::Char('a') | KeyCode::Char('A') => {
                 ctx.link().send(Msg::SectionChange(0));
-                return KeyUpdate::handled(Update::full());
+                return KeyUpdate::handled(Update::render());
             }
             KeyCode::Char('i') | KeyCode::Char('I') => {
                 ctx.link().send(Msg::SectionChange(1));
-                return KeyUpdate::handled(Update::full());
+                return KeyUpdate::handled(Update::render());
             }
             KeyCode::Char('t') | KeyCode::Char('T') => {
                 ctx.link().send(Msg::SectionChange(2));
-                return KeyUpdate::handled(Update::full());
+                return KeyUpdate::handled(Update::render());
             }
             _ => {}
         }
@@ -217,33 +217,33 @@ impl Component for Diagnostics {
             0 => match key.code {
                 KeyCode::Char('s') | KeyCode::Char('S') => {
                     ctx.link().send(Msg::ActiveToggleSpinner);
-                    KeyUpdate::handled(Update::full())
+                    KeyUpdate::handled(Update::render())
                 }
                 KeyCode::Char('r') | KeyCode::Char('R') => {
                     ctx.link().send(Msg::ActiveReset);
-                    KeyUpdate::handled(Update::full())
+                    KeyUpdate::handled(Update::render())
                 }
                 _ => KeyUpdate::unhandled(Update::none()),
             },
             1 => {
                 if matches!(key.code, KeyCode::Char('r') | KeyCode::Char('R')) {
                     ctx.link().send(Msg::IdleReset);
-                    return KeyUpdate::handled(Update::full());
+                    return KeyUpdate::handled(Update::render());
                 }
                 KeyUpdate::unhandled(Update::none())
             }
             _ => match key.code {
                 KeyCode::Char('1') => {
                     ctx.link().send(Msg::TabbedTabChange(0));
-                    KeyUpdate::handled(Update::full())
+                    KeyUpdate::handled(Update::render())
                 }
                 KeyCode::Char('2') => {
                     ctx.link().send(Msg::TabbedTabChange(1));
-                    KeyUpdate::handled(Update::full())
+                    KeyUpdate::handled(Update::render())
                 }
                 KeyCode::Char('r') | KeyCode::Char('R') => {
                     ctx.link().send(Msg::TabbedReset);
-                    KeyUpdate::handled(Update::full())
+                    KeyUpdate::handled(Update::render())
                 }
                 _ => KeyUpdate::unhandled(Update::none()),
             },

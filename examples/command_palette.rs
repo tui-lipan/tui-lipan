@@ -42,7 +42,7 @@ impl Component for EditorPanel {
 
     fn create_state(&self, _props: &Self::Properties) -> Self::State {}
 
-    fn init(&mut self, ctx: &mut Context<Self>) -> Option<Command> {
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
         let on_save = ctx.props.on_event.clone();
         ctx.register_command(
             CommandEntry::builder("editor.save")
@@ -67,12 +67,12 @@ impl Component for EditorPanel {
                 .build(),
         );
 
-        None
+        Update::none()
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {
         Frame::new()
-            .header_left("Editor")
+            .title("Editor")
             .border(true)
             .padding(1)
             .child(
@@ -115,7 +115,7 @@ impl Component for CommandPaletteDemo {
         }
     }
 
-    fn init(&mut self, ctx: &mut Context<Self>) -> Option<Command> {
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
         let registry = ctx.command_registry();
 
         let link = ctx.link().clone();
@@ -166,45 +166,45 @@ impl Component for CommandPaletteDemo {
                 .build(),
         );
 
-        None
+        Update::none()
     }
 
     fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
         match msg {
             Msg::TogglePalette => {
                 ctx.state.show_palette = !ctx.state.show_palette;
-                Update::full()
+                Update::render()
             }
             Msg::ClosePalette => {
                 ctx.state.show_palette = false;
-                Update::full()
+                Update::render()
             }
             Msg::OpenDoc(path) => {
                 ctx.state.active_doc = path.to_string();
                 ctx.state.show_palette = false;
-                Update::full()
+                Update::render()
             }
             Msg::ToggleDevtools => {
                 ctx.state.devtools_on = !ctx.state.devtools_on;
                 ctx.toggle_devtools();
                 ctx.state.show_palette = false;
-                Update::full()
+                Update::render()
             }
             Msg::ToggleWrap => {
                 ctx.state.wraps_enabled = !ctx.state.wraps_enabled;
                 ctx.state.show_palette = false;
-                Update::full()
+                Update::render()
             }
             Msg::Editor(EditorMsg::Save) => {
                 ctx.toast().push(Toast::new("Saved file"));
                 ctx.state.show_palette = false;
-                Update::full()
+                Update::render()
             }
             Msg::Editor(EditorMsg::SaveAll) => {
                 ctx.toast()
                     .push(Toast::new("Save all is disabled in this demo"));
                 ctx.state.show_palette = false;
-                Update::full()
+                Update::render()
             }
         }
     }
@@ -212,12 +212,12 @@ impl Component for CommandPaletteDemo {
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
         if key.code == KeyCode::Char('p') && key.mods == KeyMods::default() {
             ctx.link().send(Msg::TogglePalette);
-            return KeyUpdate::handled(Update::full());
+            return KeyUpdate::handled(Update::render());
         }
 
         if key.code == KeyCode::Char('q') && key.mods == KeyMods::default() {
             ctx.quit();
-            return KeyUpdate::handled(Update::full());
+            return KeyUpdate::handled(Update::render());
         }
 
         KeyUpdate::unhandled(Update::none())
@@ -230,7 +230,7 @@ impl Component for CommandPaletteDemo {
             .child(Text::new("p: open palette | q: quit").style(Style::new().fg(Color::DarkGray)))
             .child(
                 Frame::new()
-                    .header_left("App state")
+                    .title("App state")
                     .border(true)
                     .padding(1)
                     .child(

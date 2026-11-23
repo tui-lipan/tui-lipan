@@ -112,9 +112,9 @@ impl Component for ImageBackdrop {
     /// The root's state is created before the app enters the terminal, where `host_cell_size` can
     /// only guess. Pictures drawn at a guessed cell cover a box of a different shape than the cells
     /// the panes lay out, and the host has to fit them into it.
-    fn init(&mut self, ctx: &mut Context<Self>) -> Option<Command> {
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
         (ctx.state.snapshot, ctx.state.picture) = panes(host_cell_size());
-        None
+        Update::none()
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
@@ -140,7 +140,7 @@ impl Component for ImageBackdrop {
                 return Update::none();
             }
         }
-        Update::full()
+        Update::render()
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {
@@ -161,7 +161,7 @@ impl Component for ImageBackdrop {
         ]);
 
         let terminal = Frame::new()
-            .header(BorderLabels::new().center(FrameLabel::new(" terminal pane ")))
+            .titles(BorderLabels::new().center(FrameLabel::new(" terminal pane ")))
             .child(
                 Terminal::new()
                     .snapshot(ctx.state.snapshot.clone())
@@ -174,7 +174,7 @@ impl Component for ImageBackdrop {
             .height(Length::Flex(1));
 
         let widget = Frame::new()
-            .header(BorderLabels::new().center(FrameLabel::new(" Image widget ")))
+            .titles(BorderLabels::new().center(FrameLabel::new(" Image widget ")))
             .child(
                 VStack::new()
                     .child(

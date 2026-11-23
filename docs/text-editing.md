@@ -144,7 +144,9 @@ All methods from `TextEditor` (accessors, cursor movement, selection, undo/redo)
 
 ## Integration with widgets
 
-`TextEditor` and `TextInput` are typically stored in component state and passed to `TextArea` and `Input` widgets using `bound` constructors that preserve cursor position and selection across rerenders:
+For typical forms and editors, pass a plain `String` to `Input::new(value)` or `TextArea::new(value)` and update it in `on_change` — the runtime preserves cursor position and selection across rerenders and moves the cursor to the end when the value is replaced externally.
+
+Store a `TextEditor` or `TextInput` in component state and use `TextArea::bound` / `Input::bound` when your app needs to own, inspect, or programmatically drive cursor position and selection:
 
 ### TextArea + TextEditor
 
@@ -170,7 +172,7 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
             ctx.state.editor.set_text(ev.value.to_string());
             ctx.state.editor.set_cursor(ev.cursor);
             ctx.state.editor.set_anchor(ev.anchor);
-            Update::layout()
+            Update::render()
         }
     }
 }
@@ -212,15 +214,13 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
     match msg {
         Msg::InputChanged(ev) => {
             ev.apply_to(&mut ctx.state.input);
-            Update::layout()
+            Update::render()
         }
     }
 }
 ```
 
-`Input::bound(&state)` reads the value, cursor, and anchor from the `TextInput` state bundle, so cursor position and text selection are preserved across rerenders. The `InputEvent::apply_to` helper writes all three fields back in one call.
-
-> **Avoid `Input::new(value)` for editable inputs** — it always places the cursor at the end, so left/right arrow keys and selection will appear broken after each keystroke.
+`Input::bound(&state)` reads the value, cursor, and anchor from the `TextInput` state bundle for fully controlled cursor and selection state. The `InputEvent::apply_to` helper writes all three fields back in one call. If you only need the text value, `Input::new(value)` is sufficient and preserves cursor and selection automatically.
 
 `TextArea` clear shortcuts use the widget's internal editor and emit the normal
 change/edit callbacks. Prefer `TextArea::clear_bindings(bindings)` or the

@@ -89,13 +89,13 @@ fn main() {
                 ctx.state.editor_scroll = Some(ev.source_line);
             }
         }
-        Update::full()
+        Update::render()
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {
         HStack::new()
             .gap(1)
-            .child(Frame::new().header_left("Editor").border(true).child({
+            .child(Frame::new().title("Editor").border(true).child({
                 let mut ta = TextArea::new(ctx.state.markdown.clone())
                     .border(false)
                     .tab_width(4)
@@ -113,7 +113,7 @@ fn main() {
                 ta
             }))
             .child(
-                Frame::new().header_left("Preview").border(true).child(
+                Frame::new().title("Preview").border(true).child(
                     DocumentView::new(ctx.state.markdown.clone())
                         .border(false)
                         .markdown()

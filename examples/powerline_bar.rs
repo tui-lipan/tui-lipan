@@ -38,14 +38,14 @@ impl Component for PowerlineBar {
         match msg {
             Msg::ToggleFont => ctx.state.nerd_font = !ctx.state.nerd_font,
         }
-        Update::full()
+        Update::render()
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
         match key.code {
             KeyCode::Char('n') => {
                 self.update(Msg::ToggleFont, ctx);
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('q') | KeyCode::Esc => {
                 ctx.quit();
@@ -63,7 +63,7 @@ impl Component for PowerlineBar {
         };
 
         Frame::new()
-            .header_left("Powerline segment chains")
+            .title("Powerline segment chains")
             .footer_left("n toggle Nerd Font fallback • q quit")
             .border(true)
             .padding(1)
@@ -273,7 +273,7 @@ fn inline_badge(
 fn main() -> Result<()> {
     App::new()
         .title("tui-lipan - Powerline Bar")
-        .terminal_bg(Some(BAR_BG))
+        .host_background_hint(Some(BAR_BG))
         .mount(PowerlineBar)
         .run()
 }

@@ -68,7 +68,7 @@ impl Component for FlowBadgesDemo {
             .collect::<Vec<Element>>();
 
         let instructions = Frame::new()
-            .header_left("Controls")
+            .title("Controls")
             .border(true)
             .padding(1)
             .child(Text::new(
@@ -78,7 +78,7 @@ impl Component for FlowBadgesDemo {
             ));
 
         let preview = Frame::new()
-            .header_left("Flow badge wrap preview")
+            .title("Flow badge wrap preview")
             .border(true)
             .padding(1)
             .child(
@@ -89,7 +89,7 @@ impl Component for FlowBadgesDemo {
             );
 
         Frame::new()
-            .header_left("Flow Demo")
+            .title("Flow Demo")
             .border(true)
             .padding(1)
             .child(
@@ -110,7 +110,7 @@ impl Component for FlowBadgesDemo {
         match key.code {
             KeyCode::Char('q') => {
                 ctx.quit();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             _ => KeyUpdate::unhandled(Update::none()),
         }

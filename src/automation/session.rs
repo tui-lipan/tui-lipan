@@ -776,9 +776,9 @@ mod tests {
             false
         }
 
-        fn init(&mut self, ctx: &mut Context<Self>) -> Option<Command> {
+        fn init(&mut self, ctx: &mut Context<Self>) -> Update {
             let _ = ctx;
-            Some(Command::after(Duration::from_millis(50), |link| {
+            Update::command_only(Command::after(Duration::from_millis(50), |link| {
                 link.send(TimerMsg::Fired);
             }))
         }
@@ -822,8 +822,8 @@ mod tests {
             false
         }
 
-        fn init(&mut self, ctx: &mut Context<Self>) -> Option<Command> {
-            Some(ctx.link().command(|link| {
+        fn init(&mut self, ctx: &mut Context<Self>) -> Update {
+            Update::command_only(ctx.link().command(|link| {
                 link.send_after(Duration::from_millis(50), TimerMsg::Fired);
             }))
         }
@@ -876,8 +876,8 @@ mod tests {
             0
         }
 
-        fn init(&mut self, _ctx: &mut Context<Self>) -> Option<Command> {
-            Some(Command::after(Duration::ZERO, |link| {
+        fn init(&mut self, _ctx: &mut Context<Self>) -> Update {
+            Update::command_only(Command::after(Duration::ZERO, |link| {
                 link.send(TimerChainMsg::First);
             }))
         }
@@ -886,7 +886,7 @@ mod tests {
             match msg {
                 TimerChainMsg::First => {
                     ctx.state = 1;
-                    Update::with_command(Command::after(Duration::ZERO, |link| {
+                    Update::full_with_command(Command::after(Duration::ZERO, |link| {
                         link.send(TimerChainMsg::Second);
                     }))
                 }
@@ -924,12 +924,12 @@ mod tests {
 
         fn create_state(&self, _props: &Self::Properties) -> Self::State {}
 
-        fn init(&mut self, _ctx: &mut Context<Self>) -> Option<Command> {
-            Some(Command::after(Duration::ZERO, |link| link.send(())))
+        fn init(&mut self, _ctx: &mut Context<Self>) -> Update {
+            Update::command_only(Command::after(Duration::ZERO, |link| link.send(())))
         }
 
         fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
-            Update::with_command(Command::after(Duration::ZERO, |link| link.send(())))
+            Update::full_with_command(Command::after(Duration::ZERO, |link| link.send(())))
         }
 
         fn view(&self, _ctx: &Context<Self>) -> Element {
@@ -964,8 +964,8 @@ mod tests {
             false
         }
 
-        fn init(&mut self, ctx: &mut Context<Self>) -> Option<Command> {
-            Some(ctx.link().command(|link| {
+        fn init(&mut self, ctx: &mut Context<Self>) -> Update {
+            Update::command_only(ctx.link().command(|link| {
                 std::thread::sleep(Duration::from_millis(10));
                 link.send(ExternalMsg::Done);
             }))

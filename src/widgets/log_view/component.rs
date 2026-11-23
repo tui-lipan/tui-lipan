@@ -64,13 +64,13 @@ impl Component for LogViewComponent {
         Self::State::default()
     }
 
-    fn init(&mut self, ctx: &mut Context<Self>) -> Option<crate::core::component::Command> {
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
         let query = ctx.props.filter.as_deref().unwrap_or("").to_string();
         ctx.state.last_query = query;
         ctx.state.last_mode = ctx.props.filter_mode;
         ctx.state.last_case_sensitive = ctx.props.case_sensitive;
         ctx.state.query_id += 1;
-        Some(spawn_filter(ctx.state.query_id, ctx))
+        Update::command_only(spawn_filter(ctx.state.query_id, ctx))
     }
 
     fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
@@ -146,7 +146,7 @@ impl Component for LogViewComponent {
             ctx.state.last_mode = ctx.props.filter_mode;
             ctx.state.last_case_sensitive = ctx.props.case_sensitive;
             ctx.state.query_id += 1;
-            return Update::with_command(spawn_filter(ctx.state.query_id, ctx));
+            return Update::full_with_command(spawn_filter(ctx.state.query_id, ctx));
         }
         if entries_changed {
             // Only entries changed (append) - refilter inline to avoid a

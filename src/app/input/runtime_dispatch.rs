@@ -19,7 +19,7 @@ use crate::app::input::key_dispatch::{
     TerminalPreflightDispatch, dispatch_key,
 };
 use crate::app::input::keyboard;
-use crate::app::input::keymap::{Action, Keymap, KeymapRuntime, KeymapRuntimeResult};
+use crate::app::input::keymap::{Action, BindingMode, Keymap, KeymapRuntime, KeymapRuntimeResult};
 use crate::app::input::text_area_vim::TextAreaVimState;
 use crate::app::interaction_state::DirtyLevel;
 use crate::app::interaction_state::HexPendingEdit;
@@ -313,13 +313,18 @@ impl DispatchOps for RuntimeDispatchOps<'_, '_> {
             KeymapRuntimeResult::None => None,
         };
         let action_from_chord = runtime_match.is_some_and(|binding| binding.is_chord);
-        let matches = runtime_match
-            .map(|binding| vec![binding.binding_match()])
-            .unwrap_or_else(|| self.env.keymap.matches(key));
+        let matches = if action_from_chord {
+            runtime_match
+                .map(|binding| vec![binding.binding_match()])
+                .unwrap_or_default()
+        } else {
+            self.env.keymap.matches(key)
+        };
+        let has_quit = matches
+            .iter()
+            .any(|binding| binding.action == Action::Quit && binding.mode != BindingMode::Fallback);
 
-        if self.overlay.top_overlay_blocks_unfocused()
-            && matches.iter().any(|binding| binding.action == Action::Quit)
-        {
+        if self.overlay.top_overlay_blocks_unfocused() && has_quit {
             return FrameworkDispatch::Quit;
         }
 
@@ -393,7 +398,7 @@ impl DispatchOps for RuntimeDispatchOps<'_, '_> {
             return FrameworkDispatch::Handled;
         }
 
-        if matches.iter().any(|binding| binding.action == Action::Quit) {
+        if has_quit {
             if action_from_chord || !self.overlay.top_overlay_blocks_unfocused() {
                 return FrameworkDispatch::Quit;
             }
@@ -405,6 +410,10 @@ impl DispatchOps for RuntimeDispatchOps<'_, '_> {
         }
 
         FrameworkDispatch::None
+    }
+
+    fn dispatch_framework_fallback(&mut self, key: KeyEvent) -> FrameworkDispatch {
+        dispatch_framework_fallback(self.env.tree, *self.env.focused, self.env.keymap, key)
     }
 
     fn dispatch_terminal_preflight(&mut self, key: KeyEvent) -> TerminalPreflightDispatch {
@@ -447,6 +456,41 @@ impl DispatchOps for RuntimeDispatchOps<'_, '_> {
     fn dispatch_ambient_scroll(&mut self, key: KeyEvent) -> bool {
         keyboard::dispatch_ambient_page_scroll(self.env.tree, key)
     }
+}
+
+/// Whether the focused node is a text-editing surface (`Input`, `TextArea`, or `HexArea`,
+/// including read-only instances and composites built on `Input` such as `ComboBox`,
+/// `SearchPalette`, and `CommandPalette`) where lowest-priority fallback `Ctrl+C` quit is
+/// suppressed.
+pub(crate) fn focused_suppresses_fallback_quit(tree: &NodeTree, focused: Option<NodeId>) -> bool {
+    let Some(id) = focused.filter(|id| tree.is_valid(*id)) else {
+        return false;
+    };
+    matches!(
+        tree.node(id).kind,
+        NodeKind::Input(_) | NodeKind::TextArea(_) | NodeKind::HexArea(_)
+    )
+}
+
+/// Shared lowest-priority framework fallback dispatch used by `AppRunner`, `RuntimeDispatchOps`,
+/// and `TestBackend`.
+pub(crate) fn dispatch_framework_fallback(
+    tree: &NodeTree,
+    focused: Option<NodeId>,
+    keymap: &Keymap,
+    key: KeyEvent,
+) -> FrameworkDispatch {
+    if focused_suppresses_fallback_quit(tree, focused) {
+        return FrameworkDispatch::None;
+    }
+    if keymap
+        .matches(key)
+        .iter()
+        .any(|binding| binding.action == Action::Quit && binding.mode == BindingMode::Fallback)
+    {
+        return FrameworkDispatch::Quit;
+    }
+    FrameworkDispatch::None
 }
 
 fn is_terminal(tree: &NodeTree, id: NodeId) -> bool {

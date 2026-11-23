@@ -18,6 +18,7 @@ pub struct InputNode {
     pub value: Arc<str>,
     pub cursor: usize,
     pub anchor: Option<usize>,
+    pub(crate) uncontrolled: crate::utils::text::UncontrolledTextState,
     pub placeholder: Option<Arc<str>>,
     pub prefix: Option<Arc<str>>,
     pub prefix_style: Style,
@@ -48,6 +49,7 @@ pub struct InputNode {
     pub error_style: Style,
     pub reserve_error_row: bool,
     pub on_change: Option<Callback<InputEvent>>,
+    pub on_submit: Option<Callback<InputEvent>>,
     pub on_edit: Option<Callback<TextEditEvent>>,
     pub on_click: Option<Callback<MouseEvent>>,
     pub on_context_menu: Option<Callback<crate::core::event::MouseEvent>>,
@@ -144,7 +146,10 @@ impl WidgetNode for InputNode {
     }
     fn has_on_click(&self) -> bool {
         !self.disabled
-            && (self.on_click.is_some() || self.on_change.is_some() || self.on_key.is_some())
+            && (self.on_click.is_some()
+                || self.on_change.is_some()
+                || self.on_submit.is_some()
+                || self.on_key.is_some())
     }
     fn is_hoverable_for_theme(&self, theme: &Theme) -> bool {
         // Only hoverable if explicitly styled for hover, or has an on_click handler.

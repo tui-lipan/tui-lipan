@@ -100,14 +100,14 @@ impl Component for PaintDemo {
                 ctx.state.status = "Canvas cleared.".into();
             }
         }
-        Update::full()
+        Update::render()
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => {
                 ctx.quit();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('e') => KeyUpdate::handled(self.update(Msg::PickTool(Tool::Eraser), ctx)),
             KeyCode::Char('p') => KeyUpdate::handled(self.update(Msg::PickTool(Tool::Pencil), ctx)),
@@ -118,7 +118,7 @@ impl Component for PaintDemo {
 
     fn view(&self, ctx: &Context<Self>) -> Element {
         Frame::new()
-            .header_left("Paint")
+            .title("Paint")
             .footer_left(format!(
                 "{} | p: pencil e: eraser c: clear q/esc: quit",
                 ctx.state.status
@@ -131,7 +131,7 @@ impl Component for PaintDemo {
                     .child(toolbar(ctx))
                     .child(
                         Frame::new()
-                            .header_left("Braille canvas")
+                            .title("Braille canvas")
                             .border_style(BorderStyle::Rounded)
                             .padding(0)
                             .child(

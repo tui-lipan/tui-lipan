@@ -12,7 +12,7 @@ impl Component for Commands {
 
     fn create_state(&self, _: &()) -> Self::State {}
 
-    fn init(&mut self, ctx: &mut Context<Self>) -> Option<Command> {
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
         for (id, label, description, category) in [
             (
                 "dismiss",
@@ -31,7 +31,7 @@ impl Component for Commands {
             }
             ctx.register_command(entry.build());
         }
-        None
+        Update::none()
     }
 
     fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {

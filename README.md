@@ -96,8 +96,8 @@ impl Component for Counter {
 
     fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
         match msg {
-            Msg::Inc  => { ctx.state.value += 1; Update::full() }
-            Msg::Quit => { ctx.quit();            Update::full() }
+            Msg::Inc  => { ctx.state.value += 1; Update::render() }
+            Msg::Quit => { ctx.quit();            Update::render() }
         }
     }
 }
@@ -106,6 +106,11 @@ fn main() -> tui_lipan::Result<()> {
     App::new().title("Counter").mount(Counter).run()
 }
 ```
+
+Press `Ctrl+Q` to quit any app, or `Ctrl+C` when nothing else handles it (such
+as copying a selection, a focused text editor, or an embedded terminal); see
+[`docs/keybindings.md`](docs/keybindings.md) to rebind or disable framework
+quit keys.
 
 From here, the [tutorial](docs/tutorial.md) builds a complete multi-panel app.
 Deep trees can also be written with the optional `ui!` macro, which keeps the

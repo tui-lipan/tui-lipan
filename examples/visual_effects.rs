@@ -50,7 +50,7 @@ impl Component for VisualEffectsDemo {
                 ctx.state.palette_idx = (ctx.state.palette_idx + 1) % PALETTES.len();
             }
         }
-        Update::full()
+        Update::render()
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
@@ -59,14 +59,14 @@ impl Component for VisualEffectsDemo {
             KeyCode::Char('2') => Some(Msg::NextPalette),
             KeyCode::Char('q') | KeyCode::Esc => {
                 ctx.quit();
-                return KeyUpdate::handled(Update::full());
+                return KeyUpdate::handled(Update::render());
             }
             _ => None,
         };
 
         if let Some(msg) = msg {
             ctx.link().send(msg);
-            KeyUpdate::handled(Update::full())
+            KeyUpdate::handled(Update::render())
         } else {
             KeyUpdate::unhandled(Update::none())
         }
@@ -101,7 +101,7 @@ impl Component for VisualEffectsDemo {
             .into();
 
         Frame::new()
-            .header_left("Visual Effects")
+            .title("Visual Effects")
             .footer_left("1 retro preset • 2 palette • q quit")
             .border(true)
             .padding(1)
@@ -129,7 +129,7 @@ impl Component for VisualEffectsDemo {
 
 fn static_palette_panel(palette: EffectPalette) -> Element {
     Frame::new()
-        .header_left("Palette + Scanlines")
+        .title("Palette + Scanlines")
         .border(true)
         .height(Length::Flex(1))
         .child(
@@ -153,7 +153,7 @@ fn static_palette_panel(palette: EffectPalette) -> Element {
 
 fn animated_wave_panel() -> Element {
     Frame::new()
-        .header_left("Rainbow Wave")
+        .title("Rainbow Wave")
         .border(true)
         .height(Length::Flex(1))
         .child(
@@ -174,7 +174,7 @@ fn animated_wave_panel() -> Element {
 
 fn retro_zstack_panel(retro: RetroPreset) -> Element {
     Frame::new()
-        .header_left("Retro CRT over ZStack")
+        .title("Retro CRT over ZStack")
         .border(true)
         .height(Length::Flex(1))
         .child(
@@ -191,7 +191,7 @@ fn retro_zstack_panel(retro: RetroPreset) -> Element {
                         .child(
                             Center::new().child(
                                 Frame::new()
-                                    .header_left("COMPOSED FIRST")
+                                    .title("COMPOSED FIRST")
                                     .border(true)
                                     .width(Length::Px(28))
                                     .height(Length::Px(7))

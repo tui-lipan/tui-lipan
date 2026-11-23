@@ -368,7 +368,9 @@ fn splitter_handle_preserves_focus_and_content_clicks_still_focus() {
                 MouseKind::Down(MouseButton::Left),
                 MouseKind::Up(MouseButton::Left),
             ] {
-                backend.send_mouse(mouse(2, 1, kind)).unwrap();
+                backend
+                    .send_mouse(mouse(2, u16::from(border), kind))
+                    .unwrap();
             }
             assert_eq!(backend.focused_key().unwrap().as_ref(), "first");
         }
@@ -579,8 +581,11 @@ fn interactive_splitter_pointers_follow_the_handle_axis_during_hover_and_drag() 
         fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
             Update::none()
         }
-        fn view(&self, ctx: &Context<Self>) -> Element {
+        fn init(&mut self, ctx: &mut Context<Self>) -> Update {
             ctx.set_pointer_mode(PointerMode::Interactive);
+            Update::none()
+        }
+        fn view(&self, _ctx: &Context<Self>) -> Element {
             let splitter = if self.0 {
                 Splitter::horizontal()
             } else {

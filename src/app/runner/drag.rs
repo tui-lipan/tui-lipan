@@ -1158,6 +1158,8 @@ impl<C: Component> AppRunner<C> {
                 on_vim_mode_change = node.on_vim_mode_change.clone();
                 node.cursor = cursor;
                 node.anchor = anchor_opt;
+                node.uncontrolled
+                    .update_reconciled_cursor(node.value.as_ref(), cursor, anchor_opt);
             }
 
             self.sync_textarea_vim_external_selection(
@@ -1198,6 +1200,10 @@ impl<C: Component> AppRunner<C> {
         let on_editor_state_change = node.on_editor_state_change.clone();
 
         if let Some(cb) = on_change {
+            if let NodeKind::TextArea(node) = &mut self.core.tree.node_mut(id).kind {
+                node.uncontrolled
+                    .record_reported(value.clone(), cursor, anchor);
+            }
             cb.emit(TextAreaEvent {
                 value: value.clone(),
                 cursor,
@@ -1233,6 +1239,10 @@ impl<C: Component> AppRunner<C> {
             }
 
             if let Some(cb) = on_change {
+                if let NodeKind::Input(node) = &mut self.core.tree.node_mut(id).kind {
+                    node.uncontrolled
+                        .record_reported(value.clone(), cursor, anchor_opt);
+                }
                 cb.emit(InputEvent {
                     value,
                     cursor,

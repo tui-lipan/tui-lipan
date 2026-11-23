@@ -234,7 +234,7 @@ fn maybe_start_hero_anim(ctx: &mut Context<TuiLipanShowcase>) -> Option<Update> 
     let cancel = Arc::new(AtomicBool::new(false));
     ctx.state.hero_anim.cancel = Some(Arc::clone(&cancel));
     let c = Arc::clone(&cancel);
-    Some(Update::with_command(Command::spawn(move |link| {
+    Some(Update::render_with_command(Command::spawn(move |link| {
         std::thread::spawn(move || {
             loop {
                 if c.load(Ordering::Acquire) {
@@ -571,7 +571,7 @@ impl Component for TuiLipanShowcase {
                     if let Some(u) = maybe_start_hero_anim(ctx) {
                         return u;
                     }
-                    return Update::full();
+                    return Update::render();
                 }
                 Update::none()
             }
@@ -595,7 +595,7 @@ impl Component for TuiLipanShowcase {
                     if ctx.state.tab == TAB_VOID && ctx.state.void_charge.is_some() {
                         cancel_void_charge(ctx);
                         ctx.state.void_press = None;
-                        return Update::full();
+                        return Update::render();
                     }
                 }
                 Update::none()
@@ -617,7 +617,7 @@ impl Component for TuiLipanShowcase {
                         t: 0.0,
                         aura_phase: 0.0,
                     });
-                    return Update::with_command(Command::spawn(move |link| {
+                    return Update::render_with_command(Command::spawn(move |link| {
                         let start = Instant::now();
                         loop {
                             if cancel.load(Ordering::Acquire) {
@@ -647,7 +647,7 @@ impl Component for TuiLipanShowcase {
                     let id = ctx.state.next_id;
                     ctx.state.next_id += 1;
                     ctx.state.void_charge = Some((id, cx, cy, 0.0));
-                    return Update::with_command(Command::spawn(move |link| {
+                    return Update::render_with_command(Command::spawn(move |link| {
                         let start = Instant::now();
                         loop {
                             if cancel.load(Ordering::Acquire) {
@@ -680,7 +680,7 @@ impl Component for TuiLipanShowcase {
                 {
                     ch.t = t;
                     ch.aura_phase = aura_phase;
-                    return Update::full();
+                    return Update::render();
                 }
                 Update::none()
             }
@@ -693,7 +693,7 @@ impl Component for TuiLipanShowcase {
                     && cid == id
                 {
                     *s = size;
-                    return Update::full();
+                    return Update::render();
                 }
                 Update::none()
             }
@@ -788,7 +788,7 @@ impl Component for TuiLipanShowcase {
                         .map(|s| s.max_age)
                         .fold(0.0_f32, f32::max);
 
-                    return Update::with_command(Command::spawn(move |link| {
+                    return Update::render_with_command(Command::spawn(move |link| {
                         let l = link.clone();
                         std::thread::spawn(move || {
                             let start = Instant::now();
@@ -896,7 +896,7 @@ impl Component for TuiLipanShowcase {
                             tint_b,
                         },
                     );
-                    return Update::with_command(Command::spawn(move |l| {
+                    return Update::render_with_command(Command::spawn(move |l| {
                         let start = Instant::now();
                         loop {
                             std::thread::sleep(Duration::from_millis(16));
@@ -955,7 +955,7 @@ impl Component for TuiLipanShowcase {
                             );
                             meta.push((id, max_r, i as u64));
                         }
-                        Update::with_command(Command::spawn(move |link| {
+                        Update::render_with_command(Command::spawn(move |link| {
                             for (id, max_r, i) in meta {
                                 let l = link.clone();
                                 std::thread::spawn(move || {
@@ -999,7 +999,7 @@ impl Component for TuiLipanShowcase {
                                 tint_b: b,
                             },
                         );
-                        Update::with_command(Command::spawn(move |l| {
+                        Update::render_with_command(Command::spawn(move |l| {
                             let start = Instant::now();
                             loop {
                                 std::thread::sleep(Duration::from_millis(16));
@@ -1028,12 +1028,12 @@ impl Component for TuiLipanShowcase {
                     r.radius = radius.min(max_radius);
                     r.max_radius = max_radius;
                 }
-                Update::full()
+                Update::render()
             }
 
             Msg::RippleDone(id) => {
                 ctx.state.ripples.retain(|(i, _)| *i != id);
-                Update::full()
+                Update::render()
             }
 
             Msg::HeroShockwaveTick { id, radius } => {
@@ -1046,12 +1046,12 @@ impl Component for TuiLipanShowcase {
                 {
                     sw.radius = radius;
                 }
-                Update::full()
+                Update::render()
             }
 
             Msg::HeroShockwaveDone(id) => {
                 ctx.state.hero.shockwaves.retain(|(sid, _)| *sid != id);
-                Update::full()
+                Update::render()
             }
 
             Msg::HeroSparkTick(elapsed) => {
@@ -1060,19 +1060,19 @@ impl Component for TuiLipanShowcase {
                 if all_dead {
                     ctx.state.hero.sparks.clear();
                 }
-                Update::full()
+                Update::render()
             }
 
             Msg::HeroFlashTick(alpha) => {
                 ctx.state.hero.flash_alpha = alpha;
-                Update::full()
+                Update::render()
             }
 
             Msg::LogoAnimTick => {
                 if ctx.state.tab != TAB_HERO {
                     return Update::none();
                 }
-                Update::full()
+                Update::render()
             }
         }
     }
@@ -1081,11 +1081,11 @@ impl Component for TuiLipanShowcase {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => {
                 ctx.quit();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('b') | KeyCode::Char('B') => {
                 ctx.state.banner_placement = ctx.state.banner_placement.next();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             _ => KeyUpdate::unhandled(Update::none()),
         }
@@ -1184,7 +1184,7 @@ impl Component for TuiLipanShowcase {
         );
 
         Frame::new()
-            .header_left(title)
+            .title(title)
             .border_style(BorderStyle::Rounded)
             .padding(1)
             .child(
@@ -1206,7 +1206,7 @@ fn main() -> Result<()> {
     App::new()
         .title("tui-lipan AsciiCanvas showcase")
         .theme(Theme::lipan())
-        .fill_background()
+        .background(ScreenBackground::Theme)
         .mount(TuiLipanShowcase)
         .run()
 }

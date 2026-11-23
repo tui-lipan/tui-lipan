@@ -322,7 +322,7 @@ fn context_menu_document_reports_wrapped_source_line_and_link() {
         .find(|node| matches!(node.kind, NodeKind::DocumentView(_)))
         .unwrap();
     let rect = node.rect;
-    right_click(&mut backend, rect.x as u16 + 1, rect.y as u16 + 2);
+    right_click(&mut backend, rect.x as u16 + 1, rect.y as u16 + 1);
     let events = menus.borrow();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].0.source_line, 0);
@@ -345,7 +345,7 @@ fn context_menu_editors_do_not_move_caret_or_selection() {
         .find(|node| matches!(node.kind, NodeKind::Input(_)))
         .unwrap()
         .id;
-    right_click(&mut backend, 5, 1);
+    right_click(&mut backend, 5, 0);
     assert_eq!(input_menus.borrow().len(), 1);
     let NodeKind::Input(input) = &backend.core.tree.node(id).kind else {
         unreachable!()

@@ -34,7 +34,7 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for details.
 2. **Single-threaded UI/runtime state (`Rc`/`RefCell`)** - use `Command`/`CommandLink` message passing for background work
 3. **Component DI supported** - `App::mount(component)` accepts instances, not just types
 4. **Mouse + focus from day 1** - preserve precise hit-testing, hover-testing, and scrollbar-zone routing
-5. **Flexbox-inspired layout** - leaf nodes default `Auto`, containers default `Flex(1)`
+5. **Flexbox-inspired layout** - containers and fill widgets (inputs, editors, lists, tables, trees, bars) default to `Flex(1)` on their main axes; content-sized widgets (`Text`, `Button`, `Checkbox`, `Badge`, `Spinner`, …) default to `Auto` (see `docs/widget-defaults.md`)
 
 ## Commands
 
@@ -251,7 +251,7 @@ impl Component for MyComponent {
         match msg {
             Msg::Increment => ctx.state.count += 1,
         }
-        Update::full() // use Update::with_command(...) when update starts async work
+        Update::render() // use Update::render_with_command(...) when update starts async work
     }
     
     fn view(&self, ctx: &Context<Self>) -> Element { 

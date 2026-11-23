@@ -245,8 +245,6 @@ pub struct FocusChanged {
     pub new: Option<FocusEntry>,
 }
 
-pub(crate) type FocusChangedHook = std::rc::Rc<dyn Fn(&FocusChanged)>;
-
 /// One host-application metric displayed by the built-in DevTools panel.
 ///
 /// Rows are intentionally just a terse label/value pair. The application
@@ -348,10 +346,10 @@ impl Default for DevToolsConfig {
 /// use tui_lipan::prelude::*;
 ///
 /// // Fill with the active theme's backdrop surface:
-/// let app = App::new().theme(Theme::lipan()).fill_background();
+/// let app = App::new().theme(Theme::lipan()).background(ScreenBackground::Theme);
 ///
 /// // Or an explicit color:
-/// let app = App::new().screen_background(Color::hex_u24(0x04090D));
+/// let app = App::new().background(Color::hex_u24(0x04090D));
 /// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum ScreenBackground {
@@ -438,7 +436,6 @@ pub struct App {
     pub(crate) user_keymap_policy: UserKeymapPolicy,
     pub(crate) key_dispatch_policy: KeyDispatchPolicy,
     pub(crate) focus_policy: FocusPolicy,
-    pub(crate) on_focus_changed: Option<FocusChangedHook>,
     pub(crate) terminal_key_policy: TerminalKeyPolicy,
     pub(crate) command_conflict_policy: CommandConflictPolicy,
     pub(crate) chord_mismatch_policy: ChordMismatchPolicy,
@@ -478,7 +475,6 @@ impl Default for App {
             user_keymap_policy: UserKeymapPolicy::default(),
             key_dispatch_policy: KeyDispatchPolicy::WidgetFirst,
             focus_policy: FocusPolicy::default(),
-            on_focus_changed: None,
             terminal_key_policy: TerminalKeyPolicy::FrameworkFirst,
             command_conflict_policy: CommandConflictPolicy::default(),
             chord_mismatch_policy: ChordMismatchPolicy::default(),
@@ -613,30 +609,23 @@ impl App {
 
     /// Paint the root viewport background before rendering the UI tree.
     ///
-    /// By default the framework paints nothing behind the tree (the host
-    /// terminal background shows through). This opts into a filled background so
-    /// the UI reads as a designed surface. Accepts a [`Color`], [`Paint`],
-    /// [`Style`], or a [`ScreenBackground`] directly:
+    /// By default the framework paints nothing behind the tree
+    /// ([`ScreenBackground::Transparent`]), so the host terminal background
+    /// shows through. Opt into a filled background when the UI should read as a
+    /// designed surface. Accepts a [`ScreenBackground`], [`Color`], [`Paint`],
+    /// or [`Style`]:
     ///
     /// ```no_run
     /// use tui_lipan::prelude::*;
     ///
-    /// let app = App::new().screen_background(Color::hex_u24(0x04090D));
+    /// // Track the active theme's backdrop surface automatically:
+    /// let themed = App::new().theme(Theme::lipan()).background(ScreenBackground::Theme);
+    ///
+    /// // Or paint an explicit color:
+    /// let custom = App::new().background(Color::hex_u24(0x04090D));
     /// ```
-    ///
-    /// Use [`fill_background`](Self::fill_background) to track the active theme's
-    /// backdrop automatically.
-    pub fn screen_background(mut self, background: impl Into<ScreenBackground>) -> Self {
+    pub fn background(mut self, background: impl Into<ScreenBackground>) -> Self {
         self.screen_background = background.into();
-        self
-    }
-
-    /// Fill the root viewport with the active theme's backdrop surface.
-    ///
-    /// Shorthand for `screen_background(ScreenBackground::Theme)`. The fill tracks
-    /// the app theme, so swapping themes keeps the backdrop in sync.
-    pub fn fill_background(mut self) -> Self {
-        self.screen_background = ScreenBackground::Theme;
         self
     }
 
@@ -679,7 +668,10 @@ impl App {
         self
     }
 
-    /// Configure the global quit shortcut. `None` disables framework quit bindings.
+    /// Configure the global quit shortcut. `None` disables both default quit bindings
+    /// (`Ctrl+Q` and fallback `Ctrl+C`). Single-step plain `ctrl-c` bound to quit always runs in
+    /// lowest-priority fallback mode (after copy, focused widgets/terminals, `on_key`, and app
+    /// commands, and suppressed while an `Input`, `TextArea`, or `HexArea` has focus).
     pub fn global_quit(mut self, bindings: Option<KeyBindings>) -> Self {
         self.framework_keymap = match bindings {
             Some(bindings) => self.framework_keymap.bind(FrameworkAction::Quit, bindings),
@@ -724,12 +716,6 @@ impl App {
     /// Configure framework-initiated focus movement.
     pub fn focus_policy(mut self, policy: FocusPolicy) -> Self {
         self.focus_policy = policy;
-        self
-    }
-
-    /// Observe completed focus transitions after widget blur/focus callbacks are emitted.
-    pub fn on_focus_changed(mut self, hook: impl Fn(&FocusChanged) + 'static) -> Self {
-        self.on_focus_changed = Some(std::rc::Rc::new(hook));
         self
     }
 
@@ -804,18 +790,34 @@ impl App {
         self
     }
 
-    /// Set the resolved terminal background color.
+    /// Hint the host terminal's real default background color for opacity and contrast blending.
     ///
-    /// When set, [`crate::style::ColorTransform::Opacity`] can blend foreground colors
-    /// toward the real terminal background even when a cell's background is
-    /// [`Color::Reset`].  Obtain this value from [`crate::style::query_host_colors()`]
-    /// before starting the app:
+    /// Unlike [`background`](Self::background), this does **not** paint behind
+    /// the UI tree. It gives [`crate::style::ColorTransform::Opacity`], alpha
+    /// paints, and contrast resolution a concrete RGB target whenever a cell's
+    /// background is [`Color::Reset`]. Obtain the value once before startup
+    /// from [`crate::style::query_host_colors()`] (or opt into
+    /// [`live_host_terminal_colors`](Self::live_host_terminal_colors) /
+    /// [`system_theme`](Self::system_theme) to keep it updated automatically):
     ///
-    /// ```ignore
-    /// let bg = query_host_colors().map(|c| c.bg);
-    /// App::new().terminal_bg(bg).run(MyComponent);
+    /// ```no_run
+    /// use tui_lipan::prelude::*;
+    /// # struct MyComponent;
+    /// # impl Component for MyComponent {
+    /// #     type Message = ();
+    /// #     type Properties = ();
+    /// #     type State = ();
+    /// #     fn create_state(&self, _: &()) {}
+    /// #     fn view(&self, _: &Context<Self>) -> Element { Text::new("").into() }
+    /// #     fn update(&mut self, _: (), _: &mut Context<Self>) -> Update { Update::none() }
+    /// # }
+    ///
+    /// fn main() -> tui_lipan::Result<()> {
+    ///     let bg = query_host_colors().map(|c| c.bg);
+    ///     App::new().host_background_hint(bg).mount(MyComponent).run()
+    /// }
     /// ```
-    pub fn terminal_bg(mut self, color: Option<Color>) -> Self {
+    pub fn host_background_hint(mut self, color: Option<Color>) -> Self {
         self.terminal_bg = color;
         self
     }

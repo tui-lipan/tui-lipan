@@ -42,8 +42,8 @@ impl Component for TodoApp {
         State::default()
     }
 
-    fn init(&mut self, ctx: &mut Context<Self>) -> Option<Command> {
-        Some(ctx.link().command(|link| {
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
+        Update::command_only(ctx.link().command(|link| {
             std::thread::sleep(Duration::from_millis(50));
             link.send(Msg::Seeded(vec![
                 TodoItem {
@@ -63,7 +63,7 @@ impl Component for TodoApp {
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
         if key.mods.ctrl && matches!(key.code, KeyCode::Char('q') | KeyCode::Char('Q')) {
             ctx.quit();
-            return KeyUpdate::handled(Update::full());
+            return KeyUpdate::handled(Update::render());
         }
 
         KeyUpdate::unhandled(Update::none())
@@ -95,7 +95,7 @@ impl Component for TodoApp {
             HStack {
                 gap: 1,
                 Frame {
-                    header_left: "Todos",
+                    title: "Todos",
                     footer_left: "Tab to focus • Enter adds • Ctrl+Q quits",
                     border: true,
                     border_style: panel_border_style(sidebar_active),
@@ -161,7 +161,7 @@ impl Component for TodoApp {
                     },
                 },
                 Frame {
-                    header_left: "New Task",
+                    title: "New Task",
                     border: true,
                     border_style: panel_border_style(main_active),
                     style: panel_style(main_active),
@@ -181,11 +181,7 @@ impl Component for TodoApp {
                                 hover_border_style: BorderStyle::Thick,
                                 focus_style: Style::new().fg(Color::LightCyan),
                                 on_change: ctx.link().callback(Msg::DraftChanged),
-                                on_key: ctx.link()
-                                    .key_handler(|k: KeyEvent| match k.code {
-                                        KeyCode::Enter => Some(Msg::Add),
-                                        _ => None,
-                                    }),
+                                on_submit: ctx.link().callback(|_| Msg::Add),
                                 key: "draft",
                                 automation_id: "draft",
                             },
@@ -314,13 +310,13 @@ impl Component for TodoApp {
             Msg::DraftChanged(ev) => {
                 ctx.state.draft.set_text(ev.value.as_ref().to_string());
                 ctx.state.draft.set_cursor(ev.cursor);
-                Update::full()
+                Update::render()
             }
             Msg::Add => {
                 let text = ctx.state.draft.text().trim().to_string();
                 if text.is_empty() {
                     ctx.toast().push(Toast::new("Nothing to add"));
-                    return Update::full();
+                    return Update::render();
                 }
 
                 let id = ctx.state.next_id.max(3);
@@ -335,7 +331,7 @@ impl Component for TodoApp {
                 ctx.state.draft.set_text(String::new());
                 ctx.state.draft.set_cursor(0);
                 ctx.toast().push(Toast::new(format!("Added: {}", text)));
-                Update::full()
+                Update::render()
             }
             Msg::Toggle(id) => {
                 if let Some(todo) = ctx.state.todos.iter_mut().find(|t| t.id == id) {
@@ -345,19 +341,19 @@ impl Component for TodoApp {
                     } else {
                         ctx.toast().push(Toast::new("Marked as not done"));
                     }
-                    Update::full()
+                    Update::render()
                 } else {
                     Update::none()
                 }
             }
             Msg::RequestDelete(id) => {
                 ctx.state.confirm_delete = Some(id);
-                Update::full()
+                Update::render()
             }
             Msg::CancelDelete => {
                 ctx.state.confirm_delete = None;
                 ctx.toast().push(Toast::new("Delete cancelled"));
-                Update::full()
+                Update::render()
             }
             Msg::ConfirmDelete(id) => {
                 let name = ctx
@@ -374,12 +370,12 @@ impl Component for TodoApp {
                 ctx.state.scroll = ctx.state.scroll.min(max);
 
                 ctx.toast().push(Toast::new(format!("Deleted: {}", name)));
-                Update::full()
+                Update::render()
             }
             Msg::Scrolled(ev) => {
                 let max = ctx.state.todos.len().saturating_sub(1);
                 ctx.state.scroll = ev.offset.min(max);
-                Update::full()
+                Update::render()
             }
             Msg::Seeded(mut todos) => {
                 if ctx.state.todos.is_empty() {
@@ -393,7 +389,7 @@ impl Component for TodoApp {
                         .unwrap_or(0)
                         .saturating_add(1);
                     ctx.toast().push(Toast::new("Loaded initial todos"));
-                    Update::full()
+                    Update::render()
                 } else {
                     Update::none()
                 }

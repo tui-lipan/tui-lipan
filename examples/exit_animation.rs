@@ -116,7 +116,7 @@ impl Component for ExitAnimation {
                 ctx.state.exiting.finish(&id);
             }
         }
-        Update::full()
+        Update::render()
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
@@ -125,7 +125,7 @@ impl Component for ExitAnimation {
             KeyCode::Char('a') => Some(Msg::AddRow),
             KeyCode::Char('q') | KeyCode::Esc => {
                 ctx.quit();
-                return KeyUpdate::handled(Update::full());
+                return KeyUpdate::handled(Update::render());
             }
             _ => None,
         };
@@ -133,7 +133,7 @@ impl Component for ExitAnimation {
         match msg {
             Some(msg) => {
                 ctx.link().send(msg);
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             None => KeyUpdate::unhandled(Update::none()),
         }
@@ -158,7 +158,7 @@ impl Component for ExitAnimation {
         }
 
         Frame::new()
-            .header_left("ExitQueue + Animated")
+            .title("ExitQueue + Animated")
             .footer_left(format!(
                 "x remove first • a add row • q quit • live: {} • exiting: {}",
                 live_count, exiting_count
@@ -216,7 +216,7 @@ fn animated_row(row: Row, visible: bool, ctx: &Context<ExitAnimation>) -> Elemen
 fn main() -> Result<()> {
     App::new()
         .title("tui-lipan - Exit Animation")
-        .terminal_bg(query_host_colors().map(|colors| colors.bg))
+        .host_background_hint(query_host_colors().map(|colors| colors.bg))
         .mount(ExitAnimation)
         .run()
 }

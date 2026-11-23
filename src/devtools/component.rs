@@ -111,7 +111,7 @@ impl Component for DevToolsPanel {
             DevToolsMsg::CopySelected | DevToolsMsg::CopyEntry(_) => unreachable!(),
         }
         // Only the panel's own view reads this state.
-        Update::layout()
+        Update::render()
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {
@@ -163,8 +163,8 @@ impl Component for DevToolsPanel {
                     // merge with app-layer borders that happen to occupy the same cells.
                     .border_merge_mode(BorderMergeMode::Replace)
                     .style(frame_style)
-                    .header_left(FrameLabel::new("DevTools").style(secondary_style))
-                    .header_style(secondary_style)
+                    .title(FrameLabel::new("DevTools").style(secondary_style))
+                    .title_style(secondary_style)
                     // The panel is bottom-anchored, so tabs on the bottom border
                     // keep the same screen position no matter how tall the active
                     // tab's body is. On the top border they moved with every

@@ -161,7 +161,7 @@ impl Component for GraphShowcase {
             .gap(1)
             .child(
                 Frame::new()
-                    .header_left("Theme-driven top-down tree")
+                    .title("Theme-driven top-down tree")
                     .border(true)
                     .height(Length::Auto)
                     .padding(1)
@@ -169,7 +169,7 @@ impl Component for GraphShowcase {
             )
             .child(
                 Frame::new()
-                    .header_left("Left-right tree")
+                    .title("Left-right tree")
                     .border(true)
                     .height(Length::Auto)
                     .padding(1)
@@ -177,7 +177,7 @@ impl Component for GraphShowcase {
             )
             .child(
                 Frame::new()
-                    .header_left("Compact left-right tree")
+                    .title("Compact left-right tree")
                     .border(true)
                     .height(Length::Auto)
                     .padding(1)
@@ -185,7 +185,7 @@ impl Component for GraphShowcase {
             )
             .child(
                 Frame::new()
-                    .header_left("Compact nodes")
+                    .title("Compact nodes")
                     .border(true)
                     .height(Length::Auto)
                     .padding(1)
@@ -193,7 +193,7 @@ impl Component for GraphShowcase {
             )
             .child(
                 Frame::new()
-                    .header_left("Rounded nodes only")
+                    .title("Rounded nodes only")
                     .border(true)
                     .height(Length::Auto)
                     .padding(1)
@@ -201,7 +201,7 @@ impl Component for GraphShowcase {
             )
             .child(
                 Frame::new()
-                    .header_left("Rounded edges only")
+                    .title("Rounded edges only")
                     .border(true)
                     .height(Length::Auto)
                     .padding(1)
@@ -209,7 +209,7 @@ impl Component for GraphShowcase {
             )
             .child(
                 Frame::new()
-                    .header_left("Wrapped multi-line labels")
+                    .title("Wrapped multi-line labels")
                     .border(true)
                     .height(Length::Auto)
                     .padding(1)
@@ -217,7 +217,7 @@ impl Component for GraphShowcase {
             )
             .child(
                 Frame::new()
-                    .header_left("Rounded nodes and edges")
+                    .title("Rounded nodes and edges")
                     .border(true)
                     .height(Length::Auto)
                     .padding(1)
@@ -235,7 +235,7 @@ impl Component for GraphShowcase {
             )
             .child(
                 Frame::new()
-                    .header_left("Pointer status")
+                    .title("Pointer status")
                     .border(true)
                     .height(Length::Auto)
                     .padding((0, 1))
@@ -249,7 +249,7 @@ impl Component for GraphShowcase {
             Msg::NodeClicked(event) => ctx.state.last_clicked = Some(event),
             Msg::NodeHovered(event) => ctx.state.last_hovered = Some(event),
         }
-        Update::full()
+        Update::render()
     }
 }
 

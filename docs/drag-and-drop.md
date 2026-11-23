@@ -19,11 +19,11 @@ use tui_lipan::dnd::{
 
 impl Component for App {
     // ...
-    fn init(&mut self, ctx: &mut Context<Self>) -> Option<Command> {
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
         // Dropped while the host does not speak the protocol.
         ctx.host_drag_and_drop()
             .send(&ProgramCommand::AcceptDrops { mimes: vec![] });
-        None
+        Update::none()
     }
 
     fn on_host_drag_and_drop(&mut self, event: HostEvent, ctx: &mut Context<Self>) -> Update {

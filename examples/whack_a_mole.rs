@@ -17,11 +17,6 @@ fn next_frame_cmd() -> Command {
     })
 }
 
-fn with_frame(mut u: Update) -> Update {
-    u.command = Some(next_frame_cmd());
-    u
-}
-
 const MOLE_GRID: usize = 9;
 const MOLE_SPARK_BUCKETS: usize = 36;
 const MOLE_SPARK_BUCKET_TICKS: u64 = 2;
@@ -199,8 +194,8 @@ impl Component for WhackAMole {
         State::new()
     }
 
-    fn init(&mut self, _ctx: &mut Context<Self>) -> Option<Command> {
-        Some(next_frame_cmd())
+    fn init(&mut self, _ctx: &mut Context<Self>) -> Update {
+        Update::command_only(next_frame_cmd())
     }
 
     fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
@@ -233,7 +228,7 @@ impl Component for WhackAMole {
                         }
                         ctx.state.phase = GamePhase::Playing;
                     } else {
-                        return Update::full();
+                        return Update::render();
                     }
                 }
                 let i = idx as usize;
@@ -292,7 +287,7 @@ impl Component for WhackAMole {
             Msg::Tick => {
                 ctx.state.tick = ctx.state.tick.wrapping_add(1);
                 if ctx.state.phase != GamePhase::Playing {
-                    return with_frame(Update::full());
+                    return Update::render_with_command(next_frame_cmd());
                 }
 
                 let now = ctx.state.tick;
@@ -321,7 +316,7 @@ impl Component for WhackAMole {
                         ctx.state.health = 0;
                         ctx.state.finalize();
                         ctx.state.phase = GamePhase::GameOver;
-                        return with_frame(Update::full());
+                        return Update::render_with_command(next_frame_cmd());
                     }
                 }
 
@@ -361,9 +356,9 @@ impl Component for WhackAMole {
             }
         }
         if attach_frame {
-            with_frame(Update::full())
+            Update::render_with_command(next_frame_cmd())
         } else {
-            Update::full()
+            Update::render()
         }
     }
 
@@ -391,11 +386,11 @@ impl Component for WhackAMole {
         };
 
         let stats_panel = Frame::new()
-            .header_left("stats")
-            .header_padding(1)
+            .title("stats")
+            .title_padding(1)
             .border(true)
             .border_style(BorderStyle::Rounded)
-            .header_style(accent)
+            .title_style(accent)
             .inner_style(panel)
             .width(Length::Flex(1))
             .height(Length::Px(11))
@@ -441,11 +436,11 @@ impl Component for WhackAMole {
         };
 
         let pace_panel = Frame::new()
-            .header_left("pace")
-            .header_padding(1)
+            .title("pace")
+            .title_padding(1)
             .border(true)
             .border_style(BorderStyle::Rounded)
-            .header_style(accent)
+            .title_style(accent)
             .inner_style(panel)
             .width(Length::Flex(1))
             .height(Length::Flex(1))
@@ -544,11 +539,11 @@ impl Component for WhackAMole {
         }
 
         let grid_panel = Frame::new()
-            .header_left("targets")
-            .header_padding(1)
+            .title("targets")
+            .title_padding(1)
             .border(true)
             .border_style(BorderStyle::Rounded)
-            .header_style(accent)
+            .title_style(accent)
             .inner_style(panel)
             .width(Length::Flex(1))
             .height(Length::Flex(1))
@@ -614,13 +609,13 @@ impl Component for WhackAMole {
         );
 
         let console = Frame::new()
-            .header_left(title_text)
+            .title(title_text)
             .footer_right("click moles · 1-9 keys · space play/pause · r reset")
             .border(true)
             .height(Length::Flex(1))
             .width(Length::Flex(1))
             .border_style(BorderStyle::Rounded)
-            .header_style(accent)
+            .title_style(accent)
             .footer_style(muted)
             .inner_style(panel)
             .child(
@@ -691,7 +686,7 @@ impl Component for WhackAMole {
             KeyCode::Char(c) if ('1'..='9').contains(&c) => {
                 let idx = (c as u8) - b'1';
                 ctx.link().send(Msg::Hit(idx));
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char(' ') => {
                 if ctx.state.phase == GamePhase::Playing {
@@ -699,21 +694,21 @@ impl Component for WhackAMole {
                 } else {
                     ctx.link().send(Msg::Start);
                 }
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('p') | KeyCode::Char('P') => {
                 ctx.link().send(Msg::Pause);
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('r') | KeyCode::Char('R') => {
                 ctx.link().send(Msg::Reset);
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Esc => {
                 if ctx.state.phase == GamePhase::Playing {
                     ctx.link().send(Msg::Pause);
                 }
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             _ => KeyUpdate::unhandled(Update::none()),
         }
@@ -819,7 +814,7 @@ fn mole_cell(
         .child(Text::new(" ").style(label_style));
 
     let frame = Frame::new()
-        .header_left(FrameLabel::new(full_label).style(label_style))
+        .title(FrameLabel::new(full_label).style(label_style))
         .border(true)
         .border_style(border_style)
         .inner_style(Style::default().bg(frame_bg))

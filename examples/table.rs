@@ -116,7 +116,7 @@ impl Component for TableDemo {
             )
             .child(
                 Frame::new()
-                    .header_left(title)
+                    .title(title)
                     .padding(1)
                     .border(true)
                     .height(Length::Flex(1))
@@ -129,15 +129,15 @@ impl Component for TableDemo {
         match msg {
             Msg::Select(ev) => {
                 ctx.state.selected = ev.index;
-                Update::full()
+                Update::render()
             }
             Msg::ScrollTo(index) => {
                 ctx.state.selected = index;
-                Update::full()
+                Update::render()
             }
             Msg::TabChanged(ev) => {
                 ctx.state.active_tab = ev.index;
-                Update::full()
+                Update::render()
             }
         }
     }

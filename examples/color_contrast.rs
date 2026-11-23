@@ -77,7 +77,7 @@ impl Component for ContrastDemo {
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
         if key.mods.ctrl && matches!(key.code, KeyCode::Char('q') | KeyCode::Char('Q')) {
             ctx.quit();
-            return KeyUpdate::handled(Update::full());
+            return KeyUpdate::handled(Update::render());
         }
         KeyUpdate::unhandled(Update::none())
     }
@@ -104,7 +104,7 @@ impl Component for ContrastDemo {
                 stack = stack.child(row);
             }
             Frame::new()
-                .header_left("Raw: Black fg on every background")
+                .title("Raw: Black fg on every background")
                 .border(true)
                 .border_style(BorderStyle::Rounded)
                 .padding(1)
@@ -118,7 +118,7 @@ impl Component for ContrastDemo {
                 stack = stack.child(row);
             }
             Frame::new()
-                .header_left("Auto-adjusted for WCAG AA (4.5:1)")
+                .title("Auto-adjusted for WCAG AA (4.5:1)")
                 .border(true)
                 .border_style(BorderStyle::Rounded)
                 .padding(1)
@@ -166,7 +166,7 @@ impl Component for ContrastDemo {
         }
 
         let blue_section = Frame::new()
-            .header_left("Regression: Black text on blue backgrounds")
+            .title("Regression: Black text on blue backgrounds")
             .border(true)
             .border_style(BorderStyle::Rounded)
             .padding(1)
@@ -196,7 +196,7 @@ impl Component for ContrastDemo {
         }
 
         let bw_section = Frame::new()
-            .header_left("black_or_white() on grayscale spectrum")
+            .title("black_or_white() on grayscale spectrum")
             .border(true)
             .border_style(BorderStyle::Rounded)
             .padding(1)

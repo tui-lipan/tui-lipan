@@ -27,8 +27,20 @@ impl<C: Component> AppRunner<C> {
                 self.apply_component_update(dirty, scope, update_level);
             }
         }
+        self.apply_lifecycle_updates(dirty);
         self.sync_runtime_keymap_config();
         Ok(())
+    }
+
+    pub(super) fn apply_lifecycle_updates(&mut self, dirty: &mut DirtyTracker) {
+        while let Some((scope, level)) = self.core.take_lifecycle_update() {
+            if self.core.components.is_mounted_scope(scope) {
+                self.apply_component_update(dirty, scope, level);
+            }
+        }
+        if self.sync_theme_request(true) {
+            dirty.mark_full();
+        }
     }
 
     /// Apply an [`UpdateLevel`] returned by a root lifecycle or message callback.
@@ -76,14 +88,13 @@ impl<C: Component> AppRunner<C> {
                 }
                 dirty.mark_terminal_paint();
             }
-            UpdateLevel::Layout => {
+            UpdateLevel::Render => {
                 self.mark_dirty_scope(scope);
                 dirty.mark_layout();
             }
             UpdateLevel::Full => {
                 if scope == ScopeId(1) {
-                    self.dirty_component_scopes.clear();
-                    self.dirty_scope_set.clear();
+                    self.clear_dirty_scopes();
                 }
                 dirty.mark_full();
             }
@@ -101,7 +112,7 @@ impl<C: Component> AppRunner<C> {
                 UpdateLevel::TerminalGraphics => super::DirtyLevel::TerminalGraphicsOnly,
                 #[cfg(feature = "terminal")]
                 UpdateLevel::TerminalPaint => super::DirtyLevel::TerminalPaintOnly,
-                UpdateLevel::Layout => super::DirtyLevel::LayoutOnly,
+                UpdateLevel::Render => super::DirtyLevel::LayoutOnly,
                 UpdateLevel::Full => super::DirtyLevel::Full,
                 UpdateLevel::None => unreachable!(),
             };
@@ -146,18 +157,37 @@ impl<C: Component> AppRunner<C> {
         false
     }
 
-    /// Record that `scope`'s view must run again, so a layout-only frame refreshes exactly it.
-    ///
-    /// The root subsumes every other scope, so marking it discards the rest.
+    /// Record a scope once. A queued application root covers both expanded trees.
     pub(super) fn mark_dirty_scope(&mut self, scope: ScopeId) {
-        if scope == ScopeId(1) {
-            self.dirty_component_scopes.clear();
-            self.dirty_scope_set.clear();
-            self.dirty_scope_set.insert(ScopeId(1));
-            self.dirty_component_scopes.push(ScopeId(1));
-        } else if self.dirty_scope_set.insert(scope) {
+        let root = ScopeId(1);
+        if self.dirty_scope_set.contains(&root) {
+            return;
+        }
+        if scope == root {
+            self.clear_dirty_scopes();
+        }
+        if self.dirty_scope_set.insert(scope) {
             self.dirty_component_scopes.push(scope);
         }
+    }
+
+    /// Take the next batch in insertion order, keeping the outermost dirty scopes.
+    pub(super) fn take_dirty_scopes(&mut self) -> Vec<ScopeId> {
+        let mut scopes = std::mem::take(&mut self.dirty_component_scopes);
+        scopes.retain(|&scope| {
+            !self
+                .core
+                .components
+                .ancestor_scopes(scope)
+                .any(|ancestor| self.dirty_scope_set.contains(&ancestor))
+        });
+        self.dirty_scope_set.clear();
+        scopes
+    }
+
+    pub(super) fn clear_dirty_scopes(&mut self) {
+        self.dirty_component_scopes.clear();
+        self.dirty_scope_set.clear();
     }
 
     pub(super) fn apply_framework_commands(&mut self) -> bool {

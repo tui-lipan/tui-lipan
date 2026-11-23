@@ -39,11 +39,11 @@ impl Component for ContextProviderDemo {
         match msg {
             Msg::Increment => {
                 ctx.state.count = ctx.state.count.saturating_add(1);
-                Update::full()
+                Update::render()
             }
             Msg::ToggleCompact => {
                 ctx.state.compact = !ctx.state.compact;
-                Update::full()
+                Update::render()
             }
         }
     }
@@ -65,14 +65,14 @@ impl Component for ContextProviderDemo {
             )
             .child(
                 Frame::new()
-                    .header_left("Inherited Context")
+                    .title("Inherited Context")
                     .border(true)
                     .padding(1)
                     .child(child::<ContextReadout, _>(|| ContextReadout, "root")),
             )
             .child(
                 Frame::new()
-                    .header_left("Shadowed Count")
+                    .title("Shadowed Count")
                     .border(true)
                     .padding(1)
                     .child(

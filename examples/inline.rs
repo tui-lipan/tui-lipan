@@ -30,7 +30,7 @@ impl Component for InlineDemo {
                 ctx.state.draft.set_text(event.value.as_ref());
                 ctx.state.draft.set_cursor_keep_anchor(event.cursor);
                 ctx.state.draft.set_anchor(event.anchor);
-                Update::full()
+                Update::render()
             }
             Msg::Insert => {
                 let mut text = ctx.state.draft.text().trim().to_string();
@@ -43,7 +43,7 @@ impl Component for InlineDemo {
 
                 ctx.state.inserted = next;
                 ctx.state.draft.clear();
-                Update::full()
+                Update::render()
             }
         }
     }
@@ -52,11 +52,11 @@ impl Component for InlineDemo {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('Q') => {
                 ctx.quit();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('m') | KeyCode::Char('M') => {
                 ctx.toggle_mouse_capture();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             _ => KeyUpdate::unhandled(Update::none()),
         }
@@ -64,7 +64,7 @@ impl Component for InlineDemo {
 
     fn view(&self, ctx: &Context<Self>) -> Element {
         Frame::new()
-            .header_left("Inline mode")
+            .title("Inline mode")
             .border(true)
             .border_style(BorderStyle::Rounded)
             .padding(1)
@@ -86,10 +86,7 @@ impl Component for InlineDemo {
                             .placeholder("Type text and press Enter")
                             .border(true)
                             .on_change(ctx.link().callback(Msg::DraftChanged))
-                            .on_key(ctx.link().key_handler(|key| match key.code {
-                                KeyCode::Enter => Some(Msg::Insert),
-                                _ => None,
-                            })),
+                            .on_submit(ctx.link().callback(|_| Msg::Insert)),
                     )
                     .child(
                         Button::filled("Insert")

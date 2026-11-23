@@ -69,9 +69,9 @@ impl Component for TerminalHints {
         }
     }
 
-    fn init(&mut self, ctx: &mut Context<Self>) -> Option<Command> {
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
         ctx.request_focus(TERMINAL_KEY);
-        None
+        Update::none()
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
@@ -79,7 +79,7 @@ impl Component for TerminalHints {
             return KeyUpdate::unhandled(Update::none());
         };
         ctx.link().send(msg);
-        KeyUpdate::handled(Update::full())
+        KeyUpdate::handled(Update::render())
     }
 
     fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
@@ -117,7 +117,7 @@ impl Component for TerminalHints {
                 return Update::none();
             }
         }
-        Update::full()
+        Update::render()
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {
@@ -162,7 +162,7 @@ impl Component for TerminalHints {
             .gap(1)
             .child(
                 Frame::new()
-                    .header_left("Terminal hints / scan + label + decorate")
+                    .title("Terminal hints / scan + label + decorate")
                     .border(true)
                     .padding(0)
                     .child(terminal.key(TERMINAL_KEY)),
@@ -343,10 +343,10 @@ fn activate_hint(index: usize, open: bool, ctx: &mut Context<TerminalHints>) -> 
                 ctx.state.status = format!("Open failed ({error}): {text}");
             }
         }
-        return Update::full();
+        return Update::render();
     }
     if !copy_hint(&text, ctx) {
-        return Update::full();
+        return Update::render();
     }
 
     ctx.state.copy_flash = Some(selection);
@@ -354,7 +354,7 @@ fn activate_hint(index: usize, open: bool, ctx: &mut Context<TerminalHints>) -> 
     if let Some(node_id) = ctx.focused_node_id() {
         ctx.flash_copy_feedback(node_id);
     }
-    Update::with_command(Command::after(
+    Update::render_with_command(Command::after(
         Duration::from_millis(COPY_FLASH_MS),
         |link: CommandLink<Msg>| link.send(Msg::ClearCopyFlash),
     ))

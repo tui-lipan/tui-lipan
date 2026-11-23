@@ -267,6 +267,11 @@ impl<C: Component> AppRunner<C> {
 
         text_area.cursor = snapshot.cursor.min(max_cursor);
         text_area.anchor = snapshot.anchor.map(|anchor| anchor.min(max_cursor));
+        text_area.uncontrolled.update_reconciled_cursor(
+            text_area.value.as_ref(),
+            text_area.cursor,
+            text_area.anchor,
+        );
         text_area.scroll_offset = snapshot.scroll_offset.min(max_scroll_offset);
         text_area.scroll_override = snapshot
             .scroll_override
@@ -636,8 +641,7 @@ impl<C: Component> AppRunner<C> {
             reconcile_result?;
         }
 
-        self.dirty_component_scopes.clear();
-        self.dirty_scope_set.clear();
+        self.clear_dirty_scopes();
         #[cfg(feature = "devtools")]
         let reconcile_duration = reconcile_start.elapsed();
         #[cfg(feature = "profiling-tracing")]
@@ -685,23 +689,18 @@ impl<C: Component> AppRunner<C> {
             crate::core::nested::set_frame_diagnostics_enabled(enabled);
         }
 
-        if !self.dirty_component_scopes.is_empty()
-            && !self.core.refresh_cached_scopes(
-                &self.dirty_component_scopes,
-                bounds,
-                self.mouse.hovered,
-            )
+        let scopes = self.take_dirty_scopes();
+        if !scopes.is_empty()
+            && !self
+                .core
+                .refresh_cached_scopes(&scopes, bounds, self.mouse.hovered)
         {
             crate::debug::internal_log!(
                 "[tui-lipan] layout-only fallback: refresh_cached_scopes failed for {:?}",
-                self.dirty_component_scopes
+                scopes
             );
-            self.dirty_component_scopes.clear();
-            self.dirty_scope_set.clear();
             return self.render(terminal);
         }
-        self.dirty_component_scopes.clear();
-        self.dirty_scope_set.clear();
 
         self.push_drag_layout_collapse_hint();
         let text_area_drag_snapshot = self.active_text_area_drag_snapshot();
@@ -756,21 +755,18 @@ impl<C: Component> AppRunner<C> {
                         return Ok(true);
                     }
                     DirtyLevel::LayoutOnly => {
-                        if !self.dirty_component_scopes.is_empty()
-                            && !self.core.refresh_cached_scopes(
-                                &self.dirty_component_scopes,
-                                bounds,
-                                self.mouse.hovered,
-                            )
+                        let scopes = self.take_dirty_scopes();
+                        if !scopes.is_empty()
+                            && !self
+                                .core
+                                .refresh_cached_scopes(&scopes, bounds, self.mouse.hovered)
                         {
                             crate::debug::internal_log!(
                                 "[tui-lipan] layout-only fallback: render-time refresh_cached_scopes failed for {:?}",
-                                self.dirty_component_scopes
+                                scopes
                             );
                             return Ok(true);
                         }
-                        self.dirty_component_scopes.clear();
-                        self.dirty_scope_set.clear();
                     }
                     DirtyLevel::PaintOnly | DirtyLevel::DamagePaintOnly | DirtyLevel::None => {
                         return Ok(false);
@@ -879,8 +875,7 @@ impl<C: Component> AppRunner<C> {
         self.last_frame_snapshot = None;
         self.scroll_diff_snapshot = None;
         self.last_scroll_frames.clear();
-        self.dirty_component_scopes.clear();
-        self.dirty_scope_set.clear();
+        self.clear_dirty_scopes();
 
         self.flush_transcript_document_entries(terminal, document)?;
         self.finalize_after_reconcile(terminal, DrawMode::Full)?;
@@ -1237,13 +1232,13 @@ impl<C: Component> AppRunner<C> {
             return;
         };
         let bounds = self.content_bounds(size.width, size.height);
-        let theme = self.core.theme.clone();
-        self.core.ctx.set_viewport(bounds);
-        self.core.ctx.set_active_theme(theme);
-        let current = self.core.component.view(&self.core.ctx);
+        let core = &mut *self.core;
+        core.ctx.set_viewport(bounds);
+        core.ctx.set_active_theme(&core.theme);
+        let current = core.component.view(&core.ctx);
         if !crate::core::element_debug::debug_element_tree_eq(&prev, &current) {
             crate::debug::internal_log!(
-                "[tui-lipan] Update::paint() at root but root view() output changed; use Update::layout() or Update::full() instead"
+                "[tui-lipan] Update::paint() at root but root view() output changed; use Update::render() or Update::full() instead"
             );
         }
     }
@@ -1908,8 +1903,8 @@ mod tests {
     struct MemoMetricsChild;
 
     #[cfg(feature = "devtools")]
-    struct ViewMetricsPublisher {
-        publications: Rc<Cell<usize>>,
+    struct MetricsViewCounter {
+        app_views: Rc<Cell<usize>>,
     }
 
     enum ViewportChangeMsg {
@@ -1960,7 +1955,7 @@ mod tests {
     }
 
     #[cfg(feature = "devtools")]
-    impl Component for ViewMetricsPublisher {
+    impl Component for MetricsViewCounter {
         type Message = ();
         type Properties = ();
         type State = ();
@@ -1971,15 +1966,13 @@ mod tests {
             Update::none()
         }
 
-        fn view(&self, ctx: &Context<Self>) -> crate::core::element::Element {
-            let publication = self.publications.get() + 1;
-            self.publications.set(publication);
-            ctx.set_devtools_metrics(|| {
-                [crate::DevToolsMetric::new(
-                    "Age",
-                    format!("{publication} ms"),
-                )]
-            });
+        fn init(&mut self, ctx: &mut Context<Self>) -> Update {
+            ctx.set_devtools_metrics(|| [crate::DevToolsMetric::new("Age", "1 ms")]);
+            Update::none()
+        }
+
+        fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
+            self.app_views.set(self.app_views.get() + 1);
             Text::new("metrics").into()
         }
     }
@@ -2259,7 +2252,7 @@ mod tests {
             .incremental_cursor_position()
             .expect("cursor position should be known from widget state");
 
-        assert_eq!(cursor, Position::new(1, 8));
+        assert_eq!(cursor, Position::new(0, 7));
     }
 
     /// Paint the tree the way `draw_current_tree` does, returning the cells and caret it drew.
@@ -2968,7 +2961,7 @@ mod tests {
     #[cfg(feature = "devtools")]
     #[test]
     fn app_metric_rows_share_context_storage_with_panel_state() {
-        let runner = AppRunner::new(App::new().mouse(false), ScrollWithInput, ());
+        let mut runner = AppRunner::new(App::new().mouse(false), ScrollWithInput, ());
         runner.core.ctx.set_devtools_metrics(|| {
             [
                 crate::DevToolsMetric::new("Panes", "4"),
@@ -2988,12 +2981,12 @@ mod tests {
 
     #[cfg(feature = "devtools")]
     #[test]
-    fn view_published_app_metrics_render_in_same_frame_without_requesting_another() {
-        let publications = Rc::new(Cell::new(0));
+    fn metrics_set_in_init_appear_in_the_first_frame() {
+        let app_views = Rc::new(Cell::new(0));
         let mut runner = AppRunner::new(
             App::new().mouse(false),
-            ViewMetricsPublisher {
-                publications: Rc::clone(&publications),
+            MetricsViewCounter {
+                app_views: Rc::clone(&app_views),
             },
             (),
         );
@@ -3009,13 +3002,8 @@ mod tests {
         };
         runner.core.init();
         runner.core.render_element(viewport, None, None, None);
-        assert_eq!(publications.get(), 1);
+        assert_eq!(app_views.get(), 1);
         assert!(tree_contains_text(&runner.core.tree, "1 ms"));
-        assert!(!runner.apply_pending_devtools_request());
-
-        runner.core.render_element(viewport, None, None, None);
-        assert_eq!(publications.get(), 2);
-        assert!(tree_contains_text(&runner.core.tree, "2 ms"));
         assert!(!runner.apply_pending_devtools_request());
     }
 
@@ -3025,11 +3013,11 @@ mod tests {
     #[cfg(feature = "devtools")]
     #[test]
     fn devtools_panel_refreshes_alone_and_matches_a_full_paint() {
-        let publications = Rc::new(Cell::new(0));
+        let app_views = Rc::new(Cell::new(0));
         let mut runner = AppRunner::new(
             App::new().mouse(false),
-            ViewMetricsPublisher {
-                publications: Rc::clone(&publications),
+            MetricsViewCounter {
+                app_views: Rc::clone(&app_views),
             },
             (),
         );
@@ -3039,7 +3027,7 @@ mod tests {
         let mut terminal =
             crate::backend::ratatui_backend::create_test_terminal(60, 20).expect("test terminal");
         runner.render(&mut terminal).expect("app frame");
-        assert_eq!(publications.get(), 1);
+        assert_eq!(app_views.get(), 1);
         assert_eq!(runner.devtools_state.borrow().frame_history.len(), 1);
 
         // Rows published outside `view()` reach the panel without an app frame.
@@ -3056,7 +3044,7 @@ mod tests {
             .expect("panel refresh");
 
         assert!(tree_contains_text(&runner.core.tree, "from update"));
-        assert_eq!(publications.get(), 1, "the app's view must not run");
+        assert_eq!(app_views.get(), 1, "the app's view must not run");
         assert_eq!(
             runner.devtools_state.borrow().frame_history.len(),
             1,
@@ -3096,11 +3084,11 @@ mod tests {
     #[cfg(feature = "devtools")]
     #[test]
     fn devtools_panel_interaction_is_not_an_app_frame() {
-        let publications = Rc::new(Cell::new(0));
+        let app_views = Rc::new(Cell::new(0));
         let mut runner = AppRunner::new(
             App::new().mouse(false),
-            ViewMetricsPublisher {
-                publications: Rc::clone(&publications),
+            MetricsViewCounter {
+                app_views: Rc::clone(&app_views),
             },
             (),
         );
@@ -3148,7 +3136,7 @@ mod tests {
             !runner.frame_rendered && !runner.host_frame_presented,
             "a panel refresh is not a painted app frame"
         );
-        assert_eq!(publications.get(), 1, "the app's view must not run");
+        assert_eq!(app_views.get(), 1, "the app's view must not run");
         assert_eq!(runner.devtools_state.borrow().frame_history.len(), frames);
         let panel = runner.devtools_panel_rect().expect("panel");
         assert_eq!(panel.w, 60, "the Logs tab spans the width");
@@ -3178,7 +3166,7 @@ mod tests {
         runner.apply_component_update(
             &mut dirty,
             log_view,
-            crate::core::component::UpdateLevel::Layout,
+            crate::core::component::UpdateLevel::Render,
         );
         assert_eq!(
             dirty.level(),
@@ -3353,8 +3341,8 @@ mod tests {
 
         let mut runner = AppRunner::new(
             App::new().mouse(false),
-            ViewMetricsPublisher {
-                publications: Rc::new(Cell::new(0)),
+            MetricsViewCounter {
+                app_views: Rc::new(Cell::new(0)),
             },
             (),
         );
@@ -3450,9 +3438,9 @@ mod tests {
 
             fn create_state(&self, _props: &Self::Properties) -> Self::State {}
 
-            fn init(&mut self, ctx: &mut Context<Self>) -> Option<Command> {
+            fn init(&mut self, ctx: &mut Context<Self>) -> Update {
                 ctx.set_title("child");
-                None
+                Update::none()
             }
 
             fn update(&mut self, _msg: (), _ctx: &mut Context<Self>) -> Update {
@@ -3475,9 +3463,9 @@ mod tests {
 
             fn create_state(&self, _props: &Self::Properties) -> Self::State {}
 
-            fn init(&mut self, ctx: &mut Context<Self>) -> Option<Command> {
+            fn init(&mut self, ctx: &mut Context<Self>) -> Update {
                 ctx.set_title("root");
-                None
+                Update::none()
             }
 
             fn update(&mut self, _msg: (), _ctx: &mut Context<Self>) -> Update {

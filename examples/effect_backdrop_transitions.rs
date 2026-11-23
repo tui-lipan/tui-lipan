@@ -180,7 +180,7 @@ fn screen_view(index: usize, style: Kind) -> Element {
         body = body.child(Text::new(line).style(text));
     }
     Frame::new()
-        .header_left(screen.title)
+        .title(screen.title)
         .footer_left(format!(
             "space next screen | t transition: {} | q quit",
             style.label()
@@ -226,7 +226,7 @@ impl Component for Transitions {
             }
             Msg::CycleStyle => ctx.state.style = (ctx.state.style + 1) % STYLES.len(),
         }
-        Update::full()
+        Update::render()
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {

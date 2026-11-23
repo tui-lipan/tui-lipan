@@ -33,12 +33,13 @@ check() {
 }
 
 check "Widget variant parity" python3 scripts/check-widget-variant-parity.py
+check "Crate-root / prelude export parity" python3 scripts/check-export-parity.py
 check "Generated NodeKind delegation" python3 scripts/generate-node-kind-delegate-arms.py
 check "Generated widget defaults" python3 scripts/generate-widget-defaults.py --check
 check "Widget style slots" python3 scripts/check-widget-style-slots.py
 check "Disabled/focus rule" python3 scripts/check-disabled-focus.py
 check "children()/child() ordering" python3 scripts/check-children-replace.py
-check "Release tooling" python3 -m unittest scripts.test_release_notes scripts.test_bump_version
+check "Release tooling" python3 -m unittest scripts.test_release_notes scripts.test_bump_version scripts.test_export_parity
 check "Terminal corpus" python3 scripts/capture-terminal-corpus --check
 check "Macro and Rust formatting" check_macro_and_rust_formatting
 check "Documented feature tables" python3 scripts/check-feature-tables.py

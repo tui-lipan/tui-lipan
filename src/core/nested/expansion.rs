@@ -804,52 +804,40 @@ impl ComponentRegistry {
                 .prev_memo(path, memo.call_site)
                 .map(|cached| (cached.expanded_child.clone(), cached.descendant_ids.clone()))
                 .expect("hit implies a previous memo entry");
-            let needs_refresh = descendant_ids
-                .iter()
-                .copied()
-                .any(|id| self.component_subtree_needs_refresh(id));
-            if needs_refresh {
-                let descendant_ids =
-                    collect_component_ids_in_element(&expanded_child, &self.scope_to_id);
-                for child_id in descendant_ids {
-                    if !self.component_subtree_needs_refresh(child_id) {
-                        continue;
-                    }
-                    let replacement = self.expand_component_instance(child_id, epoch, viewport);
-                    let scope = self.arena.get(child_id).scope;
-                    let mut replacement = Some(replacement);
-                    if expanded_child.replace_group_child_by_scope(scope, &mut replacement) {
-                        continue;
-                    } else {
-                        #[cfg(feature = "devtools")]
-                        record_memo_miss(MemoMissReason::ViewMemoStructureChanged);
-                        let rebuilt = (memo.builder)();
-                        let mut expanded = self.expand_children(
-                            host,
-                            parent,
-                            path,
-                            vec![rebuilt],
-                            epoch,
-                            viewport,
-                        );
-                        let mut child = expanded
-                            .pop()
-                            .unwrap_or_else(|| crate::widgets::Text::new("").into());
-                        let descendant_ids =
-                            collect_component_ids_in_element(&child, &self.scope_to_id);
-                        host.set_next_memo(
-                            path,
-                            memo.call_site,
-                            MemoCacheEntry {
-                                deps_hash: memo.deps_hash,
-                                expanded_child: child.clone(),
-                                descendant_ids,
-                            },
-                        );
-                        path.pop();
-                        child.pointer_focus &= pointer_focus;
-                        return metadata.apply_to(child);
-                    }
+            // Expanding a component here also updates its descendants, even through a
+            // memoized view. Only refresh component roots within this cached element.
+            for child_id in descendant_ids {
+                if !self.memo_root_needs_refresh(child_id, parent) {
+                    continue;
+                }
+                let replacement = self.expand_component_instance(child_id, epoch, viewport);
+                let scope = self.arena.get(child_id).scope;
+                let mut replacement = Some(replacement);
+                if expanded_child.replace_group_child_by_scope(scope, &mut replacement) {
+                    continue;
+                } else {
+                    #[cfg(feature = "devtools")]
+                    record_memo_miss(MemoMissReason::ViewMemoStructureChanged);
+                    let rebuilt = (memo.builder)();
+                    let mut expanded =
+                        self.expand_children(host, parent, path, vec![rebuilt], epoch, viewport);
+                    let mut child = expanded
+                        .pop()
+                        .unwrap_or_else(|| crate::widgets::Text::new("").into());
+                    let descendant_ids =
+                        collect_component_ids_in_element(&child, &self.scope_to_id);
+                    host.set_next_memo(
+                        path,
+                        memo.call_site,
+                        MemoCacheEntry {
+                            deps_hash: memo.deps_hash,
+                            expanded_child: child.clone(),
+                            descendant_ids,
+                        },
+                    );
+                    path.pop();
+                    child.pointer_focus &= pointer_focus;
+                    return metadata.apply_to(child);
                 }
             }
             #[cfg(feature = "devtools")]
@@ -868,6 +856,9 @@ impl ComponentRegistry {
         };
 
         let descendant_ids = collect_component_ids_in_element(&child, &self.scope_to_id);
+        for &id in &descendant_ids {
+            self.keep_mounted(id, epoch);
+        }
         host.set_next_memo(
             path,
             memo.call_site,

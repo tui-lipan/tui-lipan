@@ -83,21 +83,21 @@ impl Component for InlineListPicker {
                 ctx.state.query.set_cursor_keep_anchor(event.cursor);
                 ctx.state.query.set_anchor(event.anchor);
                 ctx.state.selected = 0;
-                Update::full()
+                Update::render()
             }
             Msg::Selected(event) => {
                 ctx.state.selected = event.index;
-                Update::full()
+                Update::render()
             }
             Msg::ScrollTo(index) => {
                 ctx.state.selected = index;
-                Update::full()
+                Update::render()
             }
             Msg::Activate => {
                 let filtered = filtered_commands(ctx.state.query.text());
                 if filtered.is_empty() {
                     ctx.state.status = "No command matches this query".to_string();
-                    return Update::full();
+                    return Update::render();
                 }
 
                 let selected = ctx.state.selected.min(filtered.len().saturating_sub(1));
@@ -110,7 +110,7 @@ impl Component for InlineListPicker {
 
                 ctx.state.executed = next;
                 ctx.state.status = format!("Queued: {}", command.hint);
-                Update::full()
+                Update::render()
             }
         }
     }
@@ -119,11 +119,11 @@ impl Component for InlineListPicker {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('Q') => {
                 ctx.quit();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('m') | KeyCode::Char('M') => {
                 ctx.toggle_mouse_capture();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             _ => KeyUpdate::unhandled(Update::none()),
         }
@@ -141,7 +141,7 @@ impl Component for InlineListPicker {
         });
 
         Frame::new()
-            .header_left("Inline list picker")
+            .title("Inline list picker")
             .border(true)
             .border_style(BorderStyle::Rounded)
             .padding(1)
@@ -163,10 +163,7 @@ impl Component for InlineListPicker {
                             .placeholder("Filter commands")
                             .border(true)
                             .on_change(ctx.link().callback(Msg::QueryChanged))
-                            .on_key(ctx.link().key_handler(|key| match key.code {
-                                KeyCode::Enter => Some(Msg::Activate),
-                                _ => None,
-                            })),
+                            .on_submit(ctx.link().callback(|_| Msg::Activate)),
                     )
                     .child(
                         List::new()

@@ -132,34 +132,34 @@ impl Component for MarkdownHub {
             }
         }
 
-        Update::full()
+        Update::render()
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => {
                 ctx.quit();
-                return KeyUpdate::handled(Update::full());
+                return KeyUpdate::handled(Update::render());
             }
             KeyCode::Char('w') if ctx.state.active_tab == 1 => {
                 ctx.state.table_wrap = !ctx.state.table_wrap;
-                return KeyUpdate::handled(Update::full());
+                return KeyUpdate::handled(Update::render());
             }
             KeyCode::Char('m') if ctx.state.active_tab == 1 => {
                 ctx.state.width_fill = !ctx.state.width_fill;
-                return KeyUpdate::handled(Update::full());
+                return KeyUpdate::handled(Update::render());
             }
             KeyCode::Char('p') if ctx.state.active_tab == 1 => {
                 ctx.state.table_padding = if ctx.state.table_padding == 0 { 1 } else { 0 };
-                return KeyUpdate::handled(Update::full());
+                return KeyUpdate::handled(Update::render());
             }
             KeyCode::Char('n') if ctx.state.active_tab == 1 => {
                 ctx.state.column_separators = !ctx.state.column_separators;
-                return KeyUpdate::handled(Update::full());
+                return KeyUpdate::handled(Update::render());
             }
             KeyCode::Char('o') if ctx.state.active_tab == 1 => {
                 ctx.state.outer_frame = !ctx.state.outer_frame;
-                return KeyUpdate::handled(Update::full());
+                return KeyUpdate::handled(Update::render());
             }
             KeyCode::Char('r') if ctx.state.active_tab == 1 => {
                 ctx.state.row_separators = match ctx.state.row_separators {
@@ -167,11 +167,11 @@ impl Component for MarkdownHub {
                     TableRowSeparators::Header => TableRowSeparators::All,
                     TableRowSeparators::All => TableRowSeparators::None,
                 };
-                return KeyUpdate::handled(Update::full());
+                return KeyUpdate::handled(Update::render());
             }
             KeyCode::Char('b') if ctx.state.active_tab == 1 => {
                 ctx.state.border_style_idx = (ctx.state.border_style_idx + 1) % BORDER_STYLES.len();
-                return KeyUpdate::handled(Update::full());
+                return KeyUpdate::handled(Update::render());
             }
             _ => {}
         }
@@ -201,7 +201,7 @@ impl Component for MarkdownHub {
             )
             .child(
                 Frame::new()
-                    .header_left(format!("Markdown Hub - {title}"))
+                    .title(format!("Markdown Hub - {title}"))
                     .border(true)
                     .padding(1)
                     .height(Length::Flex(1))

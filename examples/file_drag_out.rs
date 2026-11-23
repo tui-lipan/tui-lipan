@@ -36,7 +36,7 @@ impl Component for Files {
             DropOperation::None => format!("Canceled {}", names.join(", ")),
             operation => format!("{operation:?} of {}", names.join(", ")),
         };
-        Update::full()
+        Update::render()
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {

@@ -219,7 +219,7 @@ impl Component for Demo {
             }
             Msg::Quit => ctx.quit(),
         }
-        Update::full()
+        Update::render()
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
@@ -235,7 +235,7 @@ impl Component for Demo {
         match msg {
             Some(m) => {
                 self.update(m, ctx);
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             None => KeyUpdate::unhandled(Update::none()),
         }
@@ -265,17 +265,13 @@ impl Component for Demo {
         let (title_t, blurb_t) = OPACITY_TARGET_PAGES[ctx.state.target_slot];
 
         let fg_bg_block = Animated::new(
-            Frame::new()
-                .header_left(title_b)
-                .border(true)
-                .padding(1)
-                .child(
-                    VStack::new()
-                        .gap(1)
-                        .child(Text::new("Fg + bg on Animated").style(Style::new().bold()))
-                        .child(Text::new(blurb_b))
-                        .key(format!("fg-bg-{}", ctx.state.fg_bg_slot)),
-                ),
+            Frame::new().title(title_b).border(true).padding(1).child(
+                VStack::new()
+                    .gap(1)
+                    .child(Text::new("Fg + bg on Animated").style(Style::new().bold()))
+                    .child(Text::new(blurb_b))
+                    .key(format!("fg-bg-{}", ctx.state.fg_bg_slot)),
+            ),
         )
         .fg(fg_b)
         .bg(bg_b)
@@ -296,7 +292,7 @@ impl Component for Demo {
         .on_opacity_transition_end(ctx.link().callback(|_| Msg::OpacityEndFgOnly));
 
         let frame_block = Frame::new()
-            .header_left("Fixed frame background")
+            .title("Fixed frame background")
             .border(true)
             .padding(1)
             .style(Style::new().bg(Color::Rgb(36, 40, 48)))
@@ -316,7 +312,7 @@ impl Component for Demo {
             );
 
         let target_block = Frame::new()
-            .header_left("opacity_target(Color::Red)")
+            .title("opacity_target(Color::Red)")
             .border(true)
             .padding(1)
             .style(Style::new().bg(Color::Rgb(28, 32, 40)))
@@ -339,7 +335,7 @@ impl Component for Demo {
         let crossfade_block = crossfade(ctx);
 
         Frame::new()
-            .header_left("Sequential Animated swap")
+            .title("Sequential Animated swap")
             .footer_left(
                 "[1] fg+bg  [2] fg only  [3] frame+fg  [4] opacity target  [5] crossfade  [q] quit",
             )
@@ -387,7 +383,7 @@ fn crossfade(ctx: &Context<Demo>) -> Element {
     let opacity = ctx.transition(KEY, 1.0, CROSSFADE);
     let (fg, bg, title, body) = CROSSFADE_PAGES[slot];
     let page = Frame::new()
-        .header_left(title)
+        .title(title)
         .border(true)
         // Each page covers the last: replace its title rather than keep it as a neighbour's.
         .border_merge_mode(BorderMergeMode::Replace)
@@ -409,7 +405,7 @@ fn crossfade(ctx: &Context<Demo>) -> Element {
 fn main() -> Result<()> {
     App::new()
         .title("tui-lipan - Sequential Animated swap")
-        .terminal_bg(query_host_colors().map(|c| c.bg))
+        .host_background_hint(query_host_colors().map(|c| c.bg))
         .mount(Demo)
         .run()
 }

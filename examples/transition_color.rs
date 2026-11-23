@@ -40,11 +40,11 @@ impl Component for TransitionColorDemo {
         match key.code {
             KeyCode::Char(' ') | KeyCode::Enter => {
                 ctx.state.active = !ctx.state.active;
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('q') | KeyCode::Esc => {
                 ctx.quit();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             _ => KeyUpdate::unhandled(Update::none()),
         }
@@ -80,7 +80,7 @@ impl Component for TransitionColorDemo {
             ctx.transition::<f32>("box-progress", if active { 1.0 } else { 0.0 }, scalar_cfg);
 
         let animated_box = Frame::new()
-            .header_left("With transition")
+            .title("With transition")
             .border(true)
             .border_style(BorderStyle::Rounded)
             .style(Style::new().bg(bg).fg(fg))
@@ -97,7 +97,7 @@ impl Component for TransitionColorDemo {
             );
 
         let plain_box = Frame::new()
-            .header_left("Without transition (snap)")
+            .title("Without transition (snap)")
             .border(true)
             .border_style(BorderStyle::Rounded)
             .style(
@@ -121,7 +121,7 @@ impl Component for TransitionColorDemo {
             );
 
         Frame::new()
-            .header_left("ctx.transition(...) — property-scoped animation")
+            .title("ctx.transition(...) — property-scoped animation")
             .footer_left("SPACE toggle • Q quit")
             .border(true)
             .border_style(BorderStyle::Rounded)

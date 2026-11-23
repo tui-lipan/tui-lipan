@@ -1,3 +1,6 @@
+#[path = "suites/contracts/exports.rs"]
+mod exports;
+
 #[allow(dead_code)]
 #[path = "suites/contracts/inline_surface_fixture.rs"]
 mod inline_surface_fixture;

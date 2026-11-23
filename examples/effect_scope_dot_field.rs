@@ -665,7 +665,7 @@ impl Component for DotFieldDemo {
         match msg {
             Msg::TabChanged(event) => {
                 ctx.state.active_variant = event.index.min(VARIANT_TITLES.len() - 1);
-                Update::full()
+                Update::render()
             }
             Msg::NeonMouseMove(event) => {
                 let phase = ctx.effect_phase();
@@ -721,11 +721,11 @@ impl Component for DotFieldDemo {
                     last_move_phase: phase,
                     acquired,
                 });
-                Update::full()
+                Update::render()
             }
             Msg::NeonHover(false) => {
                 ctx.state.neon_pointer = None;
-                Update::full()
+                Update::render()
             }
             Msg::NeonHover(true) => Update::none(),
         }
@@ -735,7 +735,7 @@ impl Component for DotFieldDemo {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => {
                 ctx.quit();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Left => {
                 ctx.state.active_variant = if ctx.state.active_variant == 0 {
@@ -743,27 +743,27 @@ impl Component for DotFieldDemo {
                 } else {
                     ctx.state.active_variant - 1
                 };
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Right => {
                 ctx.state.active_variant = (ctx.state.active_variant + 1) % VARIANT_TITLES.len();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('1') => {
                 ctx.state.active_variant = 0;
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('2') => {
                 ctx.state.active_variant = 1;
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('3') => {
                 ctx.state.active_variant = 2;
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('4') => {
                 ctx.state.active_variant = 3;
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             _ => KeyUpdate::unhandled(Update::none()),
         }

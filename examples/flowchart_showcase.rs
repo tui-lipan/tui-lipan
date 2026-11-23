@@ -28,7 +28,7 @@ impl Component for FlowchartShowcase {
             Msg::EdgeClicked(event) => format!("clicked edge {} -> {}", event.from, event.to),
             Msg::ItemHovered(label) => format!("hovered {label}"),
         };
-        Update::full()
+        Update::render()
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {
@@ -103,14 +103,14 @@ impl Component for FlowchartShowcase {
                     .gap(1)
                     .child(
                         Frame::new()
-                            .header_left("Flowchart showcase")
+                            .title("Flowchart showcase")
                             .border(true)
                             .padding(1)
                             .child(chart),
                     )
                     .child(
                         Frame::new()
-                            .header_left("Decision flowchart")
+                            .title("Decision flowchart")
                             .border(true)
                             .padding(1)
                             .child(decision_chart),

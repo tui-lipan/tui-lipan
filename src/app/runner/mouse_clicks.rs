@@ -851,6 +851,16 @@ impl<C: Component> AppRunner<C> {
             if let NodeKind::TextArea(node) = &mut self.core.tree.node_mut(change.node_id).kind {
                 node.cursor = new_cursor;
                 node.anchor = new_anchor;
+                if change.on_change.is_some() {
+                    node.uncontrolled
+                        .record_reported(change.value.clone(), new_cursor, new_anchor);
+                } else {
+                    node.uncontrolled.update_reconciled_cursor(
+                        node.value.as_ref(),
+                        new_cursor,
+                        new_anchor,
+                    );
+                }
             }
 
             self.sync_textarea_vim_external_selection(
@@ -1144,6 +1154,10 @@ impl<C: Component> AppRunner<C> {
             });
 
             if let Some(cb) = &change.on_change {
+                if let NodeKind::Input(node) = &mut self.core.tree.node_mut(change.node_id).kind {
+                    node.uncontrolled
+                        .record_reported(change.value.clone(), new_cursor, new_anchor);
+                }
                 cb.emit(InputEvent {
                     value: change.value,
                     cursor: new_cursor,

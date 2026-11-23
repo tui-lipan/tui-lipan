@@ -174,19 +174,19 @@ impl Component for Yazi {
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 ctx.state.move_selection(-1);
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 ctx.state.move_selection(1);
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => {
                 ctx.state.open_selected();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Left | KeyCode::Backspace | KeyCode::Char('h') => {
                 ctx.state.go_parent();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             // Yank the selection onto the system clipboard as a *file*, not as
             // its path in text form, so pasting into a file manager or a file
@@ -201,7 +201,7 @@ impl Component for Yazi {
                     Err(err) => format!("Yank failed: {err}"),
                 };
                 ctx.toast().push(Toast::new(message));
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             // A TUI cannot start a native drag itself, so this hands the
             // selection to a small GUI helper that owns a real window and can
@@ -215,7 +215,7 @@ impl Component for Yazi {
                     Some(helper) => format!("Dragging {name} via {helper}"),
                     None => "No drag helper found - install ripdrag or dragon-drop".to_string(),
                 }));
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             _ => KeyUpdate::unhandled(Update::none()),
         }
@@ -236,7 +236,7 @@ impl Component for Yazi {
             // exact columns from rounded weights each frame.
             Msg::Resize(event) => ctx.state.split_weights = event.weights,
         }
-        Update::full()
+        Update::render()
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {

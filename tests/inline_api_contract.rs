@@ -17,7 +17,6 @@ fn root_and_prelude_export_focus_event_types() {
         old: None,
         new: Some(entry),
     };
-    let _ = App::new().on_focus_changed(|_: &FocusChanged| {});
     let _: tui_lipan::prelude::FocusChanged = changed;
     let _: tui_lipan::prelude::Tag = Tag::Input;
 }

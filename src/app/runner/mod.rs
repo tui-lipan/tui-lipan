@@ -36,6 +36,7 @@ use crate::core::component::{Component, Context};
 use crate::core::element::Element;
 use crate::core::event::KeyMods;
 use crate::core::event::{KeyCode, MouseEvent, MouseKind};
+use crate::core::nested::ComponentEvent;
 use crate::core::node::NodeId;
 use crate::runtime::{RuntimeCore, RuntimeCoreConfig};
 use crate::style::{HostTerminalColors, Rect, Theme, query_host_colors};
@@ -632,7 +633,6 @@ pub struct AppRunner<C: Component> {
     alt_tracker: crate::app::input::convert::AltTracker,
     shift_pause: crate::app::input::convert::ShiftPause,
     pointer_modifiers: crate::app::input::convert::PointerModifiers,
-    on_focus_changed: Option<crate::app::context::FocusChangedHook>,
     pub(crate) drag: DragState,
     pub(crate) mouse: MouseTrackingState,
     pub(crate) animation: AnimationState,
@@ -721,8 +721,8 @@ pub struct AppRunner<C: Component> {
     /// Tracks the last tree epoch for post-reconcile cache pruning.
     pub(crate) last_post_reconcile_epoch: u32,
     /// Nested component scopes whose cached subtree must be refreshed before
-    /// the next layout-only reconcile. Deduplicated at insert time via `dirty_scope_set`.
-    pub(crate) dirty_component_scopes: Vec<ScopeId>,
+    /// the next layout-only reconcile. Preparation filters scopes covered by a queued ancestor.
+    dirty_component_scopes: Vec<ScopeId>,
     /// Tracks which scopes are already in `dirty_component_scopes` for O(1) dedup.
     dirty_scope_set: FxHashSet<ScopeId>,
     /// Previous list `selected` index per node (for pointer-hover suppression).
@@ -996,7 +996,6 @@ impl<C: Component> AppRunner<C> {
             policy: app.focus_policy,
             ..FocusState::default()
         };
-        let on_focus_changed = app.on_focus_changed.clone();
         let last_mouse = core.ctx.env().last_mouse.clone();
         let drag = DragState::with_clock(core.ctx.env().clock.clone());
         let copy_feedback =
@@ -1017,7 +1016,6 @@ impl<C: Component> AppRunner<C> {
             alt_tracker: Default::default(),
             shift_pause: Default::default(),
             pointer_modifiers: Default::default(),
-            on_focus_changed,
             drag,
             mouse: MouseTrackingState::with_pointer_cell(last_mouse),
             animation,
@@ -1159,11 +1157,9 @@ impl<C: Component> AppRunner<C> {
                 .set_app_theme(Theme::from_host_colors(colors), false);
         }
         if colors_changed && self.core.is_initialized() {
-            let update_level = self.core.on_host_theme_changed();
+            self.core
+                .broadcast_component_event(ComponentEvent::HostTheme);
             theme_changed |= self.sync_theme_request(false);
-            if !matches!(update_level, crate::core::component::UpdateLevel::None) {
-                theme_changed = true;
-            }
         }
 
         if !(colors_changed || terminal_bg_changed || theme_changed) {
@@ -1180,7 +1176,8 @@ impl<C: Component> AppRunner<C> {
             return false;
         }
         if self.core.is_initialized() {
-            let _update_level = self.core.on_host_theme_changed();
+            self.core
+                .broadcast_component_event(ComponentEvent::HostTheme);
             self.sync_theme_request(false);
         }
         true
@@ -1546,7 +1543,7 @@ impl<C: Component> AppRunner<C> {
         })
     }
 
-    /// Update host-window focus and invoke the root lifecycle exactly once per transition.
+    /// Update host-window focus and notify mounted components exactly once per transition.
     fn set_window_focused(&mut self, focused: bool, dirty: &mut DirtyTracker) -> bool {
         if self.focus.window_focused == focused {
             return false;
@@ -1556,8 +1553,9 @@ impl<C: Component> AppRunner<C> {
         if !focused {
             self.apply_pointer_leave(dirty);
         }
-        let update_level = self.core.on_window_focus_changed(focused);
-        self.apply_root_update(dirty, update_level);
+        self.core
+            .broadcast_component_event(ComponentEvent::WindowFocus(focused));
+        self.apply_lifecycle_updates(dirty);
         true
     }
 
@@ -1594,8 +1592,9 @@ impl<C: Component> AppRunner<C> {
             return;
         }
         self.held_modifiers = modifiers;
-        let update = self.core.on_modifiers_changed(modifiers);
-        self.apply_root_update(dirty, update);
+        self.core
+            .broadcast_component_event(ComponentEvent::Modifiers(modifiers));
+        self.apply_lifecycle_updates(dirty);
     }
 
     /// Adopt a title requested through [`crate::Context::set_title`], returning whether it
@@ -2689,6 +2688,7 @@ impl<C: Component> AppRunner<C> {
                 let frame_start = Instant::now();
 
                 let mut dirty = DirtyTracker::default();
+                self.apply_lifecycle_updates(&mut dirty);
                 if std::mem::take(&mut self.render_stability_pending) {
                     dirty.merge_continuous_level(DirtyLevel::Full);
                 }
@@ -2770,6 +2770,7 @@ impl<C: Component> AppRunner<C> {
                 // unrelated input.
                 let mut actual_timeout = if dirty.is_dirty()
                     || pending_event.is_some()
+                    || !self.core.queue.borrow().is_empty()
                     || std::mem::take(&mut snapshot_answered)
                 {
                     Duration::from_millis(0)

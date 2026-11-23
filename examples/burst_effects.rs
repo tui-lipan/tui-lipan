@@ -1303,7 +1303,7 @@ impl Component for BurstEffectsDemo {
                 if ev.index != ctx.state.tab {
                     cancel_all(ctx);
                     ctx.state.tab = ev.index;
-                    return Update::full();
+                    return Update::render();
                 }
                 Update::none()
             }
@@ -1340,7 +1340,7 @@ impl Component for BurstEffectsDemo {
                     ctx.state.next_id += 1;
                     ctx.state.ripple.charge = Some((charge_id, cx, cy, 0.0));
 
-                    Update::with_command(Command::spawn(move |link| {
+                    Update::render_with_command(Command::spawn(move |link| {
                         let start = Instant::now();
                         loop {
                             if cancel.load(Ordering::Acquire) {
@@ -1375,7 +1375,7 @@ impl Component for BurstEffectsDemo {
                         aura_phase: 0.0,
                     });
 
-                    Update::with_command(Command::spawn(move |link| {
+                    Update::render_with_command(Command::spawn(move |link| {
                         let start = Instant::now();
                         loop {
                             if cancel.load(Ordering::Acquire) {
@@ -1407,7 +1407,7 @@ impl Component for BurstEffectsDemo {
                     && id == charge_id
                 {
                     *s = size;
-                    return Update::full();
+                    return Update::render();
                 }
                 Update::none()
             }
@@ -1425,7 +1425,7 @@ impl Component for BurstEffectsDemo {
                 {
                     ch.t = t;
                     ch.aura_phase = aura_phase;
-                    return Update::full();
+                    return Update::render();
                 }
                 Update::none()
             }
@@ -1466,7 +1466,7 @@ impl Component for BurstEffectsDemo {
                         },
                     ));
 
-                    Update::with_command(Command::spawn(move |link| {
+                    Update::render_with_command(Command::spawn(move |link| {
                         let start = Instant::now();
                         loop {
                             std::thread::sleep(Duration::from_millis(16));
@@ -1568,7 +1568,7 @@ impl Component for BurstEffectsDemo {
                         .map(|s| s.max_age)
                         .fold(0.0_f32, f32::max);
 
-                    Update::with_command(Command::spawn(move |link| {
+                    Update::render_with_command(Command::spawn(move |link| {
                         let l = link.clone();
                         std::thread::spawn(move || {
                             let start = Instant::now();
@@ -1663,12 +1663,12 @@ impl Component for BurstEffectsDemo {
                 {
                     r.radius = radius;
                 }
-                Update::full()
+                Update::render()
             }
 
             Msg::RRippleDone(id) => {
                 ctx.state.ripple.ripples.retain(|(rid, _)| *rid != id);
-                Update::full()
+                Update::render()
             }
 
             Msg::SnShockwaveTick { id, radius } => {
@@ -1681,12 +1681,12 @@ impl Component for BurstEffectsDemo {
                 {
                     sw.radius = radius;
                 }
-                Update::full()
+                Update::render()
             }
 
             Msg::SnShockwaveDone(id) => {
                 ctx.state.sn.shockwaves.retain(|(sid, _)| *sid != id);
-                Update::full()
+                Update::render()
             }
 
             Msg::SnSparkTick(elapsed) => {
@@ -1695,12 +1695,12 @@ impl Component for BurstEffectsDemo {
                 if all_dead {
                     ctx.state.sn.sparks.clear();
                 }
-                Update::full()
+                Update::render()
             }
 
             Msg::SnFlashTick(alpha) => {
                 ctx.state.sn.flash_alpha = alpha;
-                Update::full()
+                Update::render()
             }
 
             Msg::LetterMove(x, y) => {
@@ -1720,7 +1720,7 @@ impl Component for BurstEffectsDemo {
                         c.store(true, Ordering::Release);
                     }
                     ctx.state.letter.charge = None;
-                    return Update::full();
+                    return Update::render();
                 }
                 Update::none()
             }
@@ -1739,7 +1739,7 @@ impl Component for BurstEffectsDemo {
                 ctx.state.letter.charge_cancel = Some(Arc::clone(&cancel));
                 ctx.state.letter.charge = Some((i, 0.0));
                 let idx = i;
-                Update::with_command(Command::spawn(move |link| {
+                Update::render_with_command(Command::spawn(move |link| {
                     loop {
                         std::thread::sleep(Duration::from_millis(16));
                         if cancel.load(Ordering::Acquire) {
@@ -1759,7 +1759,7 @@ impl Component for BurstEffectsDemo {
                 {
                     *tr = (*tr + 0.06).min(2.5);
                 }
-                Update::full()
+                Update::render()
             }
 
             Msg::LetterMouseUp => {
@@ -1771,7 +1771,7 @@ impl Component for BurstEffectsDemo {
                 }
                 let Some(i) = ctx.state.letter.glyph_at_cursor() else {
                     ctx.state.letter.charge = None;
-                    return Update::full();
+                    return Update::render();
                 };
                 ctx.state.letter.charge = None;
                 let g = &ctx.state.letter.glyphs[i];
@@ -1801,7 +1801,7 @@ impl Component for BurstEffectsDemo {
                     letter_meta.push((lid, delay, cancel_l));
                 }
 
-                Update::with_command(Command::spawn(move |link| {
+                Update::render_with_command(Command::spawn(move |link| {
                     let c2 = Arc::clone(&cancel_r);
                     let l = link.clone();
                     std::thread::spawn(move || {
@@ -1860,7 +1860,7 @@ impl Component for BurstEffectsDemo {
                     }
                     ctx.state.letter.ripples.retain(|(rid, _, _, _)| *rid != id);
                 }
-                Update::full()
+                Update::render()
             }
 
             Msg::LetterGlyphRippleTick { id, dr } => {
@@ -1889,7 +1889,7 @@ impl Component for BurstEffectsDemo {
                         .letter_ripples
                         .retain(|(rid, _, _)| *rid != id);
                 }
-                Update::full()
+                Update::render()
             }
 
             Msg::OpenCodeMove(x, y) => {
@@ -1945,7 +1945,7 @@ impl Component for BurstEffectsDemo {
                     glyph_id,
                 });
 
-                Update::with_command(Command::spawn(move |link| {
+                Update::render_with_command(Command::spawn(move |link| {
                     let start = Instant::now();
                     loop {
                         std::thread::sleep(Duration::from_millis(16));
@@ -1991,7 +1991,7 @@ impl Component for BurstEffectsDemo {
                 {
                     charge.rise = rise;
                     charge.phase = phase;
-                    return Update::full();
+                    return Update::render();
                 }
                 Update::none()
             }
@@ -2011,7 +2011,7 @@ impl Component for BurstEffectsDemo {
                     .map(|start| start.elapsed().as_secs_f32())
                     .unwrap_or(0.05);
                 let Some(charge) = ctx.state.opencode.charge.take() else {
-                    return Update::full();
+                    return Update::render();
                 };
                 let rise = opencode_ramp(held, OC_HOLD_SECS, OC_CHARGE_SECS);
                 let level = opencode_push(rise);
@@ -2042,7 +2042,7 @@ impl Component for BurstEffectsDemo {
                     ));
                 }
 
-                Update::with_command(start_opencode_anim_ticker(ctx))
+                Update::render_with_command(start_opencode_anim_ticker(ctx))
             }
 
             Msg::OpenCodeAnimTick(dt) => {
@@ -2069,7 +2069,7 @@ impl Component for BurstEffectsDemo {
                 {
                     c.store(true, Ordering::Release);
                 }
-                Update::full()
+                Update::render()
             }
         }
     }
@@ -2078,7 +2078,7 @@ impl Component for BurstEffectsDemo {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => {
                 ctx.quit();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             _ => KeyUpdate::unhandled(Update::none()),
         }
@@ -2320,7 +2320,7 @@ impl Component for BurstEffectsDemo {
         };
 
         Frame::new()
-            .header_left(frame_title)
+            .title(frame_title)
             .border_style(BorderStyle::Rounded)
             .padding(2)
             .child(

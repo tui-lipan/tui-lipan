@@ -33,9 +33,9 @@ impl Component for ProcessMonitor {
         State { selected: 3 }
     }
 
-    fn init(&mut self, ctx: &mut Context<Self>) -> Option<Command> {
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
         ctx.request_focus("process-table");
-        None
+        Update::none()
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {
@@ -54,7 +54,7 @@ impl Component for ProcessMonitor {
             Msg::Select(event) => ctx.state.selected = event.index,
             Msg::ScrollTo(index) => ctx.state.selected = index,
         }
-        Update::full()
+        Update::render()
     }
 }
 
@@ -427,14 +427,14 @@ fn monitor_frame(title: &'static str) -> Frame {
 
 fn monitor_frame_rich(title: RichText) -> Frame {
     Frame::new()
-        .header_left(title)
+        .title(title)
         .style(Style::new().bg(PANEL).fg(BORDER))
 }
 
 fn main() -> Result<()> {
     App::new()
         .title("tui-lipan - Process Monitor")
-        .screen_background(BG)
+        .background(BG)
         .mount(ProcessMonitor)
         .run()
 }

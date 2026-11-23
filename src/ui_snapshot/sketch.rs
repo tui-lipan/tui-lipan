@@ -56,7 +56,7 @@ impl SketchViewport {
 ///
 /// fn login_screen() -> Element {
 ///     Frame::new()
-///         .header_left("Sign In")
+///         .title("Sign In")
 ///         .child(Text::new("Welcome back."))
 ///         .into()
 /// }

@@ -7,7 +7,7 @@ use crate::widgets::common::box_glyphs::{ALL_DIRECTIONS, EAST, NORTH, SOUTH, WES
 use super::node::{
     EdgeCell, FlowchartRenderOutput, PositionedEdge, PositionedNode, PositionedSubgraph,
 };
-use super::{EdgeStyle, FlowDirection, Flowchart, NodeId, NodeShape};
+use super::{EdgeStyle, FlowDirection, Flowchart, FlowchartNodeId, NodeShape};
 
 #[derive(Clone, Debug)]
 struct LayoutNode {
@@ -44,7 +44,7 @@ pub(crate) fn build_flowchart_output(flowchart: &Flowchart) -> FlowchartRenderOu
         return FlowchartRenderOutput::default();
     }
 
-    let id_to_index: HashMap<NodeId, usize> = flowchart
+    let id_to_index: HashMap<FlowchartNodeId, usize> = flowchart
         .nodes
         .iter()
         .enumerate()
@@ -86,7 +86,7 @@ pub(crate) fn build_flowchart_output(flowchart: &Flowchart) -> FlowchartRenderOu
 
 fn classify_edges(
     flowchart: &Flowchart,
-    id_to_index: &HashMap<NodeId, usize>,
+    id_to_index: &HashMap<FlowchartNodeId, usize>,
 ) -> (Vec<LayoutEdge>, HashSet<usize>) {
     let mut adjacency = vec![Vec::<(usize, usize)>::new(); flowchart.nodes.len()];
     let mut raw_edges = Vec::new();
@@ -351,7 +351,7 @@ fn place_container(
     flowchart: &Flowchart,
     layout_nodes: &[LayoutNode],
     max_layer: usize,
-    container: Option<&NodeId>,
+    container: Option<&FlowchartNodeId>,
     base: i32,
     offsets: &mut [i32],
 ) -> i32 {
@@ -362,7 +362,7 @@ fn place_container(
             (flowchart.nodes[node.spec_index].parent.as_ref() == container).then_some(index)
         })
         .collect();
-    let child_subgraph_ids: Vec<NodeId> = flowchart
+    let child_subgraph_ids: Vec<FlowchartNodeId> = flowchart
         .subgraphs
         .iter()
         .filter(|sg| sg.parent.as_ref() == container)
@@ -435,7 +435,7 @@ fn layered_group(layout_nodes: &[LayoutNode], pool: &[usize], layer: usize) -> V
     group
 }
 
-fn subgraph_header_floor(flowchart: &Flowchart, id: &NodeId) -> i32 {
+fn subgraph_header_floor(flowchart: &Flowchart, id: &FlowchartNodeId) -> i32 {
     flowchart
         .subgraphs
         .iter()
@@ -612,8 +612,8 @@ fn obstacle_rects(
     flowchart: &Flowchart,
     nodes: &[PositionedNode],
     subgraphs: &[PositionedSubgraph],
-    from: &NodeId,
-    to: &NodeId,
+    from: &FlowchartNodeId,
+    to: &FlowchartNodeId,
 ) -> Vec<Rect> {
     let mut out = Vec::new();
     for node in nodes {
@@ -631,7 +631,11 @@ fn obstacle_rects(
     out
 }
 
-fn subgraph_contains_node(flowchart: &Flowchart, subgraph_id: &NodeId, node_id: &NodeId) -> bool {
+fn subgraph_contains_node(
+    flowchart: &Flowchart,
+    subgraph_id: &FlowchartNodeId,
+    node_id: &FlowchartNodeId,
+) -> bool {
     let Some(node) = flowchart.nodes.iter().find(|node| &node.id == node_id) else {
         return false;
     };
@@ -1378,7 +1382,7 @@ fn wrap_label(label: &str, max_width: u16) -> Vec<Arc<str>> {
     lines
 }
 
-fn subgraph_depth(flowchart: &Flowchart, id: &NodeId) -> usize {
+fn subgraph_depth(flowchart: &Flowchart, id: &FlowchartNodeId) -> usize {
     let mut depth = 0usize;
     let mut current = flowchart
         .subgraphs
@@ -1406,7 +1410,7 @@ mod tests {
     use crate::style::{Color, Style};
 
     use super::*;
-    use crate::widgets::{Edge, FlowchartItemPath, NodeShape};
+    use crate::widgets::{FlowchartEdge, FlowchartItemPath, NodeShape};
 
     #[test]
     fn empty_flowchart_measures_to_chrome_only() {
@@ -1426,7 +1430,7 @@ mod tests {
             &Flowchart::new(FlowDirection::TopDown)
                 .node("A", "Start", NodeShape::Rect)
                 .node("B", "End", NodeShape::Rect)
-                .edge(Edge::solid("A", "B")),
+                .edge(FlowchartEdge::solid("A", "B")),
         );
         let a = output
             .nodes
@@ -1474,9 +1478,9 @@ mod tests {
                 .node("A", "A", NodeShape::Rect)
                 .node("B", "B", NodeShape::Rect)
                 .node("C", "C", NodeShape::Rect)
-                .edge(Edge::solid("A", "B"))
-                .edge(Edge::solid("B", "C"))
-                .edge(Edge::solid("C", "A")),
+                .edge(FlowchartEdge::solid("A", "B"))
+                .edge(FlowchartEdge::solid("B", "C"))
+                .edge(FlowchartEdge::solid("C", "A")),
         );
         assert!(
             output
@@ -1496,8 +1500,8 @@ mod tests {
                 .node("B", "B", NodeShape::Rect)
                 .node("C", "C", NodeShape::Rect)
                 .node("D", "D", NodeShape::Rect)
-                .edge(Edge::solid("A", "D"))
-                .edge(Edge::solid("B", "C")),
+                .edge(FlowchartEdge::solid("A", "D"))
+                .edge(FlowchartEdge::solid("B", "C")),
         );
         let c = output
             .nodes
@@ -1518,10 +1522,10 @@ mod tests {
             .node("A", "A", NodeShape::Rect)
             .node("B", "B", NodeShape::Rect)
             .node("C", "C", NodeShape::Rect)
-            .edge(Edge::solid("A", "C"))
-            .edge(Edge::solid("A", "B"))
-            .edge(Edge::solid("B", "C"));
-        let id_to_index: HashMap<NodeId, usize> = flowchart
+            .edge(FlowchartEdge::solid("A", "C"))
+            .edge(FlowchartEdge::solid("A", "B"))
+            .edge(FlowchartEdge::solid("B", "C"));
+        let id_to_index: HashMap<FlowchartNodeId, usize> = flowchart
             .nodes
             .iter()
             .enumerate()
@@ -1589,10 +1593,10 @@ mod tests {
                 .subgraph("sg", "Group", |b| {
                     b.node("A", "A", NodeShape::Rect)
                         .node("C", "C", NodeShape::Rect)
-                        .edge(Edge::solid("A", "C"))
+                        .edge(FlowchartEdge::solid("A", "C"))
                 })
                 .node("B", "B", NodeShape::Rect)
-                .edge(Edge::solid("A", "B")),
+                .edge(FlowchartEdge::solid("A", "B")),
         );
         let subgraph = output
             .subgraphs
@@ -1620,9 +1624,9 @@ mod tests {
                 .node("A", "A", NodeShape::Rect)
                 .node("B", "B", NodeShape::Rect)
                 .node("C", "C", NodeShape::Rect)
-                .edge(Edge::solid("A", "B"))
-                .edge(Edge::solid("B", "C"))
-                .edge(Edge::solid("C", "A")),
+                .edge(FlowchartEdge::solid("A", "B"))
+                .edge(FlowchartEdge::solid("B", "C"))
+                .edge(FlowchartEdge::solid("C", "A")),
         );
         let middle = output
             .nodes
@@ -1654,10 +1658,10 @@ mod tests {
                 .node("B", "Decide?", NodeShape::Diamond)
                 .node("C", "Do work", NodeShape::Rect)
                 .node("D", "End", NodeShape::Stadium)
-                .edge(Edge::solid("A", "B"))
-                .edge(Edge::solid("B", "C").label("yes"))
-                .edge(Edge::thick("C", "D"))
-                .edge(Edge::solid("C", "A").label("loop")),
+                .edge(FlowchartEdge::solid("A", "B"))
+                .edge(FlowchartEdge::solid("B", "C").label("yes"))
+                .edge(FlowchartEdge::thick("C", "D"))
+                .edge(FlowchartEdge::solid("C", "A").label("loop")),
         );
         let c = output
             .nodes
@@ -1707,10 +1711,10 @@ mod tests {
             .node("X", "X", NodeShape::Rect)
             .node("B", "B", NodeShape::Rect)
             .node("T", "T", NodeShape::Rect)
-            .edge(Edge::solid("A", "X"))
-            .edge(Edge::solid("X", "T"))
-            .edge(Edge::solid("B", "T"));
-        let id_to_index: HashMap<NodeId, usize> = flowchart
+            .edge(FlowchartEdge::solid("A", "X"))
+            .edge(FlowchartEdge::solid("X", "T"))
+            .edge(FlowchartEdge::solid("B", "T"));
+        let id_to_index: HashMap<FlowchartNodeId, usize> = flowchart
             .nodes
             .iter()
             .enumerate()
@@ -1733,8 +1737,8 @@ mod tests {
 
         assign_layers(&mut nodes, &edges);
 
-        let b = id_to_index[&NodeId::from("B")];
-        let t = id_to_index[&NodeId::from("T")];
+        let b = id_to_index[&FlowchartNodeId::from("B")];
+        let t = id_to_index[&FlowchartNodeId::from("T")];
         assert_eq!(nodes[b].layer, nodes[t].layer.saturating_sub(1));
         assert!(nodes[b].layer > 0);
     }
@@ -1745,13 +1749,13 @@ mod tests {
             &Flowchart::new(FlowDirection::TopDown)
                 .node("A", "A", NodeShape::Rect)
                 .node("B", "B", NodeShape::Rect)
-                .edge(Edge::solid("A", "B")),
+                .edge(FlowchartEdge::solid("A", "B")),
         );
         let lr = build_flowchart_output(
             &Flowchart::new(FlowDirection::LeftRight)
                 .node("A", "A", NodeShape::Rect)
                 .node("B", "B", NodeShape::Rect)
-                .edge(Edge::solid("A", "B")),
+                .edge(FlowchartEdge::solid("A", "B")),
         );
         assert!(td.height > td.width / 2);
         assert!(lr.width > lr.height / 2);
@@ -1799,7 +1803,7 @@ mod tests {
             |b| {
                 b.node("X", "Step 1", NodeShape::Rect)
                     .node("Y", "Step 2", NodeShape::Rect)
-                    .edge(Edge::solid("X", "Y"))
+                    .edge(FlowchartEdge::solid("X", "Y"))
                     .subgraph("nested", "Nested", |b| {
                         b.node("Z", "Inner", NodeShape::Rect)
                     })
@@ -1832,9 +1836,9 @@ mod tests {
                 .node("A", "A", NodeShape::Rect)
                 .node("B", "B", NodeShape::Rect)
                 .node("C", "C", NodeShape::Rect)
-                .edge(Edge::solid("A", "B"))
-                .edge(Edge::dashed("A", "C"))
-                .edge(Edge::thick("B", "C")),
+                .edge(FlowchartEdge::solid("A", "B"))
+                .edge(FlowchartEdge::dashed("A", "C"))
+                .edge(FlowchartEdge::thick("B", "C")),
         );
         for edge in &output.edges {
             if matches!(edge.style, EdgeStyle::Invisible) {
@@ -1861,10 +1865,10 @@ mod tests {
                 .node("B", "B", NodeShape::Rect)
                 .node("C", "C", NodeShape::Rect)
                 .node("D", "D", NodeShape::Rect)
-                .edge(Edge::solid("A", "B"))
-                .edge(Edge::solid("A", "C"))
-                .edge(Edge::solid("B", "D"))
-                .edge(Edge::solid("C", "D")),
+                .edge(FlowchartEdge::solid("A", "B"))
+                .edge(FlowchartEdge::solid("A", "C"))
+                .edge(FlowchartEdge::solid("B", "D"))
+                .edge(FlowchartEdge::solid("C", "D")),
         );
         for edge in &output.edges {
             for cell in &edge.cells {
@@ -1881,12 +1885,12 @@ mod tests {
             &Flowchart::new(FlowDirection::TopDown)
                 .node("A", "Start", NodeShape::Rect)
                 .node("C", "End", NodeShape::Rect)
-                .edge(Edge::solid("A", "C"))
-                .edge(Edge::solid("C", "A"))
+                .edge(FlowchartEdge::solid("A", "C"))
+                .edge(FlowchartEdge::solid("C", "A"))
                 .subgraph("processing", "Processing", |b| {
                     b.node("X", "Step 1", NodeShape::Rect)
                         .node("Y", "Step 2", NodeShape::Rect)
-                        .edge(Edge::solid("X", "Y"))
+                        .edge(FlowchartEdge::solid("X", "Y"))
                 }),
         );
         let processing = output
@@ -1916,9 +1920,9 @@ mod tests {
                 .node("A", "A", NodeShape::Rect)
                 .node("B", "B", NodeShape::Rect)
                 .node("C", "C", NodeShape::Rect)
-                .edge(Edge::solid("A", "B"))
-                .edge(Edge::solid("B", "C"))
-                .edge(Edge::solid("C", "A").label("loop")),
+                .edge(FlowchartEdge::solid("A", "B"))
+                .edge(FlowchartEdge::solid("B", "C"))
+                .edge(FlowchartEdge::solid("C", "A").label("loop")),
         );
         let back = output
             .edges

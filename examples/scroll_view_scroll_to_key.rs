@@ -111,7 +111,7 @@ impl Component for ScrollToKeyDemo {
                 ctx.state.query.set_text(event.value.as_ref());
                 ctx.state.query.set_cursor_keep_anchor(event.cursor);
                 ctx.state.query.set_anchor(event.anchor);
-                Update::full()
+                Update::render()
             }
         }
     }
@@ -120,7 +120,7 @@ impl Component for ScrollToKeyDemo {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('Q') => {
                 ctx.quit();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             _ => KeyUpdate::unhandled(Update::none()),
         }
@@ -163,7 +163,7 @@ impl Component for ScrollToKeyDemo {
         }
 
         Frame::new()
-            .header_left("ScrollView scroll_to_key")
+            .title("ScrollView scroll_to_key")
             .border(true)
             .border_style(BorderStyle::Rounded)
             .padding(1)
@@ -211,7 +211,7 @@ fn first_match_key(query: &str) -> Option<String> {
 fn render_message(message: &MessageItem) -> Element {
     Element::from(
         Frame::new()
-            .header_left(message.title)
+            .title(message.title)
             .border(true)
             .border_style(BorderStyle::Plain)
             .padding(1)

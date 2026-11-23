@@ -56,7 +56,7 @@ impl Component for GhostCanvas {
 
                 if next != ctx.state.current_frame {
                     ctx.state.current_frame = next;
-                    Update::full()
+                    Update::render()
                 } else {
                     Update::none()
                 }
@@ -68,7 +68,7 @@ impl Component for GhostCanvas {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => {
                 ctx.quit();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             _ => KeyUpdate::unhandled(Update::none()),
         }
@@ -80,7 +80,7 @@ impl Component for GhostCanvas {
             .style(Style::new().fg(GHOST_BASE_FG));
 
         Frame::new()
-            .header_left("Ghost (AsciiCanvas)")
+            .title("Ghost (AsciiCanvas)")
             .footer_left(format!(
                 "frame {}/{}",
                 ctx.state.current_frame + 1,

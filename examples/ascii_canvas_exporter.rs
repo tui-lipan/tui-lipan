@@ -522,7 +522,7 @@ fn preview_len(state: &State) -> usize {
 
 fn schedule_preview_tick(ctx: &Context<ExporterApp>) -> Update {
     if ctx.state.preview_paused || !ctx.state.show_preview || preview_len(&ctx.state) <= 1 {
-        return Update::full();
+        return Update::render();
     }
 
     let generation = ctx.state.preview_playback_gen;
@@ -535,7 +535,7 @@ fn schedule_preview_tick(ctx: &Context<ExporterApp>) -> Update {
         .unwrap_or(83)
         .max(16);
 
-    Update::with_command(ctx.link().command_keyed(
+    Update::render_with_command(ctx.link().command_keyed(
         "ascii-exporter-preview-tick",
         TaskPolicy::LatestOnly,
         move |link| {
@@ -625,7 +625,7 @@ impl Component for ExporterApp {
                     ctx.state.tab = ev.index;
                     ctx.state.show_preview = false;
                     ctx.state.preview_paused = true;
-                    return Update::full();
+                    return Update::render();
                 }
                 Update::none()
             }
@@ -633,7 +633,7 @@ impl Component for ExporterApp {
                 ctx.state.banner_placement = ctx.state.banner_placement.next();
                 ctx.state.show_preview = false;
                 ctx.state.preview_paused = true;
-                Update::full()
+                Update::render()
             }
             Msg::ExportFrame => {
                 let tab = ctx.state.tab;
@@ -662,7 +662,7 @@ impl Component for ExporterApp {
                     "Saved screenshot to {}",
                     path.display()
                 )));
-                Update::with_command(ctx.link().command_keyed(
+                Update::render_with_command(ctx.link().command_keyed(
                     "clear-status",
                     TaskPolicy::LatestOnly,
                     |link| {
@@ -697,7 +697,7 @@ impl Component for ExporterApp {
                 ctx.state.status = Some(status);
                 ctx.toast()
                     .push(Toast::new(format!("Saved animation to {}", path.display())));
-                Update::with_command(ctx.link().command_keyed(
+                Update::render_with_command(ctx.link().command_keyed(
                     "clear-status",
                     TaskPolicy::LatestOnly,
                     |link| {
@@ -741,7 +741,7 @@ impl Component for ExporterApp {
                         }
                     }
                 }
-                Update::full()
+                Update::render()
             }
             Msg::TogglePreviewPlayback => {
                 let len = preview_len(&ctx.state);
@@ -754,7 +754,7 @@ impl Component for ExporterApp {
                         "Preview playing – Space pauses".to_string()
                     });
                     if ctx.state.preview_paused {
-                        Update::full()
+                        Update::render()
                     } else {
                         schedule_preview_tick(ctx)
                     }
@@ -772,7 +772,7 @@ impl Component for ExporterApp {
                     } else {
                         ctx.state.preview_frame - 1
                     };
-                    Update::full()
+                    Update::render()
                 } else {
                     Update::none()
                 }
@@ -783,7 +783,7 @@ impl Component for ExporterApp {
                     ctx.state.preview_paused = true;
                     ctx.state.preview_playback_gen = ctx.state.preview_playback_gen.wrapping_add(1);
                     ctx.state.preview_frame = (ctx.state.preview_frame + 1) % len;
-                    Update::full()
+                    Update::render()
                 } else {
                     Update::none()
                 }
@@ -804,7 +804,7 @@ impl Component for ExporterApp {
             }
             Msg::ClearStatus => {
                 ctx.state.status = None;
-                Update::full()
+                Update::render()
             }
         }
     }
@@ -813,35 +813,35 @@ impl Component for ExporterApp {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => {
                 ctx.quit();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('b') | KeyCode::Char('B') => {
                 ctx.link().send(Msg::CycleBanner);
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('s') | KeyCode::Char('S') => {
                 ctx.link().send(Msg::ExportFrame);
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('a') | KeyCode::Char('A') => {
                 ctx.link().send(Msg::ExportAnimation);
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('p') | KeyCode::Char('P') => {
                 ctx.link().send(Msg::TogglePreview);
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char(' ') => {
                 ctx.link().send(Msg::TogglePreviewPlayback);
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Left => {
                 ctx.link().send(Msg::PrevPreviewFrame);
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Right => {
                 ctx.link().send(Msg::NextPreviewFrame);
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             _ => KeyUpdate::unhandled(Update::none()),
         }
@@ -910,7 +910,7 @@ impl Component for ExporterApp {
         let hint = controls_hint(&ctx.state);
 
         Frame::new()
-            .header_left(title)
+            .title(title)
             .footer_left(hint)
             .footer_right(status_text)
             .border_style(BorderStyle::Rounded)

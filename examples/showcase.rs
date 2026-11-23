@@ -84,33 +84,33 @@ impl Component for Showcase {
         match msg {
             Msg::SetTab(i) => {
                 ctx.state.tab = i;
-                Update::full()
+                Update::render()
             }
             Msg::ToggleAccordion(i) => {
                 if i < 3 {
                     ctx.state.acc_open[i] = !ctx.state.acc_open[i];
                 }
-                Update::full()
+                Update::render()
             }
             Msg::ToggleCmd(show) => {
                 ctx.state.show_cmd = show;
-                Update::full()
+                Update::render()
             }
             Msg::ToggleFuzzy(show) => {
                 ctx.state.show_fuzzy = show;
-                Update::full()
+                Update::render()
             }
             Msg::ToggleCtx(show) => {
                 ctx.state.show_ctx = show;
                 if !show {
                     ctx.state.ctx_anchor = None;
                 }
-                Update::full()
+                Update::render()
             }
             Msg::OpenCtx(x, y) => {
                 ctx.state.show_ctx = true;
                 ctx.state.ctx_anchor = Some((x, y));
-                Update::full()
+                Update::render()
             }
             Msg::ContextAction(index) => {
                 ctx.state.show_ctx = false;
@@ -123,40 +123,40 @@ impl Component for Showcase {
                     _ => "Action",
                 };
                 ctx.toast().push(Toast::new(format!("{} (demo)", label)));
-                Update::full()
+                Update::render()
             }
             Msg::NavSelect(path) => {
                 ctx.state.nav_path = path.segments().to_vec();
-                Update::full()
+                Update::render()
             }
             Msg::BreadcrumbSelect(index) => {
                 let take = index.min(ctx.state.nav_path.len());
                 ctx.state.nav_path = ctx.state.nav_path.iter().cloned().take(take).collect();
-                Update::full()
+                Update::render()
             }
             Msg::InputChanged(event) => {
                 ctx.state.input_value = event.value;
                 ctx.state.input_cursor = event.cursor;
                 ctx.state.input_anchor = event.anchor;
-                Update::full()
+                Update::render()
             }
             Msg::InputEdited(event) => {
                 ctx.state.last_input_edit = Some(event);
-                Update::full()
+                Update::render()
             }
             Msg::TextAreaChanged(event) => {
                 ctx.state.text_value = event.value;
                 ctx.state.text_cursor = event.cursor;
                 ctx.state.text_anchor = event.anchor;
-                Update::full()
+                Update::render()
             }
             Msg::TextAreaEdited(event) => {
                 ctx.state.last_text_edit = Some(event);
-                Update::full()
+                Update::render()
             }
             Msg::TableSelected(event) => {
                 ctx.state.table_selected = event.index;
-                Update::full()
+                Update::render()
             }
             Msg::TreeSelected(event) => {
                 let path = event
@@ -167,7 +167,7 @@ impl Component for Showcase {
                     .collect::<Vec<_>>()
                     .join(".");
                 ctx.state.tree_selection = Some(path);
-                Update::full()
+                Update::render()
             }
             Msg::ShowToast => {
                 ctx.toast().push(
@@ -190,21 +190,21 @@ impl Component for Showcase {
                         .padding((1, 2))
                         .max_width(Length::Px(56)),
                 );
-                Update::full()
+                Update::render()
             }
             Msg::ShowDefaultToast => {
                 ctx.toast()
                     .push(Toast::new("Default toast using the standard chrome.").copyable(true));
-                Update::full()
+                Update::render()
             }
             Msg::ToggleTooltip(show) => {
                 ctx.state.show_tooltip = show;
-                Update::full()
+                Update::render()
             }
             #[cfg(feature = "syntax-syntect")]
             Msg::ToggleHighlight(show) => {
                 ctx.state.highlight_on = show;
-                Update::full()
+                Update::render()
             }
             Msg::NoOp => Update::none(),
         }
@@ -313,7 +313,7 @@ impl Showcase {
                     width: Length::Flex(1),
                     gap: 1,
                     Frame {
-                        header_left: "Accordion",
+                        title: "Accordion",
                         border: true,
                         {
                             Accordion::new()
@@ -333,7 +333,7 @@ impl Showcase {
                         },
                     },
                     Frame {
-                        header_left: "Sparkline",
+                        title: "Sparkline",
                         border: true,
                         VStack {
                             gap: 1,
@@ -359,7 +359,7 @@ impl Showcase {
                     width: Length::Flex(1),
                     gap: 1,
                     Frame {
-                        header_left: "Badges",
+                        title: "Badges",
                         border: true,
                         HStack {
                             gap: 2,
@@ -378,7 +378,7 @@ impl Showcase {
                         },
                     },
                     Frame {
-                        header_left: "Tooltip",
+                        title: "Tooltip",
                         border: true,
                         Center {
                             HStack {
@@ -432,7 +432,7 @@ impl Showcase {
                 gap: 2,
                 align: Align::Stretch,
                 Frame {
-                    header_left: "Project Navigator",
+                    title: "Project Navigator",
                     border: true,
                     padding: 1,
                     width: Length::Flex(2),
@@ -446,7 +446,7 @@ impl Showcase {
                     },
                 },
                 Frame {
-                    header_left: "Quick Actions",
+                    title: "Quick Actions",
                     border: true,
                     padding: 1,
                     width: Length::Flex(1),
@@ -494,7 +494,7 @@ impl Showcase {
 
         let context_menu = ContextMenu::new(
             Frame::new()
-                .header_left("Text View")
+                .title("Text View")
                 .border(true)
                 .child(text_view),
         )
@@ -586,7 +586,7 @@ impl Showcase {
                 HStack {
                     gap: 2,
                     Frame {
-                        header_left: "Table (auto height)",
+                        title: "Table (auto height)",
                         border: true,
                         padding: 1,
                         width: Length::Flex(1),
@@ -594,7 +594,7 @@ impl Showcase {
                         table,
                     },
                     Frame {
-                        header_left: "Tree (custom icons)",
+                        title: "Tree (custom icons)",
                         border: true,
                         padding: 1,
                         width: Length::Flex(1),
@@ -618,7 +618,7 @@ impl Showcase {
                 HStack {
                     gap: 2,
                     Frame {
-                        header_left: "Input (anchor + on_edit)",
+                        title: "Input (anchor + on_edit)",
                         border: true,
                         padding: 1,
                         width: Length::Flex(1),
@@ -629,6 +629,7 @@ impl Showcase {
                                     .cursor(ctx.state.input_cursor)
                                     .anchor(ctx.state.input_anchor)
                                     .placeholder("Type to edit")
+                                    .border(true)
                                     .on_change(ctx.link().callback(Msg::InputChanged))
                                     .on_edit(ctx.link().callback(Msg::InputEdited))
                             },
@@ -643,7 +644,7 @@ impl Showcase {
                         },
                     },
                     Frame {
-                        header_left: "TextArea (anchor + on_edit)",
+                        title: "TextArea (anchor + on_edit)",
                         border: true,
                         padding: 1,
                         width: Length::Flex(1),
@@ -751,7 +752,7 @@ impl Showcase {
         }
 
         stack
-            .child(Frame::new().header_left("Example Code").child(code_area))
+            .child(Frame::new().title("Example Code").child(code_area))
             .into()
     }
 }

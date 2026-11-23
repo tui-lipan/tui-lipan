@@ -6,11 +6,10 @@ notifications. Configurable bindings and chords are documented in
 
 ## Host Window Focus
 
-Host terminal/window focus is separate from widget focus. The root `Component` can observe host
-transitions with `on_window_focus_changed(focused, ctx)`; nested components do not receive it.
-Widget `.on_focus` / `.on_blur`, `ctx.request_focus`, and traversal still describe which framework
-widget receives keyboard input. A child `Terminal` that enables CSI `?1004` receives its own focus
-sequences from the runner and is not the root lifecycle callback.
+Any mounted component can observe host window focus through
+`on_window_focus_changed(focused, ctx)`. Widget focus determines which widget receives
+keyboard input and can change through traversal or `ctx.request_focus`. A child `Terminal`
+that enables CSI `?1004` receives its own focus sequences from the runner.
 
 Losing host-window focus clears pointer hover: widget hover styles, `MouseRegion`
 `on_hover_change(false)`, toast hover pauses, and modifier-held terminal link hover. Terminals do
@@ -124,7 +123,7 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
             ctx.blur();
         }
     }
-    Update::full()
+    Update::render()
 }
 ```
 
@@ -271,28 +270,20 @@ active option is a tab stop (see [`widgets/input.md`](widgets/input.md)).
 The focusable widgets listed in [Widget Focus Controls](#widget-focus-controls) expose
 `.on_focus(Callback<()>)` and `.on_blur(Callback<()>)` for behavior local to one widget.
 
-The root component can turn every application-level transition into a normal message:
+Every mounted component can react to widget focus changes in `on_focus_changed`.
 
 ```rust
-fn on_focus_changed(&self, change: &FocusChanged) -> Option<Self::Message> {
+fn on_focus_changed(&mut self, change: &FocusChanged, ctx: &mut Context<Self>) -> Update {
     let in_editor = change
         .new
         .as_ref()
         .is_some_and(|entry| entry.is_within_key("editor"));
-    Some(Msg::EditorFocusChanged(in_editor))
+    if ctx.state.editor_focused == in_editor {
+        return Update::none();
+    }
+    ctx.state.editor_focused = in_editor;
+    Update::render()
 }
-```
-
-Only the root component receives this lifecycle call. The returned message goes through
-`update()` later; nested components do not receive the hook and focus delivery never re-enters
-reconciliation.
-
-Use `App::on_focus_changed` for synchronous diagnostics and observation:
-
-```rust
-App::new().on_focus_changed(|change: &FocusChanged| {
-    tracing::debug!(?change.old, ?change.new, "focus changed");
-})
 ```
 
 `FocusChanged` contains optional `old` and `new` `FocusEntry` values. Each entry carries the
@@ -310,14 +301,13 @@ identity:
 - A different leaf identity emits `on_blur(old)`, then `on_focus(new)`, and the app-level change.
 
 This lets a keyed input move between keyed regions without manufacturing a widget blur/focus pair,
-while the root still learns that focus entered a different region. An unkeyed focusable widget
-replaced during reconciliation may emit a blur/focus pair, so key dynamic focusables when stable
-widget callback identity matters.
+while components can still observe that focus entered a different region. An unkeyed focusable
+widget replaced during reconciliation may emit a blur/focus pair. Key dynamic focusables when
+stable widget callback identity matters.
 
-Delivery order is widget callback emission, the synchronous `App::on_focus_changed` diagnostic
-hook, then root `Component::on_focus_changed`. A message returned by the component hook is appended
-to the normal queue after link-backed widget callback messages. Their handlers call `update()`
-later in queue order.
+The runtime emits widget blur and focus callbacks first, then invokes the component hooks in
+tree order, parents before children. Link-backed widget callbacks enqueue messages for the next
+pump. A hook can also call `ctx.link().send(msg)` to queue a message after those callbacks.
 
 ## Focus Decoration
 

@@ -117,7 +117,7 @@ impl Component for ImageModesDemo {
                 ctx.state.attach_images.clear();
             }
         }
-        Update::full()
+        Update::render()
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {
@@ -156,7 +156,7 @@ impl Component for ImageModesDemo {
 
         rsx! {
             Frame {
-                header_left: "TextArea Image Modes",
+                title: "TextArea Image Modes",
                 padding: 1,
                 HStack {
                     gap: 2,

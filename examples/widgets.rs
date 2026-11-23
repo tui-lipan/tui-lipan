@@ -57,14 +57,14 @@ impl Component for WidgetDemo {
         match key.code {
             KeyCode::Esc => {
                 ctx.quit();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down => {
                 match focused_button(ctx).and_then(|cell| button_neighbor(cell, key.code)) {
                     Some(target) => {
                         ctx.request_focus(target);
                         ctx.state.status = format!("Arrow focus: {target}");
-                        KeyUpdate::handled(Update::full())
+                        KeyUpdate::handled(Update::render())
                     }
                     None => KeyUpdate::unhandled(Update::none()),
                 }
@@ -94,11 +94,11 @@ impl Component for WidgetDemo {
         };
 
         Frame::new()
-            .header_left("Widgets")
+            .title("Widgets")
             .footer_left(ctx.state.status.clone())
             .padding(1)
             .style(panel_style)
-            .header_style(Style::new().fg(Color::rgb(88, 166, 255)).bold())
+            .title_style(Style::new().fg(Color::rgb(88, 166, 255)).bold())
             .footer_style(Style {
                 fg: Some(Paint::from(Color::indexed(244))),
                 dim: Some(true),
@@ -293,6 +293,7 @@ impl Component for WidgetDemo {
                         Input::new(ctx.state.filter.text().to_owned())
                             .cursor(ctx.state.filter.cursor())
                             .placeholder("Type to filter...")
+                            .border(true)
                             .border_style(border_style)
                             .disabled(disabled)
                             .disabled_style(disabled_style)
@@ -335,14 +336,14 @@ impl Component for WidgetDemo {
                             )
                             .child(
                                 Frame::new()
-                                    .header_left("Details")
+                                    .title("Details")
                                     .padding(1)
                                     .style(
                                         Style::new()
                                             .bg(Color::indexed(236))
                                             .fg(Color::indexed(252)),
                                     )
-                                    .header_style(Style::new().fg(Color::rgb(249, 115, 22)).bold())
+                                    .title_style(Style::new().fg(Color::rgb(249, 115, 22)).bold())
                                     .border_style(border_style)
                                     .child(
                                         VStack::new()
@@ -401,20 +402,20 @@ impl Component for WidgetDemo {
                 ctx.state.filter.set_text(ev.value.as_ref().to_string());
                 ctx.state.filter.set_cursor(ev.cursor);
                 ctx.state.selected = 0;
-                Update::full()
+                Update::render()
             }
             Msg::FilterKey(key) => {
                 ctx.state.status = format!("{:?} pressed in filter", key.code);
-                Update::full()
+                Update::render()
             }
             Msg::TabChanged(ev) => {
                 ctx.state.tab = ev.index;
                 ctx.state.selected = 0;
-                Update::full()
+                Update::render()
             }
             Msg::ListSelected(ev) => {
                 ctx.state.selected = ev.index;
-                Update::full()
+                Update::render()
             }
             Msg::ListActivated(ev) => {
                 let items = filtered_items(ctx.state.tab, ctx.state.filter.text());
@@ -423,30 +424,30 @@ impl Component for WidgetDemo {
                 } else {
                     ctx.state.status = "Activated: (out of range)".to_string();
                 }
-                Update::full()
+                Update::render()
             }
             Msg::ListScrollTo(index) => {
                 ctx.state.selected = index;
-                Update::full()
+                Update::render()
             }
             Msg::Scrolled(ev) => {
                 let max = HELP_LINES.saturating_sub(1);
                 ctx.state.scroll = ev.offset.min(max);
-                Update::full()
+                Update::render()
             }
             Msg::ViewScrollTo(offset) => {
                 let max = HELP_LINES.saturating_sub(1);
                 ctx.state.scroll = offset.min(max);
-                Update::full()
+                Update::render()
             }
             Msg::Action(action) => {
                 apply_action(action, ctx);
-                Update::full()
+                Update::render()
             }
             Msg::ActionKey(action, key) => {
                 apply_action(action, ctx);
                 ctx.state.status = format!("{} (via {:?})", ctx.state.status, key.code);
-                Update::full()
+                Update::render()
             }
         }
     }

@@ -20,6 +20,7 @@ use crate::app::input::runtime_dispatch::{
     selection_clipboard_shortcut,
 };
 use crate::app::interaction_state::{DragState, MouseTrackingState, WidgetState};
+use crate::core::nested::ComponentEvent;
 
 use crate::app::focus_service::{self, FocusRefs, FocusStackEntry, OverlayKey};
 use crate::app::input::focus::FocusDirection;
@@ -87,7 +88,6 @@ pub struct TestBackend<C: Component> {
     unclassified_focus_request: Option<Key>,
     deferred_outside_focus: Option<Key>,
     last_notified_focus: Option<crate::app::focus_service::NotifiedFocus>,
-    on_focus_changed: Option<crate::app::context::FocusChangedHook>,
     pub(crate) mouse: MouseTrackingState,
     pub(crate) drag: DragState,
     pub(crate) copy_feedback: CopyFeedbackState,
@@ -255,7 +255,6 @@ where
             command_conflict_policy: app.command_conflict_policy,
             chord_mismatch_policy: app.chord_mismatch_policy,
         };
-        let on_focus_changed = app.on_focus_changed.clone();
         let last_mouse = core.ctx.env().last_mouse.clone();
         let drag = DragState::with_clock(core.ctx.env().clock.clone());
         let copy_feedback = CopyFeedbackState::new(core.ctx.env().clock.clone());
@@ -277,7 +276,6 @@ where
             unclassified_focus_request: None,
             deferred_outside_focus: None,
             last_notified_focus: None,
-            on_focus_changed,
             mouse: MouseTrackingState::with_pointer_cell(last_mouse),
             drag,
             copy_feedback,
@@ -321,7 +319,7 @@ where
     /// Simulate a host terminal palette report (as OSC 4/10/11 replies deliver at runtime).
     ///
     /// Returns `false` when the colors match the last cached report. Otherwise updates the cache,
-    /// updates the app theme when following the system theme, invokes the root component's
+    /// updates the app theme when following the system theme, invokes mounted components'
     /// [`Component::on_host_theme_changed`] callback, drains messages already available, and
     /// renders.
     pub fn set_host_terminal_colors(
@@ -335,7 +333,8 @@ where
             self.core
                 .set_app_theme(crate::Theme::from_host_colors(colors), false);
         }
-        let _level = self.core.on_host_theme_changed();
+        self.core
+            .broadcast_component_event(ComponentEvent::HostTheme);
         self.sync_theme_request(false);
         let pump_dirty = self.pump()?;
         if !pump_dirty {
@@ -347,13 +346,14 @@ where
     /// Simulate a host terminal light/dark color-scheme report (DEC mode 2031).
     ///
     /// Returns `false` when the scheme matches the last cached report. Otherwise updates the
-    /// cache, invokes the root component's [`Component::on_host_theme_changed`] callback, drains
+    /// cache, invokes mounted components' [`Component::on_host_theme_changed`] callback, drains
     /// messages already available, and renders.
     pub fn set_host_color_scheme(&mut self, scheme: crate::style::ColorScheme) -> Result<bool> {
         if !self.core.ctx.env().set_host_color_scheme(scheme) {
             return Ok(false);
         }
-        let _level = self.core.on_host_theme_changed();
+        self.core
+            .broadcast_component_event(ComponentEvent::HostTheme);
         self.sync_theme_request(false);
         let pump_dirty = self.pump()?;
         if !pump_dirty {
@@ -431,8 +431,8 @@ where
 
     /// Simulate a host terminal/window focus transition.
     ///
-    /// Calls the root component's [`Component::on_window_focus_changed`] callback once per
-    /// changed value, runs its returned command, drains messages already available, and renders
+    /// Calls mounted components' [`Component::on_window_focus_changed`] callback once per
+    /// changed value, runs the returned commands, drains messages already available, and renders
     /// when an update requests it. Losing focus also clears pointer hover. Background commands
     /// remain asynchronous; call [`Self::pump`] later to process messages they produce. This does
     /// not affect widget focus.
@@ -453,16 +453,12 @@ where
                 )
             };
         }
-        lifecycle_dirty |= !matches!(
-            self.core.on_window_focus_changed(focused),
-            crate::UpdateLevel::None
-        );
+        self.core
+            .broadcast_component_event(ComponentEvent::WindowFocus(focused));
         if !focused && !self.held_modifiers.is_empty() {
             self.held_modifiers = KeyMods::NONE;
-            lifecycle_dirty |= !matches!(
-                self.core.on_modifiers_changed(KeyMods::NONE),
-                crate::UpdateLevel::None
-            );
+            self.core
+                .broadcast_component_event(ComponentEvent::Modifiers(KeyMods::NONE));
         }
         let pump_dirty = self.pump()?;
         if lifecycle_dirty && !pump_dirty {
@@ -473,8 +469,8 @@ where
 
     /// Simulate a change to the set of physically held modifier keys.
     ///
-    /// Calls the root component's [`Component::on_modifiers_changed`] callback once per changed
-    /// value and applies its returned update. This models enhanced-keyboard modifier press/release
+    /// Calls mounted components' [`Component::on_modifiers_changed`] callback once per changed
+    /// value and applies the returned updates. This models enhanced-keyboard modifier press/release
     /// events; use [`Self::send_key`] for ordinary combined key events.
     pub fn set_held_modifiers(&mut self, modifiers: KeyMods) -> Result<bool> {
         if self.held_modifiers == modifiers {
@@ -482,14 +478,9 @@ where
         }
 
         self.held_modifiers = modifiers;
-        let lifecycle_dirty = !matches!(
-            self.core.on_modifiers_changed(modifiers),
-            crate::UpdateLevel::None
-        );
-        let pump_dirty = self.pump()?;
-        if lifecycle_dirty && !pump_dirty {
-            self.render();
-        }
+        self.core
+            .broadcast_component_event(ComponentEvent::Modifiers(modifiers));
+        self.pump()?;
         Ok(true)
     }
 
@@ -1170,6 +1161,9 @@ where
             self.sync_theme_request(true);
         }
 
+        while let Some((scope, _)) = self.core.take_lifecycle_update() {
+            dirty |= self.core.components.is_mounted_scope(scope);
+        }
         self.sync_runtime_keymap_config();
 
         dirty |= self.core.take_full_repaint_request();
@@ -1442,9 +1436,14 @@ where
             &self.core.tree,
             self.focused,
             &mut self.last_notified_focus,
-            self.on_focus_changed.as_ref(),
         ) {
-            self.core.queue_focus_changed_message(&change);
+            self.core.focus.update_from_tree(
+                &self.core.tree,
+                self.focused,
+                self.focused_key.as_ref(),
+            );
+            self.core
+                .broadcast_component_event(ComponentEvent::Focus(&change));
         }
     }
 
@@ -1518,7 +1517,7 @@ where
 
     /// Set an opt-in root viewport background fill for captures.
     ///
-    /// Mirrors `App::screen_background` for headless rendering: pass a resolved
+    /// Mirrors `App::background` for headless rendering: pass a resolved
     /// style (typically `Style::new().bg(color)`), or `None` to leave the
     /// background transparent. Useful for previewing a theme's filled backdrop.
     pub fn set_screen_background(&mut self, style: Option<crate::style::Style>) {
@@ -1985,7 +1984,7 @@ impl<C: Component> DispatchOps for TestBackendDispatchOps<'_, C> {
     }
 
     fn dispatch_framework(&mut self, key: KeyEvent) -> FrameworkDispatch {
-        use crate::app::input::keymap::{Action, KeymapRuntimeResult};
+        use crate::app::input::keymap::{Action, BindingMode, KeymapRuntimeResult};
 
         let runtime_match = match self.keymap_runtime.feed(key) {
             KeymapRuntimeResult::Pending => return FrameworkDispatch::Handled,
@@ -1993,13 +1992,18 @@ impl<C: Component> DispatchOps for TestBackendDispatchOps<'_, C> {
             KeymapRuntimeResult::None => None,
         };
         let action_from_chord = runtime_match.is_some_and(|binding| binding.is_chord);
-        let matches = runtime_match
-            .map(|binding| vec![binding.binding_match()])
-            .unwrap_or_else(|| self.keymap.matches(key));
+        let matches = if action_from_chord {
+            runtime_match
+                .map(|binding| vec![binding.binding_match()])
+                .unwrap_or_default()
+        } else {
+            self.keymap.matches(key)
+        };
+        let has_quit = matches
+            .iter()
+            .any(|binding| binding.action == Action::Quit && binding.mode != BindingMode::Fallback);
 
-        if !self.top_capturing_overlay_is_empty()
-            && matches.iter().any(|binding| binding.action == Action::Quit)
-        {
+        if !self.top_capturing_overlay_is_empty() && has_quit {
             return FrameworkDispatch::Quit;
         }
 
@@ -2082,7 +2086,7 @@ impl<C: Component> DispatchOps for TestBackendDispatchOps<'_, C> {
             return FrameworkDispatch::Handled;
         }
 
-        if matches.iter().any(|binding| binding.action == Action::Quit) {
+        if has_quit {
             if action_from_chord || self.top_capturing_overlay_is_empty() {
                 return FrameworkDispatch::Quit;
             }
@@ -2096,6 +2100,15 @@ impl<C: Component> DispatchOps for TestBackendDispatchOps<'_, C> {
         }
 
         FrameworkDispatch::None
+    }
+
+    fn dispatch_framework_fallback(&mut self, key: KeyEvent) -> FrameworkDispatch {
+        crate::app::input::runtime_dispatch::dispatch_framework_fallback(
+            &self.core.tree,
+            *self.focused,
+            self.keymap,
+            key,
+        )
     }
 
     fn dispatch_terminal_preflight(&mut self, key: KeyEvent) -> TerminalPreflightDispatch {
@@ -2538,12 +2551,12 @@ mod tests {
 
         fn create_state(&self, _props: &Self::Properties) -> Self::State {}
 
-        fn init(&mut self, ctx: &mut Context<Self>) -> Option<crate::Command> {
+        fn init(&mut self, ctx: &mut Context<Self>) -> Update {
             ctx.set_clipboard_config(crate::ClipboardConfig {
                 enable_performable_ctrl_c_copy: false,
                 ..crate::ClipboardConfig::default()
             });
-            None
+            Update::none()
         }
 
         fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
@@ -2686,6 +2699,24 @@ mod tests {
             Update::none()
         }
 
+        fn on_focus_changed(
+            &mut self,
+            change: &crate::FocusChanged,
+            _ctx: &mut Context<Self>,
+        ) -> Update {
+            let key = |entry: &Option<crate::FocusEntry>| {
+                entry
+                    .as_ref()
+                    .and_then(|entry| entry.key.as_ref())
+                    .map(|key| key.as_ref().to_owned())
+                    .unwrap_or_else(|| "none".to_owned())
+            };
+            self.log
+                .borrow_mut()
+                .push(format!("hook:{}->{}", key(&change.old), key(&change.new)));
+            Update::none()
+        }
+
         fn view(&self, _ctx: &Context<Self>) -> Element {
             let first_focus = self.log.clone();
             let first_blur = self.log.clone();
@@ -2787,8 +2818,13 @@ mod tests {
             Vec::new()
         }
 
-        fn on_focus_changed(&self, _change: &crate::FocusChanged) -> Option<Self::Message> {
-            Some(RootFocusMessage::Root)
+        fn on_focus_changed(
+            &mut self,
+            _change: &crate::FocusChanged,
+            ctx: &mut Context<Self>,
+        ) -> Update {
+            ctx.link().send(RootFocusMessage::Root);
+            Update::none()
         }
 
         fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
@@ -2810,7 +2846,7 @@ mod tests {
         }
     }
 
-    struct UnmountFocusedHarness;
+    struct UnmountFocusedHarness(Rc<RefCell<Vec<crate::FocusChanged>>>);
 
     impl Component for UnmountFocusedHarness {
         type Message = ();
@@ -2822,6 +2858,15 @@ mod tests {
         }
 
         fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+
+        fn on_focus_changed(
+            &mut self,
+            change: &crate::FocusChanged,
+            _ctx: &mut Context<Self>,
+        ) -> Update {
+            self.0.borrow_mut().push(change.clone());
             Update::none()
         }
 
@@ -2843,6 +2888,7 @@ mod tests {
 
     struct MoveFocusedHarness {
         log: Rc<RefCell<Vec<&'static str>>>,
+        changes: Rc<RefCell<Vec<crate::FocusChanged>>>,
     }
 
     impl Component for MoveFocusedHarness {
@@ -2857,6 +2903,15 @@ mod tests {
         fn update(&mut self, _msg: Self::Message, ctx: &mut Context<Self>) -> Update {
             ctx.state = true;
             Update::full()
+        }
+
+        fn on_focus_changed(
+            &mut self,
+            change: &crate::FocusChanged,
+            _ctx: &mut Context<Self>,
+        ) -> Update {
+            self.changes.borrow_mut().push(change.clone());
+            Update::none()
         }
 
         fn view(&self, ctx: &Context<Self>) -> Element {
@@ -2998,25 +3053,141 @@ mod tests {
     }
 
     #[test]
-    fn focus_callbacks_precede_app_hook_and_report_payloads() {
+    fn lifecycle_hooks_follow_current_tree_order_and_run_nested_updates() -> crate::Result<()> {
+        type EventLog = Rc<RefCell<Vec<(&'static str, &'static str)>>>;
+
+        struct Observer {
+            name: &'static str,
+            log: EventLog,
+        }
+
+        impl Observer {
+            fn record(&self, event: &'static str) {
+                self.log.borrow_mut().push((event, self.name));
+            }
+
+            fn child(&self, name: &'static str) -> Element {
+                let log = Rc::clone(&self.log);
+                crate::child(
+                    move || Self {
+                        name,
+                        log: Rc::clone(&log),
+                    },
+                    (),
+                )
+                .key(name)
+            }
+        }
+
+        impl Component for Observer {
+            type Message = ();
+            type Properties = ();
+            type State = usize;
+
+            fn create_state(&self, _: &()) -> usize {
+                0
+            }
+
+            fn update(&mut self, _: (), ctx: &mut Context<Self>) -> Update {
+                ctx.state += 1;
+                Update::render()
+            }
+
+            fn memo_key(&self, _: &(), _: &Context<Self>) -> Option<u64> {
+                Some(0)
+            }
+
+            fn view(&self, ctx: &Context<Self>) -> Element {
+                match self.name {
+                    "root" if ctx.state == 0 => VStack::new()
+                        .child(self.child("parent"))
+                        .child(self.child("sibling"))
+                        .into(),
+                    "root" => VStack::new()
+                        .child(self.child("sibling"))
+                        .child(self.child("parent"))
+                        .into(),
+                    "parent" => self.child("leaf"),
+                    "leaf" => Button::new(format!("leaf count: {}", ctx.state)).key("leaf-button"),
+                    _ => Text::new(self.name).into(),
+                }
+            }
+
+            fn on_window_focus_changed(&mut self, _: bool, _: &mut Context<Self>) -> Update {
+                self.record("window");
+                Update::none()
+            }
+
+            fn on_host_theme_changed(&mut self, _: &mut Context<Self>) -> Update {
+                self.record("theme");
+                Update::none()
+            }
+
+            fn on_modifiers_changed(&mut self, _: KeyMods, _: &mut Context<Self>) -> Update {
+                self.record("modifiers");
+                Update::none()
+            }
+
+            fn on_focus_changed(
+                &mut self,
+                _: &crate::FocusChanged,
+                ctx: &mut Context<Self>,
+            ) -> Update {
+                self.record("focus");
+                if self.name == "leaf" {
+                    assert!(ctx.has_focus_within());
+                    ctx.state += 1;
+                    let link = ctx.link().clone();
+                    return Update::render_with_command(crate::Command::new(move || link.send(())));
+                }
+                Update::none()
+            }
+        }
+
+        let log = EventLog::default();
+        let app = crate::App::new().focus_policy(FocusPolicy::Manual);
+        let mut backend = TestBackend::new_with_app(
+            app,
+            Observer {
+                name: "root",
+                log: Rc::clone(&log),
+            },
+            (),
+        );
+        backend.dispatch(())?; // Reorder retained siblings before broadcasting.
+        backend.set_window_focused(false)?;
+        backend.set_host_color_scheme(crate::ColorScheme::Dark)?;
+        backend.set_held_modifiers(KeyMods {
+            ctrl: true,
+            ..KeyMods::NONE
+        })?;
+        assert_eq!(backend.focused_key(), None);
+        assert!(backend.focus_key(&Key::from("leaf-button")));
+        assert!(backend.pump()?, "events delivered: {:?}", log.borrow());
+        assert_eq!(
+            *backend.state(),
+            1,
+            "the nested command belongs to the leaf"
+        );
+        assert!(
+            backend
+                .capture_frame()
+                .plain_text()
+                .contains("leaf count: 2")
+        );
+
+        let expected: Vec<_> = ["window", "theme", "modifiers", "focus"]
+            .into_iter()
+            .flat_map(|event| ["root", "sibling", "parent", "leaf"].map(move |name| (event, name)))
+            .collect();
+        assert_eq!(*log.borrow(), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn widget_focus_callbacks_precede_component_hook_and_report_payloads() {
         let log = Rc::new(RefCell::new(Vec::new()));
-        let hook_log = log.clone();
-        let app = crate::App::new()
-            .focus_policy(FocusPolicy::Auto)
-            .on_focus_changed(move |change| {
-                let key = |entry: &Option<crate::FocusEntry>| {
-                    entry
-                        .as_ref()
-                        .and_then(|entry| entry.key.as_ref())
-                        .map(|key| key.as_ref().to_owned())
-                        .unwrap_or_else(|| "none".to_owned())
-                };
-                hook_log.borrow_mut().push(format!(
-                    "hook:{}->{}",
-                    key(&change.old),
-                    key(&change.new)
-                ));
-            });
+        let app = crate::App::new().focus_policy(FocusPolicy::Auto);
         let mut backend =
             TestBackend::new_with_app(app, FocusEventHarness { log: log.clone() }, ());
         assert_eq!(log.borrow().as_slice(), ["focus:first", "hook:none->first"]);
@@ -3048,10 +3219,7 @@ mod tests {
     #[test]
     fn equal_some_keys_deduplicate_focus_notifications_across_node_ids() {
         let log = Rc::new(RefCell::new(Vec::new()));
-        let hook_log = log.clone();
-        let app = crate::App::new()
-            .focus_policy(FocusPolicy::Auto)
-            .on_focus_changed(move |_| hook_log.borrow_mut().push("hook".into()));
+        let app = crate::App::new().focus_policy(FocusPolicy::Auto);
         let mut backend =
             TestBackend::new_with_app(app, FocusEventHarness { log: log.clone() }, ());
         log.borrow_mut().clear();
@@ -3071,17 +3239,15 @@ mod tests {
     }
 
     #[test]
-    fn same_key_moving_between_keyed_parents_emits_only_app_transition() {
+    fn same_key_moving_between_keyed_parents_emits_only_component_hook() {
         let widget_log = Rc::new(RefCell::new(Vec::new()));
         let changes = Rc::new(RefCell::new(Vec::new()));
-        let hook_changes = changes.clone();
-        let app = crate::App::new()
-            .focus_policy(FocusPolicy::Auto)
-            .on_focus_changed(move |change| hook_changes.borrow_mut().push(change.clone()));
+        let app = crate::App::new().focus_policy(FocusPolicy::Auto);
         let mut backend = TestBackend::new_with_app(
             app,
             MoveFocusedHarness {
                 log: widget_log.clone(),
+                changes: changes.clone(),
             },
             (),
         );
@@ -3947,13 +4113,11 @@ mod tests {
     }
 
     #[test]
-    fn app_hook_keeps_old_payload_when_focused_node_disappears() {
+    fn component_hook_keeps_old_payload_when_focused_node_disappears() {
         let changes = Rc::new(RefCell::new(Vec::new()));
-        let hook_changes = changes.clone();
-        let app = crate::App::new()
-            .focus_policy(FocusPolicy::Auto)
-            .on_focus_changed(move |change| hook_changes.borrow_mut().push(change.clone()));
-        let mut backend = TestBackend::new_with_app(app, UnmountFocusedHarness, ());
+        let app = crate::App::new().focus_policy(FocusPolicy::Auto);
+        let mut backend =
+            TestBackend::new_with_app(app, UnmountFocusedHarness(changes.clone()), ());
         changes.borrow_mut().clear();
 
         *backend.state_mut() = false;
@@ -4140,9 +4304,7 @@ mod tests {
     #[test]
     fn click_focus_notifies_exactly_once() {
         let log = Rc::new(RefCell::new(Vec::new()));
-        let hook_log = log.clone();
-        let app =
-            crate::App::new().on_focus_changed(move |_| hook_log.borrow_mut().push("hook".into()));
+        let app = crate::App::new();
         let mut backend =
             TestBackend::new_with_app(app, FocusEventHarness { log: log.clone() }, ());
         let rect = backend
@@ -4164,18 +4326,21 @@ mod tests {
 
         assert_eq!(
             log.borrow().as_slice(),
-            ["mouse:first", "focus:first", "hook"]
+            ["mouse:first", "focus:first", "hook:none->first"]
         );
     }
 
     #[test]
     fn auto_blur_request_does_not_emit_intermediate_none() {
         let changes = Rc::new(RefCell::new(Vec::new()));
-        let hook_changes = changes.clone();
-        let app = crate::App::new()
-            .focus_policy(FocusPolicy::Auto)
-            .on_focus_changed(move |change| hook_changes.borrow_mut().push(change.clone()));
-        let mut backend = TestBackend::new_with_app(app, FocusControlRoot, ());
+        let app = crate::App::new().focus_policy(FocusPolicy::Auto);
+        let mut backend = TestBackend::new_with_app(
+            app,
+            FocusControlRoot {
+                changes: changes.clone(),
+            },
+            (),
+        );
         changes.borrow_mut().clear();
 
         backend
@@ -4936,9 +5101,9 @@ mod tests {
 
         fn create_state(&self, _props: &Self::Properties) -> Self::State {}
 
-        fn init(&mut self, ctx: &mut Context<Self>) -> Option<crate::core::component::Command> {
+        fn init(&mut self, ctx: &mut Context<Self>) -> Update {
             ctx.request_focus("requested");
-            None
+            Update::none()
         }
 
         fn view(&self, _ctx: &Context<Self>) -> Element {
@@ -4974,7 +5139,10 @@ mod tests {
         BlurThenNext,
     }
 
-    struct FocusControlRoot;
+    #[derive(Default)]
+    struct FocusControlRoot {
+        changes: Rc<RefCell<Vec<crate::FocusChanged>>>,
+    }
 
     impl Component for FocusControlRoot {
         type Message = FocusControlMsg;
@@ -4982,6 +5150,15 @@ mod tests {
         type State = ();
 
         fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn on_focus_changed(
+            &mut self,
+            change: &crate::FocusChanged,
+            _ctx: &mut Context<Self>,
+        ) -> Update {
+            self.changes.borrow_mut().push(change.clone());
+            Update::none()
+        }
 
         fn view(&self, _ctx: &Context<Self>) -> Element {
             VStack::new()
@@ -5008,7 +5185,7 @@ mod tests {
     fn context_focus_traversal_is_explicit_under_manual_policy() {
         let mut backend = TestBackend::new_with_app(
             crate::App::new().focus_policy(FocusPolicy::Manual),
-            FocusControlRoot,
+            FocusControlRoot::default(),
             (),
         );
 
@@ -5032,7 +5209,7 @@ mod tests {
         ] {
             let mut backend = TestBackend::new_with_app(
                 crate::App::new().focus_policy(policy),
-                FocusControlRoot,
+                FocusControlRoot::default(),
                 (),
             );
             backend.focus_next();
@@ -5052,7 +5229,7 @@ mod tests {
 
     #[test]
     fn latest_context_focus_request_wins() {
-        let mut backend = TestBackend::new(FocusControlRoot);
+        let mut backend = TestBackend::new(FocusControlRoot::default());
 
         backend
             .dispatch(FocusControlMsg::BlurThenNext)
@@ -5063,7 +5240,7 @@ mod tests {
 
     #[test]
     fn test_backend_blur_clears_remembered_focus() {
-        let mut backend = TestBackend::new(FocusControlRoot);
+        let mut backend = TestBackend::new(FocusControlRoot::default());
         backend.focus_next();
 
         backend.blur();
@@ -7469,7 +7646,7 @@ mod tests {
                 }
                 ElapsedProbeMessage::ScheduleAt(deadline) => {
                     let delay = deadline.saturating_sub(ctx.elapsed());
-                    Update::with_command(crate::Command::after(delay, |link| {
+                    Update::full_with_command(crate::Command::after(delay, |link| {
                         link.send(ElapsedProbeMessage::Read);
                     }))
                 }
@@ -8032,11 +8209,11 @@ mod tests {
 
         fn create_state(&self, _props: &Self::Properties) -> Self::State {}
 
-        fn init(&mut self, ctx: &mut Context<Self>) -> Option<crate::core::component::Command> {
+        fn init(&mut self, ctx: &mut Context<Self>) -> Update {
             if let Some(key) = self.request {
                 ctx.request_focus(key);
             }
-            None
+            Update::none()
         }
 
         fn view(&self, _ctx: &Context<Self>) -> Element {
@@ -8697,13 +8874,9 @@ mod tests {
 
         fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
             match msg {
-                AsyncMsg::Start => Update {
-                    dirty: false,
-                    level: crate::core::component::UpdateLevel::None,
-                    command: Some(ctx.link().command(|link| {
-                        link.send(AsyncMsg::Done(42));
-                    })),
-                },
+                AsyncMsg::Start => Update::command_only(ctx.link().command(|link| {
+                    link.send(AsyncMsg::Done(42));
+                })),
                 AsyncMsg::Done(v) => {
                     ctx.state = v;
                     Update::full()
@@ -8752,11 +8925,11 @@ mod tests {
         fn on_window_focus_changed(&mut self, focused: bool, ctx: &mut Context<Self>) -> Update {
             self.calls.borrow_mut().push(focused);
             if focused {
-                Update::with_command(ctx.link().command(|link| {
+                Update::full_with_command(ctx.link().command(|link| {
                     link.send(WindowFocusMsg::CommandFinished);
                 }))
             } else {
-                Update::layout()
+                Update::render()
             }
         }
 
@@ -8850,9 +9023,9 @@ mod tests {
             KeyMods::NONE
         }
 
-        fn init(&mut self, ctx: &mut Context<Self>) -> Option<Command> {
+        fn init(&mut self, ctx: &mut Context<Self>) -> Update {
             ctx.set_modifier_key_reporting(true);
-            None
+            Update::none()
         }
 
         fn on_modifiers_changed(&mut self, modifiers: KeyMods, ctx: &mut Context<Self>) -> Update {
@@ -9632,7 +9805,7 @@ mod tests {
             Frame::new()
                 .style(Style::new().fg(Color::Rgb(90, 91, 92)))
                 .tab_titles(["Files", "Branches"])
-                .header_left("[2]")
+                .title("[2]")
                 .footer_left("ready")
                 .child(VStack::new().child(Text::new("content")))
                 .into()
@@ -10193,8 +10366,8 @@ mod tests {
             false
         }
 
-        fn init(&mut self, _ctx: &mut Context<Self>) -> Option<Command> {
-            Some(Command::spawn(move |link| {
+        fn init(&mut self, _ctx: &mut Context<Self>) -> Update {
+            Update::command_only(Command::spawn(move |link| {
                 link.send(InitMsg::Initialized);
             }))
         }
@@ -10338,13 +10511,9 @@ mod tests {
 
         fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
             match msg {
-                SpawnMsg::Trigger => Update {
-                    dirty: false,
-                    level: crate::core::component::UpdateLevel::None,
-                    command: Some(Command::spawn(|link| {
-                        link.send(SpawnMsg::FromBackground(99));
-                    })),
-                },
+                SpawnMsg::Trigger => Update::command_only(Command::spawn(|link| {
+                    link.send(SpawnMsg::FromBackground(99));
+                })),
                 SpawnMsg::FromBackground(v) => {
                     ctx.state = Some(v);
                     Update::full()
@@ -10825,9 +10994,9 @@ mod tests {
 
             fn create_state(&self, _props: &Self::Properties) -> Self::State {}
 
-            fn init(&mut self, ctx: &mut Context<Self>) -> Option<crate::Command> {
+            fn init(&mut self, ctx: &mut Context<Self>) -> Update {
                 ctx.set_title("from init");
-                None
+                Update::none()
             }
 
             fn update(&mut self, msg: String, ctx: &mut Context<Self>) -> Update {

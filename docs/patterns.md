@@ -10,7 +10,7 @@ Extract reusable view functions so the same code works in both mockup previews a
 // View functions take plain data, return Element
 fn sidebar(items: &[&str], selected: usize) -> Element {
     Frame::new()
-        .header_left("Nav").border(true).width(Length::Px(28))
+        .title("Nav").border(true).width(Length::Px(28))
         .child(List::new().items(items.iter().map(|s| ListItem::new(*s))).selected(selected))
         .into()
 }
@@ -38,7 +38,7 @@ while `rsx!` stays focused on composition.
 ```rust
 fn app_panel(title: impl Into<Arc<str>>, child: impl Into<Element>) -> Element {
     Frame::new()
-        .header_left(title)
+        .title(title)
         .border(true)
         .padding(1)
         .child(child)
@@ -99,7 +99,7 @@ impl AppPanel {
 impl From<AppPanel> for Element {
     fn from(panel: AppPanel) -> Element {
         Frame::new()
-            .header_left(panel.title)
+            .title(panel.title)
             .border(true)
             .padding(1)
             .child(panel.child)
@@ -109,7 +109,7 @@ impl From<AppPanel> for Element {
 ```
 
 Use this when the same shell needs a named, reusable API such as
-`AppPanel::new(...)`, `.footer_left(...)`, `.header(...)`, and `.footer(...)`.
+`AppPanel::new(...)`, `.footer_left(...)`, `.titles(...)`, and `.footer(...)`.
 
 Choose the abstraction level by behavior:
 - **Helper function returning `Element`** - best for simple reusable shells
@@ -150,12 +150,12 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
                 let user = db::get_user(id);   // blocking
                 link.send(Msg::UserLoaded(user));
             });
-            Update::with_command(cmd)
+            Update::render_with_command(cmd)
         }
         Msg::UserLoaded(user) => {
             ctx.state.loading = false;
             ctx.state.user = Some(user);
-            Update::full()
+            Update::render()
         }
     }
 }
@@ -180,7 +180,7 @@ Msg::QueryChanged(q) => {
             link.send(Msg::SearchDone(results));
         },
     );
-    Update::with_command(cmd)  // Redraw to show query immediately
+    Update::render_with_command(cmd)  // Redraw to show query immediately
 }
 ```
 
@@ -207,7 +207,7 @@ Msg::Scrolled(offset) => {
 ```
 
 For `ScrollView::on_viewport_change`, return `Update::none()` when only the
-stored offset changed. Return `Update::layout()` only when visible metadata
+stored offset changed. Return `Update::render()` only when visible metadata
 changes the emitting component's view or subtree, such as a sticky header label.
 Reserve `Update::full()` for state that affects other scopes or root-level
 composition.
@@ -341,7 +341,7 @@ fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
     match target {
         Some(target) => {
             ctx.request_focus(target);
-            KeyUpdate::handled(Update::full())
+            KeyUpdate::handled(Update::render())
         }
         // Unhandled at the edges, so the key still reaches app and framework bindings.
         None => KeyUpdate::unhandled(Update::none()),
@@ -427,17 +427,17 @@ struct State {
 Msg::OpenFile(path) => {
     ctx.state.tabs.push(path);
     ctx.state.active = ctx.state.tabs.len() - 1;
-    Update::full()
+    Update::render()
 }
 Msg::CloseTab(idx) => {
     ctx.state.tabs.remove(idx);
     ctx.state.active = ctx.state.active.min(ctx.state.tabs.len().saturating_sub(1));
-    Update::full()
+    Update::render()
 }
 Msg::ReorderTabs(e) => {
     ctx.state.tabs.swap(e.from, e.to);
     ctx.state.active = if ctx.state.active == e.from { e.to } else { ctx.state.active };
-    Update::full()
+    Update::render()
 }
 ```
 
@@ -493,16 +493,16 @@ If you just need to group children, use `VStack` or `HStack` directly.
 
 ## Anti-Patterns (Common Mistakes)
 
-### ❌ Returning `Update::full()` when nothing changed
+### ❌ Returning `Update::render()` when nothing changed
 
 ```rust
 // BAD: triggers unnecessary re-render
-Msg::SomeEvent => Update::full()
+Msg::SomeEvent => Update::render()
 
 // GOOD: only redraw if state actually changed
 Msg::SomeEvent => {
     if self.process(msg) {
-        Update::full()
+        Update::render()
     } else {
         Update::none()
     }
@@ -516,7 +516,7 @@ root rebuilds when callbacks only synchronize runtime metadata:
 // BAD: rebuilds the whole component tree on every wheel/drag event
 Msg::ViewportChanged(event) => {
     ctx.state.scroll_offset = event.offset;
-    Update::full()
+    Update::render()
 }
 
 // GOOD: the ScrollView already moved; just remember the settled offset
@@ -559,12 +559,12 @@ rsx! {
 Msg::LoadData => {
     let data = std::fs::read_to_string("data.json").unwrap();  // BLOCKS
     ctx.state.data = data;
-    Update::full()
+    Update::render()
 }
 
 // GOOD: use a command
 Msg::LoadData => {
-    Update::with_command(ctx.link().command(|link| {
+    Update::render_with_command(ctx.link().command(|link| {
         let data = std::fs::read_to_string("data.json").unwrap();
         link.send(Msg::DataLoaded(data));
     }))
@@ -749,7 +749,7 @@ VStack::new()
 
 // GOOD: Frame is justified when you use its features
 Frame::new()
-    .header_left("Settings")
+    .title("Settings")
     .border(true)
     .footer_right("v1.2")
     .child(

@@ -22,7 +22,7 @@ impl Component for WebCounter {
 
     fn view(&self, ctx: &Context<Self>) -> Element {
         Frame::new()
-            .header_left("wasm hello")
+            .title("wasm hello")
             .border(true)
             .child(
                 VStack::new()
@@ -43,11 +43,11 @@ impl Component for WebCounter {
         match key.code {
             KeyCode::Char('+') | KeyCode::Char('=') => {
                 ctx.state += 1;
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('-') | KeyCode::Char('_') => {
                 ctx.state = ctx.state.saturating_sub(1);
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             _ => KeyUpdate::unhandled(Update::none()),
         }

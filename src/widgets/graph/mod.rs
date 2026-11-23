@@ -320,7 +320,7 @@ impl Graph {
     }
 
     /// Set the focused graph node path.
-    pub fn focused_path(mut self, path: GraphNodePath) -> Self {
+    pub fn focus_path(mut self, path: GraphNodePath) -> Self {
         self.focused_path = Some(path);
         self
     }

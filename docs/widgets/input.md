@@ -112,7 +112,7 @@ Wrapper that turns a single child into a generic drag source.
 | `preview_max_size` | `(Option<u16>, Option<u16>)` | Set both optional caps (`None` per axis = uncapped) |
 | `threshold` | `u16` | Set the same movement threshold on both axes (default: `3` cells) |
 | `drag_threshold` | `(columns: u16, rows: u16)` | Set axes separately; reaching either starts the drag. Use `(3, 1)` for three columns or one row. A zero threshold starts on the first drag event. |
-| `enabled` | `bool` | Enable/disable drag behavior |
+| `disabled` | `bool` | Disable drag behavior (default: `false`) |
 
 ```rust
 DragSource::new()
@@ -150,7 +150,7 @@ Wrapper that marks a single child as a generic drop zone.
 | `highlight_overlay` | `Style` | `highlight(DropHighlight::Overlay)` + `highlight_style` |
 | `drop_slot` | `DropSlot` | `Child` (render child normally, default) or `SourcePreview` (replace child with the dragged card's snapshot; cursor float is suppressed) |
 | `drop_slot_source_preview` | `()` | Shorthand for `drop_slot(DropSlot::SourcePreview)` |
-| `enabled` | `bool` | Enable/disable drop behavior |
+| `disabled` | `bool` | Disable drop behavior (default: `false`) |
 
 `on_drag_over` is emitted on **every** pointer move while a compatible drag hovers this target (not only on enter). Use `DragOverEvent::local_y` (offset from the drop target’s top edge) with a row-height estimate to place a single insertion line; `local_x`/`local_width` give the horizontal position, e.g. for nesting depth in a tree. `DropEvent` uses the same conventions. Local coordinates are measured from the target's true origin, so they stay correct when the target is scrolled partially out of a `ScrollView`.
 
@@ -192,7 +192,7 @@ Wrapper that adds pointer callbacks to an arbitrary child subtree.
 | `capture_click` | `bool` | Capture clicks over interactive descendants |
 | `capture_requires_mods` | `KeyMods` | Capture pointer handling over descendants while modifiers are held |
 | `hover_style` | `Style` | Style underlay while hovered |
-| `enabled` | `bool` | Enable/disable pointer behavior |
+| `disabled` | `bool` | Disable pointer behavior (default: `false`) |
 
 Hover covers the full wrapped subtree, including interactive descendants.
 Click routing remains child-first unless `capture_click(true)` is set. Plain
@@ -308,16 +308,15 @@ input needs an explicit override. `SearchPalette` query inputs follow the same
 inheritance unless their `input_caret_shape(...)` or `input_caret_color(...)`
 setter is used.
 
-> **State binding:** Use `Input::bound(&state)` to create an `Input` that reads value, cursor, and anchor from a `TextInput` state bundle, and `InputEvent::apply_to(&mut state)` in your `update` handler to write changes back. This preserves cursor position and selection across rerenders. Using `Input::new(value)` resets the cursor to the end on every render.
+> **Cursor and state:** `Input::new(value)` is the normal path — store a plain `String` in component state and update it from `on_change`. The runtime preserves cursor position and selection across rerenders, and moves the cursor to the end when your app replaces the value externally. Use `Input::bound(&state)` (or `.bind(&state)`) with a `TextInput` state bundle when your app needs to own, inspect, or drive cursor and selection directly.
 
 | Prop | Type | Description |
 |------|------|-------------|
-| *(constructor)* | `impl Into<Arc<str>>` | `Input::new(value)` — current text (cursor at end) |
-| *(constructor)* | `&TextInput` | `Input::bound(state)` — bind value, cursor, and anchor from state |
-| `.bind(state)` | `&TextInput` | Apply cursor, anchor, and value from state onto an existing `Input` |
-| `value` | `impl Into<Arc<str>>` | Current text value (use `bound`/`bind` instead for cursor preservation) |
-| `cursor` | `usize` | Byte cursor position |
-| `anchor` | `Option<usize>` | Selection anchor (for text selection) |
+| *(constructor)* | `impl Into<Arc<str>>` | `Input::new(value)` — current text (cursor starts at end, then preserved by the runtime) |
+| *(constructor)* | `&TextInput` | `Input::bound(state)` — controlled value, cursor, and anchor from state |
+| `.bind(state)` | `&TextInput` | Apply controlled cursor, anchor, and value from state onto an existing `Input` |
+| `cursor` | `usize` | Controlled byte cursor position |
+| `anchor` | `Option<usize>` | Controlled selection anchor (for text selection) |
 | `caret_shape` | `CaretShape` | Override the active theme's cursor shape (`Block`, `Bar`, or `Underline`) |
 | `caret_color` | `Option<Color>` | Override the active theme's OSC 12 cursor color (terminal support required) |
 | `style` | `Style` | Idle style |
@@ -328,6 +327,8 @@ setter is used.
 | `selection_style` | `Style` | Text selection style |
 | `extend_selection_style` / `inherit_selection_style` | `Style` / `()` | Extend or inherit the text-selection theme role instead of replacing it |
 | `placeholder` | `String` | Placeholder when empty |
+| `border` | `bool` | Draw border (default: `false`) |
+| `border_style` | `BorderStyle` | Border appearance when `border` is `true` |
 | `mask` | `Option<char>` | Masking character (e.g., `'*'` for passwords) |
 | `read_only` | `bool` | Allow selection but block keyboard input |
 | `focusable` | `bool` | Whether input accepts focus; mouse selection and copy shortcuts still work when false |
@@ -336,11 +337,28 @@ setter is used.
 | `width` | `Length` | Width |
 | `height` | `Length` | Height |
 | `on_change` | `Callback<InputEvent>` | Emits value, cursor, and anchor on each edit |
+| `on_submit` | `Callback<InputEvent>` | Emits current value, cursor, and anchor on plain `Enter` (no modifiers) while focused and editable and consumes the key; disabled/read-only inputs do not submit, and `key_interceptor` runs first and may consume `Enter` |
 | `on_context_menu` | `Callback<MouseEvent>` | Right-button press in the content viewport before clipboard handling; preserves caret and selection |
 | `on_edit` | `Callback<TextEditEvent>` | Emits structured edit events |
 | `key_interceptor` | `KeyHandler` | Runs before text insertion |
 
-**Recommended pattern** — store a `TextInput` in component state and use `Input::bound`:
+**Standard pattern** — store a `String` in component state and use `Input::new`:
+
+```rust
+struct State {
+    query: String,
+}
+
+fn view(&self, ctx: &Context<Self>) -> Element {
+    Input::new(ctx.state.query.clone())
+        .placeholder("Search...")
+        .style(Style::new().fg(Color::White))
+        .focus_style(Style::new().fg(Color::White).bg(Color::indexed(237)))
+        .on_change(ctx.link().callback(|ev: InputEvent| Msg::QueryChanged(ev.value.to_string())))
+}
+```
+
+**Controlled cursor/selection** — store a `TextInput` in component state and use `Input::bound` when your app needs to inspect or drive the cursor/selection:
 
 ```rust
 struct State {
@@ -354,8 +372,6 @@ fn create_state(&self, _props: &Self::Properties) -> Self::State {
 fn view(&self, ctx: &Context<Self>) -> Element {
     Input::bound(&ctx.state.query)
         .placeholder("Search...")
-        .style(Style::new().fg(Color::White))
-        .focus_style(Style::new().fg(Color::White).bg(Color::indexed(237)))
         .on_change(ctx.link().callback(Msg::QueryChanged))
 }
 
@@ -363,18 +379,10 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
     match msg {
         Msg::QueryChanged(ev) => {
             ev.apply_to(&mut ctx.state.query);
-            Update::layout()
+            Update::render()
         }
     }
 }
-```
-
-**Legacy pattern** (cursor resets to end on each render — avoid for editable inputs):
-
-```rust
-Input::new(self.query.clone())
-    .placeholder("Search...")
-    .on_change(ctx.link().callback(Msg::QueryChanged))
 ```
 
 > `caret_color` uses OSC 12. Set `TUI_LIPAN_OSC12=0` to disable if your terminal doesn't support it.
@@ -389,16 +397,16 @@ Input::new(self.query.clone())
 
 Multi-line text editor.
 
-> **State binding:** Use `TextArea::bound(&state)` to create a `TextArea` that reads value, cursor, and anchor from a `TextEditor` state bundle, and `TextAreaEvent::apply_to(&mut state)` in your `update` handler to write changes back. This preserves cursor position and selection across rerenders. Using `TextArea::new(value)` resets the cursor on every render.
+> **Cursor and state:** `TextArea::new(value)` is the normal path — store a plain `String` in component state and update it from `on_change`. The runtime preserves cursor position and selection across rerenders, and moves the cursor to the end when your app replaces the value externally. Use `TextArea::bound(&state)` (or `.bind(&state)`) with a `TextEditor` state bundle when your app needs to own, inspect, or drive cursor and selection directly.
 
 | Prop | Type | Description |
 |------|------|-------------|
-| *(constructor)* | `impl Into<Arc<str>>` | `TextArea::new(value)` — current text |
-| *(constructor)* | `&TextEditor` | `TextArea::bound(state)` — bind value, cursor, and anchor from state |
-| `.bind(state)` | `&TextEditor` | Apply cursor, anchor, and value from state onto an existing `TextArea` |
-| `value` | `impl Into<Arc<str>>` | Current text value (use `bound`/`bind` instead for cursor preservation) |
-| `cursor` | `usize` | Byte cursor position |
-| `anchor` | `Option<usize>` | Selection anchor |
+| *(constructor)* | `impl Into<Arc<str>>` | `TextArea::new(value)` — current text (cursor preserved by the runtime) |
+| *(constructor)* | `&TextEditor` | `TextArea::bound(state)` — controlled value, cursor, and anchor from state |
+| `.bind(state)` | `&TextEditor` | Apply controlled cursor, anchor, and value from state onto an existing `TextArea` |
+| `value` | `impl Into<Arc<str>>` | Current text value |
+| `cursor` | `usize` | Controlled byte cursor position |
+| `anchor` | `Option<usize>` | Controlled selection anchor |
 | `caret_shape` | `CaretShape` | Override the active theme's cursor shape; Vim-enabled TextAreas use mode-aware defaults when the resolved shape is `Block` |
 | `caret_color` | `Option<Color>` | Override the active theme's OSC 12 cursor color |
 | `line_numbers` | `bool` | Show line number gutter |
@@ -422,6 +430,8 @@ Multi-line text editor.
 | `show_selection_when_unfocused` | `bool` | Keep the active anchor/cursor selection visible after focus leaves the `TextArea` (`true` by default; pass `false` to opt out) |
 | `unfocused_selection_style` / `inherit_unfocused_selection_style` / `unfocused_selection_style_slot` | `Style` / `()` / `StyleSlot` | Style visible selections while unfocused; inherited/default slots resolve against the text-selection theme role; slot form is for composite forwarding |
 | `placeholder` | `String` | Placeholder when empty |
+| `border` | `bool` | Draw border (default: `false`) |
+| `border_style` | `BorderStyle` | Border appearance when `border` is `true` |
 | `placeholder_style` | `Style` | Placeholder style |
 | `focus_placeholder_style` | `Style` | Placeholder when focused |
 | `read_only` | `bool` | Allow selection but block keyboard input |
@@ -485,12 +495,12 @@ that key. Clear emits the normal `on_change` and `on_edit` callbacks with a
 replace edit.
 
 ```rust
-// Recommended: use TextArea::bound to preserve cursor & selection
-TextArea::bound(&ctx.state.editor)
+// Standard path: runtime preserves cursor & selection across rerenders
+TextArea::new(ctx.state.content.clone())
     .line_numbers(true)
     .wrap(false)
     .h_scrollbar(true)
-    .on_change(ctx.link().callback(Msg::TextChanged))
+    .on_change(ctx.link().callback(|ev: TextAreaEvent| Msg::TextChanged(ev.value.to_string())))
 ```
 
 ### TextArea editor primitives
@@ -1279,7 +1289,7 @@ Hex/ASCII binary data viewer with keyboard cursor navigation.
 | `extend_selection_style` / `inherit_selection_style` | `Style` / `()` | Extend or inherit the text-selection theme role instead of replacing it |
 | `cursor_style` | `Style` | Cursor byte style |
 | `pending_edit_style` | `Style` | Background/style for half-entered nibble edits |
-| `border` | `bool` | Draw border |
+| `border` | `bool` | Draw border (default: `false`) |
 | `border_style` | `BorderStyle` | Border style |
 | `padding` | `impl Into<Padding>` | Inner padding |
 | `width` | `Length` | Width |
@@ -1375,7 +1385,7 @@ Calendar-based date selection.
 | `day` | `Option<u32>` | Selected day |
 | `title` | `String` | Calendar title |
 | `show_outside_days` | `bool` | Show days from adjacent months |
-| `border` | `bool` | Draw border |
+| `border` | `bool` | Draw border (default: `false`) |
 | `border_style` | `BorderStyle` | Border appearance |
 | `padding` | `impl Into<Padding>` | Padding |
 | `style` | `Style` | Base style |

@@ -36,9 +36,9 @@ impl Component for PatchLayers {
         }
     }
 
-    fn init(&mut self, ctx: &mut Context<Self>) -> Option<Command> {
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
         ctx.link().send('r');
-        None
+        Update::none()
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
@@ -74,7 +74,7 @@ impl Component for PatchLayers {
         } else {
             ctx.state.overlay = key;
         }
-        Update::full()
+        Update::render()
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {

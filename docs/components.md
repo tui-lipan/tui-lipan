@@ -12,6 +12,13 @@ impl Component for MyApp {
 }
 ```
 
+## Where state lives
+
+Keep mutable UI state such as the current tab, a draft, or a loading flag in `ctx.state`.
+Initialize it in `create_state`, read it in `view`, and change it from `update` or a lifecycle
+hook. Keep injected dependencies and handles, such as a service client, on the component
+instance (`self`). Use `type State = ()` when the component needs no local UI state.
+
 ## Lifecycle Methods
 
 | Method | Required | Signature | Purpose |
@@ -20,21 +27,29 @@ impl Component for MyApp {
 | `memo_key` | No | `(&self, &Props, &Context<Self>) -> Option<u64>` | Opt into retained subtree reuse |
 | `view` | Yes | `(&self, &Context<Self>) -> Element` | Return UI tree |
 | `update` | Yes | `(&mut self, Msg, &mut Context<Self>) -> Update` | Handle messages |
-| `init` | No | `(&mut self, &mut Context<Self>) -> Option<Command>` | One-time setup on mount |
+| `init` | No | `(&mut self, &mut Context<Self>) -> Update` | One-time setup on mount |
 | `on_paste` | No | `(&mut self, &str, PasteOrigin, &mut Context<Self>) -> KeyUpdate` | Handle pasted text declined by the focused widget |
 | `on_key` | No | `(&mut self, KeyEvent, &mut Context<Self>) -> KeyUpdate` | Handle unhandled key events |
-| `on_modifiers_changed` | No, root only | `(&mut self, KeyMods, &mut Context<Self>) -> Update` | React to physically held modifier keys |
-| `on_window_focus_changed` | No, root only | `(&mut self, bool, &mut Context<Self>) -> Update` | React to host terminal/window focus transitions |
-| `on_host_theme_changed` | No, root only | `(&mut self, &mut Context<Self>) -> Update` | React to host terminal palette or light/dark scheme changes |
+| `on_modifiers_changed` | No | `(&mut self, KeyMods, &mut Context<Self>) -> Update` | React to physically held modifier keys |
+| `on_window_focus_changed` | No | `(&mut self, bool, &mut Context<Self>) -> Update` | React to host terminal/window focus transitions |
+| `on_host_theme_changed` | No | `(&mut self, &mut Context<Self>) -> Update` | React to host terminal palette or light/dark scheme changes |
+| `on_focus_changed` | No | `(&mut self, &FocusChanged, &mut Context<Self>) -> Update` | Observe a completed widget focus transition |
+| `on_host_drag_and_drop` | No, root only | `(&mut self, HostEvent, &mut Context<Self>) -> Update` | Respond to the host's drag-and-drop protocol |
 | `on_props_changed` | No | `(&mut self, &Props, &mut Context<Self>) -> Update` | React to property changes |
 | `unmount` | No | `(&mut self, &mut Context<Self>)` | Teardown before removal |
 
-`on_window_focus_changed` runs only on the mounted root when the host reports an actual
-focus transition. It is not widget focus: use widget `.on_focus` / `.on_blur` callbacks and the
-focus APIs for keyboard routing. It is also separate from a child `Terminal` requesting CSI
-`?1004` focus reporting; the runner continues to send those sequences only to that terminal.
+The runtime calls `init` once before the component's first `view`. Return `Update::none()`
+after local setup or `Update::command_only(cmd)` to start background work.
 
-`on_modifiers_changed` runs only on the mounted root and reports the effective set of physically
+The runtime delivers widget focus, window focus, host theme, and modifier changes to all
+mounted components in tree order, starting at the root. Each hook can update local state
+and return an `Update` for its own scope. See [Focus events](focus.md#focus-events)
+for widget focus.
+
+`on_window_focus_changed` reports host window focus. A child terminal requesting
+CSI `?1004` focus reporting receives its own host sequences.
+
+`on_modifiers_changed` reports the effective set of physically
 held Ctrl, Alt, Shift, and Super keys, including physical Alt side when available. Call
 `ctx.set_modifier_key_reporting(true)` while an overlay needs physical modifier identity or captures
 shortcuts, and disable it when the overlay closes. Fullscreen Unix input decodes associated text,
@@ -63,14 +78,15 @@ User Action → Event → Message → update() → State Change → Re-render
 2. Callback fires (`ctx.link().callback(...)`)
 3. Message queued
 4. `update()` called - mutate state
-5. Return `(needs_redraw: bool, command: Option<Command>)`
-6. `view()` re-executed if dirty or memoization cannot retain the subtree
-7. Tree reconciled and rendered
+5. Return an `Update` with the requested refresh level and any command.
+6. The runtime reruns views and reconciles the tree as needed for that level.
 
 ## The `Update` Return Type
 
-`Update` is a named struct with a dirty flag, a refresh level, and an optional
-`Command`. Pick the smallest refresh that matches the state change:
+Return `Update::render()` when your component's state changes what its subtree displays.
+Use `Update::full()` when the change affects other component scopes or global composition.
+Read the requested refresh with `update.level()`. `UpdateLevel::None` indicates that the
+update requests no frame.
 
 | Return | Use when |
 |--------|----------|
@@ -78,13 +94,13 @@ User Action → Event → Message → update() → State Change → Re-render
 | `Update::terminal_paint()` | Repaint only the rows a live `Terminal` screen changed; nothing else on screen moved |
 | `Update::paint()` | Repaint the existing realized tree without rerunning component views or layout |
 | `Update::paint_with_command(cmd)` | Repaint the existing tree and start work without rebuilding view or layout |
-| `Update::layout()` | Rerun the emitting component scope's `view()`, then reconcile and lay out that subtree |
-| `Update::layout_with_command(cmd)` | Same component-scoped refresh while also starting background work |
+| `Update::render()` | Rerun the emitting component scope's `view()`, then reconcile and lay out that subtree |
+| `Update::render_with_command(cmd)` | Same component-scoped refresh while also starting background work |
 | `Update::full()` | Rebuild from the root because state affects other scopes or global composition |
-| `Update::with_command(cmd)` | Same root-wide refresh while also starting background work |
+| `Update::full_with_command(cmd)` | Same root-wide refresh while also starting background work |
 | `Update::command_only(cmd)` | Start background work without marking a component dirty |
 
-`paint_with_command`, `layout_with_command`, and `with_command` accept either a `Command`
+`paint_with_command`, `render_with_command`, and `full_with_command` accept either a `Command`
 or `Option<Command>`. The requested level stays the same when the command is absent.
 `left.merge(right)` keeps the strongest refresh level and submits both commands in that
 order, in the emitting component's scope. Background tasks can complete in any order.
@@ -107,11 +123,11 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
     match msg {
         Msg::Increment => {
             ctx.state.count += 1;
-            Update::full()   // redraw, no background work
+            Update::render()
         }
         Msg::LoadData => {
             let id = ctx.props.user_id;
-            Update::with_command(ctx.link().command(move |link| {
+            Update::render_with_command(ctx.link().command(move |link| {
                 // Runs on background thread
                 let data = fetch_data(id);
                 link.send(Msg::DataLoaded(data));
@@ -119,7 +135,7 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
         }
         Msg::DataLoaded(data) => {
             ctx.state.data = data;
-            Update::full()
+            Update::render()
         }
         Msg::NoOp => Update::none(),  // no redraw
     }
@@ -127,6 +143,12 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
 ```
 
 ## Context Methods
+
+Context methods that change runtime settings, register observers, or request actions take
+`&mut self`. Call them from `init`, `update`, or another lifecycle hook. Reads such as
+`ctx.theme()` and `ctx.use_context::<T>()` take `&self` and are available in `view`.
+View animations are declarative. Methods such as `ctx.transition(...)` read or declare
+an animation for the current view. Explicit restart and snap methods take `&mut self`.
 
 | Method | Purpose |
 |--------|---------|
@@ -171,7 +193,7 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
 | `ctx.follow_system_theme()` | Resume following the host terminal palette when `App::system_theme()` or `App::live_host_terminal_colors(true)` is enabled |
 | `ctx.theme_extension::<T>()` | Clone a typed app-specific theme extension |
 | `ctx.host_terminal_colors()` | Read the runner-managed `HostTerminalColors` cache when live host colors are enabled |
-| `ctx.set_host_default_background(color)` | Write cells whose background is `color` as the host terminal's default background, so a translucent terminal shows through them; `None` turns it off. Unlike `App::terminal_bg`, which gives blending a concrete color, this changes only the bytes sent to the host. It does not follow host color changes on its own; a host color refresh re-runs `view`, so call it there with `host_terminal_colors()` to keep up. An unchanged value costs nothing |
+| `ctx.set_host_default_background(color)` | Write cells whose background is `color` as the host terminal's default background, so a translucent terminal shows through them; `None` turns it off. Unlike `App::host_background_hint`, which gives blending a concrete color, this changes only the bytes sent to the host. Read `host_terminal_colors()` in `init` and `on_host_theme_changed` to follow the host palette. |
 | `ctx.host_drag_and_drop()` | Send drag-and-drop commands to the host terminal; events arrive at `on_host_drag_and_drop` (see [Drag and drop](drag-and-drop.md)) |
 | `ctx.host_cursor_style()` | Read the host cursor shape and blink from the startup probe, or `None` when the host did not answer |
 | `ctx.host_color_scheme()` | Read the light or dark `ColorScheme` the host reported through DEC mode 2031, or `None` before it reports one |
@@ -209,7 +231,7 @@ the runner applies it on the next tick. It always returns `false` without the
 `devtools` feature.
 
 Apps can also publish a small ordered set of structured metrics. Each call
-replaces the previous set, so call it from `view()` or `update()` with the
+replaces the previous set, so call it from `init()` or `update()` with the
 current snapshot:
 
 ```rust
@@ -224,10 +246,8 @@ ctx.set_devtools_metrics(std::iter::empty);
 
 The closure runs immediately when `devtools` is enabled; the panel later reads
 stored values only and never calls back into the host app while rendering.
-Publishing does not schedule a frame: values published from `view()` are read
-by the DevTools extra root later in that same frame. Calls made elsewhere are
-stored until a later frame rebuilds the panel; the host update is responsible
-for requesting that frame. The tab sizes to its content within the viewport and
+Publishing does not schedule an app frame. An open App tab shows changed rows
+on its next panel refresh. The tab sizes to its content within the viewport and
 becomes vertically scrollable when rows do not fit. Without the `devtools`
 feature, the closure is not invoked, so formatting and allocation are skipped
 while the same source keeps compiling.
@@ -372,7 +392,7 @@ Re-arming from the handler gives a recurring tick that costs no thread between f
 ```rust
 Msg::Tick => {
     refresh(ctx);
-    Update::with_command(Command::after(Duration::from_secs(1), |link: CommandLink<Msg>| {
+    Update::render_with_command(Command::after(Duration::from_secs(1), |link: CommandLink<Msg>| {
         link.send(Msg::Tick);
     }))
 }
@@ -564,26 +584,10 @@ fn view(&self, _ctx: &Context<Self>) -> Element {
 
 ### Scoping and duplicate-key policy
 
-State keys are scoped per **parent component**. Two components with the same
-`component_state_key` that are children of the same parent are considered duplicates.
-In that case the runtime uses **last-writer-wins**: the second component reuses (and
-overwrites props on) the same instance.
-
-Debug builds log a warning when duplicate sibling keys are detected:
-
-```
-Duplicate component_state_key "modal" detected; last-writer-wins
-```
-
-Duplicates across **different parent scopes** (or unrelated branches) are fine. Because
-the key is global within the registry, a component in one branch can reuse the state of
-a previously-mounted component with the same key in another branch. This is useful for
-preserving form state when switching between tabs or conditional views.
-
-### Type mismatches
-
-If a state key is reused but the component type does not match, the runtime falls back
-to creating a fresh instance rather than coercing the wrong type.
+State keys are global within the app's component registry. Give each simultaneously mounted
+component a unique state key, even across different parents. When a component moves to
+another branch, the same state key and component type let the runtime reuse its instance.
+When the type differs, the state key cannot carry the old instance over.
 
 ## Snapshot / Visual Testing
 
@@ -667,7 +671,7 @@ fn on_paste(
     ctx.state.custom_answer = text.to_owned();
     ctx.state.editing = true;
     ctx.request_focus("custom-answer");
-    KeyUpdate::handled(Update::layout())
+    KeyUpdate::handled(Update::render())
 }
 ```
 

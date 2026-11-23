@@ -60,18 +60,18 @@ impl Component for FrameHub {
         match msg {
             Msg::SelectSection(index) => {
                 self.section = index;
-                Update::full()
+                Update::render()
             }
             Msg::SelectDividerTab(index) => {
                 self.divider_tab = index;
-                Update::full()
+                Update::render()
             }
             Msg::UpdateDividerSearch(event) => {
                 ctx.state
                     .divider_search
                     .set_text(event.value.as_ref().to_string());
                 ctx.state.divider_search.set_cursor(event.cursor);
-                Update::full()
+                Update::render()
             }
         }
     }
@@ -79,7 +79,7 @@ impl Component for FrameHub {
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
         if key.code == KeyCode::Char('q') {
             ctx.quit();
-            return KeyUpdate::handled(Update::full());
+            return KeyUpdate::handled(Update::render());
         }
         KeyUpdate::unhandled(Update::none())
     }
@@ -132,7 +132,7 @@ fn decoration_section() -> Element {
                 .gap(1)
                 .child(
                     Frame::new()
-                        .header_left("Border (default)")
+                        .title("Border (default)")
                         .border(true)
                         .width(Length::Flex(1))
                         .height(Length::Px(6))
@@ -141,7 +141,7 @@ fn decoration_section() -> Element {
                 )
                 .child(
                     Frame::new()
-                        .header_left("None")
+                        .title("None")
                         .border(false)
                         .style(Style::new().bg(Color::indexed(236)))
                         .width(Length::Flex(1))
@@ -156,7 +156,7 @@ fn decoration_section() -> Element {
                 .gap(1)
                 .child(
                     Frame::new()
-                        .header_left("Info")
+                        .title("Info")
                         .decoration(
                             EdgeDecoration::new(Edge::Left)
                                 .glyph(DecorationGlyph::AutoBlock)
@@ -171,7 +171,7 @@ fn decoration_section() -> Element {
                 )
                 .child(
                     Frame::new()
-                        .header_left("Warning")
+                        .title("Warning")
                         .decoration(
                             EdgeDecoration::new(Edge::Left)
                                 .glyph(DecorationGlyph::AutoBlock)
@@ -185,7 +185,7 @@ fn decoration_section() -> Element {
                 )
                 .child(
                     Frame::new()
-                        .header_left("Error")
+                        .title("Error")
                         .decoration(
                             EdgeDecoration::new(Edge::Left)
                                 .glyph(DecorationGlyph::AutoBlock)
@@ -199,7 +199,7 @@ fn decoration_section() -> Element {
                 )
                 .child(
                     Frame::new()
-                        .header_left("Success")
+                        .title("Success")
                         .decoration(
                             EdgeDecoration::new(Edge::Left)
                                 .glyph(DecorationGlyph::AutoBlock)
@@ -307,7 +307,7 @@ fn decoration_section() -> Element {
                 .gap(1)
                 .child(
                     Frame::new()
-                        .header_left("Top")
+                        .title("Top")
                         .decoration(
                             EdgeDecoration::new(Edge::Top)
                                 .glyph(DecorationGlyph::AutoBlock)
@@ -321,7 +321,7 @@ fn decoration_section() -> Element {
                 )
                 .child(
                     Frame::new()
-                        .header_left("Bottom")
+                        .title("Bottom")
                         .decoration(
                             EdgeDecoration::new(Edge::Bottom)
                                 .glyph(DecorationGlyph::AutoBlock)
@@ -335,7 +335,7 @@ fn decoration_section() -> Element {
                 )
                 .child(
                     Frame::new()
-                        .header_left("Right")
+                        .title("Right")
                         .decoration(
                             EdgeDecoration::new(Edge::Right)
                                 .glyph(DecorationGlyph::AutoBlock)
@@ -492,7 +492,7 @@ fn features_section(ctx: &Context<FrameHub>, divider_tab: usize) -> Element {
         .scroll_keys(ScrollKeymap::DEFAULT)
         .child(
             Frame::new()
-                .header(
+                .titles(
                     BorderLabels::new()
                         .center(
                             RichText::new()
@@ -531,21 +531,21 @@ fn features_section(ctx: &Context<FrameHub>, divider_tab: usize) -> Element {
                 .gap(1)
                 .child(
                     Frame::new()
-                        .header_left("Child Align: Start")
+                        .title("Child Align: Start")
                         .child_align(Align::Start)
                         .height(Length::Px(5))
                         .child(Text::new("Top")),
                 )
                 .child(
                     Frame::new()
-                        .header_left("Child Align: Center")
+                        .title("Child Align: Center")
                         .child_align(Align::Center)
                         .height(Length::Px(5))
                         .child(Text::new("Middle")),
                 )
                 .child(
                     Frame::new()
-                        .header_left("Child Align: End")
+                        .title("Child Align: End")
                         .child_align(Align::End)
                         .height(Length::Px(5))
                         .child(Text::new("Bottom")),
@@ -554,19 +554,15 @@ fn features_section(ctx: &Context<FrameHub>, divider_tab: usize) -> Element {
         .child(
             HStack::new()
                 .gap(1)
+                .child(Frame::new().title("Left Aligned").height(Length::Px(3)))
                 .child(
                     Frame::new()
-                        .header_left("Left Aligned")
+                        .title_center("Center Aligned")
                         .height(Length::Px(3)),
                 )
                 .child(
                     Frame::new()
-                        .header_center("Center Aligned")
-                        .height(Length::Px(3)),
-                )
-                .child(
-                    Frame::new()
-                        .header_right("Right Aligned")
+                        .title_right("Right Aligned")
                         .height(Length::Px(3)),
                 ),
         )
@@ -576,21 +572,21 @@ fn features_section(ctx: &Context<FrameHub>, divider_tab: usize) -> Element {
                 .gap(1)
                 .child(
                     Frame::new()
-                        .header_left("Light Double")
+                        .title("Light Double")
                         .border_style(BorderStyle::LightDoubleDashed)
                         .height(Length::Px(4))
                         .child(Text::new("sample")),
                 )
                 .child(
                     Frame::new()
-                        .header_left("Heavy Double")
+                        .title("Heavy Double")
                         .border_style(BorderStyle::HeavyDoubleDashed)
                         .height(Length::Px(4))
                         .child(Text::new("sample")),
                 )
                 .child(
                     Frame::new()
-                        .header_left("Light Triple")
+                        .title("Light Triple")
                         .border_style(BorderStyle::LightTripleDashed)
                         .height(Length::Px(4))
                         .child(Text::new("sample")),
@@ -601,21 +597,21 @@ fn features_section(ctx: &Context<FrameHub>, divider_tab: usize) -> Element {
                 .gap(1)
                 .child(
                     Frame::new()
-                        .header_left("Heavy Triple")
+                        .title("Heavy Triple")
                         .border_style(BorderStyle::HeavyTripleDashed)
                         .height(Length::Px(4))
                         .child(Text::new("sample")),
                 )
                 .child(
                     Frame::new()
-                        .header_left("Light Quad")
+                        .title("Light Quad")
                         .border_style(BorderStyle::LightQuadrupleDashed)
                         .height(Length::Px(4))
                         .child(Text::new("sample")),
                 )
                 .child(
                     Frame::new()
-                        .header_left("Heavy Quad")
+                        .title("Heavy Quad")
                         .border_style(BorderStyle::HeavyQuadrupleDashed)
                         .height(Length::Px(4))
                         .child(Text::new("sample")),
@@ -623,7 +619,7 @@ fn features_section(ctx: &Context<FrameHub>, divider_tab: usize) -> Element {
         )
         .child(
             Frame::new()
-                .header_left("Divider Labels")
+                .title("Divider Labels")
                 .border_style(BorderStyle::Rounded)
                 .height(Length::Px(7))
                 .child(
@@ -655,7 +651,7 @@ fn features_section(ctx: &Context<FrameHub>, divider_tab: usize) -> Element {
         )
         .child(
             Frame::new()
-                .header_left("Divider Search")
+                .title("Divider Search")
                 .border_style(BorderStyle::Rounded)
                 .height(Length::Px(8))
                 .child(
@@ -683,7 +679,7 @@ fn features_section(ctx: &Context<FrameHub>, divider_tab: usize) -> Element {
         )
         .child(
             Frame::new()
-                .header_left("Vertical Divider")
+                .title("Vertical Divider")
                 .border_style(BorderStyle::Rounded)
                 .height(Length::Px(7))
                 .child(
@@ -708,7 +704,7 @@ fn join_demo(join: bool) -> Element {
     };
 
     Frame::new()
-        .header_left(title)
+        .title(title)
         .padding(1)
         .width(Length::Flex(1))
         .height(Length::Flex(1))
@@ -737,7 +733,7 @@ fn join_demo(join: bool) -> Element {
 
 fn join_panel(label: &str, color: Color, join: bool, height: u16) -> Element {
     Frame::new()
-        .header_left(label.to_string())
+        .title(label.to_string())
         .join_frame(join)
         .border_merge_mode(BorderMergeMode::Exact)
         .style(Style::new().fg(color))
@@ -749,7 +745,7 @@ fn join_panel(label: &str, color: Color, join: bool, height: u16) -> Element {
 
 fn merge_mode_demo(mode: BorderMergeMode, title: &str) -> Element {
     Frame::new()
-        .header_left(title.to_string())
+        .title(title.to_string())
         .padding(1)
         .width(Length::Flex(1))
         .height(Length::Px(12))
@@ -763,7 +759,7 @@ fn merge_mode_demo(mode: BorderMergeMode, title: &str) -> Element {
                         .height(Length::Px(7))
                         .child(
                             Frame::new()
-                                .header_left("Plain")
+                                .title("Plain")
                                 .join_frame(true)
                                 .border_style(BorderStyle::Plain)
                                 .border_merge_mode(mode)
@@ -772,7 +768,7 @@ fn merge_mode_demo(mode: BorderMergeMode, title: &str) -> Element {
                         )
                         .child(
                             Frame::new()
-                                .header_left("Double")
+                                .title("Double")
                                 .join_frame(true)
                                 .border_style(BorderStyle::Double)
                                 .border_merge_mode(mode)

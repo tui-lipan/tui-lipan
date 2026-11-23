@@ -505,7 +505,7 @@ impl Component for WindowManagerDemo {
         match msg {
             Msg::FrameworkFocusEnteredWindow(id) => {
                 focus_window(&mut ctx.state, id);
-                Update::full()
+                Update::render()
             }
             Msg::FocusWindow(id, framework_focus) => {
                 focus_window(&mut ctx.state, id);
@@ -513,7 +513,7 @@ impl Component for WindowManagerDemo {
                     request_window_focus(ctx, id);
                 }
                 ctx.state.status = format!("Focused window #{id}");
-                Update::full()
+                Update::render()
             }
             Msg::HoverWindow(id) => {
                 if self.config.focus_mode == WindowFocusMode::Hover
@@ -522,7 +522,7 @@ impl Component for WindowManagerDemo {
                     focus_window(&mut ctx.state, id);
                     request_window_focus(ctx, id);
                     ctx.state.status = format!("Hover-focused window #{id}");
-                    Update::full()
+                    Update::render()
                 } else {
                     Update::none()
                 }
@@ -589,7 +589,7 @@ impl Component for WindowManagerDemo {
                 if let Some(status) = status {
                     ctx.state.status = status;
                 }
-                Update::full()
+                Update::render()
             }
             Msg::MoveWindow(id, dx, dy, modified) => {
                 if !modified {
@@ -631,7 +631,7 @@ impl Component for WindowManagerDemo {
                 {
                     window.floating_rect = rect;
                 }
-                Update::full()
+                Update::render()
             }
             Msg::EndMove(id, x, y) => {
                 let session = ctx.state.moving_window.filter(|session| session.id == id);
@@ -651,7 +651,7 @@ impl Component for WindowManagerDemo {
                 } else {
                     ctx.state.status = format!("Finished moving window #{id}");
                 }
-                Update::full()
+                Update::render()
             }
             Msg::BeginResize(id, corner, modified) => {
                 if !modified {
@@ -662,7 +662,7 @@ impl Component for WindowManagerDemo {
                 request_window_focus(ctx, id);
                 ctx.state.resizing_window = Some(ResizeSession { id, corner });
                 ctx.state.status = format!("Resizing window #{id} from {}", corner.label());
-                Update::full()
+                Update::render()
             }
             Msg::ResizeWindow(id, corner, dx, dy, modified) => {
                 if !modified {
@@ -677,7 +677,7 @@ impl Component for WindowManagerDemo {
                     .map(|session| session.corner)
                     .unwrap_or(corner);
                 resize_window(&mut ctx.state, id, corner, dx, dy, viewport);
-                Update::full()
+                Update::render()
             }
             Msg::EndResize(id) => {
                 if ctx
@@ -688,35 +688,37 @@ impl Component for WindowManagerDemo {
                     ctx.state.resizing_window = None;
                 }
                 ctx.state.status = format!("Finished resizing window #{id}");
-                Update::full()
+                Update::render()
             }
             Msg::FinishOpen(id) => {
                 if let Some(window) = find_window_mut(&mut ctx.state, id) {
                     window.opening = false;
                     ctx.state.animation = GeometryAnimation::Spawn;
                 }
-                Update::full()
+                Update::render()
             }
             Msg::PruneClosed(id) => {
                 remove_window(&mut ctx.state, id);
-                Update::full()
+                Update::render()
             }
         }
     }
 
-    fn on_focus_changed(&self, change: &FocusChanged) -> Option<Self::Message> {
-        change
-            .new
-            .as_ref()?
-            .keys()
-            .find_map(|key| window_id_from_key(key.as_ref()))
-            .map(Msg::FrameworkFocusEnteredWindow)
+    fn on_focus_changed(&mut self, change: &FocusChanged, ctx: &mut Context<Self>) -> Update {
+        if let Some(id) = change.new.as_ref().and_then(|entry| {
+            entry
+                .keys()
+                .find_map(|key| window_id_from_key(key.as_ref()))
+        }) {
+            ctx.link().send(Msg::FrameworkFocusEnteredWindow(id));
+        }
+        Update::none()
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
         if key.is(KeyCode::Esc) || key.is(KeyCode::Char('q')) {
             ctx.quit();
-            return KeyUpdate::handled(Update::full());
+            return KeyUpdate::handled(Update::render());
         }
 
         if !is_mod_key(key) {
@@ -730,7 +732,7 @@ impl Component for WindowManagerDemo {
                 switch_workspace(&mut ctx.state, index);
             }
             request_current_window_focus(ctx);
-            return KeyUpdate::handled(Update::full());
+            return KeyUpdate::handled(Update::render());
         }
 
         let viewport = ctx.viewport();
@@ -741,44 +743,44 @@ impl Component for WindowManagerDemo {
             }
             KeyCode::Char('t') | KeyCode::Char('T') => {
                 toggle_tiling(ctx);
-                Update::full()
+                Update::render()
             }
             KeyCode::Char('f') | KeyCode::Char('F') => toggle_fullscreen(ctx),
             KeyCode::Char(' ') => {
                 toggle_focused_split_axis(&mut ctx.state);
-                Update::full()
+                Update::render()
             }
             KeyCode::Char('h') | KeyCode::Char('H') | KeyCode::Left => {
                 if let Some(id) = focus_in_direction(&mut ctx.state, Direction::Left, viewport) {
                     request_window_focus(ctx, id);
                 }
-                Update::full()
+                Update::render()
             }
             KeyCode::Char('j') | KeyCode::Char('J') | KeyCode::Down => {
                 if let Some(id) = focus_in_direction(&mut ctx.state, Direction::Down, viewport) {
                     request_window_focus(ctx, id);
                 }
-                Update::full()
+                Update::render()
             }
             KeyCode::Char('k') | KeyCode::Char('K') | KeyCode::Up => {
                 if let Some(id) = focus_in_direction(&mut ctx.state, Direction::Up, viewport) {
                     request_window_focus(ctx, id);
                 }
-                Update::full()
+                Update::render()
             }
             KeyCode::Char('l') | KeyCode::Char('L') | KeyCode::Right => {
                 if let Some(id) = focus_in_direction(&mut ctx.state, Direction::Right, viewport) {
                     request_window_focus(ctx, id);
                 }
-                Update::full()
+                Update::render()
             }
             KeyCode::Char('[') | KeyCode::Char('-') => {
                 adjust_focused_split_ratio(&mut ctx.state, -RATIO_STEP);
-                Update::full()
+                Update::render()
             }
             KeyCode::Char(']') | KeyCode::Char('=') | KeyCode::Char('+') => {
                 adjust_focused_split_ratio(&mut ctx.state, RATIO_STEP);
-                Update::full()
+                Update::render()
             }
             _ => return KeyUpdate::unhandled(Update::none()),
         };
@@ -1095,7 +1097,7 @@ impl WindowManagerDemo {
         if let Some(title_bar) = title_bar {
             body = body
                 .decoration(titlebar_top_edge(title_bar_bg))
-                .header_content(title_bar);
+                .title_content(title_bar);
         }
         let body = if window.app.has_focusable_content() {
             body
@@ -1606,8 +1608,8 @@ fn browser_content(id: WindowId) -> Element {
 
 fn empty_workspace_panel() -> Element {
     Frame::new()
-        .header_left("Empty workspace")
-        .header_padding(1)
+        .title("Empty workspace")
+        .title_padding(1)
         .border(true)
         .border_style(BorderStyle::Rounded)
         .style(
@@ -2366,7 +2368,7 @@ fn spawn_window(ctx: &mut Context<WindowManagerDemo>, animations: WindowAnimatio
         }
         SpawnPlacement::Appended => format!("Spawned {} as tiled window #{id}", app.title()),
     };
-    Update::with_command(finish_open_command(id, open_delay(animations)))
+    Update::render_with_command(finish_open_command(id, open_delay(animations)))
 }
 
 /// Outcome of placing a freshly spawned window, for status reporting.
@@ -2423,7 +2425,7 @@ fn close_focused_window(
 ) -> Update {
     let Some(id) = ctx.state.focused_window else {
         ctx.state.status = "No focused window to close".to_string();
-        return Update::full();
+        return Update::render();
     };
 
     let bounds = canvas_bounds_from_viewport(ctx.viewport());
@@ -2446,9 +2448,9 @@ fn close_focused_window(
         choose_fallback_focus(&mut ctx.state);
         request_current_window_focus(ctx);
         ctx.state.status = format!("Closing window #{id}");
-        Update::with_command(prune_closed_command(id, close_delay(animations)))
+        Update::render_with_command(prune_closed_command(id, close_delay(animations)))
     } else {
-        Update::full()
+        Update::render()
     }
 }
 
@@ -2520,7 +2522,7 @@ fn toggle_tiling(ctx: &mut Context<WindowManagerDemo>) {
 fn toggle_fullscreen(ctx: &mut Context<WindowManagerDemo>) -> Update {
     let Some(id) = ctx.state.focused_window else {
         ctx.state.status = "No focused window to fullscreen".to_string();
-        return Update::full();
+        return Update::render();
     };
 
     let bounds = canvas_bounds_from_viewport(ctx.viewport());
@@ -2549,7 +2551,7 @@ fn toggle_fullscreen(ctx: &mut Context<WindowManagerDemo>) -> Update {
         ctx.state.status = status;
     }
 
-    Update::full()
+    Update::render()
 }
 
 fn toggle_focused_split_axis(state: &mut State) {

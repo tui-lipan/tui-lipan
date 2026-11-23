@@ -143,7 +143,7 @@ impl Component for ProgressZonesDemo {
             ]);
 
         Frame::new()
-            .header_left("Progress Zones")
+            .title("Progress Zones")
             .border(true)
             .padding(1)
             .child(
@@ -174,7 +174,7 @@ impl Component for ProgressZonesDemo {
             Msg::Queue(event) => ctx.state.queue = event.progress,
             Msg::Custom(event) => ctx.state.custom = event.progress,
         }
-        Update::full()
+        Update::render()
     }
 }
 

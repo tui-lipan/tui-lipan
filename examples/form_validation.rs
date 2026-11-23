@@ -144,7 +144,7 @@ impl Component for LoginForm {
                         .err()
                         .map(|e| e.message);
                 }
-                Update::full()
+                Update::render()
             }
             Msg::PasswordChanged(ev) => {
                 self.password = ev.value;
@@ -156,13 +156,13 @@ impl Component for LoginForm {
                         .err()
                         .map(|e| e.message);
                 }
-                Update::full()
+                Update::render()
             }
             Msg::Submit => {
                 if self.validate() {
                     self.submitted = true;
                 }
-                Update::full()
+                Update::render()
             }
             Msg::Reset => {
                 self.username = Arc::from("");
@@ -174,7 +174,7 @@ impl Component for LoginForm {
                 self.username_error = None;
                 self.password_error = None;
                 self.submitted = false;
-                Update::full()
+                Update::render()
             }
         }
     }
@@ -205,11 +205,9 @@ impl Component for LoginForm {
                 .cursor(self.username_cursor)
                 .anchor(self.username_anchor)
                 .placeholder("Enter username")
+                .border(true)
                 .on_change(ctx.link().callback(Msg::UsernameChanged))
-                .on_key(ctx.link().key_handler(|key| match key.code {
-                    KeyCode::Enter => Some(Msg::Submit),
-                    _ => None,
-                }))
+                .on_submit(ctx.link().callback(|_| Msg::Submit))
                 .error(self.username_error.clone())
                 .reserve_error_row(true)
                 .width(Length::Px(LOGIN_WIDTH)),
@@ -220,12 +218,10 @@ impl Component for LoginForm {
                 .cursor(self.password_cursor)
                 .anchor(self.password_anchor)
                 .placeholder("Enter password")
+                .border(true)
                 .mask(Some('●'))
                 .on_change(ctx.link().callback(Msg::PasswordChanged))
-                .on_key(ctx.link().key_handler(|key| match key.code {
-                    KeyCode::Enter => Some(Msg::Submit),
-                    _ => None,
-                }))
+                .on_submit(ctx.link().callback(|_| Msg::Submit))
                 .error(self.password_error.clone())
                 .reserve_error_row(true)
                 .width(Length::Px(LOGIN_WIDTH)),

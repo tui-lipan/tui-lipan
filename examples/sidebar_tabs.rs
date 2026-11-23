@@ -183,14 +183,14 @@ impl Component for SidebarTabsDemo {
                 ctx.state.status = Arc::from(format!("Canceled drag for {name}"));
             }
         }
-        Update::full()
+        Update::render()
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => {
                 ctx.quit();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Up | KeyCode::Down => {
                 let len = ctx.state.services.len();
@@ -206,7 +206,7 @@ impl Component for SidebarTabsDemo {
                 let svc = &ctx.state.services[next];
                 ctx.state.selected = svc.id;
                 ctx.state.status = Arc::from(format!("Selected {}", svc.name));
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char(' ') => {
                 if let Some(idx) = ctx.state.selected_index() {
@@ -215,7 +215,7 @@ impl Component for SidebarTabsDemo {
                     ctx.state.status =
                         Arc::from(format!("{} is now {}", svc.name, svc.status.label()));
                 }
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             _ => KeyUpdate::unhandled(Update::none()),
         }
@@ -223,7 +223,7 @@ impl Component for SidebarTabsDemo {
 
     fn view(&self, ctx: &Context<Self>) -> Element {
         Frame::new()
-            .header_left("Sidebar Tabs — composed from primitives")
+            .title("Sidebar Tabs — composed from primitives")
             .footer_left(ctx.state.status.clone())
             .border(true)
             .border_style(BorderStyle::Rounded)
@@ -250,7 +250,7 @@ fn sidebar(ctx: &Context<SidebarTabsDemo>) -> Element {
     rows.push(end_drop_zone(ctx, len));
 
     Frame::new()
-        .header_left("Services")
+        .title("Services")
         .border(true)
         .border_style(BorderStyle::Rounded)
         .style(Style::new().fg(Color::indexed(60)))
@@ -422,7 +422,7 @@ fn details_pane(ctx: &Context<SidebarTabsDemo>) -> Element {
     let (glyph, color) = svc.status.glyph();
 
     Frame::new()
-        .header_left(svc.name.clone())
+        .title(svc.name.clone())
         .border(true)
         .border_style(BorderStyle::Rounded)
         .style(Style::new().fg(Color::indexed(66)))

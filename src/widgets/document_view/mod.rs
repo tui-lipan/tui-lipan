@@ -347,7 +347,7 @@ impl Default for DocumentView {
             line_number_mode: DocumentLineNumberMode::default(),
             line_number_style: Style::default(),
             highlight_full_width: false,
-            border: true,
+            border: false,
             border_style: BorderStyle::Plain,
             padding: Padding::default(),
             table_wrap: false,

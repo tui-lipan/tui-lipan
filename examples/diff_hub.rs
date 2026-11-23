@@ -318,7 +318,7 @@ impl Component for DiffHub {
             }
         }
 
-        Update::full()
+        Update::render()
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {
@@ -509,7 +509,7 @@ impl Component for DiffHub {
             )
             .child(
                 Frame::new()
-                    .header_left(format!("Diff Hub - {title}"))
+                    .title(format!("Diff Hub - {title}"))
                     .footer_left("Switch variants with tabs")
                     .border(true)
                     .padding(1)

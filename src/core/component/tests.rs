@@ -144,13 +144,17 @@ impl Component for DevToolsMetricsProbe {
         Update::none()
     }
 
-    fn view(&self, ctx: &Context<Self>) -> Element {
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
         ctx.set_devtools_metrics(|| {
             [
                 crate::DevToolsMetric::new("Panes", "4"),
                 crate::DevToolsMetric::new("Clients", "2"),
             ]
         });
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
         Text::new("metrics").into()
     }
 }
@@ -170,7 +174,7 @@ impl Component for DisabledDevToolsMetricsProbe {
         Update::none()
     }
 
-    fn view(&self, ctx: &Context<Self>) -> Element {
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
         let invoked = Rc::clone(&ctx.props);
         ctx.set_devtools_metrics(move || {
             invoked.set(true);
@@ -179,6 +183,10 @@ impl Component for DisabledDevToolsMetricsProbe {
                 format!("{}", expensive_metric()),
             )]
         });
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
         Text::new("metrics disabled").into()
     }
 }
@@ -265,7 +273,8 @@ fn request_ui_snapshot_shares_a_paint_with_a_slot_request() {
         }
 
         fn update(&mut self, _msg: (), ctx: &mut Context<Self>) -> Update {
-            ctx.request_ui_snapshot_to_slot(&ctx.state.0);
+            let slot = ctx.state.0.clone();
+            ctx.request_ui_snapshot_to_slot(&slot);
             let delivered = Rc::clone(&ctx.state.1);
             ctx.request_ui_snapshot(crate::callback::Callback::new(move |_| {
                 delivered.set(delivered.get() + 1);
@@ -303,7 +312,8 @@ fn a_slot_snapshot_leaves_messages_the_render_queued_for_the_next_pump() {
 
         fn update(&mut self, request: bool, ctx: &mut Context<Self>) -> Update {
             if request {
-                ctx.request_ui_snapshot_to_slot(&ctx.state.0);
+                let slot = ctx.state.0.clone();
+                ctx.request_ui_snapshot_to_slot(&slot);
             } else {
                 ctx.state.1 += 1;
             }
@@ -559,25 +569,12 @@ impl Component for Counter {
 
 #[test]
 fn update_constructors_set_expected_levels() {
-    let none = Update::none();
-    assert!(!none.dirty);
-    assert_eq!(none.level(), super::UpdateLevel::None);
+    use super::UpdateLevel;
 
-    let paint = Update::paint();
-    assert!(paint.dirty);
-    assert_eq!(paint.level(), super::UpdateLevel::Paint);
-
-    let layout = Update::layout();
-    assert!(layout.dirty);
-    assert_eq!(layout.level(), super::UpdateLevel::Layout);
-
-    let full = Update::full();
-    assert!(full.dirty);
-    assert_eq!(full.level(), super::UpdateLevel::Full);
-
-    let full2 = Update::full();
-    assert!(full2.dirty);
-    assert_eq!(full2.level(), super::UpdateLevel::Full);
+    assert_eq!(Update::none().level(), UpdateLevel::None);
+    assert_eq!(Update::paint().level(), UpdateLevel::Paint);
+    assert_eq!(Update::render().level(), UpdateLevel::Render);
+    assert_eq!(Update::full().level(), UpdateLevel::Full);
 }
 
 #[cfg(feature = "devtools")]
@@ -689,42 +686,37 @@ fn request_ui_snapshot_to_routes_png_extension_when_feature_enabled() {
 }
 
 #[test]
-fn with_command_defaults_to_full_level() {
-    let update = Update::with_command(Command::new(|| {}));
-    assert!(update.dirty);
+fn full_with_command_requests_full_level() {
+    let update = Update::full_with_command(Command::new(|| {}));
     assert_eq!(update.level(), super::UpdateLevel::Full);
     assert!(update.command.is_some());
 }
 
 #[test]
-fn layout_with_command_preserves_layout_level() {
-    let update = Update::layout_with_command(Command::new(|| {}));
-    assert!(update.dirty);
-    assert_eq!(update.level(), super::UpdateLevel::Layout);
+fn render_with_command_requests_render_level() {
+    let update = Update::render_with_command(Command::new(|| {}));
+    assert_eq!(update.level(), super::UpdateLevel::Render);
     assert!(update.command.is_some());
 
-    let update = Update::layout_with_command(Option::<Command>::None);
-    assert!(update.dirty);
-    assert_eq!(update.level(), super::UpdateLevel::Layout);
+    let update = Update::render_with_command(Option::<Command>::None);
+    assert_eq!(update.level(), super::UpdateLevel::Render);
     assert!(update.command.is_none());
 }
 
 #[test]
-fn with_command_optional_and_command_only() {
+fn optional_full_command_and_command_only() {
     assert_eq!(
-        Update::with_command(Option::<Command>::None).level(),
+        Update::full_with_command(Option::<Command>::None).level(),
         super::UpdateLevel::Full
     );
     let cmd = Command::new(|| {});
-    let u = Update::with_command(cmd);
+    let u = Update::full_with_command(cmd);
     assert_eq!(u.level(), super::UpdateLevel::Full);
-    assert!(u.dirty);
     assert!(u.command.is_some());
 
     let cmd2 = Command::new(|| {});
     let u2 = Update::command_only(cmd2);
     assert_eq!(u2.level(), super::UpdateLevel::None);
-    assert!(!u2.dirty);
     assert!(u2.command.is_some());
 }
 
@@ -754,7 +746,6 @@ fn command_message_to_unmounted_component_is_dropped() {
         .update_by_scope(scope_c, Box::new(CounterMsg::Inc))
         .expect("update should not panic");
     assert_eq!(update.level(), super::UpdateLevel::None);
-    assert!(!update.dirty);
 }
 
 #[test]
@@ -817,7 +808,7 @@ impl Component for KeyedCmdComponent {
         if self.call_count == 1 {
             let started_tx = self.started_tx.clone();
             let release_rx = self.release_rx.borrow_mut().take().unwrap();
-            Update::with_command(Command::spawn_keyed(
+            Update::full_with_command(Command::spawn_keyed(
                 key,
                 TaskPolicy::LatestOnly,
                 move |_link: CommandLink<()>| {
@@ -827,7 +818,7 @@ impl Component for KeyedCmdComponent {
                 },
             ))
         } else if self.call_count == 2 {
-            Update::with_command(Command::spawn_keyed(
+            Update::full_with_command(Command::spawn_keyed(
                 key,
                 TaskPolicy::LatestOnly,
                 move |_link: CommandLink<()>| {
@@ -835,7 +826,7 @@ impl Component for KeyedCmdComponent {
                 },
             ))
         } else {
-            Update::with_command(Command::spawn_keyed(
+            Update::full_with_command(Command::spawn_keyed(
                 key,
                 TaskPolicy::LatestOnly,
                 move |_link: CommandLink<()>| {
@@ -1090,7 +1081,7 @@ fn paint_with_command_preserves_paint_and_accepts_none() {
     for command in [None, Some(Command::new(|| {}))] {
         let owns_command = command.is_some();
         let update = Update::paint_with_command(command);
-        assert!(update.dirty);
+
         assert_eq!(update.level(), super::UpdateLevel::Paint);
         assert_eq!(update.command.is_some(), owns_command);
     }
@@ -1099,7 +1090,7 @@ fn paint_with_command_preserves_paint_and_accepts_none() {
 #[test]
 fn merging_updates_preserves_the_strongest_level_and_each_command_owner() {
     let constructors: [fn() -> Update; 4] =
-        [Update::none, Update::paint, Update::layout, Update::full];
+        [Update::none, Update::paint, Update::render, Update::full];
     for left in constructors {
         for right in constructors {
             for command_owner in 0..=2 {
@@ -1114,7 +1105,6 @@ fn merging_updates_preserves_the_strongest_level_and_each_command_owner() {
                 let expected = a.level().max(b.level());
                 let update = a.merge(b);
                 assert_eq!(update.level(), expected);
-                assert_eq!(update.dirty, expected != super::UpdateLevel::None);
                 assert_eq!(update.command.is_some(), command_owner != 0);
             }
         }
@@ -1130,8 +1120,8 @@ fn merged_commands_execute_in_order_without_being_dropped() {
     };
     let update = Update::command_only(make(1))
         .merge(Update::paint_with_command(make(2)))
-        .merge(Update::layout_with_command(make(3)));
-    assert_eq!(update.level(), super::UpdateLevel::Layout);
+        .merge(Update::render_with_command(make(3)));
+    assert_eq!(update.level(), super::UpdateLevel::Render);
     let (tx, _rx, _wake) = super::CommandTx::channel();
     update.command.unwrap().run(CommandRuntime {
         scope: ScopeId(1),
@@ -1159,8 +1149,8 @@ fn commands_widen_terminal_damage_updates_to_paint_in_both_merge_orders() {
             super::UpdateLevel::Paint
         );
         assert_eq!(
-            terminal().merge(Update::layout()).level(),
-            super::UpdateLevel::Layout
+            terminal().merge(Update::render()).level(),
+            super::UpdateLevel::Render
         );
         for reverse in [false, true] {
             let command = Update::command_only(Command::new(|| {}));

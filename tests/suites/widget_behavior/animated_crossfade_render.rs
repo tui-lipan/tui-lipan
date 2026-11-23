@@ -139,7 +139,7 @@ impl Component for FramedCrossfade {
     fn view(&self, _ctx: &Context<Self>) -> Element {
         let page = |title: &'static str, bg: Color| {
             Frame::new()
-                .header_left(title)
+                .title(title)
                 .border(true)
                 // A page covers the one beneath: its border replaces that page's title rather
                 // than keeping it as a neighbour's.

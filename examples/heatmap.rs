@@ -26,7 +26,7 @@ impl Component for HeatmapExample {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => {
                 ctx.quit();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             _ => KeyUpdate::unhandled(Update::none()),
         }
@@ -139,27 +139,27 @@ impl Component for HeatmapExample {
                     style: Style::new().dim(),
                 },
                 Frame {
-                    header_left: "Weekly Activity",
+                    title: "Weekly Activity",
                     border: true,
                     activity_heatmap,
                 },
                 HStack {
                     gap: 1,
                     Frame {
-                        header_left: "Server Load Glyph Mode",
+                        title: "Server Load Glyph Mode",
                         border: true,
                         width: Length::Flex(2),
                         load_heatmap,
                     },
                     VStack {
                         Frame {
-                            header_left: "Simple Grid",
+                            title: "Simple Grid",
                             border: true,
                             width: Length::Flex(1),
                             simple_heatmap,
                         },
                         Frame {
-                            header_left: "Glyph Foreground Grid",
+                            title: "Glyph Foreground Grid",
                             border: true,
                             width: Length::Flex(1),
                             big_glyphforeground_heatmap,
