@@ -636,8 +636,7 @@ impl<C: Component> AppRunner<C> {
             reconcile_result?;
         }
 
-        self.dirty_component_scopes.clear();
-        self.dirty_scope_set.clear();
+        self.clear_dirty_scopes();
         #[cfg(feature = "devtools")]
         let reconcile_duration = reconcile_start.elapsed();
         #[cfg(feature = "profiling-tracing")]
@@ -685,23 +684,18 @@ impl<C: Component> AppRunner<C> {
             crate::core::nested::set_frame_diagnostics_enabled(enabled);
         }
 
-        if !self.dirty_component_scopes.is_empty()
-            && !self.core.refresh_cached_scopes(
-                &self.dirty_component_scopes,
-                bounds,
-                self.mouse.hovered,
-            )
+        let scopes = self.take_dirty_scopes();
+        if !scopes.is_empty()
+            && !self
+                .core
+                .refresh_cached_scopes(&scopes, bounds, self.mouse.hovered)
         {
             crate::debug::internal_log!(
                 "[tui-lipan] layout-only fallback: refresh_cached_scopes failed for {:?}",
-                self.dirty_component_scopes
+                scopes
             );
-            self.dirty_component_scopes.clear();
-            self.dirty_scope_set.clear();
             return self.render(terminal);
         }
-        self.dirty_component_scopes.clear();
-        self.dirty_scope_set.clear();
 
         self.push_drag_layout_collapse_hint();
         let text_area_drag_snapshot = self.active_text_area_drag_snapshot();
@@ -756,21 +750,18 @@ impl<C: Component> AppRunner<C> {
                         return Ok(true);
                     }
                     DirtyLevel::LayoutOnly => {
-                        if !self.dirty_component_scopes.is_empty()
-                            && !self.core.refresh_cached_scopes(
-                                &self.dirty_component_scopes,
-                                bounds,
-                                self.mouse.hovered,
-                            )
+                        let scopes = self.take_dirty_scopes();
+                        if !scopes.is_empty()
+                            && !self
+                                .core
+                                .refresh_cached_scopes(&scopes, bounds, self.mouse.hovered)
                         {
                             crate::debug::internal_log!(
                                 "[tui-lipan] layout-only fallback: render-time refresh_cached_scopes failed for {:?}",
-                                self.dirty_component_scopes
+                                scopes
                             );
                             return Ok(true);
                         }
-                        self.dirty_component_scopes.clear();
-                        self.dirty_scope_set.clear();
                     }
                     DirtyLevel::PaintOnly | DirtyLevel::DamagePaintOnly | DirtyLevel::None => {
                         return Ok(false);
@@ -879,8 +870,7 @@ impl<C: Component> AppRunner<C> {
         self.last_frame_snapshot = None;
         self.scroll_diff_snapshot = None;
         self.last_scroll_frames.clear();
-        self.dirty_component_scopes.clear();
-        self.dirty_scope_set.clear();
+        self.clear_dirty_scopes();
 
         self.flush_transcript_document_entries(terminal, document)?;
         self.finalize_after_reconcile(terminal, DrawMode::Full)?;

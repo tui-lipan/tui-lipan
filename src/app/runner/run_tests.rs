@@ -5245,7 +5245,7 @@ fn a_hover_change_outside_every_queried_key_stays_a_repaint() {
         "and neither does the next one"
     );
     assert!(
-        runner.dirty_component_scopes.is_empty(),
+        runner.take_dirty_scopes().is_empty(),
         "a repaint marks no scope for refresh"
     );
 
@@ -5260,7 +5260,7 @@ fn a_hover_change_outside_every_queried_key_stays_a_repaint() {
         "the queried key now answers differently, so its view must run"
     );
     assert_eq!(
-        runner.dirty_component_scopes.as_slice(),
+        runner.take_dirty_scopes().as_slice(),
         &[ScopeId(1)],
         "and the scope that asked is marked, which is what makes the layout pass legal"
     );
@@ -5287,9 +5287,11 @@ fn text_under_key<C: Component>(runner: &AppRunner<C>, key: &str) -> String {
 }
 
 /// The frame a `LayoutOnly` hover crossing asks for: refresh the marked scopes, then reconcile.
-fn render_layout_only_frame<C: Component>(runner: &mut AppRunner<C>, viewport: Rect) {
-    let scopes = std::mem::take(&mut runner.dirty_component_scopes);
-    runner.dirty_scope_set.clear();
+fn render_layout_only_frame<C: Component>(
+    runner: &mut AppRunner<C>,
+    viewport: Rect,
+) -> Vec<ScopeId> {
+    let scopes = runner.take_dirty_scopes();
     assert!(
         runner
             .core
@@ -5305,6 +5307,7 @@ fn render_layout_only_frame<C: Component>(runner: &mut AppRunner<C>, viewport: R
         ),
         "the refreshed element should reconcile"
     );
+    scopes
 }
 
 type ScopeViews = Rc<RefCell<Vec<(&'static str, usize)>>>;
@@ -5382,13 +5385,24 @@ impl Component for DirtyScopeProbe {
 }
 
 fn dirty_scope_runner(wrap_middle_in_memo: bool) -> AppRunner<DirtyScopeProbe> {
+    dirty_scope_runner_at_depth(wrap_middle_in_memo, 1)
+}
+
+fn dirty_scope_runner_at_depth(
+    wrap_middle_in_memo: bool,
+    intermediates: usize,
+) -> AppRunner<DirtyScopeProbe> {
     let views = Rc::default();
     let mut root = DirtyScopeProbe::new("root", &views);
     let mut ancestor = DirtyScopeProbe::new("ancestor", &views);
     ancestor.wrap_middle_in_memo = wrap_middle_in_memo;
-    let mut middle = DirtyScopeProbe::new("middle", &views);
-    middle.children.push(DirtyScopeProbe::new("leaf", &views));
-    ancestor.children.push(middle);
+    let mut descendant = DirtyScopeProbe::new("leaf", &views);
+    for _ in 0..intermediates {
+        let mut middle = DirtyScopeProbe::new("middle", &views);
+        middle.children.push(descendant);
+        descendant = middle;
+    }
+    ancestor.children.push(descendant);
     root.children = vec![ancestor, DirtyScopeProbe::new("sibling", &views)];
 
     let mut runner = AppRunner::new(App::new().mouse(false), root.clone(), ());
@@ -5467,20 +5481,103 @@ fn dirty_scope_coalescing_subsumes_the_extra_root_only_for_the_application_root(
 
     runner.mark_dirty_scope(leaf);
     runner.mark_dirty_scope(extra);
-    assert_eq!(runner.dirty_component_scopes, [leaf, extra]);
+    assert_eq!(runner.take_dirty_scopes(), [leaf, extra]);
 
+    runner.mark_dirty_scope(leaf);
+    runner.mark_dirty_scope(extra);
     let root = ScopeId(1);
     runner.mark_dirty_scope(root);
     runner.mark_dirty_scope(extra);
     runner.mark_dirty_scope(leaf);
-    assert_eq!(runner.dirty_component_scopes, [root]);
 
     for scope in [extra, leaf] {
         runner.core.update_from_boxed(scope, Box::new(())).unwrap();
     }
-    render_layout_only_frame(&mut runner, DIRTY_SCOPE_VIEWPORT);
+    assert_eq!(
+        render_layout_only_frame(&mut runner, DIRTY_SCOPE_VIEWPORT),
+        [root]
+    );
     assert_eq!(text_under_key(&runner, "leaf"), "1");
     assert_eq!(text_under_key(&runner, "extra"), "1");
+}
+
+fn sibling_scope_runner(count: usize) -> (AppRunner<DirtyScopeProbe>, Vec<ScopeId>) {
+    const KEYS: [&str; 32] = [
+        "01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12", "13", "14", "15",
+        "16", "17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30",
+        "31", "32",
+    ];
+    let keys = &KEYS[..count];
+    let views = Rc::default();
+    let mut root = DirtyScopeProbe::new("root", &views);
+    root.children = keys
+        .iter()
+        .map(|key| DirtyScopeProbe::new(key, &views))
+        .collect();
+
+    let mut runner = AppRunner::new(App::new().mouse(false), root.clone(), ());
+    init_runner(&mut runner, root, DIRTY_SCOPE_VIEWPORT);
+    let scopes = keys.iter().map(|key| probe_scope(&runner, key)).collect();
+    (runner, scopes)
+}
+
+#[test]
+fn dirty_scope_preparation_uses_linear_parent_lookups_for_siblings() {
+    fn lookups(count: usize) -> usize {
+        let (mut runner, scopes) = sibling_scope_runner(count);
+        runner.core.components.parent_scope_lookups.set(0);
+        for &scope in &scopes {
+            runner.mark_dirty_scope(scope);
+        }
+        assert_eq!(runner.take_dirty_scopes(), scopes);
+        runner.core.components.parent_scope_lookups.get()
+    }
+
+    let small = lookups(16);
+    let large = lookups(32);
+    println!("parent lookups for 16 and 32 siblings: {small}, {large}");
+    assert!(
+        large <= small * 2,
+        "doubling siblings should at most double parent lookups: {small} to {large}"
+    );
+}
+
+#[test]
+fn dirty_scope_preparation_coalesces_a_deep_chain_in_either_order() {
+    let mut runner = dirty_scope_runner_at_depth(false, 8);
+    let ancestor = probe_scope(&runner, "ancestor");
+    let leaf = probe_scope(&runner, "leaf");
+    let sibling = probe_scope(&runner, "sibling");
+
+    for (queued, expected) in [
+        ([leaf, sibling, ancestor], [sibling, ancestor]),
+        ([ancestor, sibling, leaf], [ancestor, sibling]),
+    ] {
+        for scope in queued {
+            runner.mark_dirty_scope(scope);
+        }
+        assert_eq!(runner.take_dirty_scopes(), expected);
+        assert!(runner.take_dirty_scopes().is_empty());
+    }
+}
+
+#[test]
+fn dirty_scope_preparation_keeps_an_unmounted_scope_for_the_render_fallback() {
+    let mut runner = dirty_scope_runner(false);
+    let leaf = probe_scope(&runner, "leaf");
+    runner.mark_dirty_scope(leaf);
+    runner.core.component.children.clear();
+    runner
+        .core
+        .render_element(DIRTY_SCOPE_VIEWPORT, None, None, None);
+
+    let scopes = runner.take_dirty_scopes();
+    assert_eq!(scopes, [leaf]);
+    assert!(
+        !runner
+            .core
+            .refresh_cached_scopes(&scopes, DIRTY_SCOPE_VIEWPORT, None)
+    );
 }
 
 /// The layout pass a crossing asks for has to actually land, twice over: the view it re-runs must
@@ -6837,7 +6934,7 @@ fn process_pending_messages_routes_paint_only_without_scope_enqueue() {
         .expect("pending paint message should process");
 
     assert_eq!(dirty.level(), DirtyLevel::PaintOnly);
-    assert!(runner.dirty_component_scopes.is_empty());
+    assert!(runner.take_dirty_scopes().is_empty());
 }
 
 #[test]
@@ -6888,7 +6985,7 @@ fn process_pending_messages_routes_root_layout_to_layout_scope_refresh() {
         .expect("pending root layout message should process");
 
     assert_eq!(dirty.level(), DirtyLevel::LayoutOnly);
-    assert_eq!(runner.dirty_component_scopes, vec![ScopeId(1)]);
+    assert_eq!(runner.take_dirty_scopes(), vec![ScopeId(1)]);
 }
 
 #[test]
@@ -6966,7 +7063,7 @@ fn root_window_focus_lifecycle_applies_each_update_level_once_per_transition() {
         assert!(!runner.set_window_focused(false, &mut dirty));
         assert_eq!(calls.get(), 1);
         assert_eq!(
-            runner.dirty_component_scopes,
+            runner.take_dirty_scopes(),
             if matches!(expected, DirtyLevel::LayoutOnly) {
                 vec![ScopeId(1)]
             } else {
@@ -7034,7 +7131,7 @@ fn controlled_text_area_input_remains_layout_only() {
         .expect("TextArea callback should process");
 
     assert_eq!(dirty.level(), DirtyLevel::LayoutOnly);
-    assert_eq!(runner.dirty_component_scopes, vec![ScopeId(1)]);
+    assert_eq!(runner.take_dirty_scopes(), vec![ScopeId(1)]);
 
     for msg in [
         Msg::SentinelsChanged,
@@ -7128,8 +7225,7 @@ fn scroll_dependency_probe_stale_after_edits(mode: ScrollReadMode, edits: &[KeyC
         // Mirror the layout-only render path for the frame: refresh dirty
         // scopes' views, reconcile the cached element, then ask whether
         // cached views became stale.
-        let scopes = std::mem::take(&mut runner.dirty_component_scopes);
-        runner.dirty_scope_set.clear();
+        let scopes = runner.take_dirty_scopes();
         assert!(
             runner
                 .core

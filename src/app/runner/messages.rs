@@ -94,8 +94,7 @@ impl<C: Component> AppRunner<C> {
             }
             UpdateLevel::Full => {
                 if scope == ScopeId(1) {
-                    self.dirty_component_scopes.clear();
-                    self.dirty_scope_set.clear();
+                    self.clear_dirty_scopes();
                 }
                 dirty.mark_full();
             }
@@ -158,36 +157,37 @@ impl<C: Component> AppRunner<C> {
         false
     }
 
-    /// Queue the outermost dirty scopes. Expanding one also refreshes its dirty descendants.
+    /// Record a scope once. A queued application root covers both expanded trees.
     pub(super) fn mark_dirty_scope(&mut self, scope: ScopeId) {
         let root = ScopeId(1);
-        if self.dirty_scope_set.contains(&root) || self.dirty_scope_set.contains(&scope) {
+        if self.dirty_scope_set.contains(&root) {
             return;
         }
         if scope == root {
-            self.dirty_component_scopes.clear();
-            self.dirty_scope_set.clear();
-        } else {
-            let components = &self.core.components;
-            if components
+            self.clear_dirty_scopes();
+        }
+        if self.dirty_scope_set.insert(scope) {
+            self.dirty_component_scopes.push(scope);
+        }
+    }
+
+    /// Take the next batch in insertion order, keeping the outermost dirty scopes.
+    pub(super) fn take_dirty_scopes(&mut self) -> Vec<ScopeId> {
+        let mut scopes = std::mem::take(&mut self.dirty_component_scopes);
+        scopes.retain(|&scope| {
+            !self
+                .core
+                .components
                 .ancestor_scopes(scope)
                 .any(|ancestor| self.dirty_scope_set.contains(&ancestor))
-            {
-                return;
-            }
-            self.dirty_component_scopes.retain(|&queued| {
-                if components
-                    .ancestor_scopes(queued)
-                    .any(|ancestor| ancestor == scope)
-                {
-                    self.dirty_scope_set.remove(&queued);
-                    return false;
-                }
-                true
-            });
-        }
-        self.dirty_scope_set.insert(scope);
-        self.dirty_component_scopes.push(scope);
+        });
+        self.dirty_scope_set.clear();
+        scopes
+    }
+
+    pub(super) fn clear_dirty_scopes(&mut self) {
+        self.dirty_component_scopes.clear();
+        self.dirty_scope_set.clear();
     }
 
     pub(super) fn apply_framework_commands(&mut self) -> bool {

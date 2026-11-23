@@ -466,6 +466,8 @@ pub(crate) struct ComponentRegistry {
     epoch: u32,
     next_scope: u32,
     mount_requests_full: bool,
+    #[cfg(test)]
+    pub(crate) parent_scope_lookups: Cell<usize>,
     /// Theme stack used during expansion. When a `ThemeProvider` is being
     /// expanded, its theme is pushed here so that child `Component` entries
     /// can record it for later use in `refresh_scope_in_place`.
@@ -601,6 +603,8 @@ impl ComponentRegistry {
             epoch: 0,
             next_scope: 2,
             mount_requests_full: false,
+            #[cfg(test)]
+            parent_scope_lookups: Cell::default(),
             theme_stack: Vec::new(),
             context_stack: Vec::new(),
             context_generation: 1,
@@ -789,6 +793,9 @@ impl ComponentRegistry {
     }
 
     pub(crate) fn parent_scope(&self, scope: ScopeId) -> Option<ScopeId> {
+        #[cfg(test)]
+        self.parent_scope_lookups
+            .set(self.parent_scope_lookups.get() + 1);
         let id = self.scope_to_id.get(&scope).copied()?;
         if !self.is_valid(id) {
             return None;

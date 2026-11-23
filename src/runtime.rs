@@ -1063,8 +1063,7 @@ where
 
     /// Refresh the cached element tree for the given scopes.
     ///
-    /// Callers must provide an already-deduplicated list (the runner deduplicates
-    /// at collection time via `dirty_scope_set`).
+    /// Callers prepare the list before refreshing. A queued ancestor covers its descendants.
     pub(crate) fn refresh_cached_scopes(
         &mut self,
         scopes: &[ScopeId],
