@@ -1,5 +1,6 @@
 //! Regression tests for squeezed/overflowed bordered widgets painting over siblings.
 
+use tui_lipan::core::event::{MouseButton, MouseKind};
 use tui_lipan::prelude::*;
 use tui_lipan::{PointerShape, TestBackend, UiSnapshotOptions};
 
@@ -388,6 +389,104 @@ fn bordered_widgets_given_fewer_rows_than_chrome_never_paint_outside_rect() {
                 Some(PointerShape::Text),
                 "squeezed_height={squeezed_height}: text pointer should match borderless input row"
             );
+        }
+    }
+}
+
+struct InputWithErrorRow(Element);
+
+impl Component for InputWithErrorRow {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        self.0.clone()
+    }
+}
+
+#[test]
+fn squeezed_input_keeps_its_field_and_excludes_the_error_row_from_text_hits() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    for (reserve_error_row, error) in [(true, None), (false, Some("Invalid value"))] {
+        for h in [1, 2, 4] {
+            let cursor = Rc::new(Cell::new(None));
+            let context_menus = Rc::new(Cell::new(0));
+            let input = Input::new("hello")
+                .height(Length::Px(h))
+                .focusable(false)
+                .reserve_error_row(reserve_error_row)
+                .error(error)
+                .on_change(Callback::new({
+                    let cursor = cursor.clone();
+                    move |event: InputEvent| cursor.set(Some(event.cursor))
+                }))
+                .on_context_menu(Callback::new({
+                    let context_menus = context_menus.clone();
+                    move |_| context_menus.set(context_menus.get() + 1)
+                }));
+            let mut backend = TestBackend::new_with_viewport(
+                InputWithErrorRow(Element::from(input).min_height(Length::Px(0)).key("input")),
+                Rect {
+                    x: 0,
+                    y: 0,
+                    w: 24,
+                    h,
+                },
+            );
+            backend.render();
+
+            let snapshot =
+                backend.capture_ui_snapshot_with_options(&UiSnapshotOptions::diagnostic());
+            assert_eq!(find_rect(&snapshot.widgets, "input").h, h);
+            let rows = snapshot.frame.to_fixed_grid_lines();
+            let (text_x, text_y) = if h == 4 { (2, 1) } else { (1, 0) };
+            assert!(rows[text_y as usize].contains("hello"), "rows: {rows:?}");
+            assert_eq!(
+                rows.iter().any(|row| row.contains("Invalid value")),
+                h > 1 && error.is_some(),
+                "rows: {rows:?}"
+            );
+            assert_eq!(
+                backend.pointer_shape_at(text_x, text_y),
+                Some(PointerShape::Text)
+            );
+
+            let mut click = |y, button| {
+                for kind in [MouseKind::Down(button), MouseKind::Up(button)] {
+                    backend
+                        .send_mouse(MouseEvent {
+                            x: text_x + 1,
+                            y,
+                            kind,
+                            mods: KeyMods::NONE,
+                        })
+                        .unwrap();
+                }
+            };
+            click(text_y, MouseButton::Left);
+            assert_eq!(cursor.take(), Some(1));
+            click(text_y, MouseButton::Right);
+            assert_eq!(context_menus.get(), 1);
+
+            if h > 1 {
+                click(h - 1, MouseButton::Left);
+                assert_eq!(cursor.take(), None);
+                click(h - 1, MouseButton::Right);
+                assert_eq!(context_menus.get(), 1);
+                assert_ne!(
+                    backend.pointer_shape_at(text_x, h - 1),
+                    Some(PointerShape::Text)
+                );
+            }
         }
     }
 }

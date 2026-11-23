@@ -580,9 +580,9 @@ pub(crate) fn handle_input_drag(
     let node = tree.node(id);
     match &node.kind {
         NodeKind::Input(input_node) => {
-            let inner = node.rect.inner(input_node.border, input_node.padding);
+            let inner = input_node.geometry(node.rect).content;
 
-            if inner.w == 0 {
+            if inner.is_empty() {
                 return None;
             }
 

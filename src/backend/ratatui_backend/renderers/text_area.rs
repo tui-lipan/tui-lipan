@@ -2736,9 +2736,7 @@ pub(crate) struct InputCursorDecor<'a> {
 }
 
 pub(crate) struct InputCursorLayout {
-    pub border: bool,
-    pub padding: Padding,
-    pub rect: Rect,
+    pub content: Rect,
     pub clip_rect: Option<Rect>,
 }
 
@@ -2756,24 +2754,10 @@ pub(crate) fn input_cursor_position(
         mask,
     } = decor;
     let InputCursorLayout {
-        border,
-        padding,
-        rect,
+        content: inner,
         clip_rect,
     } = layout;
-    if rect.w == 0 || rect.h == 0 {
-        return None;
-    }
-
-    let mut inner = rect;
-    if border {
-        inner.x = inner.x.saturating_add(1);
-        inner.w = inner.w.saturating_sub(2);
-        inner.y = inner.y.saturating_add(1);
-        inner.h = inner.h.saturating_sub(2);
-    }
-    inner = inner.inset(padding);
-    if inner.w == 0 || inner.h == 0 {
+    if inner.is_empty() {
         return None;
     }
 
@@ -2865,7 +2849,7 @@ pub(crate) fn input_cursor_position(
         .saturating_add(prefix_w as i16)
         .saturating_add(cursor_x as i16);
     let cy = inner.y;
-    let clip = clip_rect.unwrap_or(rect);
+    let clip = clip_rect.unwrap_or(inner);
     if cx < clip.x
         || cx >= clip.x.saturating_add(clip.w as i16)
         || cy < clip.y

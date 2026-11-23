@@ -17,8 +17,9 @@ use crate::backend::ratatui_backend::renderers::theme::{
     with_theme_error, with_theme_input_focus, with_theme_muted, with_theme_primary,
 };
 use crate::core::node::NodeId;
-use crate::style::{BorderStyle, Padding, Rect, Style, ThemeRole, resolve_slot};
+use crate::style::{BorderStyle, Rect, Style, ThemeRole, resolve_slot};
 use crate::utils::text as util;
+use crate::widgets::internal::InputGeometry;
 
 pub(crate) struct InputRenderCtx<'a> {
     pub placeholder: Option<&'a str>,
@@ -34,10 +35,8 @@ pub(crate) struct InputRenderCtx<'a> {
     pub placeholder_style: Style,
     pub focus_placeholder_style: Style,
     pub selection_style: Style,
-    pub border: bool,
     pub border_style: BorderStyle,
     pub hover_border_style: Option<BorderStyle>,
-    pub padding: Padding,
     pub mask: Option<char>,
     pub is_focused: bool,
     pub is_hovered: bool,
@@ -49,7 +48,7 @@ pub(crate) struct InputRenderCtx<'a> {
     pub clip_rect: Option<Rect>,
     pub error: Option<&'a str>,
     pub error_style: Style,
-    pub reserve_error_row: bool,
+    pub geometry: InputGeometry,
 }
 
 pub(crate) fn render_input(
@@ -57,7 +56,6 @@ pub(crate) fn render_input(
     value: &str,
     cursor: usize,
     anchor: Option<usize>,
-    rect: Rect,
     ctx: InputRenderCtx<'_>,
 ) {
     let InputRenderCtx {
@@ -74,10 +72,8 @@ pub(crate) fn render_input(
         placeholder_style,
         focus_placeholder_style,
         selection_style,
-        border,
         border_style,
         hover_border_style,
-        padding,
         mask,
         is_focused,
         is_hovered,
@@ -89,7 +85,7 @@ pub(crate) fn render_input(
         clip_rect,
         error,
         error_style,
-        reserve_error_row,
+        geometry,
     } = ctx;
     let mut chrome_style = style;
     let content_style = if is_focused {
@@ -120,20 +116,14 @@ pub(crate) fn render_input(
         chrome_style = chrome_style.patch(Style::new().fg(error_fg));
     }
 
-    let has_error_row = (reserve_error_row || error.is_some()) && rect.h > 0;
-    let content_rect = if has_error_row {
-        Rect {
-            h: rect.h.saturating_sub(1),
-            ..rect
-        }
-    } else {
-        rect
-    };
-    let content_rrect = to_ratatui_rect(content_rect).intersection(rrect);
-
-    let mut inner = content_rect;
-    let draw_border = border && content_rect.h >= 3 && content_rect.w >= 3;
-    if draw_border {
+    let InputGeometry {
+        field,
+        draws_border,
+        content: inner,
+        error_row,
+    } = geometry;
+    let field_rrect = to_ratatui_rect(field).intersection(rrect);
+    if draws_border {
         let block_style = chrome_style;
         let mut border_type = border_style;
         if !disabled
@@ -143,7 +133,7 @@ pub(crate) fn render_input(
             border_type = bt;
         }
 
-        let borders = calculate_visible_borders(content_rect, clip_rect);
+        let borders = calculate_visible_borders(field, clip_rect);
         let mut block = Block::default()
             .borders(borders)
             .border_type(to_ratatui_border_type(border_type))
@@ -154,43 +144,31 @@ pub(crate) fn render_input(
         }
 
         if style_uses_backdrop_bg(block_style) {
-            clear_fg_preserve_bg_clipped(f, content_rect, clip_rect);
+            clear_fg_preserve_bg_clipped(f, field, clip_rect);
         } else if style_paints_bg(block_style) {
-            f.render_widget(Clear, content_rrect);
+            f.render_widget(Clear, field_rrect);
         }
-        f.render_widget(block, content_rrect);
-
-        // Always reserve space for borders if enabled, even if clipped
-        inner.x = inner.x.saturating_add(1);
-        inner.w = inner.w.saturating_sub(2);
-        inner.y = inner.y.saturating_add(1);
-        inner.h = inner.h.saturating_sub(2);
+        f.render_widget(block, field_rrect);
     } else if style_uses_backdrop_bg(chrome_style) {
-        clear_fg_preserve_bg_clipped(f, content_rect, clip_rect);
+        clear_fg_preserve_bg_clipped(f, field, clip_rect);
     } else if style_paints_bg(chrome_style) {
-        f.render_widget(Clear, content_rrect);
+        f.render_widget(Clear, field_rrect);
         let bg = Block::default().style(to_ratatui_style(chrome_style));
-        f.render_widget(bg, content_rrect);
+        f.render_widget(bg, field_rrect);
     }
 
-    inner = inner.inset(padding);
-    if inner.w == 0 || inner.h == 0 {
-        if let Some(err) = error {
-            let error_rect = Rect {
-                x: rect.x,
-                y: rect.y.saturating_add(rect.h.saturating_sub(1) as i16),
-                w: rect.w,
-                h: 1,
-            };
-            let error_rrect = to_ratatui_rect(error_rect).intersection(rrect);
-            if error_rrect.width > 0 && error_rrect.height > 0 {
-                let err_line = Line::from(Span::styled(
-                    truncate_end_with_ellipsis(err, error_rrect.width),
-                    to_ratatui_style(error_style),
-                ));
-                f.render_widget(Paragraph::new(err_line), error_rrect);
-            }
+    if let (Some(err), Some(error_row)) = (error, error_row) {
+        let error_rrect = to_ratatui_rect(error_row).intersection(rrect);
+        if !error_rrect.is_empty() {
+            let err_line = Line::from(Span::styled(
+                truncate_end_with_ellipsis(err, error_rrect.width),
+                to_ratatui_style(error_style),
+            ));
+            f.render_widget(Paragraph::new(err_line), error_rrect);
         }
+    }
+
+    if inner.is_empty() {
         return;
     }
 
@@ -314,26 +292,6 @@ pub(crate) fn render_input(
 
         let p = Paragraph::new(Line::from(spans)).scroll((dy, dx));
         f.render_widget(p, effective_rrect);
-
-        if !is_focused {
-            if let Some(err) = error {
-                let error_rect = Rect {
-                    x: rect.x,
-                    y: rect.y.saturating_add(rect.h.saturating_sub(1) as i16),
-                    w: rect.w,
-                    h: 1,
-                };
-                let err_rrect = to_ratatui_rect(error_rect).intersection(rrect);
-                if err_rrect.width > 0 && err_rrect.height > 0 {
-                    let err_line = Line::from(Span::styled(
-                        truncate_end_with_ellipsis(err, err_rrect.width),
-                        to_ratatui_style(error_style),
-                    ));
-                    f.render_widget(Paragraph::new(err_line), err_rrect);
-                }
-            }
-            return;
-        }
     } else {
         let mut content: Cow<'_, str> = Cow::Borrowed("");
 
@@ -489,24 +447,6 @@ pub(crate) fn render_input(
             );
         }
     }
-
-    // Render error message below the input
-    if let Some(err) = error {
-        let error_rect = Rect {
-            x: rect.x,
-            y: rect.y.saturating_add(rect.h.saturating_sub(1) as i16),
-            w: rect.w,
-            h: 1,
-        };
-        let err_rrect = to_ratatui_rect(error_rect).intersection(rrect);
-        if err_rrect.width > 0 && err_rrect.height > 0 {
-            let err_line = Line::from(Span::styled(
-                truncate_end_with_ellipsis(err, err_rrect.width),
-                to_ratatui_style(error_style),
-            ));
-            f.render_widget(Paragraph::new(err_line), err_rrect);
-        }
-    }
 }
 
 pub(crate) fn render_input_node(
@@ -558,7 +498,6 @@ pub(crate) fn render_input_node(
         &node.value,
         effective_cursor,
         effective_anchor,
-        rect,
         InputRenderCtx {
             placeholder: node.placeholder.as_deref(),
             prefix: node.prefix.as_deref(),
@@ -605,10 +544,8 @@ pub(crate) fn render_input_node(
                 style_backdrop(base_style),
                 contrast_policy,
             ),
-            border: node.border,
             border_style: node.border_style,
             hover_border_style: node.hover_border_style,
-            padding: node.padding,
             mask: node.mask,
             is_focused,
             is_hovered,
@@ -628,7 +565,7 @@ pub(crate) fn render_input_node(
                 None,
                 contrast_policy,
             ),
-            reserve_error_row: node.reserve_error_row,
+            geometry: node.geometry(rect),
         },
     );
 }
@@ -639,7 +576,7 @@ mod tests {
     use ratatui::style::Modifier;
     use ratatui::{Terminal, TerminalOptions, Viewport};
 
-    use super::{CursorPlacement, InputRenderCtx, render_input};
+    use super::{CursorPlacement, InputGeometry, InputRenderCtx, render_input};
     use crate::style::{BorderStyle, Padding, Rect, Style};
 
     fn test_input_ctx<'a>(
@@ -665,10 +602,8 @@ mod tests {
             placeholder_style: Style::default(),
             focus_placeholder_style: Style::default(),
             selection_style: Style::default(),
-            border,
             border_style: BorderStyle::Plain,
             hover_border_style: None,
-            padding: Padding::default(),
             mask: None,
             is_focused,
             is_hovered: false,
@@ -680,7 +615,12 @@ mod tests {
             clip_rect: None,
             error,
             error_style: Style::default(),
-            reserve_error_row,
+            geometry: InputGeometry::new(
+                rect,
+                border,
+                Padding::default(),
+                reserve_error_row || error.is_some(),
+            ),
         }
     }
 
@@ -708,7 +648,6 @@ mod tests {
                     "hello",
                     0,
                     None,
-                    rect,
                     test_input_ctx(rect, Style::default(), false, true, None, None, false),
                 );
             })
@@ -742,7 +681,6 @@ mod tests {
                     "hello",
                     0,
                     None,
-                    rect,
                     test_input_ctx(
                         rect,
                         Style::new().fg(crate::style::Color::Cyan),
@@ -784,7 +722,6 @@ mod tests {
                     "hello",
                     0,
                     None,
-                    rect,
                     test_input_ctx(rect, Style::new().bold(), false, true, None, None, false),
                 );
             })
@@ -818,7 +755,6 @@ mod tests {
                     "hi",
                     0,
                     None,
-                    rect,
                     test_input_ctx(
                         rect,
                         Style::default(),
@@ -866,7 +802,6 @@ mod tests {
                     "hi",
                     0,
                     None,
-                    rect,
                     test_input_ctx(rect, Style::default(), true, false, None, None, true),
                 );
             })
@@ -905,7 +840,6 @@ mod tests {
                     "",
                     0,
                     None,
-                    rect,
                     test_input_ctx(
                         rect,
                         Style::default(),

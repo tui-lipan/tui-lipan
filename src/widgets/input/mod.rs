@@ -4,6 +4,7 @@ mod reconcile;
 
 use std::sync::Arc;
 
+pub(crate) use layout::InputGeometry;
 pub(crate) use layout::measure_input;
 pub use node::InputNode;
 pub(crate) use reconcile::reconcile_input;
@@ -456,7 +457,7 @@ impl Input {
         self
     }
 
-    /// Set error message to display below the input.
+    /// Set an error message to display below the input when there is room for both rows.
     pub fn error<S>(mut self, message: Option<S>) -> Self
     where
         S: Into<Arc<str>>,
@@ -471,7 +472,7 @@ impl Input {
         self
     }
 
-    /// Reserve a dedicated row for error text even when no error is present.
+    /// Reserve an error row when there is room for both rows, even without an error message.
     pub fn reserve_error_row(mut self, reserve_error_row: bool) -> Self {
         self.reserve_error_row = reserve_error_row;
         self

@@ -422,9 +422,7 @@ impl<C: Component> AppRunner<C> {
                         mask: input.mask,
                     },
                     crate::backend::ratatui_backend::renderers::text_area::InputCursorLayout {
-                        border: input.border,
-                        padding: input.padding,
-                        rect: node.rect,
+                        content: input.geometry(node.rect).content,
                         clip_rect: scroll_clip,
                     },
                 )
