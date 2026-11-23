@@ -7,7 +7,7 @@ Programs running inside a `Terminal` pane can draw pictures. `TerminalScreen` re
 stream, decodes it, and the renderer paints the result over the pane's text.
 
 ```toml
-tui-lipan = { version = "0.45", features = ["terminal-images"] }
+tui-lipan = { version = "0.46", features = ["terminal-images"] }
 ```
 
 ```bash
