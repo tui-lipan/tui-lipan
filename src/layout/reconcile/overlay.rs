@@ -196,8 +196,12 @@ pub(crate) fn reconcile_portal(
         ),
     };
     let bounds = overlay_state.bounds;
-    content_rect.w = constraints.clamp_width(content_rect.w, bounds.w);
-    content_rect.h = constraints.clamp_height(content_rect.h, bounds.h);
+    content_rect.w = constraints
+        .clamp_width(content_rect.w, bounds.w)
+        .min(bounds.w);
+    content_rect.h = constraints
+        .clamp_height(content_rect.h, bounds.h)
+        .min(bounds.h);
     // Re-center after clamping so the modal stays centered when capped.
     content_rect.x = bounds
         .x

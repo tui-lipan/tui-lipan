@@ -990,7 +990,11 @@ fn render_border_frame(
     let rect = geometry.frame_rect;
     let join_overlap = geometry.join_overlap;
 
-    if props.compact || (props.collapsible && rect.h < 3) {
+    if rect.w == 0 || rect.h == 0 {
+        return;
+    }
+
+    if props.compact || rect.h == 1 || (props.collapsible && rect.h < 3) {
         render_compact_frame(f, props, rect, ctx);
         return;
     }

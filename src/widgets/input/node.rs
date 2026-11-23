@@ -66,8 +66,21 @@ pub struct InputNode {
 }
 
 impl InputNode {
+    /// Whether this input has enough room in `rect` to draw its border chrome around the text row.
+    pub(crate) fn draws_border(&self, rect: Rect) -> bool {
+        let has_error_row = (self.reserve_error_row || self.error.is_some()) && rect.h > 0;
+        let content_h = if has_error_row {
+            rect.h.saturating_sub(1)
+        } else {
+            rect.h
+        };
+        self.border && content_h >= 3 && rect.w >= 3
+    }
+
     fn context_menu_content_rect(&self, press: SecondaryPress) -> Rect {
-        press.rect.inner(self.border, self.padding)
+        press
+            .rect
+            .inner(self.draws_border(press.rect), self.padding)
     }
 
     /// Whether a mouse press can place a caret or start a selection in this input.
@@ -79,8 +92,9 @@ impl InputNode {
     ///
     /// Padding counts unless an affix stands between it and the value, as in a browser's input box.
     pub(crate) fn pointer_text_rect(&self, rect: Rect) -> Rect {
-        let field = rect.inner(self.border, Padding::default());
-        let inner = rect.inner(self.border, self.padding);
+        let draws_border = self.draws_border(rect);
+        let field = rect.inner(draws_border, Padding::default());
+        let inner = rect.inner(draws_border, self.padding);
         let width = |text: &Option<Arc<str>>| {
             text.as_deref()
                 .filter(|text| !text.is_empty())

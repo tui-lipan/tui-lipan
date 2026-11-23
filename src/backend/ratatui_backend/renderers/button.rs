@@ -108,34 +108,37 @@ pub(crate) fn render_button(
             let shortcut_style_final =
                 finalize_style(label_style.patch(shortcut_style), None, contrast_policy);
 
-            let borders = calculate_visible_borders(rect, clip_rect);
-
-            let block_style = to_ratatui_style(border_style);
-            let mut block = Block::default()
-                .borders(borders)
-                .border_type(to_ratatui_border_type(border_type))
-                .style(block_style);
-
-            if let Some(set) = to_ratatui_border_set(border_type) {
-                block = block.border_set(set);
-            }
-
-            f.render_widget(block, rrect);
-
+            let draw_border = rect.h >= 3 && rect.w >= 3;
             let mut inner = rect;
-            if borders.contains(Borders::LEFT) {
-                inner.x = inner.x.saturating_add(1);
-                inner.w = inner.w.saturating_sub(1);
-            }
-            if borders.contains(Borders::RIGHT) {
-                inner.w = inner.w.saturating_sub(1);
-            }
-            if borders.contains(Borders::TOP) {
-                inner.y = inner.y.saturating_add(1);
-                inner.h = inner.h.saturating_sub(1);
-            }
-            if borders.contains(Borders::BOTTOM) {
-                inner.h = inner.h.saturating_sub(1);
+            if draw_border {
+                let borders = calculate_visible_borders(rect, clip_rect);
+
+                let block_style = to_ratatui_style(border_style);
+                let mut block = Block::default()
+                    .borders(borders)
+                    .border_type(to_ratatui_border_type(border_type))
+                    .style(block_style);
+
+                if let Some(set) = to_ratatui_border_set(border_type) {
+                    block = block.border_set(set);
+                }
+
+                f.render_widget(block, rrect);
+
+                if borders.contains(Borders::LEFT) {
+                    inner.x = inner.x.saturating_add(1);
+                    inner.w = inner.w.saturating_sub(1);
+                }
+                if borders.contains(Borders::RIGHT) {
+                    inner.w = inner.w.saturating_sub(1);
+                }
+                if borders.contains(Borders::TOP) {
+                    inner.y = inner.y.saturating_add(1);
+                    inner.h = inner.h.saturating_sub(1);
+                }
+                if borders.contains(Borders::BOTTOM) {
+                    inner.h = inner.h.saturating_sub(1);
+                }
             }
             inner = inner.inset(padding);
             if inner.w == 0 || inner.h == 0 {

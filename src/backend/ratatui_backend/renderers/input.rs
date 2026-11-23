@@ -132,7 +132,8 @@ pub(crate) fn render_input(
     let content_rrect = to_ratatui_rect(content_rect).intersection(rrect);
 
     let mut inner = content_rect;
-    if border {
+    let draw_border = border && content_rect.h >= 3 && content_rect.w >= 3;
+    if draw_border {
         let block_style = chrome_style;
         let mut border_type = border_style;
         if !disabled

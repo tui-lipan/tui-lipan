@@ -63,7 +63,7 @@ pub fn reconcile_text_area(
     if matches!(text_area.width, crate::style::Length::Auto) {
         rect.w = w.min(rect.w);
     }
-    rect.w = constraints.clamp_width(rect.w, avail_w);
+    rect.w = constraints.clamp_width(rect.w, avail_w).min(avail_w);
 
     let height_is_auto = matches!(text_area.height, crate::style::Length::Auto);
     if height_is_auto {
@@ -75,7 +75,9 @@ pub fn reconcile_text_area(
         );
         rect.h = rect.h.min(available_h);
     }
-    rect.h = constraints.clamp_height(rect.h, available_h);
+    rect.h = constraints
+        .clamp_height(rect.h, available_h)
+        .min(available_h);
 
     let mut pending_scroll_event = None;
     {
