@@ -129,7 +129,7 @@ impl Component for HeatmapExample {
         rsx! {
             VStack {
                 padding: 1,
-                spacing: 1,
+                gap: 1,
                 Text {
                     content: "Heatmap Widget Examples",
                     style: Style::new().bold().fg(Color::Rgb(126, 190, 255)),
@@ -144,7 +144,7 @@ impl Component for HeatmapExample {
                     activity_heatmap,
                 },
                 HStack {
-                    spacing: 1,
+                    gap: 1,
                     Frame {
                         title: "Server Load Glyph Mode",
                         border: true,

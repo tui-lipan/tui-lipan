@@ -4,6 +4,7 @@ use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::quote;
 use syn::{Ident, parse_macro_input};
 
+mod child_block;
 mod rsx_ast;
 mod rsx_expand;
 mod ui_ast;
@@ -33,7 +34,8 @@ pub fn rsx(input: TokenStream) -> TokenStream {
 /// ```
 ///
 /// Everything before `=>` is a normal Rust expression (full autocomplete).
-/// `=> { child1, child2, ... }` desugars to `.child(child1).child(child2)...`.
+/// `=> { child1, child2, ... }` adds children through the parent type's
+/// `UiChildren` implementation.
 #[proc_macro]
 pub fn ui(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as UiInput);
@@ -43,11 +45,11 @@ pub fn ui(input: TokenStream) -> TokenStream {
 
 fn lipan_crate_path() -> TokenStream2 {
     match crate_name("tui-lipan") {
-        Ok(FoundCrate::Itself) => quote!(crate),
+        // Examples and doctests in tui-lipan's package also get Itself.
+        Ok(FoundCrate::Itself) | Err(_) => quote!(::tui_lipan),
         Ok(FoundCrate::Name(name)) => {
             let ident = Ident::new(&name, Span::call_site());
             quote!(::#ident)
         }
-        Err(_) => quote!(::tui_lipan),
     }
 }

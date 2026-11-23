@@ -214,18 +214,13 @@ impl Component for Counter {
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {
-        rsx! {
-            VStack {
-                gap: 1,
-                padding: 2,
-
-                Text { content: format!("Count: {}", ctx.state.count) }
-
-                HStack {
-                    gap: 1,
-                    Button { label: "-", on_click: ctx.link().callback(|_| Msg::Decrement) }
-                    Button { label: "+", on_click: ctx.link().callback(|_| Msg::Increment) }
-                }
+        ui! {
+            VStack::new().gap(1).padding(2) => {
+                Text::new(format!("Count: {}", ctx.state.count)),
+                HStack::new().gap(1) => {
+                    Button::new("-").on_click(ctx.link().callback(|_| Msg::Decrement)),
+                    Button::new("+").on_click(ctx.link().callback(|_| Msg::Increment)),
+                },
             }
         }
     }

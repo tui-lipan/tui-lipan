@@ -22,3 +22,5 @@ pub mod node;
 pub(crate) mod runtime_env;
 
 pub(crate) mod terminal_metrics;
+/// Child dispatch used by the `ui!` and `rsx!` macros.
+pub(crate) mod ui_children;

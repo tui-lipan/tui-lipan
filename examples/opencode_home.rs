@@ -227,7 +227,7 @@ impl Component for OpencodeHome {
                 width: Length::Auto,
                 height: Length::Auto,
                 gap: 0,
-                alignment: Align::Center,
+                align: Align::Center,
                 logo,
                 Spacer { height: Length::Px(2) },
                 Frame {
@@ -276,7 +276,7 @@ impl Component for OpencodeHome {
                 HStack {
                     height: Length::Auto,
                     width: Length::Flex(1),
-                    alignment: Align::End,
+                    align: Align::End,
                     justify: Justify::End,
                     gap: 1,
                     Text {

@@ -104,7 +104,7 @@ impl Component for ComplexLayoutComponent {
                 VStack {
                     width: Length::Auto,
                     gap: 1,
-                    alignment: Align::Center,
+                    align: Align::Center,
 
                     // Logo-like HStack
                     HStack {
@@ -138,7 +138,7 @@ impl Component for ComplexLayoutComponent {
                     // Shortcuts row
                     HStack {
                         height: Length::Auto,
-                        alignment: Align::End,
+                        align: Align::End,
                         gap: 2,
 
                         HStack {
@@ -352,7 +352,7 @@ fn align_stretch_fills_cross_axis() {
         fn view(&self, _ctx: &Context<Self>) -> Element {
             rsx! {
                 HStack {
-                    alignment: Align::Stretch,
+                    align: Align::Stretch,
                     height: Length::Px(10),
                     Button { label: "Stretched" },
                 }

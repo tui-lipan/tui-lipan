@@ -237,6 +237,7 @@ pub use crate::core::mask::CellMask;
 pub use crate::core::memo::Memo;
 pub use crate::core::nested::any_props::ThemableProps;
 pub use crate::core::node::NodeId;
+pub use crate::core::ui_children::UiChildren;
 pub use crate::input::{
     ChordMatcher, ChordResult, KeyBinding, KeyBindingParseError, KeyBindings,
     KeyEventExpansionError, format_binding, format_binding_lowercase, format_bindings,
@@ -583,3 +584,5 @@ fn inline_surface_commit_render_path_is_unified() {
 fn inline_surface_internal_wrap_policy_is_opaque() {
     crate::backend::ratatui_backend::assert_inline_surface_internal_wrap_policy_is_opaque();
 }
+
+extern crate self as tui_lipan;
