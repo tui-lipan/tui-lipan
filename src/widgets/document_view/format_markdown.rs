@@ -413,7 +413,7 @@ fn consume_fenced_top_level_block(
     fmt: &MarkdownFormatter,
 ) -> ParsedBlock {
     *i += 1;
-    let mut code_lines = Vec::new();
+    let mut code_lines: Vec<String> = Vec::new();
     let mut fence_closed = false;
     while *i < lines.len() {
         let raw = lines[*i].1.as_str();
@@ -788,7 +788,10 @@ fn parse_fence_start(line: &str) -> Option<FenceOpen<'_>> {
 
 fn parse_fence_start_at(line: &str, container_col: usize) -> Option<FenceOpen<'_>> {
     let (indent, rest) = line_leading_columns(line);
-    let rel_indent = indent.saturating_sub(container_col);
+    if indent < container_col {
+        return None;
+    }
+    let rel_indent = indent - container_col;
     if rel_indent > 3 {
         return None;
     }
@@ -824,7 +827,7 @@ fn is_fence_close(line: &str, open: FenceOpen<'_>) -> bool {
 
 fn is_fence_close_at(line: &str, container_col: usize, open: FenceOpen<'_>) -> bool {
     let (indent, rest) = line_leading_columns(line);
-    if indent.saturating_sub(container_col) > 3 {
+    if indent < container_col || indent - container_col > 3 {
         return false;
     }
     is_fence_close_trimmed(rest, open)
@@ -1047,10 +1050,7 @@ fn parse_list_at(
         let content = parse_list_item_body(
             lines,
             i,
-            ListItemIndent {
-                marker_col,
-                content_col,
-            },
+            ListItemIndent { content_col },
             fmt,
             styles,
             item_text,
@@ -1077,7 +1077,6 @@ fn parse_list_at(
 /// Lines after the list marker line for one item: continuations and nested lists.
 #[derive(Clone, Copy)]
 struct ListItemIndent {
-    marker_col: usize,
     content_col: usize,
 }
 
@@ -1147,7 +1146,7 @@ fn parse_list_item_tail(
     mut blocks: Vec<ParsedBlock>,
     mut para: Vec<FormattedLine>,
 ) -> Vec<FormattedBlock> {
-    let marker_col = indent.marker_col;
+    let content_col = indent.content_col;
     while *i < lines.len() {
         let (_, raw) = &lines[*i];
         if raw.trim().is_empty() {
@@ -1160,7 +1159,7 @@ fn parse_list_item_tail(
                 break;
             };
             let (next_ind, _) = line_leading_columns(next_raw);
-            if next_ind <= marker_col {
+            if next_ind < content_col {
                 break;
             }
             push_list_para(&mut blocks, &mut para);
@@ -1177,14 +1176,14 @@ fn parse_list_item_tail(
 
         let (ind, rest) = line_leading_columns(raw);
 
-        if ind <= marker_col {
+        if ind < content_col {
             break;
         }
 
         if let Some((_ord, _, text)) = parse_list_marker(rest) {
-            // `ind > marker_col` is guaranteed here (same-indent siblings break above).
+            // `ind >= content_col` is guaranteed here (less-indented lines break above).
             push_list_para(&mut blocks, &mut para);
-            if let Some(nested) = parse_list_at(lines, i, marker_col + 1, fmt, styles) {
+            if let Some(nested) = parse_list_at(lines, i, content_col, fmt, styles) {
                 let start_line = nested.source_line_start;
                 blocks.push(ParsedBlock {
                     kind: ParsedBlockKind::List,
@@ -1204,12 +1203,11 @@ fn parse_list_item_tail(
             continue;
         }
 
-        let container_col = indent.content_col.min(ind);
-        if let Some(open) = parse_fence_start_at(raw, container_col) {
+        if let Some(open) = parse_fence_start_at(raw, content_col) {
             push_list_para(&mut blocks, &mut para);
             let start_line = lines[*i].0;
             let code =
-                consume_fenced_list_block(lines, i, container_col, open, start_line, fmt, true);
+                consume_fenced_list_block(lines, i, content_col, open, start_line, fmt, true);
             let kind = fenced_block_kind(&code);
             blocks.push(ParsedBlock {
                 kind,
@@ -1246,14 +1244,23 @@ fn consume_fenced_list_block(
         *i += 1;
     }
     let fence_col = container_col.saturating_add(open.indent);
-    let mut code_lines = Vec::new();
+    let mut code_lines: Vec<String> = Vec::new();
     let mut fence_closed = false;
     while *i < lines.len() {
         let raw = lines[*i].1.as_str();
-        if is_fence_close_at(raw, container_col, open) {
-            *i += 1;
-            fence_closed = true;
-            break;
+        if !raw.trim().is_empty() {
+            let (line_ind, _) = line_leading_columns(raw);
+            if line_ind < container_col {
+                while code_lines.last().is_some_and(|line| line.is_empty()) {
+                    code_lines.pop();
+                }
+                break;
+            }
+            if is_fence_close_at(raw, container_col, open) {
+                *i += 1;
+                fence_closed = true;
+                break;
+            }
         }
 
         code_lines.push(strip_leading_columns(raw, fence_col));
@@ -2328,5 +2335,72 @@ let label = \"ok\";
         };
         assert_eq!(multi_spacer[0].source_line, 1);
         assert_eq!(multi_heading[0].source_line, 2);
+    }
+
+    #[test]
+    fn list_item_continuation_requires_content_column_indent() {
+        // `- item` has content column 2; a 1-space-indented fence must terminate the
+        // list item and parse as a top-level code block instead of nesting inside the item.
+        let bullet_input = "- item\n ```rust\n let x = 1;\n ```";
+        let bullet_doc = MarkdownFormatter::default().format(FormatInput {
+            value: bullet_input,
+            content_type: Some("markdown"),
+            document_styles: None,
+        });
+        assert_eq!(block_tags(&bullet_doc), vec!["list", "blank", "code"]);
+        let FormattedBlock::List(list) = &bullet_doc.blocks[0] else {
+            panic!("expected list");
+        };
+        assert_eq!(list.items[0].content.len(), 1);
+        let FormattedBlock::CodeBlock(code) = &bullet_doc.blocks[2] else {
+            panic!("expected top-level code block");
+        };
+        assert_eq!(code.language.as_deref(), Some("rust"));
+        assert_eq!(code.code.as_ref(), "let x = 1;");
+
+        // `1. item` has content column 3; 2 leading spaces is not enough to stay in the item.
+        let ordered_input = "1. item\n  ```text\n  body\n  ```";
+        let ordered_doc = MarkdownFormatter::default().format(FormatInput {
+            value: ordered_input,
+            content_type: Some("markdown"),
+            document_styles: None,
+        });
+        assert_eq!(block_tags(&ordered_doc), vec!["list", "blank", "code"]);
+
+        // After a blank line, a 1-space-indented paragraph also exits `- item`.
+        let para_input = "- item\n\n outside";
+        let para_doc = MarkdownFormatter::default().format(FormatInput {
+            value: para_input,
+            content_type: Some("markdown"),
+            document_styles: None,
+        });
+        assert_eq!(block_tags(&para_doc), vec!["list", "blank", "lines"]);
+    }
+
+    #[test]
+    fn unclosed_list_item_fence_terminates_at_less_indented_sibling() {
+        let input = "- first\n  ```rust\n  let x = 1;\n- second";
+        let doc = MarkdownFormatter::default().format(FormatInput {
+            value: input,
+            content_type: Some("markdown"),
+            document_styles: None,
+        });
+        let FormattedBlock::List(list) = &doc.blocks[0] else {
+            panic!("expected list");
+        };
+        assert_eq!(list.items.len(), 2);
+        let code = list.items[0]
+            .content
+            .iter()
+            .find_map(|block| match block {
+                FormattedBlock::CodeBlock(code) => Some(code),
+                _ => None,
+            })
+            .expect("first item should keep its unclosed code block");
+        assert_eq!(code.code.as_ref(), "let x = 1;");
+        let FormattedBlock::Lines(second_lines) = &list.items[1].content[0] else {
+            panic!("second item should parse as sibling item");
+        };
+        assert_eq!(line_text(&second_lines[0]), "second");
     }
 }
