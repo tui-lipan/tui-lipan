@@ -2,6 +2,7 @@ use std::any::{Any, TypeId};
 use std::cell::Cell;
 use std::sync::Arc;
 
+use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
 use crate::callback::ScopeId;
@@ -387,6 +388,40 @@ impl Element {
             .children_mut()
             .iter_mut()
             .any(|child| child.replace_group_child_by_scope(scope, replacement));
+        if replaced {
+            self.clear_caches();
+        }
+        replaced
+    }
+
+    /// Replace the children of every `Group` whose scope has an entry in `replacements` in a
+    /// single pass, removing each matched entry. Clears cached layout/measurement state on
+    /// every replacement path.
+    ///
+    /// The walk continues into a replaced child, so a replacement for a descendant scope still
+    /// applies inside its ancestor's fresh subtree. Entries left in the map matched nothing.
+    pub(crate) fn replace_group_children_by_scope(
+        &mut self,
+        replacements: &mut FxHashMap<ScopeId, Element>,
+    ) -> bool {
+        if replacements.is_empty() {
+            return false;
+        }
+
+        let mut replaced = false;
+        if let ElementKind::Group(group) = &mut self.kind
+            && let Some(replacement) = replacements.remove(&group.scope)
+        {
+            *group.child = replacement;
+            replaced = true;
+        }
+
+        for child in self.kind.children_mut() {
+            if replacements.is_empty() {
+                break;
+            }
+            replaced |= child.replace_group_children_by_scope(replacements);
+        }
         if replaced {
             self.clear_caches();
         }
@@ -883,6 +918,8 @@ impl Default for Element {
 
 #[cfg(test)]
 mod tests {
+    use rustc_hash::FxHashMap;
+
     use super::{Element, ElementKind, Group, MeasureCacheEntry, MeasureContext};
     use crate::callback::ScopeId;
     use crate::core::memo::Memo;
@@ -1012,6 +1049,40 @@ mod tests {
         for (_name, root) in cases {
             assert_replaces_through_wrapper(root);
         }
+    }
+
+    #[test]
+    fn replace_group_children_by_scope_splices_every_scope_in_one_pass() {
+        fn group(scope: u32, child: Element) -> Element {
+            Element::new(ElementKind::Group(Group {
+                scope: ScopeId(scope),
+                child: Box::new(child),
+            }))
+        }
+
+        let mut root: Element = Grid::new()
+            .child(group(1, Text::new("a").into()))
+            .child(group(2, Text::new("b").into()))
+            .into();
+        mark_caches(&root);
+
+        // Scope 3 lives only inside scope 2's fresh subtree; scope 9 matches nothing.
+        let mut replacements = FxHashMap::default();
+        replacements.insert(ScopeId(1), Text::new("a2").into());
+        replacements.insert(ScopeId(2), group(3, Text::new("stale").into()));
+        replacements.insert(ScopeId(3), Text::new("c2").into());
+        replacements.insert(ScopeId(9), Text::new("lost").into());
+
+        assert!(root.replace_group_children_by_scope(&mut replacements));
+        assert_eq!(
+            replacements.keys().copied().collect::<Vec<_>>(),
+            [ScopeId(9)]
+        );
+        assert_eq!(root.layout_hash_cache.get(), None);
+
+        let mut texts = Vec::new();
+        text_contents(&root, &mut texts);
+        assert_eq!(texts, ["a2", "c2"]);
     }
 
     #[test]

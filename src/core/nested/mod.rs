@@ -1275,21 +1275,18 @@ impl ComponentRegistry {
         epoch: u32,
         viewport: Rect,
     ) -> bool {
+        let mut replacements = FxHashMap::default();
         for child_id in self.direct_child_ids(id) {
             if !self.component_subtree_needs_refresh(child_id) {
                 continue;
             }
 
             let replacement = self.expand_component_instance(child_id, epoch, viewport);
-            let scope = self.arena.get(child_id).scope;
-            let mut replacement = Some(replacement);
-            if element.replace_group_child_by_scope(scope, &mut replacement) {
-                continue;
-            }
-            return false;
+            replacements.insert(self.arena.get(child_id).scope, replacement);
         }
 
-        true
+        element.replace_group_children_by_scope(&mut replacements);
+        replacements.is_empty()
     }
 
     fn propagate_cached_replacement_to_ancestors(

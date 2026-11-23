@@ -5,6 +5,8 @@ use std::rc::Rc;
 #[cfg(feature = "devtools")]
 use std::sync::Arc;
 
+use rustc_hash::FxHashMap;
+
 use crate::Result;
 use crate::app::context::SurfaceMode;
 use crate::app::input::command_registry::CommandRegistry;
@@ -1142,7 +1144,8 @@ where
             }
         }
 
-        let mut replacements = Vec::with_capacity(scopes.len());
+        let mut replacements =
+            FxHashMap::with_capacity_and_hasher(scopes.len(), Default::default());
         for &scope in scopes {
             if scope == ScopeId(1) {
                 continue;
@@ -1155,13 +1158,13 @@ where
             }
             let expanded =
                 crate::style::apply_document_theme_carve_out(&refreshed.theme, refreshed.expanded);
-            replacements.push((refreshed.scope, expanded));
+            // Siblings under one memoized ancestor share its splice scope. Each later refresh
+            // starts from the ancestor cache the earlier one updated, so the last entry wins.
+            replacements.insert(refreshed.scope, expanded);
         }
 
-        for (scope, replacement) in replacements {
-            if !self.replace_scope_in_cached_trees(scope, replacement) {
-                return false;
-            }
+        if !self.replace_scopes_in_cached_trees(replacements) {
+            return false;
         }
 
         // Once, after every requested scope has run: a nested-only refresh closes the cycle too,
@@ -1180,39 +1183,31 @@ where
             .end_frame_gc(|scope| components.is_mounted_scope(scope));
     }
 
-    fn replace_scope_in_cached_trees(&mut self, scope: ScopeId, replacement: Element) -> bool {
-        if scope == ScopeId(1) {
-            self.cached_expanded_element = Some(replacement);
-            return true;
+    /// Splice every refreshed scope into the cached trees with one walk per tree. Returns
+    /// `false` when a scope is missing, so the caller falls back to a full render.
+    fn replace_scopes_in_cached_trees(
+        &mut self,
+        mut replacements: FxHashMap<ScopeId, Element>,
+    ) -> bool {
+        if let Some(root) = self.cached_expanded_element.as_mut() {
+            root.replace_group_children_by_scope(&mut replacements);
         }
-
-        let mut replacement = Some(replacement);
-
-        if let Some(root) = self.cached_expanded_element.as_mut()
-            && root.replace_group_child_by_scope(scope, &mut replacement)
+        if let Some(extra_root) = self.cached_extra_expanded_element.as_mut() {
+            extra_root.replace_group_children_by_scope(&mut replacements);
+        }
+        if !replacements.is_empty()
+            && let Some((_gen, overlays)) = self.cached_overlays.as_mut()
         {
-            return true;
-        }
-
-        if let Some(extra_root) = self.cached_extra_expanded_element.as_mut()
-            && extra_root.replace_group_child_by_scope(scope, &mut replacement)
-        {
-            return true;
-        }
-
-        if let Some((_gen, overlays)) = self.cached_overlays.as_mut() {
-            let overlays_mut = Rc::make_mut(overlays);
-            for entry in overlays_mut.iter_mut() {
-                if entry
-                    .content
-                    .replace_group_child_by_scope(scope, &mut replacement)
-                {
-                    return true;
+            for entry in Rc::make_mut(overlays).iter_mut() {
+                if replacements.is_empty() {
+                    break;
                 }
+                entry
+                    .content
+                    .replace_group_children_by_scope(&mut replacements);
             }
         }
-
-        false
+        replacements.is_empty()
     }
 }
 
