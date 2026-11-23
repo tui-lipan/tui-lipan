@@ -388,9 +388,12 @@ class ValidationTests(unittest.TestCase):
             validate_notes("## Fixed\n\n- Lists wrap — without skipping disabled rows.\n")
 
     def test_rejects_a_placeholder_pull_request_link(self):
-        for link in ("([none])", "((none))"):
+        for link in ("([none])", "((none))", "(none)"):
             with self.assertRaisesRegex(ReleaseNotesError, "none"):
                 validate_notes(f"## Fixed\n\n- A fix. {link}\n")
+
+    def test_accepts_none_as_a_call_argument(self):
+        validate_notes("## Fixed\n\n- Call `App::global_quit(None)` to opt out.\n")
 
     def test_straightens_typographic_quotes(self):
         self.assertEqual(
