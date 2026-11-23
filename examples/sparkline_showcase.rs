@@ -31,8 +31,8 @@ impl Component for SparklineShowcase {
         }
     }
 
-    fn init(&mut self, _ctx: &mut Context<Self>) -> Update {
-        Update::command_only(schedule_tick())
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
+        Update::command_only(schedule_tick(ctx.link()))
     }
 
     fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
@@ -49,7 +49,7 @@ impl Component for SparklineShowcase {
                 trim_history(&mut ctx.state.live_net_dl, 4096);
                 trim_history(&mut ctx.state.live_net_ul, 4096);
 
-                Update::render_with_command(schedule_tick())
+                Update::render_with_command(schedule_tick(ctx.link()))
             }
         }
     }
@@ -701,8 +701,8 @@ fn trim_history(values: &mut Vec<u64>, keep: usize) {
     }
 }
 
-fn schedule_tick() -> Command {
-    Command::spawn(move |link| {
+fn schedule_tick(link: &Link<Msg>) -> Command {
+    link.command(move |link| {
         std::thread::sleep(Duration::from_millis(120));
         link.send(Msg::Tick);
     })

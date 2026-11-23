@@ -1221,7 +1221,7 @@ where
     /// a background task, a spawned process, or a socket read: no amount of virtual time makes another
     /// thread finish, so a test that only advances the clock sees the pre-arrival state forever.
     ///
-    /// Prefer [`Self::advance`] whenever the wait is for an animation or a `Command::after` timer -
+    /// Prefer [`Self::advance`] whenever the wait is for an animation or a `Link::command_after` timer -
     /// it is instant and deterministic, while this one really does spend the wall time.
     ///
     /// Only messages are pumped; animations are left to [`Self::advance`], so a test settles for the
@@ -3138,7 +3138,9 @@ mod tests {
                     assert!(ctx.has_focus_within());
                     ctx.state += 1;
                     let link = ctx.link().clone();
-                    return Update::render_with_command(crate::Command::new(move || link.send(())));
+                    return Update::render_with_command(crate::Command::on_ui_thread(move || {
+                        link.send(())
+                    }));
                 }
                 Update::none()
             }
@@ -7646,7 +7648,7 @@ mod tests {
                 }
                 ElapsedProbeMessage::ScheduleAt(deadline) => {
                     let delay = deadline.saturating_sub(ctx.elapsed());
-                    Update::full_with_command(crate::Command::after(delay, |link| {
+                    Update::full_with_command(ctx.link().command_after(delay, |link| {
                         link.send(ElapsedProbeMessage::Read);
                     }))
                 }
@@ -7659,7 +7661,7 @@ mod tests {
     }
 
     /// `Context::elapsed` reads the runtime clock: virtual under a test backend, moved only by
-    /// `advance`, and the clock `Command::after` measures its delays against, so a deadline taken from
+    /// `advance`, and the clock `Link::command_after` measures its delays against, so a deadline taken from
     /// it fires exactly when that much time has passed.
     #[test]
     fn elapsed_follows_the_virtual_clock_that_timers_fire_on() {
@@ -10346,8 +10348,6 @@ mod tests {
 
     // ── Component lifecycle tests ──────────────────────────────────────
 
-    use crate::core::component::Command;
-
     /// Component whose `init()` sends a message back via Link, verifying
     /// that init commands are processed during TestBackend construction.
     struct InitSender;
@@ -10366,8 +10366,8 @@ mod tests {
             false
         }
 
-        fn init(&mut self, _ctx: &mut Context<Self>) -> Update {
-            Update::command_only(Command::spawn(move |link| {
+        fn init(&mut self, ctx: &mut Context<Self>) -> Update {
+            Update::command_only(ctx.link().command(move |link| {
                 link.send(InitMsg::Initialized);
             }))
         }
@@ -10486,7 +10486,7 @@ mod tests {
         assert_eq!(*backend.state(), 100);
     }
 
-    /// Component whose `update` returns a `Command::spawn` that sends a message
+    /// Component whose `update` returns a background command that sends a message
     /// back from a background thread.
     struct SpawnEcho;
 
@@ -10511,7 +10511,7 @@ mod tests {
 
         fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
             match msg {
-                SpawnMsg::Trigger => Update::command_only(Command::spawn(|link| {
+                SpawnMsg::Trigger => Update::command_only(ctx.link().command(|link| {
                     link.send(SpawnMsg::FromBackground(99));
                 })),
                 SpawnMsg::FromBackground(v) => {

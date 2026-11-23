@@ -177,6 +177,9 @@ impl CancellationToken {
 }
 
 /// Type-safe handle used by background tasks to send messages back to the UI thread.
+///
+/// The handle can be cloned and shared across threads without requiring the message type to
+/// implement [`Clone`] or [`Sync`].
 pub struct CommandLink<Msg: Send + 'static> {
     scope: ScopeId,
     tx: CommandTx,
@@ -379,7 +382,7 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use super::{Dispatcher, KeyHandler, Link, ScopeId};
+    use super::{CommandLink, Dispatcher, KeyHandler, Link, ScopeId};
     use crate::core::event::{KeyCode, KeyEvent, KeyMods};
 
     type TestQueue = Rc<RefCell<Vec<(ScopeId, Box<dyn Any>)>>>;
@@ -484,5 +487,12 @@ mod tests {
         let thread = std::thread::spawn(move || notifier.notify());
         assert!(wake.wait(std::time::Duration::from_secs(1)));
         thread.join().unwrap();
+    }
+
+    #[test]
+    fn command_link_can_be_shared_with_async_runtimes() {
+        fn assert_traits<T: Send + Sync + Clone + 'static>() {}
+
+        assert_traits::<CommandLink<std::sync::mpsc::Receiver<()>>>();
     }
 }

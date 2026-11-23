@@ -67,8 +67,8 @@ impl Component for AnimatedShowcase {
         }
     }
 
-    fn init(&mut self, _ctx: &mut Context<Self>) -> Update {
-        Update::command_only(schedule_tick())
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
+        Update::command_only(schedule_tick(ctx.link()))
     }
 
     fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
@@ -99,7 +99,7 @@ impl Component for AnimatedShowcase {
                     ctx.state.pulse_open = !ctx.state.pulse_open;
                     ctx.state.pulse_height_layout_idle = false;
                 }
-                return Update::render_with_command(schedule_tick());
+                return Update::render_with_command(schedule_tick(ctx.link()));
             }
             Msg::RevealHeightSettled => ctx.state.reveal_height_layout_idle = true,
             Msg::ComboHeightSettled => ctx.state.combo_height_layout_idle = true,
@@ -521,8 +521,8 @@ fn easing_name(easing: Easing) -> String {
     }
 }
 
-fn schedule_tick() -> Command {
-    Command::spawn(move |link| {
+fn schedule_tick(link: &Link<Msg>) -> Command {
+    link.command(move |link| {
         std::thread::sleep(Duration::from_millis(800));
         link.send(Msg::Tick);
     })

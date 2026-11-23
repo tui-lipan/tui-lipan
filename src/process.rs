@@ -13,7 +13,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use crate::{Command, TaskPolicy};
+use crate::{Command, CommandLink, Link, TaskPolicy};
 
 /// Description of a native child process to run and stream.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -109,26 +109,30 @@ impl ProcessSpec {
         stream_process(self, emit)
     }
 
-    /// Create an unkeyed background [`Command`] that streams process events as messages.
+    /// Create an unkeyed background [`Command`] that streams process events to a component.
+    ///
+    /// Pass `ctx.link()` to select the component's message type.
     ///
     /// Unkeyed commands do not have a normal runtime coalescing/cancellation
     /// owner. Use [`Self::command_keyed`] when newer work should cancel an
     /// active process.
-    pub fn command<Msg, F>(self, map: F) -> Command
+    pub fn command<Msg, F>(self, link: &Link<Msg>, map: F) -> Command
     where
         Msg: Send + 'static,
         F: Fn(ProcessEvent) -> Msg + Send + 'static,
     {
-        process_command(self, map)
+        process_command(link, self, map)
     }
 
     /// Create a keyed background [`Command`] that streams process events as messages.
     ///
-    /// With [`TaskPolicy::LatestOnly`], submitting newer work for the same key
+    /// Pass `ctx.link()` to select the component's message type. With
+    /// [`TaskPolicy::LatestOnly`], submitting newer work for the same key
     /// cancels the active token. This helper observes that token, kills the
     /// child process, drains stdout/stderr, and suppresses stale messages.
     pub fn command_keyed<Msg, F>(
         self,
+        link: &Link<Msg>,
         key: impl Into<Arc<str>>,
         policy: TaskPolicy,
         map: F,
@@ -137,7 +141,7 @@ impl ProcessSpec {
         Msg: Send + 'static,
         F: Fn(ProcessEvent) -> Msg + Send + 'static,
     {
-        process_command_keyed(key, policy, self, map)
+        process_command_keyed(link, key, policy, self, map)
     }
 
     fn to_std_command(&self) -> StdCommand {
@@ -275,27 +279,31 @@ pub fn stream_process_until(
 }
 
 /// Create a background command that maps process events into component messages.
-pub fn process_command<Msg, F>(spec: ProcessSpec, map: F) -> Command
+///
+/// ```no_run
+/// use tui_lipan::{Command, Link, ProcessEvent, ProcessSpec, TaskPolicy};
+/// use tui_lipan::{process_command, process_command_keyed};
+///
+/// fn commands(link: &Link<ProcessEvent>, spec: ProcessSpec) -> [Command; 4] {
+///     [
+///         spec.clone().command(link, |event| event),
+///         spec.clone().command_keyed(link, "job", TaskPolicy::LatestOnly, |event| event),
+///         process_command(link, spec.clone(), |event| event),
+///         process_command_keyed(link, "job", TaskPolicy::LatestOnly, spec, |event| event),
+///     ]
+/// }
+/// ```
+pub fn process_command<Msg, F>(link: &Link<Msg>, spec: ProcessSpec, map: F) -> Command
 where
     Msg: Send + 'static,
     F: Fn(ProcessEvent) -> Msg + Send + 'static,
 {
-    Command::spawn::<Msg, _>(move |link| {
-        if let Err(err) = stream_process_until(
-            spec,
-            || link.is_cancelled(),
-            |event| {
-                let _ = link.send_if_not_cancelled(map(event));
-            },
-        ) {
-            let _ =
-                link.send_if_not_cancelled(map(ProcessEvent::Error(Arc::from(err.to_string()))));
-        }
-    })
+    link.command(move |link| stream_process_messages(link, spec, map))
 }
 
 /// Create a keyed background command that maps process events into component messages.
 pub fn process_command_keyed<Msg, F>(
+    link: &Link<Msg>,
     key: impl Into<Arc<str>>,
     policy: TaskPolicy,
     spec: ProcessSpec,
@@ -305,18 +313,45 @@ where
     Msg: Send + 'static,
     F: Fn(ProcessEvent) -> Msg + Send + 'static,
 {
-    Command::spawn_keyed::<Msg, _>(key, policy, move |link| {
-        if let Err(err) = stream_process_until(
-            spec,
-            || link.is_cancelled(),
-            |event| {
-                let _ = link.send_if_not_cancelled(map(event));
-            },
-        ) {
-            let _ =
-                link.send_if_not_cancelled(map(ProcessEvent::Error(Arc::from(err.to_string()))));
-        }
+    link.command_keyed(key, policy, move |link| {
+        stream_process_messages(link, spec, map);
     })
+}
+
+#[cfg(doctest)]
+mod process_commands_require_a_link {
+    //! ```compile_fail,E0061
+    //! use tui_lipan::{ProcessSpec, process_command};
+    //! process_command(ProcessSpec::new("rg"), |event| event);
+    //! ```
+    //!
+    //! ```compile_fail,E0061
+    //! use tui_lipan::{ProcessSpec, TaskPolicy, process_command_keyed};
+    //! process_command_keyed("job", TaskPolicy::LatestOnly, ProcessSpec::new("rg"), |event| event);
+    //! ```
+    //!
+    //! ```compile_fail,E0061
+    //! use tui_lipan::ProcessSpec;
+    //! ProcessSpec::new("rg").command(|event| event);
+    //! ```
+    //!
+    //! ```compile_fail,E0061
+    //! use tui_lipan::{ProcessSpec, TaskPolicy};
+    //! ProcessSpec::new("rg").command_keyed("job", TaskPolicy::LatestOnly, |event| event);
+    //! ```
+}
+
+fn stream_process_messages<Msg: Send + 'static>(
+    link: CommandLink<Msg>,
+    spec: ProcessSpec,
+    map: impl Fn(ProcessEvent) -> Msg,
+) {
+    let emit = |event| {
+        let _ = link.send_if_not_cancelled(map(event));
+    };
+    if let Err(err) = stream_process_until(spec, || link.is_cancelled(), emit) {
+        emit(ProcessEvent::Error(Arc::from(err.to_string())));
+    }
 }
 
 fn spawn_reader<R>(

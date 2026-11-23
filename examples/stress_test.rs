@@ -44,9 +44,9 @@ impl Component for StressTest {
         }
     }
 
-    fn init(&mut self, _ctx: &mut Context<Self>) -> Update {
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
         // Start tick loop for FPS display (optional, toggle with 'f')
-        Update::command_only(Command::spawn(move |link| {
+        Update::command_only(ctx.link().command(move |link| {
             link.send(Msg::Tick);
         }))
     }
@@ -62,7 +62,7 @@ impl Component for StressTest {
 
                 // Only continue ticking if FPS display is enabled
                 if ctx.state.show_fps {
-                    Update::render_with_command(Command::spawn(move |link| {
+                    Update::render_with_command(ctx.link().command(move |link| {
                         std::thread::sleep(Duration::from_millis(16));
                         link.send(Msg::Tick);
                     }))
@@ -82,7 +82,7 @@ impl Component for StressTest {
                 ctx.state.show_fps = !ctx.state.show_fps;
                 if ctx.state.show_fps {
                     // Restart tick loop
-                    Update::render_with_command(Command::spawn(move |link| {
+                    Update::render_with_command(ctx.link().command(move |link| {
                         std::thread::sleep(Duration::from_millis(16));
                         link.send(Msg::Tick);
                     }))

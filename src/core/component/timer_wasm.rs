@@ -13,7 +13,7 @@ thread_local! {
     static CONTROLLED: RefCell<Vec<ControlledEntry>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Delayed-task scheduler backing [`Command::after`](super::Command::after).
+/// Delayed-task scheduler backing [`Link::command_after`](super::Link::command_after).
 ///
 /// The web target has no thread to park, so this defers to the host event loop. Without the `web`
 /// feature there is no timer source at all and the task runs immediately — the delay is dropped
@@ -79,7 +79,9 @@ impl TimerService {
                     .ok()
             });
             if scheduled.is_none() {
-                crate::debug::internal_log!("[tui-lipan] no window for Command::after; dropping");
+                crate::debug::internal_log!(
+                    "[tui-lipan] no window for Link::command_after; dropping"
+                );
             }
         }
         #[cfg(not(feature = "web"))]

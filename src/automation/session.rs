@@ -628,7 +628,7 @@ mod tests {
     use std::rc::Rc;
 
     use crate::automation::{AutomationId, SemanticRole};
-    use crate::core::component::{Command, Context, Update};
+    use crate::core::component::{Context, Update};
     use crate::core::element::{Element, IntoElement};
     use crate::widgets::{Button, Input, List, ListItem, Tab, Table, TableRow, Tabs, Text, VStack};
 
@@ -777,8 +777,7 @@ mod tests {
         }
 
         fn init(&mut self, ctx: &mut Context<Self>) -> Update {
-            let _ = ctx;
-            Update::command_only(Command::after(Duration::from_millis(50), |link| {
+            Update::command_only(ctx.link().command_after(Duration::from_millis(50), |link| {
                 link.send(TimerMsg::Fired);
             }))
         }
@@ -876,8 +875,8 @@ mod tests {
             0
         }
 
-        fn init(&mut self, _ctx: &mut Context<Self>) -> Update {
-            Update::command_only(Command::after(Duration::ZERO, |link| {
+        fn init(&mut self, ctx: &mut Context<Self>) -> Update {
+            Update::command_only(ctx.link().command_after(Duration::ZERO, |link| {
                 link.send(TimerChainMsg::First);
             }))
         }
@@ -886,7 +885,7 @@ mod tests {
             match msg {
                 TimerChainMsg::First => {
                     ctx.state = 1;
-                    Update::full_with_command(Command::after(Duration::ZERO, |link| {
+                    Update::full_with_command(ctx.link().command_after(Duration::ZERO, |link| {
                         link.send(TimerChainMsg::Second);
                     }))
                 }
@@ -924,12 +923,18 @@ mod tests {
 
         fn create_state(&self, _props: &Self::Properties) -> Self::State {}
 
-        fn init(&mut self, _ctx: &mut Context<Self>) -> Update {
-            Update::command_only(Command::after(Duration::ZERO, |link| link.send(())))
+        fn init(&mut self, ctx: &mut Context<Self>) -> Update {
+            Update::command_only(
+                ctx.link()
+                    .command_after(Duration::ZERO, |link| link.send(())),
+            )
         }
 
-        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
-            Update::full_with_command(Command::after(Duration::ZERO, |link| link.send(())))
+        fn update(&mut self, _msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            Update::full_with_command(
+                ctx.link()
+                    .command_after(Duration::ZERO, |link| link.send(())),
+            )
         }
 
         fn view(&self, _ctx: &Context<Self>) -> Element {

@@ -27,9 +27,35 @@ use crate::utils::GridSelection;
 ///
 /// A `Command` represents work that should happen *outside* the synchronous `update` call
 /// (HTTP/IO/timers), typically executed by the runtime and eventually producing more messages.
+///
+/// Build background work with [`Link::command`], [`Link::command_after`], or
+/// [`Link::command_keyed`].
 #[non_exhaustive]
 pub struct Command {
     action: Box<dyn CommandAction>,
+}
+
+#[cfg(doctest)]
+mod removed_command_constructors {
+    //! ```compile_fail,E0599
+    //! use tui_lipan::Command;
+    //! Command::spawn::<(), _>(|_| {});
+    //! ```
+    //!
+    //! ```compile_fail,E0599
+    //! use tui_lipan::Command;
+    //! Command::after::<(), _>(std::time::Duration::ZERO, |_| {});
+    //! ```
+    //!
+    //! ```compile_fail,E0599
+    //! use tui_lipan::{Command, TaskPolicy};
+    //! Command::spawn_keyed::<(), _>("search", TaskPolicy::LatestOnly, |_| {});
+    //! ```
+    //!
+    //! ```compile_fail,E0599
+    //! use tui_lipan::Command;
+    //! Command::new(|| {});
+    //! ```
 }
 
 /// Coalescing behavior for keyed background tasks.
@@ -65,7 +91,7 @@ use timer_native::TimerService;
 #[cfg(target_arch = "wasm32")]
 use timer_wasm::TimerService;
 
-/// Skip `dt` of virtual time in the [`Command::after`] scheduler, running whatever becomes due.
+/// Skip `dt` of virtual time in the [`Link::command_after`] scheduler, running whatever becomes due.
 ///
 /// Called from [`RuntimeEnv::advance_clock`](crate::core::runtime_env::RuntimeEnv::advance_clock), so
 /// every harness that drives the virtual clock settles deferred commands without asking. Returns how
@@ -89,76 +115,13 @@ impl std::fmt::Debug for Command {
 }
 
 impl Command {
-    /// Run a one-shot action on the UI thread.
-    pub fn new(action: impl FnOnce() + 'static) -> Self {
+    /// Run a one-shot action synchronously on the UI thread.
+    ///
+    /// The event loop waits for the action to return. Use this for operations such as
+    /// [`terminal_handoff`](crate::terminal_handoff) to run an interactive editor or pager.
+    pub fn on_ui_thread(action: impl FnOnce() + 'static) -> Self {
         Self {
             action: Box::new(RunAction(Some(action))),
-        }
-    }
-
-    /// Spawn a background task that can send messages back.
-    pub fn spawn<Msg, F>(f: F) -> Self
-    where
-        Msg: Send + 'static,
-        F: FnOnce(CommandLink<Msg>) + Send + 'static,
-    {
-        Self {
-            action: Box::new(SpawnAction::<Msg, F> {
-                f: Some(f),
-                _marker: PhantomData,
-            }),
-        }
-    }
-
-    /// Run a background task after `delay`, without holding a worker while it waits.
-    ///
-    /// Use this for debounces, retries, and recurring ticks instead of `Command::spawn` with a
-    /// `thread::sleep` inside. The executor runs on a fixed pool of 2-8 workers, so a sleeping task
-    /// occupies one for the whole delay: two recurring timers can park every worker on a low-core
-    /// machine and stall unrelated background work behind them. A shared timer thread does the
-    /// waiting here, and the task reaches the pool only once it is due.
-    ///
-    /// ```no_run
-    /// # use tui_lipan::prelude::*;
-    /// # use std::time::Duration;
-    /// # #[derive(Clone)] enum Msg { Tick }
-    /// # fn example() -> Command {
-    /// Command::after(Duration::from_secs(1), |link: CommandLink<Msg>| {
-    ///     link.send(Msg::Tick);
-    /// })
-    /// # }
-    /// ```
-    ///
-    /// Re-arming from the handler gives a recurring tick that costs no thread between firings. On
-    /// the web target without the `web` feature there is no timer source, and the task runs
-    /// immediately rather than being dropped.
-    pub fn after<Msg, F>(delay: std::time::Duration, f: F) -> Self
-    where
-        Msg: Send + 'static,
-        F: FnOnce(CommandLink<Msg>) + Send + 'static,
-    {
-        Self {
-            action: Box::new(AfterAction::<Msg, F> {
-                delay,
-                f: Some(f),
-                _marker: PhantomData,
-            }),
-        }
-    }
-
-    /// Spawn a keyed background task with explicit coalescing policy.
-    pub fn spawn_keyed<Msg, F>(key: impl Into<Arc<str>>, policy: TaskPolicy, f: F) -> Self
-    where
-        Msg: Send + 'static,
-        F: FnOnce(CommandLink<Msg>) + Send + 'static,
-    {
-        Self {
-            action: Box::new(SpawnKeyedAction::<Msg, F> {
-                key: key.into(),
-                policy,
-                f: Some(f),
-                _marker: PhantomData,
-            }),
         }
     }
 
@@ -370,22 +333,67 @@ where
 }
 
 impl<Msg: 'static> Link<Msg> {
-    /// Create a background `Command` that can send messages back to this component.
+    /// Create a background command that can send messages back to the component.
     pub fn command<F>(&self, f: F) -> Command
     where
         Msg: Send + 'static,
         F: FnOnce(CommandLink<Msg>) + Send + 'static,
     {
-        Command::spawn::<Msg, F>(f)
+        Command {
+            action: Box::new(SpawnAction::<Msg, F> {
+                f: Some(f),
+                _marker: PhantomData,
+            }),
+        }
     }
 
-    /// Create a keyed background `Command` with coalescing policy.
+    /// Create a background command that runs after `delay` on the session clock.
+    ///
+    /// Use this for debounces, retries, or recurring ticks. A shared timer waits for the
+    /// deadline before submitting the closure to the executor. If the target has no timer
+    /// source (wasm without the `web` feature), the command runs without the delay.
+    ///
+    /// ```no_run
+    /// use std::time::Duration;
+    /// use tui_lipan::{Command, Link};
+    ///
+    /// enum Msg { Tick }
+    ///
+    /// fn next_tick(link: &Link<Msg>) -> Command {
+    ///     link.command_after(Duration::from_secs(1), |link| link.send(Msg::Tick))
+    /// }
+    /// ```
+    pub fn command_after<F>(&self, delay: std::time::Duration, f: F) -> Command
+    where
+        Msg: Send + 'static,
+        F: FnOnce(CommandLink<Msg>) + Send + 'static,
+    {
+        Command {
+            action: Box::new(AfterAction::<Msg, F> {
+                delay,
+                f: Some(f),
+                _marker: PhantomData,
+            }),
+        }
+    }
+
+    /// Create a keyed background command with the given coalescing policy.
+    ///
+    /// The key can be any value convertible to `Arc<str>`, such as a string literal or an
+    /// owned `String`.
     pub fn command_keyed<F>(&self, key: impl Into<Arc<str>>, policy: TaskPolicy, f: F) -> Command
     where
         Msg: Send + 'static,
         F: FnOnce(CommandLink<Msg>) + Send + 'static,
     {
-        Command::spawn_keyed::<Msg, F>(key, policy, f)
+        Command {
+            action: Box::new(SpawnKeyedAction::<Msg, F> {
+                key: key.into(),
+                policy,
+                f: Some(f),
+                _marker: PhantomData,
+            }),
+        }
     }
 }
 
@@ -2070,7 +2078,7 @@ impl<C: Component> Context<C> {
     /// Time elapsed on this runtime's clock since it started.
     ///
     /// This is the clock that [`pulsing_amount`](Self::pulsing_amount) pulses run on and
-    /// [`Command::after`] and [`CommandLink::send_after`](crate::CommandLink::send_after) delays are
+    /// [`Link::command_after`] and [`CommandLink::send_after`](crate::CommandLink::send_after) delays are
     /// measured against. It is monotonic, and virtual under a
     /// [`TestBackend`](crate::TestBackend) or a controlled automation session: it moves only when
     /// the test advances it.

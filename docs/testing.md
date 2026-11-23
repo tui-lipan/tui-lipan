@@ -156,7 +156,7 @@ scrolls, the property transitions behind `Context::transition`, overlay
 `tick_at`, copy-feedback, and command-chord reveal.
 
 `TestBackend` uses `ClockMode::Controlled`: wall sleep alone does not move this
-clock or fire `Command::after`. Background `Command::spawn` output can still
+clock or fire `Link::command_after`. Background command output can still
 arrive while logical time is frozen.
 
 ```rust
@@ -399,7 +399,7 @@ TUI_LIPAN_SNAPSHOT=/tmp/app.png cargo run --example todo --features ui-snapshot-
 | `TUI_LIPAN_SNAPSHOT_FOCUS` | `0` | Focus advances before capture, for visible focus chrome |
 | `TUI_LIPAN_SNAPSHOT_KEYS` | unset | Comma-separated key script dispatched before capture, e.g. `tab,tab,enter` |
 | `TUI_LIPAN_SNAPSHOT_SCRIPT` | unset | Full action script (see below); takes precedence over `_KEYS` |
-| `TUI_LIPAN_SNAPSHOT_ADVANCE_MS` | `0` | Virtual-clock advance before capture, ticking animations to quiescence and firing `Command::after` timers. Use this for a which-key panel behind `command_chord_reveal_delay`, a settled transition, or a spinner mid-spin |
+| `TUI_LIPAN_SNAPSHOT_ADVANCE_MS` | `0` | Virtual-clock advance before capture, ticking animations to quiescence and firing `Link::command_after` timers. Use this for a which-key panel behind `command_chord_reveal_delay`, a settled transition, or a spinner mid-spin |
 | `TUI_LIPAN_SNAPSHOT_SETTLE_MS` | `0` | **Real** time to wait before the action script, pumping messages, so asynchronous work can land. Use this when content arrives from a spawned process, a socket, or a background thread — a virtual clock cannot make another thread finish |
 | `TUI_LIPAN_SNAPSHOT_DIAGNOSTIC` | unset | `1` captures with `UiSnapshotOptions::diagnostic()` |
 
@@ -688,7 +688,7 @@ Steps are separated by `;` or newlines.
 | `scroll:#list,down` | Scroll over a widget (`up` / `down`) |
 | `scroll:down` | Scroll at the current pointer position |
 | `drag:#card>#column` | Press, move, release |
-| `wait:500` | Advance the clock 500ms, ticking animations and firing `Command::after` timers |
+| `wait:500` | Advance the clock 500ms, ticking animations and firing `Link::command_after` timers |
 | `sleep:500` | Wait 500ms of **real** time, pumping messages, so asynchronous work can land |
 
 `wait:` is instant and deterministic — reach for it first. `sleep:` really does spend the wall time,

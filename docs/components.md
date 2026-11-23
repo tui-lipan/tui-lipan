@@ -318,19 +318,20 @@ struct State {
 
 ## Commands (Async / Background Work)
 
-Components are single-threaded. Use `Command` for background work:
+Build background commands through `ctx.link()` and return them in an `Update`.
+The component link infers the message type for the closure's `CommandLink`.
 
 ```rust
-// Generic command: any closure
+// Run a blocking call on a worker.
 let cmd = ctx.link().command(move |link| {
     let result = blocking_call();
     link.send(Msg::Done(result));
 });
 
-// Keyed command: prevent stale work from piling up
+// Coalesce work with the same key.
 let cmd = ctx.link().command_keyed(
-    "search",                  // key (any &'static str)
-    TaskPolicy::LatestOnly,    // coalescing policy
+    "search",
+    TaskPolicy::LatestOnly,
     move |link| {
         if link.is_cancelled() {
             return;
@@ -341,7 +342,10 @@ let cmd = ctx.link().command_keyed(
 );
 ```
 
-### TaskPolicy Options
+`command_keyed` accepts `impl Into<Arc<str>>`, including string literals, owned
+`String` values, and `Arc<str>`.
+
+### TaskPolicy options
 
 | Policy | Behavior |
 |--------|----------|
@@ -372,56 +376,76 @@ match msg {
 
 ### Delayed work: debounces, retries, and ticks
 
-Never `thread::sleep` inside a command. Tasks run on a fixed pool of 2-8 workers, so a sleeping
-task occupies one for the whole delay — two recurring timers are enough to park the pool on a
-low-core machine and stall every other background task behind them.
-
-Use `Command::after`, which waits on a shared timer thread and reaches the pool only once due:
+On native targets, background commands run on a pool of 2-8 workers. Sleeping
+inside a command holds a worker for the whole delay. Use
+`ctx.link().command_after(delay, f)` to wait on a shared timer and submit the
+closure to the pool when it is due.
 
 ```rust
 use std::time::Duration;
 
-// Debounce: coalesce a resize storm into one flush.
-Command::after(Duration::from_millis(16), |link: CommandLink<Msg>| {
+let command = ctx.link().command_after(Duration::from_millis(16), |link| {
     link.send(Msg::FlushResizes);
-})
+});
+Update::command_only(command)
 ```
 
-Re-arming from the handler gives a recurring tick that costs no thread between firings:
+Re-arm the command from the message handler to schedule a recurring tick.
 
 ```rust
 Msg::Tick => {
     refresh(ctx);
-    Update::render_with_command(Command::after(Duration::from_secs(1), |link: CommandLink<Msg>| {
+    Update::render_with_command(ctx.link().command_after(Duration::from_secs(1), |link| {
         link.send(Msg::Tick);
     }))
 }
 ```
 
-When you already hold a `CommandLink` and only need to deliver a message later, `send_after` is
-the direct form. It is dropped if the command is cancelled first:
-
-```rust
-link.send_after(Duration::from_millis(800), Msg::Deadline);
-```
-
-Delay first, then work: the closure body still runs on the pool, so a delayed fetch or filesystem
-sweep is fine inside `Command::after` — only the *waiting* moves off the pool.
+When you already hold a `CommandLink` and only need to deliver a message later,
+use `link.send_after(Duration::from_millis(800), Msg::Deadline)`. If the
+command is cancelled before the deadline, the timer drops the message.
 
 Delayed commands use the owning session's clock. In a controlled
-`AutomationSession` or `TestBackend`, they remain pending during wall sleep and
-run only after `advance(...)` reaches their deadline. Realtime terminal and web
-sessions remain eligible for the global timer worker. Background
-`Command::spawn` work may complete in either mode without moving controlled
-logical time.
+`AutomationSession` or `TestBackend`, a delayed command runs when
+`advance(...)` reaches its deadline. Realtime terminal and web sessions use
+their timer workers. An immediate background command can finish without
+advancing a controlled session's clock.
 
-### Thread Safety
+### Async runtimes (tokio)
 
-Commands use channels internally. The component itself never needs to be `Send` or `Sync`.
+On native targets, tui-lipan commands are blocking closures. Keep a
+`tokio::runtime::Handle` on the component and inject it when you mount the
+component. Keep the runtime alive while the app runs. Clone the handle in
+`update` and move the `CommandLink` into the future.
+
+```ignore
+let handle = self.tokio.clone();
+Update::command_only(ctx.link().command(move |link| {
+    handle.spawn(async move {
+        if link.is_cancelled() {
+            return;
+        }
+        let result = fetch_async().await;
+        let _ = link.send_if_not_cancelled(Msg::Done(result));
+    });
+}))
+```
+
+Tokio polls the future, so the UI thread never waits for it. The worker is
+free as soon as `spawn` returns. The component itself can stay on the UI
+thread. Only the handle, captured data, and messages cross threads.
+
+`is_cancelled` checks the command's token and `send_if_not_cancelled`
+suppresses delivery if the token was cancelled. A keyed command finishes
+when its closure returns. A Tokio task spawned by that closure can outlive
+it, so use a Tokio task handle or your own cancellation signal to cancel
+the detached task when newer work replaces it.
 
 ### External interactive subprocesses
 
-Spawning an editor or pager that needs the real terminal must **not** use `Command::spawn` / `ctx.link().command(...)` alone: use `Command::new` on the UI thread together with [`terminal_handoff`](external-programs.md), then [`request_full_repaint()`](external-programs.md#force-a-full-redraw-after-handoff) if needed. See **[External programs](external-programs.md)**.
+Use `Command::on_ui_thread` with `terminal_handoff` to run an editor or
+pager that needs the real terminal. The event loop waits for the closure
+to return. See [External programs](external-programs.md).
 
 ## Nested Components
 

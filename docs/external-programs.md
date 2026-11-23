@@ -108,7 +108,7 @@ Use it for commands such as `rg`, formatters, compilers, or small shell helpers
 whose stdout/stderr should become component messages:
 
 ```rust
-use tui_lipan::prelude::*;
+use tui_lipan::{ProcessEvent, ProcessSpec, Update};
 
 enum Msg {
     Proc(ProcessEvent),
@@ -117,7 +117,7 @@ enum Msg {
 // Inside update():
 let command = ProcessSpec::new("sh")
     .args(["-c", "printf out; printf err >&2"])
-    .command(Msg::Proc);
+    .command(ctx.link(), Msg::Proc);
 
 Update::command_only(command)
 ```
@@ -133,7 +133,8 @@ not for programs that need terminal control; use `terminal_handoff` for editors,
 pagers, shells, password prompts, and other interactive programs.
 
 **Cancellation:** unkeyed `.command(...)` tasks normally run to completion. Use
-`.command_keyed(key, TaskPolicy::LatestOnly, ...)` or `process_command_keyed`
+`.command_keyed(ctx.link(), key, TaskPolicy::LatestOnly, ...)` or
+`process_command_keyed(ctx.link(), key, TaskPolicy::LatestOnly, spec, map)`
 when newer work should cancel a running process. Keyed process commands observe
 the background cancellation token; on cancellation they kill the child, drain
 stdout/stderr, and suppress stale component messages. For manual use,
@@ -142,14 +143,14 @@ kill-and-drain behavior.
 
 ---
 
-## Run blocking work on the **UI thread**
+## Run blocking work on the UI thread
 
-[`Command::spawn`](components.md#commands-async--background-work) and `Link::command(...)` run closures on a **worker thread**. That is wrong for `terminal_handoff`: the main thread still holds the ratatui terminal and keeps drawing.
-
-Use **`Command::new`** so suspend → subprocess → resume runs on the **same thread** as the event loop:
+Use `Command::on_ui_thread` for `terminal_handoff`. The UI thread suspends
+terminal output, waits for the subprocess to exit, and takes the terminal back
+before the event loop resumes.
 
 ```rust
-use tui_lipan::prelude::*;
+use tui_lipan::{Command, Update};
 
 // Inside update():
 let link = ctx.link().clone();
@@ -157,15 +158,12 @@ let surface_mode = ctx.surface_mode();
 let mouse_enabled = ctx.mouse_capture_enabled();
 let initial = ctx.state.draft.clone();
 
-Update {
-    dirty: false,
-    command: Some(Command::new(move || {
-        match run_my_editor(&initial, surface_mode, mouse_enabled) {
-            Ok(text) => link.send(Msg::EditorDone(text)),
-            Err(e) => link.send(Msg::EditorFailed(e)),
-        }
-    })),
-}
+Update::command_only(Command::on_ui_thread(move || {
+    match run_my_editor(&initial, surface_mode, mouse_enabled) {
+        Ok(text) => link.send(Msg::EditorDone(text)),
+        Err(e) => link.send(Msg::EditorFailed(e)),
+    }
+}))
 ```
 
 Use `link.send(...)` inside the closure to push follow-up messages; they are processed in the same message drain as other updates.
@@ -193,6 +191,6 @@ On the next loop iteration the runner promotes the frame to a **full** render, i
 ## Summary checklist
 
 1. Use `suspend_for_external_process` / `resume_after_external_process` with correct `surface_mode` and `mouse_enabled`.
-2. Run that sequence on the UI thread via `Command::new`, not `Command::spawn` / `link.command`.
+2. Run that sequence on the UI thread with `Command::on_ui_thread`.
 3. After returning to the TUI, call `ctx.request_full_repaint()` when a full frame repaint is required (especially for nested components).
 4. For `ctrl+z`, call `ctx.suspend_to_shell()` instead of doing any of the above yourself.

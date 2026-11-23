@@ -10,8 +10,8 @@ use tui_lipan::prelude::*;
 /// Game tick interval (~20 FPS). Mole lifetimes are counted in ticks.
 const FRAME_MS: u64 = 50;
 
-fn next_frame_cmd() -> Command {
-    Command::spawn(move |link| {
+fn next_frame_cmd(link: &Link<Msg>) -> Command {
+    link.command(move |link| {
         std::thread::sleep(Duration::from_millis(FRAME_MS));
         link.send(Msg::Tick);
     })
@@ -194,8 +194,8 @@ impl Component for WhackAMole {
         State::new()
     }
 
-    fn init(&mut self, _ctx: &mut Context<Self>) -> Update {
-        Update::command_only(next_frame_cmd())
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
+        Update::command_only(next_frame_cmd(ctx.link()))
     }
 
     fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
@@ -287,7 +287,7 @@ impl Component for WhackAMole {
             Msg::Tick => {
                 ctx.state.tick = ctx.state.tick.wrapping_add(1);
                 if ctx.state.phase != GamePhase::Playing {
-                    return Update::render_with_command(next_frame_cmd());
+                    return Update::render_with_command(next_frame_cmd(ctx.link()));
                 }
 
                 let now = ctx.state.tick;
@@ -316,7 +316,7 @@ impl Component for WhackAMole {
                         ctx.state.health = 0;
                         ctx.state.finalize();
                         ctx.state.phase = GamePhase::GameOver;
-                        return Update::render_with_command(next_frame_cmd());
+                        return Update::render_with_command(next_frame_cmd(ctx.link()));
                     }
                 }
 
@@ -356,7 +356,7 @@ impl Component for WhackAMole {
             }
         }
         if attach_frame {
-            Update::render_with_command(next_frame_cmd())
+            Update::render_with_command(next_frame_cmd(ctx.link()))
         } else {
             Update::render()
         }
