@@ -134,23 +134,23 @@ impl Component for InputsDemo {
         match msg {
             Msg::UsernameChanged(ev) => {
                 ev.apply_to(&mut ctx.state.username);
-                Update::full()
+                Update::render()
             }
             Msg::PasswordChanged(ev) => {
                 ev.apply_to(&mut ctx.state.password);
-                Update::full()
+                Update::render()
             }
             Msg::SearchChanged(ev) => {
                 ev.apply_to(&mut ctx.state.search);
-                Update::full()
+                Update::render()
             }
             Msg::BioChanged(ev) => {
                 ev.apply_to(&mut ctx.state.bio);
-                Update::full()
+                Update::render()
             }
             Msg::LogsChanged(ev) => {
                 ev.apply_to(&mut ctx.state.logs);
-                Update::full()
+                Update::render()
             }
             Msg::ScrollTo(_offset) => {
                 // Framework handles manual scrolling automatically via NodeKind state
@@ -162,7 +162,7 @@ impl Component for InputsDemo {
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
         if key.is(KeyCode::Char('q')) {
             ctx.quit();
-            return KeyUpdate::handled(Update::full());
+            return KeyUpdate::handled(Update::render());
         }
         KeyUpdate::unhandled(Update::none())
     }

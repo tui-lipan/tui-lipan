@@ -32,7 +32,7 @@ impl Component for ProvidedFileTreeApp {
                 if !ctx.state.pending.insert(path.clone()) {
                     return Update::none();
                 }
-                Update::with_command(ctx.link().command(move |link| {
+                Update::render_with_command(ctx.link().command(move |link| {
                     // Replace this delay and fixture data with an SSH/session-client round trip.
                     std::thread::sleep(Duration::from_millis(250));
                     link.send(Msg::DirectoryListed(list_directory(path)));
@@ -44,7 +44,7 @@ impl Component for ProvidedFileTreeApp {
                     .listings
                     .retain(|current| current.path != listing.path);
                 ctx.state.listings.push(listing);
-                Update::full()
+                Update::render()
             }
         }
     }

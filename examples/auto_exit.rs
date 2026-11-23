@@ -118,7 +118,7 @@ impl Component for AutoExit {
                 ctx.state.rows.push(Row { id, label, color });
             }
         }
-        Update::full()
+        Update::render()
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
@@ -127,7 +127,7 @@ impl Component for AutoExit {
             KeyCode::Char('a') => KeyUpdate::handled(self.update(Msg::AddRow, ctx)),
             KeyCode::Char('q') | KeyCode::Esc => {
                 ctx.quit();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             _ => KeyUpdate::unhandled(Update::none()),
         }

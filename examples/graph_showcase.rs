@@ -249,7 +249,7 @@ impl Component for GraphShowcase {
             Msg::NodeClicked(event) => ctx.state.last_clicked = Some(event),
             Msg::NodeHovered(event) => ctx.state.last_hovered = Some(event),
         }
-        Update::full()
+        Update::render()
     }
 }
 

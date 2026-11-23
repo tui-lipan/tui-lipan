@@ -45,14 +45,14 @@ impl Component for App {
                 self.slider_val = val;
             }
         }
-        Update::layout()
+        Update::render()
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
         match key.code {
             KeyCode::Char('q') => {
                 ctx.quit();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             _ => KeyUpdate::unhandled(Update::none()),
         }

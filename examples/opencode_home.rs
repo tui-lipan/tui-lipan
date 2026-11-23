@@ -70,7 +70,7 @@ fn start_leader(ctx: &mut Context<OpencodeHome>) -> Update {
             link.send(Msg::LeaderTimeout(leader_gen));
         });
 
-    Update::with_command(cmd)
+    Update::render_with_command(cmd)
 }
 
 impl Component for OpencodeHome {
@@ -96,10 +96,10 @@ impl Component for OpencodeHome {
             match key.code {
                 KeyCode::Char('m') | KeyCode::Char('M') => {
                     ctx.state.model_swapped = !ctx.state.model_swapped;
-                    return KeyUpdate::handled(Update::full());
+                    return KeyUpdate::handled(Update::render());
                 }
                 _ => {
-                    return KeyUpdate::handled(Update::full());
+                    return KeyUpdate::handled(Update::render());
                 }
             }
         }
@@ -118,34 +118,34 @@ impl Component for OpencodeHome {
                 self.editor.set_text(ev.value.to_string());
                 self.editor.set_cursor(ev.cursor);
                 self.editor.set_anchor(ev.anchor);
-                Update::full()
+                Update::render()
             }
             Msg::ActivateLeader => start_leader(ctx),
             Msg::LeaderTimeout(leader_gen) => {
                 // Only expire if generation matches (hasn't been cancelled).
                 if ctx.state.leader_active && ctx.state.leader_gen == leader_gen {
                     ctx.state.leader_active = false;
-                    Update::full()
+                    Update::render()
                 } else {
                     Update::none()
                 }
             }
             Msg::LogoMouseDown => {
                 ctx.state.logo_pressed = true;
-                Update::full()
+                Update::render()
             }
             Msg::LogoClick => {
                 ctx.state.logo_pressed = false;
                 ctx.state.logo_clicks = ctx.state.logo_clicks.saturating_add(1);
                 ctx.state.model_swapped = !ctx.state.model_swapped;
-                Update::full()
+                Update::render()
             }
             Msg::LogoHover(inside) => {
                 if inside || !ctx.state.logo_pressed {
                     Update::none()
                 } else {
                     ctx.state.logo_pressed = false;
-                    Update::full()
+                    Update::render()
                 }
             }
         }

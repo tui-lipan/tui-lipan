@@ -18,7 +18,7 @@ impl Component for Palette {
 
     fn update(&mut self, items: Self::Message, ctx: &mut Context<Self>) -> Update {
         ctx.state = Some(items);
-        Update::layout()
+        Update::render()
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {

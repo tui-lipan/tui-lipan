@@ -297,7 +297,7 @@ impl Component for SearchLists {
                 ctx.state.files_selected = 0;
                 ctx.state.branches_selected = 0;
                 ctx.state.tasks_selected = 0;
-                Update::full()
+                Update::render()
             }
             Msg::FilesChanged(ev) => {
                 ctx.state
@@ -305,7 +305,7 @@ impl Component for SearchLists {
                     .set_text(ev.value.as_ref().to_string());
                 ctx.state.files_query.set_cursor(ev.cursor);
                 ctx.state.files_selected = 0;
-                Update::full()
+                Update::render()
             }
             Msg::BranchesChanged(ev) => {
                 ctx.state
@@ -313,7 +313,7 @@ impl Component for SearchLists {
                     .set_text(ev.value.as_ref().to_string());
                 ctx.state.branches_query.set_cursor(ev.cursor);
                 ctx.state.branches_selected = 0;
-                Update::full()
+                Update::render()
             }
             Msg::TasksChanged(ev) => {
                 ctx.state
@@ -321,31 +321,31 @@ impl Component for SearchLists {
                     .set_text(ev.value.as_ref().to_string());
                 ctx.state.tasks_query.set_cursor(ev.cursor);
                 ctx.state.tasks_selected = 0;
-                Update::full()
+                Update::render()
             }
             Msg::FilesSelected(ev) => {
                 ctx.state.files_selected = ev.index;
-                Update::full()
+                Update::render()
             }
             Msg::FilesScrollTo(index) => {
                 ctx.state.files_selected = index;
-                Update::full()
+                Update::render()
             }
             Msg::BranchesSelected(ev) => {
                 ctx.state.branches_selected = ev.index;
-                Update::full()
+                Update::render()
             }
             Msg::BranchesScrollTo(index) => {
                 ctx.state.branches_selected = index;
-                Update::full()
+                Update::render()
             }
             Msg::TasksSelected(ev) => {
                 ctx.state.tasks_selected = ev.index;
-                Update::full()
+                Update::render()
             }
             Msg::TasksScrollTo(index) => {
                 ctx.state.tasks_selected = index;
-                Update::full()
+                Update::render()
             }
         }
     }

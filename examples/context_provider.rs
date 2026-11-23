@@ -39,11 +39,11 @@ impl Component for ContextProviderDemo {
         match msg {
             Msg::Increment => {
                 ctx.state.count = ctx.state.count.saturating_add(1);
-                Update::full()
+                Update::render()
             }
             Msg::ToggleCompact => {
                 ctx.state.compact = !ctx.state.compact;
-                Update::full()
+                Update::render()
             }
         }
     }

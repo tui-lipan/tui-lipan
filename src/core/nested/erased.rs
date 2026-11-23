@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use super::any_props::AnyProps;
 use crate::callback::{Dispatcher, ScopeId};
-use crate::core::component::{Command, Component, Context, KeyUpdate, Update};
+use crate::core::component::{Component, Context, KeyUpdate, Update};
 use crate::core::element::Element;
-use crate::core::event::KeyEvent;
+use crate::core::event::{KeyEvent, KeyMods};
 use crate::core::runtime_env::{MemoDependencySnapshot, RuntimeEnv};
 use crate::style::{Rect, Theme};
 
@@ -18,6 +18,25 @@ pub(crate) struct ComponentMount {
     pub(crate) props: AnyProps,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum ComponentEvent<'a> {
+    Focus(&'a crate::FocusChanged),
+    WindowFocus(bool),
+    HostTheme,
+    Modifiers(KeyMods),
+}
+
+impl ComponentEvent<'_> {
+    pub(crate) fn deliver<C: Component>(self, component: &mut C, ctx: &mut Context<C>) -> Update {
+        match self {
+            Self::Focus(change) => component.on_focus_changed(change, ctx),
+            Self::WindowFocus(focused) => component.on_window_focus_changed(focused, ctx),
+            Self::HostTheme => component.on_host_theme_changed(ctx),
+            Self::Modifiers(modifiers) => component.on_modifiers_changed(modifiers, ctx),
+        }
+    }
+}
+
 /// A mounted, type-erased component instance.
 pub(crate) trait ErasedComponent {
     /// Stable type name for diagnostics (`std::any::type_name`).
@@ -26,7 +45,7 @@ pub(crate) trait ErasedComponent {
     /// without cloning.
     fn props_equal(&self, props: &AnyProps) -> bool;
     fn set_props(&mut self, props: AnyProps) -> Update;
-    fn set_scoped_theme(&mut self, theme: Theme, has_provider: bool);
+    fn set_scoped_theme(&mut self, theme: &Theme, has_provider: bool);
     fn set_contexts(
         &mut self,
         contexts: rustc_hash::FxHashMap<TypeId, Arc<dyn Any>>,
@@ -42,7 +61,8 @@ pub(crate) trait ErasedComponent {
         &self,
         snapshot: &MemoDependencySnapshot,
     ) -> Option<crate::core::nested::MemoDependencyKind>;
-    fn init(&mut self) -> Option<Command>;
+    fn init(&mut self) -> Update;
+    fn on_event(&mut self, event: ComponentEvent<'_>) -> Update;
     fn view(&self) -> Element;
     fn update(&mut self, msg: Box<dyn Any>) -> crate::Result<Update>;
     fn on_key(&mut self, key: KeyEvent) -> KeyUpdate;
@@ -82,7 +102,7 @@ impl<C: Component> ErasedComponent for Mounted<C> {
         }
     }
 
-    fn set_scoped_theme(&mut self, theme: Theme, has_provider: bool) {
+    fn set_scoped_theme(&mut self, theme: &Theme, has_provider: bool) {
         self.ctx.set_scoped_theme(theme, has_provider);
     }
 
@@ -122,8 +142,12 @@ impl<C: Component> ErasedComponent for Mounted<C> {
         self.ctx.memo_dependency_mismatch(snapshot)
     }
 
-    fn init(&mut self) -> Option<Command> {
+    fn init(&mut self) -> Update {
         self.component.init(&mut self.ctx)
+    }
+
+    fn on_event(&mut self, event: ComponentEvent<'_>) -> Update {
+        event.deliver(&mut self.component, &mut self.ctx)
     }
 
     fn view(&self) -> Element {
@@ -174,7 +198,7 @@ impl ErasedComponent for EmptyComponent {
         Update::none()
     }
 
-    fn set_scoped_theme(&mut self, _theme: Theme, _has_provider: bool) {}
+    fn set_scoped_theme(&mut self, _theme: &Theme, _has_provider: bool) {}
 
     fn set_contexts(
         &mut self,
@@ -207,8 +231,12 @@ impl ErasedComponent for EmptyComponent {
         None
     }
 
-    fn init(&mut self) -> Option<Command> {
-        None
+    fn init(&mut self) -> Update {
+        Update::none()
+    }
+
+    fn on_event(&mut self, _event: ComponentEvent<'_>) -> Update {
+        Update::none()
     }
 
     fn view(&self) -> Element {

@@ -167,14 +167,14 @@ impl Component for KanbanDemo {
             }
         }
 
-        Update::full()
+        Update::render()
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => {
                 ctx.quit();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             _ => KeyUpdate::unhandled(Update::none()),
         }

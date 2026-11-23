@@ -186,7 +186,7 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
         }
         // Chrome outside the screen — a title from OSC 0/2, a tab's activity dot — still needs
         // `view()` to run.
-        Msg::PtyTitle(title) => { self.title = title; Update::layout() }
+        Msg::PtyTitle(title) => { self.title = title; Update::render() }
     }
 }
 ```

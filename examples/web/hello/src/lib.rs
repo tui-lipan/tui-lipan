@@ -43,11 +43,11 @@ impl Component for WebCounter {
         match key.code {
             KeyCode::Char('+') | KeyCode::Char('=') => {
                 ctx.state += 1;
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('-') | KeyCode::Char('_') => {
                 ctx.state = ctx.state.saturating_sub(1);
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             _ => KeyUpdate::unhandled(Update::none()),
         }

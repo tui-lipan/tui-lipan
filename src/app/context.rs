@@ -245,8 +245,6 @@ pub struct FocusChanged {
     pub new: Option<FocusEntry>,
 }
 
-pub(crate) type FocusChangedHook = std::rc::Rc<dyn Fn(&FocusChanged)>;
-
 /// One host-application metric displayed by the built-in DevTools panel.
 ///
 /// Rows are intentionally just a terse label/value pair. The application
@@ -438,7 +436,6 @@ pub struct App {
     pub(crate) user_keymap_policy: UserKeymapPolicy,
     pub(crate) key_dispatch_policy: KeyDispatchPolicy,
     pub(crate) focus_policy: FocusPolicy,
-    pub(crate) on_focus_changed: Option<FocusChangedHook>,
     pub(crate) terminal_key_policy: TerminalKeyPolicy,
     pub(crate) command_conflict_policy: CommandConflictPolicy,
     pub(crate) chord_mismatch_policy: ChordMismatchPolicy,
@@ -478,7 +475,6 @@ impl Default for App {
             user_keymap_policy: UserKeymapPolicy::default(),
             key_dispatch_policy: KeyDispatchPolicy::WidgetFirst,
             focus_policy: FocusPolicy::default(),
-            on_focus_changed: None,
             terminal_key_policy: TerminalKeyPolicy::FrameworkFirst,
             command_conflict_policy: CommandConflictPolicy::default(),
             chord_mismatch_policy: ChordMismatchPolicy::default(),
@@ -720,12 +716,6 @@ impl App {
     /// Configure framework-initiated focus movement.
     pub fn focus_policy(mut self, policy: FocusPolicy) -> Self {
         self.focus_policy = policy;
-        self
-    }
-
-    /// Observe completed focus transitions after widget blur/focus callbacks are emitted.
-    pub fn on_focus_changed(mut self, hook: impl Fn(&FocusChanged) + 'static) -> Self {
-        self.on_focus_changed = Some(std::rc::Rc::new(hook));
         self
     }
 

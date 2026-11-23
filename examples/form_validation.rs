@@ -144,7 +144,7 @@ impl Component for LoginForm {
                         .err()
                         .map(|e| e.message);
                 }
-                Update::full()
+                Update::render()
             }
             Msg::PasswordChanged(ev) => {
                 self.password = ev.value;
@@ -156,13 +156,13 @@ impl Component for LoginForm {
                         .err()
                         .map(|e| e.message);
                 }
-                Update::full()
+                Update::render()
             }
             Msg::Submit => {
                 if self.validate() {
                     self.submitted = true;
                 }
-                Update::full()
+                Update::render()
             }
             Msg::Reset => {
                 self.username = Arc::from("");
@@ -174,7 +174,7 @@ impl Component for LoginForm {
                 self.username_error = None;
                 self.password_error = None;
                 self.submitted = false;
-                Update::full()
+                Update::render()
             }
         }
     }

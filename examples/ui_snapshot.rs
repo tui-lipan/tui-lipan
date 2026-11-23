@@ -17,7 +17,7 @@ impl Component for AgentDashboard {
 
     fn update(&mut self, _msg: Self::Message, ctx: &mut Context<Self>) -> Update {
         ctx.state = ctx.state.wrapping_add(1);
-        Update::full()
+        Update::render()
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {

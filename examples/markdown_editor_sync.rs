@@ -89,7 +89,7 @@ fn main() {
                 ctx.state.editor_scroll = Some(ev.source_line);
             }
         }
-        Update::full()
+        Update::render()
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {

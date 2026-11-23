@@ -44,9 +44,9 @@ impl Component for StressTest {
         }
     }
 
-    fn init(&mut self, _ctx: &mut Context<Self>) -> Option<Command> {
+    fn init(&mut self, _ctx: &mut Context<Self>) -> Update {
         // Start tick loop for FPS display (optional, toggle with 'f')
-        Some(Command::spawn(move |link| {
+        Update::command_only(Command::spawn(move |link| {
             link.send(Msg::Tick);
         }))
     }
@@ -62,7 +62,7 @@ impl Component for StressTest {
 
                 // Only continue ticking if FPS display is enabled
                 if ctx.state.show_fps {
-                    Update::with_command(Command::spawn(move |link| {
+                    Update::render_with_command(Command::spawn(move |link| {
                         std::thread::sleep(Duration::from_millis(16));
                         link.send(Msg::Tick);
                     }))
@@ -72,22 +72,22 @@ impl Component for StressTest {
             }
             Msg::Text(s) => {
                 ctx.state.text = s;
-                Update::full()
+                Update::render()
             }
             Msg::Select(idx) => {
                 ctx.state.selected = idx;
-                Update::full()
+                Update::render()
             }
             Msg::ToggleFps => {
                 ctx.state.show_fps = !ctx.state.show_fps;
                 if ctx.state.show_fps {
                     // Restart tick loop
-                    Update::with_command(Command::spawn(move |link| {
+                    Update::render_with_command(Command::spawn(move |link| {
                         std::thread::sleep(Duration::from_millis(16));
                         link.send(Msg::Tick);
                     }))
                 } else {
-                    Update::full()
+                    Update::render()
                 }
             }
         }
@@ -96,7 +96,7 @@ impl Component for StressTest {
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
         if matches!(key.code, KeyCode::Char('f') | KeyCode::Char('F')) {
             ctx.link().send(Msg::ToggleFps);
-            return KeyUpdate::handled(Update::full());
+            return KeyUpdate::handled(Update::render());
         }
         KeyUpdate::unhandled(Update::none())
     }

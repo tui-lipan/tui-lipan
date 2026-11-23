@@ -411,19 +411,17 @@ pub enum UpdateLevel {
     /// Redraw from the node tree as it stands: no `view()`, no layout.
     Paint,
     /// Re-run `view()` and reconcile layout for the dirty scope.
-    Layout,
+    Render,
     /// Re-run `view()`, expand, reconcile and repaint everything.
     Full,
 }
 
 /// Component update result with optional side-effect command.
 pub struct Update {
-    /// Whether the component's view needs re-rendering.
-    pub dirty: bool,
     /// Granularity of the requested refresh.
-    pub(crate) level: UpdateLevel,
+    level: UpdateLevel,
     /// An optional async command to execute.
-    pub command: Option<Command>,
+    command: Option<Command>,
 }
 
 impl Update {
@@ -434,7 +432,6 @@ impl Update {
     #[cfg(feature = "terminal")]
     pub fn terminal_graphics() -> Self {
         Self {
-            dirty: true,
             level: UpdateLevel::TerminalGraphics,
             command: None,
         }
@@ -455,7 +452,6 @@ impl Update {
     #[cfg(feature = "terminal")]
     pub fn terminal_paint() -> Self {
         Self {
-            dirty: true,
             level: UpdateLevel::TerminalPaint,
             command: None,
         }
@@ -464,7 +460,6 @@ impl Update {
     /// Request a paint-only update.
     pub fn paint() -> Self {
         Self {
-            dirty: true,
             level: UpdateLevel::Paint,
             command: None,
         }
@@ -503,38 +498,28 @@ impl Update {
         } else {
             level
         };
-        Self {
-            dirty: self.dirty || other.dirty,
-            level,
-            command,
-        }
+        Self { level, command }
     }
 
-    /// Request a layout reconcile update.
-    pub fn layout() -> Self {
+    /// Rebuild this component's view and reconcile its subtree.
+    pub fn render() -> Self {
         Self {
-            dirty: true,
-            level: UpdateLevel::Layout,
+            level: UpdateLevel::Render,
             command: None,
         }
     }
 
-    /// Request a layout reconcile and optionally run a command.
-    pub fn layout_with_command(command: impl Into<Option<Command>>) -> Self {
-        match command.into() {
-            Some(command) => Self {
-                dirty: true,
-                level: UpdateLevel::Layout,
-                command: Some(command),
-            },
-            None => Self::layout(),
+    /// Rebuild this component's view and optionally run a command.
+    pub fn render_with_command(command: impl Into<Option<Command>>) -> Self {
+        Self {
+            command: command.into(),
+            ..Self::render()
         }
     }
 
-    /// Request a full update.
+    /// Request a rebuild from the application root.
     pub fn full() -> Self {
         Self {
-            dirty: true,
             level: UpdateLevel::Full,
             command: None,
         }
@@ -543,7 +528,6 @@ impl Update {
     /// Run a command without marking the component dirty (e.g. background fetch with a follow-up message).
     pub fn command_only(command: Command) -> Self {
         Self {
-            dirty: false,
             level: UpdateLevel::None,
             command: Some(command),
         }
@@ -552,21 +536,16 @@ impl Update {
     /// Nothing changed, no command.
     pub fn none() -> Self {
         Self {
-            dirty: false,
             level: UpdateLevel::None,
             command: None,
         }
     }
 
     /// Full refresh, and optionally run a command when [`Some`]; when [`None`], same as [`Self::full`].
-    pub fn with_command(command: impl Into<Option<Command>>) -> Self {
-        match command.into() {
-            Some(cmd) => Self {
-                dirty: true,
-                level: UpdateLevel::Full,
-                command: Some(cmd),
-            },
-            None => Self::full(),
+    pub fn full_with_command(command: impl Into<Option<Command>>) -> Self {
+        Self {
+            command: command.into(),
+            ..Self::full()
         }
     }
 
@@ -574,11 +553,35 @@ impl Update {
     pub fn level(&self) -> UpdateLevel {
         self.level
     }
+
+    pub(crate) fn run(self, scope: ScopeId, tx: &CommandTx, env: &RuntimeEnv) -> UpdateLevel {
+        let level = self.level;
+        if let Some(command) = self.into_command() {
+            command.run(CommandRuntime {
+                scope,
+                tx: tx.clone(),
+                runtime_id: env.runtime_id,
+                now: env.now(),
+                clock_mode: env.clock.mode(),
+                clock: env.clock.clone(),
+                activity: Arc::clone(&env.activity),
+            });
+        }
+        level
+    }
+
+    pub(crate) fn is_dirty(&self) -> bool {
+        self.level != UpdateLevel::None
+    }
+
+    pub(crate) fn into_command(self) -> Option<Command> {
+        self.command
+    }
 }
 
 /// The return type of `Component::on_key` and `Component::on_paste`.
 ///
-/// `handled` is tracked separately from `dirty` and `command`.
+/// `handled` is independent of the refresh and command in `update`.
 pub struct KeyUpdate {
     /// Whether the input event was handled.
     pub handled: bool,
@@ -632,9 +635,10 @@ pub trait Component: Sized + 'static {
 
     /// Called once when the component is first mounted.
     ///
-    /// This is the right place to kick off background work (HTTP/IO) by returning a `Command`.
-    fn init(&mut self, _ctx: &mut Context<Self>) -> Option<Command> {
-        None
+    /// Return [`Update::command_only`] to start background work. The first view already sees
+    /// state initialized here.
+    fn init(&mut self, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
     }
 
     /// Declarative UI definition.
@@ -661,16 +665,16 @@ pub trait Component: Sized + 'static {
         KeyUpdate::unhandled(Update::none())
     }
 
-    /// Called on the root component when the set of physically held modifier keys changes.
+    /// Called on mounted components when the set of physically held modifier keys changes.
     ///
     /// Host terminals report standalone modifier press/release events only when an enhanced
     /// keyboard protocol is active. Combined key events remain available through [`Self::on_key`]
-    /// on every terminal.
+    /// on every terminal. Parents receive the event before their children.
     fn on_modifiers_changed(&mut self, _modifiers: KeyMods, _ctx: &mut Context<Self>) -> Update {
         Update::none()
     }
 
-    /// Called on the root component for every drag-and-drop event the host terminal sends.
+    /// **Root only.** Called for every drag-and-drop event the host terminal sends.
     ///
     /// Hosts that speak the protocol (see [`crate::dnd`]) report drags over the window, drops, the
     /// data the app asked for, and the progress of drags the app started. Answer through
@@ -683,44 +687,45 @@ pub trait Component: Sized + 'static {
         Update::none()
     }
 
-    /// Called on the root component when the host terminal/window gains or loses focus.
+    /// Called on mounted components when the host terminal/window gains or loses focus.
     ///
-    /// This is distinct from widget focus and is never delivered to nested components.
+    /// This is distinct from widget focus. Parents receive the event before their children.
     fn on_window_focus_changed(&mut self, _focused: bool, _ctx: &mut Context<Self>) -> Update {
         Update::none()
     }
 
-    /// Called on the root component when the host terminal reports new colors or a new
+    /// Called on mounted components when the host terminal reports new colors or a new
     /// light/dark color scheme (when [`App::system_theme`](crate::App::system_theme) or
     /// [`App::live_host_terminal_colors`](crate::App::live_host_terminal_colors) is enabled).
     ///
     /// Read [`Context::host_terminal_colors`] and [`Context::host_color_scheme`] for the latest
     /// values. When the app is currently following the system theme, the framework updates its
     /// default theme before calling this hook; call [`Context::set_theme`] to customize or
-    /// replace it. Nested components do not receive this callback.
+    /// replace it. Parents receive the event before their children.
     fn on_host_theme_changed(&mut self, _ctx: &mut Context<Self>) -> Update {
         Update::none()
     }
 
-    /// Produce a root message after framework widget focus changes.
+    /// Observe a completed widget focus transition after widget callbacks are emitted.
     ///
-    /// Nested components do not receive this callback. The returned message is appended to the
-    /// normal root queue after widget focus callbacks and is never updated synchronously.
+    /// Parents receive the event before their children. Widget callbacks that send messages
+    /// leave those messages in the normal queue.
     fn on_focus_changed(
-        &self,
-        _change: &crate::app::context::FocusChanged,
-    ) -> Option<Self::Message> {
-        None
+        &mut self,
+        _change: &crate::FocusChanged,
+        _ctx: &mut Context<Self>,
+    ) -> Update {
+        Update::none()
     }
 
     /// Update state in response to a message.
     ///
-    /// Returns `(dirty, command)`.
+    /// Return an [`Update`] to choose a refresh level and optionally run a command.
     fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update;
 
-    /// Called when properties have changed.
+    /// Called when properties have changed, before the view uses the new values.
     ///
-    /// Returns `(dirty, command)`.
+    /// Return an [`Update`] with a command if the property change starts background work.
     fn on_props_changed(
         &mut self,
         _old_props: &Self::Properties,
@@ -1311,7 +1316,7 @@ impl<C: Component> Context<C> {
     /// [`follow_system_theme`](Self::follow_system_theme) goes back.
     pub fn set_theme(&mut self, theme: Theme) {
         if !self.env.has_provider_theme.get() {
-            self.set_active_theme(theme.clone());
+            self.set_active_theme(&theme);
         }
         *self.env.theme_request.borrow_mut() = Some(crate::core::runtime_env::ThemeRequest::Fixed(
             Box::new(theme),
@@ -1328,7 +1333,7 @@ impl<C: Component> Context<C> {
         if !self.env.has_provider_theme.get()
             && let Some(colors) = self.env.host_terminal_colors()
         {
-            self.set_active_theme(Theme::from_host_colors(colors));
+            self.set_active_theme(&Theme::from_host_colors(colors));
         }
         *self.env.theme_request.borrow_mut() = Some(crate::core::runtime_env::ThemeRequest::System);
     }
@@ -1357,7 +1362,7 @@ impl<C: Component> Context<C> {
     /// [`App::command_chord_reveal_delay`](crate::App::command_chord_reveal_delay) at runtime, for
     /// an app whose delay comes from a config file it reloads while running. Takes effect on the
     /// next chord; a chord already pending keeps being measured against the new value.
-    pub fn set_command_chord_reveal_delay(&self, delay: std::time::Duration) {
+    pub fn set_command_chord_reveal_delay(&mut self, delay: std::time::Duration) {
         self.env.command_chord_reveal_delay.set(delay);
     }
 
@@ -1369,7 +1374,7 @@ impl<C: Component> Context<C> {
     /// Change the trail set by [`App::cursor_trail`](crate::App::cursor_trail) at runtime, for an
     /// app whose setting comes from a config file it reloads while running. `None` turns trails
     /// off; a trail already on screen stops with the next frame.
-    pub fn set_cursor_trail(&self, trail: Option<crate::app::CursorTrail>) {
+    pub fn set_cursor_trail(&mut self, trail: Option<crate::app::CursorTrail>) {
         self.env.cursor_trail.set(trail);
     }
 
@@ -1378,7 +1383,7 @@ impl<C: Component> Context<C> {
     /// where a smear from the caret on the old screen to the caret on the new one would connect
     /// two unrelated places. The skip waits for that move: frames that still show the caret where
     /// it was, or carry it with its widget, keep it pending. Later moves trail as usual.
-    pub fn skip_cursor_trail(&self) {
+    pub fn skip_cursor_trail(&mut self) {
         self.env.cursor_trail_skip.set(true);
     }
 
@@ -1393,7 +1398,7 @@ impl<C: Component> Context<C> {
     ///
     /// Values below `1` are clamped to `1`. Per-widget `scroll_wheel_multiplier` overrides continue
     /// to take precedence on the widgets that set them.
-    pub fn set_scroll_wheel_multiplier(&self, multiplier: u16) {
+    pub fn set_scroll_wheel_multiplier(&mut self, multiplier: u16) {
         self.env.scroll_wheel_multiplier.set(multiplier.max(1));
     }
 
@@ -1415,7 +1420,7 @@ impl<C: Component> Context<C> {
     }
 
     /// Register a command scoped to this component instance.
-    pub fn register_command(&self, entry: CommandEntry) {
+    pub fn register_command(&mut self, entry: CommandEntry) {
         self.env
             .command_registry
             .register_for_scope(self.scope, entry);
@@ -1468,14 +1473,6 @@ impl<C: Component> Context<C> {
             .get(&TypeId::of::<T>())
             .and_then(|value| value.as_ref().downcast_ref::<T>())
             .cloned()
-    }
-
-    /// Returns a cloned typed value from the nearest active `ContextProvider<T>`.
-    pub fn context<T>(&self) -> Option<T>
-    where
-        T: ContextValue,
-    {
-        self.use_context::<T>()
     }
 
     /// Returns `true` when the app runs in inline viewport mode.
@@ -1548,7 +1545,7 @@ impl<C: Component> Context<C> {
     /// this instead of polling
     /// [`query_host_colors`](crate::style::query_host_colors) from background
     /// threads.
-    pub fn request_host_terminal_color_refresh(&self) {
+    pub fn request_host_terminal_color_refresh(&mut self) {
         self.env.request_host_terminal_color_refresh();
     }
 
@@ -1570,7 +1567,7 @@ impl<C: Component> Context<C> {
     }
 
     /// Enable or disable terminal mouse capture at runtime.
-    pub fn set_mouse_capture(&self, enabled: bool) {
+    pub fn set_mouse_capture(&mut self, enabled: bool) {
         if self.env.mouse_capture.get() != enabled {
             self.env.mouse_capture.set(enabled);
             self.env.mouse_capture_generation.set(
@@ -1584,7 +1581,7 @@ impl<C: Component> Context<C> {
     }
 
     /// Choose mouse pointer feedback without changing mouse input or widget actions.
-    pub fn set_pointer_mode(&self, mode: crate::PointerMode) {
+    pub fn set_pointer_mode(&mut self, mode: crate::PointerMode) {
         self.env.pointer_mode.set(mode);
     }
 
@@ -1594,7 +1591,7 @@ impl<C: Component> Context<C> {
     }
 
     /// Toggle terminal mouse capture at runtime and return the new state.
-    pub fn toggle_mouse_capture(&self) -> bool {
+    pub fn toggle_mouse_capture(&mut self) -> bool {
         let next = !self.env.mouse_capture.get();
         self.set_mouse_capture(next);
         next
@@ -1607,7 +1604,7 @@ impl<C: Component> Context<C> {
     /// composed text remains usable in fullscreen apps. Unix inline surfaces and unsupported
     /// terminals ignore the request; modifier sides then remain unknown. Keys already held when
     /// reporting starts may also be unknown until released and pressed again.
-    pub fn set_modifier_key_reporting(&self, enabled: bool) {
+    pub fn set_modifier_key_reporting(&mut self, enabled: bool) {
         self.env.modifier_key_reporting.set(enabled);
     }
 
@@ -1623,7 +1620,7 @@ impl<C: Component> Context<C> {
     /// without Shift. Some hosts treat a reported Shift release as typing and clear that selection.
     /// Modifiers pressed after Shift are not reported during the pause, so keep the default while
     /// recording shortcuts.
-    pub fn set_modifier_key_reporting_keeps_shift(&self, keep: bool) {
+    pub fn set_modifier_key_reporting_keeps_shift(&mut self, keep: bool) {
         self.env.modifier_key_reporting_keeps_shift.set(keep);
     }
 
@@ -1646,7 +1643,7 @@ impl<C: Component> Context<C> {
     /// still in raw mode.
     ///
     /// No-op on targets without POSIX job control (Windows, wasm).
-    pub fn suspend_to_shell(&self) {
+    pub fn suspend_to_shell(&mut self) {
         crate::app::job_control::request_suspend();
     }
 
@@ -1856,7 +1853,7 @@ impl<C: Component> Context<C> {
     /// This does not turn a render-resolved animation into a view-resolved one.
     /// Panics if this key already holds a different value type.
     pub fn restart_transition<T: crate::animation::Lerp + PartialEq + 'static>(
-        &self,
+        &mut self,
         key: impl Into<Key>,
         target: T,
         config: crate::animation::TransitionConfig,
@@ -1870,7 +1867,7 @@ impl<C: Component> Context<C> {
     /// Call once at a handoff, rather than on every view. Existing render handles remain valid.
     /// Panics if this key already holds a different value type.
     pub fn restart_transition_from<T: crate::animation::Lerp + PartialEq + 'static>(
-        &self,
+        &mut self,
         key: impl Into<Key>,
         from: T,
         target: T,
@@ -1885,7 +1882,7 @@ impl<C: Component> Context<C> {
     /// Unlike an ordinary zero-duration request, this also snaps an unchanged target.
     /// Panics if this key already holds a different value type.
     pub fn snap_transition<T: crate::animation::Lerp + PartialEq + 'static>(
-        &self,
+        &mut self,
         key: impl Into<Key>,
         value: T,
     ) {
@@ -2145,15 +2142,15 @@ impl<C: Component> Context<C> {
         self.viewport = viewport;
     }
 
-    pub(crate) fn set_scoped_theme(&mut self, theme: Theme, has_provider: bool) {
+    pub(crate) fn set_scoped_theme(&mut self, theme: &Theme, has_provider: bool) {
         self.env.has_provider_theme.set(has_provider);
         self.set_active_theme(theme);
     }
 
-    pub(crate) fn set_active_theme(&mut self, theme: Theme) {
+    pub(crate) fn set_active_theme(&mut self, theme: &Theme) {
         let mut active_theme = self.env.active_theme.borrow_mut();
-        if *active_theme != theme {
-            *active_theme = theme;
+        if &*active_theme != theme {
+            *active_theme = theme.clone();
             self.env.active_theme_generation.set(
                 self.env
                     .active_theme_generation
@@ -2239,7 +2236,7 @@ impl<C: Component> Context<C> {
     ///
     /// Use after the host terminal was repainted by another process (external editor,
     /// pager, etc.) so nested components are not stuck on a layout-only update path.
-    pub fn request_full_repaint(&self) {
+    pub fn request_full_repaint(&mut self) {
         self.env.full_repaint.set(true);
     }
 
@@ -2250,7 +2247,7 @@ impl<C: Component> Context<C> {
     /// already shows writes nothing, so calling this on every update is cheap. The latest call
     /// before a frame wins. Control characters are dropped, so text taken from a child program
     /// cannot end the escape sequence early.
-    pub fn set_title(&self, title: impl Into<String>) {
+    pub fn set_title(&mut self, title: impl Into<String>) {
         let mut title = title.into();
         title.retain(|ch| !ch.is_control());
         *self.env.title_request.borrow_mut() = Some(title);
@@ -2263,10 +2260,10 @@ impl<C: Component> Context<C> {
     /// unstyled cell. Cells keep their concrete color for blending and capture; only the bytes
     /// sent to the host change. `None` turns this off.
     ///
-    /// The value does not follow the host's colors. A host color refresh re-runs `view`, not
-    /// `update`, so set it from `view` to keep up with the host background. Setting an unchanged
-    /// value is free; a changed one redraws every cell in the next frame.
-    pub fn set_host_default_background(&self, color: Option<Color>) {
+    /// Set the initial value in [`Component::init`] and refresh it in
+    /// [`Component::on_host_theme_changed`] to track the host background. Changing the value
+    /// redraws every cell in the next frame.
+    pub fn set_host_default_background(&mut self, color: Option<Color>) {
         self.env
             .host_default_background
             .set(color.filter(|color| !color.is_sentinel()));
@@ -2284,7 +2281,7 @@ impl<C: Component> Context<C> {
     /// target is captured when this method is called; later focus changes cannot redirect it. The
     /// request is ignored if the node is no longer valid or copy feedback is disabled with a zero
     /// duration.
-    pub fn flash_copy_feedback(&self, node_id: NodeId) {
+    pub fn flash_copy_feedback(&mut self, node_id: NodeId) {
         self.env.request_copy_feedback(node_id, None);
     }
 
@@ -2300,7 +2297,7 @@ impl<C: Component> Context<C> {
     /// Columns are display columns, matching the terminal renderer. Only widgets that render a
     /// grid selection honor the range; elsewhere this behaves like
     /// [`Context::flash_copy_feedback`].
-    pub fn flash_copy_feedback_range(&self, node_id: NodeId, range: GridSelection) {
+    pub fn flash_copy_feedback_range(&mut self, node_id: NodeId, range: GridSelection) {
         self.env.request_copy_feedback(node_id, Some(range));
     }
 
@@ -2313,12 +2310,12 @@ impl<C: Component> Context<C> {
     ///
     /// Publishing never schedules an app frame. Rows that differ from the
     /// previous ones reach an open `App` tab on DevTools' next panel refresh,
-    /// which rebuilds only the panel, so this can be called from `update()` or
-    /// a timer as well as from `view()`.
+    /// which rebuilds only the panel. Publish initial values from `init()`
+    /// and publish new values from `update()`.
     ///
     /// Without the `devtools` feature this is a no-op, so the same application
     /// code continues to compile without constructing or formatting metrics.
-    pub fn set_devtools_metrics<F, I>(&self, metrics: F)
+    pub fn set_devtools_metrics<F, I>(&mut self, metrics: F)
     where
         F: FnOnce() -> I,
         I: IntoIterator<Item = crate::DevToolsMetric>,
@@ -2359,17 +2356,17 @@ impl<C: Component> Context<C> {
     }
 
     /// Request that the built-in devtools panel becomes visible.
-    pub fn show_devtools(&self) {
+    pub fn show_devtools(&mut self) {
         *self.env.devtools_request.borrow_mut() = Some(DevToolsRequest::Show);
     }
 
     /// Request that the built-in devtools panel becomes hidden.
-    pub fn hide_devtools(&self) {
+    pub fn hide_devtools(&mut self) {
         *self.env.devtools_request.borrow_mut() = Some(DevToolsRequest::Hide);
     }
 
     /// Request that the built-in devtools panel toggles visibility.
-    pub fn toggle_devtools(&self) {
+    pub fn toggle_devtools(&mut self) {
         *self.env.devtools_request.borrow_mut() = Some(DevToolsRequest::Toggle);
     }
 
@@ -2401,7 +2398,7 @@ impl<C: Component> Context<C> {
     ///
     /// A pending request replaces any earlier one (last writer wins). Triggers a full
     /// repaint so idle apps still deliver the snapshot.
-    pub fn request_ui_snapshot_to(&self, path: impl AsRef<std::path::Path>) {
+    pub fn request_ui_snapshot_to(&mut self, path: impl AsRef<std::path::Path>) {
         let path = path.as_ref().to_path_buf();
         let format = crate::ui_snapshot::UiSnapshotFileFormat::from_path(&path);
         self.env.pending_ui_snapshot.borrow_mut().request =
@@ -2413,7 +2410,7 @@ impl<C: Component> Context<C> {
     ///
     /// A pending request replaces any earlier one (last writer wins). Triggers a full
     /// repaint so idle apps still deliver the snapshot.
-    pub fn request_ui_snapshot_to_slot(&self, slot: &crate::ui_snapshot::UiSnapshotSlot) {
+    pub fn request_ui_snapshot_to_slot(&mut self, slot: &crate::ui_snapshot::UiSnapshotSlot) {
         self.env.pending_ui_snapshot.borrow_mut().request = Some(
             crate::ui_snapshot::UiSnapshotRequest::Deliver(slot.shared()),
         );
@@ -2435,7 +2432,7 @@ impl<C: Component> Context<C> {
     /// ```ignore
     /// ctx.request_ui_snapshot(ctx.link().callback(Msg::Captured));
     /// ```
-    pub fn request_ui_snapshot(&self, callback: Callback<crate::ui_snapshot::UiSnapshot>) {
+    pub fn request_ui_snapshot(&mut self, callback: Callback<crate::ui_snapshot::UiSnapshot>) {
         self.env
             .pending_ui_snapshot
             .borrow_mut()
@@ -2469,7 +2466,7 @@ impl<C: Component> Context<C> {
     ///
     /// Served by the native runner and [`crate::TestBackend`].
     pub fn observe_painted_frames(
-        &self,
+        &mut self,
         callback: Callback<crate::capture::PaintedFrame>,
     ) -> crate::capture::PaintSubscription {
         self.env.paint_observers.subscribe(callback)
@@ -2480,7 +2477,7 @@ impl<C: Component> Context<C> {
     /// tokens. Dropping the subscription unsubscribes; subscribing does not request a frame.
     #[cfg(feature = "terminal")]
     pub fn observe_terminal_presentations(
-        &self,
+        &mut self,
         callback: Callback<Vec<crate::widgets::PresentedTerminal>>,
     ) -> crate::widgets::TerminalPresentationSubscription {
         self.env.terminal_presentation_observers.subscribe(callback)

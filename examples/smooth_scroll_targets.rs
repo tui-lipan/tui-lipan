@@ -35,33 +35,33 @@ impl Component for SmoothScrollTargetsDemo {
         match key.code {
             KeyCode::Char('1') => {
                 ctx.state.message_target = next_index(ctx.state.message_target, MESSAGE_TARGETS);
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('2') => {
                 ctx.state.document_target = next_index(ctx.state.document_target, DOCUMENT_TARGETS);
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('3') => {
                 ctx.state.text_area_target =
                     next_index(ctx.state.text_area_target, TEXT_AREA_TARGETS);
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('a') | KeyCode::Char('A') => {
                 ctx.state.message_target = next_index(ctx.state.message_target, MESSAGE_TARGETS);
                 ctx.state.document_target = next_index(ctx.state.document_target, DOCUMENT_TARGETS);
                 ctx.state.text_area_target =
                     next_index(ctx.state.text_area_target, TEXT_AREA_TARGETS);
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('r') | KeyCode::Char('R') => {
                 ctx.state.message_target = 0;
                 ctx.state.document_target = 0;
                 ctx.state.text_area_target = 0;
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('Q') => {
                 ctx.quit();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             _ => KeyUpdate::unhandled(Update::none()),
         }

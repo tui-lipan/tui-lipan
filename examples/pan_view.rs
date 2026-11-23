@@ -96,7 +96,7 @@ impl Component for PanViewExample {
             }
             Msg::NodeClicked(event) => ctx.state.last_clicked = Some(event),
         }
-        Update::full()
+        Update::render()
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
@@ -105,7 +105,7 @@ impl Component for PanViewExample {
                 if let Some(event) = ctx.state.last_pan {
                     ctx.state.pan_target = Some(center_offset(event.metrics));
                     ctx.state.animate_pan = true;
-                    KeyUpdate::handled(Update::full())
+                    KeyUpdate::handled(Update::render())
                 } else {
                     KeyUpdate::unhandled(Update::none())
                 }

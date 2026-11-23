@@ -87,24 +87,24 @@ impl Component for HexAreaDemo {
             Msg::Cursor(event) => {
                 ctx.state.cursor = event.cursor;
                 ctx.state.anchor = event.anchor;
-                Update::full()
+                Update::render()
             }
             Msg::Changed(event) => {
                 ctx.state.bytes = event.bytes.to_vec();
                 ctx.state.cursor = event.cursor;
                 ctx.state.anchor = event.anchor;
-                Update::full()
+                Update::render()
             }
             Msg::Edited(event) => {
                 ctx.state.status = format!(
                     "Edit {:?} at {}: {:?} -> {:?}",
                     event.kind, event.index, event.before, event.after
                 );
-                Update::full()
+                Update::render()
             }
             Msg::Scrolled(event) => {
                 ctx.state.scroll_offset = event.offset;
-                Update::full()
+                Update::render()
             }
         }
     }
@@ -112,7 +112,7 @@ impl Component for HexAreaDemo {
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
         if matches!(key.code, KeyCode::Char('q')) {
             ctx.quit();
-            return KeyUpdate::handled(Update::full());
+            return KeyUpdate::handled(Update::render());
         }
         KeyUpdate::unhandled(Update::none())
     }

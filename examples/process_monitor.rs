@@ -33,9 +33,9 @@ impl Component for ProcessMonitor {
         State { selected: 3 }
     }
 
-    fn init(&mut self, ctx: &mut Context<Self>) -> Option<Command> {
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
         ctx.request_focus("process-table");
-        None
+        Update::none()
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {
@@ -54,7 +54,7 @@ impl Component for ProcessMonitor {
             Msg::Select(event) => ctx.state.selected = event.index,
             Msg::ScrollTo(index) => ctx.state.selected = index,
         }
-        Update::full()
+        Update::render()
     }
 }
 

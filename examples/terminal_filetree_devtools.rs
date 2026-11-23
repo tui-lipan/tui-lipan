@@ -47,7 +47,7 @@ impl Component for DevToolsApp {
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
         if key.mods.ctrl && matches!(key.code, KeyCode::Char('q') | KeyCode::Char('Q')) {
             ctx.link().send(Msg::Quit);
-            return KeyUpdate::handled(Update::full());
+            return KeyUpdate::handled(Update::render());
         }
 
         if !key.mods.ctrl
@@ -56,7 +56,7 @@ impl Component for DevToolsApp {
             && matches!(key.code, KeyCode::Char('r') | KeyCode::Char('R'))
         {
             ctx.link().send(Msg::RefreshGit);
-            return KeyUpdate::handled(Update::full());
+            return KeyUpdate::handled(Update::render());
         }
 
         if !key.mods.ctrl
@@ -65,7 +65,7 @@ impl Component for DevToolsApp {
             && matches!(key.code, KeyCode::Char('g') | KeyCode::Char('G'))
         {
             ctx.link().send(Msg::ToggleChangedOnly);
-            return KeyUpdate::handled(Update::full());
+            return KeyUpdate::handled(Update::render());
         }
 
         if !key.mods.ctrl
@@ -74,7 +74,7 @@ impl Component for DevToolsApp {
             && matches!(key.code, KeyCode::F(5))
         {
             ctx.link().send(Msg::RefreshEntries);
-            return KeyUpdate::handled(Update::full());
+            return KeyUpdate::handled(Update::render());
         }
 
         KeyUpdate::unhandled(Update::none())
@@ -84,23 +84,23 @@ impl Component for DevToolsApp {
         match msg {
             Msg::FileSelected(event) => {
                 ctx.state.selected_path = event.path;
-                Update::full()
+                Update::render()
             }
             Msg::TerminalStatus(status) => {
                 ctx.state.terminal_status = status;
-                Update::full()
+                Update::render()
             }
             Msg::RefreshGit => {
                 ctx.state.git_refresh_token = ctx.state.git_refresh_token.saturating_add(1);
-                Update::full()
+                Update::render()
             }
             Msg::RefreshEntries => {
                 ctx.state.entry_refresh_token = ctx.state.entry_refresh_token.saturating_add(1);
-                Update::full()
+                Update::render()
             }
             Msg::ToggleChangedOnly => {
                 ctx.state.changed_only = !ctx.state.changed_only;
-                Update::full()
+                Update::render()
             }
             Msg::Quit => {
                 ctx.quit();

@@ -53,7 +53,7 @@ impl Component for ThemeHotReload {
         State::default()
     }
 
-    fn init(&mut self, ctx: &mut Context<Self>) -> Option<Command> {
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
         let fallback = Theme::one_dark();
         let theme_path = ctx.state.theme_path.clone();
 
@@ -83,7 +83,7 @@ impl Component for ThemeHotReload {
             }
         }
 
-        Some(schedule_tick())
+        Update::command_only(schedule_tick())
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
@@ -112,7 +112,7 @@ impl Component for ThemeHotReload {
 
                     if let Some(theme) = newest_theme {
                         ctx.state.current_theme = theme;
-                        return Update::with_command(schedule_tick());
+                        return Update::full_with_command(schedule_tick());
                     }
                 }
 

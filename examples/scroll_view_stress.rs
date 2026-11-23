@@ -108,7 +108,7 @@ impl Component for ScrollStressDemo {
         match msg {
             Msg::Scroll(event) => {
                 ctx.state.offset = event.offset;
-                Update::full()
+                Update::render()
             }
         }
     }
@@ -117,7 +117,7 @@ impl Component for ScrollStressDemo {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('Q') => {
                 ctx.quit();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             _ => KeyUpdate::unhandled(Update::none()),
         }

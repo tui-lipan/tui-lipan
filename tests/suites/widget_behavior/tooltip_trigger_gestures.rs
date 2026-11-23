@@ -36,7 +36,7 @@ impl Component for TriggerApp {
             Msg::PopupClick => ctx.state.popup_clicks += 1,
             Msg::Close => ctx.state.closed = true,
         }
-        Update::layout()
+        Update::render()
     }
     fn view(&self, ctx: &Context<Self>) -> Element {
         let body: Element = Frame::new()

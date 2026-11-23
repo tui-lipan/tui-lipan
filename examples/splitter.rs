@@ -29,15 +29,15 @@ impl Component for SplitterDemo {
         match msg {
             Msg::ModeTabChanged(ev) => {
                 ctx.state.mode_tab = ev.index.min(1);
-                Update::full()
+                Update::render()
             }
             Msg::ListSelect(ev) => {
                 ctx.state.list_selected = ev.index;
-                Update::full()
+                Update::render()
             }
             Msg::TableSelect(ev) => {
                 ctx.state.table_selected = ev.index;
-                Update::full()
+                Update::render()
             }
         }
     }

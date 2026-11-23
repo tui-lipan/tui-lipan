@@ -54,9 +54,9 @@ impl Component for TerminalCopyModeDemo {
         }
     }
 
-    fn init(&mut self, ctx: &mut Context<Self>) -> Option<Command> {
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
         ctx.request_focus(TERMINAL_KEY);
-        None
+        Update::none()
     }
 
     fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
@@ -153,7 +153,7 @@ impl TerminalCopyModeDemo {
         if !ctx.state.active {
             if key.is(KeyCode::Char('c')) {
                 self.enter_copy_mode(ctx);
-                return Update::full();
+                return Update::render();
             }
             return Update::none();
         }
@@ -178,7 +178,7 @@ impl TerminalCopyModeDemo {
         match action {
             CopyModeAction::Moved | CopyModeAction::SelectionChanged => {
                 self.refresh_snapshot(ctx);
-                Update::full()
+                Update::render()
             }
             CopyModeAction::RequestCopy => self.copy_selection(ctx),
             CopyModeAction::Cancel => {
@@ -186,7 +186,7 @@ impl TerminalCopyModeDemo {
                 ctx.state.screen.set_scrollback(0);
                 ctx.state.snapshot = ctx.state.screen.render_snapshot();
                 ctx.state.status = "Copy mode exited • press c to enter again".to_string();
-                Update::full()
+                Update::render()
             }
             CopyModeAction::Ignored => Update::none(),
         }
@@ -219,7 +219,7 @@ impl TerminalCopyModeDemo {
             .selection(ctx.state.snapshot.total_scrollback_rows)
         else {
             ctx.state.status = "No selection — press v, move, then Enter".to_string();
-            return Update::full();
+            return Update::render();
         };
 
         let text =
@@ -228,7 +228,7 @@ impl TerminalCopyModeDemo {
                 .selection_display_text(&selection, SelectionEnd::Inclusive, true);
         if text.is_empty() {
             ctx.state.status = "Selection is empty".to_string();
-            return Update::full();
+            return Update::render();
         }
 
         match ctx.clipboard().copy(&text) {
@@ -244,7 +244,7 @@ impl TerminalCopyModeDemo {
                 ctx.state.status = format!("Copy failed: {error}");
             }
         }
-        Update::full()
+        Update::render()
     }
 }
 

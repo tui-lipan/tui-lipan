@@ -538,8 +538,11 @@ mod tests {
         fn update(&mut self, _: (), _: &mut crate::Context<Self>) -> crate::Update {
             crate::Update::none()
         }
-        fn view(&self, ctx: &crate::Context<Self>) -> Element {
+        fn init(&mut self, ctx: &mut crate::Context<Self>) -> crate::Update {
             ctx.set_pointer_mode(self.mode);
+            crate::Update::none()
+        }
+        fn view(&self, _ctx: &crate::Context<Self>) -> Element {
             HStack::new()
                 .child((self.subject)())
                 .child(
@@ -866,10 +869,14 @@ mod tests {
             }
             fn update(&mut self, mode: PointerMode, ctx: &mut Context<Self>) -> Update {
                 ctx.state = mode;
+                ctx.set_pointer_mode(mode);
                 Update::full()
             }
-            fn view(&self, ctx: &Context<Self>) -> Element {
+            fn init(&mut self, ctx: &mut Context<Self>) -> Update {
                 ctx.set_pointer_mode(ctx.state);
+                Update::none()
+            }
+            fn view(&self, _ctx: &Context<Self>) -> Element {
                 VStack::new()
                     .gap(0)
                     .child(

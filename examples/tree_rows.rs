@@ -29,7 +29,7 @@ impl Component for Projects {
             Msg::Activate => ctx.state.activated += 1,
             Msg::Close => ctx.state.closed += 1,
         }
-        Update::full()
+        Update::render()
     }
     fn view(&self, ctx: &Context<Self>) -> Element {
         let theme = ctx.theme();

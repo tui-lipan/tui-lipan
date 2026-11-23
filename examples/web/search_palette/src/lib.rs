@@ -205,16 +205,16 @@ impl Component for SearchPaletteDemo {
         match msg {
             Msg::Toggle(show) => {
                 ctx.state.show = show;
-                Update::full()
+                Update::render()
             }
             Msg::Selected(event) => {
                 ctx.state.last_selected = Some(event.item.value);
-                Update::full()
+                Update::render()
             }
             Msg::Activated(event) => {
                 ctx.state.last_selected = Some(event.item.value);
                 ctx.state.show = false;
-                Update::full()
+                Update::render()
             }
         }
     }
@@ -225,14 +225,14 @@ impl Component for SearchPaletteDemo {
             let ctrl_t = key.mods.ctrl && !key.mods.alt && !key.mods.shift;
             if plain || ctrl_t {
                 ctx.state.modal_transparent_frame_bg = !ctx.state.modal_transparent_frame_bg;
-                return KeyUpdate::handled(Update::full());
+                return KeyUpdate::handled(Update::render());
             }
         }
 
         match key.code {
             KeyCode::Char('/') if !ctx.state.show => {
                 ctx.state.show = true;
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             _ => KeyUpdate::unhandled(Update::none()),
         }

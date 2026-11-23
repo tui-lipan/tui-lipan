@@ -40,11 +40,11 @@ impl Component for TransitionColorDemo {
         match key.code {
             KeyCode::Char(' ') | KeyCode::Enter => {
                 ctx.state.active = !ctx.state.active;
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('q') | KeyCode::Esc => {
                 ctx.quit();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             _ => KeyUpdate::unhandled(Update::none()),
         }

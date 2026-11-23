@@ -84,33 +84,33 @@ impl Component for Showcase {
         match msg {
             Msg::SetTab(i) => {
                 ctx.state.tab = i;
-                Update::full()
+                Update::render()
             }
             Msg::ToggleAccordion(i) => {
                 if i < 3 {
                     ctx.state.acc_open[i] = !ctx.state.acc_open[i];
                 }
-                Update::full()
+                Update::render()
             }
             Msg::ToggleCmd(show) => {
                 ctx.state.show_cmd = show;
-                Update::full()
+                Update::render()
             }
             Msg::ToggleFuzzy(show) => {
                 ctx.state.show_fuzzy = show;
-                Update::full()
+                Update::render()
             }
             Msg::ToggleCtx(show) => {
                 ctx.state.show_ctx = show;
                 if !show {
                     ctx.state.ctx_anchor = None;
                 }
-                Update::full()
+                Update::render()
             }
             Msg::OpenCtx(x, y) => {
                 ctx.state.show_ctx = true;
                 ctx.state.ctx_anchor = Some((x, y));
-                Update::full()
+                Update::render()
             }
             Msg::ContextAction(index) => {
                 ctx.state.show_ctx = false;
@@ -123,40 +123,40 @@ impl Component for Showcase {
                     _ => "Action",
                 };
                 ctx.toast().push(Toast::new(format!("{} (demo)", label)));
-                Update::full()
+                Update::render()
             }
             Msg::NavSelect(path) => {
                 ctx.state.nav_path = path.segments().to_vec();
-                Update::full()
+                Update::render()
             }
             Msg::BreadcrumbSelect(index) => {
                 let take = index.min(ctx.state.nav_path.len());
                 ctx.state.nav_path = ctx.state.nav_path.iter().cloned().take(take).collect();
-                Update::full()
+                Update::render()
             }
             Msg::InputChanged(event) => {
                 ctx.state.input_value = event.value;
                 ctx.state.input_cursor = event.cursor;
                 ctx.state.input_anchor = event.anchor;
-                Update::full()
+                Update::render()
             }
             Msg::InputEdited(event) => {
                 ctx.state.last_input_edit = Some(event);
-                Update::full()
+                Update::render()
             }
             Msg::TextAreaChanged(event) => {
                 ctx.state.text_value = event.value;
                 ctx.state.text_cursor = event.cursor;
                 ctx.state.text_anchor = event.anchor;
-                Update::full()
+                Update::render()
             }
             Msg::TextAreaEdited(event) => {
                 ctx.state.last_text_edit = Some(event);
-                Update::full()
+                Update::render()
             }
             Msg::TableSelected(event) => {
                 ctx.state.table_selected = event.index;
-                Update::full()
+                Update::render()
             }
             Msg::TreeSelected(event) => {
                 let path = event
@@ -167,7 +167,7 @@ impl Component for Showcase {
                     .collect::<Vec<_>>()
                     .join(".");
                 ctx.state.tree_selection = Some(path);
-                Update::full()
+                Update::render()
             }
             Msg::ShowToast => {
                 ctx.toast().push(
@@ -190,21 +190,21 @@ impl Component for Showcase {
                         .padding((1, 2))
                         .max_width(Length::Px(56)),
                 );
-                Update::full()
+                Update::render()
             }
             Msg::ShowDefaultToast => {
                 ctx.toast()
                     .push(Toast::new("Default toast using the standard chrome.").copyable(true));
-                Update::full()
+                Update::render()
             }
             Msg::ToggleTooltip(show) => {
                 ctx.state.show_tooltip = show;
-                Update::full()
+                Update::render()
             }
             #[cfg(feature = "syntax-syntect")]
             Msg::ToggleHighlight(show) => {
                 ctx.state.highlight_on = show;
-                Update::full()
+                Update::render()
             }
             Msg::NoOp => Update::none(),
         }

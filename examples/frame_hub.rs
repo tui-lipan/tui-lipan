@@ -60,18 +60,18 @@ impl Component for FrameHub {
         match msg {
             Msg::SelectSection(index) => {
                 self.section = index;
-                Update::full()
+                Update::render()
             }
             Msg::SelectDividerTab(index) => {
                 self.divider_tab = index;
-                Update::full()
+                Update::render()
             }
             Msg::UpdateDividerSearch(event) => {
                 ctx.state
                     .divider_search
                     .set_text(event.value.as_ref().to_string());
                 ctx.state.divider_search.set_cursor(event.cursor);
-                Update::full()
+                Update::render()
             }
         }
     }
@@ -79,7 +79,7 @@ impl Component for FrameHub {
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
         if key.code == KeyCode::Char('q') {
             ctx.quit();
-            return KeyUpdate::handled(Update::full());
+            return KeyUpdate::handled(Update::render());
         }
         KeyUpdate::unhandled(Update::none())
     }

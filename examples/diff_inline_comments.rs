@@ -89,16 +89,16 @@ impl Component for DiffInlineComments {
                     range_label(range),
                     event.pane
                 );
-                Update::full()
+                Update::render()
             }
             Msg::RangeSelected(event) => {
                 open_editor(event.range, event.pane, ctx);
                 ctx.state.status = format!("Commenting on {}.", range_label(event.range));
-                Update::full()
+                Update::render()
             }
             Msg::DraftChanged(event) => {
                 event.apply_to(&mut ctx.state.draft);
-                Update::layout()
+                Update::render()
             }
             Msg::Save => {
                 let (Some(range), Some(pane)) = (ctx.state.active_range, ctx.state.active_pane)
@@ -125,19 +125,19 @@ impl Component for DiffInlineComments {
                 ctx.state.active_pane = None;
                 ctx.state.status = format!("Saved comment on {}.", range_label(range));
                 ctx.blur();
-                Update::full()
+                Update::render()
             }
             Msg::Cancel => {
                 ctx.state.active_range = None;
                 ctx.state.active_pane = None;
                 ctx.state.status = "Comment editor closed.".to_string();
                 ctx.blur();
-                Update::full()
+                Update::render()
             }
             Msg::Edit(range, pane) => {
                 open_editor(range, pane, ctx);
                 ctx.state.status = format!("Editing comment on {}.", range_label(range));
-                Update::full()
+                Update::render()
             }
             Msg::Delete(range) => {
                 ctx.state.comments.retain(|comment| comment.range != range);
@@ -146,7 +146,7 @@ impl Component for DiffInlineComments {
                     ctx.state.active_pane = None;
                 }
                 ctx.state.status = format!("Deleted comment on {}.", range_label(range));
-                Update::full()
+                Update::render()
             }
         }
     }

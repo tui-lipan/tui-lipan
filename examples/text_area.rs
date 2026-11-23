@@ -302,22 +302,22 @@ impl Component for TextAreaDemo {
                 ctx.state.editor.set_text(ev.value.to_string());
                 ctx.state.editor.set_cursor(ev.cursor);
                 ctx.state.editor.set_anchor(ev.anchor);
-                Update::layout()
+                Update::render()
             }
             Msg::ViewerChanged(ev) => {
                 // In read-only mode, the text shouldn't change, but cursor/anchor might
                 ctx.state.viewer.set_text(ev.value.to_string());
                 ctx.state.viewer.set_cursor(ev.cursor);
                 ctx.state.viewer.set_anchor(ev.anchor);
-                Update::layout()
+                Update::render()
             }
             Msg::VimChanged(ev) => {
                 ev.apply_to(&mut ctx.state.vim_editor);
-                Update::layout()
+                Update::render()
             }
             Msg::VimModeChanged(mode) => {
                 ctx.state.vim_mode = mode;
-                Update::layout()
+                Update::render()
             }
             Msg::ScrollTo(_offset) => {
                 // Framework handles manual scrolling automatically via NodeKind state

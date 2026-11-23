@@ -35,7 +35,7 @@ fn mouse_clipboard_paste_bubbles_and_renders_once() {
             ctx.state.1 += 1;
             crate::KeyUpdate {
                 handled: self.handled,
-                update: Update::layout(),
+                update: Update::render(),
             }
         }
     }

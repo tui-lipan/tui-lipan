@@ -141,35 +141,35 @@ impl Component for DiffHunkNavigation {
         match key.code {
             KeyCode::Char(']') => {
                 move_global_hunk(&mut ctx.state, 1);
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('[') => {
                 move_global_hunk(&mut ctx.state, -1);
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('1') => {
                 select_patch(&mut ctx.state, 0);
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('2') => {
                 select_patch(&mut ctx.state, 1);
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Char('3') => {
                 select_patch(&mut ctx.state, 2);
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Tab => {
                 move_patch(&mut ctx.state, 1);
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::BackTab => {
                 move_patch(&mut ctx.state, -1);
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('Q') => {
                 ctx.quit();
-                KeyUpdate::handled(Update::full())
+                KeyUpdate::handled(Update::render())
             }
             _ => KeyUpdate::unhandled(Update::none()),
         }

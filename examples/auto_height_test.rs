@@ -56,7 +56,7 @@ impl Component for Demo {
         ctx.state.text = ev.value;
         ctx.state.cursor = ev.cursor;
         ctx.state.anchor = ev.anchor;
-        Update::layout()
+        Update::render()
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {

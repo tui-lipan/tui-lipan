@@ -50,7 +50,7 @@ impl Component for VisualEffectsDemo {
                 ctx.state.palette_idx = (ctx.state.palette_idx + 1) % PALETTES.len();
             }
         }
-        Update::full()
+        Update::render()
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
@@ -59,14 +59,14 @@ impl Component for VisualEffectsDemo {
             KeyCode::Char('2') => Some(Msg::NextPalette),
             KeyCode::Char('q') | KeyCode::Esc => {
                 ctx.quit();
-                return KeyUpdate::handled(Update::full());
+                return KeyUpdate::handled(Update::render());
             }
             _ => None,
         };
 
         if let Some(msg) = msg {
             ctx.link().send(msg);
-            KeyUpdate::handled(Update::full())
+            KeyUpdate::handled(Update::render())
         } else {
             KeyUpdate::unhandled(Update::none())
         }

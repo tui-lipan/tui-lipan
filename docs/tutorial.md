@@ -40,7 +40,7 @@ impl Component for App {
     }
 
     fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
-        Update::full()
+        Update::render()
     }
 }
 
@@ -54,7 +54,7 @@ fn main() -> tui_lipan::Result<()> {
 - `Msg` enumerates every event. Use `#[derive(Clone)]`.
 - `create_state` initializes state from properties.
 - `view` returns the UI tree. Called on every re-render.
-- `update` handles messages. Returns `(needs_redraw, optional_command)`.
+- `update` handles messages. It returns an `Update` describing the refresh and any command.
 - Press `Ctrl+Q` to quit, or `Ctrl+C` when nothing else handles it (no selection to copy, no focused `Input`/`TextArea`/`HexArea` or `Terminal`, and neither `on_key` nor an app command claims it). You do not need to wire a quit key yourself unless you want to add another key or override it (see [`keybindings.md`](keybindings.md)).
 
 ---
@@ -122,25 +122,25 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
         Msg::Select(idx) => {
             ctx.state.selected = idx;
             ctx.state.detail = format!("Selected: {}", ctx.state.items[idx]);
-            Update::full()
+            Update::render()
         }
         Msg::Activate(idx) => {
             ctx.state.detail = format!("Activated: {}", ctx.state.items[idx]);
             ctx.request_focus("detail");  // Move focus to detail panel
-            Update::full()
+            Update::render()
         }
         Msg::ItemsLoaded(items) => {
             ctx.state.items = items;
             ctx.state.selected = 0;
             ctx.toast().push(Toast::new("Items loaded!"));
-            Update::full()
+            Update::render()
         }
     }
 }
 ```
 
 **Key points:**
-- Return `Update::full()` to redraw without spawning background work.
+- Return `Update::render()` to redraw without spawning background work.
 - Return `Update::none()` when no visual change occurred.
 - `ctx.request_focus("detail")` moves focus to a keyed widget on next render.
 - `ctx.toast().push(Toast::new(...))` shows a toast notification.
@@ -152,8 +152,8 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
 Load data on startup via `init()` and `Command`:
 
 ```rust
-fn init(&mut self, ctx: &mut Context<Self>) -> Option<Command> {
-    Some(ctx.link().command(move |link| {
+fn init(&mut self, ctx: &mut Context<Self>) -> Update {
+    Update::command_only(ctx.link().command(move |link| {
         // Runs on a background thread - safe to block here
         let items: Vec<String> = (1..=50)
             .map(|i| format!("Item {i}"))
@@ -181,7 +181,7 @@ fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
     match key.code {
         KeyCode::Char('q') if key.mods.ctrl => {
             ctx.quit();
-            KeyUpdate::handled(Update::full())
+            KeyUpdate::handled(Update::render())
         }
         KeyCode::Char('1') if key.mods.ctrl => {
             ctx.request_focus("sidebar");
@@ -197,7 +197,7 @@ fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
                 let items: Vec<String> = (1..=50).map(|i| format!("Item {i}")).collect();
                 link.send(Msg::ItemsLoaded(items));
             });
-            KeyUpdate::handled(Update::with_command(cmd))
+            KeyUpdate::handled(Update::render_with_command(cmd))
         }
         _ => KeyUpdate::unhandled(Update::none())
     }
@@ -282,7 +282,7 @@ Msg::QueryChanged(q) => {
             link.send(Msg::SearchDone(results));
         },
     );
-    Update::with_command(cmd)
+    Update::render_with_command(cmd)
 }
 ```
 

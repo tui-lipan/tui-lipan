@@ -24,17 +24,17 @@ An update's refresh level determines how much of the UI pipeline runs:
 | `Update::terminal_paint()` | A live `Terminal` screen is the only thing that looks different |
 | `Update::paint()` | The realized tree only needs repainting; no `view()` output or layout changed |
 | `Update::paint_with_command(cmd)` | Repaint the existing tree and start work without rebuilding view or layout |
-| `Update::layout()` | The emitting component's subtree changed |
-| `Update::layout_with_command(cmd)` | The local subtree changed and background work must start |
+| `Update::render()` | The emitting component's subtree changed |
+| `Update::render_with_command(cmd)` | The local subtree changed and background work must start |
 | `Update::full()` | Root composition or another component scope depends on the change |
-| `Update::with_command(cmd)` | A root-wide change also starts background work |
+| `Update::full_with_command(cmd)` | A root-wide change also starts background work |
 | `Update::command_only(cmd)` | Work must start, but no immediate visual state changed |
 
 High-frequency callbacks deserve special attention. Scroll telemetry, drag
 positions, cursor synchronization, hidden-screen cache updates, and stale-result
-bookkeeping often need `Update::none()`, not `Update::full()`.
+bookkeeping often need `Update::none()`. Use `Update::render()` when local state changes\nwhat a component displays.
 
-`Update::paint()` is not a general shortcut for `layout()`: use it only when
+`Update::paint()` is not a general shortcut for `render()`: use it only when
 rerunning `view()` would produce the same element tree. See
 [Components](components.md#the-update-return-type) for the complete update model.
 
@@ -46,7 +46,7 @@ just of the widget. Content passed *by value* forces a rebuild per change; a
 handle to app-owned state the widget reads for itself does not.
 
 `Terminal` shows both shapes: `snapshot` puts the screen's contents in the
-element, so each chunk of PTY output needs `Update::full()`, while
+element, so each chunk of PTY output needs `Update::render()`, while
 [`screen`](widgets/terminal.md#live-screens-vs-snapshots) hands over the screen
 and lets the same output be a repaint. `Text::from_source` applies the same approach to labels
 whose allocated size is independent of their contents, such as a flex-width single-row title.
@@ -515,7 +515,7 @@ returned by the factory passed to `Context::set_devtools_metrics`. Publishing
 replaces the whole small snapshot; returning no rows clears it. The factory is
 not invoked without the `devtools` feature. Publication never schedules an app
 frame: rows that changed reach an open App tab on the panel's next refresh, so
-publishing from `update()` or a timer works as well as from `view()`. The tab grows its width and height to fit content within the
+publish initial rows from `init()` and new rows from `update()`. The tab fits its content within the
 viewport, never shrinking below the panel's shared minimum, then scrolls
 vertically instead of truncating rows. With no registered metrics it shows a
 hint naming `set_devtools_metrics`. Keep values preformatted and cheap to clone—DevTools never invokes host callbacks while

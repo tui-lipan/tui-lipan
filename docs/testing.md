@@ -65,7 +65,7 @@ This is independent of widget focus and `focused_key()`.
 from `init()`). `set_host_terminal_colors(HostTerminalColors) -> Result<bool>` and
 `set_host_color_scheme(ColorScheme) -> Result<bool>` simulate runtime host palette and DEC mode
 2031 reports: they return `false` when unchanged, otherwise update the cache (and the app theme
-when following the system theme), call the root component's `on_host_theme_changed`, drain
+when following the system theme), call `on_host_theme_changed` on mounted components, drain
 messages, and re-render.
 
 ### Host window title

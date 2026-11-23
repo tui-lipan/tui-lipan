@@ -34,7 +34,7 @@ Text::from_ansi("\x1b[31merror\x1b[0m: file not found")
 `source.set([Span::new("Working")])` to update it, then return `Update::paint()` without
 rebuilding the view. With the `terminal` feature, `Update::terminal_paint()` can repaint just
 changed source rows together with terminal damage. Keep the label's allocated width and height
-independent of its contents for paint-only updates; use `Update::layout()` for content-sized text.
+independent of its contents for paint-only updates; use `Update::render()` for content-sized text.
 Source updates preserve styling, truncation, and the renderer's ordinary compositing rules.
 
 ```rust

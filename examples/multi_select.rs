@@ -72,7 +72,7 @@ impl Component for MultiSelectDemo {
         match msg {
             Msg::HighlightChanged(index) => {
                 ctx.state.active_index = index;
-                Update::full()
+                Update::render()
             }
             Msg::Toggled(event) => {
                 ctx.state.status = format!(
@@ -84,15 +84,15 @@ impl Component for MultiSelectDemo {
                         "unselected"
                     }
                 );
-                Update::full()
+                Update::render()
             }
             Msg::Changed(event) => {
                 ctx.state.selected_indices = event.selected_indices;
-                Update::full()
+                Update::render()
             }
             Msg::Commit(event) => {
                 ctx.state.status = format!("Committed {} items", event.selected_indices.len());
-                Update::full()
+                Update::render()
             }
         }
     }
@@ -100,7 +100,7 @@ impl Component for MultiSelectDemo {
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
         if matches!(key.code, KeyCode::Char('q')) {
             ctx.quit();
-            return KeyUpdate::handled(Update::full());
+            return KeyUpdate::handled(Update::render());
         }
         KeyUpdate::unhandled(Update::none())
     }

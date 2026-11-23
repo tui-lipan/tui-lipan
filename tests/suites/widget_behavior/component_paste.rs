@@ -20,7 +20,7 @@ impl Component for Form {
 
     fn update(&mut self, text: String, ctx: &mut Context<Self>) -> Update {
         ctx.state = text;
-        Update::layout()
+        Update::render()
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {
@@ -54,7 +54,7 @@ impl Component for Form {
         if self.handled {
             ctx.state = text.to_owned();
             ctx.request_focus("custom");
-            KeyUpdate::handled(Update::layout())
+            KeyUpdate::handled(Update::render())
         } else {
             KeyUpdate::unhandled(Update::none())
         }

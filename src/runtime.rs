@@ -11,11 +11,11 @@ use crate::app::input::command_registry::CommandRegistry;
 use crate::app::input::focus;
 use crate::callback::{CommandRx, CommandTx, Dispatcher, ScopeId};
 use crate::core::component::{
-    CommandRuntime, Component, Context, FocusContext, HoverContext, KeyUpdate, ScrollContext,
-    Update, UpdateLevel,
+    Component, Context, FocusContext, HoverContext, KeyUpdate, ScrollContext, Update, UpdateLevel,
 };
 use crate::core::element::{Element, ElementKind, Key};
 use crate::core::event::KeyEvent;
+use crate::core::nested::ComponentEvent;
 use crate::core::node::{NodeId, NodeTree};
 use crate::core::runtime_env::{RuntimeEnv, TranscriptEntry};
 use crate::layout::LayoutEngine;
@@ -112,6 +112,7 @@ pub(crate) struct RuntimeCore<C: Component> {
     pub(crate) system_theme: bool,
     pub(crate) ctx: Context<C>,
     pub(crate) queue: MsgQueue,
+    lifecycle_updates: VecDeque<(ScopeId, UpdateLevel)>,
     pub(crate) pending_transcript_entries: PendingTranscriptQueue,
     pub(crate) transcript_history: TranscriptHistory,
     pub(crate) command_tx: CommandTx,
@@ -162,8 +163,8 @@ where
         if self.theme == theme {
             return false;
         }
-        self.theme = theme.clone();
-        self.ctx.set_active_theme(theme);
+        self.ctx.set_active_theme(&theme);
+        self.theme = theme;
         if request_repaint {
             self.ctx.request_full_repaint();
         }
@@ -366,6 +367,7 @@ where
             system_theme,
             ctx,
             queue,
+            lifecycle_updates: VecDeque::new(),
             pending_transcript_entries,
             transcript_history,
             command_tx,
@@ -510,18 +512,10 @@ where
             return;
         }
         self.initialized = true;
-        self.ctx.set_active_theme(self.theme.clone());
-        if let Some(cmd) = self.component.init(&mut self.ctx) {
-            cmd.run(CommandRuntime {
-                scope: ScopeId(1),
-                tx: self.command_tx.clone(),
-                runtime_id: self.ctx.env().runtime_id,
-                now: self.ctx.env().now(),
-                clock_mode: self.ctx.env().clock.mode(),
-                clock: self.ctx.env().clock.clone(),
-                activity: std::sync::Arc::clone(&self.ctx.env().activity),
-            });
-        }
+        self.ctx.set_active_theme(&self.theme);
+        self.component
+            .init(&mut self.ctx)
+            .run(ScopeId(1), &self.command_tx, self.ctx.env());
     }
 
     pub(crate) fn shutdown(&mut self) {
@@ -531,6 +525,7 @@ where
         self.accepting_messages.set(false);
         crate::core::component::cancel_deferred_commands(self.ctx.env().runtime_id);
         self.queue.borrow_mut().clear();
+        self.lifecycle_updates.clear();
         if self.initialized {
             self.component.unmount(&mut self.ctx);
         }
@@ -545,12 +540,37 @@ where
         self.unmounted
     }
 
-    pub(crate) fn queue_focus_changed_message(&self, change: &crate::app::context::FocusChanged) {
-        if let Some(message) = self.component.on_focus_changed(change) {
-            self.queue
-                .borrow_mut()
-                .push_back((ScopeId(1), Box::new(message)));
+    pub(crate) fn broadcast_component_event(&mut self, event: ComponentEvent<'_>) {
+        if !self.is_initialized() {
+            return;
         }
+        self.ctx.set_active_theme(&self.theme);
+        let level = event.deliver(&mut self.component, &mut self.ctx).run(
+            ScopeId(1),
+            &self.command_tx,
+            self.ctx.env(),
+        );
+        if level != UpdateLevel::None {
+            self.lifecycle_updates.push_back((ScopeId(1), level));
+        }
+
+        let trees = [
+            self.cached_expanded_element.as_ref(),
+            self.cached_extra_expanded_element.as_ref(),
+        ];
+        self.components.broadcast(
+            trees.into_iter().flatten(),
+            event,
+            &mut self.lifecycle_updates,
+        );
+    }
+
+    pub(crate) fn take_lifecycle_update(&mut self) -> Option<(ScopeId, UpdateLevel)> {
+        if self.components.take_mount_requests_full() {
+            self.lifecycle_updates
+                .push_back((ScopeId(1), UpdateLevel::Full));
+        }
+        self.lifecycle_updates.pop_front()
     }
 
     pub(crate) fn drain_commands(&mut self) {
@@ -628,7 +648,7 @@ where
         msg: Box<dyn Any>,
     ) -> Result<UpdateLevel> {
         if scope == ScopeId(1) {
-            self.ctx.set_active_theme(self.theme.clone());
+            self.ctx.set_active_theme(&self.theme);
             let actual = std::any::type_name_of_val(msg.as_ref());
             let expected = std::any::type_name::<C::Message>();
             let component = std::any::type_name::<C>();
@@ -644,36 +664,7 @@ where
         }
 
         let update = self.components.update_by_scope(scope, msg)?;
-        let update_level = update.level();
-        if let Some(cmd) = update.command {
-            cmd.run(CommandRuntime {
-                scope,
-                tx: self.command_tx.clone(),
-                runtime_id: self.ctx.env().runtime_id,
-                now: self.ctx.env().now(),
-                clock_mode: self.ctx.env().clock.mode(),
-                clock: self.ctx.env().clock.clone(),
-                activity: std::sync::Arc::clone(&self.ctx.env().activity),
-            });
-        }
-
-        Ok(update_level)
-    }
-
-    /// Invoke the root-only host window focus lifecycle callback.
-    pub(crate) fn on_window_focus_changed(&mut self, focused: bool) -> UpdateLevel {
-        self.ctx.set_active_theme(self.theme.clone());
-        let update = self
-            .component
-            .on_window_focus_changed(focused, &mut self.ctx);
-        self.run_root_update(update)
-    }
-
-    /// Invoke the root-only host terminal color / color-scheme change callback.
-    pub(crate) fn on_host_theme_changed(&mut self) -> UpdateLevel {
-        self.ctx.set_active_theme(self.theme.clone());
-        let update = self.component.on_host_theme_changed(&mut self.ctx);
-        self.run_root_update(update)
+        Ok(update.run(scope, &self.command_tx, self.ctx.env()))
     }
 
     /// Invoke the root-only host drag-and-drop callback.
@@ -701,7 +692,7 @@ where
     }
 
     fn deliver_host_drag_and_drop(&mut self, event: crate::dnd::TaggedEvent) -> UpdateLevel {
-        self.ctx.set_active_theme(self.theme.clone());
+        self.ctx.set_active_theme(&self.theme);
         #[cfg(unix)]
         let cell = crate::app::input::pixel_mouse::cell_size();
         #[cfg(not(unix))]
@@ -719,32 +710,8 @@ where
             .sync_runtime_offering(self.tree.offers_host_drag());
     }
 
-    /// Invoke the root-only held-modifier lifecycle callback.
-    pub(crate) fn on_modifiers_changed(
-        &mut self,
-        modifiers: crate::core::event::KeyMods,
-    ) -> UpdateLevel {
-        self.ctx.set_active_theme(self.theme.clone());
-        let update = self
-            .component
-            .on_modifiers_changed(modifiers, &mut self.ctx);
-        self.run_root_update(update)
-    }
-
-    fn run_root_update(&mut self, update: Update) -> UpdateLevel {
-        let update_level = update.level();
-        if let Some(cmd) = update.command {
-            cmd.run(CommandRuntime {
-                scope: ScopeId(1),
-                tx: self.command_tx.clone(),
-                runtime_id: self.ctx.env().runtime_id,
-                now: self.ctx.env().now(),
-                clock_mode: self.ctx.env().clock.mode(),
-                clock: self.ctx.env().clock.clone(),
-                activity: std::sync::Arc::clone(&self.ctx.env().activity),
-            });
-        }
-        update_level
+    fn run_root_update(&self, update: Update) -> UpdateLevel {
+        update.run(ScopeId(1), &self.command_tx, self.ctx.env())
     }
 
     /// Bubble a key event up through component scopes, starting from the scope
@@ -761,7 +728,7 @@ where
         // render; key handlers must see where it is now, not where the last frame left it.
         self.bubble_input(focused, focused_key, |runtime, scope| {
             if scope == ScopeId(1) {
-                runtime.ctx.set_active_theme(runtime.theme.clone());
+                runtime.ctx.set_active_theme(&runtime.theme);
                 runtime.component.on_key(key, &mut runtime.ctx)
             } else {
                 runtime.components.on_key_by_scope(scope, key)
@@ -785,7 +752,7 @@ where
         }
         self.bubble_input(focused, focused_key, |runtime, scope| {
             if scope == ScopeId(1) {
-                runtime.ctx.set_active_theme(runtime.theme.clone());
+                runtime.ctx.set_active_theme(&runtime.theme);
                 runtime.component.on_paste(text, origin, &mut runtime.ctx)
             } else {
                 runtime.components.on_paste_by_scope(scope, text, origin)
@@ -811,19 +778,7 @@ where
             let KeyUpdate { handled, update } = dispatch(self, cur);
             dirty |= self.sync_theme_request(true);
 
-            if let Some(cmd) = update.command {
-                cmd.run(CommandRuntime {
-                    scope: cur,
-                    tx: self.command_tx.clone(),
-                    runtime_id: self.ctx.env().runtime_id,
-                    now: self.ctx.env().now(),
-                    clock_mode: self.ctx.env().clock.mode(),
-                    clock: self.ctx.env().clock.clone(),
-                    activity: std::sync::Arc::clone(&self.ctx.env().activity),
-                });
-            }
-
-            dirty |= update.dirty;
+            dirty |= update.run(cur, &self.command_tx, self.ctx.env()) != UpdateLevel::None;
             handled_any |= handled;
 
             if handled || cur == ScopeId(1) {
@@ -904,7 +859,7 @@ where
         hovered: Option<NodeId>,
     ) {
         self.ctx.set_viewport(bounds);
-        self.ctx.set_active_theme(self.theme.clone());
+        self.ctx.set_active_theme(&self.theme);
         self.focus
             .update_from_tree(&self.tree, focused, focused_key);
         self.hover.update_from_tree(&self.tree, hovered);
@@ -916,7 +871,7 @@ where
         const MAX_THEME_INIT_CHANGES: usize = 8;
         let mut theme_changes = 0;
         let (element, app_root_theme, epoch) = loop {
-            self.ctx.set_active_theme(self.theme.clone());
+            self.ctx.set_active_theme(&self.theme);
             #[cfg(feature = "devtools")]
             let view_start_devtools =
                 crate::core::nested::frame_diagnostics_enabled().then(web_time::Instant::now);
@@ -978,7 +933,7 @@ where
             crate::probe_bucket!(crate::alloc_probe::THEME_CARVE_OUT);
             crate::style::apply_document_theme_carve_out(&self.theme, element)
         };
-        self.ctx.set_active_theme(app_root_theme.clone());
+        self.ctx.set_active_theme(&app_root_theme);
         let extra = self.extra_root_element.clone().map(|extra| {
             let expanded = self.components.expand_in_host(
                 &mut self.extra_root_host,
@@ -994,7 +949,7 @@ where
                 ))
                 .into()
         });
-        self.ctx.set_active_theme(self.theme.clone());
+        self.ctx.set_active_theme(&self.theme);
         {
             crate::probe_bucket!(crate::alloc_probe::SWEEP);
             self.components.sweep(epoch);
@@ -1108,8 +1063,7 @@ where
 
     /// Refresh the cached element tree for the given scopes.
     ///
-    /// Callers must provide an already-deduplicated list (the runner deduplicates
-    /// at collection time via `dirty_scope_set`).
+    /// Callers prepare the list before refreshing. A queued ancestor covers its descendants.
     pub(crate) fn refresh_cached_scopes(
         &mut self,
         scopes: &[ScopeId],
@@ -1128,7 +1082,7 @@ where
 
         if scopes.contains(&ScopeId(1)) {
             self.ctx.set_viewport(viewport);
-            self.ctx.set_active_theme(self.theme.clone());
+            self.ctx.set_active_theme(&self.theme);
 
             self.scroll.begin_view(ScopeId(1));
             self.ctx.env().animations.note_view(ScopeId(1));
@@ -1161,7 +1115,7 @@ where
                 return false;
             }
             let element = crate::style::apply_document_theme_carve_out(&self.theme, element);
-            self.ctx.set_active_theme(app_root_theme.clone());
+            self.ctx.set_active_theme(&app_root_theme);
             let extra = self.extra_root_element.clone().map(|extra| {
                 let expanded = self.components.expand_in_host(
                     &mut self.extra_root_host,
@@ -1177,7 +1131,7 @@ where
                     ))
                     .into()
             });
-            self.ctx.set_active_theme(self.theme.clone());
+            self.ctx.set_active_theme(&self.theme);
             self.components.sweep(epoch);
             self.cached_expanded_element = Some(element);
             self.cached_extra_expanded_element = extra;
@@ -1546,9 +1500,9 @@ mod tests {
             0
         }
 
-        fn init(&mut self, ctx: &mut Context<Self>) -> Option<crate::core::component::Command> {
+        fn init(&mut self, ctx: &mut Context<Self>) -> Update {
             *self.link_slot.borrow_mut() = Some(ctx.link().clone());
-            None
+            Update::none()
         }
 
         fn view(&self, ctx: &Context<Self>) -> Element {
@@ -2190,9 +2144,9 @@ mod tests {
             true
         }
 
-        fn init(&mut self, ctx: &mut Context<Self>) -> Option<crate::core::component::Command> {
+        fn init(&mut self, ctx: &mut Context<Self>) -> Update {
             *self.link_slot.borrow_mut() = Some(ctx.link().clone());
-            None
+            Update::none()
         }
 
         fn view(&self, ctx: &Context<Self>) -> Element {
@@ -2216,7 +2170,7 @@ mod tests {
             match msg {
                 AlertMsg::Ask(ask) => ctx.state = ask,
             }
-            Update::layout()
+            Update::render()
         }
     }
 
@@ -2282,7 +2236,7 @@ mod tests {
                 .expect("the pane's message is queued");
             assert_eq!(
                 runtime.update_from_boxed(scope, msg).unwrap(),
-                UpdateLevel::Layout
+                UpdateLevel::Render
             );
             assert!(runtime.refresh_cached_scopes(&[scope], bounds, None));
             scope
@@ -2342,7 +2296,7 @@ mod tests {
                 match msg {
                     Msg::Bump => {
                         ctx.state += 1;
-                        Update::layout()
+                        Update::render()
                     }
                 }
             }
@@ -2380,7 +2334,7 @@ mod tests {
             runtime
                 .update_from_boxed(ScopeId(1), Box::new(Msg::Bump))
                 .expect("root update should succeed"),
-            UpdateLevel::Layout
+            UpdateLevel::Render
         );
 
         assert!(runtime.refresh_cached_scopes(&[ScopeId(1)], bounds, None));

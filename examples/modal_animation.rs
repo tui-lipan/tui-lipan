@@ -26,7 +26,7 @@ impl Component for Demo {
     }
     fn update(&mut self, _: Msg, ctx: &mut Context<Self>) -> Update {
         ctx.state.open = !ctx.state.open;
-        Update::full()
+        Update::render()
     }
     fn view(&self, ctx: &Context<Self>) -> Element {
         let mut root = ZStack::new().child(

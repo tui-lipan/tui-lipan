@@ -174,7 +174,7 @@ Use `link.send(...)` inside the closure to push follow-up messages; they are pro
 
 ## Force a **full** redraw after handoff
 
-[`Update::layout()`](components.md#the-update-return-type) rebuilds only the emitting component scope, while [`Update::full()`](components.md#the-update-return-type) rebuilds from the root. Neither alone tells Ratatui that another process changed the physical terminal, so unchanged cells may still be omitted from its next buffer diff.
+[`Update::render()`](components.md#the-update-return-type) rebuilds only the emitting component scope, while [`Update::full()`](components.md#the-update-return-type) rebuilds from the root. Neither alone tells Ratatui that another process changed the physical terminal, so unchanged cells may still be omitted from its next buffer diff.
 
 Call **`Context::request_full_repaint()`** from the message handler that runs **after** the external program exits (success or failure), before or alongside your usual state updates:
 

@@ -211,7 +211,7 @@ fn host_color_scheme_advances_the_color_generation_only_on_change() {
 
 #[test]
 fn host_terminal_color_refresh_request_is_opt_in() {
-    let disabled = AppRunner::new(App::new(), RunnerKeymapSmoke, ());
+    let mut disabled = AppRunner::new(App::new(), RunnerKeymapSmoke, ());
     disabled.core.ctx.request_host_terminal_color_refresh();
     assert!(
         !disabled
@@ -221,7 +221,7 @@ fn host_terminal_color_refresh_request_is_opt_in() {
             .take_host_terminal_color_refresh_request()
     );
 
-    let enabled = AppRunner::new(
+    let mut enabled = AppRunner::new(
         App::new().live_host_terminal_colors(true),
         RunnerKeymapSmoke,
         (),
@@ -235,7 +235,7 @@ fn host_terminal_color_refresh_request_is_opt_in() {
             .take_host_terminal_color_refresh_request()
     );
 
-    let system_theme = AppRunner::new(App::new().system_theme(), RunnerKeymapSmoke, ());
+    let mut system_theme = AppRunner::new(App::new().system_theme(), RunnerKeymapSmoke, ());
     system_theme.core.ctx.request_host_terminal_color_refresh();
     assert!(
         system_theme
@@ -5881,7 +5881,7 @@ fn a_hover_change_outside_every_queried_key_stays_a_repaint() {
         "and neither does the next one"
     );
     assert!(
-        runner.dirty_component_scopes.is_empty(),
+        runner.take_dirty_scopes().is_empty(),
         "a repaint marks no scope for refresh"
     );
 
@@ -5896,7 +5896,7 @@ fn a_hover_change_outside_every_queried_key_stays_a_repaint() {
         "the queried key now answers differently, so its view must run"
     );
     assert_eq!(
-        runner.dirty_component_scopes.as_slice(),
+        runner.take_dirty_scopes().as_slice(),
         &[ScopeId(1)],
         "and the scope that asked is marked, which is what makes the layout pass legal"
     );
@@ -5923,9 +5923,11 @@ fn text_under_key<C: Component>(runner: &AppRunner<C>, key: &str) -> String {
 }
 
 /// The frame a `LayoutOnly` hover crossing asks for: refresh the marked scopes, then reconcile.
-fn render_layout_only_frame<C: Component>(runner: &mut AppRunner<C>, viewport: Rect) {
-    let scopes = std::mem::take(&mut runner.dirty_component_scopes);
-    runner.dirty_scope_set.clear();
+fn render_layout_only_frame<C: Component>(
+    runner: &mut AppRunner<C>,
+    viewport: Rect,
+) -> Vec<ScopeId> {
+    let scopes = runner.take_dirty_scopes();
     assert!(
         runner
             .core
@@ -5940,6 +5942,277 @@ fn render_layout_only_frame<C: Component>(runner: &mut AppRunner<C>, viewport: R
             runner.mouse.hovered,
         ),
         "the refreshed element should reconcile"
+    );
+    scopes
+}
+
+type ScopeViews = Rc<RefCell<Vec<(&'static str, usize)>>>;
+
+const DIRTY_SCOPE_VIEWPORT: Rect = Rect {
+    x: 0,
+    y: 0,
+    w: 30,
+    h: 8,
+};
+
+#[derive(Clone)]
+struct DirtyScopeProbe {
+    name: &'static str,
+    views: ScopeViews,
+    children: Vec<Self>,
+    wrap_middle_in_memo: bool,
+}
+
+impl DirtyScopeProbe {
+    fn new(name: &'static str, views: &ScopeViews) -> Self {
+        Self {
+            name,
+            views: Rc::clone(views),
+            children: Vec::new(),
+            wrap_middle_in_memo: false,
+        }
+    }
+
+    fn element(self) -> Element {
+        let name = self.name;
+        crate::child(move || self.clone(), ()).key(name)
+    }
+}
+
+impl Component for DirtyScopeProbe {
+    type Message = ();
+    type Properties = ();
+    type State = usize;
+
+    fn create_state(&self, _: &()) -> usize {
+        0
+    }
+
+    fn memo_key(&self, _: &(), _: &Context<Self>) -> Option<u64> {
+        matches!(self.name, "ancestor" | "middle").then_some(0)
+    }
+
+    fn on_window_focus_changed(&mut self, _: bool, ctx: &mut Context<Self>) -> Update {
+        match self.name {
+            "root" | "middle" => Update::none(),
+            _ => self.update((), ctx),
+        }
+    }
+
+    fn update(&mut self, _: (), ctx: &mut Context<Self>) -> Update {
+        ctx.state += 1;
+        Update::render()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        self.views.borrow_mut().push((self.name, ctx.state));
+        let mut stack = VStack::new().child(Text::new(ctx.state.to_string()));
+        for child in &self.children {
+            let element = if self.wrap_middle_in_memo && child.name == "middle" {
+                let child = child.clone();
+                crate::Memo::new(0).build(move || child.clone().element())
+            } else {
+                child.clone().element()
+            };
+            stack = stack.child(element);
+        }
+        stack.into()
+    }
+}
+
+fn dirty_scope_runner(wrap_middle_in_memo: bool) -> AppRunner<DirtyScopeProbe> {
+    dirty_scope_runner_at_depth(wrap_middle_in_memo, 1)
+}
+
+fn dirty_scope_runner_at_depth(
+    wrap_middle_in_memo: bool,
+    intermediates: usize,
+) -> AppRunner<DirtyScopeProbe> {
+    let views = Rc::default();
+    let mut root = DirtyScopeProbe::new("root", &views);
+    let mut ancestor = DirtyScopeProbe::new("ancestor", &views);
+    ancestor.wrap_middle_in_memo = wrap_middle_in_memo;
+    let mut descendant = DirtyScopeProbe::new("leaf", &views);
+    for _ in 0..intermediates {
+        let mut middle = DirtyScopeProbe::new("middle", &views);
+        middle.children.push(descendant);
+        descendant = middle;
+    }
+    ancestor.children.push(descendant);
+    root.children = vec![ancestor, DirtyScopeProbe::new("sibling", &views)];
+
+    let mut runner = AppRunner::new(App::new().mouse(false), root.clone(), ());
+    init_runner(&mut runner, root, DIRTY_SCOPE_VIEWPORT);
+    views.borrow_mut().clear();
+    runner
+}
+
+fn probe_scope(runner: &AppRunner<DirtyScopeProbe>, key: &str) -> ScopeId {
+    let tree = &runner.core.tree;
+    let id = node_id_by_key(tree, key);
+    let NodeKind::Group(group) = &tree.node(id).kind else {
+        panic!("{key} should be a component group");
+    };
+    group.scope
+}
+
+fn assert_dirty_scope_frame(runner: &mut AppRunner<DirtyScopeProbe>) {
+    render_layout_only_frame(runner, DIRTY_SCOPE_VIEWPORT);
+    let views = runner.core.component.views.borrow();
+    assert_eq!(
+        views.as_slice(),
+        [("ancestor", 1), ("leaf", 1), ("sibling", 1)]
+    );
+    assert_eq!(text_under_key(runner, "leaf"), "1");
+    assert_eq!(text_under_key(runner, "sibling"), "1");
+}
+
+#[test]
+fn dirty_scope_coalescing_refreshes_each_view_once_after_a_hook_broadcast() {
+    let mut runner = dirty_scope_runner(false);
+    let mut dirty = DirtyTracker::default();
+    assert!(runner.set_window_focused(false, &mut dirty));
+    assert_eq!(dirty.level(), DirtyLevel::LayoutOnly);
+    assert_dirty_scope_frame(&mut runner);
+}
+
+#[test]
+fn dirty_scope_coalescing_replaces_a_recorded_descendant_with_its_ancestor() {
+    let mut runner = dirty_scope_runner(false);
+    for key in ["leaf", "ancestor", "sibling"] {
+        let scope = probe_scope(&runner, key);
+        runner
+            .core
+            .queue
+            .borrow_mut()
+            .push_back((scope, Box::new(())));
+    }
+    let mut dirty = DirtyTracker::default();
+    runner.process_pending_messages(&mut dirty).unwrap();
+    assert_eq!(dirty.level(), DirtyLevel::LayoutOnly);
+    assert_dirty_scope_frame(&mut runner);
+}
+
+#[test]
+fn dirty_scope_coalescing_refreshes_a_leaf_inside_a_retained_memo_subtree_once() {
+    let mut runner = dirty_scope_runner(true);
+    let mut dirty = DirtyTracker::default();
+    assert!(runner.set_window_focused(false, &mut dirty));
+    assert_eq!(dirty.level(), DirtyLevel::LayoutOnly);
+    assert_dirty_scope_frame(&mut runner);
+}
+
+#[cfg(feature = "devtools")]
+#[test]
+fn dirty_scope_coalescing_subsumes_the_extra_root_only_for_the_application_root() {
+    let mut runner = dirty_scope_runner(false);
+    let views = &runner.core.component.views;
+    let extra = DirtyScopeProbe::new("extra", views).element();
+    runner.core.set_extra_root_element(Some(extra));
+    runner
+        .core
+        .render_element(DIRTY_SCOPE_VIEWPORT, None, None, None);
+    let extra = runner.core.extra_root_scope().expect("mounted extra root");
+    let leaf = probe_scope(&runner, "leaf");
+
+    runner.mark_dirty_scope(leaf);
+    runner.mark_dirty_scope(extra);
+    assert_eq!(runner.take_dirty_scopes(), [leaf, extra]);
+
+    runner.mark_dirty_scope(leaf);
+    runner.mark_dirty_scope(extra);
+    let root = ScopeId(1);
+    runner.mark_dirty_scope(root);
+    runner.mark_dirty_scope(extra);
+    runner.mark_dirty_scope(leaf);
+
+    for scope in [extra, leaf] {
+        runner.core.update_from_boxed(scope, Box::new(())).unwrap();
+    }
+    assert_eq!(
+        render_layout_only_frame(&mut runner, DIRTY_SCOPE_VIEWPORT),
+        [root]
+    );
+    assert_eq!(text_under_key(&runner, "leaf"), "1");
+    assert_eq!(text_under_key(&runner, "extra"), "1");
+}
+
+fn sibling_scope_runner(count: usize) -> (AppRunner<DirtyScopeProbe>, Vec<ScopeId>) {
+    const KEYS: [&str; 32] = [
+        "01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12", "13", "14", "15",
+        "16", "17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30",
+        "31", "32",
+    ];
+    let keys = &KEYS[..count];
+    let views = Rc::default();
+    let mut root = DirtyScopeProbe::new("root", &views);
+    root.children = keys
+        .iter()
+        .map(|key| DirtyScopeProbe::new(key, &views))
+        .collect();
+
+    let mut runner = AppRunner::new(App::new().mouse(false), root.clone(), ());
+    init_runner(&mut runner, root, DIRTY_SCOPE_VIEWPORT);
+    let scopes = keys.iter().map(|key| probe_scope(&runner, key)).collect();
+    (runner, scopes)
+}
+
+#[test]
+fn dirty_scope_preparation_uses_linear_parent_lookups_for_siblings() {
+    fn lookups(count: usize) -> usize {
+        let (mut runner, scopes) = sibling_scope_runner(count);
+        runner.core.components.parent_scope_lookups.set(0);
+        for &scope in &scopes {
+            runner.mark_dirty_scope(scope);
+        }
+        assert_eq!(runner.take_dirty_scopes(), scopes);
+        runner.core.components.parent_scope_lookups.get()
+    }
+
+    let small = lookups(16);
+    let large = lookups(32);
+    println!("parent lookups for 16 and 32 siblings: {small}, {large}");
+    assert!(
+        large <= small * 2,
+        "doubling siblings should at most double parent lookups: {small} to {large}"
+    );
+}
+
+#[test]
+fn dirty_scope_preparation_coalesces_a_deep_chain_in_either_order() {
+    let mut runner = dirty_scope_runner_at_depth(false, 8);
+    let ancestor = probe_scope(&runner, "ancestor");
+    let leaf = probe_scope(&runner, "leaf");
+    let sibling = probe_scope(&runner, "sibling");
+
+    for (queued, expected) in [
+        ([leaf, sibling, ancestor], [sibling, ancestor]),
+        ([ancestor, sibling, leaf], [ancestor, sibling]),
+    ] {
+        for scope in queued {
+            runner.mark_dirty_scope(scope);
+        }
+        assert_eq!(runner.take_dirty_scopes(), expected);
+        assert!(runner.take_dirty_scopes().is_empty());
+    }
+}
+
+#[test]
+fn dirty_scope_preparation_keeps_an_unmounted_scope_for_the_render_fallback() {
+    let mut runner = dirty_scope_runner(false);
+    let leaf = probe_scope(&runner, "leaf");
+    runner.mark_dirty_scope(leaf);
+    runner.core.component.children.clear();
+    runner
+        .core
+        .render_element(DIRTY_SCOPE_VIEWPORT, None, None, None);
+
+    let scopes = runner.take_dirty_scopes();
+    assert_eq!(scopes, [leaf]);
+    assert!(
+        !runner
+            .core
+            .refresh_cached_scopes(&scopes, DIRTY_SCOPE_VIEWPORT, None)
     );
 }
 
@@ -7297,7 +7570,7 @@ fn process_pending_messages_routes_paint_only_without_scope_enqueue() {
         .expect("pending paint message should process");
 
     assert_eq!(dirty.level(), DirtyLevel::PaintOnly);
-    assert!(runner.dirty_component_scopes.is_empty());
+    assert!(runner.take_dirty_scopes().is_empty());
 }
 
 #[test]
@@ -7318,7 +7591,7 @@ fn process_pending_messages_routes_root_layout_to_layout_scope_refresh() {
 
         fn update(&mut self, msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
             match msg {
-                Msg::RootLayout => Update::layout(),
+                Msg::RootLayout => Update::render(),
             }
         }
 
@@ -7348,7 +7621,7 @@ fn process_pending_messages_routes_root_layout_to_layout_scope_refresh() {
         .expect("pending root layout message should process");
 
     assert_eq!(dirty.level(), DirtyLevel::LayoutOnly);
-    assert_eq!(runner.dirty_component_scopes, vec![ScopeId(1)]);
+    assert_eq!(runner.take_dirty_scopes(), vec![ScopeId(1)]);
 }
 
 #[test]
@@ -7378,7 +7651,7 @@ fn root_window_focus_lifecycle_applies_each_update_level_once_per_transition() {
             match self.requested {
                 RequestedUpdate::None => Update::none(),
                 RequestedUpdate::Paint => Update::paint(),
-                RequestedUpdate::Layout => Update::layout(),
+                RequestedUpdate::Layout => Update::render(),
                 RequestedUpdate::Full => Update::full(),
             }
         }
@@ -7426,7 +7699,7 @@ fn root_window_focus_lifecycle_applies_each_update_level_once_per_transition() {
         assert!(!runner.set_window_focused(false, &mut dirty));
         assert_eq!(calls.get(), 1);
         assert_eq!(
-            runner.dirty_component_scopes,
+            runner.take_dirty_scopes(),
             if matches!(expected, DirtyLevel::LayoutOnly) {
                 vec![ScopeId(1)]
             } else {
@@ -7460,12 +7733,12 @@ fn controlled_text_area_input_remains_layout_only() {
         fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
             match msg {
                 Msg::Changed(event) => event.apply_to(&mut ctx.state),
-                Msg::SentinelsChanged | Msg::VimModeChanged => return Update::layout(),
+                Msg::SentinelsChanged | Msg::VimModeChanged => return Update::render(),
                 Msg::AsyncAutocomplete => {
-                    return Update::layout_with_command(crate::Command::new(|| {}));
+                    return Update::render_with_command(crate::Command::new(|| {}));
                 }
             }
-            Update::layout()
+            Update::render()
         }
 
         fn view(&self, ctx: &Context<Self>) -> Element {
@@ -7494,7 +7767,7 @@ fn controlled_text_area_input_remains_layout_only() {
         .expect("TextArea callback should process");
 
     assert_eq!(dirty.level(), DirtyLevel::LayoutOnly);
-    assert_eq!(runner.dirty_component_scopes, vec![ScopeId(1)]);
+    assert_eq!(runner.take_dirty_scopes(), vec![ScopeId(1)]);
 
     for msg in [
         Msg::SentinelsChanged,
@@ -7546,7 +7819,7 @@ fn scroll_dependency_probe_stale_after_edits(mode: ScrollReadMode, edits: &[KeyC
             match msg {
                 Msg::Changed(event) => event.apply_to(&mut ctx.state),
             }
-            Update::layout()
+            Update::render()
         }
 
         fn view(&self, ctx: &Context<Self>) -> Element {
@@ -7588,8 +7861,7 @@ fn scroll_dependency_probe_stale_after_edits(mode: ScrollReadMode, edits: &[KeyC
         // Mirror the layout-only render path for the frame: refresh dirty
         // scopes' views, reconcile the cached element, then ask whether
         // cached views became stale.
-        let scopes = std::mem::take(&mut runner.dirty_component_scopes);
-        runner.dirty_scope_set.clear();
+        let scopes = runner.take_dirty_scopes();
         assert!(
             runner
                 .core
@@ -11617,9 +11889,9 @@ impl Component for PaneSwitchSnapshotSmoke {
         "first"
     }
 
-    fn init(&mut self, ctx: &mut Context<Self>) -> Option<crate::Command> {
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
         ctx.request_focus("first");
-        None
+        Update::none()
     }
 
     fn update(&mut self, pane: Self::Message, ctx: &mut Context<Self>) -> Update {
@@ -12190,8 +12462,8 @@ impl Component for DeferredRevealSmoke {
         false
     }
 
-    fn init(&mut self, _ctx: &mut Context<Self>) -> Option<crate::Command> {
-        Some(crate::Command::after(Duration::from_millis(120), |link| {
+    fn init(&mut self, _ctx: &mut Context<Self>) -> Update {
+        Update::command_only(crate::Command::after(Duration::from_millis(120), |link| {
             link.send(());
         }))
     }
@@ -12219,8 +12491,8 @@ impl Component for AsyncArrivalSmoke {
         false
     }
 
-    fn init(&mut self, _ctx: &mut Context<Self>) -> Option<crate::Command> {
-        Some(crate::Command::spawn(|link| {
+    fn init(&mut self, _ctx: &mut Context<Self>) -> Update {
+        Update::command_only(crate::Command::spawn(|link| {
             std::thread::sleep(Duration::from_millis(80));
             link.send(());
         }))
@@ -12887,9 +13159,9 @@ impl Component for ClosingModalHost {
         false
     }
 
-    fn init(&mut self, ctx: &mut Context<Self>) -> Option<crate::core::component::Command> {
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
         *self.link.borrow_mut() = Some(ctx.link().clone());
-        None
+        Update::none()
     }
 
     fn update(&mut self, open: bool, ctx: &mut Context<Self>) -> Update {
@@ -13961,7 +14233,7 @@ impl Component for QueuedTypingSmoke {
         self.updates.set(self.updates.get() + 1);
         event.apply_to(&mut ctx.state);
         if self.layout_only {
-            Update::layout()
+            Update::render()
         } else {
             Update::full()
         }
@@ -14218,11 +14490,11 @@ impl Component for InitThemeComponent {
         Vec::new()
     }
 
-    fn init(&mut self, ctx: &mut Context<Self>) -> Option<crate::Command> {
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
         ctx.set_theme(self.initial.clone());
         let seen = ctx.with_theme(Clone::clone);
         ctx.state.push(seen);
-        None
+        Update::none()
     }
 
     fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
@@ -14400,9 +14672,9 @@ impl Component for NestedInitThemeChild {
 
     fn create_state(&self, _props: &Self::Properties) -> Self::State {}
 
-    fn init(&mut self, ctx: &mut Context<Self>) -> Option<crate::Command> {
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
         ctx.set_theme(Theme::nord());
-        None
+        Update::none()
     }
 
     fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
@@ -14492,9 +14764,9 @@ impl Component for ChainThemeSetter {
 
     fn create_state(&self, _props: &Self::Properties) -> Self::State {}
 
-    fn init(&mut self, ctx: &mut Context<Self>) -> Option<crate::Command> {
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
         ctx.set_theme(self.next.clone());
-        None
+        Update::none()
     }
 
     fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
@@ -14626,9 +14898,9 @@ impl Component for NestedThemeChild {
 
     fn create_state(&self, _props: &Self::Properties) -> Self::State {}
 
-    fn init(&mut self, ctx: &mut Context<Self>) -> Option<crate::Command> {
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
         *ctx.props.link_slot.borrow_mut() = Some(ctx.link().clone());
-        None
+        Update::none()
     }
 
     fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {

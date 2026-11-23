@@ -499,7 +499,7 @@ description or keybinding hint.
 | `title_alignment` | `Align` | Title alignment |
 
 ```rust
-fn init(&mut self, ctx: &mut Context<Self>) -> Option<Command> {
+fn init(&mut self, ctx: &mut Context<Self>) -> Update {
     let link = ctx.link().clone();
     ctx.register_command(
         CommandEntry::builder("app.toggle-wrap")
@@ -510,7 +510,7 @@ fn init(&mut self, ctx: &mut Context<Self>) -> Option<Command> {
             .handler(Callback::new(move |_| link.send(Msg::ToggleWrap)))
             .build(),
     );
-    None
+    Update::none()
 }
 
 fn view(&self, ctx: &Context<Self>) -> Element {
