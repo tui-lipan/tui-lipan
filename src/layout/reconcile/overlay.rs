@@ -410,7 +410,7 @@ fn collect_popover_overlay_root(
     if !tree.is_valid(content_id) || !seen.insert(content_id) {
         return;
     }
-    if !trigger_visible_in_scroll_views(tree, *popover_node.trigger) {
+    if !trigger_visible(tree, *popover_node.trigger, overlay_state.bounds) {
         suppress_portal_subtree(tree, content_id);
         return;
     }
@@ -450,7 +450,7 @@ fn collect_popover_overlay_root(
     });
 }
 
-fn trigger_visible_in_scroll_views(tree: &NodeTree, trigger: NodeId) -> bool {
+fn trigger_visible(tree: &NodeTree, trigger: NodeId, bounds: Rect) -> bool {
     let mut visible = tree.node(trigger).rect;
     let mut child = trigger;
     while let Some(parent) = tree.node(child).parent {
@@ -466,7 +466,7 @@ fn trigger_visible_in_scroll_views(tree: &NodeTree, trigger: NodeId) -> bool {
         }
         child = parent;
     }
-    true
+    !visible.intersection(&bounds).is_empty()
 }
 
 fn crosses_root_portal_boundary(node: &crate::core::node::Node, child: NodeId) -> bool {

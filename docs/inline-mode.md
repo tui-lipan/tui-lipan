@@ -137,7 +137,7 @@ Anchored popovers (`Popover`, `Select`, `ComboBox`, `ContextMenu`, and `Tooltip`
 
 - **Fixed inline height** (`InlineHeight::Fixed(rows)`): Popovers are placed using the same rules as fullscreen mode, bounded to the inline viewport — opening at their configured placement, flipping to the opposite side when that side offers more space, shrinking to fit the available side if needed, and clamping inside the viewport.
 - **Auto inline height** (`InlineHeight::auto()` / `InlineHeight::auto_capped(max)`): The viewport temporarily grows to accommodate an open popover (up to the cap and terminal height) without stretching the base layout, then shrinks back once the popover closes. When the popup cannot fit below even at the cap or terminal height, it follows the normal auto-flip/clamp rules inside the capped viewport.
-- **Clipped triggers**: Popovers inside a `ScrollView` remain suppressed while their trigger is scrolled completely out of view, matching fullscreen mode.
+- **Clipped triggers**: A root-portal popover can appear only while some part of its trigger is visible within the viewport and any enclosing `ScrollView`.
 
 ## Limits in Inline Mode
 

@@ -15279,6 +15279,29 @@ fn inline_auto_capped_flips_popover_above_without_adding_blank_rows() {
 }
 
 #[test]
+fn inline_auto_capped_suppresses_popover_with_trigger_below_viewport() {
+    let mut runner = AppRunner::new(
+        App::new().inline_ephemeral(InlineHeight::auto_capped(8)),
+        InlineAutoSelectDemo {
+            top_spacer: 8,
+            with_label: false,
+            list_height: 5,
+        },
+        (),
+    );
+    runner.core.init();
+    runner.core.ctx.state = true;
+
+    let (bounds, overlay_bounds, _) = settle_inline_auto_runner(&mut runner, 80, 24);
+    assert_eq!(bounds.h, 11);
+    assert_eq!(overlay_bounds.h, 8);
+    assert!(
+        runner.core.tree.overlay_roots().is_empty(),
+        "an open Select with its trigger below the viewport must not publish a popup"
+    );
+}
+
+#[test]
 fn inline_auto_height_respects_cap_when_popover_only_fits_below() {
     let mut runner = AppRunner::new(
         App::new().inline_ephemeral(InlineHeight::auto_capped(7)),
