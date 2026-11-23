@@ -170,7 +170,7 @@ impl DropTarget {
         self
     }
 
-    /// What to render at this target while a compatible [`crate::prelude::DragPreview::SourceSnapshot`] drag hovers.
+    /// What to render at this target while a compatible [`crate::DragPreview::SourceSnapshot`] drag hovers.
     pub fn drop_slot(mut self, slot: DropSlot) -> Self {
         self.drop_slot = slot;
         self

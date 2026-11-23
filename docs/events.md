@@ -166,13 +166,35 @@ pub struct CheckboxEvent {
 }
 ```
 
+### `RadioEvent`
+
+Emitted by: `Radio::on_select`
+
+```rust
+pub struct RadioEvent {
+    pub index: usize,       // Selected option index
+    pub label: Arc<str>,    // Selected option label
+}
+```
+
+### `SelectEvent`
+
+Emitted by: `Select::on_select`
+
+```rust
+pub struct SelectEvent {
+    pub index: usize,       // Selected option index
+    pub label: Arc<str>,    // Selected option label
+}
+```
+
 ### `TabsEvent`
 
-Emitted by: `Tabs::on_change`, `VStack::on_tab_change`
+Emitted by: `Tabs::on_select`, `DraggableTabBar::on_select`, `VStack::on_tab_change`
 
 ```rust
 pub struct TabsEvent {
-    pub index: usize,  // Newly active tab index
+    pub index: usize,  // Newly selected tab index
 }
 ```
 
@@ -628,7 +650,7 @@ pub struct KeyMods {
 }
 ```
 
-`AltSide` is exported from the crate root and prelude. Enable
+`AltSide` is exported from the crate root (`tui_lipan::AltSide`). Enable
 `ctx.set_modifier_key_reporting(true)` while an overlay needs physical Alt identity, then disable
 it on close. Supported terminals supply standalone modifier reports; otherwise `alt_side` stays
 `Unknown`. Unix inline surfaces ignore the request until their reader supports associated text.
@@ -973,7 +995,7 @@ Quick lookup - which callbacks does each widget support?
 
 | Callback | Payload | When |
 |----------|---------|------|
-| `on_change` | `usize` | Selection changed (new index) |
+| `on_select` | `RadioEvent` | Selection changed (`index`, `label`) |
 | `on_focus` / `on_blur` | `usize` | Active option gained / lost focus |
 | `on_key` | `KeyHandler` | Key while the active option is focused |
 
@@ -981,8 +1003,7 @@ Quick lookup - which callbacks does each widget support?
 
 | Callback | Payload | When |
 |----------|---------|------|
-| `on_select` | `usize` | Item selected |
-| `on_change` | `usize` | Selection changed |
+| `on_select` | `SelectEvent` | Option picked via Enter or click (`index`, `label`) |
 | `on_toggle` | `bool` | Dropdown opened/closed |
 | `on_focus` / `on_blur` | `()` | Trigger focus gained / lost |
 | `on_key` | `KeyHandler` | Key while trigger focused |
@@ -993,7 +1014,7 @@ Quick lookup - which callbacks does each widget support?
 |----------|---------|------|
 | `on_query_change` | `Arc<str>` | Input text changed |
 | `on_open_change` | `bool` | Dropdown open/close requested |
-| `on_active_index_change` | `Option<usize>` | Active row changed |
+| `on_highlight` | `Option<usize>` | Highlighted row changed |
 | `on_commit` | `ComboBoxCommitEvent` | Enter/activate commit |
 | `on_focus` / `on_blur` | `()` | Input focus gained / lost |
 | `on_key` | `KeyHandler` | Key while input focused |
@@ -1002,7 +1023,7 @@ Quick lookup - which callbacks does each widget support?
 
 | Callback | Payload | When |
 |----------|---------|------|
-| `on_active_index_change` | `usize` | Active row changed |
+| `on_highlight` | `usize` | Highlighted row changed |
 | `on_toggle` | `MultiSelectToggleEvent` | Row toggled |
 | `on_change` | `MultiSelectChangeEvent` | Selected set changed |
 | `on_commit` | `MultiSelectCommitEvent` | Enter pressed |
@@ -1032,17 +1053,17 @@ Quick lookup - which callbacks does each widget support?
 
 | Callback | Payload | When |
 |----------|---------|------|
-| `on_change` | `TabsEvent` | Active tab changed |
+| `on_select` | `TabsEvent` | Selected tab changed |
 
 ### DraggableTabBar
 
 | Callback | Payload | When |
 |----------|---------|------|
-| `on_change` | `TabsEvent` | Active tab changed |
+| `on_select` | `TabsEvent` | Selected tab changed |
 | `on_action` | `DraggableTabActionEvent` | Action tab clicked |
 | `on_close` | `DraggableTabCloseEvent` | Tab close button clicked or closeable tab middle-clicked |
 | `on_reorder` | `DraggableTabReorderEvent` | Tab dragged to new position |
-| `on_transfer` | `DraggableTabTransferEvent` | Tab transferred to another bar; destination `on_change` follows |
+| `on_transfer` | `DraggableTabTransferEvent` | Tab transferred to another bar; destination `on_select` follows |
 | `on_context_menu` | `(Option<usize>, MouseEvent)` | Right-button press and hit tab index without switching tabs; empty space, border/padding and overflow controls report `None` |
 | `on_click` | `MouseEvent` | Raw mouse click on tab bar |
 
@@ -1151,7 +1172,7 @@ blur and focus callbacks. See [Focus events](focus.md#focus-events) for the tran
 
 `Tree::on_hover` reports composed-row pointer transitions, including interactive descendants.
 `index` is the visible row index, `path` is the node's index path, and `hovered` indicates entry or
-exit. These fields are available from `tui_lipan::TreeHoverEvent` and the prelude.
+exit. These fields are available from `tui_lipan::TreeHoverEvent`.
 
 ### Terminal paste content
 
@@ -1167,7 +1188,7 @@ file-drop path. See
 ## ForwardedMouseEvent
 
 A framework-produced terminal mouse report delivered by `Terminal::on_mouse_forward_event`.
-The type is available from the crate root, `widgets`, `widgets::terminal`, and the prelude
+The type is available from the crate root (`tui_lipan::ForwardedMouseEvent`)
 with the `terminal` feature.
 
 | Field | Meaning |

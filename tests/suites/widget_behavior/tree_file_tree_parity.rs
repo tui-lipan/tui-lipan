@@ -1,5 +1,6 @@
 //! `Tree` and `FileTree` share one row layout: guides, the arrow column, the content gap, the icon
 //! column, and the icon gap. The same hierarchy with the same options must draw the same grid.
+use tui_lipan::FileTreeDirectoryListing;
 use tui_lipan::TestBackend;
 use tui_lipan::prelude::*;
 

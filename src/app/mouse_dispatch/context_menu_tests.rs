@@ -221,8 +221,8 @@ fn context_menu_tabs_reports_hit_tab_without_switching() {
         Tabs::new()
             .tabs([Tab::new("one"), Tab::new("two")])
             .width(Length::Px(30))
-            .active(0)
-            .on_change(on_change)
+            .selected(0)
+            .on_select(on_change)
             .on_context_menu(callback),
     );
     // Derive a target column through the same public geometry as rendering.
@@ -270,7 +270,7 @@ fn context_menu_multiselect_preserves_checked_and_active_items() {
         MultiSelect::new()
             .items(["one", "two", "three"])
             .selected_indices([0, 2])
-            .active_index(0)
+            .highlighted(0)
             .on_toggle(on_toggle)
             .on_change(on_change)
             .on_context_menu(callback),
@@ -345,7 +345,7 @@ fn context_menu_editors_do_not_move_caret_or_selection() {
         .find(|node| matches!(node.kind, NodeKind::Input(_)))
         .unwrap()
         .id;
-    right_click(&mut backend, 5, 0);
+    right_click(&mut backend, 5, 1);
     assert_eq!(input_menus.borrow().len(), 1);
     let NodeKind::Input(input) = &backend.core.tree.node(id).kind else {
         unreachable!()

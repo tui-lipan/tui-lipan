@@ -38,7 +38,6 @@ enum Msg {
     ExportFilenameChanged(InputEvent),
     ImportFilenameChanged(InputEvent),
     SelectChar(usize),
-    SelectChange(usize),
     SelectToggle(bool),
     PrevChar,
     NextChar,
@@ -469,8 +468,7 @@ impl Component for FigletEditor {
                                 placeholder: "Select a character...",
                                 expanded: self.select_expanded,
                                 on_toggle: ctx.link().callback(Msg::SelectToggle),
-                                on_change: ctx.link().callback(Msg::SelectChange),
-                                on_select: ctx.link().callback(Msg::SelectChar),
+                                on_select: ctx.link().callback(|e: SelectEvent| Msg::SelectChar(e.index)),
                             },
                         },
                         Frame {
@@ -526,7 +524,6 @@ impl Component for FigletEditor {
                                     value: self.preview_text.clone(),
                                     cursor: self.preview_text_cursor,
                                     anchor: self.preview_text_anchor,
-                                    border: true,
                                     on_change: ctx.link().callback(Msg::PreviewTextChanged),
                                 },
                                 self.render_bigtext_preview(),
@@ -570,7 +567,6 @@ impl Component for FigletEditor {
                                     .cursor(self.export_filename_cursor)
                                     .anchor(self.export_filename_anchor)
                                     .placeholder("myfont.flf")
-                                    .border(true)
                                     .on_change(ctx.link().callback(Msg::ExportFilenameChanged)),
                             )
                             .child(
@@ -606,7 +602,6 @@ impl Component for FigletEditor {
                                     .cursor(self.import_filename_cursor)
                                     .anchor(self.import_filename_anchor)
                                     .placeholder("font.flf")
-                                    .border(true)
                                     .on_change(ctx.link().callback(Msg::ImportFilenameChanged)),
                             )
                             .child(
@@ -769,16 +764,6 @@ impl Component for FigletEditor {
             Msg::SelectChar(idx) => {
                 self.selected_index = Some(idx);
                 self.select_expanded = false;
-                if let Some(ch_str) = self.available_chars.get(idx)
-                    && let Some(ch) = ch_str.chars().next()
-                {
-                    self.save_current_char(ctx);
-                    self.load_char(ch);
-                }
-                Update::render()
-            }
-            Msg::SelectChange(idx) => {
-                self.selected_index = Some(idx);
                 if let Some(ch_str) = self.available_chars.get(idx)
                     && let Some(ch) = ch_str.chars().next()
                 {

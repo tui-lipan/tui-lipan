@@ -188,6 +188,8 @@ it cannot move focus to a different same-type widget.
 | `FocusScope::Contain` | While focus is inside, next/previous traversal wraps within the nearest containing ancestor. The pane is also opaque from outside: Tab never enters it. |
 
 ```rust
+use tui_lipan::FocusScope;
+
 HStack::new()
     .child(
         Frame::new()
@@ -207,6 +209,8 @@ not enter it, just as Tab from inside will not leave. A ring that could Tab *in*
 in it, or bind an app-owned pane-switch key:
 
 ```rust
+use tui_lipan::FocusScope;
+
 // Tab cycles within whichever pane holds focus; F6 moves between panes.
 Frame::new().focus_scope(FocusScope::Contain).child(sidebar)
 ```
@@ -273,6 +277,8 @@ The focusable widgets listed in [Widget Focus Controls](#widget-focus-controls) 
 Every mounted component can react to widget focus changes in `on_focus_changed`.
 
 ```rust
+use tui_lipan::FocusChanged;
+
 fn on_focus_changed(&mut self, change: &FocusChanged, ctx: &mut Context<Self>) -> Update {
     let in_editor = change
         .new
@@ -382,6 +388,8 @@ bubbling dispatch. Embedded terminals use `TerminalKeyPolicy`; see
 keyed child in lazygit-style layouts:
 
 ```rust
+use tui_lipan::{FocusAccordion, FocusSizing};
+
 VStack::new()
     .focus_sizing(FocusSizing::Accordion(FocusAccordion {
         focused_min: 10,

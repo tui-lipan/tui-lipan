@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use tui_lipan::CellMask;
 use tui_lipan::prelude::*;
+use tui_lipan::{CellEffect, EffectCell, EffectContext, GlyphLayout, TerminalColor};
 
 const R_CELLS_PER_SEC: f32 = 22.0;
 const R_RING_WIDTH: f32 = 2.5;
@@ -2122,8 +2123,8 @@ impl Component for BurstEffectsDemo {
                 Tab::new("Custom vortex"),
                 Tab::new("OpenCode"),
             ])
-            .active(ctx.state.tab.min(4))
-            .on_change(ctx.link().callback(Msg::TabChanged));
+            .selected(ctx.state.tab.min(4))
+            .on_select(ctx.link().callback(Msg::TabChanged));
 
         let charge_label = if charging {
             " [charging…]"

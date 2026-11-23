@@ -16,6 +16,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use tui_lipan::ListItemGutter;
 use tui_lipan::prelude::*;
 use tui_lipan::{TestBackend, UiSnapshotOptions};
 
@@ -233,7 +234,6 @@ fn collections_panel(scenario: SketchScenario) -> Element {
                     Input::new("acme billing")
                         .placeholder("Filter collections")
                         .prefix("/")
-                        .border(true)
                         .border_style(BorderStyle::Rounded)
                         .style(input_style())
                         .focus_style(focus_surface())
@@ -315,7 +315,6 @@ fn request_panel(scenario: SketchScenario) -> Element {
                         .child(
                             Input::new(scenario.url())
                                 .prefix("URL ")
-                                .border(true)
                                 .border_style(BorderStyle::Rounded)
                                 .style(input_style())
                                 .focus_style(focus_surface())
@@ -343,7 +342,7 @@ fn request_panel(scenario: SketchScenario) -> Element {
                         .tab("Headers")
                         .tab("Body")
                         .tab("Auth")
-                        .active(2)
+                        .selected(2)
                         .height(Length::Px(1))
                         .active_style(Style::new().fg(Color::Black).bg(accent()).bold())
                         .style(muted())

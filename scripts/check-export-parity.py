@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Check crate-root export parity against src/widgets/mod.rs and src/prelude.rs.
+"""Check crate-root export parity against src/widgets/mod.rs, src/prelude.rs, and docs/widgets/index.md.
 
-Enforces three invariants textually across all feature gates:
+Enforces five invariants textually across all feature gates:
 1. Every public export in src/widgets/mod.rs is re-exported at the crate root
    (src/lib.rs) with matching #[cfg(...)] gates and resolves to the same
    canonical item.
@@ -11,6 +11,10 @@ Enforces three invariants textually across all feature gates:
 3. Generic collision-prone names (Msg, Step, State, Props, Event, Node, Item)
    are not exported into src/widgets/mod.rs or src/prelude.rs, and prelude
    widget re-exports do not rely on `as` rename workarounds.
+4. `src/prelude.rs` stays within `PRELUDE_EXPORT_BUDGET` so the prelude stays
+   curated instead of drifting back into a mirror of the crate root.
+5. Every widget listed in `docs/widgets/index.md` tables (including
+   feature-gated widgets) is exported by `src/prelude.rs`.
 """
 
 from __future__ import annotations
@@ -25,10 +29,14 @@ ROOT = Path(__file__).resolve().parents[1]
 LIB_RS = ROOT / "src/lib.rs"
 PRELUDE_RS = ROOT / "src/prelude.rs"
 WIDGETS_MOD_RS = ROOT / "src/widgets/mod.rs"
+WIDGETS_INDEX_MD = ROOT / "docs/widgets/index.md"
+
+INDEX_WIDGET_ROW_RE = re.compile(r"^\s*\|\s*`([A-Z][A-Za-z0-9_]*)`\s*\|")
 
 FORBIDDEN_GENERIC_EXPORTS = frozenset(
     {"Msg", "Step", "State", "Props", "Event", "Node", "Item"}
 )
+PRELUDE_EXPORT_BUDGET = 250
 
 PUB_ITEM_RE = re.compile(
     r"pub\s+(?:async\s+)?(?:unsafe\s+)?(?:const\s+)?"
@@ -286,7 +294,30 @@ def format_cfgs(cfgs: frozenset[str]) -> str:
     return " ".join(sorted(cfgs)) if cfgs else "(unconditional)"
 
 
-def check_sources(lib_src: str, prelude_src: str, widgets_src: str) -> tuple[list[str], tuple[int, int, int]]:
+def parse_indexed_widgets(index_md: str) -> list[str]:
+    widgets: list[str] = []
+    seen: set[str] = set()
+    in_fence = False
+    for line in index_md.splitlines():
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        if m := INDEX_WIDGET_ROW_RE.match(line):
+            name = m.group(1)
+            if name not in seen:
+                seen.add(name)
+                widgets.append(name)
+    return widgets
+
+
+def check_sources(
+    lib_src: str,
+    prelude_src: str,
+    widgets_src: str,
+    widgets_index_md: str = "",
+) -> tuple[list[str], tuple[int, int, int, int]]:
     lib_exports, lib_mods = parse_module(lib_src, "crate")
     prelude_exports, prelude_mods = parse_module(prelude_src, "crate::prelude")
     widget_exports, widget_mods = parse_module(widgets_src, "crate::widgets")
@@ -386,7 +417,29 @@ def check_sources(lib_src: str, prelude_src: str, widgets_src: str) -> tuple[lis
             + ", ".join(aliased_widgets)
         )
 
-    return diagnostics, (len(widget_exports), len(prelude_exports), len(lib_exports))
+    # 4. Keep src/prelude.rs curated by enforcing a size budget.
+    if len(prelude_exports) > PRELUDE_EXPORT_BUDGET:
+        diagnostics.append(
+            f"src/prelude.rs exports {len(prelude_exports)} items, exceeding the budget of "
+            f"{PRELUDE_EXPORT_BUDGET}.\n"
+            "  Export new or specialized items at the crate root (src/lib.rs) instead, or raise "
+            "`PRELUDE_EXPORT_BUDGET` in scripts/check-export-parity.py deliberately."
+        )
+
+    # 5. Every widget listed in docs/widgets/index.md must be exported by src/prelude.rs.
+    indexed_widgets = parse_indexed_widgets(widgets_index_md)
+    if missing := sorted(set(indexed_widgets) - prelude_exports.keys()):
+        diagnostics.append(
+            "Widget(s) listed in docs/widgets/index.md are missing from src/prelude.rs:\n  "
+            + ", ".join(missing)
+        )
+
+    return diagnostics, (
+        len(widget_exports),
+        len(indexed_widgets),
+        len(prelude_exports),
+        len(lib_exports),
+    )
 
 
 def main() -> int:
@@ -394,13 +447,14 @@ def main() -> int:
         lib_src = LIB_RS.read_text(encoding="utf-8")
         prelude_src = PRELUDE_RS.read_text(encoding="utf-8")
         widgets_src = WIDGETS_MOD_RS.read_text(encoding="utf-8")
+        widgets_index_md = WIDGETS_INDEX_MD.read_text(encoding="utf-8")
     except OSError as exc:
         print(f"error: failed to read source file: {exc}", file=sys.stderr)
         return 2
 
     try:
-        diagnostics, (n_widgets, n_prelude, n_lib) = check_sources(
-            lib_src, prelude_src, widgets_src
+        diagnostics, (n_widgets, n_indexed, n_prelude, n_lib) = check_sources(
+            lib_src, prelude_src, widgets_src, widgets_index_md
         )
     except ResolutionError as exc:
         print(f"Export parity check failed:\n\n{exc}", file=sys.stderr)
@@ -413,7 +467,8 @@ def main() -> int:
 
     print(
         f"Export parity OK ({n_widgets} widget exports in root, "
-        f"{n_prelude} prelude exports ⊆ {n_lib} root exports)."
+        f"{n_indexed} indexed widgets in prelude, "
+        f"{n_prelude}/{PRELUDE_EXPORT_BUDGET} prelude exports ⊆ {n_lib} root exports)."
     )
     return 0
 

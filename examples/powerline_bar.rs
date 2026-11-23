@@ -4,6 +4,7 @@
 //! glyphs (`Round`/`Arrow`) versus their font-safe `Half` fallback.
 
 use tui_lipan::prelude::*;
+use tui_lipan::{CapSides, CapStyle};
 
 const BAR_BG: Color = Color::Rgb(24, 29, 39);
 const TEXT_DARK: Color = Color::Rgb(15, 18, 24);

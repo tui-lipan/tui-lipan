@@ -64,7 +64,7 @@ impl Component for Screen {
             .tab("Search")
             .tab("Git")
             .tab("Debug")
-            .active(0);
+            .selected(0);
 
         let header = HStack::new()
             .height(Length::Px(1))

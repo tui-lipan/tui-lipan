@@ -3,6 +3,7 @@
 use std::{sync::Arc, time::Duration};
 use tui_lipan::prelude::*;
 use tui_lipan::{App, OverlayId, Result};
+use tui_lipan::{CellEffect, EffectCell, EffectContext};
 #[path = "support/portal_reveal.rs"]
 mod portal_reveal;
 use portal_reveal::PortalReveal;

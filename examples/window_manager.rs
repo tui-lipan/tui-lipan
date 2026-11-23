@@ -30,6 +30,7 @@ use std::cell::Cell;
 use std::time::Duration;
 
 use tui_lipan::prelude::*;
+use tui_lipan::{DecorationGlyph, EdgeDecoration, FloatRect, FocusChanged};
 
 type WindowId = u32;
 

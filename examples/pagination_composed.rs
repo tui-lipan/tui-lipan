@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use tui_lipan::PaginationButtonOverrides;
 use tui_lipan::prelude::*;
 
 const PAGE_SIZES: &[usize] = &[5, 10, 20, 50];
@@ -104,11 +105,14 @@ impl Component for PaginationDemo {
                             .child(
                                 Select::new()
                                     .options(PAGE_SIZES.iter().map(|size| size.to_string()))
-                                    .selected(Some(ctx.state.page_size_index))
+                                    .selected(ctx.state.page_size_index)
                                     .expanded(ctx.state.page_size_open)
                                     .on_toggle(ctx.link().callback(Msg::PageSizeToggle))
-                                    .on_select(ctx.link().callback(Msg::PageSizeSelect))
-                                    .on_change(ctx.link().callback(Msg::PageSizeSelect))
+                                    .on_select(
+                                        ctx.link().callback(|e: SelectEvent| {
+                                            Msg::PageSizeSelect(e.index)
+                                        }),
+                                    )
                                     .width(Length::Px(8)),
                             ),
                     )

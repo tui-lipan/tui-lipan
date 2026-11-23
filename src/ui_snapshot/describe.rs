@@ -147,7 +147,7 @@ fn describe_node(
             }
         }
         NodeKind::Tabs(tabs) => {
-            desc.selected_index = Some(tabs.active);
+            desc.selected_index = tabs.selected;
             let labels: Vec<String> = tabs.tabs.iter().map(|t| t.label.to_string()).collect();
             if !labels.is_empty() {
                 let total = labels.len();
@@ -156,7 +156,7 @@ fn describe_node(
             }
         }
         NodeKind::DraggableTabBar(bar) => {
-            desc.selected_index = Some(bar.active);
+            desc.selected_index = bar.selected;
             let labels: Vec<String> = bar.tabs.iter().map(|t| t.label.to_string()).collect();
             if !labels.is_empty() {
                 let total = labels.len();

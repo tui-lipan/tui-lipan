@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tui_lipan::prelude::*;
+use tui_lipan::{CellEffect, EffectCell, EffectContext};
 use tui_lipan::{
     TestBackend, VisibilityAnimation, VisibilityAnimationContext, VisibilityAnimationPhase,
 };

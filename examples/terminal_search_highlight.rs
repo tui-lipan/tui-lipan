@@ -3,6 +3,7 @@
 //! Run with:
 //!   cargo run --example terminal_search_highlight --features terminal
 
+use tui_lipan::TerminalDecoration;
 use tui_lipan::prelude::*;
 use tui_lipan::utils::spans::char_col_to_display_col;
 

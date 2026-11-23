@@ -4,6 +4,7 @@
 
 use tui_lipan::prelude::*;
 use tui_lipan::{CapturedFrame, TestBackend};
+use tui_lipan::{DescriptionPlacement, ItemDescription};
 
 const W: u16 = 32;
 const H: u16 = 6;

@@ -5,6 +5,7 @@
 use std::collections::VecDeque;
 use std::time::Duration;
 
+use tui_lipan::FrameLabel;
 use tui_lipan::prelude::*;
 
 /// Game tick interval (~20 FPS). Mole lifetimes are counted in ticks.

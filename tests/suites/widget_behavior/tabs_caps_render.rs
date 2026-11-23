@@ -6,6 +6,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
+use tui_lipan::TabsOverflow;
 use tui_lipan::core::event::{MouseButton, MouseKind};
 use tui_lipan::prelude::*;
 use tui_lipan::{CapturedFrame, MouseEvent, TestBackend};
@@ -83,7 +84,7 @@ impl Component for TabsApp {
                 Tab::new("B"),
                 Tab::new("C"),
             ])
-            .active(1)
+            .selected(1)
             .focusable(false)
             .divider(' ')
             .caps(self.caps)
@@ -256,7 +257,7 @@ impl Component for WideUnicodeTabsApp {
             .hover_style(Style::new())
             .tab_hover_style(Style::new().bg(HOVER))
             .active_style(Style::new())
-            .on_change(Callback::new(move |event: TabsEvent| {
+            .on_select(Callback::new(move |event: TabsEvent| {
                 changes.set(Some(event.index));
             }))
             .into()

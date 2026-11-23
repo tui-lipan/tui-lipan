@@ -1,5 +1,6 @@
 use tui_lipan::prelude::*;
 use tui_lipan::{CapturedFrame, TestBackend};
+use tui_lipan::{DescriptionPlacement, ItemDescription, ListSymbolPosition};
 
 const W: u16 = 26;
 

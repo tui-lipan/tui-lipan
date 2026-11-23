@@ -1,6 +1,9 @@
 use std::{f32::consts::TAU, time::Duration};
 
 use tui_lipan::prelude::*;
+use tui_lipan::{
+    CellEffect, EffectCell, EffectContext, EffectPrepareContext, PreparedCellEffect, TerminalColor,
+};
 
 const VARIANT_TITLES: [&str; 4] = ["Neon Bloom", "Veiled Lights", "Ember Drift", "Hearth Glow"];
 const NEON_CHASE_TICKS: f32 = 28.0;
@@ -775,10 +778,10 @@ impl Component for DotFieldDemo {
             .tab(VARIANT_TITLES[1])
             .tab(VARIANT_TITLES[2])
             .tab(VARIANT_TITLES[3])
-            .active(ctx.state.active_variant.min(VARIANT_TITLES.len() - 1))
+            .selected(ctx.state.active_variant.min(VARIANT_TITLES.len() - 1))
             .active_style(Style::new().fg(Color::rgb(240, 246, 255)).bold())
             .style(Style::new().bg(Color::rgb(8, 10, 14)))
-            .on_change(ctx.link().callback(Msg::TabChanged))
+            .on_select(ctx.link().callback(Msg::TabChanged))
             .height(Length::Px(3));
 
         let effect: Element = match ctx.state.active_variant {

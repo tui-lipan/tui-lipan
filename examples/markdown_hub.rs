@@ -4,6 +4,7 @@
 
 #[cfg(feature = "markdown")]
 use tui_lipan::prelude::*;
+use tui_lipan::{DocumentTableWidthMode, TableRowSeparators};
 
 #[cfg(feature = "markdown")]
 const PREVIEW_MD: &str = r#"# Markdown Links
@@ -194,10 +195,10 @@ impl Component for MarkdownHub {
                     .tab("Preview")
                     .tab("Tables")
                     .tab("Hyperlinks")
-                    .active(ctx.state.active_tab)
+                    .selected(ctx.state.active_tab)
                     .border(true)
                     .height(Length::Px(3))
-                    .on_change(ctx.link().callback(Msg::TabChanged)),
+                    .on_select(ctx.link().callback(Msg::TabChanged)),
             )
             .child(
                 Frame::new()

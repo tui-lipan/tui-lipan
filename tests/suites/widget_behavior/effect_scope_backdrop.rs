@@ -6,6 +6,7 @@
 
 use tui_lipan::prelude::*;
 use tui_lipan::{CapturedFrame, TestBackend};
+use tui_lipan::{CellEffect, EffectCell, EffectContext, EffectPrepareContext, PreparedCellEffect};
 
 /// Reveals the backdrop in every column left of `split`, keeping the scope's content elsewhere.
 #[derive(Debug)]

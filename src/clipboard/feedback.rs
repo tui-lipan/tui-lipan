@@ -103,7 +103,7 @@ impl FromStr for CopyFeedbackEffect {
 ///
 /// ```
 /// use std::time::Duration;
-/// use tui_lipan::prelude::*;
+/// use tui_lipan::{CopyFeedback, CopyFeedbackEffect};
 ///
 /// let feedback = CopyFeedback::new(CopyFeedbackEffect::Scan)
 ///     .duration(Duration::from_millis(400))

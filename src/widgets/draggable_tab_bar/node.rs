@@ -20,7 +20,7 @@ use crate::widgets::file_tree::FileIconStyle;
 #[derive(Clone)]
 pub struct DraggableTabBarNode {
     pub tabs: Arc<[DraggableTab]>,
-    pub active: usize,
+    pub selected: Option<usize>,
     pub style: Style,
     pub focus_style: StyleSlot,
     pub hover_style: StyleSlot,
@@ -53,7 +53,7 @@ pub struct DraggableTabBarNode {
     pub empty_text_style: Style,
     pub scroll_offset: usize,
     pub scroll_override: Option<usize>,
-    pub previous_active: usize,
+    pub previous_selected: Option<usize>,
     pub width_lock: Option<TabWidthLock>,
     pub pending_swap: Option<(usize, usize)>,
     pub show_file_icons: bool,
@@ -67,7 +67,7 @@ pub struct DraggableTabBarNode {
     pub drag_preview: bool,
     pub reorder_mode: DragReorderMode,
     pub drag_threshold: u16,
-    pub on_change: Option<Callback<TabsEvent>>,
+    pub on_select: Option<Callback<TabsEvent>>,
     pub on_action: Option<Callback<DraggableTabActionEvent>>,
     pub on_close: Option<Callback<DraggableTabCloseEvent>>,
     pub on_reorder: Option<Callback<DraggableTabReorderEvent>>,
@@ -92,7 +92,7 @@ impl DraggableTabBarNode {
                 DraggableTabHitPart::Close => self.on_close.is_some(),
                 DraggableTabHitPart::Body => match self.tabs[hit.index].kind {
                     DraggableTabKind::Action => self.on_action.is_some(),
-                    DraggableTabKind::Tab => self.on_change.is_some() || self.can_drag_tabs(),
+                    DraggableTabKind::Tab => self.on_select.is_some() || self.can_drag_tabs(),
                 },
             },
         }
@@ -245,7 +245,7 @@ impl WidgetNode for DraggableTabBarNode {
     fn has_on_click(&self) -> bool {
         !self.disabled
             && (self.on_click.is_some()
-                || self.on_change.is_some()
+                || self.on_select.is_some()
                 || self.on_action.is_some()
                 || self.on_close.is_some()
                 || self.on_reorder.is_some()
@@ -280,7 +280,7 @@ impl From<DraggableTabBar> for DraggableTabBarNode {
     fn from(value: DraggableTabBar) -> Self {
         Self {
             tabs: value.tabs,
-            active: value.active,
+            selected: value.selected,
             style: value.style,
             focus_style: value.focus_style,
             hover_style: value.hover_style,
@@ -313,7 +313,7 @@ impl From<DraggableTabBar> for DraggableTabBarNode {
             empty_text_style: value.empty_text_style,
             scroll_offset: value.scroll_offset,
             scroll_override: None,
-            previous_active: value.active,
+            previous_selected: value.selected,
             width_lock: None,
             pending_swap: None,
             show_file_icons: value.show_file_icons,
@@ -327,7 +327,7 @@ impl From<DraggableTabBar> for DraggableTabBarNode {
             drag_preview: value.drag_preview,
             reorder_mode: value.reorder_mode,
             drag_threshold: value.drag_threshold,
-            on_change: value.on_change,
+            on_select: value.on_select,
             on_action: value.on_action,
             on_close: value.on_close,
             on_reorder: value.on_reorder,

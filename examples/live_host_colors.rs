@@ -6,6 +6,7 @@
 //! driven by `App::system_theme()`; the lower panel also shows how to build
 //! app-owned tokens from `Theme::from_host_colors(...)`.
 
+use tui_lipan::HostTerminalColors;
 use tui_lipan::prelude::*;
 
 struct LiveHostColors;

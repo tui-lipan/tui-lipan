@@ -1,5 +1,6 @@
 use tui_lipan::TextEditor;
 use tui_lipan::prelude::*;
+use tui_lipan::{CaretShape, TextAreaVimConfig, TextAreaVimCurrentLineHighlight, TextAreaVimMode};
 
 struct TextAreaDemo;
 

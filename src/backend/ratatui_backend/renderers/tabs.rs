@@ -117,7 +117,7 @@ pub(crate) struct TabsRenderCtx {
 pub(crate) fn render_tabs(
     f: &mut ratatui::Frame<'_>,
     tabs: &[Tab],
-    active: usize,
+    selected: Option<usize>,
     rect: crate::style::Rect,
     rrect: ratatui::layout::Rect,
     ctx: TabsRenderCtx,
@@ -218,7 +218,7 @@ pub(crate) fn render_tabs(
         return;
     }
 
-    let active = active.min(len.saturating_sub(1));
+    let selected = selected.map(|s| s.min(len.saturating_sub(1)));
 
     let hovered_x = if !disabled && is_hovered {
         mouse_pos.and_then(|(mx, my)| {
@@ -257,7 +257,7 @@ pub(crate) fn render_tabs(
 
         let is_tab_hovered =
             hovered_x.is_some_and(|hx| hx >= start_x && hx < start_x.saturating_add(seg_w));
-        let is_active = idx == active;
+        let is_active = selected == Some(idx);
         let tab_style = resolve_tabs_tab_style(
             base_raw_style,
             TabsTabStyleCtx {
@@ -341,7 +341,7 @@ pub(crate) fn render_tabs_node(
     render_tabs(
         state.f,
         &node.tabs,
-        node.active,
+        node.selected,
         rect,
         rrect,
         TabsRenderCtx {

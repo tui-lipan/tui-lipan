@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use tui_lipan::EffectAxis;
 use tui_lipan::prelude::*;
+use tui_lipan::{AsciiCanvasBuffer, AsciiCell, EffectChannels};
 
 #[path = "common/tui_lipan_art.rs"]
 mod art;
@@ -921,9 +922,9 @@ impl Component for ExporterApp {
                     .child(
                         Tabs::new()
                             .tabs(tabs)
-                            .active(tab.min(TAB_LABELS.len().saturating_sub(1)))
+                            .selected(tab.min(TAB_LABELS.len().saturating_sub(1)))
                             .focusable(false)
-                            .on_change(ctx.link().callback(Msg::TabChanged)),
+                            .on_select(ctx.link().callback(Msg::TabChanged)),
                     )
                     .child(Center::new().child(body)),
             )

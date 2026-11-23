@@ -30,7 +30,7 @@ pub(crate) const DEFAULT_SYNC_MATCH_LIMIT: usize = 100;
 /// # Examples
 ///
 /// ```
-/// # use tui_lipan::prelude::{ItemDescription, Spinner};
+/// # use tui_lipan::{ItemDescription, Spinner};
 /// // Left only (equivalent to a plain string):
 /// let d = ItemDescription::new().left("Code editor");
 ///

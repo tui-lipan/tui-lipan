@@ -176,7 +176,6 @@ impl Component for TodoApp {
                                 value: ctx.state.draft.text().to_owned(),
                                 cursor: ctx.state.draft.cursor(),
                                 placeholder: "Add a task...",
-                                border: true,
                                 border_style: BorderStyle::Rounded,
                                 hover_border_style: BorderStyle::Thick,
                                 focus_style: Style::new().fg(Color::LightCyan),

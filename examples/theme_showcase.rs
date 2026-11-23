@@ -339,7 +339,6 @@ impl Component for ThemeShowcase {
                     Input::new(ctx.state.input.text().to_owned())
                         .cursor(ctx.state.input.cursor())
                         .placeholder("Type something...")
-                        .border(true)
                         .on_change(ctx.link().callback(Msg::InputChanged)),
                 )
                 .child(

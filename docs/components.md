@@ -235,6 +235,8 @@ replaces the previous set, so call it from `init()` or `update()` with the
 current snapshot:
 
 ```rust
+use tui_lipan::DevToolsMetric;
+
 ctx.set_devtools_metrics(|| [
     DevToolsMetric::new("Panes", pane_count.to_string()),
     DevToolsMetric::new("Queue", queue_depth.to_string()),
@@ -694,6 +696,8 @@ Unhandled pastes then visit the focused component and its parents, stopping at
 receives it without a focused node. Focus queries reflect the current focus.
 
 ```rust,ignore
+use tui_lipan::PasteOrigin;
+
 fn on_paste(
     &mut self,
     text: &str,

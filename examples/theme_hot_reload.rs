@@ -10,6 +10,7 @@ use std::time::Duration;
 
 #[cfg(feature = "theme-reload")]
 use tui_lipan::prelude::*;
+use tui_lipan::{ThemeWatcher, load_theme_from_toml};
 
 #[cfg(feature = "theme-reload")]
 const THEME_PATH: &str = "examples/assets/theme.toml";

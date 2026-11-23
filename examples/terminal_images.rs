@@ -17,6 +17,7 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use tui_lipan::prelude::*;
+use tui_lipan::{FrameLabel, TerminalCellSize, host_cell_size};
 
 /// Starting size only. The screen is resized to the widget as soon as it reports a viewport, the
 /// way a PTY-backed pane tracks its own geometry - without that the screen stays this tall no

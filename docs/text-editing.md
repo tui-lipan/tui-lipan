@@ -279,6 +279,8 @@ Clear operations are reported as `TextEditKind::Replace` through the same
 Wire it up via `on_edit`:
 
 ```rust
+use tui_lipan::TextEditEvent;
+
 TextArea {
     editor: ctx.state.editor.clone(),
     on_edit: ctx.link().callback(|ev: TextEditEvent| Msg::OnEdit(ev)),
@@ -292,6 +294,8 @@ coordinates for editor integrations. Build it from the current text and rebuild
 it whenever the text changes:
 
 ```rust
+use tui_lipan::LineIndex;
+
 let index = LineIndex::new(editor.text());
 let pos = index.byte_to_position(editor.text(), editor.cursor());
 let byte = index.position_to_byte(editor.text(), pos);
@@ -309,7 +313,7 @@ final empty line, and only `\n` is treated as a line break.
 
 `TextArea`'s vim mode word/WORD/line motions (`w`/`b`/`e`, `W`/`B`/`E`, `0`/`^`/`$`) are pure,
 byte-offset functions with no dependency on `TextEditor`/`TextArea` state. They're exposed
-publicly through `tui_lipan::text_motion` (and re-exported from the prelude) so host apps that
+publicly through `tui_lipan::text_motion` (and re-exported at the crate root) so host apps that
 render their own text grids — for example a terminal emulator's scrollback copy mode — can reuse
 the same algorithms instead of reimplementing vim motion from scratch.
 
@@ -357,33 +361,30 @@ end instead of advancing to the next word.
 
 ## Imports
 
-`TextEditor`, `TextEditEvent`, `TextEditKind`, `LineIndex`, `TextPosition`,
-`TextRange`, and `TextEncoding` are available from both the prelude and the
-crate root:
+`TextEditor` and `TextInput` are available from both `tui_lipan::prelude::*` and the crate root:
 
 ```rust
-use tui_lipan::TextEditor;
-use tui_lipan::TextEditEvent;
-use tui_lipan::{LineIndex, TextEncoding, TextPosition, TextRange};
+use tui_lipan::prelude::*;
+// or directly from the crate root:
+use tui_lipan::{TextEditor, TextInput};
 ```
 
-`TextInput` is available from the prelude only:
+Lower-level edit and line-index types (`TextEditEvent`, `TextEditKind`, `LineIndex`,
+`TextPosition`, `TextRange`, `TextEncoding`) are exported from the crate root:
 
 ```rust
-use tui_lipan::prelude::TextInput;
-// or
-use tui_lipan::prelude::*;
+use tui_lipan::{LineIndex, TextEditEvent, TextEditKind, TextEncoding, TextPosition, TextRange};
 ```
 
 The `text_motion` module functions (`word_forward_start`, `word_backward_start`, `word_end`,
 `big_word_forward_start`, `big_word_backward_start`, `big_word_end`, `line_start_at`,
-`line_end_at`, `first_nonblank_in_line`) are available from both the crate root module path and
-the prelude:
+`line_end_at`, `first_nonblank_in_line`) are available from both `tui_lipan::text_motion` and the
+crate root:
 
 ```rust
 use tui_lipan::text_motion::{word_forward_start, word_end};
-// or
-use tui_lipan::prelude::*; // brings the same functions into scope directly
+// or directly from the crate root:
+use tui_lipan::{word_forward_start, word_end};
 ```
 
 ## TextArea Tab Behavior

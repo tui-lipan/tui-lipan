@@ -2,6 +2,7 @@
 //!
 //! These tests verify that complex widget layouts work correctly from a user's perspective.
 
+use tui_lipan::ScrollTarget;
 use tui_lipan::prelude::*;
 
 // Deliberately exhaustive: patch releases must preserve these public variants.

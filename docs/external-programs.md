@@ -45,6 +45,8 @@ The framework consumes that request on the next tick: it promotes the frame to a
 Always pair suspend and resume. Prefer an RAII guard in your own code so resume runs on panic or early return:
 
 ```rust
+use tui_lipan::SurfaceMode;
+
 struct Handoff {
     surface_mode: SurfaceMode,
     mouse_enabled: bool,
@@ -109,7 +111,8 @@ whose stdout/stderr should become messages for the component identified by the
 supplied link.
 
 ```rust
-use tui_lipan::{ProcessEvent, ProcessSpec, Update};
+use tui_lipan::prelude::*;
+use tui_lipan::{ProcessEvent, ProcessSpec};
 
 enum Msg {
     Proc(ProcessEvent),

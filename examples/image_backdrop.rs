@@ -25,6 +25,7 @@ use std::sync::Arc;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use tui_lipan::prelude::*;
+use tui_lipan::{FrameLabel, TerminalCellSize, host_cell_size};
 
 const ROWS: u16 = 16;
 const COLS: u16 = 60;

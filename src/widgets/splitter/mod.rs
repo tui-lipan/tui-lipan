@@ -250,6 +250,7 @@ impl Splitter {
     /// covers the splitter.
     ///
     /// ```
+    /// # use tui_lipan::SplitterPaneLimits;
     /// # use tui_lipan::prelude::*;
     /// // The sidebar never goes below 16 columns or past 80, however far the
     /// // handle is dragged; the content pane takes whatever is left.

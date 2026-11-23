@@ -11,8 +11,8 @@ use crate::widgets::TabsEvent;
 /// Shared tab navigation state extracted from either `Tabs` or `DraggableTabBar`.
 struct TabState {
     len: usize,
-    active: usize,
-    on_change: Option<Callback<TabsEvent>>,
+    selected: Option<usize>,
+    on_select: Option<Callback<TabsEvent>>,
     on_key: Option<KeyHandler>,
 }
 
@@ -20,14 +20,14 @@ fn extract_tab_state(kind: &NodeKind) -> Option<TabState> {
     match kind {
         NodeKind::Tabs(node) => Some(TabState {
             len: node.tabs.len(),
-            active: node.active,
-            on_change: node.on_change.clone(),
+            selected: node.selected,
+            on_select: node.on_select.clone(),
             on_key: node.on_key.clone(),
         }),
         NodeKind::DraggableTabBar(node) => Some(TabState {
             len: node.tabs.len(),
-            active: node.active,
-            on_change: node.on_change.clone(),
+            selected: node.selected,
+            on_select: node.on_select.clone(),
             on_key: node.on_key.clone(),
         }),
         _ => None,
@@ -50,19 +50,23 @@ pub(crate) fn handle_key(tree: &NodeTree, id: NodeId, key: KeyEvent) -> bool {
             handled = handle_key_cb(cb);
         }
     } else {
-        let active = state.active.min(state.len.saturating_sub(1));
+        let current = state.selected.map(|s| s.min(state.len.saturating_sub(1)));
 
-        if let Some(cb) = state.on_change.as_ref() {
-            let next: Option<usize> = match key.code {
-                KeyCode::Left => Some(active.saturating_sub(1)),
-                KeyCode::Right => Some((active + 1).min(state.len.saturating_sub(1))),
-                KeyCode::Home => Some(0),
-                KeyCode::End => Some(state.len.saturating_sub(1)),
+        if let Some(cb) = state.on_select.as_ref() {
+            let next: Option<usize> = match (current, key.code) {
+                (Some(active), KeyCode::Left) => Some(active.saturating_sub(1)),
+                (Some(active), KeyCode::Right) => {
+                    Some((active + 1).min(state.len.saturating_sub(1)))
+                }
+                (None, KeyCode::Left) => Some(state.len.saturating_sub(1)),
+                (None, KeyCode::Right) => Some(0),
+                (_, KeyCode::Home) => Some(0),
+                (_, KeyCode::End) => Some(state.len.saturating_sub(1)),
                 _ => None,
             };
 
             if let Some(next) = next {
-                if next != active {
+                if current != Some(next) {
                     cb.emit(TabsEvent { index: next });
                 }
                 handled = true;

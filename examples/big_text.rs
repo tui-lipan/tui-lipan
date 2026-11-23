@@ -1,3 +1,4 @@
+use tui_lipan::Shadow;
 use tui_lipan::prelude::*;
 
 struct BigTextDemo;

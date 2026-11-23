@@ -2,6 +2,10 @@
 use std::collections::HashSet;
 
 use tui_lipan::prelude::*;
+use tui_lipan::{
+    FileKind, FileTreeChange, FileTreeChangeSource, FileTreeChangeStatus, FileTreeDirectoryListing,
+    FileTreeItemStyle, GitIconStyle,
+};
 
 struct FileTreeShowcase;
 
@@ -199,8 +203,8 @@ impl Component for FileTreeShowcase {
         let tabs = Tabs::new()
             .tab("FileTree")
             .tab("Tree")
-            .active(ctx.state.tab)
-            .on_change(
+            .selected(ctx.state.tab)
+            .on_select(
                 ctx.link()
                     .callback(|event: TabsEvent| Msg::SelectTab(event.index)),
             );

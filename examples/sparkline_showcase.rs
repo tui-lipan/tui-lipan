@@ -1,6 +1,9 @@
 use std::time::Duration;
 
 use tui_lipan::prelude::*;
+use tui_lipan::{
+    SparklineAggregation, SparklineBarsPreset, SparklineLinePreset, SparklineZeroPolicy,
+};
 
 struct SparklineShowcase;
 

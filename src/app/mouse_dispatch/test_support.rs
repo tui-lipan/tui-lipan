@@ -478,8 +478,8 @@ pub(crate) fn handle_draggable_tab_bar_click_test_backend<C: Component>(
         ) {
             handled = true;
         }
-        if action.tab_index != action.active
-            && let Some(cb) = action.on_change
+        if action.selected != Some(action.tab_index)
+            && let Some(cb) = action.on_select
         {
             cb.emit(crate::widgets::TabsEvent {
                 index: action.tab_index,

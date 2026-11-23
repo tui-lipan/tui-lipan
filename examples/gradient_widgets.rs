@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use tui_lipan::GradientRange;
 use tui_lipan::prelude::*;
 
 struct GradientWidgets;

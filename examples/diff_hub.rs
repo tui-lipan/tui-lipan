@@ -2,6 +2,9 @@ use std::sync::Arc;
 
 use tui_lipan::DiffPalette;
 use tui_lipan::prelude::*;
+use tui_lipan::{
+    DiffContextExpansion, DiffContextSeparatorEvent, DiffData, DiffDataConfig, DiffScrollEvent,
+};
 
 const BEFORE: &str = r#"fn greet(name: &str) -> String {
     format!("Hello, {}", name)
@@ -502,10 +505,10 @@ impl Component for DiffHub {
                     .tab("Clickable Context")
                     .tab("Patch Unified")
                     .tab("Patch Split")
-                    .active(ctx.state.active_tab)
+                    .selected(ctx.state.active_tab)
                     .border(true)
                     .height(Length::Px(3))
-                    .on_change(ctx.link().callback(Msg::TabChanged)),
+                    .on_select(ctx.link().callback(Msg::TabChanged)),
             )
             .child(
                 Frame::new()

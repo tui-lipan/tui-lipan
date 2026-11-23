@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use tui_lipan::ImageContent;
+use tui_lipan::ScrollClip;
 use tui_lipan::TextAreaImageMode;
 use tui_lipan::prelude::*;
 
@@ -202,7 +203,7 @@ impl Component for Messenger {
                     .tabs(active_chat.images.iter().enumerate().map(|(i, _)| {
                         DraggableTab::new(format!("Image {}", i + 1)).closeable(true)
                     }))
-                    .active(usize::MAX) // no active tab - these are chips, not tabs
+                    .selected(None) // no active tab - these are chips, not tabs
                     .style(Style::new().fg(Color::Cyan))
                     .active_style(Style::new().fg(Color::Cyan)) // neutralize active highlight
                     .close_symbol("x")

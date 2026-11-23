@@ -1,3 +1,4 @@
+use tui_lipan::ListSymbolPosition;
 use tui_lipan::TestBackend;
 use tui_lipan::prelude::*;
 

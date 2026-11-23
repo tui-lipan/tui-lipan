@@ -1195,8 +1195,8 @@ impl Component for TuiLipanShowcase {
                     .child(
                         Tabs::new()
                             .tabs(tabs)
-                            .active(tab.min(TAB_LABELS.len().saturating_sub(1)))
-                            .on_change(ctx.link().callback(Msg::TabChanged)),
+                            .selected(tab.min(TAB_LABELS.len().saturating_sub(1)))
+                            .on_select(ctx.link().callback(Msg::TabChanged)),
                     )
                     .child(VStack::new().align(Align::Center).gap(1).child(stage)),
             )
@@ -1262,7 +1262,7 @@ mod tests {
             std::assert_matches!(
                 effects.as_slice(),
                 [VisualEffect::Channels {
-                    channels: EffectChannels::Foreground,
+                    channels: tui_lipan::EffectChannels::Foreground,
                     ..
                 }]
             );

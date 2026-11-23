@@ -1,6 +1,7 @@
 use tui_lipan::TestBackend;
 use tui_lipan::core::event::{MouseButton, MouseEvent, MouseKind};
 use tui_lipan::prelude::*;
+use tui_lipan::{PointerMode, PointerShape, SplitterHandleMode, SplitterPaneLimits};
 
 struct BorderSplitter;
 
@@ -369,7 +370,7 @@ fn splitter_handle_preserves_focus_and_content_clicks_still_focus() {
                 MouseKind::Up(MouseButton::Left),
             ] {
                 backend
-                    .send_mouse(mouse(2, u16::from(border), kind))
+                    .send_mouse(mouse(2, u16::from(border) + 1, kind))
                     .unwrap();
             }
             assert_eq!(backend.focused_key().unwrap().as_ref(), "first");

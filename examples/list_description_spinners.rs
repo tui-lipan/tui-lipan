@@ -6,6 +6,7 @@
 //! follow the description text. Press `q` to quit.
 
 use tui_lipan::prelude::*;
+use tui_lipan::{DescriptionPlacement, ItemDescription, ListItemLine, ListSymbolPosition};
 
 struct DescriptionSpinnersDemo;
 

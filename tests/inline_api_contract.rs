@@ -9,7 +9,7 @@ use tui_lipan::{
 };
 
 #[test]
-fn root_and_prelude_export_focus_event_types() {
+fn root_exports_focus_event_types() {
     let entry = FocusEntry::new(Some(Key::from("field")), Tag::Input);
     assert!(entry.is_within_key("field"));
     assert_eq!(entry.keys().count(), 1);
@@ -17,8 +17,8 @@ fn root_and_prelude_export_focus_event_types() {
         old: None,
         new: Some(entry),
     };
-    let _: tui_lipan::prelude::FocusChanged = changed;
-    let _: tui_lipan::prelude::Tag = Tag::Input;
+    let _: tui_lipan::FocusChanged = changed;
+    let _: tui_lipan::Tag = Tag::Input;
 }
 
 #[test]
@@ -48,24 +48,14 @@ fn root_exports_include_scroll_wheel_types() {
 }
 
 #[test]
-fn prelude_exports_layered_key_dispatch_types() {
-    use tui_lipan::prelude::*;
-    let _ = FrameworkAction::Quit;
-    let _ = FrameworkKeymap::default().unbind(FrameworkAction::Quit);
-    let _ = UserKeymapPolicy::Disabled;
-    let _ = KeyDispatchPolicy::AppCommandsFirst;
-    let _ = TerminalKeyPolicy::AppCommandsThenTerminal;
-    let _ = CommandConflictPolicy::HighestPriority;
-    let _ = ChordMismatchPolicy::ForwardPrefixAndCurrent;
-}
-
-#[test]
 fn root_exports_include_key_dispatch_policy_types() {
     let _ = tui_lipan::FrameworkAction::Quit;
     let _ = tui_lipan::FrameworkKeymap::default().unbind(tui_lipan::FrameworkAction::Quit);
     let _ = tui_lipan::UserKeymapPolicy::Disabled;
     let _ = tui_lipan::KeyDispatchPolicy::AppCommandsFirst;
     let _ = tui_lipan::TerminalKeyPolicy::TerminalOnly;
+    let _ = tui_lipan::CommandConflictPolicy::HighestPriority;
+    let _ = tui_lipan::ChordMismatchPolicy::ForwardPrefixAndCurrent;
 }
 
 #[test]

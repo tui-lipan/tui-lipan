@@ -67,6 +67,8 @@ State-style setters use [StyleSlot semantics](../styling.md#state-style-slots):
 ### ListItem Types
 
 ```rust
+use tui_lipan::{ListItemGutter, ListItemLine, ListItemRole, ListSymbolPosition, ListTruncation};
+
 ListItem::new("Normal item")          // Selectable row
 ListItem::header("Section Title")      // Non-selectable header row
 ListItem::divider("Section Title")     // Header drawn as ── Section Title ──, centered at any width
@@ -338,6 +340,8 @@ consistent table-wide spacing, and `bottom_margin` for row-specific extra space.
 ### Heatmap Cells
 
 ```rust
+use tui_lipan::GradientRange;
+
 TableCell::heat_fg(value, &gradient, GradientRange::new(0.0, 100.0))  // Color fg by value
 TableCell::heat_bg(value, &gradient, GradientRange::new(0.0, 100.0))  // Color bg by value
 ```
@@ -345,6 +349,8 @@ TableCell::heat_bg(value, &gradient, GradientRange::new(0.0, 100.0))  // Color b
 ### Inspector Patterns
 
 ```rust
+use tui_lipan::TableDisclosureState;
+
 Table::inspector(true)   // Enable inspector presets
 
 // Row helpers
@@ -391,8 +397,7 @@ Hierarchical tree view with expand/collapse.
 | `on_hover` | `Callback<TreeHoverEvent>` | Composed-row pointer entry and exit |
 | `on_pointer_move` | `Callback<TreeEvent>` | Pointer movement over composed rows |
 | `on_viewport_change` | `Callback<ScrollViewportEvent>` | Composed-row viewport metadata |
-| `selected` | `usize` | Controlled selected visible row index |
-| `clear_selection` | `bool` | When `true`, suppress the selection highlight (authoritative over `selected` and internal state) |
+| `selected` | `impl Into<Option<usize>>` | Controlled selected visible row index (`None` clears the selection highlight; leave unset for uncontrolled internal selection) |
 | `force_scroll_to_selected` | `bool` | Force the internal list to reveal the selected row on next render |
 | `gap` | `u16` | Vertical gap between items |
 | `indent` | `u16` | Cells each level of depth adds (default: `2`); zero puts every level in one column |
@@ -604,6 +609,8 @@ than `ListItem`s. Describe where each visible row sits with a `TreeBranch`, buil
 put the guide spans in front of the row's own content:
 
 ```rust
+use tui_lipan::{TreeBranch, TreeGuides};
+
 let guides = TreeGuides::new(IndentStyle::Branch)
     .indent(2)
     .guide_style(Style::new().fg(theme.border));
@@ -859,6 +866,8 @@ arrows instead of replacing directory icons.
 Run the complete asynchronous pattern with `cargo run --example provided_file_tree`.
 
 ```rust
+use tui_lipan::{FileTreeDirectoryListing, FileTreeEntryRequest, GitChangeState, GitFileStatus};
+
 let listings = vec![FileTreeDirectoryListing::new(
     project_root.clone(),
     [
@@ -879,6 +888,11 @@ FileTree::new(project_root)
 ```
 
 ```rust
+use tui_lipan::{
+    FileKind, FileTreeChange, FileTreeChangeSource, FileTreeChangeStatus, FileTreeChangeView,
+    FileTreeItemStyle, FileTreeSuffixPriority,
+};
+
 let changes = vec![
     FileTreeChange::new("src/main.rs", FileTreeChangeStatus::Modified)
         .kind(FileKind::File)
@@ -904,6 +918,8 @@ FileTree::new(project_root)
 ```
 
 ```rust
+use tui_lipan::FileTreeChangeView;
+
 FileTree::new("/home/user/projects")
     .git_status(true)
     .change_view(FileTreeChangeView::ChangedOnly)
@@ -973,6 +989,8 @@ High-throughput log list with level highlighting and fuzzy filtering.
 Plus standard list/scroll styling props, including `scrollbar_config`.
 
 ```rust
+use tui_lipan::LogBuffer;
+
 let buffer = Arc::new(LogBuffer::new(10_000)); // 10k entry ring buffer
 
 // In a background thread: buffer.push(LogEntry { level, message });

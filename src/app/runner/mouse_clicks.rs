@@ -228,8 +228,8 @@ impl<C: Component> AppRunner<C> {
             if self.ensure_draggable_tab_bar_tab_visible(action.node_id, action.tab_index) {
                 handled = true;
             }
-            if action.tab_index != action.active
-                && let Some(cb) = action.on_change
+            if action.selected != Some(action.tab_index)
+                && let Some(cb) = action.on_select
             {
                 cb.emit(TabsEvent {
                     index: action.tab_index,
@@ -1254,7 +1254,7 @@ impl<C: Component> AppRunner<C> {
     ///
     /// Returns `true` when the tab actually changed and the event was emitted.
     pub(crate) fn handle_tabs_click(&self, change: TabsChange) -> bool {
-        if change.next != change.active {
+        if change.selected != Some(change.next) {
             change.cb.emit(TabsEvent { index: change.next });
             return true;
         }

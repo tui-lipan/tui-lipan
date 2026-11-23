@@ -32,7 +32,7 @@ pub struct ComboBox {
     placeholder: Option<Arc<str>>,
     open: bool,
     pub(crate) animation: Option<VisibilityAnimation>,
-    active_index: Option<usize>,
+    highlighted: Option<usize>,
     selected: Option<usize>,
     allow_custom_value: bool,
     width: Length,
@@ -60,7 +60,7 @@ pub struct ComboBox {
     empty_text: Option<Arc<str>>,
     on_query_change: Option<Callback<Arc<str>>>,
     on_open_change: Option<Callback<bool>>,
-    on_active_index_change: Option<Callback<Option<usize>>>,
+    on_highlight: Option<Callback<Option<usize>>>,
     on_commit: Option<Callback<ComboBoxCommitEvent>>,
     focusable: bool,
     tab_stop: bool,
@@ -77,7 +77,7 @@ impl Default for ComboBox {
             placeholder: Some("Type to filter...".into()),
             open: false,
             animation: None,
-            active_index: None,
+            highlighted: None,
             selected: None,
             allow_custom_value: false,
             width: Length::Flex(1),
@@ -127,7 +127,7 @@ impl Default for ComboBox {
             empty_text: Some("No matches".into()),
             on_query_change: None,
             on_open_change: None,
-            on_active_index_change: None,
+            on_highlight: None,
             on_commit: None,
             focusable: true,
             tab_stop: true,
@@ -175,15 +175,21 @@ impl ComboBox {
         self
     }
 
-    /// Set currently active_index source index.
-    pub fn active_index(mut self, active_index: Option<usize>) -> Self {
-        self.active_index = active_index;
+    /// Set highlighted source index inside the dropdown list.
+    ///
+    /// Pass `None` to clear the explicit highlight. Bare integers still work
+    /// via `From<T> for Option<T>` (`combo.highlighted(0)`).
+    pub fn highlighted(mut self, highlighted: impl Into<Option<usize>>) -> Self {
+        self.highlighted = highlighted.into();
         self
     }
 
     /// Set selected source index.
-    pub fn selected(mut self, selected: Option<usize>) -> Self {
-        self.selected = selected;
+    ///
+    /// Pass `None` for no current selection. Bare integers still work via
+    /// `From<T> for Option<T>` (`combo.selected(0)`).
+    pub fn selected(mut self, selected: impl Into<Option<usize>>) -> Self {
+        self.selected = selected.into();
         self
     }
 
@@ -415,49 +421,49 @@ impl ComboBox {
         self
     }
 
-    /// Set dropdown active_index-item style.
+    /// Set dropdown highlighted-item style.
     pub fn list_selection_style(mut self, style: Style) -> Self {
         self.list_config.selection_style = StyleSlot::Replace(style);
         self
     }
 
-    /// Extend the themed dropdown active_index-item style.
+    /// Extend the themed dropdown highlighted-item style.
     pub fn extend_list_selection_style(mut self, style: Style) -> Self {
         self.list_config.selection_style = StyleSlot::Extend(style);
         self
     }
 
-    /// Inherit the themed dropdown active_index-item style.
+    /// Inherit the themed dropdown highlighted-item style.
     pub fn inherit_list_selection_style(mut self) -> Self {
         self.list_config.selection_style = StyleSlot::Inherit;
         self
     }
 
-    /// Set dropdown active_index-item style slot directly for composite forwarding.
+    /// Set dropdown highlighted-item style slot directly for composite forwarding.
     pub fn list_selection_style_slot(mut self, slot: StyleSlot) -> Self {
         self.list_config.selection_style = slot;
         self
     }
 
-    /// Set dropdown active_index-item style while the list is not focused.
+    /// Set dropdown highlighted-item style while the list is not focused.
     pub fn list_unfocused_selection_style(mut self, style: Style) -> Self {
         self.list_config.unfocused_selection_style = StyleSlot::Replace(style);
         self
     }
 
-    /// Extend the themed dropdown active_index-item style while the list is not focused.
+    /// Extend the themed dropdown highlighted-item style while the list is not focused.
     pub fn extend_list_unfocused_selection_style(mut self, style: Style) -> Self {
         self.list_config.unfocused_selection_style = StyleSlot::Extend(style);
         self
     }
 
-    /// Inherit the themed dropdown active_index-item style while the list is not focused.
+    /// Inherit the themed dropdown highlighted-item style while the list is not focused.
     pub fn inherit_list_unfocused_selection_style(mut self) -> Self {
         self.list_config.unfocused_selection_style = StyleSlot::Inherit;
         self
     }
 
-    /// Set dropdown unfocused active_index-item style slot directly for composite forwarding.
+    /// Set dropdown unfocused highlighted-item style slot directly for composite forwarding.
     pub fn list_unfocused_selection_style_slot(mut self, slot: StyleSlot) -> Self {
         self.list_config.unfocused_selection_style = slot;
         self
@@ -487,7 +493,7 @@ impl ComboBox {
         self
     }
 
-    /// Set dropdown active_index-item symbol.
+    /// Set dropdown highlighted-item symbol.
     pub fn list_selection_symbol(mut self, symbol: Option<impl Into<Arc<str>>>) -> Self {
         self.list_config.selection_symbol = symbol.map(Into::into);
         self
@@ -500,13 +506,13 @@ impl ComboBox {
         self
     }
 
-    /// Set dropdown active_index-item symbol style.
+    /// Set dropdown highlighted-item symbol style.
     pub fn list_selection_symbol_style(mut self, style: Style) -> Self {
         self.list_config.selection_symbol_style = Some(style);
         self
     }
 
-    /// Set dropdown active_index-item symbol style while the list is not focused.
+    /// Set dropdown highlighted-item symbol style while the list is not focused.
     pub fn list_unfocused_selection_symbol_style(mut self, style: Style) -> Self {
         self.list_config.unfocused_selection_symbol_style = Some(style);
         self
@@ -548,9 +554,9 @@ impl ComboBox {
         self
     }
 
-    /// Callback fired when active_index source index changes.
-    pub fn on_active_index_change(mut self, cb: Callback<Option<usize>>) -> Self {
-        self.on_active_index_change = Some(cb);
+    /// Callback fired when the highlighted source index changes.
+    pub fn on_highlight(mut self, cb: Callback<Option<usize>>) -> Self {
+        self.on_highlight = Some(cb);
         self
     }
 
@@ -564,21 +570,18 @@ impl ComboBox {
 impl From<ComboBox> for Element {
     fn from(combo: ComboBox) -> Self {
         let filtered_indices = filtered_item_indices(&combo.items, combo.query.as_ref());
-        let effective_highlight = normalized_active_index(
-            combo.active_index,
+        let effective_highlight = normalized_highlighted(
+            combo.highlighted,
             combo.selected,
             filtered_indices.as_slice(),
         );
-        let list_selected = effective_highlight
-            .and_then(|source_index| {
-                filtered_indices
-                    .iter()
-                    .position(|&candidate| candidate == source_index)
-            })
-            .unwrap_or(0);
+        let list_selected = effective_highlight.and_then(|source_index| {
+            filtered_indices
+                .iter()
+                .position(|&candidate| candidate == source_index)
+        });
 
         let mut input = Input::new(combo.query.clone())
-            .border(true)
             .width(combo.width)
             .style(combo.input_style)
             .hover_style_slot(combo.input_hover_style)
@@ -635,7 +638,7 @@ impl From<ComboBox> for Element {
             let allow_custom_value = combo.allow_custom_value;
             let open = combo.open;
             let on_open_change = combo.on_open_change.clone();
-            let on_active_index_change = combo.on_active_index_change.clone();
+            let on_highlight = combo.on_highlight.clone();
             let on_commit = combo.on_commit.clone();
             let caller_on_key = combo.on_key.clone();
             input = input.on_key(KeyHandler::new(move |key: KeyEvent| {
@@ -671,7 +674,7 @@ impl From<ComboBox> for Element {
                         } else {
                             current_pos.saturating_sub(1)
                         };
-                        if let Some(cb) = on_active_index_change.as_ref() {
+                        if let Some(cb) = on_highlight.as_ref() {
                             cb.emit(Some(filtered_indices[next_pos]));
                         }
                         if let Some(cb) = on_open_change.as_ref() {
@@ -682,11 +685,11 @@ impl From<ComboBox> for Element {
                     KeyCode::Enter => {
                         let mut handled = false;
 
-                        let active_index = effective_highlight
+                        let highlighted = effective_highlight
                             .filter(|source_index| filtered_indices.contains(source_index));
                         let selected =
                             selected.filter(|source_index| filtered_indices.contains(source_index));
-                        let picked_index = active_index.or(selected);
+                        let picked_index = highlighted.or(selected);
 
                         if let Some(cb) = on_commit.as_ref() {
                             if let Some(index) = picked_index {
@@ -781,7 +784,7 @@ impl From<ComboBox> for Element {
             list = list.empty_text(empty_text);
         }
 
-        if let Some(cb) = combo.on_active_index_change.clone() {
+        if let Some(cb) = combo.on_highlight.clone() {
             let filtered_indices = filtered_indices.clone();
             list = list.on_select(Callback::new(move |event: ListEvent| {
                 if let Some(source_index) = filtered_indices.get(event.index).copied() {
@@ -848,8 +851,8 @@ fn filtered_item_indices(items: &[Arc<str>], query: &str) -> Vec<usize> {
         .collect()
 }
 
-fn normalized_active_index(
-    active_index: Option<usize>,
+fn normalized_highlighted(
+    highlighted: Option<usize>,
     selected: Option<usize>,
     filtered_indices: &[usize],
 ) -> Option<usize> {
@@ -857,7 +860,7 @@ fn normalized_active_index(
         return None;
     }
 
-    active_index
+    highlighted
         .filter(|index| filtered_indices.contains(index))
         .or_else(|| selected.filter(|index| filtered_indices.contains(index)))
         .or_else(|| filtered_indices.first().copied())
@@ -865,7 +868,7 @@ fn normalized_active_index(
 
 #[cfg(test)]
 mod tests {
-    use super::{filtered_item_indices, normalized_active_index};
+    use super::{filtered_item_indices, normalized_highlighted};
 
     #[test]
     fn filter_returns_all_for_empty_query() {
@@ -882,19 +885,19 @@ mod tests {
     }
 
     #[test]
-    fn normalized_active_index_prefers_explicit_highlight() {
+    fn normalized_highlighted_prefers_explicit_highlight() {
         let filtered = vec![2, 4, 6];
-        let resolved = normalized_active_index(Some(4), Some(2), filtered.as_slice());
+        let resolved = normalized_highlighted(Some(4), Some(2), filtered.as_slice());
         assert_eq!(resolved, Some(4));
     }
 
     #[test]
-    fn normalized_active_index_falls_back_to_selected_then_first() {
+    fn normalized_highlighted_falls_back_to_selected_then_first() {
         let filtered = vec![1, 3, 5];
-        let resolved = normalized_active_index(Some(2), Some(3), filtered.as_slice());
+        let resolved = normalized_highlighted(Some(2), Some(3), filtered.as_slice());
         assert_eq!(resolved, Some(3));
 
-        let resolved = normalized_active_index(Some(2), Some(4), filtered.as_slice());
+        let resolved = normalized_highlighted(Some(2), Some(4), filtered.as_slice());
         assert_eq!(resolved, Some(1));
     }
 }

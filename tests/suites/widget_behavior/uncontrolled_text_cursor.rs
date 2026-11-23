@@ -232,20 +232,20 @@ fn uncontrolled_input_cursor_move_then_rejected_edit_preserves_moved_cursor() {
     backend.send_key(plain(KeyCode::Char('x'))).unwrap();
     assert_eq!(backend.state().value, "abcd");
 
-    // Move cursor again via mouse click (padding left = 1, so x = 2 lands at col 1 -> pos 1),
+    // Move cursor again via mouse click (border 1 + left padding 1, so x = 3 lands at col 1 -> pos 1),
     // then reject a paste.
     backend
         .send_mouse(MouseEvent {
-            x: 2,
-            y: 0,
+            x: 3,
+            y: 1,
             kind: MouseKind::Down(MouseButton::Left),
             mods: KeyMods::default(),
         })
         .unwrap();
     backend
         .send_mouse(MouseEvent {
-            x: 2,
-            y: 0,
+            x: 3,
+            y: 1,
             kind: MouseKind::Up(MouseButton::Left),
             mods: KeyMods::default(),
         })
@@ -263,27 +263,27 @@ fn uncontrolled_input_cursor_move_then_rejected_edit_preserves_moved_cursor() {
 fn uncontrolled_input_drag_selection_then_rejected_paste_preserves_selection() {
     let mut backend = input_backend("abcd");
 
-    // Drag from col 1 (x = 2 with left padding 1) to col 3 (x = 4) to select "bc".
+    // Drag from col 1 (x = 3 with border 1 + left padding 1) to col 3 (x = 5) to select "bc".
     backend
         .send_mouse(MouseEvent {
-            x: 2,
-            y: 0,
+            x: 3,
+            y: 1,
             kind: MouseKind::Down(MouseButton::Left),
             mods: KeyMods::default(),
         })
         .unwrap();
     backend
         .send_mouse(MouseEvent {
-            x: 4,
-            y: 0,
+            x: 5,
+            y: 1,
             kind: MouseKind::Drag(MouseButton::Left),
             mods: KeyMods::default(),
         })
         .unwrap();
     backend
         .send_mouse(MouseEvent {
-            x: 4,
-            y: 0,
+            x: 5,
+            y: 1,
             kind: MouseKind::Up(MouseButton::Left),
             mods: KeyMods::default(),
         })

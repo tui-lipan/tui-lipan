@@ -1,4 +1,5 @@
 use tui_lipan::prelude::*;
+use tui_lipan::{PointerShape, SplitterHandleMode};
 
 struct SplitterDemo;
 
@@ -135,8 +136,8 @@ impl Component for SplitterDemo {
 
         let tabs = Tabs::new()
             .tabs(vec![Tab::new("Classic"), Tab::new("Frame Join")])
-            .active(ctx.state.mode_tab.min(1))
-            .on_change(ctx.link().callback(Msg::ModeTabChanged));
+            .selected(ctx.state.mode_tab.min(1))
+            .on_select(ctx.link().callback(Msg::ModeTabChanged));
 
         Frame::new()
             .title("Splitter Demo")

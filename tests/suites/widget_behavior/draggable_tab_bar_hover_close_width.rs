@@ -8,6 +8,7 @@
 use tui_lipan::core::event::{KeyMods, MouseEvent, MouseKind};
 use tui_lipan::prelude::*;
 use tui_lipan::{CapturedFrame, TestBackend};
+use tui_lipan::{DraggableTabBarOverflow, DraggableTabBarVariant};
 
 struct HoverCloseBar;
 
@@ -25,7 +26,7 @@ impl Component for HoverCloseBar {
     fn view(&self, _ctx: &Context<Self>) -> Element {
         DraggableTabBar::new()
             .tabs(vec![DraggableTab::new("ABCDEFGHIJKL").closeable(true)])
-            .active(0)
+            .selected(0)
             .variant(DraggableTabBarVariant::FrameLine)
             .close_on_hover_only(true)
             .show_overflow_controls(false)

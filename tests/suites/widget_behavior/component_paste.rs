@@ -1,6 +1,6 @@
 use std::{cell::RefCell, rc::Rc};
 
-use tui_lipan::{TestBackend, prelude::*};
+use tui_lipan::{PasteOrigin, TestBackend, prelude::*};
 
 #[derive(Clone)]
 struct Form {

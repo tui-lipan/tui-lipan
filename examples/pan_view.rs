@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use tui_lipan::PanMetrics;
 use tui_lipan::prelude::*;
 
 struct PanViewExample;

@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use tui_lipan::prelude::*;
 use tui_lipan::utils::hints::{HOME_ROW_HINT_KEYS, HintKind, HintMatch, HintScan, assign_labels};
+use tui_lipan::{TerminalDecoration, TerminalPos, TerminalSelection};
 
 const TERMINAL_KEY: &str = "hint-terminal";
 const IPV4_HINT_ID: u16 = 1;

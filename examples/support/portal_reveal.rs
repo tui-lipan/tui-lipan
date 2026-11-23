@@ -1,5 +1,5 @@
 //! A reusable application-defined reveal effect, independent of widget lifecycle.
-use tui_lipan::prelude::*;
+use tui_lipan::{CellEffect, EffectCell, EffectContext};
 
 #[derive(Debug)]
 pub struct PortalReveal {

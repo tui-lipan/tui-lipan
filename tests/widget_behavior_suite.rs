@@ -78,6 +78,8 @@ mod search_palette_row_fit;
 mod select_button_padding_render;
 #[path = "suites/widget_behavior/select_keeps_focus.rs"]
 mod select_keeps_focus;
+#[path = "suites/widget_behavior/selection_api_consistency.rs"]
+mod selection_api_consistency;
 #[path = "suites/widget_behavior/sequence_diagram_theme_render.rs"]
 mod sequence_diagram_theme_render;
 #[path = "suites/widget_behavior/splitter_drag_test_backend.rs"]

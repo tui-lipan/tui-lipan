@@ -788,7 +788,7 @@ mod tests {
             DraggableTabBar::new()
                 .tabs([DraggableTab::new("One"), DraggableTab::new("Two")])
                 .show_close_buttons(false)
-                .on_change(crate::Callback::new(|_| {})),
+                .on_select(crate::Callback::new(|_| {})),
         );
         let node = tree
             .iter()
@@ -884,7 +884,7 @@ mod tests {
                             .tabs([DraggableTab::new("One"), DraggableTab::new("Two")])
                             .show_close_buttons(false)
                             .height(Length::Px(1))
-                            .on_change(crate::Callback::new(|_| {}))
+                            .on_select(crate::Callback::new(|_| {}))
                             .on_reorder(crate::Callback::new(|_| {})),
                     )
                     .child(Text::new("Blank").height(Length::Flex(1)))

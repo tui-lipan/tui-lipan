@@ -8,10 +8,11 @@ fn crate_root_exports_common_widgets_and_helpers() {
         DEFAULT_COLOR_ANIMATION_FRAME_RATE, DEFAULT_FRAME_RATE, DocumentView, Easing, Edge,
         ErDiagram, FileTree, FlowDirection, Flowchart, FlowchartEdge, FlowchartNodeId, Frame,
         GanttDiagram, Graph, GraphNode, HStack, Heatmap, HexArea, Input, List, ListItem, Modal,
-        NodeId, NodeShape, Popover, ProgressBar, Radio, ScrollView, SearchPalette, Select,
-        SelectionEnd, SequenceDiagram, SequenceMessage, SequenceStep, Slider, Spinner,
-        StateDiagram, StatusBar, Tab, Table, TableCell, TableRow, Tabs, Text, TextArea, TextEditor,
-        TextInput, Tooltip, Tree, TreeNode, TripleClickSelectionMode, VStack, word_forward_start,
+        NodeId, NodeShape, Popover, ProgressBar, Radio, RadioEvent, ScrollView, SearchPalette,
+        Select, SelectEvent, SelectionEnd, SequenceDiagram, SequenceMessage, SequenceStep, Slider,
+        Spinner, StateDiagram, StatusBar, Tab, Table, TableCell, TableRow, Tabs, Text, TextArea,
+        TextEditor, TextInput, Tooltip, Tree, TreeNode, TripleClickSelectionMode, VStack,
+        word_forward_start,
     };
 
     let _ = (
@@ -115,6 +116,7 @@ fn crate_root_exports_terminal_images_feature_items() {
 mod prelude_hygiene {
     use std::any::TypeId;
     use tui_lipan::prelude::*;
+    use tui_lipan::{FlowchartNodeId, SequenceStep};
 
     // Common user-authored names must not collide with prelude re-exports.
     #[allow(dead_code)]

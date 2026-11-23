@@ -1,5 +1,6 @@
 //! A translucent `Animated` crossfades with the glyphs it is drawn over, not only their colors.
 
+use tui_lipan::ExitAnimation;
 use tui_lipan::TestBackend;
 use tui_lipan::prelude::*;
 

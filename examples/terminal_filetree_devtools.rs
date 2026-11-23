@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use tui_lipan::FileTreeGitStatusCache;
 use tui_lipan::prelude::*;
 
 struct DevToolsApp;

@@ -2,6 +2,9 @@ use std::sync::Arc;
 
 use tui_lipan::core::event::{MouseButton, MouseKind};
 use tui_lipan::prelude::*;
+use tui_lipan::{
+    DecorationGlyph, EdgeDecoration, FocusAccordion, SparklineBarsPreset, TextEditEvent, TreePath,
+};
 
 struct Showcase;
 
@@ -217,8 +220,8 @@ impl Component for Showcase {
                 padding: 1,
                 Tabs {
                     border: true,
-                    active: ctx.state.tab,
-                    on_change: ctx.link().callback(|e: TabsEvent| Msg::SetTab(e.index)),
+                    selected: ctx.state.tab,
+                    on_select: ctx.link().callback(|e: TabsEvent| Msg::SetTab(e.index)),
                     tab: "General",
                     tab: "Navigation",
                     tab: "Data & Text",
@@ -629,7 +632,6 @@ impl Showcase {
                                     .cursor(ctx.state.input_cursor)
                                     .anchor(ctx.state.input_anchor)
                                     .placeholder("Type to edit")
-                                    .border(true)
                                     .on_change(ctx.link().callback(Msg::InputChanged))
                                     .on_edit(ctx.link().callback(Msg::InputEdited))
                             },

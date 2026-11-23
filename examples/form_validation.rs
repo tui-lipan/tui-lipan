@@ -5,6 +5,7 @@
 use std::sync::Arc;
 
 use tui_lipan::prelude::*;
+use tui_lipan::{StringValidator, ValidationError};
 
 const LOGIN_WIDTH: u16 = 50;
 
@@ -205,7 +206,6 @@ impl Component for LoginForm {
                 .cursor(self.username_cursor)
                 .anchor(self.username_anchor)
                 .placeholder("Enter username")
-                .border(true)
                 .on_change(ctx.link().callback(Msg::UsernameChanged))
                 .on_submit(ctx.link().callback(|_| Msg::Submit))
                 .error(self.username_error.clone())
@@ -218,7 +218,6 @@ impl Component for LoginForm {
                 .cursor(self.password_cursor)
                 .anchor(self.password_anchor)
                 .placeholder("Enter password")
-                .border(true)
                 .mask(Some('●'))
                 .on_change(ctx.link().callback(Msg::PasswordChanged))
                 .on_submit(ctx.link().callback(|_| Msg::Submit))

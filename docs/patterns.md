@@ -125,6 +125,8 @@ the prefix in the label string yourself. Extra lines automatically indent under 
 label text.
 
 ```rust
+use tui_lipan::ListItemLine;
+
 List::new().items([
     ListItem::new("Alpha")
         .numbered(1)
@@ -666,6 +668,8 @@ Button::new("Click").focus_style(Style::new().bg(Color::rgb(80, 80, 80)))
 Don't set properties that are already the default - it adds noise and signals misunderstanding of the framework. Common offenders:
 
 ```rust
+use tui_lipan::CaretShape;
+
 // BAD: explicit framework defaults add noise
 Input::new(query.clone())
     .focusable(true)                   // interactive widgets are focusable by default

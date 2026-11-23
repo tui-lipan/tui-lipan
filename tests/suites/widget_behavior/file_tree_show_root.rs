@@ -7,6 +7,7 @@ use std::rc::Rc;
 use tui_lipan::TestBackend;
 use tui_lipan::core::event::{KeyCode, KeyEvent, KeyMods};
 use tui_lipan::prelude::*;
+use tui_lipan::{FileTreeChange, FileTreeChangeSource, FileTreeChangeStatus, FileTreeChangeView};
 
 struct ForestTree {
     selected: Rc<RefCell<Vec<String>>>,

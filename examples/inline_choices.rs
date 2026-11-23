@@ -26,7 +26,6 @@ enum Msg {
     ThemeChanged(usize),
     TargetToggle(bool),
     TargetSelected(usize),
-    TargetChanged(usize),
     NoteChanged(InputEvent),
     Apply,
 }
@@ -54,7 +53,7 @@ impl Component for InlineChoices {
                 ctx.state.target_expanded = expanded;
                 Update::render()
             }
-            Msg::TargetSelected(index) | Msg::TargetChanged(index) => {
+            Msg::TargetSelected(index) => {
                 ctx.state.target = Some(index.min(TARGETS.len().saturating_sub(1)));
                 ctx.state.target_expanded = false;
                 Update::render()
@@ -122,12 +121,15 @@ impl Component for InlineChoices {
                     .child(Text::new("Theme"))
                     .child(
                         Radio::new(THEMES.iter().copied())
-                            .selected(Some(ctx.state.theme))
+                            .selected(ctx.state.theme)
                             .layout(RadioLayout::Horizontal)
                             .gap(2)
                             .checked_style(Style::new().fg(Color::LightGreen).bold())
                             .unchecked_style(Style::new().fg(Color::DarkGray))
-                            .on_change(ctx.link().callback(Msg::ThemeChanged)),
+                            .on_select(
+                                ctx.link()
+                                    .callback(|e: RadioEvent| Msg::ThemeChanged(e.index)),
+                            ),
                     )
                     .child(Text::new("Deployment target"))
                     .child(
@@ -142,8 +144,10 @@ impl Component for InlineChoices {
                                 ScrollbarConfig::new().variant(ScrollbarVariant::Integrated),
                             )
                             .on_toggle(ctx.link().callback(Msg::TargetToggle))
-                            .on_select(ctx.link().callback(Msg::TargetSelected))
-                            .on_change(ctx.link().callback(Msg::TargetChanged))
+                            .on_select(
+                                ctx.link()
+                                    .callback(|e: SelectEvent| Msg::TargetSelected(e.index)),
+                            )
                             .width(Length::Flex(1)),
                     )
                     .child(
@@ -151,7 +155,6 @@ impl Component for InlineChoices {
                             .cursor(ctx.state.note.cursor())
                             .anchor(ctx.state.note.anchor())
                             .placeholder("Optional note")
-                            .border(true)
                             .on_change(ctx.link().callback(Msg::NoteChanged))
                             .on_submit(ctx.link().callback(|_| Msg::Apply)),
                     )

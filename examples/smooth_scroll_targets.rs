@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use tui_lipan::prelude::*;
+use tui_lipan::{ScrollBehavior, ScrollDistanceConfig};
 
 const MESSAGE_TARGETS: &[usize] = &[3, 11, 19, 27];
 const DOCUMENT_TARGETS: &[usize] = &[4, 16, 29, 42];

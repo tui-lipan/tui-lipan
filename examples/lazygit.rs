@@ -8,6 +8,7 @@
 //! - Compact mode: non-focused panes collapse when space is tight
 
 use tui_lipan::prelude::*;
+use tui_lipan::{FocusAccordion, FocusSizing, TabVariant};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Mock Data
