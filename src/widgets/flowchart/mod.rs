@@ -99,9 +99,9 @@ pub enum EdgeArrow {
 
 /// Stable identifier for a flowchart node or subgraph.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct NodeId(Arc<str>);
+pub struct FlowchartNodeId(Arc<str>);
 
-impl NodeId {
+impl FlowchartNodeId {
     /// Create an identifier.
     pub fn new(id: impl Into<Arc<str>>) -> Self {
         Self(id.into())
@@ -113,31 +113,31 @@ impl NodeId {
     }
 }
 
-impl From<&str> for NodeId {
+impl From<&str> for FlowchartNodeId {
     fn from(value: &str) -> Self {
         Self::new(value)
     }
 }
 
-impl From<String> for NodeId {
+impl From<String> for FlowchartNodeId {
     fn from(value: String) -> Self {
         Self::new(Arc::<str>::from(value))
     }
 }
 
-impl From<Arc<str>> for NodeId {
+impl From<Arc<str>> for FlowchartNodeId {
     fn from(value: Arc<str>) -> Self {
         Self::new(value)
     }
 }
 
-impl AsRef<str> for NodeId {
+impl AsRef<str> for FlowchartNodeId {
     fn as_ref(&self) -> &str {
         self.as_str()
     }
 }
 
-impl std::fmt::Display for NodeId {
+impl std::fmt::Display for FlowchartNodeId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
     }
@@ -145,11 +145,11 @@ impl std::fmt::Display for NodeId {
 
 /// A directed flowchart edge.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Edge {
+pub struct FlowchartEdge {
     /// Source node id.
-    pub from: NodeId,
+    pub from: FlowchartNodeId,
     /// Target node id.
-    pub to: NodeId,
+    pub to: FlowchartNodeId,
     /// Optional edge label.
     pub label: Option<Arc<str>>,
     /// Stroke style.
@@ -164,29 +164,33 @@ pub struct Edge {
     pub label_style: Option<Style>,
 }
 
-impl Edge {
+impl FlowchartEdge {
     /// Create a solid directed edge.
-    pub fn solid(from: impl Into<NodeId>, to: impl Into<NodeId>) -> Self {
+    pub fn solid(from: impl Into<FlowchartNodeId>, to: impl Into<FlowchartNodeId>) -> Self {
         Self::new(from, to, EdgeStyle::Solid)
     }
 
     /// Create a dashed directed edge.
-    pub fn dashed(from: impl Into<NodeId>, to: impl Into<NodeId>) -> Self {
+    pub fn dashed(from: impl Into<FlowchartNodeId>, to: impl Into<FlowchartNodeId>) -> Self {
         Self::new(from, to, EdgeStyle::Dashed)
     }
 
     /// Create a thick directed edge.
-    pub fn thick(from: impl Into<NodeId>, to: impl Into<NodeId>) -> Self {
+    pub fn thick(from: impl Into<FlowchartNodeId>, to: impl Into<FlowchartNodeId>) -> Self {
         Self::new(from, to, EdgeStyle::Thick)
     }
 
     /// Create an invisible layout edge.
-    pub fn invisible(from: impl Into<NodeId>, to: impl Into<NodeId>) -> Self {
+    pub fn invisible(from: impl Into<FlowchartNodeId>, to: impl Into<FlowchartNodeId>) -> Self {
         Self::new(from, to, EdgeStyle::Invisible).arrow_to(EdgeArrow::None)
     }
 
     /// Create an edge with a specific style.
-    pub fn new(from: impl Into<NodeId>, to: impl Into<NodeId>, style: EdgeStyle) -> Self {
+    pub fn new(
+        from: impl Into<FlowchartNodeId>,
+        to: impl Into<FlowchartNodeId>,
+        style: EdgeStyle,
+    ) -> Self {
         Self {
             from: from.into(),
             to: to.into(),
@@ -242,7 +246,7 @@ impl Edge {
 #[non_exhaustive]
 pub struct FlowchartNodeEvent {
     /// Target node id.
-    pub id: NodeId,
+    pub id: FlowchartNodeId,
     /// Target node label.
     pub label: Arc<str>,
 }
@@ -252,9 +256,9 @@ pub struct FlowchartNodeEvent {
 #[non_exhaustive]
 pub struct FlowchartEdgeEvent {
     /// Source node id.
-    pub from: NodeId,
+    pub from: FlowchartNodeId,
     /// Target node id.
-    pub to: NodeId,
+    pub to: FlowchartNodeId,
     /// Optional edge label.
     pub label: Option<Arc<str>>,
 }
@@ -264,7 +268,7 @@ pub struct FlowchartEdgeEvent {
 #[non_exhaustive]
 pub struct FlowchartSubgraphEvent {
     /// Target subgraph id.
-    pub id: NodeId,
+    pub id: FlowchartNodeId,
     /// Target subgraph label.
     pub label: Arc<str>,
 }
@@ -285,28 +289,28 @@ pub enum FlowchartItemEvent {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum FlowchartItemPath {
     /// A node id.
-    Node(NodeId),
+    Node(FlowchartNodeId),
     /// Edge index in insertion order.
     Edge(usize),
     /// A subgraph id.
-    Subgraph(NodeId),
+    Subgraph(FlowchartNodeId),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct FlowchartNodeSpec {
-    pub(crate) id: NodeId,
+    pub(crate) id: FlowchartNodeId,
     pub(crate) label: Arc<str>,
     pub(crate) shape: NodeShape,
     pub(crate) style: Style,
     pub(crate) hover_style: Style,
-    pub(crate) parent: Option<NodeId>,
+    pub(crate) parent: Option<FlowchartNodeId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct FlowchartSubgraphSpec {
-    pub(crate) id: NodeId,
+    pub(crate) id: FlowchartNodeId,
     pub(crate) label: Arc<str>,
-    pub(crate) parent: Option<NodeId>,
+    pub(crate) parent: Option<FlowchartNodeId>,
     pub(crate) style: Style,
 }
 
@@ -315,10 +319,10 @@ pub(crate) struct FlowchartSubgraphSpec {
 pub struct Flowchart {
     pub(crate) direction: FlowDirection,
     pub(crate) nodes: Arc<[FlowchartNodeSpec]>,
-    pub(crate) edges: Arc<[Edge]>,
+    pub(crate) edges: Arc<[FlowchartEdge]>,
     pub(crate) subgraphs: Arc<[FlowchartSubgraphSpec]>,
     pub(crate) class_defs: Arc<HashMap<Arc<str>, Style>>,
-    pub(crate) class_assignments: Arc<HashMap<NodeId, Arc<str>>>,
+    pub(crate) class_assignments: Arc<HashMap<FlowchartNodeId, Arc<str>>>,
     pub(crate) style: Style,
     pub(crate) node_style: Style,
     pub(crate) edge_style: Style,
@@ -395,7 +399,7 @@ impl Flowchart {
     /// Add or replace a node.
     pub fn node(
         mut self,
-        id: impl Into<NodeId>,
+        id: impl Into<FlowchartNodeId>,
         label: impl Into<Arc<str>>,
         shape: NodeShape,
     ) -> Self {
@@ -413,7 +417,7 @@ impl Flowchart {
     /// Add a node with a style override.
     pub fn styled_node(
         mut self,
-        id: impl Into<NodeId>,
+        id: impl Into<FlowchartNodeId>,
         label: impl Into<Arc<str>>,
         shape: NodeShape,
         style: Style,
@@ -430,7 +434,7 @@ impl Flowchart {
     }
 
     /// Set the hover style patched onto an existing node id.
-    pub fn node_hover_style(mut self, id: impl Into<NodeId>, style: Style) -> Self {
+    pub fn node_hover_style(mut self, id: impl Into<FlowchartNodeId>, style: Style) -> Self {
         let id = id.into();
         let mut nodes = self.nodes.to_vec();
         if let Some(node) = nodes.iter_mut().find(|node| node.id == id) {
@@ -441,7 +445,7 @@ impl Flowchart {
     }
 
     /// Add an edge.
-    pub fn edge(mut self, edge: Edge) -> Self {
+    pub fn edge(mut self, edge: FlowchartEdge) -> Self {
         let mut edges = self.edges.to_vec();
         edges.push(edge);
         self.edges = edges.into();
@@ -451,7 +455,7 @@ impl Flowchart {
     /// Add a nested subgraph through a closure builder.
     pub fn subgraph(
         mut self,
-        id: impl Into<NodeId>,
+        id: impl Into<FlowchartNodeId>,
         label: impl Into<Arc<str>>,
         build: impl FnOnce(FlowchartSubgraphBuilder) -> FlowchartSubgraphBuilder,
     ) -> Self {
@@ -491,7 +495,11 @@ impl Flowchart {
     }
 
     /// Assign a class to a node or subgraph id.
-    pub fn assign_class(mut self, id: impl Into<NodeId>, class: impl Into<Arc<str>>) -> Self {
+    pub fn assign_class(
+        mut self,
+        id: impl Into<FlowchartNodeId>,
+        class: impl Into<Arc<str>>,
+    ) -> Self {
         let mut assignments = (*self.class_assignments).clone();
         assignments.insert(id.into(), class.into());
         self.class_assignments = Arc::new(assignments);
@@ -642,10 +650,10 @@ impl Flowchart {
 
     fn push_node(
         &mut self,
-        id: NodeId,
+        id: FlowchartNodeId,
         label: Arc<str>,
         shape: NodeShape,
-        parent: Option<NodeId>,
+        parent: Option<FlowchartNodeId>,
         style: Style,
         hover_style: Style,
     ) {
@@ -672,7 +680,13 @@ impl Flowchart {
         self.nodes = nodes.into();
     }
 
-    fn push_subgraph(&mut self, id: NodeId, label: Arc<str>, parent: Option<NodeId>, style: Style) {
+    fn push_subgraph(
+        &mut self,
+        id: FlowchartNodeId,
+        label: Arc<str>,
+        parent: Option<FlowchartNodeId>,
+        style: Style,
+    ) {
         let mut subgraphs = self.subgraphs.to_vec();
         if let Some(existing) = subgraphs.iter_mut().find(|subgraph| subgraph.id == id) {
             *existing = FlowchartSubgraphSpec {
@@ -695,14 +709,14 @@ impl Flowchart {
 
 /// Builder passed to [`Flowchart::subgraph`].
 pub struct FlowchartSubgraphBuilder {
-    parent: NodeId,
+    parent: FlowchartNodeId,
     nodes: Vec<FlowchartNodeSpec>,
-    edges: Vec<Edge>,
+    edges: Vec<FlowchartEdge>,
     subgraphs: Vec<FlowchartSubgraphSpec>,
 }
 
 impl FlowchartSubgraphBuilder {
-    fn new(parent: NodeId) -> Self {
+    fn new(parent: FlowchartNodeId) -> Self {
         Self {
             parent,
             nodes: Vec::new(),
@@ -714,7 +728,7 @@ impl FlowchartSubgraphBuilder {
     /// Add a node inside this subgraph.
     pub fn node(
         mut self,
-        id: impl Into<NodeId>,
+        id: impl Into<FlowchartNodeId>,
         label: impl Into<Arc<str>>,
         shape: NodeShape,
     ) -> Self {
@@ -732,7 +746,7 @@ impl FlowchartSubgraphBuilder {
     /// Add a styled node inside this subgraph.
     pub fn styled_node(
         mut self,
-        id: impl Into<NodeId>,
+        id: impl Into<FlowchartNodeId>,
         label: impl Into<Arc<str>>,
         shape: NodeShape,
         style: Style,
@@ -749,7 +763,7 @@ impl FlowchartSubgraphBuilder {
     }
 
     /// Set the hover style patched onto an existing node inside this subgraph builder.
-    pub fn node_hover_style(mut self, id: impl Into<NodeId>, style: Style) -> Self {
+    pub fn node_hover_style(mut self, id: impl Into<FlowchartNodeId>, style: Style) -> Self {
         let id = id.into();
         if let Some(node) = self.nodes.iter_mut().find(|node| node.id == id) {
             node.hover_style = style;
@@ -758,7 +772,7 @@ impl FlowchartSubgraphBuilder {
     }
 
     /// Add an edge inside this subgraph.
-    pub fn edge(mut self, edge: Edge) -> Self {
+    pub fn edge(mut self, edge: FlowchartEdge) -> Self {
         self.edges.push(edge);
         self
     }
@@ -766,7 +780,7 @@ impl FlowchartSubgraphBuilder {
     /// Add a nested subgraph.
     pub fn subgraph(
         mut self,
-        id: impl Into<NodeId>,
+        id: impl Into<FlowchartNodeId>,
         label: impl Into<Arc<str>>,
         build: impl FnOnce(FlowchartSubgraphBuilder) -> FlowchartSubgraphBuilder,
     ) -> Self {

@@ -175,7 +175,7 @@ impl Component for LogViewer {
                 padding: 1,
                 gap: 1,
                 Frame {
-                    header_left: "Log Filter",
+                    title: "Log Filter",
                     border: true,
                     height: Length::Auto,
                     HStack {
@@ -186,6 +186,7 @@ impl Component for LogViewer {
                             anchor: ctx.state.filter_anchor,
                             placeholder: "Search logs (regex supported)...",
                             prefix: "🔍 ",
+                            border: true,
                             on_change: ctx.link().callback(Msg::FilterChanged),
                             width: Length::Flex(1),
                         },
@@ -215,7 +216,7 @@ impl Component for LogViewer {
                 },
                 log_view,
                 Frame {
-                    header_left: "Log Details",
+                    title: "Log Details",
                     border: true,
                     height: Length::Px(10),
                     TextArea::new(details).border(false).read_only(true).wrap(true),

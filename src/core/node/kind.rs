@@ -520,7 +520,7 @@ impl From<Button> for NodeKind {
 
 impl From<Input> for NodeKind {
     fn from(value: Input) -> Self {
-        NodeKind::Input(crate::widgets::internal::reconcile_input(&value))
+        NodeKind::Input(crate::widgets::internal::reconcile_input(&value, None))
     }
 }
 

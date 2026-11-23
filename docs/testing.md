@@ -19,7 +19,7 @@ impl Component for MyWidget {
 
     fn view(&self, _ctx: &Context<Self>) -> Element {
         Frame::new()
-            .header_left("Panel")
+            .title("Panel")
             .child(Text::new("hello"))
             .into()
     }

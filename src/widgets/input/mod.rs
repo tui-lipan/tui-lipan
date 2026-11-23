@@ -19,15 +19,17 @@ use crate::text::input::TextInput;
 
 /// A single-line text input.
 ///
-/// Recommended state binding:
-/// `Input::bound(&state).on_change(ctx.link().callback(Msg::Changed))`
-/// and then `ev.apply_to(&mut state)` in the handler.
-/// Storing only the raw text value breaks cursor navigation and selection across rerenders.
+/// Pass the current value to [`Input::new`] and update it from [`Input::on_change`]:
+/// the runtime preserves cursor position and selection across rerenders, and moves
+/// the cursor to the end when the value is replaced externally. Use [`Input::bound`]
+/// with a [`TextInput`] state bundle when your component needs to own or inspect
+/// cursor and selection directly.
 #[derive(Clone)]
 pub struct Input {
     pub(crate) value: Arc<str>,
     pub(crate) cursor: usize,
     pub(crate) anchor: Option<usize>,
+    pub(crate) cursor_controlled: bool,
     pub(crate) placeholder: Option<Arc<str>>,
     pub(crate) prefix: Option<Arc<str>>,
     pub(crate) suffix: Option<Arc<str>>,
@@ -68,6 +70,7 @@ pub struct Input {
     /// Default: `Length::Auto`.
     pub(crate) height: Length,
     pub(crate) on_change: Option<Callback<InputEvent>>,
+    pub(crate) on_submit: Option<Callback<InputEvent>>,
     pub(crate) on_edit: Option<Callback<TextEditEvent>>,
     pub(crate) on_click: Option<Callback<MouseEvent>>,
     pub(crate) on_context_menu: Option<Callback<crate::core::event::MouseEvent>>,
@@ -89,6 +92,7 @@ impl Input {
             value,
             cursor,
             anchor: None,
+            cursor_controlled: false,
             placeholder: None,
             prefix: None,
             suffix: None,
@@ -108,7 +112,7 @@ impl Input {
             caret_blinking: None,
             caret_color: None,
             selection_style: StyleSlot::Inherit,
-            border: true,
+            border: false,
             border_style: BorderStyle::Plain,
             padding: Padding {
                 left: 1,
@@ -126,6 +130,7 @@ impl Input {
             width: Length::Flex(1),
             height: Length::Auto,
             on_change: None,
+            on_submit: None,
             on_edit: None,
             on_click: None,
             on_context_menu: None,
@@ -147,6 +152,7 @@ impl Input {
     /// Set the cursor position (byte index).
     pub fn cursor(mut self, cursor: usize) -> Self {
         self.cursor = cursor;
+        self.cursor_controlled = true;
         self
     }
 
@@ -154,6 +160,7 @@ impl Input {
     /// When set, text between anchor and cursor is selected.
     pub fn anchor(mut self, anchor: Option<usize>) -> Self {
         self.anchor = anchor;
+        self.cursor_controlled = true;
         self
     }
 
@@ -162,6 +169,7 @@ impl Input {
         self.value = state.text().into();
         self.cursor = state.cursor();
         self.anchor = state.anchor();
+        self.cursor_controlled = true;
         self
     }
 
@@ -378,6 +386,19 @@ impl Input {
     /// Callback fired when the input value or cursor changes.
     pub fn on_change(mut self, cb: Callback<InputEvent>) -> Self {
         self.on_change = Some(cb);
+        self
+    }
+
+    /// Callback fired when plain Enter (without modifiers) is pressed while
+    /// focused and editable.
+    ///
+    /// Disabled and read-only inputs do not submit. [`Self::key_interceptor`]
+    /// runs first and may consume Enter before `on_submit` is reached. When
+    /// reached, `on_submit` emits this callback with the current value, cursor,
+    /// and anchor and consumes the key; when unset, Enter falls through to
+    /// [`Self::on_key`] and parent handlers.
+    pub fn on_submit(mut self, cb: Callback<InputEvent>) -> Self {
+        self.on_submit = Some(cb);
         self
     }
 

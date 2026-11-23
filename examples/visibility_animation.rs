@@ -316,7 +316,7 @@ fn action(
 }
 fn card(title: &str, accent: Color, content: impl Into<Element>) -> Frame {
     Frame::new()
-        .header_left(title)
+        .title(title)
         .border_style(BorderStyle::Rounded)
         .style(Style::new().fg(accent).bg(SURFACE))
         .padding((1, 2))

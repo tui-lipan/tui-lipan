@@ -1517,7 +1517,7 @@ where
 
     /// Set an opt-in root viewport background fill for captures.
     ///
-    /// Mirrors `App::screen_background` for headless rendering: pass a resolved
+    /// Mirrors `App::background` for headless rendering: pass a resolved
     /// style (typically `Style::new().bg(color)`), or `None` to leave the
     /// background transparent. Useful for previewing a theme's filled backdrop.
     pub fn set_screen_background(&mut self, style: Option<crate::style::Style>) {
@@ -1984,7 +1984,7 @@ impl<C: Component> DispatchOps for TestBackendDispatchOps<'_, C> {
     }
 
     fn dispatch_framework(&mut self, key: KeyEvent) -> FrameworkDispatch {
-        use crate::app::input::keymap::{Action, KeymapRuntimeResult};
+        use crate::app::input::keymap::{Action, BindingMode, KeymapRuntimeResult};
 
         let runtime_match = match self.keymap_runtime.feed(key) {
             KeymapRuntimeResult::Pending => return FrameworkDispatch::Handled,
@@ -1992,13 +1992,18 @@ impl<C: Component> DispatchOps for TestBackendDispatchOps<'_, C> {
             KeymapRuntimeResult::None => None,
         };
         let action_from_chord = runtime_match.is_some_and(|binding| binding.is_chord);
-        let matches = runtime_match
-            .map(|binding| vec![binding.binding_match()])
-            .unwrap_or_else(|| self.keymap.matches(key));
+        let matches = if action_from_chord {
+            runtime_match
+                .map(|binding| vec![binding.binding_match()])
+                .unwrap_or_default()
+        } else {
+            self.keymap.matches(key)
+        };
+        let has_quit = matches
+            .iter()
+            .any(|binding| binding.action == Action::Quit && binding.mode != BindingMode::Fallback);
 
-        if !self.top_capturing_overlay_is_empty()
-            && matches.iter().any(|binding| binding.action == Action::Quit)
-        {
+        if !self.top_capturing_overlay_is_empty() && has_quit {
             return FrameworkDispatch::Quit;
         }
 
@@ -2081,7 +2086,7 @@ impl<C: Component> DispatchOps for TestBackendDispatchOps<'_, C> {
             return FrameworkDispatch::Handled;
         }
 
-        if matches.iter().any(|binding| binding.action == Action::Quit) {
+        if has_quit {
             if action_from_chord || self.top_capturing_overlay_is_empty() {
                 return FrameworkDispatch::Quit;
             }
@@ -2095,6 +2100,15 @@ impl<C: Component> DispatchOps for TestBackendDispatchOps<'_, C> {
         }
 
         FrameworkDispatch::None
+    }
+
+    fn dispatch_framework_fallback(&mut self, key: KeyEvent) -> FrameworkDispatch {
+        crate::app::input::runtime_dispatch::dispatch_framework_fallback(
+            &self.core.tree,
+            *self.focused,
+            self.keymap,
+            key,
+        )
     }
 
     fn dispatch_terminal_preflight(&mut self, key: KeyEvent) -> TerminalPreflightDispatch {
@@ -9791,7 +9805,7 @@ mod tests {
             Frame::new()
                 .style(Style::new().fg(Color::Rgb(90, 91, 92)))
                 .tab_titles(["Files", "Branches"])
-                .header_left("[2]")
+                .title("[2]")
                 .footer_left("ready")
                 .child(VStack::new().child(Text::new("content")))
                 .into()

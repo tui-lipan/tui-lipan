@@ -17,12 +17,12 @@ fn main() -> Result<()> {
 
 fn sidebar() -> Element {
     Frame::new()
-        .header_left("Navigation")
+        .title("Navigation")
         .border(true)
         .border_style(BorderStyle::Rounded)
         .width(Length::Px(28))
         .style(Style::new().bg(Color::indexed(235)))
-        .header_style(Style::new().fg(Color::rgb(168, 130, 255)).bold())
+        .title_style(Style::new().fg(Color::rgb(168, 130, 255)).bold())
         .child(
             List::new()
                 .items([
@@ -65,11 +65,11 @@ fn metrics_row() -> Element {
 
 fn metric_card(title: impl Into<String>, data: Vec<u64>, color: Color) -> Element {
     Frame::new()
-        .header_left(title.into())
+        .title(title.into())
         .border(true)
         .border_style(BorderStyle::Rounded)
         .style(Style::new().bg(Color::indexed(235)))
-        .header_style(Style::new().fg(color).bold())
+        .title_style(Style::new().fg(color).bold())
         .child(
             Sparkline::new(data)
                 .style(Style::new().fg(color))
@@ -81,12 +81,12 @@ fn metric_card(title: impl Into<String>, data: Vec<u64>, color: Color) -> Elemen
 
 fn main_content() -> Element {
     Frame::new()
-        .header_left("Overview")
+        .title("Overview")
         .border(true)
         .border_style(BorderStyle::Rounded)
         .padding(1)
         .style(Style::new().bg(Color::indexed(235)).fg(Color::indexed(252)))
-        .header_style(Style::new().fg(Color::rgb(88, 166, 255)).bold())
+        .title_style(Style::new().fg(Color::rgb(88, 166, 255)).bold())
         .child(
             VStack::new()
                 .gap(1)
@@ -103,11 +103,11 @@ fn main_content() -> Element {
                 .child(Text::new(""))
                 .child(
                     Frame::new()
-                        .header_left("Usage")
+                        .title("Usage")
                         .border(true)
                         .border_style(BorderStyle::Rounded)
                         .padding(1)
-                        .header_style(Style::new().fg(Color::rgb(16, 185, 129)).bold())
+                        .title_style(Style::new().fg(Color::rgb(16, 185, 129)).bold())
                         .child(
                             VStack::new()
                                 .child(Text::new("mockup!(\"Title\", {").style(
@@ -116,7 +116,7 @@ fn main_content() -> Element {
                                 .child(Text::new("    Frame::new()").style(
                                     Style::new().fg(Color::rgb(16, 185, 129)),
                                 ))
-                                .child(Text::new("        .header_left(\"Hello\")").style(
+                                .child(Text::new("        .title(\"Hello\")").style(
                                     Style::new().fg(Color::rgb(16, 185, 129)),
                                 ))
                                 .child(Text::new("        .child(Text::new(\"World\"))").style(

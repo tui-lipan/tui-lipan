@@ -207,9 +207,9 @@ impl DragSource {
         self
     }
 
-    /// Enable or disable this drag source.
-    pub fn enabled(mut self, enabled: bool) -> Self {
-        self.enabled = enabled;
+    /// Disable or enable this drag source.
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.enabled = !disabled;
         self
     }
 }

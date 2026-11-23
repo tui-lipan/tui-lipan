@@ -55,6 +55,7 @@ fn main() -> tui_lipan::Result<()> {
 - `create_state` initializes state from properties.
 - `view` returns the UI tree. Called on every re-render.
 - `update` handles messages. It returns an `Update` describing the refresh and any command.
+- Press `Ctrl+Q` to quit, or `Ctrl+C` when nothing else handles it (no selection to copy, no focused `Input`/`TextArea`/`HexArea` or `Terminal`, and neither `on_key` nor an app command claims it). You do not need to wire a quit key yourself unless you want to add another key or override it (see [`keybindings.md`](keybindings.md)).
 
 ---
 
@@ -71,7 +72,7 @@ fn view(&self, ctx: &Context<Self>) -> Element {
         .gap(0)
         .child(
             Frame::new()
-                .header_left("Items")
+                .title("Items")
                 .border(true)
                 .border_style(if sidebar_focused { BorderStyle::Thick } else { BorderStyle::Rounded })
                 .width(Length::Px(30))
@@ -88,7 +89,7 @@ fn view(&self, ctx: &Context<Self>) -> Element {
         )
         .child(
             Frame::new()
-                .header_left("Detail")
+                .title("Detail")
                 .border(true)
                 .border_style(if detail_focused { BorderStyle::Thick } else { BorderStyle::Rounded })
                 .padding(1)
@@ -208,6 +209,7 @@ fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
 - `KeyUpdate::unhandled(update)` lets the key continue to parent components.
 - `key.mods.ctrl`, `key.mods.alt`, `key.mods.shift` are boolean flags.
 - You can return a `Command` from `on_key` too (via the `Update` tuple).
+- The framework already quits on `Ctrl+Q` and fallback `Ctrl+C` by default; intercepting them in `on_key` (as above) lets you run custom cleanup or a confirmation prompt before calling `ctx.quit()`, or you can disable the defaults with `App::global_quit(None)`.
 
 ---
 

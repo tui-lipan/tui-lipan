@@ -37,6 +37,7 @@ pub(crate) fn handle_key(
     let has_on_change = node.on_change.is_some();
     let is_masked = node.mask.is_some();
     let on_change = node.on_change.clone();
+    let on_submit = node.on_submit.clone();
     let history_scope = node.history_scope.clone();
     let on_edit = node.on_edit.clone();
     let on_key = node.on_key.clone();
@@ -94,7 +95,20 @@ pub(crate) fn handle_key(
                 ctx.copy_feedback,
                 id,
             );
+            let reported = dispatch.mutated.then(|| {
+                (
+                    Arc::from(input.text().to_owned()),
+                    input.cursor(),
+                    input.anchor(),
+                )
+            });
             clipboard_handled = ctx.record_copy_feedback_dispatch(dispatch);
+            if let Some((reported_value, reported_cursor, reported_anchor)) = reported
+                && let NodeKind::Input(node) = &mut tree.node_mut(id).kind
+            {
+                node.uncontrolled
+                    .record_reported(reported_value, reported_cursor, reported_anchor);
+            }
         }
     }
 
@@ -102,14 +116,31 @@ pub(crate) fn handle_key(
         return true;
     }
 
-    // ── Phase 2: read-only / no on_change fast path ─────────────────────
-    if read_only || !has_on_change {
+    // ── Phase 2: read-only fast path ────────────────────────────────────
+    if disabled || read_only {
         return on_key.as_ref().map(handle_on_key).unwrap_or(false);
     }
 
     // ── Phase 2.5: pre-insertion key interceptor ────────────────────────
     if !from_chord && handle_key_interceptor(key_interceptor.as_ref(), key) {
         return true;
+    }
+
+    // ── Phase 2.75: plain Enter submit ──────────────────────────────────
+    if !from_chord
+        && key.is(crate::core::event::KeyCode::Enter)
+        && let Some(cb) = on_submit.as_ref()
+    {
+        cb.emit(InputEvent {
+            value,
+            cursor,
+            anchor,
+        });
+        return true;
+    }
+
+    if !has_on_change {
+        return on_key.as_ref().map(handle_on_key).unwrap_or(false);
     }
 
     // ── Phase 3: editable – forward key to TextInput ────────────────────
@@ -132,10 +163,17 @@ pub(crate) fn handle_key(
             {
                 cb.emit(edit);
             }
+            let next_value: Arc<str> = Arc::from(input.text().to_owned());
+            let next_cursor = input.cursor();
+            let next_anchor = input.anchor();
+            if let NodeKind::Input(node) = &mut tree.node_mut(id).kind {
+                node.uncontrolled
+                    .record_reported(next_value.clone(), next_cursor, next_anchor);
+            }
             cb.emit(InputEvent {
-                value: Arc::from(input.text().to_owned()),
-                cursor: input.cursor(),
-                anchor: input.anchor(),
+                value: next_value,
+                cursor: next_cursor,
+                anchor: next_anchor,
             });
             true
         } else if let Some(cb) = on_key.as_ref() {
@@ -188,14 +226,26 @@ pub(crate) fn handle_paste(
     input.sync_history_scope(history_scope.as_ref());
     input.sync_from(value.as_ref(), cursor, anchor);
 
-    let mut context = InputClipboardContext::new(
-        input,
-        on_change.as_ref(),
-        on_edit.as_ref(),
-        !is_masked,
-        true,
-        is_masked,
-    );
+    let handled = {
+        let mut context = InputClipboardContext::new(
+            input,
+            on_change.as_ref(),
+            on_edit.as_ref(),
+            !is_masked,
+            true,
+            is_masked,
+        );
 
-    router::dispatch_text_paste(text, &mut context, ctx.clipboard_config.paste_max_bytes)
+        router::dispatch_text_paste(text, &mut context, ctx.clipboard_config.paste_max_bytes)
+    };
+    if handled {
+        let reported_value: Arc<str> = Arc::from(input.text().to_owned());
+        let reported_cursor = input.cursor();
+        let reported_anchor = input.anchor();
+        if let NodeKind::Input(node) = &mut tree.node_mut(id).kind {
+            node.uncontrolled
+                .record_reported(reported_value, reported_cursor, reported_anchor);
+        }
+    }
+    handled
 }

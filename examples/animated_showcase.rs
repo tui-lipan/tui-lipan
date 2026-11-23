@@ -153,7 +153,7 @@ impl Component for AnimatedShowcase {
         };
 
         Frame::new()
-            .header_left("Animated Showcase")
+            .title("Animated Showcase")
             .footer_left(format!(
                 "{} • {}ms • 1/2/3/4/5 toggle • e/d tune • a autoplay • q quit",
                 easing_name(EASINGS[ctx.state.easing_idx]),
@@ -265,7 +265,7 @@ impl AnimatedShowcase {
 
     fn fade_panel(&self, ctx: &Context<Self>, transition: TransitionConfig) -> Element {
         Frame::new()
-            .header_left("Opacity Fade")
+            .title("Opacity Fade")
             .border(true)
             .padding(1)
             .width(Length::Flex(1))
@@ -276,7 +276,7 @@ impl AnimatedShowcase {
                     .child(
                         Animated::new(
                             Frame::new()
-                                .header_left("Reserved Layout")
+                                .title("Reserved Layout")
                                 .border(true)
                                 .padding(1)
                                 .style(Style::new().bg(Color::indexed(236)))
@@ -310,7 +310,7 @@ impl AnimatedShowcase {
     fn height_panel(&self, ctx: &Context<Self>, transition: TransitionConfig) -> Element {
         let closing = !ctx.state.reveal_open && !ctx.state.reveal_height_layout_idle;
         Frame::new()
-            .header_left("Height Reveal")
+            .title("Height Reveal")
             .border(true)
             .padding(1)
             .width(Length::Flex(1))
@@ -323,7 +323,7 @@ impl AnimatedShowcase {
                     .child(
                         Animated::new(
                             Frame::new()
-                                .header_left("Natural Content Height")
+                                .title("Natural Content Height")
                                 .border(true)
                                 .padding(1)
                                 .style(Style::new().bg(Color::indexed(235)))
@@ -354,7 +354,7 @@ impl AnimatedShowcase {
     fn position_panel(&self, ctx: &Context<Self>, transition: TransitionConfig) -> Element {
         let card: Element = Animated::new(
             Frame::new()
-                .header_left("Keyed Card")
+                .title("Keyed Card")
                 .border(true)
                 .padding(1)
                 .style(Style::new().bg(Color::indexed(236)))
@@ -385,7 +385,7 @@ impl AnimatedShowcase {
         };
 
         Frame::new()
-            .header_left("Position Transition")
+            .title("Position Transition")
             .border(true)
             .padding(1)
             .width(Length::Flex(1))
@@ -403,7 +403,7 @@ impl AnimatedShowcase {
     fn combo_panel(&self, ctx: &Context<Self>, transition: TransitionConfig) -> Element {
         let closing = !ctx.state.combo_open && !ctx.state.combo_height_layout_idle;
         Frame::new()
-            .header_left("Fade + Expand")
+            .title("Fade + Expand")
             .border(true)
             .padding(1)
             .width(Length::Flex(1))
@@ -416,7 +416,7 @@ impl AnimatedShowcase {
                     .child(
                         Animated::new(
                             Frame::new()
-                                .header_left("Deploy Summary")
+                                .title("Deploy Summary")
                                 .border(true)
                                 .padding(1)
                                 .style(Style::new().bg(Color::indexed(236)))
@@ -449,7 +449,7 @@ impl AnimatedShowcase {
     fn pulse_panel(&self, ctx: &Context<Self>, transition: TransitionConfig) -> Element {
         let closing = !ctx.state.pulse_open && !ctx.state.pulse_height_layout_idle;
         Frame::new()
-                .header_left("Looping Pulse")
+                .title("Looping Pulse")
             .border(true)
             .padding(1)
             .width(Length::Flex(1))
@@ -464,7 +464,7 @@ impl AnimatedShowcase {
                     .child(
                         Animated::new(
                             Frame::new()
-                                .header_left("Live Heartbeat")
+                                .title("Live Heartbeat")
                                 .border(true)
                                 .padding(1)
                                 .style(Style::new().bg(Color::indexed(234)))
@@ -531,7 +531,7 @@ fn schedule_tick() -> Command {
 fn main() -> Result<()> {
     App::new()
         .title("tui-lipan - Animated Showcase")
-        .terminal_bg(query_host_colors().map(|c| c.bg))
+        .host_background_hint(query_host_colors().map(|c| c.bg))
         .mount(AnimatedShowcase)
         .run()
 }

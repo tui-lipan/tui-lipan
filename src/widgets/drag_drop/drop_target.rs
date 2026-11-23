@@ -183,9 +183,9 @@ impl DropTarget {
         self
     }
 
-    /// Enable or disable this drop target.
-    pub fn enabled(mut self, enabled: bool) -> Self {
-        self.enabled = enabled;
+    /// Disable or enable this drop target.
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.enabled = !disabled;
         self
     }
 }

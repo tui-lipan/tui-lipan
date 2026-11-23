@@ -208,7 +208,7 @@ There is no `Widget` trait. Conversion to `Element` is the only integration poin
 - **No `ratatui` types in the public API.** Use `Style`, `Length`, `Color`, `Callback`, etc. from `tui_lipan`.
 - **Use `Arc<str>`** for immutable shared strings (labels, titles, placeholder text).
 - **Use `Callback<T>`** for event callbacks and `KeyHandler` for `on_key` props.
-- **Leaf widgets default to `Length::Auto`**; containers default to `Length::Flex(1)`.
+- **Content-sized widgets default to `Length::Auto`**; containers and fill widgets (inputs, editors, lists, tables, trees, bars) default to `Length::Flex(1)` on their main axes (see [`widget-defaults.md`](widget-defaults.md)).
 
 ### Event struct construction
 
@@ -821,7 +821,7 @@ impl MyComposite {
 impl From<MyComposite> for Element {
     fn from(val: MyComposite) -> Self {
         Frame::new()
-            .header_left(val.title)
+            .title(val.title)
             .border(true)
             .child(
                 VStack::new()

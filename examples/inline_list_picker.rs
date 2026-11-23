@@ -141,7 +141,7 @@ impl Component for InlineListPicker {
         });
 
         Frame::new()
-            .header_left("Inline list picker")
+            .title("Inline list picker")
             .border(true)
             .border_style(BorderStyle::Rounded)
             .padding(1)
@@ -163,10 +163,7 @@ impl Component for InlineListPicker {
                             .placeholder("Filter commands")
                             .border(true)
                             .on_change(ctx.link().callback(Msg::QueryChanged))
-                            .on_key(ctx.link().key_handler(|key| match key.code {
-                                KeyCode::Enter => Some(Msg::Activate),
-                                _ => None,
-                            })),
+                            .on_submit(ctx.link().callback(|_| Msg::Activate)),
                     )
                     .child(
                         List::new()

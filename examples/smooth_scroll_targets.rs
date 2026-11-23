@@ -73,7 +73,7 @@ impl Component for SmoothScrollTargetsDemo {
         let text_area_line = TEXT_AREA_TARGETS[ctx.state.text_area_target];
 
         Frame::new()
-            .header_left("Smooth scroll targets")
+            .title("Smooth scroll targets")
             .footer_left("1/2/3 jump panels · a jump all · r reset · wheel/drag cancels · q quits")
             .border(true)
             .border_style(BorderStyle::Rounded)
@@ -105,7 +105,7 @@ fn adaptive_smooth_scroll() -> ScrollBehavior {
 
 fn summary(message_id: usize, document_line: usize, text_area_line: usize) -> Element {
     Frame::new()
-        .header_left("Targets")
+        .title("Targets")
         .height(Length::Auto)
         .border(true)
         .border_style(BorderStyle::Plain)
@@ -142,7 +142,7 @@ fn render_scroll_view_panel(target_id: usize) -> Element {
         .children((0..32).map(move |id| render_message_card(id, target_id)));
 
     Frame::new()
-        .header_left(format!("1 · ScrollView::scroll_to_key({target_key})"))
+        .title(format!("1 · ScrollView::scroll_to_key({target_key})"))
         .footer_left("keyed top-level children")
         .height(Length::Flex(1))
         .border(true)
@@ -164,7 +164,7 @@ fn render_message_card(id: usize, target_id: usize) -> Element {
 
     Element::from(
         Frame::new()
-            .header_left(title)
+            .title(title)
             .border(true)
             .border_style(BorderStyle::Plain)
             .padding(1)
@@ -188,7 +188,7 @@ fn render_document_panel(target_line: usize) -> Element {
         .scroll_behavior(adaptive_smooth_scroll());
 
     Frame::new()
-        .header_left(format!(
+        .title(format!(
             "2 · DocumentView::scroll_to_source_line({target_line})"
         ))
         .footer_left("zero-based source line")
@@ -214,7 +214,7 @@ fn render_text_area_panel(target_line: usize) -> Element {
         .scroll_behavior(adaptive_smooth_scroll());
 
     Frame::new()
-        .header_left(format!("3 · TextArea::scroll_to_line({target_line})"))
+        .title(format!("3 · TextArea::scroll_to_line({target_line})"))
         .footer_left("zero-based logical line")
         .height(Length::Flex(1))
         .border(true)

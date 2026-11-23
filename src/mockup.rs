@@ -11,7 +11,7 @@
 //! fn main() -> Result<()> {
 //!     mockup!("Dashboard", {
 //!         Frame::new()
-//!             .header_left("Panel")
+//!             .title("Panel")
 //!             .border(true)
 //!             .child(Text::new("Hello!"))
 //!     })
@@ -28,7 +28,8 @@ use crate::core::event::{KeyCode, KeyEvent};
 /// the full [`Component`] implementation automatically. No messages,
 /// no state, no `update()` - just the view.
 ///
-/// Press `Esc` or `q` to quit.
+/// Press `Esc`, `q`, or the framework quit keys (`Ctrl+Q`, or `Ctrl+C` outside a focused text
+/// editor) to quit.
 ///
 /// # Usage
 ///
@@ -42,7 +43,7 @@ use crate::core::event::{KeyCode, KeyEvent};
 ///         .title("My Layout")
 ///         .mount(Mockup::new(|| {
 ///             Frame::new()
-///                 .header_left("Hello")
+///                 .title("Hello")
 ///                 .border(true)
 ///                 .child(Text::new("World"))
 ///                 .into()
@@ -59,7 +60,7 @@ use crate::core::event::{KeyCode, KeyEvent};
 /// fn main() -> Result<()> {
 ///     mockup!("My Layout", {
 ///         Frame::new()
-///             .header_left("Hello")
+///             .title("Hello")
 ///             .border(true)
 ///             .child(Text::new("World"))
 ///     })
@@ -94,16 +95,93 @@ where
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => {
-                ctx.quit();
-                KeyUpdate::handled(Update::full())
-            }
-            _ => KeyUpdate::unhandled(Update::none()),
+        if !key.mods.ctrl
+            && !key.mods.alt
+            && !key.mods.super_key
+            && matches!(key.code, KeyCode::Esc | KeyCode::Char('q'))
+        {
+            ctx.quit();
+            return KeyUpdate::handled(Update::full());
         }
+        KeyUpdate::unhandled(Update::none())
     }
 
     fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
         Update::none()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::App;
+    use crate::core::event::KeyMods;
+    use crate::test_backend::TestBackend;
+    use crate::widgets::Text;
+
+    fn mockup_backend(app: App) -> TestBackend<Mockup<impl Fn() -> Element + 'static>> {
+        let mut backend =
+            TestBackend::new_with_app(app, Mockup::new(|| Text::new("hi").into()), ());
+        backend.render();
+        backend
+    }
+
+    #[test]
+    fn mockup_quits_on_esc_q_and_framework_quit_keys() {
+        let quit_keys = [
+            KeyEvent {
+                code: KeyCode::Esc,
+                mods: KeyMods::NONE,
+            },
+            KeyEvent {
+                code: KeyCode::Char('q'),
+                mods: KeyMods::NONE,
+            },
+            KeyEvent {
+                code: KeyCode::Char('q'),
+                mods: KeyMods::CTRL,
+            },
+            KeyEvent {
+                code: KeyCode::Char('c'),
+                mods: KeyMods::CTRL,
+            },
+        ];
+
+        for key in quit_keys {
+            let mut backend = mockup_backend(App::new());
+            backend.send_key(key).expect("send key");
+            assert!(
+                backend.core.ctx.should_quit(),
+                "mockup should quit on {key:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn mockup_respects_disabled_framework_quit_while_keeping_esc_and_q() {
+        let mut backend = mockup_backend(App::new().global_quit(None));
+        backend
+            .send_key(KeyEvent {
+                code: KeyCode::Char('q'),
+                mods: KeyMods::CTRL,
+            })
+            .expect("send ctrl-q");
+        assert!(!backend.core.ctx.should_quit());
+
+        backend
+            .send_key(KeyEvent {
+                code: KeyCode::Char('c'),
+                mods: KeyMods::CTRL,
+            })
+            .expect("send ctrl-c");
+        assert!(!backend.core.ctx.should_quit());
+
+        backend
+            .send_key(KeyEvent {
+                code: KeyCode::Char('q'),
+                mods: KeyMods::NONE,
+            })
+            .expect("send q");
+        assert!(backend.core.ctx.should_quit());
     }
 }

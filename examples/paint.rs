@@ -118,7 +118,7 @@ impl Component for PaintDemo {
 
     fn view(&self, ctx: &Context<Self>) -> Element {
         Frame::new()
-            .header_left("Paint")
+            .title("Paint")
             .footer_left(format!(
                 "{} | p: pencil e: eraser c: clear q/esc: quit",
                 ctx.state.status
@@ -131,7 +131,7 @@ impl Component for PaintDemo {
                     .child(toolbar(ctx))
                     .child(
                         Frame::new()
-                            .header_left("Braille canvas")
+                            .title("Braille canvas")
                             .border_style(BorderStyle::Rounded)
                             .padding(0)
                             .child(

@@ -1097,7 +1097,7 @@ impl WindowManagerDemo {
         if let Some(title_bar) = title_bar {
             body = body
                 .decoration(titlebar_top_edge(title_bar_bg))
-                .header_content(title_bar);
+                .title_content(title_bar);
         }
         let body = if window.app.has_focusable_content() {
             body
@@ -1608,8 +1608,8 @@ fn browser_content(id: WindowId) -> Element {
 
 fn empty_workspace_panel() -> Element {
     Frame::new()
-        .header_left("Empty workspace")
-        .header_padding(1)
+        .title("Empty workspace")
+        .title_padding(1)
         .border(true)
         .border_style(BorderStyle::Rounded)
         .style(

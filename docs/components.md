@@ -193,7 +193,7 @@ an animation for the current view. Explicit restart and snap methods take `&mut 
 | `ctx.follow_system_theme()` | Resume following the host terminal palette when `App::system_theme()` or `App::live_host_terminal_colors(true)` is enabled |
 | `ctx.theme_extension::<T>()` | Clone a typed app-specific theme extension |
 | `ctx.host_terminal_colors()` | Read the runner-managed `HostTerminalColors` cache when live host colors are enabled |
-| `ctx.set_host_default_background(color)` | Write cells whose background is `color` as the host terminal's default background, so a translucent terminal shows through them; `None` turns it off. Unlike `App::terminal_bg`, which gives blending a concrete color, this changes only the bytes sent to the host. Read `host_terminal_colors()` in `init` and `on_host_theme_changed` to follow the host palette. |
+| `ctx.set_host_default_background(color)` | Write cells whose background is `color` as the host terminal's default background, so a translucent terminal shows through them; `None` turns it off. Unlike `App::host_background_hint`, which gives blending a concrete color, this changes only the bytes sent to the host. Read `host_terminal_colors()` in `init` and `on_host_theme_changed` to follow the host palette. |
 | `ctx.host_drag_and_drop()` | Send drag-and-drop commands to the host terminal; events arrive at `on_host_drag_and_drop` (see [Drag and drop](drag-and-drop.md)) |
 | `ctx.host_cursor_style()` | Read the host cursor shape and blink from the startup probe, or `None` when the host did not answer |
 | `ctx.host_color_scheme()` | Read the light or dark `ColorScheme` the host reported through DEC mode 2031, or `None` before it reports one |

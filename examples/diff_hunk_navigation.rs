@@ -188,7 +188,7 @@ impl Component for DiffHunkNavigation {
         let active_count = hunk_count(PATCHES[active].patch);
 
         Frame::new()
-            .header_left("DiffView hunk navigation")
+            .title("DiffView hunk navigation")
             .footer_left("[ previous global hunk | ] next global hunk | 1/2/3 first hunk in file | Tab file | q quit")
             .border(true)
             .border_style(BorderStyle::Rounded)
@@ -302,7 +302,7 @@ fn summary(
     global_count: usize,
 ) -> Element {
     Frame::new()
-        .header_left("How this works")
+        .title("How this works")
         .height(Length::Auto)
         .border(true)
         .border_style(BorderStyle::Plain)
@@ -385,7 +385,7 @@ fn render_patch_card(index: usize, current: Option<&GlobalHunk>) -> Element {
 
     Element::from(
         Frame::new()
-            .header_left(title)
+            .title(title)
             .footer_left(format!(
                 "{} hunk(s) | file {} | {}",
                 hunk_count,
@@ -395,7 +395,7 @@ fn render_patch_card(index: usize, current: Option<&GlobalHunk>) -> Element {
             .height(Length::Auto)
             .border(true)
             .border_style(BorderStyle::Rounded)
-            .header_style(if is_active {
+            .title_style(if is_active {
                 Style::new().fg(Color::LightCyan).bold()
             } else {
                 Style::default()

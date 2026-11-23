@@ -1184,7 +1184,7 @@ impl Component for TuiLipanShowcase {
         );
 
         Frame::new()
-            .header_left(title)
+            .title(title)
             .border_style(BorderStyle::Rounded)
             .padding(1)
             .child(
@@ -1206,7 +1206,7 @@ fn main() -> Result<()> {
     App::new()
         .title("tui-lipan AsciiCanvas showcase")
         .theme(Theme::lipan())
-        .fill_background()
+        .background(ScreenBackground::Theme)
         .mount(TuiLipanShowcase)
         .run()
 }

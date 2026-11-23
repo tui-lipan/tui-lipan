@@ -84,7 +84,7 @@ impl Component for TerminalCopyModeDemo {
         VStack::new()
             .child(
                 Frame::new()
-                    .header_left(if ctx.state.active {
+                    .title(if ctx.state.active {
                         "Terminal copy mode"
                     } else {
                         "Terminal"

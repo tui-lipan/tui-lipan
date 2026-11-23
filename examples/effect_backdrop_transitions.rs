@@ -180,7 +180,7 @@ fn screen_view(index: usize, style: Kind) -> Element {
         body = body.child(Text::new(line).style(text));
     }
     Frame::new()
-        .header_left(screen.title)
+        .title(screen.title)
         .footer_left(format!(
             "space next screen | t transition: {} | q quit",
             style.label()

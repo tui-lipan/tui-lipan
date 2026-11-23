@@ -64,7 +64,7 @@ impl Component for AnsiDemo {
 
         let section = |title: &str, content: &str| -> Element {
             Frame::new()
-                .header_left(title.to_string())
+                .title(title.to_string())
                 .border(true)
                 .border_style(BorderStyle::Rounded)
                 .padding(1)

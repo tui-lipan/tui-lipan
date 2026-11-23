@@ -126,6 +126,7 @@ pub(crate) trait DispatchOps {
     fn dispatch_bubble(&mut self, key: KeyEvent) -> bool;
     fn dispatch_command(&mut self, key: KeyEvent) -> bool;
     fn dispatch_framework(&mut self, key: KeyEvent) -> FrameworkDispatch;
+    fn dispatch_framework_fallback(&mut self, key: KeyEvent) -> FrameworkDispatch;
     fn dispatch_terminal_preflight(&mut self, key: KeyEvent) -> TerminalPreflightDispatch;
     fn dispatch_terminal(&mut self, key: KeyEvent) -> bool;
     fn dispatch_ambient_scroll(&mut self, key: KeyEvent) -> bool;
@@ -184,7 +185,13 @@ fn dispatch_terminal_focus(
         TerminalKeyPolicy::FrameworkFirst => match ops.dispatch_framework(request.key) {
             FrameworkDispatch::Handled => DispatchOutcome::Framework,
             FrameworkDispatch::Quit => DispatchOutcome::FrameworkQuit,
-            FrameworkDispatch::None => dispatch_terminal_forward(request.key, ops),
+            FrameworkDispatch::None => {
+                if ops.dispatch_terminal(request.key) {
+                    DispatchOutcome::Terminal
+                } else {
+                    dispatch_framework_fallback_only(request.key, ops)
+                }
+            }
         },
         TerminalKeyPolicy::AppCommandsThenTerminal => {
             match ops.dispatch_terminal_preflight(request.key) {
@@ -277,7 +284,7 @@ fn dispatch_framework_ambient(key: KeyEvent, ops: &mut impl DispatchOps) -> Disp
         FrameworkDispatch::None if ops.dispatch_ambient_scroll(key) => {
             DispatchOutcome::AmbientScroll
         }
-        FrameworkDispatch::None => DispatchOutcome::Unhandled,
+        FrameworkDispatch::None => dispatch_framework_fallback_only(key, ops),
     }
 }
 
@@ -302,12 +309,24 @@ fn dispatch_terminal_then_bubble_framework(
     match ops.dispatch_framework(key) {
         FrameworkDispatch::Handled => Some(DispatchOutcome::Framework),
         FrameworkDispatch::Quit => Some(DispatchOutcome::FrameworkQuit),
-        FrameworkDispatch::None => None,
+        FrameworkDispatch::None => match ops.dispatch_framework_fallback(key) {
+            FrameworkDispatch::Handled => Some(DispatchOutcome::Framework),
+            FrameworkDispatch::Quit => Some(DispatchOutcome::FrameworkQuit),
+            FrameworkDispatch::None => None,
+        },
     }
 }
 
 fn dispatch_framework_only(key: KeyEvent, ops: &mut impl DispatchOps) -> DispatchOutcome {
     match ops.dispatch_framework(key) {
+        FrameworkDispatch::Handled => DispatchOutcome::Framework,
+        FrameworkDispatch::Quit => DispatchOutcome::FrameworkQuit,
+        FrameworkDispatch::None => dispatch_framework_fallback_only(key, ops),
+    }
+}
+
+fn dispatch_framework_fallback_only(key: KeyEvent, ops: &mut impl DispatchOps) -> DispatchOutcome {
+    match ops.dispatch_framework_fallback(key) {
         FrameworkDispatch::Handled => DispatchOutcome::Framework,
         FrameworkDispatch::Quit => DispatchOutcome::FrameworkQuit,
         FrameworkDispatch::None => DispatchOutcome::Unhandled,
@@ -340,6 +359,7 @@ mod tests {
         command_mismatch: bool,
         framework_quit: bool,
         framework_handles: bool,
+        framework_fallback_quit: bool,
         ambient_handles: bool,
         calls: Vec<&'static str>,
     }
@@ -358,6 +378,7 @@ mod tests {
                 command_mismatch: case.command_mismatch,
                 framework_quit: case.framework_quit,
                 framework_handles: case.framework_handles,
+                framework_fallback_quit: false,
                 ambient_handles: case.ambient_handles,
                 calls: Vec::new(),
             }
@@ -403,6 +424,15 @@ mod tests {
                 FrameworkDispatch::Quit
             } else if self.framework_handles {
                 FrameworkDispatch::Handled
+            } else {
+                FrameworkDispatch::None
+            }
+        }
+
+        fn dispatch_framework_fallback(&mut self, _key: KeyEvent) -> FrameworkDispatch {
+            self.calls.push("framework-fallback");
+            if self.framework_fallback_quit {
+                FrameworkDispatch::Quit
             } else {
                 FrameworkDispatch::None
             }
@@ -844,5 +874,70 @@ mod tests {
             assert_eq!(ops.calls, case.expected_calls, "{} calls", case.name);
             assert_eq!(outcome, case.expected, "{} outcome", case.name);
         }
+    }
+
+    #[test]
+    fn framework_fallback_runs_only_after_normal_dispatch_declines() {
+        // Widget focus: fallback quit runs after widget, bubble, command, framework, and ambient.
+        let mut ops = FakeOps {
+            framework_fallback_quit: true,
+            ..FakeOps::default()
+        };
+        let outcome = dispatch_key(DispatchRequest::new(ctrl('c'), FocusKind::Widget), &mut ops);
+        assert_eq!(outcome, DispatchOutcome::FrameworkQuit);
+        assert_eq!(
+            ops.calls,
+            &[
+                "command-chord",
+                "widget",
+                "bubble",
+                "command",
+                "framework",
+                "ambient",
+                "framework-fallback",
+            ]
+        );
+
+        // Terminal FrameworkFirst: interactive terminal consumes before fallback quit.
+        let mut ops = FakeOps {
+            terminal_handles: true,
+            framework_fallback_quit: true,
+            ..FakeOps::default()
+        };
+        let outcome = dispatch_key(
+            DispatchRequest::new(ctrl('c'), FocusKind::Terminal)
+                .terminal_policy(TerminalKeyPolicy::FrameworkFirst),
+            &mut ops,
+        );
+        assert_eq!(outcome, DispatchOutcome::Terminal);
+        assert_eq!(ops.calls, &["framework", "terminal"]);
+
+        // Terminal FrameworkFirst: if terminal declines, fallback quit runs.
+        let mut ops = FakeOps {
+            terminal_handles: false,
+            framework_fallback_quit: true,
+            ..FakeOps::default()
+        };
+        let outcome = dispatch_key(
+            DispatchRequest::new(ctrl('c'), FocusKind::Terminal)
+                .terminal_policy(TerminalKeyPolicy::FrameworkFirst),
+            &mut ops,
+        );
+        assert_eq!(outcome, DispatchOutcome::FrameworkQuit);
+        assert_eq!(ops.calls, &["framework", "terminal", "framework-fallback"]);
+
+        // TerminalOnly: never reaches framework fallback.
+        let mut ops = FakeOps {
+            terminal_handles: false,
+            framework_fallback_quit: true,
+            ..FakeOps::default()
+        };
+        let outcome = dispatch_key(
+            DispatchRequest::new(ctrl('c'), FocusKind::Terminal)
+                .terminal_policy(TerminalKeyPolicy::TerminalOnly),
+            &mut ops,
+        );
+        assert_eq!(outcome, DispatchOutcome::Unhandled);
+        assert_eq!(ops.calls, &["terminal-preflight", "terminal"]);
     }
 }

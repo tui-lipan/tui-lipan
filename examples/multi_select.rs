@@ -44,7 +44,7 @@ impl Component for MultiSelectDemo {
             .join(", ");
 
         Frame::new()
-            .header_left("MultiSelect Example")
+            .title("MultiSelect Example")
             .border(true)
             .padding(1)
             .child(

@@ -137,7 +137,7 @@ impl Component for AutoExit {
 fn main() -> Result<()> {
     App::new()
         .title("tui-lipan - Auto Exit")
-        .terminal_bg(query_host_colors().map(|colors| colors.bg))
+        .host_background_hint(query_host_colors().map(|colors| colors.bg))
         .mount(AutoExit)
         .run()
 }

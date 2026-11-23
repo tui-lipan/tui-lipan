@@ -71,7 +71,7 @@ fn root_element_for_reconcile<'a>(
 }
 
 /// Resolve the theme active at the app content root, so the DevTools extra root
-/// (and its wrapper `ThemeProvider`) match what `App::fill_background()` reads
+/// (and its wrapper `ThemeProvider`) match what `App::background(ScreenBackground::Theme)` reads
 /// from `app_content_root_node().active_theme()`.
 ///
 /// Reconcile treats `ThemeProvider`/`ContextProvider` as transparent wrappers

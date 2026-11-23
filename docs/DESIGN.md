@@ -117,8 +117,8 @@ The layout engine lives in `src/layout/`.
 
 Current sizing model:
 
-- Containers default to flex-like fill.
-- Leaf widgets generally measure to content.
+- Containers and fill widgets (inputs, editors, lists, tables, trees, bars) default to `Flex(1)` on their main axes.
+- Content-sized widgets (`Text`, `Button`, `Checkbox`, `Badge`, `Spinner`, …) default to `Auto`. See [Widget defaults](widget-defaults.md) for every widget's exact defaults.
 - Sizing is expressed with crate-owned layout types such as `Length`, `Size`,
   `Rect`, `Padding`, `Align`, and `Justify`.
 

@@ -267,6 +267,11 @@ impl<C: Component> AppRunner<C> {
 
         text_area.cursor = snapshot.cursor.min(max_cursor);
         text_area.anchor = snapshot.anchor.map(|anchor| anchor.min(max_cursor));
+        text_area.uncontrolled.update_reconciled_cursor(
+            text_area.value.as_ref(),
+            text_area.cursor,
+            text_area.anchor,
+        );
         text_area.scroll_offset = snapshot.scroll_offset.min(max_scroll_offset);
         text_area.scroll_override = snapshot
             .scroll_override
@@ -2247,7 +2252,7 @@ mod tests {
             .incremental_cursor_position()
             .expect("cursor position should be known from widget state");
 
-        assert_eq!(cursor, Position::new(1, 8));
+        assert_eq!(cursor, Position::new(0, 7));
     }
 
     /// Paint the tree the way `draw_current_tree` does, returning the cells and caret it drew.

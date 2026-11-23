@@ -130,7 +130,7 @@ fn preview_body(_theme: &Theme) -> Element {
 /// A bordered panel painted with the theme's panel surface.
 fn panel(theme: &Theme, title: &str) -> Frame {
     Frame::new()
-        .header_left(title)
+        .title(title)
         .border(true)
         .border_style(BorderStyle::Rounded)
         .style(Style::new().bg(theme.surface.panel))

@@ -427,14 +427,14 @@ fn monitor_frame(title: &'static str) -> Frame {
 
 fn monitor_frame_rich(title: RichText) -> Frame {
     Frame::new()
-        .header_left(title)
+        .title(title)
         .style(Style::new().bg(PANEL).fg(BORDER))
 }
 
 fn main() -> Result<()> {
     App::new()
         .title("tui-lipan - Process Monitor")
-        .screen_background(BG)
+        .background(BG)
         .mount(ProcessMonitor)
         .run()
 }

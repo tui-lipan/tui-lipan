@@ -8,9 +8,9 @@ use crate::core::node::WidgetNode;
 use crate::style::{BorderStyle, Length, Padding, Rect, Style, Theme};
 
 use super::{
-    Edge, EdgeArrow, EdgeStyle, FlowDirection, Flowchart, FlowchartEdgeEvent, FlowchartItemEvent,
-    FlowchartItemPath, FlowchartNodeEvent, FlowchartSubgraphEvent, FlowchartTheme, NodeId,
-    NodeShape,
+    EdgeArrow, EdgeStyle, FlowDirection, Flowchart, FlowchartEdge, FlowchartEdgeEvent,
+    FlowchartItemEvent, FlowchartItemPath, FlowchartNodeEvent, FlowchartNodeId,
+    FlowchartSubgraphEvent, FlowchartTheme, NodeShape,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,7 +42,7 @@ impl FlowchartWidgetKey {
 #[derive(Clone, Debug)]
 pub(crate) struct PositionedNode {
     pub(crate) rect: Rect,
-    pub(crate) id: NodeId,
+    pub(crate) id: FlowchartNodeId,
     pub(crate) label: Arc<str>,
     pub(crate) label_lines: Arc<[Arc<str>]>,
     pub(crate) shape: NodeShape,
@@ -54,7 +54,7 @@ pub(crate) struct PositionedNode {
 pub(crate) struct PositionedSubgraph {
     pub(crate) rect: Rect,
     pub(crate) header_rect: Rect,
-    pub(crate) id: NodeId,
+    pub(crate) id: FlowchartNodeId,
     pub(crate) label: Arc<str>,
     pub(crate) depth: usize,
     pub(crate) style: Style,
@@ -73,8 +73,8 @@ pub(crate) struct EdgeCell {
 #[derive(Clone, Debug)]
 pub(crate) struct PositionedEdge {
     pub(crate) index: usize,
-    pub(crate) from: NodeId,
-    pub(crate) to: NodeId,
+    pub(crate) from: FlowchartNodeId,
+    pub(crate) to: FlowchartNodeId,
     pub(crate) label: Option<Arc<str>>,
     pub(crate) style: EdgeStyle,
     pub(crate) head_from: EdgeArrow,
@@ -101,10 +101,10 @@ pub(crate) struct FlowchartRenderOutput {
 pub struct FlowchartNode {
     pub(crate) direction: FlowDirection,
     pub(crate) nodes: Arc<[super::FlowchartNodeSpec]>,
-    pub(crate) edges: Arc<[Edge]>,
+    pub(crate) edges: Arc<[FlowchartEdge]>,
     pub(crate) subgraphs: Arc<[super::FlowchartSubgraphSpec]>,
     pub(crate) class_defs: Arc<std::collections::HashMap<Arc<str>, Style>>,
-    pub(crate) class_assignments: Arc<std::collections::HashMap<NodeId, Arc<str>>>,
+    pub(crate) class_assignments: Arc<std::collections::HashMap<FlowchartNodeId, Arc<str>>>,
     pub(crate) style: Style,
     pub(crate) node_style: Style,
     pub(crate) edge_style: Style,
@@ -410,7 +410,10 @@ fn hash_style_map(map: &std::collections::HashMap<Arc<str>, Style>, hasher: &mut
     }
 }
 
-fn hash_assignments(map: &std::collections::HashMap<NodeId, Arc<str>>, hasher: &mut impl Hasher) {
+fn hash_assignments(
+    map: &std::collections::HashMap<FlowchartNodeId, Arc<str>>,
+    hasher: &mut impl Hasher,
+) {
     let mut entries: Vec<_> = map.iter().collect();
     entries.sort_by_key(|(key, _)| *key);
     entries.len().hash(hasher);

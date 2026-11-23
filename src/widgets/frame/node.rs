@@ -146,8 +146,8 @@ impl FrameNode {
 
     fn has_focus_chrome(&self) -> bool {
         self.focus_min_height.is_some()
-            || self.header.focused_style.is_some()
-            || self.footer.focused_style.is_some()
+            || self.header.focus_style.is_some()
+            || self.footer.focus_style.is_some()
             || self.style_overrides.as_ref().is_some_and(|overrides| {
                 overrides
                     .focus_style

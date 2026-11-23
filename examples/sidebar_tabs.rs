@@ -223,7 +223,7 @@ impl Component for SidebarTabsDemo {
 
     fn view(&self, ctx: &Context<Self>) -> Element {
         Frame::new()
-            .header_left("Sidebar Tabs — composed from primitives")
+            .title("Sidebar Tabs — composed from primitives")
             .footer_left(ctx.state.status.clone())
             .border(true)
             .border_style(BorderStyle::Rounded)
@@ -250,7 +250,7 @@ fn sidebar(ctx: &Context<SidebarTabsDemo>) -> Element {
     rows.push(end_drop_zone(ctx, len));
 
     Frame::new()
-        .header_left("Services")
+        .title("Services")
         .border(true)
         .border_style(BorderStyle::Rounded)
         .style(Style::new().fg(Color::indexed(60)))
@@ -422,7 +422,7 @@ fn details_pane(ctx: &Context<SidebarTabsDemo>) -> Element {
     let (glyph, color) = svc.status.glyph();
 
     Frame::new()
-        .header_left(svc.name.clone())
+        .title(svc.name.clone())
         .border(true)
         .border_style(BorderStyle::Rounded)
         .style(Style::new().fg(Color::indexed(66)))

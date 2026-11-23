@@ -10,7 +10,7 @@ Extract reusable view functions so the same code works in both mockup previews a
 // View functions take plain data, return Element
 fn sidebar(items: &[&str], selected: usize) -> Element {
     Frame::new()
-        .header_left("Nav").border(true).width(Length::Px(28))
+        .title("Nav").border(true).width(Length::Px(28))
         .child(List::new().items(items.iter().map(|s| ListItem::new(*s))).selected(selected))
         .into()
 }
@@ -38,7 +38,7 @@ while `rsx!` stays focused on composition.
 ```rust
 fn app_panel(title: impl Into<Arc<str>>, child: impl Into<Element>) -> Element {
     Frame::new()
-        .header_left(title)
+        .title(title)
         .border(true)
         .padding(1)
         .child(child)
@@ -99,7 +99,7 @@ impl AppPanel {
 impl From<AppPanel> for Element {
     fn from(panel: AppPanel) -> Element {
         Frame::new()
-            .header_left(panel.title)
+            .title(panel.title)
             .border(true)
             .padding(1)
             .child(panel.child)
@@ -109,7 +109,7 @@ impl From<AppPanel> for Element {
 ```
 
 Use this when the same shell needs a named, reusable API such as
-`AppPanel::new(...)`, `.footer_left(...)`, `.header(...)`, and `.footer(...)`.
+`AppPanel::new(...)`, `.footer_left(...)`, `.titles(...)`, and `.footer(...)`.
 
 Choose the abstraction level by behavior:
 - **Helper function returning `Element`** - best for simple reusable shells
@@ -749,7 +749,7 @@ VStack::new()
 
 // GOOD: Frame is justified when you use its features
 Frame::new()
-    .header_left("Settings")
+    .title("Settings")
     .border(true)
     .footer_right("v1.2")
     .child(

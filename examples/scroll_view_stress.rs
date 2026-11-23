@@ -144,7 +144,7 @@ impl Component for ScrollStressDemo {
             );
 
         Frame::new()
-            .header_left("ScrollView Stress Test")
+            .title("ScrollView Stress Test")
             .border(true)
             .border_style(BorderStyle::Rounded)
             .padding(1)

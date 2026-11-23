@@ -89,7 +89,7 @@ impl DatePicker {
             nav_hover_style: StyleSlot::Inherit,
             nav_disabled_style: Style::default(),
             show_outside_days: false,
-            border: true,
+            border: false,
             border_style: BorderStyle::Rounded,
             padding: Padding::default(),
             width: Length::Auto,
@@ -592,7 +592,7 @@ impl From<DatePicker> for Element {
 
         if let Some(title) = picker.title.clone() {
             frame = frame
-                .header(BorderLabels::new().left(FrameLabel::new(title).style(picker.title_style)));
+                .titles(BorderLabels::new().left(FrameLabel::new(title).style(picker.title_style)));
         }
 
         frame.into()

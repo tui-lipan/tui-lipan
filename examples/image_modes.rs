@@ -156,7 +156,7 @@ impl Component for ImageModesDemo {
 
         rsx! {
             Frame {
-                header_left: "TextArea Image Modes",
+                title: "TextArea Image Modes",
                 padding: 1,
                 HStack {
                     gap: 2,
