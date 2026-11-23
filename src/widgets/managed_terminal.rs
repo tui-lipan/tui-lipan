@@ -28,7 +28,6 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::Command;
 use crate::callback::{Callback, CommandLink};
 use crate::core::component::{Component, Context, Update};
 use crate::core::element::Element;
@@ -515,9 +514,9 @@ impl Component for ManagedTerminal {
 
                 ctx.state.resize_generation = ctx.state.resize_generation.wrapping_add(1).max(1);
                 let generation = ctx.state.resize_generation;
-                Update::command_only(Command::after(
+                Update::command_only(ctx.link().command_after(
                     ctx.props.resize_debounce,
-                    move |link: CommandLink<ManagedTerminalMsg>| {
+                    move |link| {
                         link.send(ManagedTerminalMsg::FlushResize { generation });
                     },
                 ))

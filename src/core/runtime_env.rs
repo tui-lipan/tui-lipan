@@ -486,7 +486,7 @@ impl RuntimeEnv {
 
     /// Shift the virtual clock forward by `dt`.
     ///
-    /// This also brings [`Command::after`](crate::Command::after) timers forward by the same amount,
+    /// This also brings [`Link::command_after`](crate::Link::command_after) timers forward by the same amount,
     /// running whatever becomes due. A clock that moved without firing the timers hung off it left a
     /// gap no caller could close: the deferred command is framework-owned, so an application could
     /// not settle it itself, and the harness had no wall clock for it to wait on. Deferred tasks run

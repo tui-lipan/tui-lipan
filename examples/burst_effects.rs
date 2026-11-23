@@ -1079,7 +1079,7 @@ fn start_opencode_anim_ticker(ctx: &mut Context<BurstEffectsDemo>) -> Option<Com
     }
     let cancel = Arc::new(AtomicBool::new(false));
     ctx.state.opencode.anim_cancel = Some(Arc::clone(&cancel));
-    Some(Command::spawn(move |link| {
+    Some(ctx.link().command(move |link| {
         let mut last = Instant::now();
         loop {
             std::thread::sleep(Duration::from_millis(16));
@@ -1341,7 +1341,7 @@ impl Component for BurstEffectsDemo {
                     ctx.state.next_id += 1;
                     ctx.state.ripple.charge = Some((charge_id, cx, cy, 0.0));
 
-                    Update::render_with_command(Command::spawn(move |link| {
+                    Update::render_with_command(ctx.link().command(move |link| {
                         let start = Instant::now();
                         loop {
                             if cancel.load(Ordering::Acquire) {
@@ -1376,7 +1376,7 @@ impl Component for BurstEffectsDemo {
                         aura_phase: 0.0,
                     });
 
-                    Update::render_with_command(Command::spawn(move |link| {
+                    Update::render_with_command(ctx.link().command(move |link| {
                         let start = Instant::now();
                         loop {
                             if cancel.load(Ordering::Acquire) {
@@ -1467,7 +1467,7 @@ impl Component for BurstEffectsDemo {
                         },
                     ));
 
-                    Update::render_with_command(Command::spawn(move |link| {
+                    Update::render_with_command(ctx.link().command(move |link| {
                         let start = Instant::now();
                         loop {
                             std::thread::sleep(Duration::from_millis(16));
@@ -1569,7 +1569,7 @@ impl Component for BurstEffectsDemo {
                         .map(|s| s.max_age)
                         .fold(0.0_f32, f32::max);
 
-                    Update::render_with_command(Command::spawn(move |link| {
+                    Update::render_with_command(ctx.link().command(move |link| {
                         let l = link.clone();
                         std::thread::spawn(move || {
                             let start = Instant::now();
@@ -1740,7 +1740,7 @@ impl Component for BurstEffectsDemo {
                 ctx.state.letter.charge_cancel = Some(Arc::clone(&cancel));
                 ctx.state.letter.charge = Some((i, 0.0));
                 let idx = i;
-                Update::render_with_command(Command::spawn(move |link| {
+                Update::render_with_command(ctx.link().command(move |link| {
                     loop {
                         std::thread::sleep(Duration::from_millis(16));
                         if cancel.load(Ordering::Acquire) {
@@ -1802,7 +1802,7 @@ impl Component for BurstEffectsDemo {
                     letter_meta.push((lid, delay, cancel_l));
                 }
 
-                Update::render_with_command(Command::spawn(move |link| {
+                Update::render_with_command(ctx.link().command(move |link| {
                     let c2 = Arc::clone(&cancel_r);
                     let l = link.clone();
                     std::thread::spawn(move || {
@@ -1946,7 +1946,7 @@ impl Component for BurstEffectsDemo {
                     glyph_id,
                 });
 
-                Update::render_with_command(Command::spawn(move |link| {
+                Update::render_with_command(ctx.link().command(move |link| {
                     let start = Instant::now();
                     loop {
                         std::thread::sleep(Duration::from_millis(16));

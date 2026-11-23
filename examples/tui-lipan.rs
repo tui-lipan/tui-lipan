@@ -234,17 +234,19 @@ fn maybe_start_hero_anim(ctx: &mut Context<TuiLipanShowcase>) -> Option<Update> 
     let cancel = Arc::new(AtomicBool::new(false));
     ctx.state.hero_anim.cancel = Some(Arc::clone(&cancel));
     let c = Arc::clone(&cancel);
-    Some(Update::render_with_command(Command::spawn(move |link| {
-        std::thread::spawn(move || {
-            loop {
-                if c.load(Ordering::Acquire) {
-                    break;
+    Some(Update::render_with_command(ctx.link().command(
+        move |link| {
+            std::thread::spawn(move || {
+                loop {
+                    if c.load(Ordering::Acquire) {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(60));
+                    link.send(Msg::LogoAnimTick);
                 }
-                std::thread::sleep(Duration::from_millis(60));
-                link.send(Msg::LogoAnimTick);
-            }
-        });
-    })))
+            });
+        },
+    )))
 }
 
 fn cancel_all(ctx: &mut Context<TuiLipanShowcase>) {
@@ -617,7 +619,7 @@ impl Component for TuiLipanShowcase {
                         t: 0.0,
                         aura_phase: 0.0,
                     });
-                    return Update::render_with_command(Command::spawn(move |link| {
+                    return Update::render_with_command(ctx.link().command(move |link| {
                         let start = Instant::now();
                         loop {
                             if cancel.load(Ordering::Acquire) {
@@ -647,7 +649,7 @@ impl Component for TuiLipanShowcase {
                     let id = ctx.state.next_id;
                     ctx.state.next_id += 1;
                     ctx.state.void_charge = Some((id, cx, cy, 0.0));
-                    return Update::render_with_command(Command::spawn(move |link| {
+                    return Update::render_with_command(ctx.link().command(move |link| {
                         let start = Instant::now();
                         loop {
                             if cancel.load(Ordering::Acquire) {
@@ -788,7 +790,7 @@ impl Component for TuiLipanShowcase {
                         .map(|s| s.max_age)
                         .fold(0.0_f32, f32::max);
 
-                    return Update::render_with_command(Command::spawn(move |link| {
+                    return Update::render_with_command(ctx.link().command(move |link| {
                         let l = link.clone();
                         std::thread::spawn(move || {
                             let start = Instant::now();
@@ -896,7 +898,7 @@ impl Component for TuiLipanShowcase {
                             tint_b,
                         },
                     );
-                    return Update::render_with_command(Command::spawn(move |l| {
+                    return Update::render_with_command(ctx.link().command(move |l| {
                         let start = Instant::now();
                         loop {
                             std::thread::sleep(Duration::from_millis(16));
@@ -955,7 +957,7 @@ impl Component for TuiLipanShowcase {
                             );
                             meta.push((id, max_r, i as u64));
                         }
-                        Update::render_with_command(Command::spawn(move |link| {
+                        Update::render_with_command(ctx.link().command(move |link| {
                             for (id, max_r, i) in meta {
                                 let l = link.clone();
                                 std::thread::spawn(move || {
@@ -999,7 +1001,7 @@ impl Component for TuiLipanShowcase {
                                 tint_b: b,
                             },
                         );
-                        Update::render_with_command(Command::spawn(move |l| {
+                        Update::render_with_command(ctx.link().command(move |l| {
                             let start = Instant::now();
                             loop {
                                 std::thread::sleep(Duration::from_millis(16));

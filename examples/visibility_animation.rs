@@ -297,9 +297,12 @@ fn tour_step(ctx: &mut Context<Studio>, generation: u64, step: u8) -> Update {
     } else {
         900
     };
-    Update::render_with_command(Command::after(Duration::from_millis(delay), move |link| {
-        link.send(Msg::Tour(generation, step + 1))
-    }))
+    Update::render_with_command(
+        ctx.link()
+            .command_after(Duration::from_millis(delay), move |link| {
+                link.send(Msg::Tour(generation, step + 1))
+            }),
+    )
 }
 fn action(
     label: &str,

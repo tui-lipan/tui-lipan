@@ -624,11 +624,14 @@ pub(crate) fn evaluate_wait_condition(
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
     use std::rc::Rc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, mpsc};
+    use std::thread::JoinHandle;
 
     use crate::automation::{AutomationId, SemanticRole};
-    use crate::core::component::{Command, Context, Update};
+    use crate::core::component::{Context, Update};
     use crate::core::element::{Element, IntoElement};
     use crate::widgets::{Button, Input, List, ListItem, Tab, Table, TableRow, Tabs, Text, VStack};
 
@@ -777,8 +780,7 @@ mod tests {
         }
 
         fn init(&mut self, ctx: &mut Context<Self>) -> Update {
-            let _ = ctx;
-            Update::command_only(Command::after(Duration::from_millis(50), |link| {
+            Update::command_only(ctx.link().command_after(Duration::from_millis(50), |link| {
                 link.send(TimerMsg::Fired);
             }))
         }
@@ -809,6 +811,281 @@ mod tests {
             .execute(AutomationStep::advance(Duration::from_millis(50)))
             .unwrap();
         assert_eq!(session.discover(&Selector::text_contains("fired")).len(), 1);
+    }
+
+    #[derive(Clone, Copy)]
+    enum RoutedCommandMsg {
+        Start,
+        Unmount,
+        Received(u8),
+    }
+
+    #[derive(Default)]
+    struct CommandRecipient {
+        child_link: Rc<RefCell<Option<crate::Link<RoutedCommandMsg>>>>,
+        received: Rc<RefCell<[Vec<u8>; 2]>>,
+        is_child: bool,
+    }
+
+    impl Component for CommandRecipient {
+        type Message = RoutedCommandMsg;
+        type Properties = ();
+        type State = bool;
+
+        fn create_state(&self, _: &()) -> bool {
+            !self.is_child
+        }
+
+        fn init(&mut self, ctx: &mut Context<Self>) -> Update {
+            if self.is_child {
+                *self.child_link.borrow_mut() = Some(ctx.link().clone());
+            }
+            Update::none()
+        }
+
+        fn update(&mut self, msg: RoutedCommandMsg, ctx: &mut Context<Self>) -> Update {
+            match msg {
+                RoutedCommandMsg::Start => {
+                    let child_link = self.child_link.borrow();
+                    let child = child_link.as_ref().expect("child link saved on mount");
+                    let root = ctx.link();
+                    Update::command_only(
+                        child.command(|link| link.send(RoutedCommandMsg::Received(1))),
+                    )
+                    .merge(Update::command_only(
+                        child.command_after(Duration::from_millis(1), |link| {
+                            link.send(RoutedCommandMsg::Received(2))
+                        }),
+                    ))
+                    .merge(Update::command_only(child.command_keyed(
+                        "route",
+                        crate::TaskPolicy::LatestOnly,
+                        |link| link.send(RoutedCommandMsg::Received(3)),
+                    )))
+                    .merge(Update::command_only(root.command(|link| {
+                        link.send(RoutedCommandMsg::Received(4));
+                    })))
+                }
+                RoutedCommandMsg::Unmount => {
+                    ctx.state = false;
+                    Update::render()
+                }
+                RoutedCommandMsg::Received(value) => {
+                    self.received.borrow_mut()[usize::from(self.is_child)].push(value);
+                    Update::none()
+                }
+            }
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            if ctx.state {
+                let child_link = self.child_link.clone();
+                let received = self.received.clone();
+                crate::child(
+                    move || Self {
+                        child_link: child_link.clone(),
+                        received: received.clone(),
+                        is_child: true,
+                    },
+                    (),
+                )
+            } else {
+                Text::new("recipient").into()
+            }
+        }
+    }
+
+    #[test]
+    fn merged_background_commands_deliver_to_their_links() {
+        let recipient = CommandRecipient::default();
+        let received = recipient.received.clone();
+        let mut session = AutomationSession::new(recipient, AutomationOptions::default()).unwrap();
+        session
+            .engine
+            .backend
+            .dispatch(RoutedCommandMsg::Start)
+            .unwrap();
+        session
+            .execute(AutomationStep::advance(Duration::from_millis(1)))
+            .unwrap();
+        session
+            .wait_for_idle(Duration::from_secs(5), Duration::ZERO)
+            .unwrap();
+        session.drain_ready().unwrap();
+        received.borrow_mut()[1].sort_unstable();
+        assert_eq!(*received.borrow(), [vec![4], vec![1, 2, 3]]);
+
+        session
+            .engine
+            .backend
+            .dispatch(RoutedCommandMsg::Unmount)
+            .unwrap();
+        session
+            .engine
+            .backend
+            .dispatch(RoutedCommandMsg::Start)
+            .unwrap();
+        session
+            .execute(AutomationStep::advance(Duration::from_millis(1)))
+            .unwrap();
+        session
+            .wait_for_idle(Duration::from_secs(5), Duration::ZERO)
+            .unwrap();
+        session.drain_ready().unwrap();
+        assert_eq!(*received.borrow(), [vec![4, 4], vec![1, 2, 3]]);
+    }
+
+    #[derive(Default)]
+    struct RuntimeCommandProbe {
+        foreign: Option<crate::Link<RuntimeCommandMsg>>,
+        foreign_runs: Arc<AtomicUsize>,
+    }
+
+    enum RuntimeCommandMsg {
+        Start,
+        Done(u8),
+    }
+
+    impl Component for RuntimeCommandProbe {
+        type Message = RuntimeCommandMsg;
+        type Properties = ();
+        type State = Vec<u8>;
+
+        fn create_state(&self, _: &()) -> Self::State {
+            Vec::new()
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            match msg {
+                RuntimeCommandMsg::Start => {
+                    let foreign = self.foreign.as_ref().expect("foreign link installed");
+                    let send_foreign = |value| {
+                        let runs = self.foreign_runs.clone();
+                        move |link: crate::CommandLink<RuntimeCommandMsg>| {
+                            runs.fetch_add(1, Ordering::Relaxed);
+                            link.send(RuntimeCommandMsg::Done(value));
+                        }
+                    };
+                    Update::command_only(foreign.command(send_foreign(1)))
+                        .merge(Update::command_only(
+                            foreign.command_after(Duration::from_millis(1), send_foreign(2)),
+                        ))
+                        .merge(Update::command_only(foreign.command_keyed(
+                            "foreign",
+                            crate::TaskPolicy::LatestOnly,
+                            send_foreign(3),
+                        )))
+                        .merge(Update::command_only(ctx.link().command(|link| {
+                            link.send(RuntimeCommandMsg::Done(4));
+                        })))
+                }
+                RuntimeCommandMsg::Done(value) => {
+                    ctx.state.push(value);
+                    Update::none()
+                }
+            }
+        }
+
+        fn view(&self, _: &Context<Self>) -> Element {
+            Text::new("runtime command probe").into()
+        }
+    }
+
+    #[test]
+    fn merged_commands_skip_links_from_another_runtime() {
+        let mut source =
+            AutomationSession::new(RuntimeCommandProbe::default(), AutomationOptions::default())
+                .unwrap();
+        let probe = RuntimeCommandProbe {
+            foreign: Some(source.engine.backend.core.ctx.link().clone()),
+            ..RuntimeCommandProbe::default()
+        };
+        let foreign_runs = probe.foreign_runs.clone();
+        let mut receiver = AutomationSession::new(probe, AutomationOptions::default()).unwrap();
+
+        receiver
+            .engine
+            .backend
+            .dispatch(RuntimeCommandMsg::Start)
+            .unwrap();
+        receiver
+            .execute(AutomationStep::advance(Duration::from_millis(1)))
+            .unwrap();
+        receiver
+            .wait_for_idle(Duration::from_secs(5), Duration::ZERO)
+            .unwrap();
+        receiver.drain_ready().unwrap();
+        source.drain_ready().unwrap();
+
+        let runs = foreign_runs.load(Ordering::Relaxed);
+        assert_eq!(
+            (runs, receiver.engine.backend.state().as_slice()),
+            (0, &[4][..])
+        );
+        assert!(source.engine.backend.state().is_empty());
+    }
+
+    struct DetachedCommand {
+        release: Option<mpsc::Receiver<()>>,
+        thread: mpsc::Sender<JoinHandle<()>>,
+    }
+
+    impl Component for DetachedCommand {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _: &()) {}
+
+        fn update(&mut self, (): (), ctx: &mut Context<Self>) -> Update {
+            let release = self.release.take().expect("command starts once");
+            let thread = self.thread.clone();
+            Update::command_only(ctx.link().command(move |link| {
+                let busy: crate::BusyGuard = link.busy();
+                let worker = std::thread::spawn(move || {
+                    let _busy = busy;
+                    let _ = release.recv();
+                });
+                thread.send(worker).unwrap();
+            }))
+        }
+
+        fn view(&self, _: &Context<Self>) -> Element {
+            Text::new("detached work").into()
+        }
+    }
+
+    #[test]
+    fn detached_command_work_keeps_automation_busy() {
+        let (release_tx, release_rx) = mpsc::channel();
+        let (thread_tx, thread_rx) = mpsc::channel();
+        let mut session = AutomationSession::new(
+            DetachedCommand {
+                release: Some(release_rx),
+                thread: thread_tx,
+            },
+            AutomationOptions::default(),
+        )
+        .unwrap();
+
+        let wake = session.engine.backend.core.command_wake.clone();
+        session.engine.backend.dispatch(()).unwrap();
+        let worker = thread_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        // The closure sends no UI messages. This wake comes from its activity guard dropping.
+        assert!(wake.wait(Duration::from_secs(5)));
+
+        let while_running = session.wait_for_idle(Duration::ZERO, Duration::ZERO);
+        drop(release_tx);
+        worker.join().unwrap();
+        let after_drop = session
+            .wait_for_idle(Duration::ZERO, Duration::ZERO)
+            .unwrap();
+
+        std::assert_matches!(
+            while_running,
+            Err(AutomationError::IdleTimeout { idle, .. }) if idle.tracked_commands == 1
+        );
+        assert!(after_drop.is_idle());
     }
 
     struct CommandLinkTimer;
@@ -876,8 +1153,8 @@ mod tests {
             0
         }
 
-        fn init(&mut self, _ctx: &mut Context<Self>) -> Update {
-            Update::command_only(Command::after(Duration::ZERO, |link| {
+        fn init(&mut self, ctx: &mut Context<Self>) -> Update {
+            Update::command_only(ctx.link().command_after(Duration::ZERO, |link| {
                 link.send(TimerChainMsg::First);
             }))
         }
@@ -886,7 +1163,7 @@ mod tests {
             match msg {
                 TimerChainMsg::First => {
                     ctx.state = 1;
-                    Update::full_with_command(Command::after(Duration::ZERO, |link| {
+                    Update::full_with_command(ctx.link().command_after(Duration::ZERO, |link| {
                         link.send(TimerChainMsg::Second);
                     }))
                 }
@@ -924,12 +1201,18 @@ mod tests {
 
         fn create_state(&self, _props: &Self::Properties) -> Self::State {}
 
-        fn init(&mut self, _ctx: &mut Context<Self>) -> Update {
-            Update::command_only(Command::after(Duration::ZERO, |link| link.send(())))
+        fn init(&mut self, ctx: &mut Context<Self>) -> Update {
+            Update::command_only(
+                ctx.link()
+                    .command_after(Duration::ZERO, |link| link.send(())),
+            )
         }
 
-        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
-            Update::full_with_command(Command::after(Duration::ZERO, |link| link.send(())))
+        fn update(&mut self, _msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            Update::full_with_command(
+                ctx.link()
+                    .command_after(Duration::ZERO, |link| link.send(())),
+            )
         }
 
         fn view(&self, _ctx: &Context<Self>) -> Element {

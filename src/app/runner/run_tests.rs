@@ -7735,7 +7735,7 @@ fn controlled_text_area_input_remains_layout_only() {
                 Msg::Changed(event) => event.apply_to(&mut ctx.state),
                 Msg::SentinelsChanged | Msg::VimModeChanged => return Update::render(),
                 Msg::AsyncAutocomplete => {
-                    return Update::render_with_command(crate::Command::new(|| {}));
+                    return Update::render_with_command(crate::Command::on_ui_thread(|| {}));
                 }
             }
             Update::render()
@@ -12449,7 +12449,7 @@ fn cancel_only_swallows_an_unbound_key_after_the_prefix() {
     assert_eq!(keys.borrow().as_slice(), &[key(KeyCode::Char('x'))]);
 }
 
-/// Reveals itself only once a `Command::after` timer fires, the shape any app uses for a delayed
+/// Reveals itself only once a `Link::command_after` timer fires, the shape any app uses for a delayed
 /// affordance: a spawn animation's opacity gate, a which-key panel, a debounced result.
 struct DeferredRevealSmoke;
 
@@ -12462,10 +12462,13 @@ impl Component for DeferredRevealSmoke {
         false
     }
 
-    fn init(&mut self, _ctx: &mut Context<Self>) -> Update {
-        Update::command_only(crate::Command::after(Duration::from_millis(120), |link| {
-            link.send(());
-        }))
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
+        Update::command_only(
+            ctx.link()
+                .command_after(Duration::from_millis(120), |link| {
+                    link.send(());
+                }),
+        )
     }
 
     fn update(&mut self, _msg: Self::Message, ctx: &mut Context<Self>) -> Update {
@@ -12491,8 +12494,8 @@ impl Component for AsyncArrivalSmoke {
         false
     }
 
-    fn init(&mut self, _ctx: &mut Context<Self>) -> Update {
-        Update::command_only(crate::Command::spawn(|link| {
+    fn init(&mut self, ctx: &mut Context<Self>) -> Update {
+        Update::command_only(ctx.link().command(|link| {
             std::thread::sleep(Duration::from_millis(80));
             link.send(());
         }))

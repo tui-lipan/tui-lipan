@@ -195,10 +195,10 @@ and [Events](events.md).
 Commands preserve a single-threaded UI tree while allowing concurrent I/O or
 compute work:
 
-- `Command::new(...)` runs a UI-thread action.
-- `Command::spawn(...)` runs background work.
-- `Command::spawn_keyed(...)` coalesces keyed background work according to
-  `TaskPolicy`.
+- `Command::on_ui_thread(...)` runs an action synchronously on the UI thread.
+- `Link::command(...)` submits background work.
+- `Link::command_after(...)` waits on the session clock before submitting background work.
+- `Link::command_keyed(...)` applies a `TaskPolicy` to background work with the same key.
 
 External full-screen subprocesses such as `$EDITOR` must use UI-thread terminal
 handoff rather than a background worker. See [External programs](external-programs.md).

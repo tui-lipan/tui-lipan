@@ -84,7 +84,7 @@ impl Component for ThemeHotReload {
             }
         }
 
-        Update::command_only(schedule_tick())
+        Update::command_only(schedule_tick(ctx.link()))
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
@@ -113,11 +113,11 @@ impl Component for ThemeHotReload {
 
                     if let Some(theme) = newest_theme {
                         ctx.state.current_theme = theme;
-                        return Update::full_with_command(schedule_tick());
+                        return Update::full_with_command(schedule_tick(ctx.link()));
                     }
                 }
 
-                Update::command_only(schedule_tick())
+                Update::command_only(schedule_tick(ctx.link()))
             }
             Msg::ThemeError(err) => {
                 ctx.toast().push(
@@ -215,8 +215,8 @@ impl Component for ThemeHotReload {
 }
 
 #[cfg(feature = "theme-reload")]
-fn schedule_tick() -> Command {
-    Command::spawn(move |link| {
+fn schedule_tick(link: &Link<Msg>) -> Command {
+    link.command(move |link| {
         std::thread::sleep(Duration::from_millis(150));
         link.send(Msg::Tick);
     })

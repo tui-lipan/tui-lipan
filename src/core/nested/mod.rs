@@ -771,7 +771,7 @@ impl ComponentRegistry {
         let level = entry
             .component
             .on_event(event)
-            .run(scope, &self.command_tx, &self.env);
+            .run(&self.command_tx, &self.env);
         if level != UpdateLevel::None {
             self.mark_dirty_path(id);
             updates.push_back((scope, level));
@@ -865,7 +865,7 @@ impl ComponentRegistry {
                 if !entry.component.props_equal(&element.props) {
                     let update = entry.component.set_props(element.props.clone());
                     entry.self_dirty = true;
-                    update.run(entry.scope, &self.command_tx, &self.env);
+                    update.run(&self.command_tx, &self.env);
                 }
                 return id;
             }
@@ -1040,10 +1040,7 @@ impl ComponentRegistry {
             entry.component.set_viewport(viewport);
 
             if !entry.initialized {
-                let level = entry
-                    .component
-                    .init()
-                    .run(entry.scope, &self.command_tx, &self.env);
+                let level = entry.component.init().run(&self.command_tx, &self.env);
                 self.mount_requests_full |= level == UpdateLevel::Full;
                 entry.initialized = true;
             }

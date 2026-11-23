@@ -2437,7 +2437,11 @@ mod tests {
                 .borrow_mut()
                 .push(*msg.downcast::<SearchPaletteMsg>().expect("search message"));
         });
-        let link = Link::new(ScopeId(1), dispatcher);
+        let link = Link::new(
+            ScopeId(1),
+            crate::core::component::RuntimeId::next(),
+            dispatcher,
+        );
 
         let user_seen = Rc::new(RefCell::new(false));
         let user_seen_for_handler = Rc::clone(&user_seen);
@@ -2472,7 +2476,11 @@ mod tests {
                 .borrow_mut()
                 .push(*msg.downcast::<SearchPaletteMsg>().expect("search message"));
         });
-        let link = Link::new(ScopeId(1), dispatcher);
+        let link = Link::new(
+            ScopeId(1),
+            crate::core::component::RuntimeId::next(),
+            dispatcher,
+        );
 
         let seen = Rc::new(RefCell::new(Vec::new()));
         let seen_for_handler = Rc::clone(&seen);
@@ -2500,7 +2508,11 @@ mod tests {
     #[test]
     fn empty_results_consume_left_alt_row_navigation_after_callers_interceptor() {
         let dispatcher = Dispatcher::new(|_, _| panic!("empty palette must not navigate"));
-        let link = Link::new(ScopeId(1), dispatcher);
+        let link = Link::new(
+            ScopeId(1),
+            crate::core::component::RuntimeId::next(),
+            dispatcher,
+        );
         let seen = Rc::new(RefCell::new(Vec::new()));
         let seen_for_handler = Rc::clone(&seen);
         let handler = search_input_key_interceptor(

@@ -27,6 +27,9 @@ use crate::utils::GridSelection;
 ///
 /// A `Command` represents work that should happen *outside* the synchronous `update` call
 /// (HTTP/IO/timers), typically executed by the runtime and eventually producing more messages.
+///
+/// Build background work with [`Link::command`], [`Link::command_after`], or
+/// [`Link::command_keyed`].
 #[non_exhaustive]
 pub struct Command {
     action: Box<dyn CommandAction>,
@@ -45,7 +48,7 @@ pub enum TaskPolicy {
 
 mod task_policy;
 
-use task_policy::Task;
+use task_policy::{Task, TaskKey};
 
 #[cfg(not(target_arch = "wasm32"))]
 mod executor_native;
@@ -65,7 +68,7 @@ use timer_native::TimerService;
 #[cfg(target_arch = "wasm32")]
 use timer_wasm::TimerService;
 
-/// Skip `dt` of virtual time in the [`Command::after`] scheduler, running whatever becomes due.
+/// Skip `dt` of virtual time in the [`Link::command_after`] scheduler, running whatever becomes due.
 ///
 /// Called from [`RuntimeEnv::advance_clock`](crate::core::runtime_env::RuntimeEnv::advance_clock), so
 /// every harness that drives the virtual clock settles deferred commands without asking. Returns how
@@ -89,76 +92,13 @@ impl std::fmt::Debug for Command {
 }
 
 impl Command {
-    /// Run a one-shot action on the UI thread.
-    pub fn new(action: impl FnOnce() + 'static) -> Self {
+    /// Run a one-shot action synchronously on the UI thread.
+    ///
+    /// The event loop waits for the action to return. Use this for operations such as
+    /// [`terminal_handoff`](crate::terminal_handoff) to run an interactive editor or pager.
+    pub fn on_ui_thread(action: impl FnOnce() + 'static) -> Self {
         Self {
             action: Box::new(RunAction(Some(action))),
-        }
-    }
-
-    /// Spawn a background task that can send messages back.
-    pub fn spawn<Msg, F>(f: F) -> Self
-    where
-        Msg: Send + 'static,
-        F: FnOnce(CommandLink<Msg>) + Send + 'static,
-    {
-        Self {
-            action: Box::new(SpawnAction::<Msg, F> {
-                f: Some(f),
-                _marker: PhantomData,
-            }),
-        }
-    }
-
-    /// Run a background task after `delay`, without holding a worker while it waits.
-    ///
-    /// Use this for debounces, retries, and recurring ticks instead of `Command::spawn` with a
-    /// `thread::sleep` inside. The executor runs on a fixed pool of 2-8 workers, so a sleeping task
-    /// occupies one for the whole delay: two recurring timers can park every worker on a low-core
-    /// machine and stall unrelated background work behind them. A shared timer thread does the
-    /// waiting here, and the task reaches the pool only once it is due.
-    ///
-    /// ```no_run
-    /// # use tui_lipan::prelude::*;
-    /// # use std::time::Duration;
-    /// # #[derive(Clone)] enum Msg { Tick }
-    /// # fn example() -> Command {
-    /// Command::after(Duration::from_secs(1), |link: CommandLink<Msg>| {
-    ///     link.send(Msg::Tick);
-    /// })
-    /// # }
-    /// ```
-    ///
-    /// Re-arming from the handler gives a recurring tick that costs no thread between firings. On
-    /// the web target without the `web` feature there is no timer source, and the task runs
-    /// immediately rather than being dropped.
-    pub fn after<Msg, F>(delay: std::time::Duration, f: F) -> Self
-    where
-        Msg: Send + 'static,
-        F: FnOnce(CommandLink<Msg>) + Send + 'static,
-    {
-        Self {
-            action: Box::new(AfterAction::<Msg, F> {
-                delay,
-                f: Some(f),
-                _marker: PhantomData,
-            }),
-        }
-    }
-
-    /// Spawn a keyed background task with explicit coalescing policy.
-    pub fn spawn_keyed<Msg, F>(key: impl Into<Arc<str>>, policy: TaskPolicy, f: F) -> Self
-    where
-        Msg: Send + 'static,
-        F: FnOnce(CommandLink<Msg>) + Send + 'static,
-    {
-        Self {
-            action: Box::new(SpawnKeyedAction::<Msg, F> {
-                key: key.into(),
-                policy,
-                f: Some(f),
-                _marker: PhantomData,
-            }),
         }
     }
 
@@ -169,7 +109,6 @@ impl Command {
 
 #[derive(Clone)]
 pub(crate) struct CommandRuntime {
-    pub(crate) scope: ScopeId,
     pub(crate) tx: CommandTx,
     /// Which runtime is running this command, so a deferred timer can be attributed to it.
     pub(crate) runtime_id: RuntimeId,
@@ -181,6 +120,20 @@ pub(crate) struct CommandRuntime {
     pub(crate) clock: crate::core::runtime_env::SessionClock,
     /// Per-runtime accounting for background work.
     pub(crate) activity: Arc<crate::core::runtime_env::RuntimeActivity>,
+}
+
+impl CommandRuntime {
+    fn accepts_link(&self, link_runtime_id: RuntimeId) -> bool {
+        if self.runtime_id == link_runtime_id {
+            return true;
+        }
+        crate::debug::internal_log!(
+            "[tui-lipan] dropped command from runtime {:?} submitted to runtime {:?}",
+            link_runtime_id,
+            self.runtime_id
+        );
+        false
+    }
 }
 
 struct MergedCommands(Command, Command);
@@ -230,11 +183,15 @@ where
 }
 
 struct SpawnAction<Msg, F> {
+    scope: ScopeId,
+    runtime_id: RuntimeId,
     f: Option<F>,
     _marker: PhantomData<fn(Msg)>,
 }
 
 struct SpawnKeyedAction<Msg, F> {
+    scope: ScopeId,
+    runtime_id: RuntimeId,
     key: Arc<str>,
     policy: TaskPolicy,
     f: Option<F>,
@@ -262,6 +219,8 @@ pub(crate) fn schedule_after_for_session(
 }
 
 struct AfterAction<Msg, F> {
+    scope: ScopeId,
+    runtime_id: RuntimeId,
     delay: std::time::Duration,
     f: Option<F>,
     _marker: PhantomData<fn(Msg)>,
@@ -273,13 +232,16 @@ where
     F: FnOnce(CommandLink<Msg>) + Send + 'static,
 {
     fn run(mut self: Box<Self>, runtime: CommandRuntime) {
+        if !runtime.accepts_link(self.runtime_id) {
+            return;
+        }
         let Some(f) = self.f.take() else {
             return;
         };
 
         let token = CancellationToken::default();
         let link = CommandLink::new(
-            runtime.scope,
+            self.scope,
             runtime.tx,
             token.clone(),
             runtime.clock.clone(),
@@ -309,13 +271,16 @@ where
     F: FnOnce(CommandLink<Msg>) + Send + 'static,
 {
     fn run(mut self: Box<Self>, runtime: CommandRuntime) {
+        if !runtime.accepts_link(self.runtime_id) {
+            return;
+        }
         let Some(f) = self.f.take() else {
             return;
         };
 
         let token = CancellationToken::default();
         let link = CommandLink::new(
-            runtime.scope,
+            self.scope,
             runtime.tx,
             token.clone(),
             runtime.clock.clone(),
@@ -339,15 +304,22 @@ where
     F: FnOnce(CommandLink<Msg>) + Send + 'static,
 {
     fn run(mut self: Box<Self>, runtime: CommandRuntime) {
+        if !runtime.accepts_link(self.runtime_id) {
+            return;
+        }
         let Some(f) = self.f.take() else {
             return;
         };
 
-        let key = Arc::clone(&self.key);
+        let key = TaskKey {
+            runtime_id: runtime.runtime_id,
+            scope: self.scope,
+            name: Arc::clone(&self.key),
+        };
         let policy = self.policy;
         let token = CancellationToken::default();
         let link = CommandLink::new(
-            runtime.scope,
+            self.scope,
             runtime.tx,
             token.clone(),
             runtime.clock.clone(),
@@ -370,22 +342,79 @@ where
 }
 
 impl<Msg: 'static> Link<Msg> {
-    /// Create a background `Command` that can send messages back to this component.
+    /// Create a background command that sends messages to this link's component.
+    ///
+    /// The command runs only in this link's runtime.
     pub fn command<F>(&self, f: F) -> Command
     where
         Msg: Send + 'static,
         F: FnOnce(CommandLink<Msg>) + Send + 'static,
     {
-        Command::spawn::<Msg, F>(f)
+        Command {
+            action: Box::new(SpawnAction::<Msg, F> {
+                scope: self.scope,
+                runtime_id: self.runtime_id,
+                f: Some(f),
+                _marker: PhantomData,
+            }),
+        }
     }
 
-    /// Create a keyed background `Command` with coalescing policy.
+    /// Create a background command that runs after `delay` on the session clock.
+    ///
+    /// The command runs only in this link's runtime and sends messages to its component.
+    ///
+    /// Use this for debounces, retries, or recurring ticks. A shared timer waits for the
+    /// deadline before submitting the closure to the executor. If the target has no timer
+    /// source (wasm without the `web` feature), the command runs without the delay.
+    ///
+    /// ```no_run
+    /// use std::time::Duration;
+    /// use tui_lipan::{Command, Link};
+    ///
+    /// enum Msg { Tick }
+    ///
+    /// fn next_tick(link: &Link<Msg>) -> Command {
+    ///     link.command_after(Duration::from_secs(1), |link| link.send(Msg::Tick))
+    /// }
+    /// ```
+    pub fn command_after<F>(&self, delay: std::time::Duration, f: F) -> Command
+    where
+        Msg: Send + 'static,
+        F: FnOnce(CommandLink<Msg>) + Send + 'static,
+    {
+        Command {
+            action: Box::new(AfterAction::<Msg, F> {
+                scope: self.scope,
+                runtime_id: self.runtime_id,
+                delay,
+                f: Some(f),
+                _marker: PhantomData,
+            }),
+        }
+    }
+
+    /// Create a keyed background command with the given coalescing policy.
+    ///
+    /// The command runs only in this link's runtime and sends messages to its component.
+    /// Coalescing applies to commands with the same key bound to this component within the
+    /// session. The key can be any value convertible to `Arc<str>`, such as a string literal or
+    /// an owned `String`.
     pub fn command_keyed<F>(&self, key: impl Into<Arc<str>>, policy: TaskPolicy, f: F) -> Command
     where
         Msg: Send + 'static,
         F: FnOnce(CommandLink<Msg>) + Send + 'static,
     {
-        Command::spawn_keyed::<Msg, F>(key, policy, f)
+        Command {
+            action: Box::new(SpawnKeyedAction::<Msg, F> {
+                scope: self.scope,
+                runtime_id: self.runtime_id,
+                key: key.into(),
+                policy,
+                f: Some(f),
+                _marker: PhantomData,
+            }),
+        }
     }
 }
 
@@ -554,11 +583,10 @@ impl Update {
         self.level
     }
 
-    pub(crate) fn run(self, scope: ScopeId, tx: &CommandTx, env: &RuntimeEnv) -> UpdateLevel {
+    pub(crate) fn run(self, tx: &CommandTx, env: &RuntimeEnv) -> UpdateLevel {
         let level = self.level;
         if let Some(command) = self.into_command() {
             command.run(CommandRuntime {
-                scope,
                 tx: tx.clone(),
                 runtime_id: env.runtime_id,
                 now: env.now(),
@@ -1239,7 +1267,7 @@ impl<C: Component> Context<C> {
             state,
             props,
             viewport,
-            link: Link::new(scope, dispatcher),
+            link: Link::new(scope, env.runtime_id, dispatcher),
             env,
             scope,
         }
@@ -2071,7 +2099,7 @@ impl<C: Component> Context<C> {
     /// Time elapsed on this runtime's clock since it started.
     ///
     /// This is the clock that [`pulsing_amount`](Self::pulsing_amount) pulses run on and
-    /// [`Command::after`] and [`CommandLink::send_after`](crate::CommandLink::send_after) delays are
+    /// [`Link::command_after`] and [`CommandLink::send_after`](crate::CommandLink::send_after) delays are
     /// measured against. It is monotonic, and virtual under a
     /// [`TestBackend`](crate::TestBackend) or a controlled automation session: it moves only when
     /// the test advances it.

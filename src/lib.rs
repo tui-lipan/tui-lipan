@@ -163,7 +163,7 @@ pub fn host_reads_shared_frames() -> bool {
 
 /// Temporarily release the interactive terminal for an external program (e.g. `$EDITOR`).
 ///
-/// Run suspend/resume on the **UI thread** (see [`Command::new`](crate::core::component::Command::new));
+/// Run suspend/resume on the **UI thread** (see [`Command::on_ui_thread`](crate::core::component::Command::on_ui_thread));
 /// use [`Context::request_full_repaint`](crate::core::component::Context::request_full_repaint) after
 /// return when a full frame redraw is needed. Human-oriented guide: `docs/external-programs.md` in the repo.
 #[cfg(not(target_arch = "wasm32"))]
@@ -210,7 +210,7 @@ pub use crate::automation::{
     SemanticAction, SemanticChecked, SemanticNode, SemanticRole, SemanticTree, SemanticValue,
     ValueSensitivity, WaitCondition,
 };
-pub use crate::callback::{Callback, CancellationToken, CommandLink, KeyHandler, Link};
+pub use crate::callback::{BusyGuard, Callback, CancellationToken, CommandLink, KeyHandler, Link};
 pub use crate::capture::{
     CapturedCell, CapturedFrame, CapturedImage, CastRecording, CellModifiers, CellRun, CursorShape,
     CursorState, PaintSubscription, PaintedFrame, UnderlineStyle,

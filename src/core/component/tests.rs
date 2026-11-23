@@ -7,11 +7,11 @@ use std::time::Duration;
 
 use crate::app::context::SurfaceMode;
 use crate::app::input::command_registry::CommandRegistry;
-use crate::callback::{CancellationToken, CommandLink, Dispatcher, ScopeId};
+use crate::callback::{CancellationToken, CommandLink, Dispatcher, Link, ScopeId};
 use crate::clipboard::ClipboardConfig;
 use crate::core::component::{
-    Command, CommandRuntime, Component, Context, FocusContext, HoverContext, ScrollContext,
-    TaskPolicy, Update,
+    Command, CommandRuntime, Component, Context, FocusContext, HoverContext, RuntimeId,
+    ScrollContext, TaskPolicy, Update,
 };
 use crate::core::element::{Element, ElementKind};
 use crate::core::nested::{ComponentRegistry, ComponentRegistryConfig, HostState};
@@ -24,7 +24,7 @@ use crate::widgets::{Frame, Splitter, Text, VStack};
 
 use crate::test_backend::TestBackend;
 
-fn new_registry() -> ComponentRegistry {
+fn new_registry(runtime_id: RuntimeId) -> ComponentRegistry {
     let dispatcher = Dispatcher::new(|_, _| {});
     let (command_tx, _command_rx, _wake) = super::CommandTx::channel();
     let quit = Rc::new(Cell::new(false));
@@ -34,7 +34,7 @@ fn new_registry() -> ComponentRegistry {
         dispatcher,
         command_tx,
         env: RuntimeEnv {
-            runtime_id: crate::core::component::RuntimeId::next(),
+            runtime_id,
             command_registry: CommandRegistry::default(),
             quit,
             focus: Rc::new(FocusContext::default()),
@@ -687,14 +687,14 @@ fn request_ui_snapshot_to_routes_png_extension_when_feature_enabled() {
 
 #[test]
 fn full_with_command_requests_full_level() {
-    let update = Update::full_with_command(Command::new(|| {}));
+    let update = Update::full_with_command(Command::on_ui_thread(|| {}));
     assert_eq!(update.level(), super::UpdateLevel::Full);
     assert!(update.command.is_some());
 }
 
 #[test]
 fn render_with_command_requests_render_level() {
-    let update = Update::render_with_command(Command::new(|| {}));
+    let update = Update::render_with_command(Command::on_ui_thread(|| {}));
     assert_eq!(update.level(), super::UpdateLevel::Render);
     assert!(update.command.is_some());
 
@@ -709,12 +709,12 @@ fn optional_full_command_and_command_only() {
         Update::full_with_command(Option::<Command>::None).level(),
         super::UpdateLevel::Full
     );
-    let cmd = Command::new(|| {});
+    let cmd = Command::on_ui_thread(|| {});
     let u = Update::full_with_command(cmd);
     assert_eq!(u.level(), super::UpdateLevel::Full);
     assert!(u.command.is_some());
 
-    let cmd2 = Command::new(|| {});
+    let cmd2 = Command::on_ui_thread(|| {});
     let u2 = Update::command_only(cmd2);
     assert_eq!(u2.level(), super::UpdateLevel::None);
     assert!(u2.command.is_some());
@@ -722,7 +722,7 @@ fn optional_full_command_and_command_only() {
 
 #[test]
 fn command_message_to_unmounted_component_is_dropped() {
-    let mut registry = new_registry();
+    let mut registry = new_registry(RuntimeId::next());
     let mut host = HostState::default();
 
     let epoch1 = registry.begin_epoch();
@@ -750,7 +750,7 @@ fn command_message_to_unmounted_component_is_dropped() {
 
 #[test]
 fn splitter_expands_components_in_panes_before_layout() {
-    let mut registry = new_registry();
+    let mut registry = new_registry(RuntimeId::next());
     let mut host = HostState::default();
 
     let epoch = registry.begin_epoch();
@@ -800,7 +800,7 @@ impl Component for KeyedCmdComponent {
         Text::new("keyed").into()
     }
 
-    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+    fn update(&mut self, _msg: Self::Message, ctx: &mut Context<Self>) -> Update {
         self.call_count += 1;
         let key = Arc::clone(&self.key);
         let ran_tx = self.ran_tx.clone();
@@ -808,33 +808,92 @@ impl Component for KeyedCmdComponent {
         if self.call_count == 1 {
             let started_tx = self.started_tx.clone();
             let release_rx = self.release_rx.borrow_mut().take().unwrap();
-            Update::full_with_command(Command::spawn_keyed(
+            Update::full_with_command(ctx.link().command_keyed(
                 key,
                 TaskPolicy::LatestOnly,
-                move |_link: CommandLink<()>| {
+                move |_| {
                     let _ = started_tx.send(());
                     let _ = release_rx.recv();
                     let _ = ran_tx.send("A");
                 },
             ))
         } else if self.call_count == 2 {
-            Update::full_with_command(Command::spawn_keyed(
+            Update::full_with_command(ctx.link().command_keyed(
                 key,
                 TaskPolicy::LatestOnly,
-                move |_link: CommandLink<()>| {
+                move |_| {
                     let _ = ran_tx.send("B");
                 },
             ))
         } else {
-            Update::full_with_command(Command::spawn_keyed(
+            Update::full_with_command(ctx.link().command_keyed(
                 key,
                 TaskPolicy::LatestOnly,
-                move |_link: CommandLink<()>| {
+                move |_| {
                     let _ = ran_tx.send("C");
                 },
             ))
         }
     }
+}
+
+#[test]
+fn keyed_background_commands_coalesce_by_link_and_runtime() {
+    let (tx, _rx, _wake) = super::CommandTx::channel();
+    let clock = crate::core::runtime_env::SessionClock::new(crate::automation::ClockMode::Realtime);
+    let runtime = CommandRuntime {
+        tx,
+        runtime_id: super::RuntimeId::next(),
+        now: clock.now(),
+        clock_mode: clock.mode(),
+        clock,
+        activity: Default::default(),
+    };
+    let other_runtime = CommandRuntime {
+        runtime_id: super::RuntimeId::next(),
+        ..runtime.clone()
+    };
+    let first = Link::<()>::new(ScopeId(1), runtime.runtime_id, Dispatcher::new(|_, _| {}));
+    let second = Link::<()>::new(ScopeId(2), runtime.runtime_id, Dispatcher::new(|_, _| {}));
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let key = "keyed_background_commands_coalesce_by_link_and_runtime";
+
+    first
+        .command_keyed(key, TaskPolicy::LatestOnly, move |link| {
+            started_tx.send(link.cancellation_token()).unwrap();
+            let _ = release_rx.recv();
+        })
+        .run(runtime.clone());
+    let token = started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    second
+        .command_keyed(key, TaskPolicy::LatestOnly, |_| {})
+        .run(runtime.clone());
+    assert!(
+        !token.is_cancelled(),
+        "another component shares the string key"
+    );
+    let other = Link::<()>::new(
+        ScopeId(1),
+        other_runtime.runtime_id,
+        Dispatcher::new(|_, _| {}),
+    );
+    other
+        .command_keyed(key, TaskPolicy::LatestOnly, |_| {})
+        .run(other_runtime);
+    assert!(
+        !token.is_cancelled(),
+        "another runtime shares the string key"
+    );
+    first
+        .command_keyed(key, TaskPolicy::LatestOnly, |_| {})
+        .run(runtime);
+    assert!(
+        token.is_cancelled(),
+        "the same component and key replace the active task"
+    );
+    drop(release_tx);
 }
 
 #[test]
@@ -858,7 +917,8 @@ fn keyed_command_latest_only_coalesces_pending_tasks() {
 
     let release_rx = Rc::new(RefCell::new(Some(release_rx)));
 
-    let mut registry = new_registry();
+    let runtime_id = RuntimeId::next();
+    let mut registry = new_registry(runtime_id);
     let mut host = HostState::default();
 
     let epoch1 = registry.begin_epoch();
@@ -886,15 +946,15 @@ fn keyed_command_latest_only_coalesces_pending_tasks() {
     let cmd1 = update1.command.expect("first update should have command");
 
     let (dummy_cmd_tx, _dummy_cmd_rx, _wake) = super::CommandTx::channel();
-    cmd1.run(CommandRuntime {
-        scope,
-        tx: dummy_cmd_tx.clone(),
-        runtime_id: super::RuntimeId::next(),
+    let runtime = CommandRuntime {
+        tx: dummy_cmd_tx,
+        runtime_id,
         now: web_time::Instant::now(),
         clock_mode: crate::automation::ClockMode::Realtime,
         clock: crate::core::runtime_env::SessionClock::new(crate::automation::ClockMode::Realtime),
         activity: std::sync::Arc::new(crate::core::runtime_env::RuntimeActivity::default()),
-    });
+    };
+    cmd1.run(runtime.clone());
 
     started_rx
         .recv_timeout(Duration::from_secs(1))
@@ -905,30 +965,14 @@ fn keyed_command_latest_only_coalesces_pending_tasks() {
         .update_by_scope(scope, Box::new(KeyedCmdMsg::Trigger))
         .expect("second update should succeed");
     let cmd2 = update2.command.expect("second update should have command");
-    cmd2.run(CommandRuntime {
-        scope,
-        tx: dummy_cmd_tx.clone(),
-        runtime_id: super::RuntimeId::next(),
-        now: web_time::Instant::now(),
-        clock_mode: crate::automation::ClockMode::Realtime,
-        clock: crate::core::runtime_env::SessionClock::new(crate::automation::ClockMode::Realtime),
-        activity: std::sync::Arc::new(crate::core::runtime_env::RuntimeActivity::default()),
-    });
+    cmd2.run(runtime.clone());
 
     // Third update: task C replaces pending B.
     let update3 = registry
         .update_by_scope(scope, Box::new(KeyedCmdMsg::Trigger))
         .expect("third update should succeed");
     let cmd3 = update3.command.expect("third update should have command");
-    cmd3.run(CommandRuntime {
-        scope,
-        tx: dummy_cmd_tx,
-        runtime_id: super::RuntimeId::next(),
-        now: web_time::Instant::now(),
-        clock_mode: crate::automation::ClockMode::Realtime,
-        clock: crate::core::runtime_env::SessionClock::new(crate::automation::ClockMode::Realtime),
-        activity: std::sync::Arc::new(crate::core::runtime_env::RuntimeActivity::default()),
-    });
+    cmd3.run(runtime);
 
     // Release the active task.
     drop(_guard);
@@ -975,17 +1019,18 @@ fn command_link_send_if_not_cancelled_suppresses_messages() {
     );
 }
 
-/// `Command::after` must not occupy an executor worker while it waits. The executor runs 2-8
+/// `Link::command_after` must not occupy an executor worker while it waits. The executor runs 2-8
 /// workers, so if delays were served by sleeping tasks, a couple of recurring timers would park
 /// the pool and stall everything behind them. Saturating the pool with long timers and then
 /// requiring prompt work to run proves the waiting happens elsewhere.
 #[test]
 fn after_does_not_occupy_executor_workers_while_waiting() {
+    let runtime_id = RuntimeId::next();
+    let link = Link::<()>::new(ScopeId(1), runtime_id, Dispatcher::new(|_, _| {}));
     let (cmd_tx, _cmd_rx, _wake) = super::CommandTx::channel();
     let runtime = || CommandRuntime {
-        scope: ScopeId(1),
         tx: cmd_tx.clone(),
-        runtime_id: super::RuntimeId::next(),
+        runtime_id,
         now: web_time::Instant::now(),
         clock_mode: crate::automation::ClockMode::Realtime,
         clock: crate::core::runtime_env::SessionClock::new(crate::automation::ClockMode::Realtime),
@@ -994,12 +1039,13 @@ fn after_does_not_occupy_executor_workers_while_waiting() {
 
     // Far more long timers than the pool has workers (worker count is capped at 8).
     for _ in 0..64 {
-        Command::after(Duration::from_secs(30), |_link: CommandLink<()>| {}).run(runtime());
+        link.command_after(Duration::from_secs(30), |_| {})
+            .run(runtime());
     }
 
     // Ordinary background work must still run promptly.
     let (ran_tx, ran_rx) = mpsc::channel();
-    Command::spawn(move |_link: CommandLink<()>| {
+    link.command(move |_| {
         let _ = ran_tx.send(());
     })
     .run(runtime());
@@ -1011,17 +1057,18 @@ fn after_does_not_occupy_executor_workers_while_waiting() {
 
 #[test]
 fn after_runs_the_task_once_the_delay_elapses() {
+    let runtime_id = RuntimeId::next();
+    let link = Link::<()>::new(ScopeId(1), runtime_id, Dispatcher::new(|_, _| {}));
     let (cmd_tx, _cmd_rx, _wake) = super::CommandTx::channel();
     let (ran_tx, ran_rx) = mpsc::channel();
 
     let start = std::time::Instant::now();
-    Command::after(Duration::from_millis(60), move |_link: CommandLink<()>| {
+    link.command_after(Duration::from_millis(60), move |_| {
         let _ = ran_tx.send(());
     })
     .run(CommandRuntime {
-        scope: ScopeId(1),
         tx: cmd_tx,
-        runtime_id: super::RuntimeId::next(),
+        runtime_id,
         now: web_time::Instant::now(),
         clock_mode: crate::automation::ClockMode::Realtime,
         clock: crate::core::runtime_env::SessionClock::new(crate::automation::ClockMode::Realtime),
@@ -1041,11 +1088,12 @@ fn after_runs_the_task_once_the_delay_elapses() {
 /// after a long tick would be held behind it.
 #[test]
 fn after_fires_in_due_order_regardless_of_submission_order() {
+    let runtime_id = RuntimeId::next();
+    let link = Link::<()>::new(ScopeId(1), runtime_id, Dispatcher::new(|_, _| {}));
     let (cmd_tx, _cmd_rx, _wake) = super::CommandTx::channel();
     let runtime = || CommandRuntime {
-        scope: ScopeId(1),
         tx: cmd_tx.clone(),
-        runtime_id: super::RuntimeId::next(),
+        runtime_id,
         now: web_time::Instant::now(),
         clock_mode: crate::automation::ClockMode::Realtime,
         clock: crate::core::runtime_env::SessionClock::new(crate::automation::ClockMode::Realtime),
@@ -1054,13 +1102,13 @@ fn after_fires_in_due_order_regardless_of_submission_order() {
     let (order_tx, order_rx) = mpsc::channel();
 
     let late = order_tx.clone();
-    Command::after(Duration::from_millis(220), move |_link: CommandLink<()>| {
+    link.command_after(Duration::from_millis(220), move |_| {
         let _ = late.send("late");
     })
     .run(runtime());
 
     let early = order_tx.clone();
-    Command::after(Duration::from_millis(40), move |_link: CommandLink<()>| {
+    link.command_after(Duration::from_millis(40), move |_| {
         let _ = early.send("early");
     })
     .run(runtime());
@@ -1078,7 +1126,7 @@ fn after_fires_in_due_order_regardless_of_submission_order() {
 
 #[test]
 fn paint_with_command_preserves_paint_and_accepts_none() {
-    for command in [None, Some(Command::new(|| {}))] {
+    for command in [None, Some(Command::on_ui_thread(|| {}))] {
         let owns_command = command.is_some();
         let update = Update::paint_with_command(command);
 
@@ -1097,10 +1145,10 @@ fn merging_updates_preserves_the_strongest_level_and_each_command_owner() {
                 let mut a = left();
                 let mut b = right();
                 if command_owner == 1 {
-                    a.command = Some(Command::new(|| {}));
+                    a.command = Some(Command::on_ui_thread(|| {}));
                 }
                 if command_owner == 2 {
-                    b.command = Some(Command::new(|| {}));
+                    b.command = Some(Command::on_ui_thread(|| {}));
                 }
                 let expected = a.level().max(b.level());
                 let update = a.merge(b);
@@ -1116,7 +1164,7 @@ fn merged_commands_execute_in_order_without_being_dropped() {
     let seen = Rc::new(RefCell::new(Vec::new()));
     let make = |n| {
         let seen = seen.clone();
-        Command::new(move || seen.borrow_mut().push(n))
+        Command::on_ui_thread(move || seen.borrow_mut().push(n))
     };
     let update = Update::command_only(make(1))
         .merge(Update::paint_with_command(make(2)))
@@ -1124,7 +1172,6 @@ fn merged_commands_execute_in_order_without_being_dropped() {
     assert_eq!(update.level(), super::UpdateLevel::Render);
     let (tx, _rx, _wake) = super::CommandTx::channel();
     update.command.unwrap().run(CommandRuntime {
-        scope: ScopeId(1),
         tx,
         runtime_id: super::RuntimeId::next(),
         now: web_time::Instant::now(),
@@ -1153,7 +1200,7 @@ fn commands_widen_terminal_damage_updates_to_paint_in_both_merge_orders() {
             super::UpdateLevel::Render
         );
         for reverse in [false, true] {
-            let command = Update::command_only(Command::new(|| {}));
+            let command = Update::command_only(Command::on_ui_thread(|| {}));
             let update = if reverse {
                 command.merge(terminal())
             } else {
@@ -1178,7 +1225,7 @@ fn runtime_executes_paint_commands_without_promoting_the_update() {
         }
         fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
             let count = self.0.clone();
-            Update::paint_with_command(Command::new(move || count.set(count.get() + 1)))
+            Update::paint_with_command(Command::on_ui_thread(move || count.set(count.get() + 1)))
         }
     }
     let count = Rc::new(Cell::new(0));

@@ -993,12 +993,9 @@ fn update_file_tree(msg: FileTreeMsg, ctx: &mut Context<FileTreeComponent>) -> U
             let interval = refresh_interval(&ctx.props, &ctx.state.watch);
             match interval {
                 Some(interval) if poll_generation == ctx.state.watch.poll_generation => {
-                    Update::command_only(Command::after(
-                        interval,
-                        move |link: crate::callback::CommandLink<FileTreeMsg>| {
-                            link.send(FileTreeMsg::RefreshTick { poll_generation });
-                        },
-                    ))
+                    Update::command_only(ctx.link().command_after(interval, move |link| {
+                        link.send(FileTreeMsg::RefreshTick { poll_generation });
+                    }))
                 }
                 _ => Update::none(),
             }
@@ -1045,12 +1042,9 @@ fn update_file_tree(msg: FileTreeMsg, ctx: &mut Context<FileTreeComponent>) -> U
                 return Update::none();
             }
             ctx.state.watch.flush_scheduled = true;
-            Update::command_only(Command::after(
-                watch::WATCH_BATCH,
-                move |link: crate::callback::CommandLink<FileTreeMsg>| {
-                    link.send(FileTreeMsg::WatchFlush { generation });
-                },
-            ))
+            Update::command_only(ctx.link().command_after(watch::WATCH_BATCH, move |link| {
+                link.send(FileTreeMsg::WatchFlush { generation });
+            }))
         }
         FileTreeMsg::WatchFlush { generation } => watch_flush(ctx, generation),
         FileTreeMsg::WatchReload { generation } => {
@@ -1074,12 +1068,9 @@ fn update_file_tree(msg: FileTreeMsg, ctx: &mut Context<FileTreeComponent>) -> U
                 return Update::none();
             }
             ctx.state.watch.git_scheduled = true;
-            Update::command_only(Command::after(
-                watch::GIT_BATCH,
-                move |link: crate::callback::CommandLink<FileTreeMsg>| {
-                    link.send(FileTreeMsg::WatchGitFlush { generation });
-                },
-            ))
+            Update::command_only(ctx.link().command_after(watch::GIT_BATCH, move |link| {
+                link.send(FileTreeMsg::WatchGitFlush { generation });
+            }))
         }
         FileTreeMsg::WatchGitFlush { generation } => {
             if generation != ctx.state.watch.generation {
@@ -4041,7 +4032,6 @@ mod tests {
             options,
         )
         .run(crate::core::component::CommandRuntime {
-            scope: crate::callback::ScopeId(1),
             tx: runtime.command_tx.clone(),
             runtime_id: runtime.ctx.env().runtime_id,
             now: runtime.ctx.env().now(),
@@ -4736,7 +4726,6 @@ mod tests {
         done: impl FnMut(&FileTreeMsg) -> bool,
     ) -> Vec<FileTreeMsg> {
         command.run(crate::core::component::CommandRuntime {
-            scope: crate::callback::ScopeId(1),
             tx: runtime.command_tx.clone(),
             runtime_id: runtime.ctx.env().runtime_id,
             now: runtime.ctx.env().now(),

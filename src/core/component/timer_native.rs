@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use super::task_policy::Task;
 
-/// Delayed-task scheduler backing [`Command::after`](super::Command::after).
+/// Delayed-task scheduler backing [`Link::command_after`](super::Link::command_after).
 ///
 /// One thread owns every pending timer. Without it the only way to delay work is to sleep inside a
 /// task, which parks one of the executor's 2-8 workers for the whole delay: two recurring timers
@@ -144,7 +144,7 @@ impl TimerService {
     /// Run every timer `owner` armed that is due by `horizon`, and report how many ran.
     ///
     /// This is what lets a headless capture or a `TestBackend` settle work deferred through
-    /// [`Command::after`](super::Command::after). Those harnesses drive a virtual clock and never
+    /// [`Link::command_after`](super::Link::command_after). Those harnesses drive a virtual clock and never
     /// sleep, so a real deadline would simply never arrive: a pane that reveals itself on a 36 ms
     /// timer stays invisible for the whole capture, and nothing in the tree explains why.
     ///

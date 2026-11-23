@@ -163,7 +163,10 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
 }
 ```
 
-If the blocking work is an **interactive subprocess** that needs the real TTY (`$EDITOR`, a pager), do **not** use `link.command` / `Command::spawn` for that phase: use `Command::new` on the UI thread with [`terminal_handoff`](external-programs.md), then [`request_full_repaint()`](external-programs.md#force-a-full-redraw-after-handoff) as needed. See **[External programs](external-programs.md)**.
+For an interactive subprocess that needs the real TTY, such as `$EDITOR` or a pager,
+use `Command::on_ui_thread` with `terminal_handoff`. Call
+`ctx.request_full_repaint()` after the subprocess exits if needed. See
+[External programs](external-programs.md).
 
 ---
 

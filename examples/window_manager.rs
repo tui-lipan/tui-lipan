@@ -2369,7 +2369,7 @@ fn spawn_window(ctx: &mut Context<WindowManagerDemo>, animations: WindowAnimatio
         }
         SpawnPlacement::Appended => format!("Spawned {} as tiled window #{id}", app.title()),
     };
-    Update::render_with_command(finish_open_command(id, open_delay(animations)))
+    Update::render_with_command(finish_open_command(ctx.link(), id, open_delay(animations)))
 }
 
 /// Outcome of placing a freshly spawned window, for status reporting.
@@ -2449,7 +2449,11 @@ fn close_focused_window(
         choose_fallback_focus(&mut ctx.state);
         request_current_window_focus(ctx);
         ctx.state.status = format!("Closing window #{id}");
-        Update::render_with_command(prune_closed_command(id, close_delay(animations)))
+        Update::render_with_command(prune_closed_command(
+            ctx.link(),
+            id,
+            close_delay(animations),
+        ))
     } else {
         Update::render()
     }
@@ -3257,15 +3261,15 @@ fn close_delay(animations: WindowAnimationConfig) -> Duration {
     }
 }
 
-fn finish_open_command(id: WindowId, delay: Duration) -> Command {
-    Command::spawn(move |link| {
+fn finish_open_command(link: &Link<Msg>, id: WindowId, delay: Duration) -> Command {
+    link.command(move |link| {
         std::thread::sleep(delay);
         link.send(Msg::FinishOpen(id));
     })
 }
 
-fn prune_closed_command(id: WindowId, delay: Duration) -> Command {
-    Command::spawn(move |link| {
+fn prune_closed_command(link: &Link<Msg>, id: WindowId, delay: Duration) -> Command {
+    link.command(move |link| {
         std::thread::sleep(delay);
         link.send(Msg::PruneClosed(id));
     })

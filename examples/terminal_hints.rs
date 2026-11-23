@@ -355,10 +355,12 @@ fn activate_hint(index: usize, open: bool, ctx: &mut Context<TerminalHints>) -> 
     if let Some(node_id) = ctx.focused_node_id() {
         ctx.flash_copy_feedback(node_id);
     }
-    Update::render_with_command(Command::after(
-        Duration::from_millis(COPY_FLASH_MS),
-        |link: CommandLink<Msg>| link.send(Msg::ClearCopyFlash),
-    ))
+    Update::render_with_command(
+        ctx.link()
+            .command_after(Duration::from_millis(COPY_FLASH_MS), |link| {
+                link.send(Msg::ClearCopyFlash)
+            }),
+    )
 }
 
 fn copy_hint(text: &str, ctx: &mut Context<TerminalHints>) -> bool {

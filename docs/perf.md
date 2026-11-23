@@ -334,15 +334,14 @@ Do not add app-side list virtualization until measurement shows that
 ## Coalesce background and streamed work
 
 Never block `view()` or normal `update()` with filesystem, network, parsing, or
-expensive search work. Run it through `ctx.link().command(...)` or
-`Command::spawn`, and use the narrow update that matches the immediate UI
-change. `Command::new` runs synchronously on the UI thread.
+expensive search work. Run it through `ctx.link().command(...)` and use the
+narrow update that matches the immediate UI change. `Command::on_ui_thread` runs synchronously on the UI thread.
 
 Do not `thread::sleep` inside a task to delay work. The executor is a fixed pool
 of 2-8 workers, so a sleeping task holds one for its whole delay; a couple of
 recurring ticks can park every worker and stall unrelated background work behind
-them. Use `Command::after(delay, ...)` or `link.send_after(delay, msg)`, which
-wait on a shared timer thread and only reach the pool once due. See
+them. Use `ctx.link().command_after(delay, ...)` or `link.send_after(delay, msg)`
+to wait on a shared timer thread. See
 [Components](components.md#delayed-work-debounces-retries-and-ticks).
 
 For superseding work such as filter-as-you-type, use a keyed command with

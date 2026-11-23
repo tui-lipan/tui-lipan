@@ -320,7 +320,7 @@ docs/focus.md             Focus traversal, programmatic focus, key bubbling
 docs/keybindings.md       keymap.conf, chord API, TextArea newline keys
 docs/clipboard.md         Clipboard config, image clipboard
 docs/inline-mode.md       Inline viewport mode
-docs/external-programs.md terminal_handoff, UI-thread Command::new, request_full_repaint
+docs/external-programs.md terminal_handoff, UI-thread Command::on_ui_thread, request_full_repaint
 docs/error-handling.md    Error handling policy (panics vs Error variants)
 docs/DESIGN.md            Architecture and runtime internals
 docs/patterns.md          Common patterns + anti-patterns
