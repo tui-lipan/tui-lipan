@@ -113,7 +113,7 @@ impl Component for InlineDemo {
 
 fn main() -> Result<()> {
     App::new()
-        .inline_ephemeral(8)
+        .inline_ephemeral(InlineHeight::auto_capped(16))
         .mouse(true)
         .mount(InlineDemo)
         .exit_view(|_component, ctx| {
