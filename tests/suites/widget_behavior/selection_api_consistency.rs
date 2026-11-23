@@ -831,6 +831,18 @@ fn multi_select_enter_commits_with_or_without_highlight_and_respects_disabled() 
     assert!(cleared.focus_key(&Key::from("multi")));
     cleared.render();
 
+    // Modified Enter (Ctrl+Enter has its own List callback) does not commit.
+    cleared
+        .send_key(KeyEvent {
+            code: KeyCode::Enter,
+            mods: KeyMods {
+                ctrl: true,
+                ..KeyMods::default()
+            },
+        })
+        .unwrap();
+    assert!(cleared.state().commits.is_empty());
+
     press(&mut cleared, KeyCode::Enter);
     assert_eq!(cleared.state().commits.len(), 1);
     assert_eq!(cleared.state().commits[0].selected_indices, vec![1]);

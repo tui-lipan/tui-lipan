@@ -724,7 +724,7 @@ impl From<MultiSelect> for Element {
                 {
                     return true;
                 }
-                if key.code == KeyCode::Enter {
+                if key.is(KeyCode::Enter) {
                     let Some(cb) = on_commit.as_ref() else {
                         return false;
                     };
