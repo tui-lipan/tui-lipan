@@ -11,7 +11,7 @@ use super::{Tab, Tabs, TabsEvent, TabsOverflow};
 #[derive(Clone)]
 pub struct TabsNode {
     pub tabs: Arc<[Tab]>,
-    pub active: usize,
+    pub selected: Option<usize>,
     pub style: Style,
     pub focus_style: StyleSlot,
     pub hover_style: StyleSlot,
@@ -25,7 +25,7 @@ pub struct TabsNode {
     pub padding: Padding,
     pub disabled: bool,
     pub disabled_style: Style,
-    pub on_change: Option<Callback<TabsEvent>>,
+    pub on_select: Option<Callback<TabsEvent>>,
     pub on_click: Option<Callback<MouseEvent>>,
     pub on_context_menu: Option<Callback<(Option<usize>, crate::core::event::MouseEvent)>>,
     pub on_key: Option<KeyHandler>,
@@ -81,7 +81,7 @@ impl WidgetNode for TabsNode {
         y: i16,
         rect: crate::Rect,
     ) -> Option<crate::PointerShape> {
-        if self.disabled || self.on_change.is_none() {
+        if self.disabled || self.on_select.is_none() {
             return None;
         }
         let inner = rect.inner(self.border, self.padding);
@@ -138,13 +138,13 @@ impl WidgetNode for TabsNode {
     }
 
     fn has_on_click(&self) -> bool {
-        !self.disabled && (self.on_click.is_some() || self.on_change.is_some())
+        !self.disabled && (self.on_click.is_some() || self.on_select.is_some())
     }
 
     fn is_hoverable_for_theme(&self, theme: &Theme) -> bool {
         // Only hoverable if explicitly styled for hover, or has an on_click handler.
-        // Having on_change alone does not make the widget hoverable since clicking
-        // changes the active tab without needing visual hover feedback.
+        // Having on_select alone does not make the widget hoverable since clicking
+        // changes the selected tab without needing visual hover feedback.
         if !self.disabled && self.on_click.is_some() {
             return true;
         }
@@ -160,7 +160,7 @@ impl From<Tabs> for TabsNode {
     fn from(value: Tabs) -> Self {
         Self {
             tabs: value.tabs,
-            active: value.active,
+            selected: value.selected,
             style: value.style,
             focus_style: value.focus_style,
             hover_style: value.hover_style,
@@ -174,7 +174,7 @@ impl From<Tabs> for TabsNode {
             padding: value.padding,
             disabled: value.disabled,
             disabled_style: value.disabled_style,
-            on_change: value.on_change,
+            on_select: value.on_select,
             on_click: value.on_click,
             on_context_menu: value.on_context_menu,
             on_key: value.on_key,

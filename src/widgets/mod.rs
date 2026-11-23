@@ -256,7 +256,7 @@ pub use popover::{Popover, PopoverOffset, PopoverPlacement};
 pub use progress::{ProgressBar, ProgressEvent, ProgressStyle, ProgressTextPosition, ProgressZone};
 #[cfg(feature = "qr-code")]
 pub use qr_code::{QrCode, QrEcc, QrRender};
-pub use radio::{Radio, RadioLayout};
+pub use radio::{Radio, RadioEvent, RadioLayout};
 pub use scroll::ScrollAxis;
 pub(crate) use scroll_view::node::{
     HeightCacheItem, ScrollViewLayoutCache, VirtualChildEntry, VirtualHeightCache,
@@ -275,7 +275,7 @@ pub use search_palette::{
 };
 pub(crate) use segment_cap::caps_fit_padding;
 pub use segment_cap::{CapSides, CapStyle};
-pub use select::Select;
+pub use select::{Select, SelectEvent};
 pub use selection::TripleClickSelectionMode;
 pub use sequence_diagram::{
     ActivationTheme, ActorKind, ActorRef, AutonumberTheme, FragmentGlyphs, FragmentKind,

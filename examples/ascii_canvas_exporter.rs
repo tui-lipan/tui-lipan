@@ -922,9 +922,9 @@ impl Component for ExporterApp {
                     .child(
                         Tabs::new()
                             .tabs(tabs)
-                            .active(tab.min(TAB_LABELS.len().saturating_sub(1)))
+                            .selected(tab.min(TAB_LABELS.len().saturating_sub(1)))
                             .focusable(false)
-                            .on_change(ctx.link().callback(Msg::TabChanged)),
+                            .on_select(ctx.link().callback(Msg::TabChanged)),
                     )
                     .child(Center::new().child(body)),
             )

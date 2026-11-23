@@ -35,8 +35,8 @@ impl Component for DiagramShowcase {
             .tab("ER")
             .tab("State")
             .tab("Gantt")
-            .active(ctx.state.active_tab.min(4))
-            .on_change(ctx.link().callback(AppMsg::TabChanged));
+            .selected(ctx.state.active_tab.min(4))
+            .on_select(ctx.link().callback(AppMsg::TabChanged));
 
         let content = match ctx.state.active_tab {
             0 => sequence_tab(ctx),

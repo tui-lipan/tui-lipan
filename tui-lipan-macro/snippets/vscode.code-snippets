@@ -79,7 +79,7 @@
   },
   "Tabs (ui!)": {
     "prefix": ["uitabs", "ui-tabs"],
-    "body": "Tabs::new()${1:.tab(\"${2:Tab 1}\").tab(\"${3:Tab 2}\")}${4:.active(${5:0})}${6:.on_change(ctx.link().callback(|e| ${7:Msg::SetTab(e.index)}))}",
+    "body": "Tabs::new()${1:.tab(\"${2:Tab 1}\").tab(\"${3:Tab 2}\")}${4:.selected(${5:0})}${6:.on_select(ctx.link().callback(|e| ${7:Msg::SetTab(e.index)}))}",
     "description": "Tabs builder chain"
   },
   "Spinner (ui!)": {

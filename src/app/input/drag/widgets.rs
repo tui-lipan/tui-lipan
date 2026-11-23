@@ -213,7 +213,7 @@ pub(crate) fn handle_draggable_tab_bar_drag(
                 drag.pending_id = target_id;
                 drag.pending_bar_id = target_bar.bar_id.clone();
                 drag.pending_index = to_index;
-                drag.pending_on_change = target_bar.on_change.clone();
+                drag.pending_on_change = target_bar.on_select.clone();
                 drag.on_transfer = target_bar.on_transfer.clone().or(drag.on_transfer);
 
                 Some((
@@ -221,7 +221,7 @@ pub(crate) fn handle_draggable_tab_bar_drag(
                     Some(DraggableTabDragEvent::Transfer {
                         event,
                         on_transfer,
-                        on_change: target_bar.on_change.clone(),
+                        on_change: target_bar.on_select.clone(),
                     }),
                 ))
             }
@@ -229,7 +229,7 @@ pub(crate) fn handle_draggable_tab_bar_drag(
                 drag.pending_id = target_id;
                 drag.pending_bar_id = target_bar.bar_id.clone();
                 drag.pending_index = to_index;
-                drag.pending_on_change = target_bar.on_change.clone();
+                drag.pending_on_change = target_bar.on_select.clone();
                 Some((drag, None))
             }
         }

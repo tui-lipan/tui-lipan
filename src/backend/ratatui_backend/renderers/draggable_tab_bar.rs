@@ -228,7 +228,7 @@ pub(crate) struct DraggableTabBarRenderCtx<'a> {
 pub(crate) fn render_draggable_tab_bar(
     f: &mut ratatui::Frame<'_>,
     tabs: &[DraggableTab],
-    active: usize,
+    selected: Option<usize>,
     rect: crate::style::Rect,
     rrect: ratatui::layout::Rect,
     ctx: DraggableTabBarRenderCtx<'_>,
@@ -369,7 +369,7 @@ pub(crate) fn render_draggable_tab_bar(
         }
         return;
     }
-    let active = active.min(len.saturating_sub(1));
+    let selected = selected.map(|s| s.min(len.saturating_sub(1)));
 
     let disp_opts = crate::widgets::draggable_tab_bar::TabDisplayOptions {
         variant,
@@ -507,7 +507,7 @@ pub(crate) fn render_draggable_tab_bar(
             let is_action_tab = tab.kind == DraggableTabKind::Action;
             let is_tab_hovered = hovered_tab == Some(vis.index);
             let is_close_hovered = hovered_close_tab == Some(vis.index);
-            let is_active = !is_action_tab && vis.index == active;
+            let is_active = !is_action_tab && selected == Some(vis.index);
 
             // The close control keeps its cells in the tab's measured width whether or not the
             // symbol is drawn, so a hover-only close would otherwise truncate the label for a
@@ -787,7 +787,7 @@ pub(crate) fn render_draggable_tab_bar_node(
     let tab_hover_style = resolve_slot(theme, ThemeRole::ItemHover, &node.tab_hover_style);
     let active_style = resolve_slot(theme, ThemeRole::Selection, &node.active_style);
     let mut tabs = node.tabs.to_vec();
-    let mut active = node.active;
+    let mut selected = node.selected;
     if let Some((from, to)) = node.pending_swap
         && from < tabs.len()
         && to < tabs.len()
@@ -795,15 +795,17 @@ pub(crate) fn render_draggable_tab_bar_node(
     {
         let moved = tabs.remove(from);
         tabs.insert(to, moved);
-        active = if active == from {
-            to
-        } else if from < to && active > from && active <= to {
-            active.saturating_sub(1)
-        } else if to < from && active >= to && active < from {
-            active.saturating_add(1)
-        } else {
-            active
-        };
+        selected = selected.map(|active| {
+            if active == from {
+                to
+            } else if from < to && active > from && active <= to {
+                active.saturating_sub(1)
+            } else if to < from && active >= to && active < from {
+                active.saturating_add(1)
+            } else {
+                active
+            }
+        });
         // A slot label names where a tab is, so the tabs the preview moved name their new slots.
         if let Some(format) = &node.position_label {
             let (first, last) = (from.min(to), from.max(to));
@@ -831,7 +833,7 @@ pub(crate) fn render_draggable_tab_bar_node(
     render_draggable_tab_bar(
         state.f,
         &tabs,
-        active,
+        selected,
         rect,
         rrect,
         DraggableTabBarRenderCtx {

@@ -84,7 +84,7 @@ impl Component for BarApp {
                 DraggableTab::new("B").closeable(self.close_buttons),
                 DraggableTab::new("C").closeable(self.close_buttons),
             ])
-            .active(1)
+            .selected(1)
             .focusable(false)
             .draggable(false)
             .divider(' ')
@@ -321,7 +321,7 @@ fn label_ellipsis_still_gets_caps() {
         fn view(&self, _ctx: &Context<Self>) -> Element {
             DraggableTabBar::new()
                 .tabs(["AAAAAA", "BBBBBB", "CCCCCC"].map(DraggableTab::new))
-                .active(1)
+                .selected(1)
                 .focusable(false)
                 .draggable(false)
                 .divider(' ')

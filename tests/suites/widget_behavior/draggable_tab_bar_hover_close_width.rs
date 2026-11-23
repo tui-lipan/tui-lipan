@@ -26,7 +26,7 @@ impl Component for HoverCloseBar {
     fn view(&self, _ctx: &Context<Self>) -> Element {
         DraggableTabBar::new()
             .tabs(vec![DraggableTab::new("ABCDEFGHIJKL").closeable(true)])
-            .active(0)
+            .selected(0)
             .variant(DraggableTabBarVariant::FrameLine)
             .close_on_hover_only(true)
             .show_overflow_controls(false)

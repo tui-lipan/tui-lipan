@@ -80,7 +80,7 @@ impl Component for EmptyTransfer {
                 })
                 .reorder_mode(self.mode)
                 .height(Length::Px(1))
-                .on_change(ctx.link().callback(Msg::Select));
+                .on_select(ctx.link().callback(Msg::Select));
             if !self.source_only_callback || id == "top" {
                 bar = bar.on_transfer(
                     ctx.link()
@@ -474,14 +474,14 @@ impl Component for OnDropSwapPreviewApp {
                 .iter()
                 .map(|label| DraggableTab::new(label.as_str())),
         )
-        .active(ctx.state.active)
+        .selected(ctx.state.active)
         .reorder_mode(DragReorderMode::OnDrop)
         .divider(' ')
         .show_close_buttons(false)
         .show_overflow_controls(false)
         .active_style(Style::new().bg(Color::Blue))
         .height(Length::Px(1))
-        .on_change(ctx.link().callback(OnDropSwapPreviewMsg::Select))
+        .on_select(ctx.link().callback(OnDropSwapPreviewMsg::Select))
         .on_reorder(ctx.link().callback(OnDropSwapPreviewMsg::Reorder))
         .into()
     }

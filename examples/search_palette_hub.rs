@@ -610,9 +610,9 @@ impl SearchPaletteHub {
                                             .description_overflow(multi_description_overflow)
                                             .description_selection(ctx.state.description_selection)
                                             .selection_full_width(true)
-                                            .active_index(ctx.state.multi_active_index)
+                                            .highlighted(ctx.state.multi_active_index)
                                             .selected_indices(ctx.state.multi_selected.clone())
-                                            .on_active_index_change(
+                                            .on_highlight(
                                                 ctx.link().callback(Msg::MultiHighlightChanged),
                                             )
                                             .on_change(ctx.link().callback(Msg::MultiChanged))
@@ -644,8 +644,8 @@ impl Component for SearchPaletteHub {
                 Tab::new("Description"),
                 Tab::new("Overlays"),
             ])
-            .active(ctx.state.active_tab.min(4))
-            .on_change(ctx.link().callback(Msg::TabChanged));
+            .selected(ctx.state.active_tab.min(4))
+            .on_select(ctx.link().callback(Msg::TabChanged));
 
         let mode_hint = match ctx.state.active_tab {
             0 => "Palette mode: / open, t/Ctrl+t toggle frame tint, q quit when closed",

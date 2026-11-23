@@ -47,8 +47,8 @@ impl Component for FrameHub {
                     .tab("Border Merge")
                     .tab("Decorations")
                     .tab("Features")
-                    .active(self.section)
-                    .on_change(link.callback(|event: TabsEvent| Msg::SelectSection(event.index)))
+                    .selected(self.section)
+                    .on_select(link.callback(|event: TabsEvent| Msg::SelectSection(event.index)))
                     .style(Style::new().fg(Color::DarkGray))
                     .active_style(Style::new().fg(Color::White).bold()),
             )
@@ -637,8 +637,8 @@ fn features_section(ctx: &Context<FrameHub>, divider_tab: usize) -> Element {
                                         .tab("Overview")
                                         .tab("Search")
                                         .tab("Logs")
-                                        .active(divider_tab)
-                                        .on_change(link.callback(|event: TabsEvent| {
+                                        .selected(divider_tab)
+                                        .on_select(link.callback(|event: TabsEvent| {
                                             Msg::SelectDividerTab(event.index)
                                         }))
                                         .style(Style::new().fg(Color::DarkGray))

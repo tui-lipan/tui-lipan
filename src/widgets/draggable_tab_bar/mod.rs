@@ -484,7 +484,7 @@ pub(crate) enum DraggableTabHitTarget {
 #[derive(Clone)]
 pub struct DraggableTabBar {
     pub(crate) tabs: Arc<[DraggableTab]>,
-    pub(crate) active: usize,
+    pub(crate) selected: Option<usize>,
     pub(crate) style: Style,
     pub(crate) focus_style: StyleSlot,
     pub(crate) hover_style: StyleSlot,
@@ -529,7 +529,7 @@ pub struct DraggableTabBar {
     pub(crate) drag_preview: bool,
     pub(crate) reorder_mode: DragReorderMode,
     pub(crate) drag_threshold: u16,
-    pub(crate) on_change: Option<Callback<TabsEvent>>,
+    pub(crate) on_select: Option<Callback<TabsEvent>>,
     pub(crate) on_action: Option<Callback<DraggableTabActionEvent>>,
     pub(crate) on_close: Option<Callback<DraggableTabCloseEvent>>,
     pub(crate) on_reorder: Option<Callback<DraggableTabReorderEvent>>,
@@ -549,7 +549,7 @@ impl Default for DraggableTabBar {
     fn default() -> Self {
         Self {
             tabs: Arc::default(),
-            active: 0,
+            selected: Some(0),
             style: Style::default(),
             focus_style: StyleSlot::Inherit,
             hover_style: StyleSlot::Inherit,
@@ -594,7 +594,7 @@ impl Default for DraggableTabBar {
             drag_preview: true,
             reorder_mode: DragReorderMode::Live,
             drag_threshold: 1,
-            on_change: None,
+            on_select: None,
             on_action: None,
             on_close: None,
             on_reorder: None,
@@ -652,9 +652,12 @@ impl DraggableTabBar {
         self
     }
 
-    /// Set active tab index.
-    pub fn active(mut self, active: usize) -> Self {
-        self.active = active;
+    /// Set selected tab index.
+    ///
+    /// Pass `None` for no highlighted tab. Bare integers still work via
+    /// `From<T> for Option<T>` (`bar.selected(0)`).
+    pub fn selected(mut self, selected: impl Into<Option<usize>>) -> Self {
+        self.selected = selected.into();
         self
     }
 
@@ -1048,9 +1051,9 @@ impl DraggableTabBar {
         self
     }
 
-    /// Callback fired when active tab changes.
-    pub fn on_change(mut self, cb: Callback<TabsEvent>) -> Self {
-        self.on_change = Some(cb);
+    /// Callback fired when the selected tab changes.
+    pub fn on_select(mut self, cb: Callback<TabsEvent>) -> Self {
+        self.on_select = Some(cb);
         self
     }
 
@@ -2289,7 +2292,7 @@ impl crate::layout::hash::LayoutHash for DraggableTabBar {
         for tab in self.tabs.iter() {
             tab_metrics_with_options(tab, &options).width.hash(hasher);
         }
-        self.active.hash(hasher);
+        self.selected.hash(hasher);
         self.divider.hash(hasher);
         self.close_symbol.hash(hasher);
         self.accent_symbol.hash(hasher);

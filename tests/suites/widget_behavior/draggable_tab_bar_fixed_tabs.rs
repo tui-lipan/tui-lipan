@@ -150,7 +150,7 @@ impl Component for FixedTabs {
         let bar = |id: &str, tabs: &[Tab]| {
             DraggableTabBar::new()
                 .tabs(tabs.iter().map(to_tab))
-                .active(ctx.state.selected)
+                .selected(ctx.state.selected)
                 .bar_id(id)
                 .drag_group("editors")
                 .reorder_mode(mode)
@@ -160,7 +160,7 @@ impl Component for FixedTabs {
                 .show_overflow_controls(false)
                 .focusable(false)
                 .height(Length::Px(1))
-                .on_change(ctx.link().callback(Msg::Select))
+                .on_select(ctx.link().callback(Msg::Select))
                 .on_reorder(ctx.link().callback(Msg::Reorder))
                 .on_transfer(ctx.link().callback(Msg::Transfer))
                 .on_close(ctx.link().callback(Msg::Close))

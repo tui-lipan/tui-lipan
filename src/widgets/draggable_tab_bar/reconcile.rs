@@ -19,32 +19,42 @@ pub fn reconcile_draggable_tab_bar(
         rect.h = h.min(rect.h);
     }
 
-    let (old_offset, old_override, old_previous_active, old_tabs, old_width_lock, old_pending_swap) =
-        match &tree.node(id).kind {
-            NodeKind::DraggableTabBar(node) => (
-                node.scroll_offset,
-                node.scroll_override,
-                node.previous_active,
-                Some(node.tabs.clone()),
-                node.width_lock,
-                node.pending_swap,
-            ),
-            _ => (bar.scroll_offset, None, bar.active, None, None, None),
-        };
+    let (
+        old_offset,
+        old_override,
+        old_previous_selected,
+        old_tabs,
+        old_width_lock,
+        old_pending_swap,
+    ) = match &tree.node(id).kind {
+        NodeKind::DraggableTabBar(node) => (
+            node.scroll_offset,
+            node.scroll_override,
+            node.previous_selected,
+            Some(node.tabs.clone()),
+            node.width_lock,
+            node.pending_swap,
+        ),
+        _ => (bar.scroll_offset, None, bar.selected, None, None, None),
+    };
 
-    // A newly mounted bar has no earlier position to keep, so it opens on its active tab unless the
-    // app asked for a position of its own. Its first layout can be provisional, so a later width
-    // reveals again, until the user scrolls the strip themselves.
+    // A newly mounted bar has no earlier position to keep, so it opens on its selected tab unless
+    // the app asked for a position of its own. Its first layout can be provisional, so a later
+    // width reveals again, until the user scrolls the strip themselves.
     let mounting = !matches!(tree.node(id).kind, NodeKind::DraggableTabBar(_));
     let resized = old_override.is_none() && tree.node(id).rect.w != rect.w;
-    let reveal_active = bar.active < bar.tabs.len()
-        && (bar.active != old_previous_active || ((mounting || resized) && bar.scroll_offset == 0));
+    let reveal_target = bar.selected.filter(|&idx| idx < bar.tabs.len());
+    let reveal_selected = reveal_target.is_some()
+        && (bar.selected != old_previous_selected
+            || ((mounting || resized) && bar.scroll_offset == 0));
     let viewport_w = rect.w.saturating_sub(bar.padding.horizontal()).max(1) as usize;
     let display_options = bar.display_options();
     let mut next_offset = old_override.unwrap_or(old_offset);
     if bar.tabs.is_empty() {
         next_offset = 0;
-    } else if reveal_active {
+    } else if let Some(selected_idx) = reveal_target
+        && reveal_selected
+    {
         next_offset = DraggableTabBar::scroll_offset_to_reveal_tab(
             &bar.tabs,
             &display_options,
@@ -54,7 +64,7 @@ pub fn reconcile_draggable_tab_bar(
                 show_overflow_controls: bar.show_overflow_controls,
                 overflow_labels: bar.overflow_labels.clone(),
             },
-            bar.active,
+            selected_idx,
         );
     } else {
         let total_width =
@@ -82,7 +92,7 @@ pub fn reconcile_draggable_tab_bar(
             }
         }
     }
-    next_node.previous_active = bar.active;
+    next_node.previous_selected = bar.selected;
     next_node.scroll_offset = next_offset;
     next_node.scroll_override = old_override.map(|_| next_offset);
     next_node.width_lock = old_width_lock.filter(|lock| {
@@ -176,10 +186,10 @@ mod tests {
         "alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel",
     ];
 
-    fn scrolling_bar(active: usize) -> DraggableTabBar {
+    fn scrolling_bar(selected: usize) -> DraggableTabBar {
         DraggableTabBar::new()
             .tabs(LABELS.iter().map(|label| DraggableTab::new(*label)))
-            .active(active)
+            .selected(selected)
             .show_close_buttons(false)
             .border(false)
             .divider(' ')
@@ -198,7 +208,7 @@ mod tests {
         let active = layout
             .visible_tabs
             .iter()
-            .find(|tab| tab.index == node.active)
+            .find(|tab| Some(tab.index) == node.selected)
             .expect("active tab is on screen");
         (
             active.clip_left,

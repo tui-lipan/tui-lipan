@@ -612,11 +612,13 @@ impl<C: Component> AppRunner<C> {
         if !self.core.tree.is_valid(id) {
             return false;
         }
-        let active = match &self.core.tree.node(id).kind {
-            NodeKind::DraggableTabBar(node_tabs) => node_tabs.active,
-            _ => return false,
+        let Some(selected) = (match &self.core.tree.node(id).kind {
+            NodeKind::DraggableTabBar(node_tabs) => node_tabs.selected,
+            _ => None,
+        }) else {
+            return false;
         };
-        self.ensure_draggable_tab_bar_tab_visible(id, active)
+        self.ensure_draggable_tab_bar_tab_visible(id, selected)
     }
 
     pub(crate) fn focus_for_node(&mut self, id: NodeId) -> bool {

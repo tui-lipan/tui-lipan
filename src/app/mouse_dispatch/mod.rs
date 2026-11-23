@@ -1478,7 +1478,7 @@ impl<C: Component> MouseDispatchCtx<C> for TestBackend<C> {
     }
 
     fn handle_tabs_click(&mut self, change: crate::app::input::mouse::TabsChange) -> bool {
-        if change.next != change.active {
+        if change.selected != Some(change.next) {
             change
                 .cb
                 .emit(crate::widgets::TabsEvent { index: change.next });

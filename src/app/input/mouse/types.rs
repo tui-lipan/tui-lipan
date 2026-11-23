@@ -127,7 +127,7 @@ pub(crate) struct TableSelect {
 pub(crate) struct TabsChange {
     pub cb: Callback<TabsEvent>,
     pub next: usize,
-    pub active: usize,
+    pub selected: Option<usize>,
 }
 
 pub(crate) struct DraggableTabBarAction {
@@ -136,13 +136,13 @@ pub(crate) struct DraggableTabBarAction {
     pub tab_index: usize,
     pub action_hit: bool,
     pub close_hit: bool,
-    pub active: usize,
+    pub selected: Option<usize>,
     pub bar_id: Option<Arc<str>>,
     pub drag_group: Option<Arc<str>>,
     pub draggable: bool,
     pub reorder_mode: DragReorderMode,
     pub drag_threshold: u16,
-    pub on_change: Option<Callback<TabsEvent>>,
+    pub on_select: Option<Callback<TabsEvent>>,
     pub on_action: Option<Callback<DraggableTabActionEvent>>,
     pub on_close: Option<Callback<DraggableTabCloseEvent>>,
     pub on_transfer: Option<Callback<DraggableTabTransferEvent>>,

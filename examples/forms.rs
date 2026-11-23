@@ -20,7 +20,6 @@ enum Msg {
     ThemeChanged(usize),
     CountryToggle(bool),
     CountrySelect(usize),
-    CountryChange(usize),
     VolumeChanged(f64),
     PrevMonth,
     NextMonth,
@@ -48,13 +47,16 @@ impl Component for FormsDemo {
             .child_align(Align::Center)
             .child(
                 Radio::new(vec!["Light", "Dark", "System"])
-                    .selected(Some(self.theme))
+                    .selected(self.theme)
                     .layout(RadioLayout::Horizontal)
                     .gap(2)
                     .checked_style(Style::new().fg(Color::Green))
                     .unchecked_style(Style::new().fg(Color::DarkGray))
                     .hover_style(Style::new().fg(Color::LightBlue))
-                    .on_change(ctx.link().callback(Msg::ThemeChanged)),
+                    .on_select(
+                        ctx.link()
+                            .callback(|e: RadioEvent| Msg::ThemeChanged(e.index)),
+                    ),
             );
 
         let select_section = Frame::new()
@@ -68,8 +70,10 @@ impl Component for FormsDemo {
                     .placeholder("Select a country...")
                     .expanded(self.country_expanded)
                     .on_toggle(ctx.link().callback(Msg::CountryToggle))
-                    .on_change(ctx.link().callback(Msg::CountryChange))
-                    .on_select(ctx.link().callback(Msg::CountrySelect))
+                    .on_select(
+                        ctx.link()
+                            .callback(|e: SelectEvent| Msg::CountrySelect(e.index)),
+                    )
                     .width(Length::Flex(1)),
             );
 
@@ -136,7 +140,7 @@ impl Component for FormsDemo {
                             .items(ITEMS.iter().copied())
                             .query(self.combo_query.clone())
                             .open(self.combo_open)
-                            .active_index(self.combo_active)
+                            .highlighted(self.combo_active)
                             .selected(self.combo_selected)
                             .allow_custom_value(true)
                             .placeholder("Start typing...")
@@ -144,7 +148,7 @@ impl Component for FormsDemo {
                             .list_height(Length::Px(6))
                             .on_query_change(ctx.link().callback(Msg::ComboQueryChanged))
                             .on_open_change(ctx.link().callback(Msg::ComboOpenChanged))
-                            .on_active_index_change(ctx.link().callback(Msg::ComboHighlightChanged))
+                            .on_highlight(ctx.link().callback(Msg::ComboHighlightChanged))
                             .on_commit(ctx.link().callback(Msg::ComboCommit)),
                     )
                     .child(Text::new(format!("Status: {}", self.combo_status))),
@@ -174,10 +178,6 @@ impl Component for FormsDemo {
                 Update::render()
             }
             Msg::CountrySelect(idx) => {
-                self.country_idx = Some(idx);
-                Update::render()
-            }
-            Msg::CountryChange(idx) => {
                 self.country_idx = Some(idx);
                 Update::render()
             }

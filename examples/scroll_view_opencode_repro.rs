@@ -819,9 +819,9 @@ impl Component for OpencodeScrollRepro {
                         Tabs {
                             border: true,
                             border_style: BorderStyle::Rounded,
-                            active: ctx.state.active_preset,
+                            selected: ctx.state.active_preset,
                             height: Length::Px(3),
-                            on_change: ctx.link().callback(|e: TabsEvent| Msg::SetPreset(e.index)),
+                            on_select: ctx.link().callback(|e: TabsEvent| Msg::SetPreset(e.index)),
                             tab: "Mixed",
                             tab: "Diff Heavy",
                             tab: "Patch Stack",

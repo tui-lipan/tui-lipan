@@ -750,7 +750,7 @@ VStack::new()
                 .tabs(self.images.iter().enumerate().map(|(i, _)| {
                     DraggableTab::new(format!("Image {}", i + 1)).closeable(true)
                 }))
-                .active(usize::MAX)
+                .selected(None)
                 .close_symbol("x")
                 .draggable(false)
                 .focusable(false)
@@ -1051,7 +1051,7 @@ Radio button group.
 | Prop | Type | Description |
 |------|------|-------------|
 | `options` | `Vec<Arc<str>>` | **Constructor** - option labels |
-| `selected` | `Option<usize>` | Selected index |
+| `selected` | `impl Into<Option<usize>>` | Selected index (`None` clears selection) |
 | `layout` | `RadioLayout` | `Vertical` or `Horizontal` |
 | `variant` | `RadioVariant` | Visual variant |
 | `gap` | `u16` | Space between options |
@@ -1070,7 +1070,7 @@ Radio button group.
 | `focus_key` | `impl Into<Arc<str>>` | Key on the active option so focus follows arrows. Default: derived from option labels |
 | `on_focus` / `on_blur` | `Callback<usize>` | Active option gained / lost focus (payload = option index) |
 | `on_key` | `KeyHandler` | Key while the active option is focused (runs before arrows) |
-| `on_change` | `Callback<usize>` | Selection changed callback |
+| `on_select` | `Callback<RadioEvent>` | Selection changed (`RadioEvent { index, label }`) |
 
 Roving focus: only the selected option (or the first option when none is
 selected) is focusable and a tab stop. Other options remain mouse-activatable
@@ -1080,9 +1080,9 @@ distinct groups rarely collide; override when two groups share the same labels.
 
 ```rust
 Radio::new(vec!["Option A".into(), "Option B".into(), "Option C".into()])
-    .selected(Some(self.choice))
+    .selected(self.choice)
     .layout(RadioLayout::Horizontal)
-    .on_change(ctx.link().callback(Msg::ChoiceChanged))
+    .on_select(ctx.link().callback(|e: RadioEvent| Msg::ChoiceChanged(e.index)))
 ```
 
 ---
@@ -1095,7 +1095,7 @@ Dropdown select widget.
 |------|------|-------------|
 | `animation` | `impl Into<Option<VisibilityAnimation>>` | Opt-in popup entry/exit effects and timing, forwarded to Popover |
 | `options` | `Vec<String>` | Available options |
-| `selected` | `Option<usize>` | Selected index |
+| `selected` | `impl Into<Option<usize>>` | Selected index (`None` shows `placeholder` and leaves popup unhighlighted) |
 | `placeholder` | `String` | Placeholder when nothing selected |
 | `expanded` | `bool` | Controlled expanded state |
 | `width` | `Length` | Width |
@@ -1104,8 +1104,7 @@ Dropdown select widget.
 | `tab_stop` | `bool` | Include trigger in Tab traversal (default: `true`) |
 | `on_focus` / `on_blur` | `Callback<()>` | Trigger focus gained / lost |
 | `on_key` | `KeyHandler` | Key while trigger focused (caller-first) |
-| `on_select` | `Callback<usize>` | Item selected |
-| `on_change` | `Callback<usize>` | Selection changed |
+| `on_select` | `Callback<SelectEvent>` | Option selected (`SelectEvent { index, label }`): fires on closed-trigger navigation or when committing a pick in the open popup (Enter or mouse click); moving the highlight inside an open popup does not emit `on_select` |
 | `on_toggle` | `Callback<bool>` | Dropdown opened/closed |
 | `button_variant` | `ButtonVariant` | Trigger button variant |
 | `button_padding` | `impl Into<Padding>` | Trigger button padding (default: 1 cell horizontally) |
@@ -1147,6 +1146,10 @@ Dropdown select widget.
 | `list_empty_text_style` | `Style` | Dropdown empty text style |
 | `list_disabled_style` | `Style` | Dropdown disabled style |
 
+Keyboard behavior:
+- **Closed trigger (focused, enabled):** `Up`/`Down` (and `k`/`j`), `Home`/`End`, and `PageUp`/`PageDown` step through options without opening the popup and emit `on_select` once per actual change (no emission at the ends or with zero options). `Enter` and `Space` open/toggle the popup.
+- **Open popup:** arrow/page/home/end keys move the popup highlight without emitting `on_select`; `Enter` or mouse click commits the pick (emitting `on_select` once) and closes the popup; `Esc` dismisses without emitting `on_select`.
+
 Select forwards shared dropdown-list chrome through `ListConfig`, including
 `symbol_column`, `gutter_gap`, and `gutter_for_non_selectable` for row-local
 leading adornment alignment.
@@ -1164,8 +1167,8 @@ Controlled input + dropdown list for searchable selection.
 | `query` | `Arc<str>` | Controlled input value |
 | `placeholder` | `String` | Input placeholder |
 | `open` | `bool` | Controlled dropdown state |
-| `active_index` | `Option<usize>` | Active source index |
-| `selected` | `Option<usize>` | Selected source index fallback |
+| `highlighted` | `impl Into<Option<usize>>` | Highlighted source index in the dropdown |
+| `selected` | `impl Into<Option<usize>>` | Selected source index (`None` clears selection) |
 | `allow_custom_value` | `bool` | Allow Enter to commit free-form query |
 | `width` | `Length` | Input width |
 | `list_width` | `Length` | Dropdown width override |
@@ -1193,7 +1196,7 @@ Controlled input + dropdown list for searchable selection.
 | `input_focus_suffix_style` | `Style` | Input suffix style when focused |
 | `on_query_change` | `Callback<Arc<str>>` | Input query changed |
 | `on_open_change` | `Callback<bool>` | Request open/close change |
-| `on_active_index_change` | `Callback<Option<usize>>` | Active source index changed |
+| `on_highlight` | `Callback<Option<usize>>` | Highlighted source index changed |
 | `on_commit` | `Callback<ComboBoxCommitEvent>` | Enter/activate commit event |
 
 `ComboBoxCommitEvent` contains:
@@ -1215,7 +1218,7 @@ Controlled list for selecting multiple items with `Space` toggle and `Enter` com
 | Prop | Type | Description |
 |------|------|-------------|
 | `items` | `Arc<[MultiSelectItem]>` / `items_arc` | Source rows (`items(...)` collects into `Arc`; prefer `items_arc` when sharing) |
-| `active_index` | `usize` | Active source index |
+| `highlighted` | `impl Into<Option<usize>>` | Highlighted cursor source index (`None` clears highlight) |
 | `selected_indices` | `Vec<usize>` | Controlled selected source indices |
 | `max_selected` | `usize` | Optional maximum selected rows |
 | `selected_prefix` | `String` | Prefix for selected rows (default: `[x]`) |
@@ -1242,9 +1245,9 @@ Controlled list for selecting multiple items with `Space` toggle and `Enter` com
 | `on_key` | `KeyHandler` | Key while focused (caller-first; returning `true` skips Space toggle) |
 | `empty_text` | `String` | Text when list is empty |
 | `empty_text_style` | `Style` | Empty-text style |
-| `on_active_index_change` | `Callback<usize>` | Active row changed |
+| `on_highlight` | `Callback<usize>` | Highlighted row changed |
 | `on_toggle` | `Callback<MultiSelectToggleEvent>` | Current row toggled |
-| `on_context_menu` | `Callback<(ListEvent, MouseEvent)>` | Right-button press reports the source item index; preserves checked items and active row |
+| `on_context_menu` | `Callback<(ListEvent, MouseEvent)>` | Right-button press reports the source item index; preserves checked items and highlighted row |
 | `on_change` | `Callback<MultiSelectChangeEvent>` | Selected set changed |
 | `on_commit` | `Callback<MultiSelectCommitEvent>` | Enter commit with selected set |
 
@@ -1254,8 +1257,8 @@ Event payloads:
 - `MultiSelectCommitEvent { selected_indices }`
 
 Interaction notes:
-- Space toggles the active_index row.
-- Mouse click on a row toggles that row and updates the active row.
+- Space toggles the highlighted row.
+- Mouse click on a row toggles that row and updates the highlighted row.
 - Enter emits `on_commit` (mouse click does not commit).
 
 `MultiSelectItem` supports optional descriptions:

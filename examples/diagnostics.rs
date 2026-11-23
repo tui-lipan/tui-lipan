@@ -264,8 +264,8 @@ impl Diagnostics {
         rsx! {
             Tabs {
                 tabs: vec!["Active".into(), "Idle".into(), "Tabbed".into()],
-                active: ctx.state.section,
-                on_change: ctx.link().callback(|e: TabsEvent| Msg::SectionChange(e.index)),
+                selected: ctx.state.section,
+                on_select: ctx.link().callback(|e: TabsEvent| Msg::SectionChange(e.index)),
             }
         }
     }
@@ -444,8 +444,8 @@ impl Diagnostics {
                 Text { content: "" },
                 Tabs {
                     tabs: vec!["Tab 1 (Idle)".into(), "Tab 2 (Hoverables)".into()],
-                    active: ctx.state.tabbed_active_tab,
-                    on_change: ctx.link().callback(|e: TabsEvent| Msg::TabbedTabChange(e.index)),
+                    selected: ctx.state.tabbed_active_tab,
+                    on_select: ctx.link().callback(|e: TabsEvent| Msg::TabbedTabChange(e.index)),
                 },
                 if ctx.state.tabbed_active_tab == 0 {
                     VStack {

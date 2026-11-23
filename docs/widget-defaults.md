@@ -516,7 +516,6 @@ Source: `src/widgets/select/mod.rs` (`Select`).
 | `animation` | `None` |
 | `on_toggle` | `None` |
 | `on_select` | `None` |
-| `on_change` | `None` |
 | `width` | `Length::Auto` |
 | `disabled` | `false` |
 | `button_variant` | `ButtonVariant::Outlined` |
@@ -557,7 +556,7 @@ Source: `src/widgets/combo_box.rs` (`ComboBox`).
 | `placeholder` | `Some("Type to filter...".into())` |
 | `open` | `false` |
 | `animation` | `None` |
-| `active_index` | `None` |
+| `highlighted` | `None` |
 | `selected` | `None` |
 | `allow_custom_value` | `false` |
 | `width` | `Length::Flex(1)` |
@@ -585,7 +584,7 @@ Source: `src/widgets/combo_box.rs` (`ComboBox`).
 | `empty_text` | `Some("No matches".into())` |
 | `on_query_change` | `None` |
 | `on_open_change` | `None` |
-| `on_active_index_change` | `None` |
+| `on_highlight` | `None` |
 | `on_commit` | `None` |
 | `focusable` | `true` |
 | `tab_stop` | `true` |
@@ -600,7 +599,7 @@ Source: `src/widgets/multi_select.rs` (`MultiSelect`).
 | Field | Default initializer |
 |---|---|
 | `items` | `Arc::from([])` |
-| `active_index` | `0` |
+| `highlighted` | `Some(0)` |
 | `selected_indices` | `Vec::new()` |
 | `max_selected` | `None` |
 | `title` | `None` |
@@ -624,7 +623,7 @@ Source: `src/widgets/multi_select.rs` (`MultiSelect`).
 | `on_focus` | `None` |
 | `on_blur` | `None` |
 | `on_key` | `None` |
-| `on_active_index_change` | `None` |
+| `on_highlight` | `None` |
 | `on_toggle` | `None` |
 | `on_context_menu` | `None` |
 | `on_change` | `None` |
@@ -871,7 +870,7 @@ Source: `src/widgets/tabs/mod.rs` (`Tabs`).
 | Field | Default initializer |
 |---|---|
 | `tabs` | `Arc::new([])` |
-| `active` | `0` |
+| `selected` | `Some(0)` |
 | `style` | `Style::default()` |
 | `focus_style` | `StyleSlot::Inherit` |
 | `hover_style` | `StyleSlot::Inherit` |
@@ -885,7 +884,7 @@ Source: `src/widgets/tabs/mod.rs` (`Tabs`).
 | `padding` | `Padding::default()` |
 | `width` | `Length::Flex(1)` |
 | `height` | `Length::Auto` |
-| `on_change` | `None` |
+| `on_select` | `None` |
 | `on_click` | `None` |
 | `on_context_menu` | `None` |
 | `on_key` | `None` |
@@ -903,7 +902,7 @@ Source: `src/widgets/draggable_tab_bar/mod.rs` (`DraggableTabBar`).
 | Field | Default initializer |
 |---|---|
 | `tabs` | `Arc::default()` |
-| `active` | `0` |
+| `selected` | `Some(0)` |
 | `style` | `Style::default()` |
 | `focus_style` | `StyleSlot::Inherit` |
 | `hover_style` | `StyleSlot::Inherit` |
@@ -948,7 +947,7 @@ Source: `src/widgets/draggable_tab_bar/mod.rs` (`DraggableTabBar`).
 | `drag_preview` | `true` |
 | `reorder_mode` | `DragReorderMode::Live` |
 | `drag_threshold` | `1` |
-| `on_change` | `None` |
+| `on_select` | `None` |
 | `on_action` | `None` |
 | `on_close` | `None` |
 | `on_reorder` | `None` |
@@ -1273,7 +1272,6 @@ Source: `src/widgets/tree/mod.rs` (`Tree`).
 | `on_pointer_move` | `None` |
 | `on_viewport_change` | `None` |
 | `selected` | `None` |
-| `clear_selection` | `false` |
 | `force_scroll_to_selected` | `false` |
 | `gap` | `0` |
 | `indent` | `2` |

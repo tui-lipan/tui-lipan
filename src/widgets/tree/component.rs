@@ -54,10 +54,9 @@ impl Component for TreeComponent {
         TreeState {
             hovered: None,
             expanded: expanded_paths_from_root(&props.root),
-            selected: if props.clear_selection {
-                None
-            } else {
-                Some(props.selected.unwrap_or(0))
+            selected: match props.selected {
+                Some(selected) => selected,
+                None => Some(0),
             },
         }
     }
@@ -76,15 +75,8 @@ impl Component for TreeComponent {
             return Update::full();
         }
 
-        if old_props.clear_selection != ctx.props.clear_selection {
+        if old_props.selected != ctx.props.selected {
             sync_selection_from_props(&ctx.props, &mut ctx.state);
-            return Update::full();
-        }
-
-        if old_props.selected != ctx.props.selected
-            && let Some(selected) = ctx.props.selected
-        {
-            ctx.state.selected = Some(selected);
             return Update::full();
         }
 
@@ -449,15 +441,16 @@ fn resolved_expanded(ctx: &Context<TreeComponent>) -> Cow<'_, HashSet<TreePath>>
 /// Reconcile internal selection state with the current props.
 ///
 /// Shared by every `on_props_changed` path so an update that changes several
-/// props at once cannot skip part of the sync. Leaving `clear_selection` with no
-/// controlled index restores a cursor rather than staying blank.
+/// props at once cannot skip part of the sync. Leaving controlled `None` for
+/// uncontrolled mode restores a cursor rather than staying blank.
 fn sync_selection_from_props(props: &TreeProps, state: &mut TreeState) {
-    if props.clear_selection {
-        state.selected = None;
-    } else if let Some(selected) = props.selected {
-        state.selected = Some(selected);
-    } else if state.selected.is_none() {
-        state.selected = Some(0);
+    match props.selected {
+        Some(selected) => state.selected = selected,
+        None => {
+            if state.selected.is_none() {
+                state.selected = Some(0);
+            }
+        }
     }
 }
 
@@ -489,16 +482,15 @@ impl ListRows {
 }
 
 fn selected_index(ctx: &Context<TreeComponent>) -> Option<usize> {
-    if ctx.props.clear_selection {
-        None
-    } else {
-        let preferred = ctx.props.selected.or(ctx.state.selected)?;
-        let items = visible_entries(&ctx.props, &ctx.state.expanded)
-            .iter()
-            .map(|entry| entry.node.item.clone())
-            .collect::<Vec<_>>();
-        crate::widgets::List::nearest_selectable_index(&items, preferred)
-    }
+    let preferred = match ctx.props.selected {
+        Some(selected) => selected?,
+        None => ctx.state.selected?,
+    };
+    let items = visible_entries(&ctx.props, &ctx.state.expanded)
+        .iter()
+        .map(|entry| entry.node.item.clone())
+        .collect::<Vec<_>>();
+    crate::widgets::List::nearest_selectable_index(&items, preferred)
 }
 
 fn push_entries<'a>(
@@ -945,26 +937,26 @@ mod tests {
     }
 
     #[test]
-    fn clear_selection_suppresses_inner_list_highlight() {
+    fn selected_none_suppresses_inner_list_highlight() {
         // Baseline: the controlled prop reaches the inner list.
         assert_eq!(
             inner_list_selection(crate::widgets::Tree::new(sample_tree()).selected(1)),
             Some(1)
         );
 
-        // clear_selection wins over the controlled prop.
+        // selected(None) clears the highlight.
         assert_eq!(
             inner_list_selection(
                 crate::widgets::Tree::new(sample_tree())
                     .selected(1)
-                    .clear_selection(true)
+                    .selected(None)
             ),
             None
         );
     }
 
     #[test]
-    fn leaving_clear_selection_restores_a_cursor_even_when_expansion_also_changed() {
+    fn leaving_selected_none_restores_a_cursor_even_when_expansion_also_changed() {
         // Both branches of on_props_changed must run the same sync; the
         // expansion branch used to skip the restore and leave the tree blank.
         let mut state = TreeState {
@@ -974,7 +966,7 @@ mod tests {
         };
 
         let cleared = crate::widgets::Tree::new(sample_tree())
-            .clear_selection(true)
+            .selected(None)
             .props;
         sync_selection_from_props(&cleared, &mut state);
         assert_eq!(state.selected, None);
@@ -985,8 +977,8 @@ mod tests {
     }
 
     #[test]
-    fn clear_selection_survives_a_select_message() {
-        let tree = crate::widgets::Tree::new(sample_tree()).clear_selection(true);
+    fn selected_none_survives_a_select_message() {
+        let tree = crate::widgets::Tree::new(sample_tree()).selected(None);
         let mut backend =
             crate::TestBackend::new_with_props(TreeComponent::new(), tree.props.clone());
         backend.set_viewport(crate::style::Rect {
@@ -997,8 +989,8 @@ mod tests {
         });
         backend.render();
 
-        // The inner list may still adopt and emit a selection; clear_selection
-        // must keep the highlight suppressed regardless of recorded state.
+        // The inner list may still adopt and emit a selection; controlled
+        // selected(None) must keep the highlight suppressed until updated.
         backend
             .dispatch(TreeMsg::Select(2))
             .expect("dispatch tree select");

@@ -116,6 +116,7 @@ pub use crate::widgets::{
     TextArea, TextAreaEvent, TextAreaLineNumberMode, ThemeProvider, Toast, Tooltip, Tree,
     TreeEvent, TreeExpansionMode, TreeNode, TreeToggleEvent, VStack, ZStack,
 };
+pub use crate::widgets::{RadioEvent, SelectEvent};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Feature-gated widgets & high-frequency companion types
