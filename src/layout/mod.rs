@@ -47,18 +47,23 @@ impl LayoutEngine {
         reconcile::reconcile_with_overlays_mode(tree, root, bounds, focus, overlays, true)
     }
 
-    pub(crate) fn reconcile_with_overlays_mode(
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn reconcile_with_overlay_bounds(
         tree: &mut NodeTree,
         root: &Element,
         bounds: Rect,
+        overlay_bounds: Rect,
+        popover_expand_bounds: Option<Rect>,
         focus: Option<&FocusContext>,
         overlays: &[crate::overlay::OverlayEntry],
         allow_root_overlays: bool,
     ) {
-        reconcile::reconcile_with_overlays_mode(
+        reconcile::reconcile_with_overlay_bounds(
             tree,
             root,
             bounds,
+            overlay_bounds,
+            popover_expand_bounds,
             focus,
             overlays,
             allow_root_overlays,

@@ -294,10 +294,16 @@ pub(crate) fn render(f: &mut ratatui::Frame<'_>, ctx: &RenderContext<'_>) {
         let slide_offset = overlay_slide_offset(tree, overlay);
         let overlay_rect =
             overlay_paint_offset(tree, overlay).apply_to_rect(tree.node(overlay.id).rect);
+        let absolute_overlay_rect = Rect {
+            x: content_rect.x.saturating_add(overlay_rect.x),
+            y: content_rect.y.saturating_add(overlay_rect.y),
+            w: overlay_rect.w,
+            h: overlay_rect.h,
+        };
         let clear_rect = clip_overlay_clear_rect(content_rect, overlay_rect);
         let effect_backdrop = custom_effect
             .as_ref()
-            .and_then(|_| snapshot_buffer_rect(state.f, overlay_rect, Some(content_rect)));
+            .and_then(|_| snapshot_buffer_rect(state.f, absolute_overlay_rect, Some(content_rect)));
 
         // Snapshot all cells in the overlay area before clearing. After drawing
         // the overlay content, any untouched cells are restored so transparent
@@ -410,7 +416,7 @@ pub(crate) fn render(f: &mut ratatui::Frame<'_>, ctx: &RenderContext<'_>) {
         if let Some(effect) = custom_effect {
             apply_visual_effects_over_backdrop(
                 state.f,
-                overlay_rect,
+                absolute_overlay_rect,
                 std::slice::from_ref(&effect),
                 state.ctx.effect_phase,
                 Some(content_rect),

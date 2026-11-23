@@ -604,7 +604,9 @@ impl<C: Component> AppRunner<C> {
 
         let size = terminal.size()?;
 
-        let bounds = self.content_bounds(size.width, size.height);
+        let mut bounds = self.content_bounds(size.width, size.height);
+        let mut overlay_bounds = self.overlay_bounds(size.width, size.height);
+        self.sync_runtime_overlay_bounds(size.width, size.height);
 
         #[cfg(feature = "devtools")]
         self.install_devtools_overlay();
@@ -626,15 +628,18 @@ impl<C: Component> AppRunner<C> {
         self.pop_drag_layout_collapse_hint();
         reconcile_result?;
 
-        // Auto-height inline viewports follow the content: re-measure after
-        // reconcile and re-reconcile at the settled height. Capped in case a
-        // view keeps changing its natural height in response to the viewport.
-        let mut bounds = bounds;
+        // Auto-height inline viewports follow the content (and temporarily
+        // expand for open popovers): re-measure after reconcile and
+        // re-reconcile at the settled bounds. Capped in case a view keeps
+        // changing its natural height in response to the viewport.
         for _ in 0..RENDER_STABILITY_MAX_PASSES {
-            let Some(new_bounds) = self.sync_inline_auto_height(terminal, bounds)? else {
+            let Some((new_bounds, new_overlay_bounds)) =
+                self.sync_inline_auto_height(terminal, bounds, overlay_bounds)?
+            else {
                 break;
             };
             bounds = new_bounds;
+            overlay_bounds = new_overlay_bounds;
             self.push_drag_layout_collapse_hint();
             let reconcile_result = self.render_element_until_scroll_stable(bounds);
             self.pop_drag_layout_collapse_hint();
@@ -677,6 +682,8 @@ impl<C: Component> AppRunner<C> {
         let size = terminal.size()?;
 
         let bounds = self.content_bounds(size.width, size.height);
+        let overlay_bounds = self.overlay_bounds(size.width, size.height);
+        self.sync_runtime_overlay_bounds(size.width, size.height);
 
         #[cfg(feature = "devtools")]
         self.install_devtools_overlay();
@@ -799,7 +806,10 @@ impl<C: Component> AppRunner<C> {
         // A layout-only frame can still change the content's natural height
         // (e.g. a list gaining rows). When the auto inline height moves, fall
         // back to a full render so the tree is reconciled at the new bounds.
-        if self.sync_inline_auto_height(terminal, bounds)?.is_some() {
+        if self
+            .sync_inline_auto_height(terminal, bounds, overlay_bounds)?
+            .is_some()
+        {
             crate::debug::internal_log!(
                 "[tui-lipan] layout-only fallback: inline auto height moved"
             );
@@ -829,6 +839,13 @@ impl<C: Component> AppRunner<C> {
 
         let (width, screen_height) = crossterm::terminal::size()?;
         let initial_bounds = self.content_bounds(width, screen_height);
+        self.core.set_inline_overlay_bounds(
+            Some(Rect {
+                h: initial_bounds.h.min(screen_height).max(1),
+                ..initial_bounds
+            }),
+            None,
+        );
 
         self.push_drag_layout_collapse_hint();
         let initial_result = self.render_element_until_scroll_stable(initial_bounds);
@@ -852,6 +869,13 @@ impl<C: Component> AppRunner<C> {
             h: natural_height,
         };
         if full_bounds != initial_bounds {
+            self.core.set_inline_overlay_bounds(
+                Some(Rect {
+                    h: full_bounds.h.min(screen_height).max(1),
+                    ..full_bounds
+                }),
+                None,
+            );
             self.push_drag_layout_collapse_hint();
             let full_result = self.render_element_until_scroll_stable(full_bounds);
             self.pop_drag_layout_collapse_hint();

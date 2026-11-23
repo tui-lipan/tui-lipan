@@ -140,6 +140,13 @@ pub(crate) struct RuntimeCore<C: Component> {
     /// Cached overlay entries with the generation they were cloned at.
     /// Avoids deep-cloning every frame when overlays haven't changed.
     cached_overlays: Option<(u64, Rc<[OverlayEntry]>)>,
+    /// Visible overlay placement bounds when they differ from layout bounds
+    /// (for example in `InlineHeight::Auto`, where the viewport can grow to fit
+    /// open popovers or cap taller base content without stretching the layout).
+    overlay_bounds: Option<Rect>,
+    /// Maximum viewport bounds available to grow an `InlineHeight::Auto`
+    /// viewport for open popovers.
+    popover_expand_bounds: Option<Rect>,
     #[cfg(debug_assertions)]
     pub(crate) debug_last_root_view_before_expand: Option<Element>,
 }
@@ -392,9 +399,20 @@ where
             cached_extra_expanded_element: None,
             extra_root_element: None,
             cached_overlays: None,
+            overlay_bounds: None,
+            popover_expand_bounds: None,
             #[cfg(debug_assertions)]
             debug_last_root_view_before_expand: None,
         }
+    }
+
+    pub(crate) fn set_inline_overlay_bounds(
+        &mut self,
+        overlay_bounds: Option<Rect>,
+        popover_expand_bounds: Option<Rect>,
+    ) {
+        self.overlay_bounds = overlay_bounds;
+        self.popover_expand_bounds = popover_expand_bounds;
     }
 
     #[cfg(feature = "devtools")]
@@ -980,10 +998,12 @@ where
         self.tree.set_session_now(self.ctx.env().now());
         {
             crate::probe_bucket!(crate::alloc_probe::RECONCILE);
-            LayoutEngine::reconcile_with_overlays_mode(
+            LayoutEngine::reconcile_with_overlay_bounds(
                 &mut self.tree,
                 root.as_element(),
                 bounds,
+                self.overlay_bounds.unwrap_or(bounds),
+                self.popover_expand_bounds,
                 Some(self.focus.as_ref()),
                 &overlays,
                 !self.surface_mode.is_inline(),
@@ -1048,10 +1068,12 @@ where
         .expect("expanded extra root element should exist before reconciliation");
         self.tree.set_base_active_theme(self.theme.clone());
         self.tree.set_session_now(self.ctx.env().now());
-        LayoutEngine::reconcile_with_overlays_mode(
+        LayoutEngine::reconcile_with_overlay_bounds(
             &mut self.tree,
             root.as_element(),
             bounds,
+            self.overlay_bounds.unwrap_or(bounds),
+            self.popover_expand_bounds,
             Some(self.focus.as_ref()),
             &overlays,
             !self.surface_mode.is_inline(),

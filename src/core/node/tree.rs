@@ -1082,6 +1082,14 @@ impl NodeTree {
         &self.overlay_roots
     }
 
+    pub(crate) fn required_inline_overlay_height(&self) -> u16 {
+        self.overlay_roots
+            .iter()
+            .map(|root| root.required_viewport_bottom)
+            .max()
+            .unwrap_or(0)
+    }
+
     pub(crate) fn top_capturing_overlay(&self) -> Option<&OverlayRoot> {
         self.overlay_roots
             .iter()
@@ -2295,6 +2303,7 @@ mod tests {
             copy_text: None,
             copy_zone: None,
             copy_feedback_active: false,
+            required_viewport_bottom: 0,
         }
     }
 

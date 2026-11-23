@@ -32,6 +32,9 @@ pub(crate) struct OverlayRoot {
     pub(crate) copy_text: Option<Arc<str>>,
     pub(crate) copy_zone: Option<Rect>,
     pub(crate) copy_feedback_active: bool,
+    /// Exclusive bottom row (in content-local coordinates) required to display
+    /// this overlay in an auto-height inline viewport without clipping.
+    pub(crate) required_viewport_bottom: u16,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

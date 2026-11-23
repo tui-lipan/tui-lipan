@@ -29,6 +29,7 @@ pub(crate) fn reconcile_popover(
             capture_focus: popover.capture_focus,
             capture_pointer: popover.capture_pointer,
             auto_focus: popover.auto_focus,
+            desired_bottom: 0,
         });
         std::mem::take(&mut node.children)
     };
@@ -55,6 +56,7 @@ pub(crate) fn reconcile_popover(
     new_children.push(trigger_id);
 
     let mut content_rect = None;
+    let mut desired_bottom = 0u16;
     if popover.open {
         if let Some(content) = reuse_content.filter(|id| tree.is_valid(*id)) {
             crate::widgets::containers::exit_retention::revive(tree, content);
@@ -62,6 +64,13 @@ pub(crate) fn reconcile_popover(
         let trigger_rect = tree.node(trigger_id).rect;
         let bounds = overlay_state.bounds;
         let resolved = resolve_popover_rect(popover, trigger_rect, bounds);
+        if popover.scope == OverlayScope::RootPortal {
+            let desired = overlay_state.popover_expand_bounds.map_or(resolved, |max| {
+                resolve_popover_rect(popover, trigger_rect, max)
+            });
+            desired_bottom =
+                (i32::from(desired.y) + i32::from(desired.h)).clamp(0, i32::from(u16::MAX)) as u16;
+        }
 
         let content_id = reconcile_element(
             &mut ReconcileCtx {
@@ -84,6 +93,11 @@ pub(crate) fn reconcile_popover(
     }
 
     if let Some(content) = retain_closing_content(tree, id, popover, reuse_content, epoch) {
+        if popover.scope == OverlayScope::RootPortal {
+            let rect = tree.node(content).rect;
+            desired_bottom =
+                (i32::from(rect.y) + i32::from(rect.h)).clamp(0, i32::from(u16::MAX)) as u16;
+        }
         new_children.push(content);
     }
 
@@ -111,6 +125,7 @@ pub(crate) fn reconcile_popover(
         if new_children.len() > 1 {
             *popover_node.content = new_children[1];
         }
+        popover_node.desired_bottom = desired_bottom;
     }
 
     node.rect = popover_rect;

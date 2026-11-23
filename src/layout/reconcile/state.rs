@@ -147,6 +147,10 @@ pub(crate) fn reconcile_single_child_required(
 
 pub(crate) struct OverlayState {
     pub(crate) bounds: Rect,
+    /// Maximum viewport bounds available for growing an `InlineHeight::Auto`
+    /// viewport to fit open root-portal popovers. `None` outside auto-height
+    /// inline surfaces.
+    pub(crate) popover_expand_bounds: Option<Rect>,
     pub(crate) allow_root_overlays: bool,
     pub(crate) roots: Vec<OverlayRoot>,
     pub(crate) order: u64,
@@ -159,9 +163,14 @@ pub(crate) struct OverlayState {
 }
 
 impl OverlayState {
-    pub(crate) fn new(bounds: Rect, allow_root_overlays: bool) -> Self {
+    pub(crate) fn with_bounds(
+        bounds: Rect,
+        popover_expand_bounds: Option<Rect>,
+        allow_root_overlays: bool,
+    ) -> Self {
         Self {
             bounds,
+            popover_expand_bounds,
             allow_root_overlays,
             roots: Vec::new(),
             order: 0,
