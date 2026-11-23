@@ -11,6 +11,7 @@ use crate::backend::ratatui_backend::render::RenderState;
 use crate::backend::ratatui_backend::renderers::theme::{with_theme_muted, with_theme_primary};
 use crate::core::node::NodeId;
 use crate::style::{Align, BorderStyle, Padding, Rect, Style, ThemeRole, resolve_slot};
+use crate::utils::text::end_at_width;
 use crate::widgets::ButtonVariant;
 
 pub(crate) struct ButtonRenderCtx {
@@ -108,36 +109,39 @@ pub(crate) fn render_button(
             let shortcut_style_final =
                 finalize_style(label_style.patch(shortcut_style), None, contrast_policy);
 
-            let borders = calculate_visible_borders(rect, clip_rect);
-
-            let block_style = to_ratatui_style(border_style);
-            let mut block = Block::default()
-                .borders(borders)
-                .border_type(to_ratatui_border_type(border_type))
-                .style(block_style);
-
-            if let Some(set) = to_ratatui_border_set(border_type) {
-                block = block.border_set(set);
-            }
-
-            f.render_widget(block, rrect);
-
+            let draw_border = rect.h >= 3 && rect.w >= 3;
             let mut inner = rect;
-            if borders.contains(Borders::LEFT) {
-                inner.x = inner.x.saturating_add(1);
-                inner.w = inner.w.saturating_sub(1);
+            if draw_border {
+                let borders = calculate_visible_borders(rect, clip_rect);
+
+                let block_style = to_ratatui_style(border_style);
+                let mut block = Block::default()
+                    .borders(borders)
+                    .border_type(to_ratatui_border_type(border_type))
+                    .style(block_style);
+
+                if let Some(set) = to_ratatui_border_set(border_type) {
+                    block = block.border_set(set);
+                }
+
+                f.render_widget(block, rrect);
+
+                if borders.contains(Borders::LEFT) {
+                    inner.x = inner.x.saturating_add(1);
+                    inner.w = inner.w.saturating_sub(1);
+                }
+                if borders.contains(Borders::RIGHT) {
+                    inner.w = inner.w.saturating_sub(1);
+                }
+                if borders.contains(Borders::TOP) {
+                    inner.y = inner.y.saturating_add(1);
+                    inner.h = inner.h.saturating_sub(1);
+                }
+                if borders.contains(Borders::BOTTOM) {
+                    inner.h = inner.h.saturating_sub(1);
+                }
             }
-            if borders.contains(Borders::RIGHT) {
-                inner.w = inner.w.saturating_sub(1);
-            }
-            if borders.contains(Borders::TOP) {
-                inner.y = inner.y.saturating_add(1);
-                inner.h = inner.h.saturating_sub(1);
-            }
-            if borders.contains(Borders::BOTTOM) {
-                inner.h = inner.h.saturating_sub(1);
-            }
-            inner = inner.inset(padding);
+            inner = inner.inset_preserving_cell(padding);
             if inner.w == 0 || inner.h == 0 {
                 return;
             }
@@ -152,6 +156,7 @@ pub(crate) fn render_button(
                     label_style,
                     icon_style: icon_style_final,
                     shortcut_style: shortcut_style_final,
+                    ellipsize_label: rect.w > 2,
                     icon_gap,
                     shortcut_gap,
                 },
@@ -195,6 +200,7 @@ pub(crate) fn render_button(
                 ButtonSpansCtx {
                     align,
                     label_style: s,
+                    ellipsize_label: true,
                     icon_style: finalize_style(s.patch(icon_style), base_backdrop, contrast_policy),
                     shortcut_style: finalize_style(
                         s.patch(shortcut_style),
@@ -257,6 +263,7 @@ pub(crate) fn render_button(
                         ButtonSpansCtx {
                             align,
                             label_style: s,
+                            ellipsize_label: true,
                             icon_style: finalize_style(
                                 s.patch(icon_style),
                                 base_backdrop,
@@ -302,6 +309,7 @@ pub(crate) fn render_button(
 
 struct ButtonSpansCtx {
     align: Align,
+    ellipsize_label: bool,
     label_style: Style,
     icon_style: Style,
     shortcut_style: Style,
@@ -318,6 +326,7 @@ fn build_button_spans(
 ) -> Vec<Span<'static>> {
     let ButtonSpansCtx {
         align,
+        ellipsize_label,
         label_style,
         icon_style,
         shortcut_style,
@@ -352,10 +361,10 @@ fn build_button_spans(
     }
 
     let available_label = width.saturating_sub(reserved);
-    let label_visible = if available_label == 0 {
-        "".into()
-    } else {
+    let label_visible = if ellipsize_label {
         truncate_end_with_ellipsis(label, available_label)
+    } else {
+        (&label[..end_at_width(label, 0, available_label.into())]).into()
     };
     let label_w = UnicodeWidthStr::width(label_visible.as_ref()).min(u16::MAX as usize) as u16;
     let content_w = reserved.saturating_add(label_w);

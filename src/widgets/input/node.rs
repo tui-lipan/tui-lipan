@@ -12,6 +12,8 @@ use crate::style::{
 use crate::text::edit::TextEditEvent;
 use crate::widgets::InputEvent;
 
+use super::layout::InputGeometry;
+
 /// A realized input node.
 #[derive(Clone)]
 pub struct InputNode {
@@ -66,8 +68,13 @@ pub struct InputNode {
 }
 
 impl InputNode {
-    fn context_menu_content_rect(&self, press: SecondaryPress) -> Rect {
-        press.rect.inner(self.border, self.padding)
+    pub(crate) fn geometry(&self, rect: Rect) -> InputGeometry {
+        InputGeometry::new(
+            rect,
+            self.border,
+            self.padding,
+            self.reserve_error_row || self.error.is_some(),
+        )
     }
 
     /// Whether a mouse press can place a caret or start a selection in this input.
@@ -79,8 +86,14 @@ impl InputNode {
     ///
     /// Padding counts unless an affix stands between it and the value, as in a browser's input box.
     pub(crate) fn pointer_text_rect(&self, rect: Rect) -> Rect {
-        let field = rect.inner(self.border, Padding::default());
-        let inner = rect.inner(self.border, self.padding);
+        let geometry = self.geometry(rect);
+        let field = geometry
+            .field
+            .inner(geometry.draws_border, Padding::default());
+        let inner = geometry.content;
+        if inner.is_empty() {
+            return inner;
+        }
         let width = |text: &Option<Arc<str>>| {
             text.as_deref()
                 .filter(|text| !text.is_empty())
@@ -103,7 +116,8 @@ impl InputNode {
 impl WidgetNode for InputNode {
     fn secondary_hit_test_refinement(&self, press: SecondaryPress) -> Option<bool> {
         Some(
-            self.context_menu_content_rect(press)
+            self.geometry(press.rect)
+                .content
                 .contains(press.mouse.x as i16, press.mouse.y as i16),
         )
     }
@@ -122,7 +136,7 @@ impl WidgetNode for InputNode {
         crate::widgets::context_menu::emit_mouse_context_menu(
             self.on_context_menu.as_ref(),
             press.mouse,
-            self.context_menu_content_rect(press),
+            self.geometry(press.rect).content,
         )
     }
 

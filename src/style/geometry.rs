@@ -47,6 +47,19 @@ impl Rect {
         Self { x, y, w, h }
     }
 
+    /// Drops padding on any axis where it would consume every cell.
+    pub(crate) fn inset_preserving_cell(&self, mut padding: Padding) -> Self {
+        if padding.horizontal() >= self.w {
+            padding.left = 0;
+            padding.right = 0;
+        }
+        if padding.vertical() >= self.h {
+            padding.top = 0;
+            padding.bottom = 0;
+        }
+        self.inset(padding)
+    }
+
     /// Returns the inner rectangle after accounting for optional border and padding.
     ///
     /// This is the common pattern used by widgets to compute their content area:

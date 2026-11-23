@@ -99,7 +99,7 @@ fn frame_and_list_chrome_matches_baseline() -> Result<()> {
 #[test]
 fn form_chrome_matches_baseline() -> Result<()> {
     Sketch::view("chrome-form", form_chrome)
-        .viewport(40, 12)
+        .viewport(40, 17)
         .dir(std::env::temp_dir().join("tui-lipan-baseline-artifacts"))
         .baseline(BASELINE_DIR)
         .quiet(true)
@@ -300,7 +300,7 @@ fn focused_form_chrome_matches_baseline() -> Result<()> {
     // Focus chrome is the easiest thing to break without noticing, since it only
     // appears in one state.
     Sketch::view("chrome-form-focused", form_chrome)
-        .viewport(40, 12)
+        .viewport(40, 17)
         .focus_next(1)
         .dir(std::env::temp_dir().join("tui-lipan-baseline-artifacts"))
         .baseline(BASELINE_DIR)

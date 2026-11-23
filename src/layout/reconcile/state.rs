@@ -35,8 +35,8 @@ pub(crate) fn apply_constraints(
     avail_w: u16,
     avail_h: u16,
 ) {
-    rect.w = constraints.clamp_width(rect.w, avail_w);
-    rect.h = constraints.clamp_height(rect.h, avail_h);
+    rect.w = constraints.clamp_width(rect.w, avail_w).min(avail_w);
+    rect.h = constraints.clamp_height(rect.h, avail_h).min(avail_h);
 }
 
 pub(crate) fn resolve_rect_with_auto(

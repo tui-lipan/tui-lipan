@@ -1362,6 +1362,9 @@ fn render_node(
         }
         (clipped, to_ratatui_rect(clipped))
     } else {
+        if rect.is_empty() {
+            return (Some(rect), false, false, false, false, false);
+        }
         (rect, to_ratatui_rect(rect))
     };
 

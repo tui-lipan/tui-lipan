@@ -753,27 +753,23 @@ pub(crate) fn input_viewport_start(line: &str, cursor: usize, width: u16) -> usi
     let cursor = clamp_cursor(line, cursor);
     let cursor_col = str_visual_width(&line[..cursor], None);
 
-    // Keep cursor visible and reserve 1 cell for the caret.
-    let start_col = cursor_col.saturating_add(1).saturating_sub(width);
+    // In a narrow field, the caret can share the last visible cell with text.
+    let caret_cell = usize::from(width > 2 || cursor < line.len());
+    let start_col = cursor_col.saturating_add(caret_cell).saturating_sub(width);
     byte_at_col(line, start_col)
 }
 
 pub(crate) fn viewport(line: &str, cursor: usize, width: u16) -> (usize, usize, u16) {
-    let width = width as usize;
     if width == 0 {
         return (0, 0, 0);
     }
 
     let cursor = clamp_cursor(line, cursor);
-    let cursor_col = str_visual_width(&line[..cursor], None);
-
-    // Keep cursor visible and reserve 1 cell for the caret.
-    let start_col = cursor_col.saturating_add(1).saturating_sub(width);
-    let start = byte_at_col(line, start_col);
-    let end = end_at_width(line, start, width);
+    let start = input_viewport_start(line, cursor, width);
+    let end = end_at_width(line, start, width.into());
 
     let cursor_x = str_visual_width(&line[start..cursor], None)
-        .min(width.saturating_sub(1))
+        .min(usize::from(width - 1))
         .min(u16::MAX as usize) as u16;
 
     (start, end, cursor_x)
