@@ -76,6 +76,13 @@ class FilteringTests(unittest.TestCase):
             ),
             "release metadata only",
         )
+        self.assertEqual(
+            exclusion_reason(
+                "release: v0.46.0",
+                ["Cargo.toml", "README.md", "docs/widgets/terminal-images.md"],
+            ),
+            "release metadata only",
+        )
 
     def test_keeps_changes_that_may_be_user_visible(self):
         self.assertIsNone(exclusion_reason("perf: reduce redraws", ["src/app/runner.rs"]))

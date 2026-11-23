@@ -198,8 +198,9 @@ def exclusion_reason(subject: str, paths: Sequence[str]) -> str | None:
         or path in {"README.md", "CONTRIBUTING.md"},
     ):
         return "documentation-only change"
-    if re.match(r"^release:\s+v?\d", lowered) and set(paths).issubset(
-        RELEASE_METADATA_PATHS
+    # A series bump also rewrites the install snippets in Markdown docs.
+    if re.match(r"^release:\s+v?\d", lowered) and paths_are(
+        paths, lambda path: path in RELEASE_METADATA_PATHS or path.endswith(".md")
     ):
         return "release metadata only"
     return None
