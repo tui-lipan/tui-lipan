@@ -565,6 +565,9 @@ layout, truncation, and match highlights. Explicit per-item foreground colours
 survive selection, while List supplies the selection background. Match styles
 patch over item styles. Active label styles apply before the per-item style;
 focused/active description overrides apply before the per-item right style.
+`SearchItem::focused_right_style(Style)` replaces the right style on the focused
+row only, for example to give a colored status footer the highlighted row's
+secondary color.
 
 `SearchItem::disabled(true)` and `SearchEntry::disabled(true)` mute the row using
 the theme's muted style with dim text, including custom-rendered text, status and
@@ -753,6 +756,8 @@ to extend or inherit the scoped theme roles.
 
 > `ItemDescription::right(...)` is trailing metadata: it is bounded and truncated before the primary label, so long right-side hints do not displace item labels in narrow palettes.
 
+> Queries match `ItemDescription::right(...)` text by default. Call `.right_searchable(false)` when it only annotates the row, such as a category or shortcut footer, so typing the annotation does not list every row that carries it.
+
 `ItemDescription::spinner(...)` animates a spinner next to a row's description,
 for rows whose work is still running:
 
@@ -844,7 +849,8 @@ a match that respects word boundaries: `tabs` lists `Sidebar tabs` above
   hit outranks a synonym-only alias hit on another row (aliases still surface
   rows the label alone would miss). The description has a lower weight, and
   the right-hand hint (`ItemDescription::right`) only matches via exact or
-  substring comparison, which suits keybinding-style hints. `Hybrid` ignores
+  substring comparison, which suits keybinding-style hints
+  (`ItemDescription::right_searchable(false)` leaves it out of matching). `Hybrid` ignores
   the `normalization` prop; matching runs on raw (non-normalized) characters.
 
   ```rust

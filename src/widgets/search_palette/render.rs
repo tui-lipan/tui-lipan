@@ -415,6 +415,12 @@ fn default_render<T>(
     };
     let explicit_description_override =
         explicit_focused_description.or(explicit_active_description);
+    let item_right_style = is_focused
+        .then_some(item.focused_right_style.as_deref())
+        .flatten()
+        .or(item.right_style.as_deref())
+        .copied()
+        .unwrap_or_default();
     let description_style = explicit_description_override.unwrap_or(styles.description);
     let description_row_policy = if explicit_description_override.is_none() {
         RowStylePolicy::Full
@@ -428,7 +434,7 @@ fn default_render<T>(
         .and_then(|d| d.left.as_ref())
         .map(|desc| {
             let right_style = if styles.description_placement == DescriptionPlacement::Right {
-                item.right_style.as_deref().copied().unwrap_or_default()
+                item_right_style
             } else {
                 Style::default()
             };
@@ -600,7 +606,7 @@ fn default_render<T>(
             &highlight.description_right_hits,
             description_style,
             styles.highlight,
-            item.right_style.as_deref().copied().unwrap_or_default(),
+            item_right_style,
         );
         if !desc_right_spans.is_empty() && styles.primary_truncate_description_first {
             primary_truncate_description_first = true;
@@ -1052,6 +1058,46 @@ mod tests {
 
         assert_eq!(output.row_to_result.first(), Some(&None));
         assert_eq!(output.items[0].style, header_style);
+    }
+
+    #[test]
+    fn focused_right_style_replaces_right_style_on_the_focused_row() {
+        let item = SearchItem::new("Label", ())
+            .description(ItemDescription::new().right("Connected"))
+            .right_style(Style::new().fg(Color::Green))
+            .focused_right_style(Style::new().fg(Color::Blue));
+        let styles = RenderStyles {
+            active_item: None,
+            item: Style::default(),
+            description: Style::default(),
+            active_description: None,
+            focused_description: None,
+            description_separator: None,
+            description_placement: DescriptionPlacement::Inline,
+            description_selection: false,
+            description_overflow: DescriptionOverflow::Truncate,
+            primary_truncate_description_first: true,
+            primary_description_gap: 0,
+            primary_min_label_width: None,
+            line_width: Some(40),
+            highlight: Style::default(),
+            disabled: Style::new().dim(),
+        };
+        let right_fg = |selected: Option<usize>| {
+            let score = ScoreRender {
+                show: false,
+                gradient: None,
+                range: None,
+            };
+            let highlight = SearchHighlight::default();
+            default_render(0, &item, &highlight, &styles, 0, score, selected)
+                .description_spans
+                .iter()
+                .find(|span| span.content.contains("Connected"))
+                .and_then(|span| span.style.fg)
+        };
+        assert_eq!(right_fg(Some(0)), Some(Color::Blue.into()));
+        assert_eq!(right_fg(None), Some(Color::Green.into()));
     }
 
     #[test]
