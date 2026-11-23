@@ -187,7 +187,7 @@ impl Component for InlineChoices {
 
 fn main() -> Result<()> {
     App::new()
-        .inline_ephemeral(13)
+        .inline_ephemeral(InlineHeight::auto_capped(24))
         .mouse(true)
         .mount(InlineChoices)
         .run()

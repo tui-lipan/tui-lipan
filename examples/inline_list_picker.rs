@@ -180,7 +180,7 @@ impl Component for InlineListPicker {
                             .on_select(ctx.link().callback(Msg::Selected))
                             .on_scroll_to(ctx.link().callback(Msg::ScrollTo))
                             .on_activate(ctx.link().callback(|_| Msg::Activate))
-                            .height(Length::Flex(1)),
+                            .height(Length::Px(8)),
                     )
                     .child(Text::new(format!(
                         "Runs: {} | {}",
@@ -227,7 +227,7 @@ fn clamp_selected(selected: usize, len: usize) -> usize {
 
 fn main() -> Result<()> {
     App::new()
-        .inline_ephemeral(12)
+        .inline_ephemeral(InlineHeight::auto_capped(24))
         .mouse(true)
         .mount(InlineListPicker)
         .run()
