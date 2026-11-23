@@ -1,11 +1,10 @@
 use std::cell::RefCell;
-use std::sync::Arc;
 
 #[cfg(feature = "web")]
 use wasm_bindgen_futures::spawn_local;
 
 use super::TaskPolicy;
-use super::task_policy::{KeyedTaskState, Task};
+use super::task_policy::{KeyedTaskState, Task, TaskKey};
 
 pub(super) struct TaskExecutor {
     keyed: RefCell<KeyedTaskState>,
@@ -39,7 +38,7 @@ impl TaskExecutor {
         }
     }
 
-    pub(super) fn execute_keyed(&self, key: Arc<str>, policy: TaskPolicy, task: Task) {
+    pub(super) fn execute_keyed(&self, key: TaskKey, policy: TaskPolicy, task: Task) {
         match policy {
             TaskPolicy::QueueAll => self.execute(task),
             TaskPolicy::DropIfRunning => {
@@ -57,7 +56,7 @@ impl TaskExecutor {
         }
     }
 
-    fn wrap_keyed_task(&self, key: Arc<str>, task: Task) -> Task {
+    fn wrap_keyed_task(&self, key: TaskKey, task: Task) -> Task {
         let token = task.cancellation_token();
         Task::with_token(
             move || {
@@ -68,7 +67,7 @@ impl TaskExecutor {
         )
     }
 
-    fn on_keyed_task_complete(&self, key: Arc<str>) {
+    fn on_keyed_task_complete(&self, key: TaskKey) {
         if let Some(task) = self.keyed.borrow_mut().on_keyed_task_complete(&key) {
             let wrapped = self.wrap_keyed_task(key, task);
             self.execute(wrapped);

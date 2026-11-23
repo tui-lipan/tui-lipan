@@ -210,7 +210,7 @@ pub use crate::automation::{
     SemanticAction, SemanticChecked, SemanticNode, SemanticRole, SemanticTree, SemanticValue,
     ValueSensitivity, WaitCondition,
 };
-pub use crate::callback::{Callback, CancellationToken, CommandLink, KeyHandler, Link};
+pub use crate::callback::{BusyGuard, Callback, CancellationToken, CommandLink, KeyHandler, Link};
 pub use crate::capture::{
     CapturedCell, CapturedFrame, CapturedImage, CastRecording, CellModifiers, CellRun, CursorShape,
     CursorState, PaintSubscription, PaintedFrame, UnderlineStyle,

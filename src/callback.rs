@@ -176,6 +176,12 @@ impl CancellationToken {
     }
 }
 
+/// Keeps the runtime busy until dropped.
+#[must_use = "keep this guard alive while background work is pending"]
+pub struct BusyGuard {
+    _activity: crate::core::runtime_env::RuntimeActivityGuard,
+}
+
 /// Type-safe handle used by background tasks to send messages back to the UI thread.
 ///
 /// The handle can be cloned and shared across threads without requiring the message type to
@@ -224,6 +230,16 @@ impl<Msg: Send + 'static> CommandLink<Msg> {
             runtime_id,
             activity,
             _marker: PhantomData,
+        }
+    }
+
+    /// Track work that will outlive the command closure.
+    ///
+    /// Create the guard before starting a detached thread or future, then move it into that
+    /// work. Automation considers the runtime busy until the guard is dropped.
+    pub fn busy(&self) -> BusyGuard {
+        BusyGuard {
+            _activity: self.activity.track(),
         }
     }
 
@@ -276,7 +292,7 @@ impl<Msg: Send + 'static> CommandLink<Msg> {
 
 /// Type-safe handle used to send messages to a specific component instance.
 pub struct Link<Msg: 'static> {
-    scope: ScopeId,
+    pub(crate) scope: ScopeId,
     dispatcher: Dispatcher,
     _marker: PhantomData<fn(Msg)>,
 }

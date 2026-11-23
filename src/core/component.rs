@@ -48,7 +48,7 @@ pub enum TaskPolicy {
 
 mod task_policy;
 
-use task_policy::Task;
+use task_policy::{Task, TaskKey};
 
 #[cfg(not(target_arch = "wasm32"))]
 mod executor_native;
@@ -109,7 +109,6 @@ impl Command {
 
 #[derive(Clone)]
 pub(crate) struct CommandRuntime {
-    pub(crate) scope: ScopeId,
     pub(crate) tx: CommandTx,
     /// Which runtime is running this command, so a deferred timer can be attributed to it.
     pub(crate) runtime_id: RuntimeId,
@@ -170,11 +169,13 @@ where
 }
 
 struct SpawnAction<Msg, F> {
+    scope: ScopeId,
     f: Option<F>,
     _marker: PhantomData<fn(Msg)>,
 }
 
 struct SpawnKeyedAction<Msg, F> {
+    scope: ScopeId,
     key: Arc<str>,
     policy: TaskPolicy,
     f: Option<F>,
@@ -202,6 +203,7 @@ pub(crate) fn schedule_after_for_session(
 }
 
 struct AfterAction<Msg, F> {
+    scope: ScopeId,
     delay: std::time::Duration,
     f: Option<F>,
     _marker: PhantomData<fn(Msg)>,
@@ -219,7 +221,7 @@ where
 
         let token = CancellationToken::default();
         let link = CommandLink::new(
-            runtime.scope,
+            self.scope,
             runtime.tx,
             token.clone(),
             runtime.clock.clone(),
@@ -255,7 +257,7 @@ where
 
         let token = CancellationToken::default();
         let link = CommandLink::new(
-            runtime.scope,
+            self.scope,
             runtime.tx,
             token.clone(),
             runtime.clock.clone(),
@@ -283,11 +285,15 @@ where
             return;
         };
 
-        let key = Arc::clone(&self.key);
+        let key = TaskKey {
+            runtime_id: runtime.runtime_id,
+            scope: self.scope,
+            name: Arc::clone(&self.key),
+        };
         let policy = self.policy;
         let token = CancellationToken::default();
         let link = CommandLink::new(
-            runtime.scope,
+            self.scope,
             runtime.tx,
             token.clone(),
             runtime.clock.clone(),
@@ -310,7 +316,7 @@ where
 }
 
 impl<Msg: 'static> Link<Msg> {
-    /// Create a background command that can send messages back to the component.
+    /// Create a background command that sends messages to this link's component.
     pub fn command<F>(&self, f: F) -> Command
     where
         Msg: Send + 'static,
@@ -318,6 +324,7 @@ impl<Msg: 'static> Link<Msg> {
     {
         Command {
             action: Box::new(SpawnAction::<Msg, F> {
+                scope: self.scope,
                 f: Some(f),
                 _marker: PhantomData,
             }),
@@ -325,6 +332,7 @@ impl<Msg: 'static> Link<Msg> {
     }
 
     /// Create a background command that runs after `delay` on the session clock.
+    /// The command sends messages to this link's component.
     ///
     /// Use this for debounces, retries, or recurring ticks. A shared timer waits for the
     /// deadline before submitting the closure to the executor. If the target has no timer
@@ -347,6 +355,7 @@ impl<Msg: 'static> Link<Msg> {
     {
         Command {
             action: Box::new(AfterAction::<Msg, F> {
+                scope: self.scope,
                 delay,
                 f: Some(f),
                 _marker: PhantomData,
@@ -356,8 +365,9 @@ impl<Msg: 'static> Link<Msg> {
 
     /// Create a keyed background command with the given coalescing policy.
     ///
-    /// The key can be any value convertible to `Arc<str>`, such as a string literal or an
-    /// owned `String`.
+    /// The command sends messages to this link's component. Coalescing applies to commands
+    /// with the same key bound to this component within the session. The key can be any
+    /// value convertible to `Arc<str>`, such as a string literal or an owned `String`.
     pub fn command_keyed<F>(&self, key: impl Into<Arc<str>>, policy: TaskPolicy, f: F) -> Command
     where
         Msg: Send + 'static,
@@ -365,6 +375,7 @@ impl<Msg: 'static> Link<Msg> {
     {
         Command {
             action: Box::new(SpawnKeyedAction::<Msg, F> {
+                scope: self.scope,
                 key: key.into(),
                 policy,
                 f: Some(f),
@@ -539,11 +550,10 @@ impl Update {
         self.level
     }
 
-    pub(crate) fn run(self, scope: ScopeId, tx: &CommandTx, env: &RuntimeEnv) -> UpdateLevel {
+    pub(crate) fn run(self, tx: &CommandTx, env: &RuntimeEnv) -> UpdateLevel {
         let level = self.level;
         if let Some(command) = self.into_command() {
             command.run(CommandRuntime {
-                scope,
                 tx: tx.clone(),
                 runtime_id: env.runtime_id,
                 now: env.now(),

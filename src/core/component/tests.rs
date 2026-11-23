@@ -838,6 +838,60 @@ impl Component for KeyedCmdComponent {
 }
 
 #[test]
+fn keyed_background_commands_coalesce_by_link_and_runtime() {
+    let (tx, _rx, _wake) = super::CommandTx::channel();
+    let clock = crate::core::runtime_env::SessionClock::new(crate::automation::ClockMode::Realtime);
+    let runtime = CommandRuntime {
+        tx,
+        runtime_id: super::RuntimeId::next(),
+        now: clock.now(),
+        clock_mode: clock.mode(),
+        clock,
+        activity: Default::default(),
+    };
+    let other_runtime = CommandRuntime {
+        runtime_id: super::RuntimeId::next(),
+        ..runtime.clone()
+    };
+    let first = Link::<()>::new(ScopeId(1), Dispatcher::new(|_, _| {}));
+    let second = Link::<()>::new(ScopeId(2), Dispatcher::new(|_, _| {}));
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let key = "keyed_background_commands_coalesce_by_link_and_runtime";
+
+    first
+        .command_keyed(key, TaskPolicy::LatestOnly, move |link| {
+            started_tx.send(link.cancellation_token()).unwrap();
+            let _ = release_rx.recv();
+        })
+        .run(runtime.clone());
+    let token = started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    second
+        .command_keyed(key, TaskPolicy::LatestOnly, |_| {})
+        .run(runtime.clone());
+    assert!(
+        !token.is_cancelled(),
+        "another component shares the string key"
+    );
+    first
+        .command_keyed(key, TaskPolicy::LatestOnly, |_| {})
+        .run(other_runtime);
+    assert!(
+        !token.is_cancelled(),
+        "another runtime shares the string key"
+    );
+    first
+        .command_keyed(key, TaskPolicy::LatestOnly, |_| {})
+        .run(runtime);
+    assert!(
+        token.is_cancelled(),
+        "the same component and key replace the active task"
+    );
+    drop(release_tx);
+}
+
+#[test]
 fn keyed_command_latest_only_coalesces_pending_tasks() {
     // Use a unique key to avoid collision with other tests using the global executor.
     let key: Arc<str> = Arc::from(format!(
@@ -886,15 +940,15 @@ fn keyed_command_latest_only_coalesces_pending_tasks() {
     let cmd1 = update1.command.expect("first update should have command");
 
     let (dummy_cmd_tx, _dummy_cmd_rx, _wake) = super::CommandTx::channel();
-    cmd1.run(CommandRuntime {
-        scope,
-        tx: dummy_cmd_tx.clone(),
+    let runtime = CommandRuntime {
+        tx: dummy_cmd_tx,
         runtime_id: super::RuntimeId::next(),
         now: web_time::Instant::now(),
         clock_mode: crate::automation::ClockMode::Realtime,
         clock: crate::core::runtime_env::SessionClock::new(crate::automation::ClockMode::Realtime),
         activity: std::sync::Arc::new(crate::core::runtime_env::RuntimeActivity::default()),
-    });
+    };
+    cmd1.run(runtime.clone());
 
     started_rx
         .recv_timeout(Duration::from_secs(1))
@@ -905,30 +959,14 @@ fn keyed_command_latest_only_coalesces_pending_tasks() {
         .update_by_scope(scope, Box::new(KeyedCmdMsg::Trigger))
         .expect("second update should succeed");
     let cmd2 = update2.command.expect("second update should have command");
-    cmd2.run(CommandRuntime {
-        scope,
-        tx: dummy_cmd_tx.clone(),
-        runtime_id: super::RuntimeId::next(),
-        now: web_time::Instant::now(),
-        clock_mode: crate::automation::ClockMode::Realtime,
-        clock: crate::core::runtime_env::SessionClock::new(crate::automation::ClockMode::Realtime),
-        activity: std::sync::Arc::new(crate::core::runtime_env::RuntimeActivity::default()),
-    });
+    cmd2.run(runtime.clone());
 
     // Third update: task C replaces pending B.
     let update3 = registry
         .update_by_scope(scope, Box::new(KeyedCmdMsg::Trigger))
         .expect("third update should succeed");
     let cmd3 = update3.command.expect("third update should have command");
-    cmd3.run(CommandRuntime {
-        scope,
-        tx: dummy_cmd_tx,
-        runtime_id: super::RuntimeId::next(),
-        now: web_time::Instant::now(),
-        clock_mode: crate::automation::ClockMode::Realtime,
-        clock: crate::core::runtime_env::SessionClock::new(crate::automation::ClockMode::Realtime),
-        activity: std::sync::Arc::new(crate::core::runtime_env::RuntimeActivity::default()),
-    });
+    cmd3.run(runtime);
 
     // Release the active task.
     drop(_guard);
@@ -984,7 +1022,6 @@ fn after_does_not_occupy_executor_workers_while_waiting() {
     let link = Link::<()>::new(ScopeId(1), Dispatcher::new(|_, _| {}));
     let (cmd_tx, _cmd_rx, _wake) = super::CommandTx::channel();
     let runtime = || CommandRuntime {
-        scope: ScopeId(1),
         tx: cmd_tx.clone(),
         runtime_id: super::RuntimeId::next(),
         now: web_time::Instant::now(),
@@ -1022,7 +1059,6 @@ fn after_runs_the_task_once_the_delay_elapses() {
         let _ = ran_tx.send(());
     })
     .run(CommandRuntime {
-        scope: ScopeId(1),
         tx: cmd_tx,
         runtime_id: super::RuntimeId::next(),
         now: web_time::Instant::now(),
@@ -1047,7 +1083,6 @@ fn after_fires_in_due_order_regardless_of_submission_order() {
     let link = Link::<()>::new(ScopeId(1), Dispatcher::new(|_, _| {}));
     let (cmd_tx, _cmd_rx, _wake) = super::CommandTx::channel();
     let runtime = || CommandRuntime {
-        scope: ScopeId(1),
         tx: cmd_tx.clone(),
         runtime_id: super::RuntimeId::next(),
         now: web_time::Instant::now(),
@@ -1128,7 +1163,6 @@ fn merged_commands_execute_in_order_without_being_dropped() {
     assert_eq!(update.level(), super::UpdateLevel::Render);
     let (tx, _rx, _wake) = super::CommandTx::channel();
     update.command.unwrap().run(CommandRuntime {
-        scope: ScopeId(1),
         tx,
         runtime_id: super::RuntimeId::next(),
         now: web_time::Instant::now(),

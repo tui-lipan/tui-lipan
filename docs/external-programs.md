@@ -105,7 +105,8 @@ No-op on targets without POSIX job control (Windows, wasm), so the keybinding ca
 or PTY types, and it is separate from the `terminal` feature/LSP integrations.
 
 Use it for commands such as `rg`, formatters, compilers, or small shell helpers
-whose stdout/stderr should become component messages:
+whose stdout/stderr should become messages for the component identified by the
+supplied link.
 
 ```rust
 use tui_lipan::{ProcessEvent, ProcessSpec, Update};

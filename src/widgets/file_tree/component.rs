@@ -4033,7 +4033,6 @@ mod tests {
             options,
         )
         .run(crate::core::component::CommandRuntime {
-            scope: crate::callback::ScopeId(1),
             tx: runtime.command_tx.clone(),
             runtime_id: runtime.ctx.env().runtime_id,
             now: runtime.ctx.env().now(),
@@ -4728,7 +4727,6 @@ mod tests {
         done: impl FnMut(&FileTreeMsg) -> bool,
     ) -> Vec<FileTreeMsg> {
         command.run(crate::core::component::CommandRuntime {
-            scope: crate::callback::ScopeId(1),
             tx: runtime.command_tx.clone(),
             runtime_id: runtime.ctx.env().runtime_id,
             now: runtime.ctx.env().now(),

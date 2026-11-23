@@ -311,7 +311,7 @@ pub struct IdleReport {
     pub future_timers: usize,
     /// Whether UI state still requires a commit.
     pub dirty: bool,
-    /// Runtime-owned commands still tracked.
+    /// Runtime-owned commands and active [`BusyGuard`](crate::BusyGuard) values.
     pub tracked_commands: usize,
     /// Whether arbitrary external `Link` holders make permanent idleness unknowable.
     pub external_links_untracked: bool,

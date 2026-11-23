@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 
 use super::TaskPolicy;
-use super::task_policy::{KeyedTaskState, Task};
+use super::task_policy::{KeyedTaskState, Task, TaskKey};
 
 const DEFAULT_OVERFLOW_THREAD_CAP: usize = 32;
 
@@ -62,7 +62,7 @@ impl TaskExecutor {
         self.enqueue(task);
     }
 
-    pub(super) fn execute_keyed(&self, key: Arc<str>, policy: TaskPolicy, task: Task) {
+    pub(super) fn execute_keyed(&self, key: TaskKey, policy: TaskPolicy, task: Task) {
         match policy {
             TaskPolicy::QueueAll => {
                 self.enqueue(task);
@@ -73,7 +73,7 @@ impl TaskExecutor {
                     Err(_) => Some(task),
                 };
                 if let Some(task) = to_enqueue {
-                    let wrapped = self.wrap_keyed_task(Arc::clone(&key), task);
+                    let wrapped = self.wrap_keyed_task(key.clone(), task);
                     if !self.enqueue(wrapped) {
                         Self::clear_keyed_state_with(&self.keyed, &key);
                     }
@@ -83,7 +83,7 @@ impl TaskExecutor {
                 let to_enqueue: Option<Task> = match self.keyed.lock() {
                     Ok(mut keyed) => keyed
                         .submit_latest_only(&key, task)
-                        .map(|task| self.wrap_keyed_task(Arc::clone(&key), task)),
+                        .map(|task| self.wrap_keyed_task(key.clone(), task)),
                     Err(_) => Some(task),
                 };
 
@@ -96,7 +96,7 @@ impl TaskExecutor {
         }
     }
 
-    fn wrap_keyed_task(&self, key: Arc<str>, task: Task) -> Task {
+    fn wrap_keyed_task(&self, key: TaskKey, task: Task) -> Task {
         let tx = self.tx.clone();
         let keyed = Arc::clone(&self.keyed);
         let overflow_threads = Arc::clone(&self.overflow_threads);
@@ -122,7 +122,7 @@ impl TaskExecutor {
         tx: mpsc::SyncSender<Task>,
         overflow_threads: Arc<AtomicUsize>,
         overflow_thread_cap: usize,
-        key: Arc<str>,
+        key: TaskKey,
     ) {
         let next = if let Ok(mut keyed) = keyed_state.lock() {
             keyed.on_keyed_task_complete(&key)
@@ -131,7 +131,7 @@ impl TaskExecutor {
         };
 
         if let Some(task) = next {
-            let next_key = Arc::clone(&key);
+            let next_key = key.clone();
             let next_keyed = Arc::clone(&keyed_state);
             let next_tx = tx.clone();
             let next_overflow_threads = Arc::clone(&overflow_threads);
@@ -156,7 +156,7 @@ impl TaskExecutor {
         }
     }
 
-    fn clear_keyed_state_with(keyed_state: &Arc<Mutex<KeyedTaskState>>, key: &Arc<str>) {
+    fn clear_keyed_state_with(keyed_state: &Arc<Mutex<KeyedTaskState>>, key: &TaskKey) {
         if let Ok(mut keyed) = keyed_state.lock() {
             keyed.clear_for_enqueue_failure(key);
         }
@@ -226,7 +226,7 @@ struct KeyedCompletionGuard {
     tx: mpsc::SyncSender<Task>,
     overflow_threads: Arc<AtomicUsize>,
     overflow_thread_cap: usize,
-    key: Option<Arc<str>>,
+    key: Option<TaskKey>,
 }
 
 impl KeyedCompletionGuard {
@@ -235,7 +235,7 @@ impl KeyedCompletionGuard {
         tx: mpsc::SyncSender<Task>,
         overflow_threads: Arc<AtomicUsize>,
         overflow_thread_cap: usize,
-        key: Arc<str>,
+        key: TaskKey,
     ) -> Self {
         Self {
             keyed_state: Some(keyed_state),
@@ -278,6 +278,14 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
+    fn test_key(name: &str) -> TaskKey {
+        TaskKey {
+            runtime_id: crate::core::component::RuntimeId::from_raw_for_tests(0),
+            scope: crate::callback::ScopeId(1),
+            name: Arc::from(name),
+        }
+    }
+
     fn task(f: impl FnOnce() + Send + 'static) -> Task {
         Task::new(f)
     }
@@ -298,13 +306,13 @@ mod tests {
     #[test]
     fn queue_all_executes_all_tasks_for_same_key() {
         let executor = TaskExecutor::with_config(1, 8, 32);
-        let key: Arc<str> = Arc::from("search");
+        let key = test_key("search");
         let (tx, rx) = mpsc::channel();
 
         for label in ["A", "B", "C"] {
             let tx = tx.clone();
             executor.execute_keyed(
-                Arc::clone(&key),
+                key.clone(),
                 TaskPolicy::QueueAll,
                 task(move || {
                     let _ = tx.send(label);
@@ -327,7 +335,7 @@ mod tests {
     #[test]
     fn drop_if_running_drops_new_task_when_key_active() {
         let executor = TaskExecutor::with_config(1, 8, 32);
-        let key: Arc<str> = Arc::from("search");
+        let key = test_key("search");
 
         let (started_tx, started_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
@@ -335,7 +343,7 @@ mod tests {
 
         let ran_first = ran_tx.clone();
         executor.execute_keyed(
-            Arc::clone(&key),
+            key.clone(),
             TaskPolicy::DropIfRunning,
             task(move || {
                 let _ = started_tx.send(());
@@ -377,7 +385,7 @@ mod tests {
     #[test]
     fn drop_if_running_does_not_cancel_active_task() {
         let executor = TaskExecutor::with_config(1, 8, 32);
-        let key: Arc<str> = Arc::from("search");
+        let key = test_key("search");
 
         let (started_tx, started_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
@@ -387,7 +395,7 @@ mod tests {
         });
         let active_token = active.cancellation_token();
 
-        executor.execute_keyed(Arc::clone(&key), TaskPolicy::DropIfRunning, active);
+        executor.execute_keyed(key.clone(), TaskPolicy::DropIfRunning, active);
         started_rx
             .recv_timeout(Duration::from_secs(1))
             .expect("active task should start");
@@ -404,7 +412,7 @@ mod tests {
     #[test]
     fn latest_only_keeps_only_latest_pending_task() {
         let executor = TaskExecutor::with_config(1, 8, 32);
-        let key: Arc<str> = Arc::from("search");
+        let key = test_key("search");
 
         let (started_tx, started_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
@@ -412,7 +420,7 @@ mod tests {
 
         let ran_first = ran_tx.clone();
         executor.execute_keyed(
-            Arc::clone(&key),
+            key.clone(),
             TaskPolicy::LatestOnly,
             task(move || {
                 let _ = started_tx.send(());
@@ -427,7 +435,7 @@ mod tests {
 
         let ran_second = ran_tx.clone();
         executor.execute_keyed(
-            Arc::clone(&key),
+            key.clone(),
             TaskPolicy::LatestOnly,
             task(move || {
                 let _ = ran_second.send("B");
@@ -469,7 +477,7 @@ mod tests {
     #[test]
     fn latest_only_cancels_active_and_replaced_pending_tokens() {
         let executor = TaskExecutor::with_config(1, 8, 32);
-        let key: Arc<str> = Arc::from("search");
+        let key = test_key("search");
 
         let (started_tx, started_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
@@ -478,14 +486,14 @@ mod tests {
             let _ = release_rx.recv();
         });
         let active_token = active.cancellation_token();
-        executor.execute_keyed(Arc::clone(&key), TaskPolicy::LatestOnly, active);
+        executor.execute_keyed(key.clone(), TaskPolicy::LatestOnly, active);
         started_rx
             .recv_timeout(Duration::from_secs(1))
             .expect("active task should start");
 
         let pending = task(|| {});
         let pending_token = pending.cancellation_token();
-        executor.execute_keyed(Arc::clone(&key), TaskPolicy::LatestOnly, pending);
+        executor.execute_keyed(key.clone(), TaskPolicy::LatestOnly, pending);
         assert!(active_token.is_cancelled());
         assert!(!pending_token.is_cancelled());
 
@@ -579,7 +587,7 @@ mod tests {
     #[test]
     fn latest_only_recovers_after_dropped_active_task() {
         let executor = TaskExecutor::with_config(1, 1, 1);
-        let key: Arc<str> = Arc::from("search");
+        let key = test_key("search");
 
         let (worker_started_tx, worker_started_rx) = mpsc::channel();
         let (release_worker_tx, release_worker_rx) = mpsc::channel();
@@ -614,7 +622,7 @@ mod tests {
             let _ = ran_first.send("first");
         });
         let dropped_token = dropped.cancellation_token();
-        executor.execute_keyed(Arc::clone(&key), TaskPolicy::LatestOnly, dropped);
+        executor.execute_keyed(key.clone(), TaskPolicy::LatestOnly, dropped);
         assert!(dropped_token.is_cancelled());
 
         release_overflow_tx
@@ -653,7 +661,7 @@ mod tests {
     #[test]
     fn drop_if_running_recovers_after_dropped_active_task() {
         let executor = TaskExecutor::with_config(1, 1, 1);
-        let key: Arc<str> = Arc::from("search");
+        let key = test_key("search");
 
         let (worker_started_tx, worker_started_rx) = mpsc::channel();
         let (release_worker_tx, release_worker_rx) = mpsc::channel();
@@ -688,7 +696,7 @@ mod tests {
             let _ = ran_first.send("first");
         });
         let dropped_token = dropped.cancellation_token();
-        executor.execute_keyed(Arc::clone(&key), TaskPolicy::DropIfRunning, dropped);
+        executor.execute_keyed(key.clone(), TaskPolicy::DropIfRunning, dropped);
         assert!(dropped_token.is_cancelled());
 
         release_overflow_tx
@@ -727,14 +735,14 @@ mod tests {
     #[test]
     fn latest_only_cleans_up_keyed_state_after_task_panic() {
         let executor = TaskExecutor::with_config(1, 8, 32);
-        let key: Arc<str> = Arc::from("panic-cleanup");
+        let key = test_key("panic-cleanup");
         let (panicking_started_tx, panicking_started_rx) = mpsc::channel();
         let (ran_tx, ran_rx) = mpsc::channel();
         let previous_hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
 
         executor.execute_keyed(
-            Arc::clone(&key),
+            key.clone(),
             TaskPolicy::LatestOnly,
             task(move || {
                 let _ = panicking_started_tx.send(());

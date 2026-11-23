@@ -319,7 +319,10 @@ struct State {
 ## Commands (Async / Background Work)
 
 Build background commands through `ctx.link()` and return them in an `Update`.
-The component link infers the message type for the closure's `CommandLink`.
+The component link infers the message type for the closure's `CommandLink` and
+determines which component receives its messages. If another component returns
+the command in an `Update`, messages still go to the component whose link built
+the command. The message type must implement `Send`.
 
 ```rust
 // Run a blocking call on a worker.
@@ -343,7 +346,8 @@ let cmd = ctx.link().command_keyed(
 ```
 
 `command_keyed` accepts `impl Into<Arc<str>>`, including string literals, owned
-`String` values, and `Arc<str>`.
+`String` values, and `Arc<str>`. A key identifies work for one component within
+one runtime.
 
 ### TaskPolicy options
 
@@ -421,7 +425,9 @@ component. Keep the runtime alive while the app runs. Clone the handle in
 ```ignore
 let handle = self.tokio.clone();
 Update::command_only(ctx.link().command(move |link| {
+    let busy = link.busy();
     handle.spawn(async move {
+        let _busy = busy;
         if link.is_cancelled() {
             return;
         }
@@ -433,7 +439,8 @@ Update::command_only(ctx.link().command(move |link| {
 
 Tokio polls the future, so the UI thread never waits for it. The worker is
 free as soon as `spawn` returns. The component itself can stay on the UI
-thread. Only the handle, captured data, and messages cross threads.
+thread. The guard from `link.busy()` keeps the session busy until the future
+finishes or drops the guard. See [Automation idle detection](testing.md#persistent-automation-sessions).
 
 `is_cancelled` checks the command's token and `send_if_not_cancelled`
 suppresses delivery if the token was cancelled. A keyed command finishes

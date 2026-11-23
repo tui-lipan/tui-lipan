@@ -517,7 +517,7 @@ where
         self.ctx.set_active_theme(&self.theme);
         self.component
             .init(&mut self.ctx)
-            .run(ScopeId(1), &self.command_tx, self.ctx.env());
+            .run(&self.command_tx, self.ctx.env());
     }
 
     pub(crate) fn shutdown(&mut self) {
@@ -547,11 +547,9 @@ where
             return;
         }
         self.ctx.set_active_theme(&self.theme);
-        let level = event.deliver(&mut self.component, &mut self.ctx).run(
-            ScopeId(1),
-            &self.command_tx,
-            self.ctx.env(),
-        );
+        let level = event
+            .deliver(&mut self.component, &mut self.ctx)
+            .run(&self.command_tx, self.ctx.env());
         if level != UpdateLevel::None {
             self.lifecycle_updates.push_back((ScopeId(1), level));
         }
@@ -666,7 +664,7 @@ where
         }
 
         let update = self.components.update_by_scope(scope, msg)?;
-        Ok(update.run(scope, &self.command_tx, self.ctx.env()))
+        Ok(update.run(&self.command_tx, self.ctx.env()))
     }
 
     /// Invoke the root-only host drag-and-drop callback.
@@ -713,7 +711,7 @@ where
     }
 
     fn run_root_update(&self, update: Update) -> UpdateLevel {
-        update.run(ScopeId(1), &self.command_tx, self.ctx.env())
+        update.run(&self.command_tx, self.ctx.env())
     }
 
     /// Bubble a key event up through component scopes, starting from the scope
@@ -780,7 +778,7 @@ where
             let KeyUpdate { handled, update } = dispatch(self, cur);
             dirty |= self.sync_theme_request(true);
 
-            dirty |= update.run(cur, &self.command_tx, self.ctx.env()) != UpdateLevel::None;
+            dirty |= update.run(&self.command_tx, self.ctx.env()) != UpdateLevel::None;
             handled_any |= handled;
 
             if handled || cur == ScopeId(1) {

@@ -654,7 +654,11 @@ Controlled mode is the default. Wall sleep does not move its logical clock;
 `AutomationStep::advance(...)` deterministically fires due framework timers.
 `drain_ready()` reaches a fixed point at the current logical time.
 `wait_for_idle(timeout, quiet_window)` waits for bounded quiescence and reports
-queued messages, timers, and runtime-owned commands.
+queued messages, timers, and runtime-owned commands. Commands count as active
+while their closure runs. For a thread or future that outlives that closure,
+create a `CommandLink::busy()` guard before handing off the work and move the
+guard into it. `IdleReport::tracked_commands` includes each live guard, and
+dropping the guard wakes the session to recheck idleness.
 
 Checkpoint sinks are configured in `AutomationOptions`. A checkpoint may commit
 semantic Markdown or JSON, PNG, an in-memory recording marker, and a baseline
