@@ -176,7 +176,6 @@ impl Component for ScrollToKeyDemo {
                             .cursor(ctx.state.query.cursor())
                             .anchor(ctx.state.query.anchor())
                             .placeholder("Search messages: release, search, telemetry, invoice...")
-                            .border(true)
                             .on_change(ctx.link().callback(Msg::QueryChanged)),
                     )
                     .child(Text::new(status).style(Style::new().fg(Color::DarkGray)))

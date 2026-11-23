@@ -60,7 +60,6 @@ impl Component for InputsDemo {
                                 gap: 0,
                                 Text { content: "Basic Username:" },
                                 Input::bound(&ctx.state.username)
-                                    .border(true)
                                     .placeholder("Enter username...")
                                     .caret_shape(CaretShape::Bar)
                                     .on_change(ctx.link().callback(Msg::UsernameChanged)),
@@ -69,7 +68,6 @@ impl Component for InputsDemo {
                                 gap: 0,
                                 Text { content: "Password (Masked):" },
                                 Input::bound(&ctx.state.password)
-                                    .border(true)
                                     .placeholder("Enter password...")
                                     .mask(Some('*'))
                                     .on_change(ctx.link().callback(Msg::PasswordChanged)),
@@ -78,7 +76,6 @@ impl Component for InputsDemo {
                                 gap: 0,
                                 Text { content: "Search with Prefix/Suffix:" },
                                 Input::bound(&ctx.state.search)
-                                    .border(true)
                                     .prefix("🔍 ")
                                     .suffix(format!(" {} chars", ctx.state.search.text().len()))
                                     .placeholder("Type to search...")

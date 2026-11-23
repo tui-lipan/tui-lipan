@@ -74,7 +74,6 @@ impl Component for AutoWrapDemo {
                             .cursor(ctx.state.draft.cursor())
                             .anchor(ctx.state.draft.anchor())
                             .placeholder("Type text and press Enter")
-                            .border(true)
                             .on_change(ctx.link().callback(Msg::DraftChanged))
                             .on_submit(ctx.link().callback(|_| Msg::Insert)),
                     )

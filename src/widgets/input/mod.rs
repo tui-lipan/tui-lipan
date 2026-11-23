@@ -112,7 +112,7 @@ impl Input {
             caret_blinking: None,
             caret_color: None,
             selection_style: StyleSlot::Inherit,
-            border: false,
+            border: true,
             border_style: BorderStyle::Plain,
             padding: Padding {
                 left: 1,
@@ -567,5 +567,80 @@ impl crate::layout::hash::LayoutHash for Input {
         self.error.hash(hasher);
         self.reserve_error_row.hash(hasher);
         Some(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::widgets::{DocumentView, HexArea, TextArea};
+
+    #[test]
+    fn input_defaults_to_bordered_while_editors_stay_borderless() {
+        assert!(Input::new("hello").border);
+        assert!(Input::bound(&TextInput::new("hello")).border);
+        assert!(!Input::new("hello").border(false).border);
+
+        assert!(!TextArea::new("hello").border);
+        assert!(!DocumentView::new("hello").border);
+        assert!(!HexArea::new(Vec::<u8>::new()).border);
+    }
+
+    #[test]
+    fn default_input_renders_border_and_border_false_omits_it() {
+        use crate::core::component::{Component, Context, Update};
+        use crate::test_backend::TestBackend;
+
+        struct InputHost {
+            border: Option<bool>,
+        }
+
+        impl Component for InputHost {
+            type Message = ();
+            type Properties = ();
+            type State = ();
+
+            fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+            fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+                Update::none()
+            }
+
+            fn view(&self, _ctx: &Context<Self>) -> Element {
+                let mut input = Input::new("hello").width(Length::Px(12));
+                if let Some(border) = self.border {
+                    input = input.border(border);
+                }
+                input.into()
+            }
+        }
+
+        let viewport = crate::Rect {
+            x: 0,
+            y: 0,
+            w: 16,
+            h: 5,
+        };
+
+        let mut bordered = TestBackend::new_with_viewport(InputHost { border: None }, viewport);
+        bordered.render();
+        let bordered_text = bordered.capture_frame().plain_text();
+        assert!(
+            bordered_text.contains('┌') && bordered_text.contains('┘'),
+            "default Input should render box border:\n{bordered_text}"
+        );
+
+        let mut borderless = TestBackend::new_with_viewport(
+            InputHost {
+                border: Some(false),
+            },
+            viewport,
+        );
+        borderless.render();
+        let borderless_text = borderless.capture_frame().plain_text();
+        assert!(
+            !borderless_text.contains('┌') && borderless_text.contains("hello"),
+            "border(false) Input should omit box border:\n{borderless_text}"
+        );
     }
 }

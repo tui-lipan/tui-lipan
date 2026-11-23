@@ -165,7 +165,6 @@ impl Component for NativeScrollChat {
                     .cursor(ctx.state.draft.cursor())
                     .anchor(ctx.state.draft.anchor())
                     .placeholder("Ask something...")
-                    .border(true)
                     .on_change(ctx.link().callback(Msg::DraftChanged))
                     .on_submit(ctx.link().callback(|_| Msg::Submit)),
             )

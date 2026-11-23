@@ -161,7 +161,6 @@ impl Component for InlineListPicker {
                             .cursor(ctx.state.query.cursor())
                             .anchor(ctx.state.query.anchor())
                             .placeholder("Filter commands")
-                            .border(true)
                             .on_change(ctx.link().callback(Msg::QueryChanged))
                             .on_submit(ctx.link().callback(|_| Msg::Activate)),
                     )

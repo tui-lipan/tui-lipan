@@ -134,7 +134,7 @@ Source: `src/widgets/input/mod.rs` (`Input`).
 | `caret_blinking` | `None` |
 | `caret_color` | `None` |
 | `selection_style` | `StyleSlot::Inherit` |
-| `border` | `false` |
+| `border` | `true` |
 | `border_style` | `BorderStyle::Plain` |
 | `padding` | `Padding { left: 1, right: 1, top: 0, bottom: 0, }` |
 | `mask` | `None` |
