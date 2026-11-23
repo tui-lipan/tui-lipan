@@ -32,6 +32,7 @@ instance (`self`). Use `type State = ()` when the component needs no local UI st
 | `on_key` | No | `(&mut self, KeyEvent, &mut Context<Self>) -> KeyUpdate` | Handle unhandled key events |
 | `on_modifiers_changed` | No | `(&mut self, KeyMods, &mut Context<Self>) -> Update` | React to physically held modifier keys |
 | `on_window_focus_changed` | No | `(&mut self, bool, &mut Context<Self>) -> Update` | React to host terminal/window focus transitions |
+| `on_viewport_changed` | No | `(&mut self, Rect, &mut Context<Self>) -> Update` | React to a root viewport change before any view reads it, e.g. snap a transition on resize |
 | `on_host_theme_changed` | No | `(&mut self, &mut Context<Self>) -> Update` | React to host terminal palette or light/dark scheme changes |
 | `on_focus_changed` | No | `(&mut self, &FocusChanged, &mut Context<Self>) -> Update` | Observe a completed widget focus transition |
 | `on_host_drag_and_drop` | No, root only | `(&mut self, HostEvent, &mut Context<Self>) -> Update` | Respond to the host's drag-and-drop protocol |
@@ -41,7 +42,7 @@ instance (`self`). Use `type State = ()` when the component needs no local UI st
 The runtime calls `init` once before the component's first `view`. Return `Update::none()`
 after local setup or `Update::command_only(cmd)` to start background work.
 
-The runtime delivers widget focus, window focus, host theme, and modifier changes to all
+The runtime delivers widget focus, window focus, host theme, viewport, and modifier changes to all
 mounted components in tree order, starting at the root. Each hook can update local state
 and return an `Update` for its own scope. See [Focus events](focus.md#focus-events)
 for widget focus.

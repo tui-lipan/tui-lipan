@@ -22,6 +22,7 @@ pub(crate) struct ComponentMount {
 pub(crate) enum ComponentEvent<'a> {
     Focus(&'a crate::FocusChanged),
     WindowFocus(bool),
+    Viewport(Rect),
     HostTheme,
     Modifiers(KeyMods),
 }
@@ -31,6 +32,7 @@ impl ComponentEvent<'_> {
         match self {
             Self::Focus(change) => component.on_focus_changed(change, ctx),
             Self::WindowFocus(focused) => component.on_window_focus_changed(focused, ctx),
+            Self::Viewport(viewport) => component.on_viewport_changed(viewport, ctx),
             Self::HostTheme => component.on_host_theme_changed(ctx),
             Self::Modifiers(modifiers) => component.on_modifiers_changed(modifiers, ctx),
         }

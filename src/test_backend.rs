@@ -8905,6 +8905,83 @@ mod tests {
         panic!("expected background command to update state");
     }
 
+    struct ViewportHarness {
+        calls: Rc<RefCell<Vec<Rect>>>,
+        seen: Rc<Cell<f32>>,
+    }
+
+    impl Component for ViewportHarness {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) {}
+
+        fn on_viewport_changed(&mut self, viewport: Rect, ctx: &mut Context<Self>) -> Update {
+            self.calls.borrow_mut().push(viewport);
+            ctx.snap_transition("slide", slide_target(viewport));
+            Update::none()
+        }
+
+        fn update(&mut self, _msg: (), _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            let target = slide_target(ctx.viewport());
+            let config = TransitionConfig {
+                duration: Duration::from_secs(10),
+                easing: Easing::Linear,
+            };
+            self.seen.set(ctx.transition("slide", target, config));
+            Text::new("viewport").into()
+        }
+    }
+
+    fn slide_target(viewport: Rect) -> f32 {
+        if viewport.w >= 60 { 1.0 } else { 0.0 }
+    }
+
+    #[test]
+    fn viewport_changes_reach_components_once_before_the_view() {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let seen = Rc::new(Cell::new(-1.0));
+        let mut backend = TestBackend::new(ViewportHarness {
+            calls: Rc::clone(&calls),
+            seen: Rc::clone(&seen),
+        });
+        let narrow = Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 10,
+        };
+        let wide = Rect {
+            x: 0,
+            y: 0,
+            w: 80,
+            h: 10,
+        };
+        backend.set_viewport(narrow);
+        backend.render();
+        backend.render();
+        assert_eq!(
+            *calls.borrow(),
+            [narrow],
+            "an unchanged viewport is not an event"
+        );
+        assert_eq!(seen.get(), 0.0);
+
+        backend.set_viewport(wide);
+        backend.render();
+        assert_eq!(*calls.borrow(), [narrow, wide]);
+        assert_eq!(
+            seen.get(),
+            1.0,
+            "the hook's snap lands before the view reads it"
+        );
+    }
+
     struct WindowFocusHarness {
         calls: Rc<RefCell<Vec<bool>>>,
         views: Rc<Cell<usize>>,

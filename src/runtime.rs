@@ -123,6 +123,9 @@ pub(crate) struct RuntimeCore<C: Component> {
     accepting_messages: Rc<Cell<bool>>,
     initialized: bool,
     unmounted: bool,
+    /// The root viewport mounted components last saw, so each change reaches
+    /// `Component::on_viewport_changed` once.
+    notified_viewport: Option<Rect>,
     pub(crate) focus: Rc<FocusContext>,
     pub(crate) hover: Rc<HoverContext>,
     pub(crate) scroll: Rc<ScrollContext>,
@@ -385,6 +388,7 @@ where
             accepting_messages,
             initialized: false,
             unmounted: false,
+            notified_viewport: None,
             focus,
             hover,
             scroll,
@@ -581,6 +585,19 @@ where
             event,
             &mut self.lifecycle_updates,
         );
+    }
+
+    /// Set the root viewport for the coming views, first telling mounted components when it
+    /// changed. The first viewport is the one `init` already saw, so it is not an event.
+    fn set_root_viewport(&mut self, viewport: Rect) {
+        self.ctx.set_viewport(viewport);
+        if self
+            .notified_viewport
+            .replace(viewport)
+            .is_some_and(|previous| previous != viewport)
+        {
+            self.broadcast_component_event(ComponentEvent::Viewport(viewport));
+        }
     }
 
     pub(crate) fn take_lifecycle_update(&mut self) -> Option<(ScopeId, UpdateLevel)> {
@@ -876,7 +893,7 @@ where
         focused_key: Option<&Key>,
         hovered: Option<NodeId>,
     ) {
-        self.ctx.set_viewport(bounds);
+        self.set_root_viewport(bounds);
         self.ctx.set_active_theme(&self.theme);
         self.focus
             .update_from_tree(&self.tree, focused, focused_key);
@@ -1047,7 +1064,7 @@ where
             return false;
         }
 
-        self.ctx.set_viewport(bounds);
+        self.set_root_viewport(bounds);
         self.focus
             .update_from_tree(&self.tree, focused, focused_key);
         // Chain only: any view that had to run for this frame already ran in
@@ -1100,6 +1117,7 @@ where
             return true;
         }
 
+        self.set_root_viewport(viewport);
         self.hover.begin_scoped_view(&self.tree, hovered, scopes);
 
         if scopes.contains(&ScopeId(1)) {

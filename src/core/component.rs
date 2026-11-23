@@ -728,6 +728,15 @@ pub trait Component: Sized + 'static {
         Update::none()
     }
 
+    /// Called on mounted components when the root viewport changes size or position, before any
+    /// view reads the new one.
+    ///
+    /// Use it for runtime effects of a resize that [`view`](Self::view) may not perform, such as
+    /// [`Context::snap_transition`]. Parents receive the event before their children.
+    fn on_viewport_changed(&mut self, _viewport: Rect, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
     /// Called on mounted components when the host terminal reports new colors or a new
     /// light/dark color scheme (when [`App::system_theme`](crate::App::system_theme) or
     /// [`App::live_host_terminal_colors`](crate::App::live_host_terminal_colors) is enabled).
