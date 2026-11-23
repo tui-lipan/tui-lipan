@@ -39,7 +39,11 @@ pub(super) fn build_search_entries<T>(items: &[SearchItem<T>]) -> Vec<SearchEntr
         .map(|item| SearchEntry {
             label: item.label.clone(),
             description: item.description.as_ref().and_then(|d| d.left.clone()),
-            description_right: item.description.as_ref().and_then(|d| d.right.clone()),
+            description_right: item
+                .description
+                .as_ref()
+                .filter(|d| d.right_searchable)
+                .and_then(|d| d.right.clone()),
             aliases: item.aliases.clone(),
         })
         .collect()
@@ -796,6 +800,7 @@ mod tests {
     use nucleo::pattern::{CaseMatching, Normalization};
 
     use super::{SearchEntry, SearchItem, SearchMatchMode, all_item_results, match_items};
+    use crate::widgets::search_palette::ItemDescription;
 
     fn entries(labels: &[&str]) -> Vec<SearchEntry> {
         let items: Vec<SearchItem<usize>> = labels
@@ -898,6 +903,29 @@ mod tests {
 
         let order: Vec<_> = results.iter().map(|result| result.item_index).collect();
         assert_eq!(order, [2, 1, 0], "{results:?}");
+    }
+
+    #[test]
+    fn unsearchable_right_description_does_not_match() {
+        let footer = || ItemDescription::new().right("Settings · Display");
+        let items = vec![
+            SearchItem::new("Diffs", 0).description(footer()),
+            SearchItem::new("Theme", 1).description(footer().right_searchable(false)),
+            SearchItem::new("Settings", 2),
+        ];
+        let entries = super::build_search_entries(&items);
+        let mut matched: Vec<_> = match_items(
+            &entries,
+            "settings",
+            SearchMatchMode::Hybrid,
+            CaseMatching::Smart,
+            Normalization::Smart,
+        )
+        .into_iter()
+        .map(|result| result.item_index)
+        .collect();
+        matched.sort_unstable();
+        assert_eq!(matched, [0, 2]);
     }
 
     #[test]

@@ -22,7 +22,8 @@ pub(crate) const DEFAULT_SYNC_MATCH_LIMIT: usize = 100;
 /// Structured description for a [`SearchItem`].
 ///
 /// Supports a left segment (searchable, placed according to [`DescriptionPlacement`])
-/// and a right segment (not searchable, always right-aligned). Both are styled with
+/// and a right segment (always right-aligned; searchable unless
+/// [`ItemDescription::right_searchable`] turns it off). Both are styled with
 /// `description_style`.
 ///
 /// Plain strings convert to a left-only description via [`From`].
@@ -40,21 +41,38 @@ pub(crate) const DEFAULT_SYNC_MATCH_LIMIT: usize = 100;
 /// // Both:
 /// let d = ItemDescription::new().left("Code editor").right("Free");
 ///
+/// // A category footer that annotates the row but should not match queries:
+/// let d = ItemDescription::new().right("Settings · Diffs").right_searchable(false);
+///
 /// // Animated, for a row whose work is still running:
 /// let d = ItemDescription::new().left("indexing").spinner(Spinner::new());
 /// ```
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ItemDescription {
     /// Left-aligned description text (searchable, respects [`DescriptionPlacement`]).
     pub left: Option<Arc<str>>,
-    /// Right-aligned text (not searchable, always shown on the right).
+    /// Right-aligned text, always shown on the right.
     pub right: Option<Arc<str>>,
+    /// Whether queries match [`right`](Self::right) (default `true`).
+    pub right_searchable: bool,
     /// Animated spinner rendered next to the description (see
     /// [`ItemDescription::spinner`]). Boxed to keep `SearchItem` small: a palette
     /// holds one per row, and almost none of them carry a spinner.
     pub spinner: Option<Box<Spinner>>,
     /// Which side of the description text the spinner sits on.
     pub spinner_position: ListSymbolPosition,
+}
+
+impl Default for ItemDescription {
+    fn default() -> Self {
+        Self {
+            left: None,
+            right: None,
+            right_searchable: true,
+            spinner: None,
+            spinner_position: ListSymbolPosition::default(),
+        }
+    }
 }
 
 impl ItemDescription {
@@ -72,6 +90,16 @@ impl ItemDescription {
     /// Set the right-aligned text (e.g. `"Free"`, `"Pro"`).
     pub fn right(mut self, text: impl Into<Arc<str>>) -> Self {
         self.right = Some(text.into());
+        self
+    }
+
+    /// Whether queries match the right-aligned text (default `true`).
+    ///
+    /// Turn this off when the right side only annotates the row, such as a
+    /// category or shortcut footer, so typing that annotation does not list
+    /// every row that carries it.
+    pub fn right_searchable(mut self, searchable: bool) -> Self {
+        self.right_searchable = searchable;
         self
     }
 
@@ -141,6 +169,9 @@ pub struct SearchItem<T> {
     pub label_style: Option<Box<Style>>,
     /// Per-item right-hand text style, patched over the description style.
     pub right_style: Option<Box<Style>>,
+    /// Per-item right-hand text style on the focused row, used instead of
+    /// [`right_style`](Self::right_style) there.
+    pub focused_right_style: Option<Box<Style>>,
     /// Muted and inspectable, but cannot be activated by keyboard or mouse.
     pub disabled: bool,
     /// User data.
@@ -160,6 +191,7 @@ impl<T> SearchItem<T> {
             priority: 0,
             label_style: None,
             right_style: None,
+            focused_right_style: None,
             disabled: false,
             value,
         }
@@ -174,6 +206,14 @@ impl<T> SearchItem<T> {
     /// Style right-hand text while retaining layout and match highlights.
     pub fn right_style(mut self, style: Style) -> Self {
         self.right_style = Some(Box::new(style));
+        self
+    }
+
+    /// Style right-hand text on the focused row instead of
+    /// [`right_style`](Self::right_style), for example to give a colored status
+    /// footer the same secondary color as the rest of the highlighted row.
+    pub fn focused_right_style(mut self, style: Style) -> Self {
+        self.focused_right_style = Some(Box::new(style));
         self
     }
 
