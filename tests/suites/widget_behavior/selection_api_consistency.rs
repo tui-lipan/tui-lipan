@@ -711,12 +711,15 @@ fn combo_box_selected_and_highlighted_support_none_and_on_highlight() {
 
 struct MultiSelectHighlightApp {
     highlighted: Option<usize>,
+    selected_indices: Vec<usize>,
+    disabled: bool,
 }
 
 #[derive(Default)]
 struct MultiSelectHighlightState {
     highlights: Vec<usize>,
     toggles: Vec<MultiSelectToggleEvent>,
+    commits: Vec<MultiSelectCommitEvent>,
 }
 
 impl Component for MultiSelectHighlightApp {
@@ -732,6 +735,7 @@ impl Component for MultiSelectHighlightApp {
         match msg {
             MultiMsg::Highlight(i) => ctx.state.highlights.push(i),
             MultiMsg::Toggle(ev) => ctx.state.toggles.push(ev),
+            MultiMsg::Commit(ev) => ctx.state.commits.push(ev),
         }
         Update::full()
     }
@@ -739,9 +743,12 @@ impl Component for MultiSelectHighlightApp {
     fn view(&self, ctx: &Context<Self>) -> Element {
         MultiSelect::new()
             .items(["One", "Two", "Three"])
+            .selected_indices(self.selected_indices.clone())
             .highlighted(self.highlighted)
+            .disabled(self.disabled)
             .on_highlight(ctx.link().callback(MultiMsg::Highlight))
             .on_toggle(ctx.link().callback(MultiMsg::Toggle))
+            .on_commit(ctx.link().callback(MultiMsg::Commit))
             .key("multi")
     }
 }
@@ -750,11 +757,16 @@ impl Component for MultiSelectHighlightApp {
 enum MultiMsg {
     Highlight(usize),
     Toggle(MultiSelectToggleEvent),
+    Commit(MultiSelectCommitEvent),
 }
 
 #[test]
 fn multi_select_highlighted_none_clears_cursor_and_on_highlight_fires() {
-    let mut cleared = TestBackend::new(MultiSelectHighlightApp { highlighted: None });
+    let mut cleared = TestBackend::new(MultiSelectHighlightApp {
+        highlighted: None,
+        selected_indices: Vec::new(),
+        disabled: false,
+    });
     cleared.set_viewport(Rect {
         x: 0,
         y: 0,
@@ -783,6 +795,8 @@ fn multi_select_highlighted_none_clears_cursor_and_on_highlight_fires() {
     // Bare usize highlighted(1) works via Into<Option<usize>> and toggles row 1 on Space.
     let mut active = TestBackend::new(MultiSelectHighlightApp {
         highlighted: Some(1),
+        selected_indices: Vec::new(),
+        disabled: false,
     });
     active.set_viewport(Rect {
         x: 0,
@@ -797,4 +811,66 @@ fn multi_select_highlighted_none_clears_cursor_and_on_highlight_fires() {
     assert_eq!(active.state().toggles.len(), 1);
     assert_eq!(active.state().toggles[0].index, 1);
     assert!(active.state().toggles[0].selected);
+}
+
+#[test]
+fn multi_select_enter_commits_with_or_without_highlight_and_respects_disabled() {
+    // Non-empty items + highlighted(None) + selected_indices([1]) + Enter -> one on_commit([1]).
+    let mut cleared = TestBackend::new(MultiSelectHighlightApp {
+        highlighted: None,
+        selected_indices: vec![1],
+        disabled: false,
+    });
+    cleared.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 30,
+        h: 8,
+    });
+    cleared.render();
+    assert!(cleared.focus_key(&Key::from("multi")));
+    cleared.render();
+
+    press(&mut cleared, KeyCode::Enter);
+    assert_eq!(cleared.state().commits.len(), 1);
+    assert_eq!(cleared.state().commits[0].selected_indices, vec![1]);
+
+    // highlighted(Some(0)) + Enter -> exactly one on_commit([1]).
+    let mut active = TestBackend::new(MultiSelectHighlightApp {
+        highlighted: Some(0),
+        selected_indices: vec![1],
+        disabled: false,
+    });
+    active.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 30,
+        h: 8,
+    });
+    active.render();
+    assert!(active.focus_key(&Key::from("multi")));
+    active.render();
+
+    press(&mut active, KeyCode::Enter);
+    assert_eq!(active.state().commits.len(), 1);
+    assert_eq!(active.state().commits[0].selected_indices, vec![1]);
+
+    // disabled -> Enter emits no on_commit.
+    let mut disabled = TestBackend::new(MultiSelectHighlightApp {
+        highlighted: Some(0),
+        selected_indices: vec![1],
+        disabled: true,
+    });
+    disabled.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 30,
+        h: 8,
+    });
+    disabled.render();
+    let _ = disabled.focus_key(&Key::from("multi"));
+    disabled.render();
+
+    press(&mut disabled, KeyCode::Enter);
+    assert!(disabled.state().commits.is_empty());
 }

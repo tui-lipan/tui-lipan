@@ -677,23 +677,11 @@ impl From<MultiSelect> for Element {
             list = list.on_select(Callback::new(move |event: ListEvent| cb.emit(event.index)));
         }
 
-        if let Some(cb) = multi.on_commit {
-            let selected_indices = selected_indices.clone();
-            list = list.on_activate(Callback::new(move |_event: ListEvent| {
-                cb.emit(MultiSelectCommitEvent {
-                    selected_indices: selected_indices.clone(),
-                });
-            }));
-        }
-
         if !multi.disabled && (multi.on_toggle.is_some() || multi.on_change.is_some()) {
-            let selected_indices = selected_indices.clone();
-            let max_selected = multi.max_selected;
-            let on_toggle = multi.on_toggle;
-            let on_change = multi.on_change;
             let selected_indices_click = selected_indices.clone();
-            let on_toggle_click = on_toggle.clone();
-            let on_change_click = on_change.clone();
+            let max_selected = multi.max_selected;
+            let on_toggle_click = multi.on_toggle.clone();
+            let on_change_click = multi.on_change.clone();
 
             list = list.on_item_click(Callback::new(move |event: ListEvent| {
                 let (next_selected, toggled_to_selected) = match toggle_selection(
@@ -717,8 +705,18 @@ impl From<MultiSelect> for Element {
                     });
                 }
             }));
+        }
 
-            let caller_on_key = multi.on_key.clone();
+        if !multi.disabled
+            && (multi.on_commit.is_some() || multi.on_toggle.is_some() || multi.on_change.is_some())
+        {
+            let selected_indices = selected_indices.clone();
+            let max_selected = multi.max_selected;
+            let on_toggle = multi.on_toggle;
+            let on_change = multi.on_change;
+            let on_commit = multi.on_commit;
+            let caller_on_key = multi.on_key;
+
             list = list.on_key(KeyHandler::new(move |key: KeyEvent| {
                 if caller_on_key
                     .as_ref()
@@ -726,7 +724,16 @@ impl From<MultiSelect> for Element {
                 {
                     return true;
                 }
-                if key.code != KeyCode::Char(' ') {
+                if key.code == KeyCode::Enter {
+                    let Some(cb) = on_commit.as_ref() else {
+                        return false;
+                    };
+                    cb.emit(MultiSelectCommitEvent {
+                        selected_indices: selected_indices.clone(),
+                    });
+                    return true;
+                }
+                if key.code != KeyCode::Char(' ') || (on_toggle.is_none() && on_change.is_none()) {
                     return false;
                 }
                 let Some(highlighted) = highlighted else {
