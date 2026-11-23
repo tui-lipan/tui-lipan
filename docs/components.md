@@ -86,7 +86,7 @@ User Action → Event → Message → update() → State Change → Re-render
 Return `Update::render()` when your component's state changes what its subtree displays.
 Use `Update::full()` when the change affects other component scopes or global composition.
 Read the requested refresh with `update.level()`. `UpdateLevel::None` indicates that the
-update requests no frame.
+update requests no frame. `update.has_command()` reports whether it starts background work.
 
 | Return | Use when |
 |--------|----------|

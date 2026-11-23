@@ -583,6 +583,12 @@ impl Update {
         self.level
     }
 
+    /// Whether this update starts a command, for a caller that batches several updates and must
+    /// stop where background work begins.
+    pub fn has_command(&self) -> bool {
+        self.command.is_some()
+    }
+
     pub(crate) fn run(self, tx: &CommandTx, env: &RuntimeEnv) -> UpdateLevel {
         let level = self.level;
         if let Some(command) = self.into_command() {

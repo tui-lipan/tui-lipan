@@ -709,15 +709,16 @@ fn optional_full_command_and_command_only() {
         Update::full_with_command(Option::<Command>::None).level(),
         super::UpdateLevel::Full
     );
+    assert!(!Update::full().has_command());
     let cmd = Command::on_ui_thread(|| {});
     let u = Update::full_with_command(cmd);
     assert_eq!(u.level(), super::UpdateLevel::Full);
-    assert!(u.command.is_some());
+    assert!(u.has_command());
 
     let cmd2 = Command::on_ui_thread(|| {});
     let u2 = Update::command_only(cmd2);
     assert_eq!(u2.level(), super::UpdateLevel::None);
-    assert!(u2.command.is_some());
+    assert!(u2.has_command());
 }
 
 #[test]
