@@ -1831,4 +1831,4 @@ The non-exhaustive enum identifies the item under the pointer:
 | `Edge` | `FlowchartEdgeEvent`, including edge index, endpoints and optional label |
 | `Subgraph` | `FlowchartSubgraphEvent`, including subgraph id and label |
 
-Available through `tui_lipan::FlowchartItemEvent`, `tui_lipan::widgets`, and the prelude.
+Available through `tui_lipan::FlowchartItemEvent` and the prelude.

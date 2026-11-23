@@ -26,6 +26,7 @@ pub struct TextAreaSnapshot {
     pub image_mode: TextAreaImageMode,
 }
 
+/// Payload passed to a [`TextAreaClipboardTransform`] callback before copying text to the clipboard.
 #[non_exhaustive]
 pub struct TextAreaClipboardTransformEvent<'a> {
     /// Selection text after TextArea's default sentinel-to-label rendering.
@@ -34,6 +35,7 @@ pub struct TextAreaClipboardTransformEvent<'a> {
     pub raw_text: &'a str,
 }
 
+/// Callback that rewrites selected [`TextArea`] text before it is written to the clipboard.
 pub type TextAreaClipboardTransform =
     Arc<dyn for<'a> Fn(TextAreaClipboardTransformEvent<'a>) -> String>;
 

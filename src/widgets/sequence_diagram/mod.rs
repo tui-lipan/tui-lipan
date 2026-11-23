@@ -313,9 +313,6 @@ impl SequenceMessage {
     }
 }
 
-/// Compatibility alias for applications that use Mermaid naming.
-pub type Msg = SequenceMessage;
-
 /// One flat sequence diagram command.
 ///
 /// Steps are stored in order; fragment blocks are delimited by
@@ -445,9 +442,6 @@ impl SequenceStep {
         Self::FragmentEnd
     }
 }
-
-/// Compatibility alias for concise examples.
-pub type Step = SequenceStep;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct ParticipantSpec {

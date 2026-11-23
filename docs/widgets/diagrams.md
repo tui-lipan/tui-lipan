@@ -132,7 +132,7 @@ click/hover callbacks.
 | `node` | `(id, label, NodeShape)` | Add or replace a node |
 | `styled_node` | `(id, label, NodeShape, Style)` | Add a node with a style override |
 | `node_hover_style` | `(id, Style)` | Set a per-node hover style override; also available on subgraph builders |
-| `edge` | `FlowchartEdge` (`Edge`) | Add a directed edge |
+| `edge` | `FlowchartEdge` | Add a directed edge |
 | `subgraph` | `(id, label, builder)` | Add a grouped subgraph; builders can nest subgraphs |
 | `class_def` | `(name, Style)` | Define a named class style |
 | `assign_class` | `(id, class)` | Apply a class to a node or subgraph |
@@ -175,9 +175,10 @@ Flowchart::new(FlowDirection::TopDown)
     .on_node_click(ctx.link().callback(Msg::NodeClicked))
 ```
 
-`FlowchartEdge` is the prelude alias for the public `Edge` type to avoid a name
-collision with the styling `Edge` type already exported by the prelude. Outside
-the prelude, use `tui_lipan::widgets::Edge` directly.
+Flowchart nodes and subgraphs are identified by `FlowchartNodeId` (converted from
+`&str`, `String`, or `Arc<str>`), and directed edges use `FlowchartEdge`. Both
+types are available at the crate root (`tui_lipan::{FlowchartEdge, FlowchartNodeId}`)
+and in `tui_lipan::prelude::*`.
 
 ---
 
@@ -192,7 +193,7 @@ notes, fragments, autonumbering, and per-item pointer callbacks.
 | `participant_aliased` | `(alias, label)` | Add a participant whose message key differs from its rendered label |
 | `actor_kind` | `(actor, ActorKind)` | Render an actor as `Participant` (box) or `Actor` (stick figure) |
 | `message` | `SequenceMessage` | Append a message step (`sync`, `async_`, `reply`, etc.) |
-| `step` | `SequenceStep` / `Step` | Append any step, including messages, notes, activations, and fragments |
+| `step` | `SequenceStep` | Append any step, including messages, notes, activations, and fragments |
 | `variant` | `SequenceDiagramVariant` | Select boxed Mermaid-style participants or compact minimal rendering |
 | `theme` | `SequenceDiagramTheme` | Apply a bundled style/glyph theme; presets include `classic()`, `minimal()`, and `ascii()` |
 | `minimal` | `()` | Shortcut for `.variant(SequenceDiagramVariant::Minimal).theme(SequenceDiagramTheme::minimal())` |
@@ -232,10 +233,10 @@ but the final label can flex wider when the current arrow span is wider, and the
 is calculated for that final width. Set `.message_label_overflow(Overflow::Wrap)` to wrap
 arrow labels over multiple visual rows instead of truncating. Notes continue to wrap to
 multiple rows at `max_label_cells`.
-Use `Step`/`SequenceStep` for non-message rows such as `Step::self_msg(...)`,
-`Step::note(...)`, `Step::note_over(...)`, `Step::activate(...)`,
-`Step::deactivate(...)`, `Step::fragment_begin(...)`,
-`Step::fragment_branch(...)`, and `Step::fragment_end()`.
+Use `SequenceStep` for non-message rows such as `SequenceStep::self_msg(...)`,
+`SequenceStep::note(...)`, `SequenceStep::note_over(...)`, `SequenceStep::activate(...)`,
+`SequenceStep::deactivate(...)`, `SequenceStep::fragment_begin(...)`,
+`SequenceStep::fragment_branch(...)`, and `SequenceStep::fragment_end()`.
 
 `SequenceDiagramTheme` groups every diagram-local style, border, and glyph knob
 so a single value can switch between visual systems.
@@ -257,12 +258,12 @@ SequenceDiagram::new()
     .message(SequenceMessage::sync("Client", "Service", "GET /items").activate_target(true))
     .message(SequenceMessage::async_("Service", "DB", "query"))
     .message(SequenceMessage::reply("DB", "Service", "rows"))
-    .step(Step::note_over(["Client", "Service"], "cached response allowed"))
-    .step(Step::fragment_begin(FragmentKind::Alt, "cache hit"))
+    .step(SequenceStep::note_over(["Client", "Service"], "cached response allowed"))
+    .step(SequenceStep::fragment_begin(FragmentKind::Alt, "cache hit"))
     .message(SequenceMessage::reply("Service", "Client", "200 OK"))
-    .step(Step::fragment_branch(FragmentKind::Alt, "else miss"))
+    .step(SequenceStep::fragment_branch(FragmentKind::Alt, "else miss"))
     .message(SequenceMessage::sync("Service", "DB", "refresh"))
-    .step(Step::fragment_end())
+    .step(SequenceStep::fragment_end())
     .autonumber(true)
     .item_hover_style(Style::new().fg(Color::Black).bg(Color::LightCyan))
     .on_item_click(ctx.link().callback(Msg::SequenceClicked))

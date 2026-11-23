@@ -446,25 +446,25 @@ Emitted by: `Flowchart::on_node_click`, `Flowchart::on_edge_click`,
 
 ```rust
 pub struct FlowchartNodeEvent {
-    pub id: NodeId,
+    pub id: FlowchartNodeId,
     pub label: Arc<str>,
 }
 
 pub struct FlowchartEdgeEvent {
-    pub from: NodeId,
-    pub to: NodeId,
+    pub from: FlowchartNodeId,
+    pub to: FlowchartNodeId,
     pub label: Option<Arc<str>>,
 }
 
 pub struct FlowchartSubgraphEvent {
-    pub id: NodeId,
+    pub id: FlowchartNodeId,
     pub label: Arc<str>,
 }
 
 pub enum FlowchartItemPath {
-    Node(NodeId),
+    Node(FlowchartNodeId),
     Edge(usize),
-    Subgraph(NodeId),
+    Subgraph(FlowchartNodeId),
 }
 ```
 
