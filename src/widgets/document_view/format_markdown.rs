@@ -20,6 +20,36 @@ use super::format::{
     FormattedLine, FormattedLink, FormattedList, FormattedListItem, FormattedTable,
 };
 
+/// Vertical spacing policy between Markdown blocks in [`MarkdownFormatter`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum MarkdownSpacing {
+    /// Balanced terminal typography (default).
+    ///
+    /// Separates sections and distinct paragraphs with a single blank row while
+    /// tightening parent-to-child transitions that otherwise waste vertical
+    /// space in a terminal:
+    /// - headings stay attached to the block immediately following them, with a
+    ///   blank row separating a heading from preceding content,
+    /// - paragraphs ending with `:` stay attached to an immediately following
+    ///   list, code block, diagram, table, or blockquote,
+    /// - horizontal rules absorb adjacent blank rows because the rule itself
+    ///   occupies a full divider row,
+    /// - consecutive blank source lines collapse to at most one row, and
+    ///   leading/trailing blank lines are trimmed.
+    #[default]
+    Balanced,
+    /// Preserve explicit blank source lines between blocks.
+    ///
+    /// Runs of multiple blank source lines collapse to at most one row, leading
+    /// and trailing blank lines are trimmed, and a visual spacer is inserted
+    /// before a fenced code/diagram block that immediately follows non-blank
+    /// content.
+    Loose,
+    /// Collapse all blank lines and block spacers so blocks sit flush against
+    /// each other. Useful for dense previews such as chat cards or sidebars.
+    Compact,
+}
+
 /// Formatter that renders markdown into structured display blocks.
 #[derive(Clone, Debug)]
 pub struct MarkdownFormatter {
@@ -27,8 +57,8 @@ pub struct MarkdownFormatter {
     pub styles: DocumentStyles,
     /// Whether soft line breaks inside paragraphs are rendered as spaces.
     pub soft_break_as_space: bool,
-    /// Whether blank source lines and Markdown block spacers are collapsed in output blocks.
-    pub compact_blocks: bool,
+    /// Vertical spacing policy between rendered Markdown blocks.
+    pub spacing: MarkdownSpacing,
     /// Whether fenced ```mermaid blocks are rendered as diagrams. When
     /// false, mermaid fences fall through to ordinary code-block rendering.
     pub render_diagrams: bool,
@@ -39,7 +69,7 @@ impl Default for MarkdownFormatter {
         Self {
             styles: DocumentStyles::default(),
             soft_break_as_space: true,
-            compact_blocks: false,
+            spacing: MarkdownSpacing::default(),
             render_diagrams: true,
         }
     }
@@ -58,9 +88,9 @@ impl MarkdownFormatter {
         self
     }
 
-    /// Collapse blank source lines and Markdown block spacers for a denser preview.
-    pub fn compact_blocks(mut self, enabled: bool) -> Self {
-        self.compact_blocks = enabled;
+    /// Set the vertical spacing policy between rendered Markdown blocks.
+    pub fn spacing(mut self, spacing: MarkdownSpacing) -> Self {
+        self.spacing = spacing;
         self
     }
 
@@ -102,7 +132,7 @@ impl ContentFormatter for MarkdownFormatter {
     fn cache_key(&self) -> u64 {
         let mut h = FxHasher::default();
         self.soft_break_as_space.hash(&mut h);
-        self.compact_blocks.hash(&mut h);
+        self.spacing.hash(&mut h);
         self.render_diagrams.hash(&mut h);
         self.styles.heading_styles.hash(&mut h);
         self.styles.code_inline_style.hash(&mut h);
@@ -121,7 +151,7 @@ impl ContentFormatter for MarkdownFormatter {
     fn measure_cache_key(&self) -> u64 {
         let mut h = FxHasher::default();
         self.soft_break_as_space.hash(&mut h);
-        self.compact_blocks.hash(&mut h);
+        self.spacing.hash(&mut h);
         self.render_diagrams.hash(&mut h);
         h.finish()
     }
@@ -135,51 +165,64 @@ impl ContentFormatter for MarkdownFormatter {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ParsedBlockKind {
+    Blank,
+    Heading,
+    Paragraph { ends_with_colon: bool },
+    List,
+    CodeBlock,
+    Diagram,
+    Table,
+    BlockQuote,
+    HorizontalRule,
+}
+
+struct ParsedBlock {
+    kind: ParsedBlockKind,
+    block: FormattedBlock,
+    source_line: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FenceOpen<'a> {
+    marker: char,
+    len: usize,
+    lang: Option<&'a str>,
+    indent: usize,
+}
+
 fn parse_blocks(
     lines: &[(usize, String)],
     fmt: &MarkdownFormatter,
     styles: &DocumentStyles,
 ) -> Vec<FormattedBlock> {
-    let mut out = Vec::new();
+    let mut parsed: Vec<ParsedBlock> = Vec::new();
     let mut i = 0usize;
 
     while i < lines.len() {
-        let (source_line, raw) = (&lines[i].0, lines[i].1.as_str());
+        let (source_line, raw) = (lines[i].0, lines[i].1.as_str());
         let trimmed = raw.trim();
 
         if trimmed.is_empty() {
-            if !fmt.compact_blocks {
-                // Preserve explicit blank lines from source for readable spacing.
-                out.push(FormattedBlock::Lines(vec![FormattedLine {
-                    spans: vec![Span::new("")],
-                    source_line: *source_line,
-                    indent: 0,
-                    links: Vec::new(),
-                }]));
-            }
+            parsed.push(ParsedBlock {
+                kind: ParsedBlockKind::Blank,
+                block: blank_line_block(source_line),
+                source_line,
+            });
             i += 1;
             continue;
         }
 
-        // Fenced code block: ```lang ... ```
-        if let Some(lang) = parse_fence_start(trimmed) {
-            let start_line = *source_line;
-            i += 1;
-            let mut code_lines = Vec::new();
-            let mut fence_closed = false;
-            while i < lines.len() {
-                let t = lines[i].1.trim();
-                if t.starts_with("```") {
-                    i += 1;
-                    fence_closed = true;
-                    break;
-                }
-                code_lines.push(lines[i].1.clone());
-                i += 1;
-            }
-
-            let block = build_fenced_block(lang, code_lines, fence_closed, start_line, fmt);
-            push_fenced_block(&mut out, block, start_line, fmt);
+        // Fenced code block: ```lang ... ``` or ~~~lang ... ~~~
+        if let Some(open) = parse_fence_start(raw) {
+            parsed.push(consume_fenced_top_level_block(
+                lines,
+                &mut i,
+                open,
+                source_line,
+                fmt,
+            ));
             continue;
         }
 
@@ -187,20 +230,26 @@ fn parse_blocks(
         if let Some((level, content)) = parse_heading(trimmed) {
             let style = styles.heading_styles[level.saturating_sub(1).min(5)];
             let (spans, links) = parse_inline(content, fmt, styles, style);
-            out.push(FormattedBlock::Lines(vec![FormattedLine {
-                spans,
-                source_line: *source_line,
-                indent: 0,
-                links,
-            }]));
+            parsed.push(ParsedBlock {
+                kind: ParsedBlockKind::Heading,
+                block: FormattedBlock::Lines(vec![FormattedLine {
+                    spans,
+                    source_line,
+                    indent: 0,
+                    links,
+                }]),
+                source_line,
+            });
             i += 1;
             continue;
         }
 
         // Horizontal rule
         if is_horizontal_rule(trimmed) {
-            out.push(FormattedBlock::HorizontalRule {
-                source_line: *source_line,
+            parsed.push(ParsedBlock {
+                kind: ParsedBlockKind::HorizontalRule,
+                block: FormattedBlock::HorizontalRule { source_line },
+                source_line,
             });
             i += 1;
             continue;
@@ -211,7 +260,7 @@ fn parse_blocks(
             let row0 = lines[i].1.as_str();
             let row1 = lines[i + 1].1.as_str();
             if looks_like_table_row(row0) && looks_like_table_separator(row1) {
-                let start_line = *source_line;
+                let start_line = source_line;
                 let headers = parse_table_cells(row0);
                 let alignments = parse_table_alignments(row1);
                 i += 2;
@@ -239,19 +288,23 @@ fn parse_blocks(
                     })
                     .collect();
 
-                out.push(FormattedBlock::Table(FormattedTable {
-                    headers: header_spans,
-                    rows: row_spans,
-                    alignments,
-                    source_line_start: start_line,
-                }));
+                parsed.push(ParsedBlock {
+                    kind: ParsedBlockKind::Table,
+                    block: FormattedBlock::Table(FormattedTable {
+                        headers: header_spans,
+                        rows: row_spans,
+                        alignments,
+                        source_line_start: start_line,
+                    }),
+                    source_line: start_line,
+                });
                 continue;
             }
         }
 
         // Blockquote (supports nesting by computing minimum quote depth)
         if is_blockquote_line(trimmed) {
-            let start_line = *source_line;
+            let start_line = source_line;
             let mut quote_lines: Vec<(usize, String)> = Vec::new();
             while i < lines.len() {
                 let t = lines[i].1.trim_start();
@@ -274,11 +327,15 @@ fn parse_blocks(
                 .map(|(line_no, line)| (line_no, strip_quote_depth(line.as_str(), depth)))
                 .collect();
 
-            out.push(FormattedBlock::BlockQuote(FormattedBlockQuote {
-                blocks: parse_blocks(&stripped, fmt, styles),
-                depth,
-                source_line_start: start_line,
-            }));
+            parsed.push(ParsedBlock {
+                kind: ParsedBlockKind::BlockQuote,
+                block: FormattedBlock::BlockQuote(FormattedBlockQuote {
+                    blocks: parse_blocks(&stripped, fmt, styles),
+                    depth,
+                    source_line_start: start_line,
+                }),
+                source_line: start_line,
+            });
             continue;
         }
 
@@ -286,17 +343,23 @@ fn parse_blocks(
         if parse_indented_list_line(lines[i].1.as_str()).is_some()
             && let Some(list) = parse_list_at(lines, &mut i, 0, fmt, styles)
         {
-            out.push(FormattedBlock::List(list));
+            let start_line = list.source_line_start;
+            parsed.push(ParsedBlock {
+                kind: ParsedBlockKind::List,
+                block: FormattedBlock::List(list),
+                source_line: start_line,
+            });
             continue;
         }
 
         // Paragraph: collect consecutive normal lines.
+        let para_start = source_line;
         let mut para_lines = Vec::new();
         while i < lines.len() {
             let (line_no, line) = (lines[i].0, lines[i].1.as_str());
             let t = line.trim();
             if t.is_empty()
-                || parse_fence_start(t).is_some()
+                || parse_fence_start(line).is_some()
                 || parse_heading(t).is_some()
                 || is_horizontal_rule(t)
                 || is_blockquote_line(t)
@@ -323,31 +386,203 @@ fn parse_blocks(
 
         if para_lines.is_empty() {
             // Safety net to avoid infinite loop on unexpected content.
-            out.push(FormattedBlock::Lines(vec![FormattedLine {
+            para_lines.push(FormattedLine {
                 spans: vec![Span::new(raw)],
-                source_line: *source_line,
+                source_line,
                 indent: 0,
                 links: Vec::new(),
-            }]));
+            });
             i += 1;
-        } else {
-            out.push(FormattedBlock::Lines(para_lines));
         }
+        let ends_with_colon = lines_end_with_colon(&para_lines);
+        parsed.push(ParsedBlock {
+            kind: ParsedBlockKind::Paragraph { ends_with_colon },
+            block: FormattedBlock::Lines(para_lines),
+            source_line: para_start,
+        });
+    }
+
+    apply_block_spacing(parsed, fmt.spacing)
+}
+
+fn consume_fenced_top_level_block(
+    lines: &[(usize, String)],
+    i: &mut usize,
+    open: FenceOpen<'_>,
+    start_line: usize,
+    fmt: &MarkdownFormatter,
+) -> ParsedBlock {
+    *i += 1;
+    let mut code_lines: Vec<String> = Vec::new();
+    let mut fence_closed = false;
+    while *i < lines.len() {
+        let raw = lines[*i].1.as_str();
+        if is_fence_close(raw, open) {
+            *i += 1;
+            fence_closed = true;
+            break;
+        }
+        let code_line = if open.indent > 0 {
+            strip_leading_columns(raw, open.indent)
+        } else {
+            raw.to_string()
+        };
+        code_lines.push(code_line);
+        *i += 1;
+    }
+
+    let block = build_fenced_block(open.lang, code_lines, fence_closed, start_line, fmt);
+    let kind = fenced_block_kind(&block);
+    ParsedBlock {
+        kind,
+        block,
+        source_line: start_line,
+    }
+}
+
+fn fenced_block_kind(block: &FormattedBlock) -> ParsedBlockKind {
+    match block {
+        FormattedBlock::Diagram(_) => ParsedBlockKind::Diagram,
+        _ => ParsedBlockKind::CodeBlock,
+    }
+}
+
+fn apply_block_spacing(parsed: Vec<ParsedBlock>, spacing: MarkdownSpacing) -> Vec<FormattedBlock> {
+    let has_content = parsed
+        .iter()
+        .any(|item| item.kind != ParsedBlockKind::Blank);
+    if !has_content {
+        return match spacing {
+            MarkdownSpacing::Compact => Vec::new(),
+            MarkdownSpacing::Balanced | MarkdownSpacing::Loose => {
+                parsed.into_iter().take(1).map(|item| item.block).collect()
+            }
+        };
+    }
+
+    let mut out = Vec::with_capacity(parsed.len());
+    let mut prev_kind: Option<ParsedBlockKind> = None;
+    let mut prev_end_source_line: Option<usize> = None;
+    let mut pending_blank_line: Option<usize> = None;
+
+    for item in parsed {
+        if item.kind == ParsedBlockKind::Blank {
+            if prev_kind.is_some() && pending_blank_line.is_none() {
+                pending_blank_line = Some(item.source_line);
+            }
+            continue;
+        }
+
+        if let Some(prev) = prev_kind
+            && needs_blank_between(prev, item.kind, pending_blank_line.is_some(), spacing)
+        {
+            let spacer_line = pending_blank_line
+                .unwrap_or_else(|| prev_end_source_line.unwrap_or(item.source_line));
+            out.push(blank_line_block(spacer_line));
+        }
+        pending_blank_line = None;
+        prev_kind = Some(item.kind);
+        prev_end_source_line = last_visual_source_line(&item.block).or(Some(item.source_line));
+        out.push(item.block);
     }
 
     out
 }
 
-fn push_fenced_block(
-    out: &mut Vec<FormattedBlock>,
-    block: FormattedBlock,
-    source_line: usize,
-    fmt: &MarkdownFormatter,
-) {
-    if !fmt.compact_blocks && previous_block_has_content(out.last()) {
-        out.push(blank_line_block(source_line));
+fn last_visual_source_line(block: &FormattedBlock) -> Option<usize> {
+    match block {
+        FormattedBlock::Lines(lines) => lines.last().map(|line| line.source_line),
+        FormattedBlock::HorizontalRule { source_line } => Some(*source_line),
+        FormattedBlock::CodeBlock(code) => {
+            let line_count = code.code.split('\n').count();
+            Some(
+                code.source_line_start
+                    .saturating_add(line_count.saturating_sub(1)),
+            )
+        }
+        FormattedBlock::Diagram(diagram) => Some(diagram.source_line_start),
+        FormattedBlock::Table(table) => Some(table.source_line_start),
+        FormattedBlock::BlockQuote(quote) => quote
+            .blocks
+            .iter()
+            .rev()
+            .find_map(last_visual_source_line)
+            .or(Some(quote.source_line_start)),
+        FormattedBlock::List(list) => list
+            .items
+            .last()
+            .and_then(|item| {
+                item.content
+                    .iter()
+                    .rev()
+                    .find_map(last_visual_source_line)
+                    .or(Some(item.source_line))
+            })
+            .or(Some(list.source_line_start)),
     }
-    out.push(block);
+}
+
+fn needs_blank_between(
+    prev: ParsedBlockKind,
+    next: ParsedBlockKind,
+    had_source_blank: bool,
+    spacing: MarkdownSpacing,
+) -> bool {
+    match spacing {
+        MarkdownSpacing::Compact => false,
+        MarkdownSpacing::Loose => {
+            had_source_blank
+                || matches!(next, ParsedBlockKind::CodeBlock | ParsedBlockKind::Diagram)
+        }
+        MarkdownSpacing::Balanced => {
+            // Horizontal rules occupy a full row with centered stroke and act
+            // as their own visual divider.
+            if prev == ParsedBlockKind::HorizontalRule || next == ParsedBlockKind::HorizontalRule {
+                return false;
+            }
+            // Headings stay attached to the content that immediately follows.
+            if prev == ParsedBlockKind::Heading {
+                return false;
+            }
+            // A paragraph ending with `:` introduces an immediately following
+            // list, code block, diagram, table, or blockquote.
+            if matches!(
+                prev,
+                ParsedBlockKind::Paragraph {
+                    ends_with_colon: true
+                }
+            ) && matches!(
+                next,
+                ParsedBlockKind::List
+                    | ParsedBlockKind::CodeBlock
+                    | ParsedBlockKind::Diagram
+                    | ParsedBlockKind::Table
+                    | ParsedBlockKind::BlockQuote
+            ) {
+                return false;
+            }
+            // Start each new heading section with a separating row above it.
+            if next == ParsedBlockKind::Heading {
+                return true;
+            }
+            // Fenced blocks after non-lead-in prose keep a separating row even
+            // when the source omitted a blank line.
+            if matches!(next, ParsedBlockKind::CodeBlock | ParsedBlockKind::Diagram) {
+                return true;
+            }
+            had_source_blank
+        }
+    }
+}
+
+fn lines_end_with_colon(lines: &[FormattedLine]) -> bool {
+    lines
+        .iter()
+        .rev()
+        .flat_map(|line| line.spans.iter().rev())
+        .flat_map(|span| span.content.chars().rev())
+        .find(|ch| !ch.is_whitespace())
+        == Some(':')
 }
 
 fn build_fenced_block(
@@ -379,20 +614,6 @@ fn build_fenced_block(
         code,
         source_line_start,
     })
-}
-
-fn previous_block_has_content(block: Option<&FormattedBlock>) -> bool {
-    match block {
-        Some(FormattedBlock::Lines(lines)) => lines.iter().any(formatted_line_has_content),
-        Some(_) => true,
-        None => false,
-    }
-}
-
-fn formatted_line_has_content(line: &FormattedLine) -> bool {
-    line.spans
-        .iter()
-        .any(|span| !span.content.as_ref().trim().is_empty())
 }
 
 fn blank_line_block(source_line: usize) -> FormattedBlock {
@@ -561,21 +782,63 @@ fn merge_styles(stack: &[Style]) -> Style {
     out
 }
 
-fn parse_fence_start(trimmed: &str) -> Option<Option<&str>> {
-    if !trimmed.starts_with("```") {
+fn parse_fence_start(line: &str) -> Option<FenceOpen<'_>> {
+    parse_fence_start_at(line, 0)
+}
+
+fn parse_fence_start_at(line: &str, container_col: usize) -> Option<FenceOpen<'_>> {
+    let (indent, rest) = line_leading_columns(line);
+    if indent < container_col {
         return None;
     }
-    let rest = trimmed.trim_start_matches('`').trim();
-    if rest.is_empty() {
-        Some(None)
-    } else {
-        let lang = rest.split_whitespace().next().unwrap_or_default();
-        if lang.is_empty() {
-            Some(None)
-        } else {
-            Some(Some(lang))
-        }
+    let rel_indent = indent - container_col;
+    if rel_indent > 3 {
+        return None;
     }
+    parse_fence_start_trimmed(rest, rel_indent)
+}
+
+fn parse_fence_start_trimmed(trimmed_start: &str, indent: usize) -> Option<FenceOpen<'_>> {
+    let marker = trimmed_start.chars().next()?;
+    if marker != '`' && marker != '~' {
+        return None;
+    }
+    let len = trimmed_start.chars().take_while(|&c| c == marker).count();
+    if len < 3 {
+        return None;
+    }
+    let info = trimmed_start[len..].trim();
+    // CommonMark §4.5: backtick fence info strings may not contain backticks.
+    if marker == '`' && info.contains('`') {
+        return None;
+    }
+    let lang = info.split_whitespace().next().filter(|s| !s.is_empty());
+    Some(FenceOpen {
+        marker,
+        len,
+        lang,
+        indent,
+    })
+}
+
+fn is_fence_close(line: &str, open: FenceOpen<'_>) -> bool {
+    is_fence_close_at(line, 0, open)
+}
+
+fn is_fence_close_at(line: &str, container_col: usize, open: FenceOpen<'_>) -> bool {
+    let (indent, rest) = line_leading_columns(line);
+    if indent < container_col || indent - container_col > 3 {
+        return false;
+    }
+    is_fence_close_trimmed(rest, open)
+}
+
+fn is_fence_close_trimmed(trimmed_start: &str, open: FenceOpen<'_>) -> bool {
+    let count = trimmed_start
+        .chars()
+        .take_while(|&c| c == open.marker)
+        .count();
+    count >= open.len && trimmed_start[count..].trim().is_empty()
 }
 
 fn parse_heading(trimmed: &str) -> Option<(usize, &str)> {
@@ -787,10 +1050,7 @@ fn parse_list_at(
         let content = parse_list_item_body(
             lines,
             i,
-            ListItemIndent {
-                marker_col,
-                content_col,
-            },
+            ListItemIndent { content_col },
             fmt,
             styles,
             item_text,
@@ -817,7 +1077,6 @@ fn parse_list_at(
 /// Lines after the list marker line for one item: continuations and nested lists.
 #[derive(Clone, Copy)]
 struct ListItemIndent {
-    marker_col: usize,
     content_col: usize,
 }
 
@@ -830,14 +1089,27 @@ fn parse_list_item_body(
     first_text: &str,
     first_line_no: usize,
 ) -> Vec<FormattedBlock> {
-    let mut blocks: Vec<FormattedBlock> = Vec::new();
-    if let Some(lang) = parse_fence_start(first_text.trim_start()) {
-        let fence_col = indent
-            .content_col
-            .saturating_add(leading_columns_from(first_text, indent.content_col));
-        let code = consume_fenced_list_block(lines, i, fence_col, lang, first_line_no, fmt, false);
-        blocks.push(code);
-        return parse_list_item_tail(lines, i, indent.marker_col, fmt, styles, blocks, Vec::new());
+    let mut blocks: Vec<ParsedBlock> = Vec::new();
+    let marker_extra_indent = leading_columns_from(first_text, indent.content_col);
+    if marker_extra_indent <= 3
+        && let Some(open) = parse_fence_start_trimmed(first_text.trim_start(), marker_extra_indent)
+    {
+        let code = consume_fenced_list_block(
+            lines,
+            i,
+            indent.content_col,
+            open,
+            first_line_no,
+            fmt,
+            false,
+        );
+        let kind = fenced_block_kind(&code);
+        blocks.push(ParsedBlock {
+            kind,
+            block: code,
+            source_line: first_line_no,
+        });
+        return parse_list_item_tail(lines, i, indent, fmt, styles, blocks, Vec::new());
     }
 
     let (spans, links) = parse_inline(first_text, fmt, styles, Style::default());
@@ -848,18 +1120,33 @@ fn parse_list_item_body(
         links,
     }];
 
-    parse_list_item_tail(lines, i, indent.marker_col, fmt, styles, blocks, para)
+    parse_list_item_tail(lines, i, indent, fmt, styles, blocks, para)
+}
+
+fn push_list_para(blocks: &mut Vec<ParsedBlock>, para: &mut Vec<FormattedLine>) {
+    if para.is_empty() {
+        return;
+    }
+    let lines = std::mem::take(para);
+    let source_line = lines[0].source_line;
+    let ends_with_colon = lines_end_with_colon(&lines);
+    blocks.push(ParsedBlock {
+        kind: ParsedBlockKind::Paragraph { ends_with_colon },
+        block: FormattedBlock::Lines(lines),
+        source_line,
+    });
 }
 
 fn parse_list_item_tail(
     lines: &[(usize, String)],
     i: &mut usize,
-    marker_col: usize,
+    indent: ListItemIndent,
     fmt: &MarkdownFormatter,
     styles: &DocumentStyles,
-    mut blocks: Vec<FormattedBlock>,
+    mut blocks: Vec<ParsedBlock>,
     mut para: Vec<FormattedLine>,
 ) -> Vec<FormattedBlock> {
+    let content_col = indent.content_col;
     while *i < lines.len() {
         let (_, raw) = &lines[*i];
         if raw.trim().is_empty() {
@@ -872,21 +1159,16 @@ fn parse_list_item_tail(
                 break;
             };
             let (next_ind, _) = line_leading_columns(next_raw);
-            if next_ind <= marker_col {
+            if next_ind < content_col {
                 break;
             }
-            if !para.is_empty() {
-                blocks.push(FormattedBlock::Lines(std::mem::take(&mut para)));
-            }
-            if !fmt.compact_blocks {
-                for (source_line, _) in lines.iter().take(next).skip(blank_start) {
-                    blocks.push(FormattedBlock::Lines(vec![FormattedLine {
-                        spans: vec![Span::new("")],
-                        source_line: *source_line,
-                        indent: 0,
-                        links: Vec::new(),
-                    }]));
-                }
+            push_list_para(&mut blocks, &mut para);
+            for (source_line, _) in lines.iter().take(next).skip(blank_start) {
+                blocks.push(ParsedBlock {
+                    kind: ParsedBlockKind::Blank,
+                    block: blank_line_block(*source_line),
+                    source_line: *source_line,
+                });
             }
             *i = next;
             continue;
@@ -894,17 +1176,20 @@ fn parse_list_item_tail(
 
         let (ind, rest) = line_leading_columns(raw);
 
-        if ind <= marker_col {
+        if ind < content_col {
             break;
         }
 
         if let Some((_ord, _, text)) = parse_list_marker(rest) {
-            // `ind > marker_col` is guaranteed here (same-indent siblings break above).
-            if !para.is_empty() {
-                blocks.push(FormattedBlock::Lines(std::mem::take(&mut para)));
-            }
-            if let Some(nested) = parse_list_at(lines, i, marker_col + 1, fmt, styles) {
-                blocks.push(FormattedBlock::List(nested));
+            // `ind >= content_col` is guaranteed here (less-indented lines break above).
+            push_list_para(&mut blocks, &mut para);
+            if let Some(nested) = parse_list_at(lines, i, content_col, fmt, styles) {
+                let start_line = nested.source_line_start;
+                blocks.push(ParsedBlock {
+                    kind: ParsedBlockKind::List,
+                    block: FormattedBlock::List(nested),
+                    source_line: start_line,
+                });
                 continue;
             }
             let (spans, links) = parse_inline(text.trim_start(), fmt, styles, Style::default());
@@ -918,14 +1203,17 @@ fn parse_list_item_tail(
             continue;
         }
 
-        if let Some(lang) = parse_fence_start(rest.trim_start()) {
-            if !para.is_empty() {
-                blocks.push(FormattedBlock::Lines(std::mem::take(&mut para)));
-            }
+        if let Some(open) = parse_fence_start_at(raw, content_col) {
+            push_list_para(&mut blocks, &mut para);
             let start_line = lines[*i].0;
-            blocks.push(consume_fenced_list_block(
-                lines, i, ind, lang, start_line, fmt, true,
-            ));
+            let code =
+                consume_fenced_list_block(lines, i, content_col, open, start_line, fmt, true);
+            let kind = fenced_block_kind(&code);
+            blocks.push(ParsedBlock {
+                kind,
+                block: code,
+                source_line: start_line,
+            });
             continue;
         }
 
@@ -939,17 +1227,15 @@ fn parse_list_item_tail(
         *i += 1;
     }
 
-    if !para.is_empty() {
-        blocks.push(FormattedBlock::Lines(para));
-    }
-    blocks
+    push_list_para(&mut blocks, &mut para);
+    apply_block_spacing(blocks, fmt.spacing)
 }
 
 fn consume_fenced_list_block(
     lines: &[(usize, String)],
     i: &mut usize,
-    fence_indent: usize,
-    lang: Option<&str>,
+    container_col: usize,
+    open: FenceOpen<'_>,
     start_line: usize,
     fmt: &MarkdownFormatter,
     consume_opening_line: bool,
@@ -957,22 +1243,31 @@ fn consume_fenced_list_block(
     if consume_opening_line {
         *i += 1;
     }
-    let mut code_lines = Vec::new();
+    let fence_col = container_col.saturating_add(open.indent);
+    let mut code_lines: Vec<String> = Vec::new();
     let mut fence_closed = false;
     while *i < lines.len() {
         let raw = lines[*i].1.as_str();
-        let stripped = strip_leading_columns(raw, fence_indent);
-        if parse_fence_start(stripped.trim_start()).is_some() {
-            *i += 1;
-            fence_closed = true;
-            break;
+        if !raw.trim().is_empty() {
+            let (line_ind, _) = line_leading_columns(raw);
+            if line_ind < container_col {
+                while code_lines.last().is_some_and(|line| line.is_empty()) {
+                    code_lines.pop();
+                }
+                break;
+            }
+            if is_fence_close_at(raw, container_col, open) {
+                *i += 1;
+                fence_closed = true;
+                break;
+            }
         }
 
-        code_lines.push(stripped);
+        code_lines.push(strip_leading_columns(raw, fence_col));
         *i += 1;
     }
 
-    build_fenced_block(lang, code_lines, fence_closed, start_line, fmt)
+    build_fenced_block(open.lang, code_lines, fence_closed, start_line, fmt)
 }
 
 fn parse_list_marker(trimmed: &str) -> Option<(bool, usize, &str)> {
@@ -1198,7 +1493,7 @@ mod tests {
 
     #[test]
     fn ordered_blank_line_before_fence_stays_in_item() {
-        let formatter = MarkdownFormatter::default().compact_blocks(true);
+        let formatter = MarkdownFormatter::default().spacing(MarkdownSpacing::Compact);
         let doc = formatter.format(FormatInput {
             value: "1. setup\n\n   ```text\n   cargo test\n   ```\n2. next",
             content_type: Some("markdown"),
@@ -1216,7 +1511,7 @@ mod tests {
 
     #[test]
     fn nested_bullet_after_fence_with_blank_separator_stays_nested() {
-        let formatter = MarkdownFormatter::default().compact_blocks(true);
+        let formatter = MarkdownFormatter::default().spacing(MarkdownSpacing::Compact);
         let doc = formatter.format(FormatInput {
             value: "- outer\n  ```text\n  code\n  ```\n\n  - nested",
             content_type: Some("markdown"),
@@ -1622,9 +1917,9 @@ flowchart LR
             Some(crate::style::Paint::Solid(crate::style::Color::Red))
         );
 
-        let paragraph = match &doc.blocks[2] {
+        let paragraph = match &doc.blocks[1] {
             FormattedBlock::Lines(lines) => lines,
-            _ => panic!("expected paragraph block"),
+            _ => panic!("expected paragraph block immediately after heading"),
         };
         assert_eq!(
             paragraph[0].spans[0].style.fg,
@@ -1674,5 +1969,438 @@ flowchart LR
         assert_eq!(&*links[0].url, "https://example.com/a.png");
         assert_eq!((links[0].start, links[0].end), (0, text.len()));
         assert_eq!(styles[0].underline, Some(true));
+    }
+
+    #[test]
+    fn four_backtick_fence_preserves_nested_three_backtick_fence() {
+        let input = "\
+A fence that contains another fence:
+
+````markdown
+Use this in a doc:
+
+```rust
+let label = \"ok\";
+```
+````
+
+## Table";
+        let doc = MarkdownFormatter::default().format(FormatInput {
+            value: input,
+            content_type: Some("markdown"),
+            document_styles: None,
+        });
+
+        let code_blocks: Vec<&FormattedCodeBlock> = doc
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                FormattedBlock::CodeBlock(code) => Some(code),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(code_blocks.len(), 1);
+        assert_eq!(code_blocks[0].language.as_deref(), Some("markdown"));
+        assert_eq!(
+            code_blocks[0].code.as_ref(),
+            "Use this in a doc:\n\n```rust\nlet label = \"ok\";\n```"
+        );
+    }
+
+    #[test]
+    fn tilde_fence_preserves_inner_backticks_and_shorter_tildes() {
+        let input = "~~~~markdown\n```rust\nfn main() {}\n```\n~~~\n~~~~";
+        let doc = MarkdownFormatter::default().format(FormatInput {
+            value: input,
+            content_type: Some("markdown"),
+            document_styles: None,
+        });
+
+        assert_eq!(doc.blocks.len(), 1);
+        let FormattedBlock::CodeBlock(code) = &doc.blocks[0] else {
+            panic!("expected code block");
+        };
+        assert_eq!(code.language.as_deref(), Some("markdown"));
+        assert_eq!(code.code.as_ref(), "```rust\nfn main() {}\n```\n~~~");
+    }
+
+    #[test]
+    fn closing_fence_with_info_string_does_not_close_outer_fence() {
+        let input = "````markdown\n````rust\nlet x = 1;\n````";
+        let doc = MarkdownFormatter::default().format(FormatInput {
+            value: input,
+            content_type: Some("markdown"),
+            document_styles: None,
+        });
+
+        assert_eq!(doc.blocks.len(), 1);
+        let FormattedBlock::CodeBlock(code) = &doc.blocks[0] else {
+            panic!("expected code block");
+        };
+        assert_eq!(code.code.as_ref(), "````rust\nlet x = 1;");
+    }
+
+    #[test]
+    fn backtick_inline_span_on_single_line_is_not_a_fenced_code_block() {
+        let input = "```inline code```";
+        let doc = MarkdownFormatter::default().format(FormatInput {
+            value: input,
+            content_type: Some("markdown"),
+            document_styles: None,
+        });
+
+        assert_eq!(doc.blocks.len(), 1);
+        let FormattedBlock::Lines(lines) = &doc.blocks[0] else {
+            panic!("expected paragraph, not code block");
+        };
+        assert_eq!(line_text(&lines[0]), "inline code");
+    }
+
+    #[test]
+    fn list_item_preserves_nested_fence_inside_four_backtick_fence() {
+        let input = "\
+- Nested fence example:
+  ````markdown
+  ```rust
+  let x = 1;
+  ```
+  ````";
+        let doc = MarkdownFormatter::default().format(FormatInput {
+            value: input,
+            content_type: Some("markdown"),
+            document_styles: None,
+        });
+
+        let FormattedBlock::List(list) = &doc.blocks[0] else {
+            panic!("expected list");
+        };
+        let code = list.items[0]
+            .content
+            .iter()
+            .find_map(|block| match block {
+                FormattedBlock::CodeBlock(code) => Some(code),
+                _ => None,
+            })
+            .expect("nested code block");
+        assert_eq!(code.language.as_deref(), Some("markdown"));
+        assert_eq!(code.code.as_ref(), "```rust\nlet x = 1;\n```");
+    }
+
+    fn block_tags(doc: &FormattedDocument) -> Vec<&'static str> {
+        doc.blocks
+            .iter()
+            .map(|block| match block {
+                FormattedBlock::Lines(lines)
+                    if lines.len() == 1
+                        && lines[0]
+                            .spans
+                            .iter()
+                            .all(|span| span.content.trim().is_empty()) =>
+                {
+                    "blank"
+                }
+                FormattedBlock::Lines(_) => "lines",
+                FormattedBlock::List(_) => "list",
+                FormattedBlock::CodeBlock(_) => "code",
+                FormattedBlock::Diagram(_) => "diagram",
+                FormattedBlock::Table(_) => "table",
+                FormattedBlock::BlockQuote(_) => "quote",
+                FormattedBlock::HorizontalRule { .. } => "hr",
+            })
+            .collect()
+    }
+
+    #[test]
+    fn balanced_spacing_tightens_headings_lead_ins_and_rules() {
+        let input = "\n\nIntro.\n\n\n## Lists\n\nBullets:\n\n- a\n- b\n\n## Code\n\nRust:\n\n```rust\nfn main() {}\n```\n\n> Quoted\n\n---\n\nTail.\n\n";
+        let doc = MarkdownFormatter::default()
+            .spacing(MarkdownSpacing::Balanced)
+            .format(FormatInput {
+                value: input,
+                content_type: Some("markdown"),
+                document_styles: None,
+            });
+
+        assert_eq!(
+            block_tags(&doc),
+            vec![
+                "lines", // Intro.
+                "blank", // section break before ## Lists
+                "lines", // ## Lists
+                "lines", // Bullets: (attached to heading)
+                "list",  // - a, - b (attached to colon lead-in)
+                "blank", // section break before ## Code
+                "lines", // ## Code
+                "lines", // Rust: (attached to heading)
+                "code",  // rust block (attached to colon lead-in)
+                "blank", // explicit blank before quote
+                "quote", // > Quoted
+                "hr",    // --- (absorbs surrounding blanks)
+                "lines", // Tail.
+            ]
+        );
+    }
+
+    #[test]
+    fn loose_and_compact_spacing_policies_differ_from_balanced() {
+        let input = "\n\n## Title\n\n\nBody.\n\nNext.\n\n";
+
+        let balanced = MarkdownFormatter::default()
+            .spacing(MarkdownSpacing::Balanced)
+            .format(FormatInput {
+                value: input,
+                content_type: Some("markdown"),
+                document_styles: None,
+            });
+        assert_eq!(
+            block_tags(&balanced),
+            vec!["lines", "lines", "blank", "lines"]
+        );
+
+        let loose = MarkdownFormatter::default()
+            .spacing(MarkdownSpacing::Loose)
+            .format(FormatInput {
+                value: input,
+                content_type: Some("markdown"),
+                document_styles: None,
+            });
+        assert_eq!(
+            block_tags(&loose),
+            vec!["lines", "blank", "lines", "blank", "lines"]
+        );
+
+        let compact = MarkdownFormatter::default()
+            .spacing(MarkdownSpacing::Compact)
+            .format(FormatInput {
+                value: input,
+                content_type: Some("markdown"),
+                document_styles: None,
+            });
+        assert_eq!(block_tags(&compact), vec!["lines", "lines", "lines"]);
+    }
+
+    #[test]
+    fn markdown_spacing_affects_formatter_cache_keys() {
+        let balanced = MarkdownFormatter::default().spacing(MarkdownSpacing::Balanced);
+        let loose = MarkdownFormatter::default().spacing(MarkdownSpacing::Loose);
+        let compact = MarkdownFormatter::default().spacing(MarkdownSpacing::Compact);
+
+        assert_ne!(balanced.cache_key(), loose.cache_key());
+        assert_ne!(balanced.cache_key(), compact.cache_key());
+        assert_ne!(loose.cache_key(), compact.cache_key());
+        assert_ne!(balanced.measure_cache_key(), loose.measure_cache_key());
+        assert_ne!(balanced.measure_cache_key(), compact.measure_cache_key());
+        assert_ne!(loose.measure_cache_key(), compact.measure_cache_key());
+    }
+
+    #[test]
+    fn document_view_markdown_spacing_preserves_existing_formatter_options() {
+        let view = super::super::DocumentView::new("```mermaid\ngraph TD\nA --> B\n```")
+            .markdown()
+            .render_diagrams(false)
+            .markdown_spacing(MarkdownSpacing::Compact);
+
+        let formatter = view.formatter.as_deref().expect("formatter");
+        let md = formatter
+            .as_any()
+            .downcast_ref::<MarkdownFormatter>()
+            .expect("markdown formatter");
+        assert!(!md.render_diagrams);
+        assert_eq!(md.spacing, MarkdownSpacing::Compact);
+    }
+
+    #[test]
+    fn list_item_rejects_fence_indented_four_columns_past_content() {
+        // `- item` has content column 2, so 6 leading spaces (4 extra) is not a fence.
+        let tail_input = "- item\n      ```text\n      body\n      ```";
+        let tail_doc = MarkdownFormatter::default().format(FormatInput {
+            value: tail_input,
+            content_type: Some("markdown"),
+            document_styles: None,
+        });
+        let FormattedBlock::List(tail_list) = &tail_doc.blocks[0] else {
+            panic!("expected list");
+        };
+        assert!(
+            !tail_list.items[0]
+                .content
+                .iter()
+                .any(|block| matches!(block, FormattedBlock::CodeBlock(_))),
+            "4+ columns past list content column must not open a fenced code block"
+        );
+
+        // Marker-line fence with 4 extra spaces past content column 2 is also rejected.
+        let marker_input = "-     ```text\n      body\n      ```";
+        let marker_doc = MarkdownFormatter::default().format(FormatInput {
+            value: marker_input,
+            content_type: Some("markdown"),
+            document_styles: None,
+        });
+        let FormattedBlock::List(marker_list) = &marker_doc.blocks[0] else {
+            panic!("expected list");
+        };
+        assert!(
+            !marker_list.items[0]
+                .content
+                .iter()
+                .any(|block| matches!(block, FormattedBlock::CodeBlock(_))),
+            "marker-line fence with 4+ extra columns must not open a fenced code block"
+        );
+    }
+
+    #[test]
+    fn list_item_accepts_fence_indented_up_to_three_columns_past_content() {
+        // `- item` has content column 2; 5 leading spaces is 3 extra columns (allowed).
+        let input = "- item\n     ```rust\n     let x = 1;\n     ```";
+        let doc = MarkdownFormatter::default().format(FormatInput {
+            value: input,
+            content_type: Some("markdown"),
+            document_styles: None,
+        });
+        let FormattedBlock::List(list) = &doc.blocks[0] else {
+            panic!("expected list");
+        };
+        let code = list.items[0]
+            .content
+            .iter()
+            .find_map(|block| match block {
+                FormattedBlock::CodeBlock(code) => Some(code),
+                _ => None,
+            })
+            .expect("fence 3 columns past content column should parse as code block");
+        assert_eq!(code.language.as_deref(), Some("rust"));
+        assert_eq!(code.code.as_ref(), "let x = 1;");
+    }
+
+    #[test]
+    fn list_item_deeply_indented_backticks_do_not_close_fence() {
+        // Content column is 2; 6 leading spaces (4 extra) inside the body must not close.
+        let input = "- item\n  ```markdown\n      ```\n  still inside\n  ```";
+        let doc = MarkdownFormatter::default().format(FormatInput {
+            value: input,
+            content_type: Some("markdown"),
+            document_styles: None,
+        });
+        let FormattedBlock::List(list) = &doc.blocks[0] else {
+            panic!("expected list");
+        };
+        let code = list.items[0]
+            .content
+            .iter()
+            .find_map(|block| match block {
+                FormattedBlock::CodeBlock(code) => Some(code),
+                _ => None,
+            })
+            .expect("code block");
+        assert_eq!(code.language.as_deref(), Some("markdown"));
+        assert_eq!(code.code.as_ref(), "    ```\nstill inside");
+    }
+
+    #[test]
+    fn synthetic_balanced_spacer_inherits_previous_block_source_line() {
+        let doc = MarkdownFormatter::default().format(FormatInput {
+            value: "paragraph\n## Heading",
+            content_type: Some("markdown"),
+            document_styles: None,
+        });
+        assert_eq!(block_tags(&doc), vec!["lines", "blank", "lines"]);
+
+        let FormattedBlock::Lines(para) = &doc.blocks[0] else {
+            panic!("expected paragraph");
+        };
+        let FormattedBlock::Lines(spacer) = &doc.blocks[1] else {
+            panic!("expected synthetic spacer");
+        };
+        let FormattedBlock::Lines(heading) = &doc.blocks[2] else {
+            panic!("expected heading");
+        };
+        assert_eq!(para[0].source_line, 0);
+        assert_eq!(
+            spacer[0].source_line, 0,
+            "synthetic spacer must inherit preceding block source line, not steal heading's line"
+        );
+        assert_eq!(heading[0].source_line, 1);
+
+        // Multi-line paragraph before heading inherits the last paragraph line.
+        let multi = MarkdownFormatter::default().format(FormatInput {
+            value: "line zero\nline one\n## Heading",
+            content_type: Some("markdown"),
+            document_styles: None,
+        });
+        let FormattedBlock::Lines(multi_spacer) = &multi.blocks[1] else {
+            panic!("expected synthetic spacer");
+        };
+        let FormattedBlock::Lines(multi_heading) = &multi.blocks[2] else {
+            panic!("expected heading");
+        };
+        assert_eq!(multi_spacer[0].source_line, 1);
+        assert_eq!(multi_heading[0].source_line, 2);
+    }
+
+    #[test]
+    fn list_item_continuation_requires_content_column_indent() {
+        // `- item` has content column 2; a 1-space-indented fence must terminate the
+        // list item and parse as a top-level code block instead of nesting inside the item.
+        let bullet_input = "- item\n ```rust\n let x = 1;\n ```";
+        let bullet_doc = MarkdownFormatter::default().format(FormatInput {
+            value: bullet_input,
+            content_type: Some("markdown"),
+            document_styles: None,
+        });
+        assert_eq!(block_tags(&bullet_doc), vec!["list", "blank", "code"]);
+        let FormattedBlock::List(list) = &bullet_doc.blocks[0] else {
+            panic!("expected list");
+        };
+        assert_eq!(list.items[0].content.len(), 1);
+        let FormattedBlock::CodeBlock(code) = &bullet_doc.blocks[2] else {
+            panic!("expected top-level code block");
+        };
+        assert_eq!(code.language.as_deref(), Some("rust"));
+        assert_eq!(code.code.as_ref(), "let x = 1;");
+
+        // `1. item` has content column 3; 2 leading spaces is not enough to stay in the item.
+        let ordered_input = "1. item\n  ```text\n  body\n  ```";
+        let ordered_doc = MarkdownFormatter::default().format(FormatInput {
+            value: ordered_input,
+            content_type: Some("markdown"),
+            document_styles: None,
+        });
+        assert_eq!(block_tags(&ordered_doc), vec!["list", "blank", "code"]);
+
+        // After a blank line, a 1-space-indented paragraph also exits `- item`.
+        let para_input = "- item\n\n outside";
+        let para_doc = MarkdownFormatter::default().format(FormatInput {
+            value: para_input,
+            content_type: Some("markdown"),
+            document_styles: None,
+        });
+        assert_eq!(block_tags(&para_doc), vec!["list", "blank", "lines"]);
+    }
+
+    #[test]
+    fn unclosed_list_item_fence_terminates_at_less_indented_sibling() {
+        let input = "- first\n  ```rust\n  let x = 1;\n- second";
+        let doc = MarkdownFormatter::default().format(FormatInput {
+            value: input,
+            content_type: Some("markdown"),
+            document_styles: None,
+        });
+        let FormattedBlock::List(list) = &doc.blocks[0] else {
+            panic!("expected list");
+        };
+        assert_eq!(list.items.len(), 2);
+        let code = list.items[0]
+            .content
+            .iter()
+            .find_map(|block| match block {
+                FormattedBlock::CodeBlock(code) => Some(code),
+                _ => None,
+            })
+            .expect("first item should keep its unclosed code block");
+        assert_eq!(code.code.as_ref(), "let x = 1;");
+        let FormattedBlock::Lines(second_lines) = &list.items[1].content[0] else {
+            panic!("second item should parse as sibling item");
+        };
+        assert_eq!(line_text(&second_lines[0]), "second");
     }
 }

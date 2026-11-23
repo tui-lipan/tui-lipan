@@ -286,8 +286,6 @@ pub use crate::ui_snapshot::{
 pub use crate::utils::SelectionEnd;
 pub use crate::utils::gradient::{ColorGradient, GradientDirection, GradientRange};
 pub use crate::validation::{StringValidator, ValidationError, Validator};
-#[cfg(feature = "markdown")]
-pub use crate::widgets::MarkdownFormatter;
 #[cfg(feature = "terminal")]
 #[doc(hidden)]
 pub use crate::widgets::TerminalEngineKind;
@@ -409,6 +407,8 @@ pub use crate::widgets::{
 };
 #[cfg(feature = "image")]
 pub use crate::widgets::{Image, ImageFit, ImagePlayback, ImageProtocol, ImageRepeat, ImageSource};
+#[cfg(feature = "markdown")]
+pub use crate::widgets::{MarkdownFormatter, MarkdownSpacing};
 #[cfg(feature = "qr-code")]
 pub use crate::widgets::{QrCode, QrEcc, QrRender};
 #[cfg(feature = "syntax-syntect")]

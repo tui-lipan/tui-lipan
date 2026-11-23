@@ -1844,3 +1844,15 @@ The non-exhaustive enum identifies the item under the pointer:
 | `Subgraph` | `FlowchartSubgraphEvent`, including subgraph id and label |
 
 Available through `tui_lipan::FlowchartItemEvent` and the prelude.
+
+## MarkdownSpacing
+
+Vertical block-spacing policy for `MarkdownFormatter` and `DocumentView::markdown_spacing(...)` (requires the `markdown` feature):
+
+| Variant | Behavior |
+|---------|----------|
+| `Balanced` **(default)** | Keeps a single blank row between sections and distinct paragraphs while keeping headings attached to their following block, colon-terminated lead-in paragraphs attached to an immediately following list/code/diagram/table/blockquote, horizontal rules free of redundant surrounding blank rows, and runs of blank lines collapsed |
+| `Loose` | Preserves explicit single blank lines between blocks, collapses consecutive blank runs, trims leading/trailing blank lines, and adds a spacer before fenced code/diagram blocks following non-blank content |
+| `Compact` | Collapses all blank lines and block spacers so blocks sit flush against each other |
+
+Available through `tui_lipan::MarkdownSpacing`, `tui_lipan::widgets::MarkdownSpacing`, and the prelude.

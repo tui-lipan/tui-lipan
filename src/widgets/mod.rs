@@ -164,8 +164,6 @@ pub use diff_view::{
     DiffPrefixes, DiffScrollEvent, DiffView, DiffViewBackend, DiffViewMode,
 };
 pub use divider::{Divider, Orientation};
-#[cfg(feature = "markdown")]
-pub use document_view::MarkdownFormatter;
 pub use document_view::diagram::{
     ClassMemberSpec as DiagramClassMemberSpec, ClassNodeSpec as DiagramClassNodeSpec,
     ClassRelationSpec as DiagramClassRelationSpec, ClassSpec as DiagramClassSpec,
@@ -186,6 +184,8 @@ pub use document_view::{
     DocumentView, FormatInput, FormattedBlock, FormattedDiagramBlock, FormattedDocument,
     FormattedLine, PlainFormatter, TableRowSeparators,
 };
+#[cfg(feature = "markdown")]
+pub use document_view::{MarkdownFormatter, MarkdownSpacing};
 pub use drag_drop::{
     DEFAULT_PREVIEW_MAX_HEIGHT, DEFAULT_PREVIEW_MAX_WIDTH, DragCancelEvent, DragLeaveEvent,
     DragOverEvent, DragPayload, DragPreview, DragSlot, DragSlotAxis, DragSource, DragStartEvent,
