@@ -2119,6 +2119,155 @@ mod tests {
         assert_eq!(texts, vec!["child:1"]);
     }
 
+    /// A memoized parent with two children, so both children's refreshes splice at its scope.
+    struct MemoPair {
+        links: [Rc<RefCell<Option<Link<ChildMsg>>>>; 2],
+        child_view_count: Rc<Cell<usize>>,
+        pair_view_count: Rc<Cell<usize>>,
+    }
+
+    impl Component for MemoPair {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn memo_key(&self, _props: &Self::Properties, _ctx: &Context<Self>) -> Option<u64> {
+            Some(1)
+        }
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            self.pair_view_count.set(self.pair_view_count.get() + 1);
+            let child = |key: &'static str, link_slot: &Rc<RefCell<Option<Link<ChildMsg>>>>| {
+                let link_slot = Rc::clone(link_slot);
+                let view_count = Rc::clone(&self.child_view_count);
+                crate::child(
+                    move || ChildComponent {
+                        link_slot: Rc::clone(&link_slot),
+                        view_count: Rc::clone(&view_count),
+                    },
+                    (),
+                )
+                .key(key)
+            };
+            crate::widgets::VStack::new()
+                .child(child("a", &self.links[0]))
+                .child(child("b", &self.links[1]))
+                .into()
+        }
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+    }
+
+    struct MemoPairRoot {
+        links: [Rc<RefCell<Option<Link<ChildMsg>>>>; 2],
+        child_view_count: Rc<Cell<usize>>,
+        pair_view_count: Rc<Cell<usize>>,
+    }
+
+    impl Component for MemoPairRoot {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            let links = self.links.clone();
+            let child_view_count = Rc::clone(&self.child_view_count);
+            let pair_view_count = Rc::clone(&self.pair_view_count);
+            crate::child(
+                move || MemoPair {
+                    links: links.clone(),
+                    child_view_count: Rc::clone(&child_view_count),
+                    pair_view_count: Rc::clone(&pair_view_count),
+                },
+                (),
+            )
+        }
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+    }
+
+    /// Both children's refreshes splice at the memoized parent's scope. The second refresh starts
+    /// from the parent cache the first one updated, so the one surviving splice carries both.
+    #[test]
+    fn refresh_cached_scopes_keeps_every_sibling_under_a_shared_memoized_ancestor() {
+        let links = [Rc::new(RefCell::new(None)), Rc::new(RefCell::new(None))];
+        let child_view_count = Rc::new(Cell::new(0));
+        let pair_view_count = Rc::new(Cell::new(0));
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 4,
+        };
+        let mut runtime = RuntimeCore::new_test(
+            MemoPairRoot {
+                links: links.clone(),
+                child_view_count: Rc::clone(&child_view_count),
+                pair_view_count: Rc::clone(&pair_view_count),
+            },
+            (),
+            Rect::default(),
+            Theme::default(),
+            SurfaceMode::Fullscreen,
+            Rc::new(Cell::new(true)),
+        );
+        runtime.init();
+        runtime.render_element(bounds, None, None, None);
+        assert_eq!(child_view_count.get(), 2);
+
+        let mut scopes = Vec::new();
+        for slot in &links {
+            let link = slot
+                .borrow()
+                .clone()
+                .expect("child init should publish its link");
+            link.send(ChildMsg::Increment);
+            let (scope, msg) = runtime
+                .queue
+                .borrow_mut()
+                .pop_front()
+                .expect("child message should be queued");
+            runtime
+                .update_from_boxed(scope, msg)
+                .expect("update should succeed");
+            scopes.push(scope);
+        }
+
+        assert!(runtime.refresh_cached_scopes(&scopes, bounds, None));
+        assert_eq!(
+            pair_view_count.get(),
+            1,
+            "the memoized parent's view is skipped"
+        );
+        assert_eq!(child_view_count.get(), 4);
+
+        let texts = |runtime: &RuntimeCore<MemoPairRoot>| {
+            let mut texts = Vec::new();
+            collect_texts(
+                runtime
+                    .cached_expanded_element
+                    .as_ref()
+                    .expect("expanded element should be cached"),
+                &mut texts,
+            );
+            texts
+        };
+        assert_eq!(texts(&runtime), ["child:1", "child:1"]);
+
+        // A root render reuses the parent's memo cache, which must hold both refreshes too.
+        runtime.render_element(bounds, None, None, None);
+        assert_eq!(pair_view_count.get(), 1);
+        assert_eq!(texts(&runtime), ["child:1", "child:1"]);
+    }
+
     #[derive(Clone)]
     enum AlertMsg {
         Ask(bool),
