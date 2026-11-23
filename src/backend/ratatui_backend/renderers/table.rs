@@ -27,8 +27,9 @@ use crate::style::resolve::{Durability, StateLayer, resolve_state_cascade};
 use crate::style::{BorderStyle, Padding, Rect, ScrollbarVariant, Style, ThemeRole, resolve_slot};
 use crate::utils::scrollbar::ScrollbarMetricsCache;
 use crate::widgets::table::{
-    resolved_row_height, resolved_row_total_height, row_index_at_visual_offset,
-    table_header_reserved_height, visible_rows_for_height,
+    resolved_column_widths, resolved_row_height, resolved_row_total_height,
+    row_index_at_visual_offset, table_header_reserved_height, table_inspector_prefix_width,
+    visible_rows_for_height,
 };
 use crate::widgets::{ColumnWidth, TableDisclosureState, TableRow, TableRowRole};
 
@@ -290,8 +291,24 @@ pub(crate) fn render_table(
         })
     };
 
-    // Convert constraints
-    let constraints: Vec<Constraint> = widths
+    // Resolve missing column widths from content and convert to constraints
+    let effective_widths = resolved_column_widths(
+        header,
+        rows,
+        widths,
+        selection_symbol,
+        unselected_symbol,
+        |row| {
+            table_inspector_prefix_width(
+                row,
+                inspector,
+                inspector_indent_size,
+                inspector_collapsed_symbol,
+                inspector_expanded_symbol,
+            )
+        },
+    );
+    let constraints: Vec<Constraint> = effective_widths
         .iter()
         .map(|w| match w {
             ColumnWidth::Fixed(v) => Constraint::Length(*v),

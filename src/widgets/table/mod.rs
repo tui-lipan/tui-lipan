@@ -502,6 +502,11 @@ impl Table {
     }
 
     /// Set column widths.
+    ///
+    /// When omitted (or shorter than the column count in `header` and normal data
+    /// rows), each unspecified column defaults to `ColumnWidth::Min(w)` where `w`
+    /// is the widest cell line in that column (including column 0's selection
+    /// symbol and inspector prefix, with a floor of `1`).
     pub fn widths(mut self, widths: impl IntoIterator<Item = ColumnWidth>) -> Self {
         self.widths = widths.into_iter().collect();
         self
@@ -866,7 +871,11 @@ impl crate::layout::hash::LayoutHash for Table {
         self.scrollbar.hash(hasher);
         self.scrollbar_config.gap.hash(hasher);
         self.show_scroll_indicators.hash(hasher);
-        self.widths.hash(hasher);
+        if matches!(self.width, Length::Auto) {
+            layout::resolved_table_widths(self).hash(hasher);
+        } else {
+            self.widths.hash(hasher);
+        }
         self.selected.hash(hasher);
         Some(())
     }
@@ -877,7 +886,7 @@ mod node;
 mod reconcile;
 mod shared;
 
-pub(crate) use layout::measure_table;
+pub(crate) use layout::{measure_table, resolved_column_widths, table_inspector_prefix_width};
 pub(crate) use node::TableNode;
 pub(crate) use reconcile::reconcile_table;
 pub(crate) use shared::{
