@@ -2,7 +2,10 @@
 
 use tui_lipan::core::event::{MouseButton, MouseKind};
 use tui_lipan::prelude::*;
-use tui_lipan::{RadioEvent as RootRadioEvent, SelectEvent as RootSelectEvent, TestBackend};
+use tui_lipan::{
+    MultiSelectToggleEvent, RadioEvent as RootRadioEvent, SelectEvent as RootSelectEvent,
+    TestBackend,
+};
 
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent {
