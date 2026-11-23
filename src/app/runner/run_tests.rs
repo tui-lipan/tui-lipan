@@ -15034,3 +15034,302 @@ fn queued_nested_messages_see_app_theme_while_theme_provider_stays_scoped() {
         "unscoped sibling sees host system theme in the same drain"
     );
 }
+
+struct InlineAutoSelectDemo {
+    top_spacer: u16,
+    with_label: bool,
+    list_height: u16,
+}
+
+#[derive(Clone, Debug)]
+enum InlineAutoSelectMsg {
+    SetExpanded(bool),
+}
+
+impl Component for InlineAutoSelectDemo {
+    type Message = InlineAutoSelectMsg;
+    type Properties = ();
+    type State = bool;
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {
+        false
+    }
+
+    fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+        match msg {
+            InlineAutoSelectMsg::SetExpanded(expanded) => {
+                ctx.state = expanded;
+                Update::render()
+            }
+        }
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        let mut stack = VStack::new();
+        if self.top_spacer > 0 {
+            stack = stack.child(Spacer::new().height(Length::Px(self.top_spacer)));
+        }
+        if self.with_label {
+            stack = stack.child(Text::new("Target"));
+        }
+        stack
+            .child(
+                crate::widgets::Select::new()
+                    .options(["Local sandbox", "Staging cluster", "Production canary"])
+                    .placeholder("Choose target")
+                    .expanded(ctx.state)
+                    .list_height(Length::Px(self.list_height))
+                    .on_toggle(ctx.link().callback(InlineAutoSelectMsg::SetExpanded))
+                    .width(Length::Px(26)),
+            )
+            .into()
+    }
+}
+
+fn settle_inline_auto_runner<C: Component>(
+    runner: &mut AppRunner<C>,
+    width: u16,
+    screen_height: u16,
+) -> (Rect, Rect, u16) {
+    let mut bounds = runner.content_bounds(width, screen_height);
+    let mut overlay_bounds = runner.overlay_bounds(width, screen_height);
+    runner.sync_runtime_overlay_bounds(width, screen_height);
+    runner
+        .render_element_until_scroll_stable(bounds)
+        .expect("initial inline reconcile should succeed");
+    let mut viewport_rows = overlay_bounds.h;
+    for _ in 0..4 {
+        let Some(plan) =
+            runner.resolve_inline_auto_height(width, screen_height, bounds, overlay_bounds)
+        else {
+            break;
+        };
+        viewport_rows = plan.viewport_rows;
+        if !plan.bounds_changed {
+            break;
+        }
+        bounds = plan.layout_bounds;
+        overlay_bounds = plan.overlay_bounds;
+        runner
+            .render_element_until_scroll_stable(bounds)
+            .expect("settled inline reconcile should succeed");
+    }
+    (bounds, overlay_bounds, viewport_rows)
+}
+
+#[test]
+fn inline_auto_height_expands_viewport_for_open_select_and_shrinks_on_close() {
+    for app in [
+        App::new().inline_ephemeral(InlineHeight::auto()),
+        App::new().inline_transcript(InlineHeight::auto()),
+    ] {
+        let mut runner = AppRunner::new(
+            app,
+            InlineAutoSelectDemo {
+                top_spacer: 0,
+                with_label: true,
+                list_height: 5,
+            },
+            (),
+        );
+        runner.core.init();
+
+        // Closed: 1-row label + 3-row Select trigger = 4 rows.
+        let (bounds, overlay_bounds, viewport_rows) =
+            settle_inline_auto_runner(&mut runner, 80, 24);
+        assert_eq!(bounds.h, 4);
+        assert_eq!(overlay_bounds.h, 4);
+        assert_eq!(viewport_rows, 4);
+        assert!(runner.core.tree.overlay_roots().is_empty());
+
+        // Open Select: base layout stays 4 rows; viewport and overlay bounds grow to 9 rows.
+        runner.core.ctx.state = true;
+        let (bounds, overlay_bounds, viewport_rows) =
+            settle_inline_auto_runner(&mut runner, 80, 24);
+        assert_eq!(
+            bounds.h, 4,
+            "opening a popover must not stretch the base layout"
+        );
+        assert_eq!(
+            viewport_rows, 9,
+            "auto-height viewport should grow to fit the 5-row dropdown below the 4-row base"
+        );
+        assert_eq!(overlay_bounds.h, 9);
+        assert_eq!(runner.core.tree.overlay_roots().len(), 1);
+        let overlay_rect = runner
+            .core
+            .tree
+            .node(runner.core.tree.overlay_roots()[0].id)
+            .rect;
+        assert_eq!(overlay_rect.y, 4);
+        assert_eq!(overlay_rect.h, 5);
+
+        // Paint into a fixed viewport anchored at a non-zero terminal row (y = 6)
+        // to verify inline frame-origin translation paints the popup in the right rows.
+        let backend = TestBackend::new(80, 20);
+        let mut terminal = RatatuiTerminal::with_options(
+            backend,
+            ratatui::TerminalOptions {
+                viewport: ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 6, 80, 9)),
+            },
+        )
+        .expect("fixed viewport test terminal should init");
+        let join_index =
+            crate::backend::ratatui_backend::render::build_join_index(&runner.core.tree);
+        let scrollbar_metrics_cache = RefCell::new(Default::default());
+        let overlay_bg_snapshot = RefCell::new(Vec::new());
+        let dnd_snapshot_cells = RefCell::new(None);
+        let cursor_position = Cell::new(None);
+        let ctx = crate::backend::ratatui_backend::RenderContext {
+            tree: &runner.core.tree,
+            focused: None,
+            hovered: None,
+            mouse_pos: None,
+            suppress_pointer_item_hover_nodes: None,
+            blink_visible: true,
+            effect_phase: 0,
+            images_enabled: false,
+            contrast_policy: runner.contrast_policy,
+            read_only_selection: None,
+            scrollbar_metrics_cache: &scrollbar_metrics_cache,
+            overlay_bg_snapshot: &overlay_bg_snapshot,
+            join_index: &join_index,
+            cursor_position: &cursor_position,
+            terminal_bg: None,
+            drag_preview_label: None,
+            drag_preview_at_mouse: false,
+            drag_preview_snapshot_rect: None,
+            dnd_snapshot_cells: &dnd_snapshot_cells,
+            drag_preview_max_width: None,
+            drag_preview_max_height: None,
+            drag_preview_grab_offset: None,
+            drop_slot_source_preview_rect: None,
+            paint_glyph_caches: None,
+            copy_feedback: None,
+            copy_feedback_style: Style::default(),
+        };
+        terminal
+            .draw(|frame| {
+                crate::backend::ratatui_backend::render(frame, &ctx);
+            })
+            .expect("render inline popup at y=6");
+        let buf = terminal.backend().buffer();
+        let row_text = |row: u16| -> String {
+            (0..80)
+                .map(|x| buf.cell((x, row)).map_or(" ", |c| c.symbol()))
+                .collect()
+        };
+        assert!(
+            row_text(6).contains("Target"),
+            "label should paint at inline origin y=6, got: {:?}",
+            row_text(6)
+        );
+        assert!(
+            (10..15).any(|row| row_text(row).contains("Local sandbox")),
+            "dropdown option should paint inside rows 10..15"
+        );
+        assert!(
+            (10..15).any(|row| row_text(row).contains("Staging cluster")),
+            "second dropdown option should paint inside rows 10..15"
+        );
+
+        // Close Select: viewport shrinks cleanly back to 4 rows.
+        runner.core.ctx.state = false;
+        let (bounds, overlay_bounds, viewport_rows) =
+            settle_inline_auto_runner(&mut runner, 80, 24);
+        assert_eq!(bounds.h, 4);
+        assert_eq!(overlay_bounds.h, 4);
+        assert_eq!(viewport_rows, 4);
+        assert!(runner.core.tree.overlay_roots().is_empty());
+    }
+}
+
+#[test]
+fn inline_auto_capped_flips_popover_above_without_adding_blank_rows() {
+    let mut runner = AppRunner::new(
+        App::new().inline_ephemeral(InlineHeight::auto_capped(12)),
+        InlineAutoSelectDemo {
+            top_spacer: 7,
+            with_label: false,
+            list_height: 5,
+        },
+        (),
+    );
+    runner.core.init();
+
+    let (bounds, _, viewport_rows) = settle_inline_auto_runner(&mut runner, 80, 24);
+    assert_eq!(bounds.h, 10);
+    assert_eq!(viewport_rows, 10);
+
+    // Trigger is at rows 7..10. Below only has 2 rows up to cap 12, while
+    // above has 7 rows, so the 5-row popup flips above (rows 2..7) and the
+    // viewport stays at 10 rows with no wasted blank rows beneath the base UI.
+    runner.core.ctx.state = true;
+    let (bounds, overlay_bounds, viewport_rows) = settle_inline_auto_runner(&mut runner, 80, 24);
+    assert_eq!(bounds.h, 10);
+    assert_eq!(viewport_rows, 10);
+    assert_eq!(overlay_bounds.h, 10);
+    let overlay_rect = runner
+        .core
+        .tree
+        .node(runner.core.tree.overlay_roots()[0].id)
+        .rect;
+    assert_eq!(overlay_rect.y, 2);
+    assert_eq!(overlay_rect.h, 5);
+}
+
+#[test]
+fn inline_auto_capped_suppresses_popover_with_trigger_below_viewport() {
+    let mut runner = AppRunner::new(
+        App::new().inline_ephemeral(InlineHeight::auto_capped(8)),
+        InlineAutoSelectDemo {
+            top_spacer: 8,
+            with_label: false,
+            list_height: 5,
+        },
+        (),
+    );
+    runner.core.init();
+    runner.core.ctx.state = true;
+
+    let (bounds, overlay_bounds, _) = settle_inline_auto_runner(&mut runner, 80, 24);
+    assert_eq!(bounds.h, 11);
+    assert_eq!(overlay_bounds.h, 8);
+    assert!(
+        runner.core.tree.overlay_roots().is_empty(),
+        "an open Select with its trigger below the viewport must not publish a popup"
+    );
+}
+
+#[test]
+fn inline_auto_height_respects_cap_when_popover_only_fits_below() {
+    let mut runner = AppRunner::new(
+        App::new().inline_ephemeral(InlineHeight::auto_capped(7)),
+        InlineAutoSelectDemo {
+            top_spacer: 0,
+            with_label: false,
+            list_height: 8,
+        },
+        (),
+    );
+    runner.core.init();
+
+    let (bounds, _, viewport_rows) = settle_inline_auto_runner(&mut runner, 80, 24);
+    assert_eq!(bounds.h, 3);
+    assert_eq!(viewport_rows, 3);
+
+    // Trigger is at rows 0..3 -> 0 rows above, 4 rows below within cap 7.
+    // Viewport grows to the cap (7) and the popup shrinks to 4 rows below.
+    runner.core.ctx.state = true;
+    let (bounds, overlay_bounds, viewport_rows) = settle_inline_auto_runner(&mut runner, 80, 24);
+    assert_eq!(bounds.h, 3);
+    assert_eq!(viewport_rows, 7);
+    assert_eq!(overlay_bounds.h, 7);
+    let overlay_rect = runner
+        .core
+        .tree
+        .node(runner.core.tree.overlay_roots()[0].id)
+        .rect;
+    assert_eq!(overlay_rect.y, 3);
+    assert_eq!(overlay_rect.h, 4);
+}

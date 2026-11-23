@@ -5,6 +5,8 @@ mod exports;
 #[path = "suites/contracts/inline_surface_fixture.rs"]
 mod inline_surface_fixture;
 
+#[path = "suites/contracts/inline_surface_popovers.rs"]
+mod inline_surface_popovers;
 #[path = "suites/contracts/inline_surface_resize.rs"]
 mod inline_surface_resize;
 #[path = "suites/contracts/inline_transcript_history.rs"]

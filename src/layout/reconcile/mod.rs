@@ -30,6 +30,29 @@ pub(crate) fn reconcile_with_overlays_mode(
     overlays: &[crate::overlay::OverlayEntry],
     allow_root_overlays: bool,
 ) {
+    reconcile_with_overlay_bounds(
+        tree,
+        root,
+        bounds,
+        bounds,
+        None,
+        focus,
+        overlays,
+        allow_root_overlays,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn reconcile_with_overlay_bounds(
+    tree: &mut NodeTree,
+    root: &Element,
+    bounds: Rect,
+    overlay_bounds: Rect,
+    popover_expand_bounds: Option<Rect>,
+    focus: Option<&FocusContext>,
+    overlays: &[crate::overlay::OverlayEntry],
+    allow_root_overlays: bool,
+) {
     let previous_entry_roots: Vec<_> = tree
         .overlay_roots()
         .iter()
@@ -49,7 +72,8 @@ pub(crate) fn reconcile_with_overlays_mode(
         root,
         reuse_root.then_some(root_node),
     );
-    let mut overlay_state = OverlayState::new(bounds, allow_root_overlays);
+    let mut overlay_state =
+        OverlayState::with_bounds(overlay_bounds, popover_expand_bounds, allow_root_overlays);
     overlay_state.previous_entry_roots = previous_entry_roots;
     let _root_id = {
         let mut ctx = ReconcileCtx {

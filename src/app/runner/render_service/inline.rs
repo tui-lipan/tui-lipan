@@ -22,6 +22,14 @@ use crate::style::Rect;
 
 use super::AppRunner;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct InlineAutoHeightPlan {
+    pub(crate) layout_bounds: Rect,
+    pub(crate) overlay_bounds: Rect,
+    pub(crate) viewport_rows: u16,
+    pub(crate) bounds_changed: bool,
+}
+
 pub(super) fn reanchor_inline_viewport_to_top<B: Backend>(
     terminal: &mut ratatui::Terminal<B>,
 ) -> std::result::Result<(), B::Error> {
@@ -279,46 +287,78 @@ impl<C: Component> AppRunner<C> {
         Ok(())
     }
 
+    /// Measure the live element's natural height (plus any open root-portal
+    /// popovers) for `InlineHeight::Auto` and compute the target layout bounds,
+    /// overlay bounds, and on-screen viewport height without touching a tty.
+    pub(crate) fn resolve_inline_auto_height(
+        &mut self,
+        width: u16,
+        screen_height: u16,
+        current_layout_bounds: Rect,
+        current_overlay_bounds: Rect,
+    ) -> Option<InlineAutoHeightPlan> {
+        let max_rows = self.surface.auto_inline_height()?;
+        if self.surface.is_transcript() && self.surface.inline.transcript_expanded {
+            // The expanded-transcript flow sizes the viewport from the full
+            // replay document instead (see `render_expanded_transcript`).
+            return None;
+        }
+        let element = self.core.cached_expanded_element.as_ref()?;
+
+        let natural = min_size_constrained(element, Some(current_layout_bounds.w), None)
+            .1
+            .max(1);
+        let overlay_bottom = self.core.tree.required_inline_overlay_height();
+        let effective_cap = max_rows
+            .map_or(screen_height, |cap| cap.min(screen_height))
+            .max(1);
+        let viewport_rows = natural.max(overlay_bottom).min(effective_cap).max(1);
+
+        self.surface.inline.auto_height_resolved = natural;
+        self.surface.inline.auto_viewport_height_resolved = viewport_rows;
+        self.sync_runtime_overlay_bounds(width, screen_height);
+
+        let layout_bounds = self.content_bounds(width, screen_height);
+        let overlay_bounds = self.overlay_bounds(width, screen_height);
+        let bounds_changed =
+            layout_bounds != current_layout_bounds || overlay_bounds != current_overlay_bounds;
+
+        Some(InlineAutoHeightPlan {
+            layout_bounds,
+            overlay_bounds,
+            viewport_rows,
+            bounds_changed,
+        })
+    }
+
     /// Measure the live element's natural height for `InlineHeight::Auto` and
-    /// resize the inline viewport to match. Returns the new content bounds
-    /// when they differ from `bounds`, so the caller can re-reconcile at the
-    /// final size.
+    /// resize the inline viewport to match. Returns the new `(layout_bounds,
+    /// overlay_bounds)` when either differs from the current pass, so the
+    /// caller can re-reconcile at the settled size.
     ///
     /// The layout bounds stay at the content's natural height even when it
-    /// exceeds the terminal; only the on-screen viewport is clamped (to the
-    /// `max` cap and the terminal height), showing the top of the layout and
-    /// clipping the rest at draw time.
+    /// exceeds the terminal or when an open popover temporarily expands the
+    /// viewport; only the on-screen viewport and overlay placement bounds grow
+    /// (up to the `max` cap and terminal height) so the base UI never shifts.
     pub(super) fn sync_inline_auto_height(
         &mut self,
         terminal: &mut crate::backend::ratatui_backend::Terminal,
         bounds: Rect,
-    ) -> Result<Option<Rect>> {
-        let Some(max_rows) = self.surface.auto_inline_height() else {
-            return Ok(None);
-        };
-        if self.surface.is_transcript() && self.surface.inline.transcript_expanded {
-            // The expanded-transcript flow sizes the viewport from the full
-            // replay document instead (see `render_expanded_transcript`).
-            return Ok(None);
-        }
-        let Some(element) = self.core.cached_expanded_element.as_ref() else {
-            return Ok(None);
-        };
-
-        let natural = min_size_constrained(element, Some(bounds.w), None).1.max(1);
-        self.surface.inline.auto_height_resolved = natural;
-
+        overlay_bounds: Rect,
+    ) -> Result<Option<(Rect, Rect)>> {
         let size = terminal.size()?;
-        let viewport_rows = max_rows
-            .map_or(natural, |cap| natural.min(cap))
-            .min(size.height)
-            .max(1);
-        if terminal.get_frame().area().height != viewport_rows {
-            self.resize_inline_viewport(terminal, viewport_rows)?;
+        let Some(plan) =
+            self.resolve_inline_auto_height(size.width, size.height, bounds, overlay_bounds)
+        else {
+            return Ok(None);
+        };
+        if terminal.get_frame().area().height != plan.viewport_rows {
+            self.resize_inline_viewport(terminal, plan.viewport_rows)?;
         }
 
-        let new_bounds = self.content_bounds(size.width, size.height);
-        Ok((new_bounds != bounds).then_some(new_bounds))
+        Ok(plan
+            .bounds_changed
+            .then_some((plan.layout_bounds, plan.overlay_bounds)))
     }
 
     /// Recreate the inline terminal with a new viewport height, anchored at
