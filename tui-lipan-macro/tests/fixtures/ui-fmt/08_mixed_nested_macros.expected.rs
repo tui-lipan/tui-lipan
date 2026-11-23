@@ -10,7 +10,7 @@ fn view(kind: Kind) {
     };
     let rsx_outer = rsx! {
         Frame {
-            content: ui! {
+            title_content: ui! {
                 VStack::new() => { Text::new("r") }
             },
         }

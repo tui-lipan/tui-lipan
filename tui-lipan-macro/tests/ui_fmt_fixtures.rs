@@ -40,6 +40,40 @@ fn second_pass_is_noop_for_all_expected_fixtures() {
     }
 }
 
+#[test]
+fn fixtures_do_not_reference_removed_api_names() {
+    const REMOVED_APIS: &[&str] = &[
+        "header_left",
+        "header_center",
+        "header_right",
+        "header_style",
+        "header_padding",
+        "header_content",
+        "focused_style",
+        "focused_header_style",
+        "focused_footer_style",
+        "focused_description_style",
+        "focused_path",
+        "Update::layout",
+        ".with_command(",
+        "alignment:",
+        "spacing:",
+    ];
+
+    for case in fixture_cases() {
+        for path in [&case.input_path, &case.expected_path] {
+            let source = fs::read_to_string(path).unwrap();
+            for removed in REMOVED_APIS {
+                assert!(
+                    !source.contains(removed),
+                    "fixture `{}` still references removed API `{removed}`",
+                    path.display()
+                );
+            }
+        }
+    }
+}
+
 struct FixtureCase {
     name: String,
     input_path: PathBuf,
