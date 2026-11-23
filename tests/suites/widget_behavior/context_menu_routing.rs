@@ -25,9 +25,9 @@ impl Component for Menus {
             .child(
                 DraggableTabBar::new()
                     .tabs([DraggableTab::new("First"), DraggableTab::new("Second")])
-                    .active(0)
+                    .selected(0)
                     .focusable(false)
-                    .on_change(Callback::new(move |event: TabsEvent| {
+                    .on_select(Callback::new(move |event: TabsEvent| {
                         selected
                             .borrow_mut()
                             .push(format!("selected {}", event.index))

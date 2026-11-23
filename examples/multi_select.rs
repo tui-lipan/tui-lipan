@@ -53,11 +53,11 @@ impl Component for MultiSelectDemo {
                     .child(
                         MultiSelect::new()
                             .items(ITEMS.iter().copied())
-                            .active_index(ctx.state.active_index)
+                            .highlighted(ctx.state.active_index)
                             .selected_indices(ctx.state.selected_indices.clone())
                             .max_selected(4)
                             .height(Length::Px(10))
-                            .on_active_index_change(ctx.link().callback(Msg::HighlightChanged))
+                            .on_highlight(ctx.link().callback(Msg::HighlightChanged))
                             .on_toggle(ctx.link().callback(Msg::Toggled))
                             .on_change(ctx.link().callback(Msg::Changed))
                             .on_commit(ctx.link().callback(Msg::Commit)),

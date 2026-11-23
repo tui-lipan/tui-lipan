@@ -41,7 +41,7 @@ impl Component for SlidingBar {
         bar = if self.empty {
             bar.empty_text("ABCDEFGHIJKL")
         } else {
-            bar.tabs(vec![DraggableTab::new("ABCDEFGHIJ")]).active(0)
+            bar.tabs(vec![DraggableTab::new("ABCDEFGHIJ")]).selected(0)
         };
         Canvas::new()
             .child_at(

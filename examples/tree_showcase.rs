@@ -199,8 +199,8 @@ impl Component for FileTreeShowcase {
         let tabs = Tabs::new()
             .tab("FileTree")
             .tab("Tree")
-            .active(ctx.state.tab)
-            .on_change(
+            .selected(ctx.state.tab)
+            .on_select(
                 ctx.link()
                     .callback(|event: TabsEvent| Msg::SelectTab(event.index)),
             );

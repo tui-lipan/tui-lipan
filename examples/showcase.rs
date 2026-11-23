@@ -217,8 +217,8 @@ impl Component for Showcase {
                 padding: 1,
                 Tabs {
                     border: true,
-                    active: ctx.state.tab,
-                    on_change: ctx.link().callback(|e: TabsEvent| Msg::SetTab(e.index)),
+                    selected: ctx.state.tab,
+                    on_select: ctx.link().callback(|e: TabsEvent| Msg::SetTab(e.index)),
                     tab: "General",
                     tab: "Navigation",
                     tab: "Data & Text",

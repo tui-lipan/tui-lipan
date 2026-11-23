@@ -219,6 +219,7 @@ pub use crate::widgets::{
     TreeBranch, TreeEvent, TreeExpansionMode, TreeGuides, TreeHoverEvent, TreeKeymap, TreeNode,
     TreePath, TreeToggleEvent, VStack, VirtualTextPlacement, ZStack,
 };
+pub use crate::widgets::{RadioEvent, SelectEvent};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Feature-gated curated widgets

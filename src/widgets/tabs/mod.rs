@@ -107,7 +107,7 @@ impl From<Arc<str>> for Tab {
 #[derive(Clone)]
 pub struct Tabs {
     pub(crate) tabs: Arc<[Tab]>,
-    pub(crate) active: usize,
+    pub(crate) selected: Option<usize>,
     pub(crate) style: Style,
     pub(crate) focus_style: StyleSlot,
     pub(crate) hover_style: StyleSlot,
@@ -121,7 +121,7 @@ pub struct Tabs {
     pub(crate) padding: Padding,
     pub(crate) width: Length,
     pub(crate) height: Length,
-    pub(crate) on_change: Option<Callback<TabsEvent>>,
+    pub(crate) on_select: Option<Callback<TabsEvent>>,
     pub(crate) on_click: Option<Callback<MouseEvent>>,
     pub(crate) on_context_menu: Option<Callback<(Option<usize>, crate::core::event::MouseEvent)>>,
     pub(crate) on_key: Option<KeyHandler>,
@@ -137,7 +137,7 @@ impl Default for Tabs {
     fn default() -> Self {
         Self {
             tabs: Arc::new([]),
-            active: 0,
+            selected: Some(0),
             style: Style::default(),
             focus_style: StyleSlot::Inherit,
             hover_style: StyleSlot::Inherit,
@@ -151,7 +151,7 @@ impl Default for Tabs {
             padding: Padding::default(),
             width: Length::Flex(1),
             height: Length::Auto,
-            on_change: None,
+            on_select: None,
             on_click: None,
             on_context_menu: None,
             on_key: None,
@@ -194,9 +194,12 @@ impl Tabs {
         self
     }
 
-    /// Set active tab index.
-    pub fn active(mut self, active: usize) -> Self {
-        self.active = active;
+    /// Set selected tab index.
+    ///
+    /// Pass `None` for no highlighted tab. Bare integers still work via
+    /// `From<T> for Option<T>` (`tabs.selected(0)`).
+    pub fn selected(mut self, selected: impl Into<Option<usize>>) -> Self {
+        self.selected = selected.into();
         self
     }
 
@@ -342,9 +345,9 @@ impl Tabs {
         self
     }
 
-    /// Callback fired when the active tab changes.
-    pub fn on_change(mut self, cb: Callback<TabsEvent>) -> Self {
-        self.on_change = Some(cb);
+    /// Callback fired when the selected tab changes.
+    pub fn on_select(mut self, cb: Callback<TabsEvent>) -> Self {
+        self.on_select = Some(cb);
         self
     }
 
@@ -468,7 +471,7 @@ impl crate::layout::hash::LayoutHash for Tabs {
         self.border_style.hash(hasher);
         self.padding.hash(hasher);
         self.tabs.len().hash(hasher);
-        self.active.hash(hasher);
+        self.selected.hash(hasher);
         self.divider.hash(hasher);
         self.overflow.hash(hasher);
         Some(())

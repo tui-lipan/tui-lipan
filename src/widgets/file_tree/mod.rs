@@ -899,7 +899,7 @@ impl FileTree {
     /// Clear the selection highlight (no current row).
     ///
     /// When `true`, this is authoritative over both the controlled `selected`
-    /// prop and internal selection state. See [`crate::widgets::Tree::clear_selection`].
+    /// prop and internal selection state. See [`crate::widgets::Tree::selected`] (passing `None`).
     pub fn clear_selection(mut self, clear: bool) -> Self {
         self.props.clear_selection = clear;
         self

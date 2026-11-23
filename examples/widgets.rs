@@ -273,7 +273,7 @@ impl Component for WidgetDemo {
                             .tab("All")
                             .tab("Fruits")
                             .tab("Veggies")
-                            .active(ctx.state.tab)
+                            .selected(ctx.state.tab)
                             .border(true)
                             .border_style(border_style)
                             .height(Length::Px(3))
@@ -286,7 +286,7 @@ impl Component for WidgetDemo {
                             .disabled(disabled)
                             .disabled_style(disabled_style)
                             .focusable(true)
-                            .on_change(ctx.link().callback(Msg::TabChanged))
+                            .on_select(ctx.link().callback(Msg::TabChanged))
                             .key("tabs"),
                     )
                     .child(

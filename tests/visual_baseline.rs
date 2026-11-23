@@ -151,7 +151,7 @@ fn tabs_chrome() -> Element {
                 .tab("Overview")
                 .tab("Details")
                 .tab("History")
-                .active(1)
+                .selected(1)
                 .border(true)
                 .key("tabs"),
         )

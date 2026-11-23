@@ -109,7 +109,7 @@ pub struct MultiSelectCommitEvent {
 #[derive(Clone)]
 pub struct MultiSelect {
     items: Arc<[MultiSelectItem]>,
-    active_index: usize,
+    highlighted: Option<usize>,
     selected_indices: Vec<usize>,
     max_selected: Option<usize>,
     title: Option<Arc<str>>,
@@ -135,7 +135,7 @@ pub struct MultiSelect {
     on_focus: Option<Callback<()>>,
     on_blur: Option<Callback<()>>,
     on_key: Option<KeyHandler>,
-    on_active_index_change: Option<Callback<usize>>,
+    on_highlight: Option<Callback<usize>>,
     on_toggle: Option<Callback<MultiSelectToggleEvent>>,
     on_context_menu: Option<Callback<(ListEvent, crate::core::event::MouseEvent)>>,
     on_change: Option<Callback<MultiSelectChangeEvent>>,
@@ -146,7 +146,7 @@ impl Default for MultiSelect {
     fn default() -> Self {
         Self {
             items: Arc::from([]),
-            active_index: 0,
+            highlighted: Some(0),
             selected_indices: Vec::new(),
             max_selected: None,
             title: None,
@@ -192,7 +192,7 @@ impl Default for MultiSelect {
             on_focus: None,
             on_blur: None,
             on_key: None,
-            on_active_index_change: None,
+            on_highlight: None,
             on_toggle: None,
             on_context_menu: None,
             on_change: None,
@@ -252,9 +252,12 @@ impl MultiSelect {
         self
     }
 
-    /// Set currently active_index source index.
-    pub fn active_index(mut self, active_index: usize) -> Self {
-        self.active_index = active_index;
+    /// Set highlighted source index.
+    ///
+    /// Pass `None` for no highlighted row. Bare integers still work via
+    /// `From<T> for Option<T>` (`multi.highlighted(0)`).
+    pub fn highlighted(mut self, highlighted: impl Into<Option<usize>>) -> Self {
+        self.highlighted = highlighted.into();
         self
     }
 
@@ -324,55 +327,55 @@ impl MultiSelect {
         self
     }
 
-    /// Set active_index-item style.
+    /// Set highlighted-item style.
     pub fn selection_style(mut self, style: Style) -> Self {
         self.list_config.selection_style = StyleSlot::Replace(style);
         self
     }
 
-    /// Extend the themed active_index-item style.
+    /// Extend the themed highlighted-item style.
     pub fn extend_selection_style(mut self, style: Style) -> Self {
         self.list_config.selection_style = StyleSlot::Extend(style);
         self
     }
 
-    /// Inherit the themed active_index-item style.
+    /// Inherit the themed highlighted-item style.
     pub fn inherit_selection_style(mut self) -> Self {
         self.list_config.selection_style = StyleSlot::Inherit;
         self
     }
 
-    /// Set active_index-item style slot directly for composite forwarding.
+    /// Set highlighted-item style slot directly for composite forwarding.
     pub fn selection_style_slot(mut self, slot: StyleSlot) -> Self {
         self.list_config.selection_style = slot;
         self
     }
 
-    /// Set active_index-item style while the list is not focused.
+    /// Set highlighted-item style while the list is not focused.
     pub fn unfocused_selection_style(mut self, style: Style) -> Self {
         self.list_config.unfocused_selection_style = StyleSlot::Replace(style);
         self
     }
 
-    /// Extend the themed active_index-item style while the list is not focused.
+    /// Extend the themed highlighted-item style while the list is not focused.
     pub fn extend_unfocused_selection_style(mut self, style: Style) -> Self {
         self.list_config.unfocused_selection_style = StyleSlot::Extend(style);
         self
     }
 
-    /// Inherit the themed active_index-item style while the list is not focused.
+    /// Inherit the themed highlighted-item style while the list is not focused.
     pub fn inherit_unfocused_selection_style(mut self) -> Self {
         self.list_config.unfocused_selection_style = StyleSlot::Inherit;
         self
     }
 
-    /// Set unfocused active_index-item style slot directly for composite forwarding.
+    /// Set unfocused highlighted-item style slot directly for composite forwarding.
     pub fn unfocused_selection_style_slot(mut self, slot: StyleSlot) -> Self {
         self.list_config.unfocused_selection_style = slot;
         self
     }
 
-    /// Set whether active_index row style should span full row width.
+    /// Set whether highlighted row style should span full row width.
     pub fn selection_full_width(mut self, selection_full_width: bool) -> Self {
         self.list_config.selection_full_width = selection_full_width;
         self
@@ -402,7 +405,7 @@ impl MultiSelect {
         self
     }
 
-    /// Set the symbol shown on the active_index (focused) but unchecked row
+    /// Set the symbol shown on the highlighted (focused) but unchecked row
     /// (default: `"[ ] "`).
     ///
     /// Defaults to the same bracket as `unselected_symbol` so the visual
@@ -546,9 +549,9 @@ impl MultiSelect {
         self
     }
 
-    /// Callback fired when active_index row changes.
-    pub fn on_active_index_change(mut self, cb: Callback<usize>) -> Self {
-        self.on_active_index_change = Some(cb);
+    /// Callback fired when the highlighted row changes.
+    pub fn on_highlight(mut self, cb: Callback<usize>) -> Self {
+        self.on_highlight = Some(cb);
         self
     }
 
@@ -585,7 +588,7 @@ impl From<MultiSelect> for Element {
     fn from(multi: MultiSelect) -> Self {
         let selected_indices =
             normalize_selected_indices(multi.selected_indices, multi.items.len());
-        let active_index = normalized_active_index(multi.active_index, multi.items.len());
+        let highlighted = normalized_highlighted(multi.highlighted, multi.items.len());
 
         let list_items = multi
             .items
@@ -606,7 +609,7 @@ impl From<MultiSelect> for Element {
 
         let mut list = List::new()
             .items(list_items)
-            .selected(active_index)
+            .selected(highlighted)
             .activate_on_click(false)
             .border(multi.list_config.border)
             .border_style(multi.list_config.border_style)
@@ -670,7 +673,7 @@ impl From<MultiSelect> for Element {
             list = list.empty_text(empty_text);
         }
 
-        if let Some(cb) = multi.on_active_index_change.clone() {
+        if let Some(cb) = multi.on_highlight.clone() {
             list = list.on_select(Callback::new(move |event: ListEvent| cb.emit(event.index)));
         }
 
@@ -726,17 +729,22 @@ impl From<MultiSelect> for Element {
                 if key.code != KeyCode::Char(' ') {
                     return false;
                 }
+                let Some(highlighted) = highlighted else {
+                    return false;
+                };
 
-                let (next_selected, toggled_to_selected) =
-                    match toggle_selection(selected_indices.as_slice(), active_index, max_selected)
-                    {
-                        Some(result) => result,
-                        None => return true,
-                    };
+                let (next_selected, toggled_to_selected) = match toggle_selection(
+                    selected_indices.as_slice(),
+                    highlighted,
+                    max_selected,
+                ) {
+                    Some(result) => result,
+                    None => return true,
+                };
 
                 if let Some(cb) = on_toggle.as_ref() {
                     cb.emit(MultiSelectToggleEvent {
-                        index: active_index,
+                        index: highlighted,
                         selected: toggled_to_selected,
                     });
                 }
@@ -821,11 +829,11 @@ fn effective_description_overflow(
     }
 }
 
-fn normalized_active_index(active_index: usize, len: usize) -> usize {
+fn normalized_highlighted(highlighted: Option<usize>, len: usize) -> Option<usize> {
     if len == 0 {
-        0
+        None
     } else {
-        active_index.min(len.saturating_sub(1))
+        highlighted.map(|index| index.min(len.saturating_sub(1)))
     }
 }
 

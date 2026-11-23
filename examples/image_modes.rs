@@ -139,7 +139,7 @@ impl Component for ImageModesDemo {
                     .tabs(ctx.state.attach_images.iter().enumerate().map(|(i, _)| {
                         DraggableTab::new(format!("Photo {}", i + 1)).closeable(true)
                     }))
-                    .active(usize::MAX) // no active tab - these are chips
+                    .selected(None) // no active tab - these are chips
                     .style(Style::new().fg(Color::Green))
                     .active_style(Style::new().fg(Color::Green))
                     .close_style(Style::new().fg(Color::indexed(246)).dim())

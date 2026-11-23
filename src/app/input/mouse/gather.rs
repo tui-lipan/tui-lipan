@@ -656,13 +656,13 @@ pub(crate) fn gather_hit_actions(
     };
 
     let tabs_change = match &node.kind {
-        NodeKind::Tabs(node_tabs) => node_tabs.on_change.clone().and_then(|cb| {
+        NodeKind::Tabs(node_tabs) => node_tabs.on_select.clone().and_then(|cb| {
             let len = node_tabs.tabs.len();
             if len == 0 {
                 return None;
             }
 
-            let active = node_tabs.active.min(len.saturating_sub(1));
+            let selected = node_tabs.selected.map(|s| s.min(len.saturating_sub(1)));
 
             let inner = node.rect.inner(node_tabs.border, node_tabs.padding);
 
@@ -681,7 +681,7 @@ pub(crate) fn gather_hit_actions(
             Some(TabsChange {
                 cb,
                 next: idx,
-                active,
+                selected,
             })
         }),
         _ => None,
@@ -693,7 +693,7 @@ pub(crate) fn gather_hit_actions(
             if len == 0 {
                 None
             } else {
-                let has_handlers = node_tabs.on_change.is_some()
+                let has_handlers = node_tabs.on_select.is_some()
                     || node_tabs.on_action.is_some()
                     || node_tabs.on_close.is_some()
                     || (node_tabs.draggable
@@ -702,7 +702,7 @@ pub(crate) fn gather_hit_actions(
                 if !has_handlers {
                     None
                 } else {
-                    let active = node_tabs.active.min(len.saturating_sub(1));
+                    let selected = node_tabs.selected.map(|s| s.min(len.saturating_sub(1)));
                     let inner = node.rect.inner(node_tabs.border, node_tabs.padding);
                     if !inner.contains(x_i16, y_i16) {
                         None
@@ -720,16 +720,16 @@ pub(crate) fn gather_hit_actions(
                             ) => DraggableTabBarAction {
                                 node_id: node.id,
                                 overflow_scroll_step: -1,
-                                tab_index: active,
+                                tab_index: selected.unwrap_or(0),
                                 action_hit: false,
                                 close_hit: false,
-                                active,
+                                selected,
                                 bar_id: node_tabs.bar_id.clone(),
                                 drag_group: node_tabs.drag_group.clone(),
                                 draggable: false,
                                 reorder_mode: node_tabs.reorder_mode,
                                 drag_threshold: node_tabs.drag_threshold,
-                                on_change: node_tabs.on_change.clone(),
+                                on_select: node_tabs.on_select.clone(),
                                 on_action: node_tabs.on_action.clone(),
                                 on_close: node_tabs.on_close.clone(),
                                 on_transfer: node_tabs.on_transfer.clone(),
@@ -739,16 +739,16 @@ pub(crate) fn gather_hit_actions(
                             ) => DraggableTabBarAction {
                                 node_id: node.id,
                                 overflow_scroll_step: 1,
-                                tab_index: active,
+                                tab_index: selected.unwrap_or(0),
                                 action_hit: false,
                                 close_hit: false,
-                                active,
+                                selected,
                                 bar_id: node_tabs.bar_id.clone(),
                                 drag_group: node_tabs.drag_group.clone(),
                                 draggable: false,
                                 reorder_mode: node_tabs.reorder_mode,
                                 drag_threshold: node_tabs.drag_threshold,
-                                on_change: node_tabs.on_change.clone(),
+                                on_select: node_tabs.on_select.clone(),
                                 on_action: node_tabs.on_action.clone(),
                                 on_close: node_tabs.on_close.clone(),
                                 on_transfer: node_tabs.on_transfer.clone(),
@@ -772,13 +772,13 @@ pub(crate) fn gather_hit_actions(
                                         hit.part,
                                         crate::widgets::DraggableTabHitPart::Close
                                     ),
-                                    active,
+                                    selected,
                                     bar_id: node_tabs.bar_id.clone(),
                                     drag_group: node_tabs.drag_group.clone(),
                                     draggable,
                                     reorder_mode: node_tabs.reorder_mode,
                                     drag_threshold: node_tabs.drag_threshold,
-                                    on_change: node_tabs.on_change.clone(),
+                                    on_select: node_tabs.on_select.clone(),
                                     on_action: node_tabs.on_action.clone(),
                                     on_close: node_tabs.on_close.clone(),
                                     on_transfer: node_tabs.on_transfer.clone(),
@@ -1059,7 +1059,7 @@ pub(crate) fn gather_border_tabs_change(
             Some(TabsChange {
                 cb,
                 next: idx,
-                active,
+                selected: Some(active),
             })
         }),
         NodeKind::Frame(props) => props.on_tab_change.clone().and_then(|cb| {
@@ -1112,7 +1112,7 @@ pub(crate) fn gather_border_tabs_change(
             Some(TabsChange {
                 cb,
                 next: idx,
-                active,
+                selected: Some(active),
             })
         }),
         _ => None,
@@ -1249,7 +1249,7 @@ mod tests {
         let root: crate::Element = Tabs::new()
             .tabs([Tab::new("one"), Tab::new("two")])
             .divider('|')
-            .on_change(Callback::new(|_| {}))
+            .on_select(Callback::new(|_| {}))
             .into();
         let mut tree = NodeTree::new();
         LayoutEngine::reconcile_with_focus(

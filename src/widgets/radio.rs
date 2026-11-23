@@ -21,6 +21,16 @@ pub enum RadioLayout {
     Horizontal,
 }
 
+/// Selection event emitted by [`Radio`].
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct RadioEvent {
+    /// Selected option index.
+    pub index: usize,
+    /// Selected option label.
+    pub label: Arc<str>,
+}
+
 /// A radio button group.
 ///
 /// Keyboard model (WAI-ARIA radio group / roving tabindex):
@@ -32,7 +42,7 @@ pub enum RadioLayout {
 pub struct Radio {
     options: Vec<Arc<str>>,
     selected: Option<usize>,
-    on_change: Option<Callback<usize>>,
+    on_select: Option<Callback<RadioEvent>>,
     disabled: bool,
     gap: u16,
     layout: RadioLayout,
@@ -70,7 +80,7 @@ impl Radio {
         Self {
             options: options.into_iter().map(Into::into).collect(),
             selected: None,
-            on_change: None,
+            on_select: None,
             disabled: false,
             gap: 0,
             layout: RadioLayout::Vertical,
@@ -95,14 +105,17 @@ impl Radio {
     }
 
     /// Set selected index.
-    pub fn selected(mut self, selected: Option<usize>) -> Self {
-        self.selected = selected;
+    ///
+    /// Pass `None` for no selected option. Bare integers still work via
+    /// `From<T> for Option<T>` (`radio.selected(0)`).
+    pub fn selected(mut self, selected: impl Into<Option<usize>>) -> Self {
+        self.selected = selected.into();
         self
     }
 
-    /// Set on-change callback.
-    pub fn on_change(mut self, cb: Callback<usize>) -> Self {
-        self.on_change = Some(cb);
+    /// Set selection callback fired when the selected option changes.
+    pub fn on_select(mut self, cb: Callback<RadioEvent>) -> Self {
+        self.on_select = Some(cb);
         self
     }
 
@@ -271,7 +284,8 @@ impl Radio {
 
 impl From<Radio> for Element {
     fn from(radio: Radio) -> Self {
-        let len = radio.options.len();
+        let options: Arc<[Arc<str>]> = radio.options.into();
+        let len = options.len();
         let active = radio
             .selected
             .filter(|&i| i < len)
@@ -279,19 +293,19 @@ impl From<Radio> for Element {
         let focus_key = radio
             .focus_key
             .clone()
-            .unwrap_or_else(|| derived_focus_key(&radio.options));
+            .unwrap_or_else(|| derived_focus_key(&options));
 
-        let items: Vec<Element> = radio
-            .options
-            .into_iter()
+        let items: Vec<Element> = options
+            .iter()
+            .cloned()
             .enumerate()
             .map(|(i, option)| {
                 let is_selected = radio.selected == Some(i);
                 let is_active = active == Some(i);
-                let on_change = radio.on_change.clone();
+                let on_select = radio.on_select.clone();
 
                 let mut checkbox = Checkbox::new(is_selected)
-                    .label(option)
+                    .label(option.clone())
                     .variant(radio.variant)
                     .gap(1)
                     .style(radio.style)
@@ -318,9 +332,10 @@ impl From<Radio> for Element {
                 }
 
                 if is_active && !radio.disabled {
-                    let change_cb = radio.on_change.clone();
+                    let select_cb = radio.on_select.clone();
                     let caller_on_key = radio.on_key.clone();
                     let layout = radio.layout;
+                    let key_options = Arc::clone(&options);
                     checkbox = checkbox.on_key(KeyHandler::new(move |key: KeyEvent| {
                         if caller_on_key
                             .as_ref()
@@ -328,22 +343,30 @@ impl From<Radio> for Element {
                         {
                             return true;
                         }
-                        handle_radio_key(key, i, len, layout, &change_cb)
+                        handle_radio_key(key, i, &key_options, layout, &select_cb)
                     }));
                 }
 
-                if let Some(cb) = on_change
+                if let Some(cb) = on_select
                     && !radio.disabled
                 {
                     let cb_toggle = cb.clone();
+                    let label_toggle = option.clone();
                     checkbox = checkbox.on_toggle(Callback::new(move |ev: CheckboxEvent| {
                         if ev.state.is_checked() {
-                            cb_toggle.emit(i);
+                            cb_toggle.emit(RadioEvent {
+                                index: i,
+                                label: label_toggle.clone(),
+                            });
                         }
                     }));
 
+                    let label_click = option;
                     checkbox = checkbox.on_click(Callback::new(move |_: MouseEvent| {
-                        cb.emit(i);
+                        cb.emit(RadioEvent {
+                            index: i,
+                            label: label_click.clone(),
+                        });
                     }));
                 }
 
@@ -381,10 +404,11 @@ impl From<Radio> for Element {
 fn handle_radio_key(
     key: KeyEvent,
     current: usize,
-    len: usize,
+    options: &[Arc<str>],
     layout: RadioLayout,
-    on_change: &Option<Callback<usize>>,
+    on_select: &Option<Callback<RadioEvent>>,
 ) -> bool {
+    let len = options.len();
     if len == 0 || key.mods.ctrl || key.mods.alt || key.mods.super_key {
         return false;
     }
@@ -406,9 +430,12 @@ fn handle_radio_key(
     };
 
     if next != current
-        && let Some(cb) = on_change
+        && let Some(cb) = on_select
     {
-        cb.emit(next);
+        cb.emit(RadioEvent {
+            index: next,
+            label: options[next].clone(),
+        });
     }
     true
 }

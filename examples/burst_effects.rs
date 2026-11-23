@@ -2122,8 +2122,8 @@ impl Component for BurstEffectsDemo {
                 Tab::new("Custom vortex"),
                 Tab::new("OpenCode"),
             ])
-            .active(ctx.state.tab.min(4))
-            .on_change(ctx.link().callback(Msg::TabChanged));
+            .selected(ctx.state.tab.min(4))
+            .on_select(ctx.link().callback(Msg::TabChanged));
 
         let charge_label = if charging {
             " [charging…]"

@@ -193,7 +193,7 @@ impl TabsHubDemo {
         let bordered = DraggableTabBar::new()
             .tabs(ctx.state.bordered_tabs.iter().map(to_widget_tab))
             .tab(new_tab_action())
-            .active(ctx.state.bordered_active)
+            .selected(ctx.state.bordered_active)
             .bar_id("bordered")
             .drag_group("editor")
             .variant(DraggableTabBarVariant::Bordered)
@@ -214,7 +214,7 @@ impl TabsHubDemo {
             .file_icon_style(FileIconStyle::NerdFontColored)
             .file_icon_override("md", "󰍔", Some(Color::indexed(222)))
             .reorder_mode(DragReorderMode::Live)
-            .on_change(ctx.link().callback(Msg::BorderedChange))
+            .on_select(ctx.link().callback(Msg::BorderedChange))
             .on_action(ctx.link().callback(|_| Msg::AddTab))
             .on_close(ctx.link().callback(Msg::BorderedClose))
             .on_transfer(ctx.link().callback(Msg::Transfer))
@@ -223,7 +223,7 @@ impl TabsHubDemo {
         let frame_line = DraggableTabBar::new()
             .tabs(ctx.state.frame_tabs.iter().map(to_widget_tab))
             .tab(new_tab_action())
-            .active(ctx.state.frame_active)
+            .selected(ctx.state.frame_active)
             .bar_id("frame")
             .drag_group("editor")
             .variant(DraggableTabBarVariant::FrameLine)
@@ -246,7 +246,7 @@ impl TabsHubDemo {
             .file_icon_style(FileIconStyle::NerdFontColored)
             .file_icon_override("lock", "󰌾", Some(Color::indexed(250)))
             .reorder_mode(DragReorderMode::Live)
-            .on_change(ctx.link().callback(Msg::FrameChange))
+            .on_select(ctx.link().callback(Msg::FrameChange))
             .on_action(ctx.link().callback(|_| Msg::AddTab))
             .on_close(ctx.link().callback(Msg::FrameClose))
             .on_transfer(ctx.link().callback(Msg::Transfer))
@@ -444,8 +444,8 @@ impl Component for TabsHubDemo {
         let section_tabs = Tabs::new()
             .tab("Tab Variants")
             .tab("Draggable Tab Bar")
-            .active(ctx.state.section_tab.min(1))
-            .on_change(ctx.link().callback(Msg::SectionChanged));
+            .selected(ctx.state.section_tab.min(1))
+            .on_select(ctx.link().callback(Msg::SectionChanged));
 
         let section = if ctx.state.section_tab == 0 {
             self.view_tab_variants(ctx)

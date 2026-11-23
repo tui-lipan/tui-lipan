@@ -4775,13 +4775,13 @@ fn middle_clicking_closeable_tab_closes_without_activating_or_closing_non_closea
                     DraggableTab::new("pinned").closeable(false),
                     DraggableTab::action("+").closeable(true),
                 ])
-                .active(0)
+                .selected(0)
                 .show_close_buttons(self.show_close_buttons)
                 .disabled(self.disabled)
                 .on_close(Callback::new(move |ev: DraggableTabCloseEvent| {
                     closed.borrow_mut().push(ev.index);
                 }))
-                .on_change(Callback::new(move |ev: TabsEvent| {
+                .on_select(Callback::new(move |ev: TabsEvent| {
                     changed.borrow_mut().push(ev.index);
                 }))
                 .on_action(Callback::new(
@@ -5239,13 +5239,13 @@ fn fixed_tab_selects_without_arming_a_drag() {
                     crate::widgets::DraggableTab::new("Home").reorderable(false),
                     crate::widgets::DraggableTab::new("Alpha"),
                 ])
-                .active(ctx.state.selected)
+                .selected(ctx.state.selected)
                 .divider('|')
                 .show_overflow_controls(false)
                 .show_close_buttons(false)
                 .focusable(false)
                 .height(Length::Px(1))
-                .on_change(ctx.link().callback(Msg::Select))
+                .on_select(ctx.link().callback(Msg::Select))
                 .on_reorder(ctx.link().callback(|_| Msg::Ignore))
                 .into()
         }

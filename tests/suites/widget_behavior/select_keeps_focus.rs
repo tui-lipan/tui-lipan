@@ -21,14 +21,12 @@ struct Picker {
 #[derive(Clone, Copy)]
 enum Msg {
     Toggle(bool),
-    Highlight(usize),
     Pick(usize),
 }
 
 #[derive(Default)]
 struct State {
     selected: usize,
-    highlighted: usize,
     expanded: bool,
 }
 
@@ -45,9 +43,7 @@ impl Component for Picker {
         match msg {
             Msg::Toggle(open) => {
                 ctx.state.expanded = open;
-                ctx.state.highlighted = ctx.state.selected;
             }
-            Msg::Highlight(index) => ctx.state.highlighted = index,
             Msg::Pick(index) => {
                 ctx.state.selected = index;
                 match self.focus_after_pick {
@@ -64,21 +60,15 @@ impl Component for Picker {
 
     fn view(&self, ctx: &Context<Self>) -> Element {
         let state = &ctx.state;
-        let shown = if state.expanded {
-            state.highlighted
-        } else {
-            state.selected
-        };
         VStack::new()
             .child(Button::new("before").key("before"))
             .child(
                 Select::new()
                     .options(["one", "two", "three"])
-                    .selected(Some(shown))
+                    .selected(state.selected)
                     .expanded(state.expanded)
                     .on_toggle(ctx.link().callback(Msg::Toggle))
-                    .on_change(ctx.link().callback(Msg::Highlight))
-                    .on_select(ctx.link().callback(Msg::Pick))
+                    .on_select(ctx.link().callback(|e: SelectEvent| Msg::Pick(e.index)))
                     .key("select"),
             )
             .child(Button::new("after").key("after"))

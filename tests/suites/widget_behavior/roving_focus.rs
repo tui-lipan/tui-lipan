@@ -123,13 +123,16 @@ impl Component for RadioHarness {
             .child(Input::new("before").key("before"))
             .child(
                 Radio::new(["a", "b", "c"])
-                    .selected(Some(ctx.state.selected))
-                    .on_change(ctx.link().callback(RadioMsg::Change)),
+                    .selected(ctx.state.selected)
+                    .on_select(
+                        ctx.link()
+                            .callback(|e: RadioEvent| RadioMsg::Change(e.index)),
+                    ),
             )
             .child(
                 Radio::new(["x", "y", "z"])
-                    .selected(Some(0))
-                    .on_change(Callback::new(|_| {})),
+                    .selected(0)
+                    .on_select(Callback::new(|_| {})),
             )
             .child(Input::new("after").key("after"))
             .into()

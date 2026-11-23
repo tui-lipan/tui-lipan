@@ -7921,10 +7921,10 @@ mod tests {
                 .items(["Alpha", "Beta", "Gamma"])
                 .query(ctx.state.query.clone())
                 .open(ctx.state.open)
-                .active_index(ctx.state.active)
+                .highlighted(ctx.state.active)
                 .on_query_change(ctx.link().callback(AppCommandComboMsg::Query))
                 .on_open_change(ctx.link().callback(AppCommandComboMsg::Open))
-                .on_active_index_change(ctx.link().callback(AppCommandComboMsg::Active))
+                .on_highlight(ctx.link().callback(AppCommandComboMsg::Active))
                 .on_commit(ctx.link().callback(AppCommandComboMsg::Commit))
                 .key("app-command-combo")
         }

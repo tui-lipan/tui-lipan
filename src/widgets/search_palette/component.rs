@@ -1808,7 +1808,7 @@ mod tests {
                                 .iter()
                                 .map(|label| crate::widgets::DraggableTab::new(*label)),
                         )
-                        .active(page)
+                        .selected(page)
                         .show_close_buttons(false)
                         .border(false)
                         .divider(' ')

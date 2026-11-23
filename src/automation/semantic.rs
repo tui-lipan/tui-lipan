@@ -707,7 +707,7 @@ fn synthetic_semantic_children(
                     synthetic_node(
                         SemanticRole::Tab,
                         Some(tab.label.to_string()),
-                        Some(tabs.active == index),
+                        Some(tabs.selected == Some(index)),
                         Rect {
                             x: content
                                 .x
@@ -740,7 +740,7 @@ fn synthetic_semantic_children(
                     synthetic_node(
                         SemanticRole::Tab,
                         Some(tab.label.to_string()),
-                        Some(tabs.active == index),
+                        Some(tabs.selected == Some(index)),
                         Rect {
                             x: content
                                 .x
@@ -946,9 +946,9 @@ fn supports_semantic_click(node: &Node) -> bool {
         NodeKind::Table(table) => {
             table.on_select.is_some() || table.on_activate.is_some() || table.on_click.is_some()
         }
-        NodeKind::Tabs(tabs) => tabs.on_change.is_some() || tabs.on_click.is_some(),
+        NodeKind::Tabs(tabs) => tabs.on_select.is_some() || tabs.on_click.is_some(),
         NodeKind::DraggableTabBar(tabs) => {
-            tabs.on_change.is_some()
+            tabs.on_select.is_some()
                 || tabs.on_action.is_some()
                 || tabs.on_close.is_some()
                 || tabs.on_click.is_some()

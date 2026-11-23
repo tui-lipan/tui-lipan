@@ -391,8 +391,7 @@ Hierarchical tree view with expand/collapse.
 | `on_hover` | `Callback<TreeHoverEvent>` | Composed-row pointer entry and exit |
 | `on_pointer_move` | `Callback<TreeEvent>` | Pointer movement over composed rows |
 | `on_viewport_change` | `Callback<ScrollViewportEvent>` | Composed-row viewport metadata |
-| `selected` | `usize` | Controlled selected visible row index |
-| `clear_selection` | `bool` | When `true`, suppress the selection highlight (authoritative over `selected` and internal state) |
+| `selected` | `impl Into<Option<usize>>` | Controlled selected visible row index (`None` clears the selection highlight; leave unset for uncontrolled internal selection) |
 | `force_scroll_to_selected` | `bool` | Force the internal list to reveal the selected row on next render |
 | `gap` | `u16` | Vertical gap between items |
 | `indent` | `u16` | Cells each level of depth adds (default: `2`); zero puts every level in one column |

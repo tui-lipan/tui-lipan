@@ -13,7 +13,7 @@ inherit scoped theme roles.
 |------|------|-------------|
 | `tabs` | `Arc<[Tab]>` / `tabs_arc` | Tab items (`tabs(...)` collects into `Arc`; prefer `tabs_arc` when sharing) |
 | `tab(Tab)` | method | Add a single tab |
-| `active` | `usize` | Active tab index |
+| `selected` | `impl Into<Option<usize>>` | Selected tab index (`None` highlights no tab) |
 | `divider` | `char` | Separator between tabs |
 | `caps` | `Option<(char, char)>` | End-cap glyphs drawn around the active and hovered tabs, plus any tab opted in with `Tab::capped(true)`. Each cap replaces one padding cell (the tab keeps its measured width), painted in the tab's own background over the strip background, so the tab reads as a rounded/pointed pill. `None` (default) keeps flat padding. Pass `CapStyle::Round.chars()` / `CapStyle::Arrow.chars()` / `CapStyle::Half.chars()` for the named sets; `CapStyle::Padded.chars()` is `None`. A tab falls back to flat padding when it overflow-truncates, when its background matches the strip's, or when either cap is not single-width. |
 | `border` | `bool` | Show border |
@@ -35,7 +35,7 @@ inherit scoped theme roles.
 | `on_focus` / `on_blur` | `Callback<()>` | Focus gained / lost |
 | `width` | `Length` | Width |
 | `height` | `Length` | Height |
-| `on_change` | `Callback<TabsEvent>` | Active tab changed |
+| `on_select` | `Callback<TabsEvent>` | Selected tab changed |
 | `on_click` | `Callback<MouseEvent>` | Raw tab-bar click |
 | `on_context_menu` | `Callback<(Option<usize>, MouseEvent)>` | Right-button press without switching tabs; unused strip space, border and padding report `None` |
 | `on_key` | `KeyHandler` | Key handler |
@@ -47,10 +47,10 @@ Tabs::new()
         Tab::new("Terminal"),
         Tab::new("Log"),
     ])
-    .active(self.active_tab)
+    .selected(self.active_tab)
     .border(true)
     .active_style(Style::new().fg(Color::Cyan).bold())
-    .on_change(ctx.link().callback(|e: TabsEvent| Msg::TabChanged(e.index)))
+    .on_select(ctx.link().callback(|e: TabsEvent| Msg::TabChanged(e.index)))
 ```
 
 **Tab construction:**
@@ -76,7 +76,7 @@ Tab::new("Draft")
 ### Opt into a tab pointer
 
 `Tab::pointer_shape(PointerShape::Pointer)` requests a pointing hand over that tab's visible label
-and padding. It does not affect dividers or unused strip space. Registering `on_change` or
+and padding. It does not affect dividers or unused strip space. Registering `on_select` or
 `on_click` alone keeps the normal pointer. Use `Element::pointer_shape(...)` when you intend an
 override for an entire element instead.
 
@@ -105,7 +105,7 @@ symbol still appears when nothing else about the bar reacts to the pointer.
 |------|------|-------------|
 | `tabs` | `Vec<DraggableTab>` | Tab items |
 | `tab(DraggableTab)` | method | Add a single tab |
-| `active` | `usize` | Active tab index |
+| `selected` | `impl Into<Option<usize>>` | Selected tab index (`None` highlights no tab) |
 | `on_action` | `Callback<DraggableTabActionEvent>` | Action tab clicked |
 | `variant` | `DraggableTabBarVariant` | `Bordered` or `FrameLine` |
 | `draggable` | `bool` | Enable drag reordering |
@@ -157,7 +157,7 @@ symbol still appears when nothing else about the bar reacts to the pointer.
 | `on_focus` / `on_blur` | `Callback<()>` | Focus gained / lost |
 | `width` | `Length` | Width |
 | `height` | `Length` | Height |
-| `on_change` | `Callback<TabsEvent>` | Active tab changed |
+| `on_select` | `Callback<TabsEvent>` | Selected tab changed |
 | `on_close` | `Callback<DraggableTabCloseEvent>` | Close button clicked or closeable tab middle-clicked |
 | `on_context_menu` | `Callback<(Option<usize>, MouseEvent)>` | Right-button press with hit tab index and content coordinates; empty space, border/padding and overflow report `None`. Does not change the active tab |
 | `on_reorder` | `Callback<DraggableTabReorderEvent>` | Tab dragged to new position |
@@ -203,12 +203,12 @@ Create pinned action tabs for tab-strip buttons such as `+`:
 DraggableTabBar::new()
     .tabs(files.iter().map(to_file_tab))
     .tab(DraggableTab::action("+").style(Style::new().fg(Color::LightGreen).bold()))
-    .active(active_file_index)
-    .on_change(ctx.link().callback(|e| Msg::SelectTab(e.index)))
+    .selected(active_file_index)
+    .on_select(ctx.link().callback(|e| Msg::SelectTab(e.index)))
     .on_action(ctx.link().callback(|_| Msg::CreateTab));
 ```
 
-Action tabs render in the strip but do not emit `on_change`, become active,
+Action tabs render in the strip but do not emit `on_select`, become active,
 show close buttons, or participate as same-bar reorder targets. A trailing
 action tab stays pinned while normal tabs reorder before it.
 
@@ -401,7 +401,7 @@ bars, including returning to the original panel, without releasing the mouse. Tr
 are taken from the current view after each move. Area registrations are tracked during reconciliation
 and resolved once per rendered tree; drag updates do not discover registrations by scanning the tree.
 
-Tabs can be dragged between bars that share the same `drag_group`. The `on_transfer` callback fires on the **source** bar and reports `from_bar`, `to_bar`, `from` index, and `to` index. After that callback queues the transfer, the destination bar's `on_change` callback fires with `to`, selecting the transferred tab through the same controlled-state path as a mouse click.
+Tabs can be dragged between bars that share the same `drag_group`. The `on_transfer` callback fires on the **source** bar and reports `from_bar`, `to_bar`, `from` index, and `to` index. After that callback queues the transfer, the destination bar's `on_select` callback fires with `to`, selecting the transferred tab through the same controlled-state path as a mouse click.
 
 ### Full Example
 
@@ -415,7 +415,7 @@ rsx! {
         ],
         bar_id: "editor",
         drag_group: "editors",
-        active: self.active_tab,
+        selected: self.active_tab,
         variant: DraggableTabBarVariant::FrameLine,
         tab_max_width: Some(20),
         overflow: DraggableTabBarOverflow::ShrinkThenScroll { min_tab_width: 8 },
@@ -425,7 +425,7 @@ rsx! {
         show_overflow_controls: true,
         caps: CapStyle::Round.chars(),
         active_style: Style::new().fg(Color::Cyan).bold(),
-        on_change: ctx.link().callback(|e| Msg::SetActive(e.index)),
+        on_select: ctx.link().callback(|e| Msg::SetActive(e.index)),
         on_close: ctx.link().callback(Msg::CloseTab),
         on_reorder: ctx.link().callback(Msg::ReorderTabs),
     }
@@ -442,7 +442,7 @@ DraggableTabBar::new()
         DraggableTab::new(format!("Image {}", i + 1))
             .closeable(true)
     }))
-    .active(usize::MAX)       // No active tab (no highlight)
+    .selected(None)           // No selected tab (no highlight)
     .close_symbol("x")
     .draggable(false)
     .focusable(false)

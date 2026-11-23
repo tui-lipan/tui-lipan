@@ -343,7 +343,7 @@ fn request_panel(scenario: SketchScenario) -> Element {
                         .tab("Headers")
                         .tab("Body")
                         .tab("Auth")
-                        .active(2)
+                        .selected(2)
                         .height(Length::Px(1))
                         .active_style(Style::new().fg(Color::Black).bg(accent()).bold())
                         .style(muted())
