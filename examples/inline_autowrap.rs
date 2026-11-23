@@ -61,7 +61,7 @@ impl Component for AutoWrapDemo {
 
     fn view(&self, ctx: &Context<Self>) -> Element {
         Frame::new()
-            .header_left("Inline Transcript mode")
+            .title("Inline Transcript mode")
             .border(true)
             .border_style(BorderStyle::Rounded)
             .padding(1)
@@ -76,10 +76,7 @@ impl Component for AutoWrapDemo {
                             .placeholder("Type text and press Enter")
                             .border(true)
                             .on_change(ctx.link().callback(Msg::DraftChanged))
-                            .on_key(ctx.link().key_handler(|key| match key.code {
-                                KeyCode::Enter => Some(Msg::Insert),
-                                _ => None,
-                            })),
+                            .on_submit(ctx.link().callback(|_| Msg::Insert)),
                     )
                     .child(
                         Button::filled("Append")

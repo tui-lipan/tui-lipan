@@ -66,7 +66,7 @@ impl Component for App {
                 gap: 0,
                 padding: 0,
                 Frame {
-                    header_left: "Checkboxes (Tab to navigate, Space/Enter/Click to toggle)",
+                    title: "Checkboxes (Tab to navigate, Space/Enter/Click to toggle)",
                     border: true,
                     border_style: BorderStyle::Rounded,
                     height: Length::Auto,
@@ -105,7 +105,7 @@ impl Component for App {
                     },
                 },
                 Frame {
-                    header_left: "Sliders (drag to change value)",
+                    title: "Sliders (drag to change value)",
                     border: true,
                     border_style: BorderStyle::Rounded,
                     height: Length::Auto,
@@ -141,7 +141,7 @@ impl Component for App {
                     },
                 },
                 Frame {
-                    header_left: "Progress Bars (drag to change value)",
+                    title: "Progress Bars (drag to change value)",
                     border: true,
                     border_style: BorderStyle::Rounded,
                     height: Length::Flex(1),
@@ -253,7 +253,7 @@ impl Component for App {
                     },
                 },
                 Frame {
-                    header_left: "Spinners (auto-animated)",
+                    title: "Spinners (auto-animated)",
                     border: true,
                     border_style: BorderStyle::Rounded,
                     height: Length::Flex(1),

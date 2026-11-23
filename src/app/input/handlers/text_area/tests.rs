@@ -5107,3 +5107,108 @@ fn app_commands_first_can_preempt_vim_text_area_shortcut_by_policy() {
     assert!(command_hit.get());
     assert!(changes.borrow().is_empty());
 }
+
+#[test]
+fn uncontrolled_text_area_several_edits_before_render_and_clipboard_rejection() {
+    let changes = Rc::new(RefCell::new(Vec::<TextAreaEvent>::new()));
+    let make_on_change = || {
+        let changes = Rc::clone(&changes);
+        Callback::new(move |event| changes.borrow_mut().push(event))
+    };
+    let bounds = Rect {
+        x: 0,
+        y: 0,
+        w: 40,
+        h: 8,
+    };
+    let reconcile_uncontrolled = |tree: &mut NodeTree, value: &str| {
+        let el: crate::core::element::Element =
+            TextArea::new(value).on_change(make_on_change()).into();
+        LayoutEngine::reconcile_with_focus(tree, &el, bounds, None);
+    };
+
+    let mut tree = NodeTree::new();
+    reconcile_uncontrolled(&mut tree, "abcd");
+
+    let read_only_selection = HashMap::new();
+    let mut input_history = HashMap::new();
+    let mut textarea_history = HashMap::new();
+    let mut text_area_vim_state = HashMap::new();
+    let mut hex_history = HashMap::new();
+    let mut hex_pending_edit = HashMap::new();
+    let keymap = Keymap::default();
+    let clipboard = ClipboardService::new(Box::new(StaticClipboardProvider("Z")), Rc::new(|_| {}));
+    let clipboard_config = ClipboardConfig::default();
+    let mut ctx = default_key_ctx(
+        &read_only_selection,
+        &mut input_history,
+        &mut textarea_history,
+        &mut text_area_vim_state,
+        &mut hex_history,
+        &mut hex_pending_edit,
+        &keymap,
+        &clipboard,
+        &clipboard_config,
+    );
+
+    let root = tree.root;
+    // Move to pos 1, select "bc" (cursor 3, anchor 1), and reconcile.
+    assert!(handle_key(&mut tree, root, key(KeyCode::Right), &mut ctx));
+    reconcile_uncontrolled(&mut tree, "abcd");
+    let shift_right = KeyEvent {
+        code: KeyCode::Right,
+        mods: KeyMods {
+            shift: true,
+            ..KeyMods::default()
+        },
+    };
+    assert!(handle_key(&mut tree, root, shift_right, &mut ctx));
+    reconcile_uncontrolled(&mut tree, "abcd");
+    assert!(handle_key(&mut tree, root, shift_right, &mut ctx));
+    reconcile_uncontrolled(&mut tree, "abcd");
+
+    // Several paste edits before a single render, then REJECT (keep "abcd"):
+    // both cursor (3) and selection anchor (Some(1)) must survive.
+    assert!(handle_paste(&mut tree, root, "x", &mut ctx));
+    assert!(handle_paste(&mut tree, root, "y", &mut ctx));
+    assert_eq!(changes.borrow().last().unwrap().value.as_ref(), "axyd");
+    reconcile_uncontrolled(&mut tree, "abcd");
+    let NodeKind::TextArea(ta) = &tree.node(root).kind else {
+        panic!("expected text area");
+    };
+    assert_eq!((ta.cursor, ta.anchor), (3, Some(1)));
+
+    // Clipboard Ctrl+V and Ctrl+X rejected: pre-edit cursor and selection still survive.
+    assert!(handle_key(&mut tree, root, ctrl_char('v'), &mut ctx));
+    assert_eq!(changes.borrow().last().unwrap().value.as_ref(), "aZd");
+    reconcile_uncontrolled(&mut tree, "abcd");
+    let NodeKind::TextArea(ta) = &tree.node(root).kind else {
+        panic!("expected text area");
+    };
+    assert_eq!((ta.cursor, ta.anchor), (3, Some(1)));
+
+    assert!(handle_key(&mut tree, root, ctrl_char('x'), &mut ctx));
+    assert_eq!(changes.borrow().last().unwrap().value.as_ref(), "ad");
+    reconcile_uncontrolled(&mut tree, "abcd");
+    let NodeKind::TextArea(ta) = &tree.node(root).kind else {
+        panic!("expected text area");
+    };
+    assert_eq!((ta.cursor, ta.anchor), (3, Some(1)));
+
+    // Several paste edits before one render, then ACCEPT ("axyd"):
+    // cursor lands right after the second paste (pos 3, anchor None).
+    assert!(handle_paste(&mut tree, root, "x", &mut ctx));
+    assert!(handle_paste(&mut tree, root, "y", &mut ctx));
+    reconcile_uncontrolled(&mut tree, "axyd");
+    let NodeKind::TextArea(ta) = &tree.node(root).kind else {
+        panic!("expected text area");
+    };
+    assert_eq!((ta.cursor, ta.anchor), (3, None));
+
+    // Real external value replacement moves cursor to end and clears any selection.
+    reconcile_uncontrolled(&mut tree, "hello!");
+    let NodeKind::TextArea(ta) = &tree.node(root).kind else {
+        panic!("expected text area");
+    };
+    assert_eq!((ta.cursor, ta.anchor), (6, None));
+}

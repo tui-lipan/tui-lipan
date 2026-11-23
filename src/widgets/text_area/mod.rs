@@ -217,6 +217,7 @@ pub struct TextArea {
     pub(crate) value: Arc<str>,
     pub(crate) cursor: usize,         // byte index
     pub(crate) anchor: Option<usize>, // selection anchor byte index
+    pub(crate) cursor_controlled: bool,
     pub(crate) placeholder: Option<Arc<str>>,
     pub(crate) style: Style,
     pub(crate) hover_style: StyleSlot,
@@ -351,6 +352,7 @@ impl Default for TextArea {
             value: "".into(),
             cursor: 0,
             anchor: None,
+            cursor_controlled: false,
             placeholder: None,
             style: Style::default(),
             hover_style: StyleSlot::Inherit,
@@ -373,7 +375,7 @@ impl Default for TextArea {
             color_strategy: None,
             language: None,
             theme: None,
-            border: true,
+            border: false,
             border_style: BorderStyle::Plain,
             padding: Padding::default(),
             width: Length::Flex(1),
@@ -483,6 +485,7 @@ impl TextArea {
     /// Set cursor position.
     pub fn cursor(mut self, cursor: usize) -> Self {
         self.cursor = cursor;
+        self.cursor_controlled = true;
         self
     }
 
@@ -490,6 +493,7 @@ impl TextArea {
     /// When set, text between anchor and cursor is selected.
     pub fn anchor(mut self, anchor: Option<usize>) -> Self {
         self.anchor = anchor;
+        self.cursor_controlled = true;
         self
     }
 
@@ -498,6 +502,7 @@ impl TextArea {
         self.value = state.text().into();
         self.cursor = state.cursor();
         self.anchor = state.anchor();
+        self.cursor_controlled = true;
         self
     }
 

@@ -242,7 +242,7 @@ impl Component for HeaderFrameComponent {
     fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
         Frame::new()
             .height(Length::Px(3))
-            .header_content(Text::new("Search"))
+            .title_content(Text::new("Search"))
             .child(Text::new("Body"))
             .into()
     }
@@ -263,7 +263,7 @@ impl Component for GroupedBorderLabelsComponent {
         Frame::new()
             .width(Length::Px(24))
             .height(Length::Px(5))
-            .header(
+            .titles(
                 BorderLabels::new()
                     .left(FrameLabel::new("left"))
                     .center("center")
@@ -295,8 +295,8 @@ impl Component for TabsWithHeaderLabelComponent {
         Frame::new()
             .width(Length::Px(42))
             .height(Length::Px(3))
-            .header_left("[2]")
-            .header_padding(1)
+            .title("[2]")
+            .title_padding(1)
             .tab_titles(["Files", "Worktrees", "Submodule"])
             .tab_variant(TabVariant::Minimal)
             .active_tab(1)
@@ -322,7 +322,7 @@ impl Component for FooterTabsComponent {
         Frame::new()
             .width(Length::Px(40))
             .height(Length::Px(4))
-            .header_left("Title")
+            .title("Title")
             .footer_right("hint")
             .tab_titles(["Files", "Worktrees"])
             .tab_edge(crate::widgets::TabEdge::Bottom)
@@ -349,7 +349,7 @@ impl Component for HeaderLabelPaddingStyleComponent {
             .width(Length::Px(12))
             .height(Length::Px(3))
             .style(Style::new().fg(Color::Red))
-            .header(
+            .titles(
                 BorderLabels::new()
                     .left(FrameLabel::new("X").style(Style::new().fg(Color::Blue)))
                     .padding(1),
@@ -443,10 +443,10 @@ fn grouped_label_style_resolution_preserves_each_layer() {
     let label_focused = Style::new().fg(Color::Yellow);
     let group = BorderLabels::new()
         .style(group_style)
-        .focused_style(group_focused);
+        .focus_style(group_focused);
     let label = FrameLabel::new("label")
         .style(label_style)
-        .focused_style(label_focused);
+        .focus_style(label_focused);
 
     let unfocused = crate::backend::ratatui_backend::renderers::frame::render::resolve_label_style(
         base, &group, &label, false,
@@ -1040,7 +1040,7 @@ impl Component for CompactFramePaintLeakComponent {
             .border(true)
             .height(Length::Px(2))
             .style(Style::new().bg(Color::DarkGray))
-            .header_left("Compact")
+            .title("Compact")
             .child(Text::new("body"))
             .into()
     }
@@ -1061,9 +1061,9 @@ impl Component for CompactFrameStatusRightComponent {
         Frame::new()
             .compact(true)
             .border(true)
-            .header_padding(1)
+            .title_padding(1)
             .footer_padding(1)
-            .header_left("Files")
+            .title("Files")
             .footer_right("1 of 6")
             .child(Text::new("body"))
             .into()
@@ -3957,7 +3957,7 @@ impl Component for OverlappingBorderTitlePreserveComponent {
                 Frame::new()
                     .border(true)
                     .border_merge_mode(BorderMergeMode::Fuzzy)
-                    .header(BorderLabels::new().left("KEEP  ME").padding(1))
+                    .titles(BorderLabels::new().left("KEEP  ME").padding(1))
                     .child(Text::new("below")),
             )
             .child_at(
@@ -4064,7 +4064,7 @@ impl Component for BorderOnStyledBackdropComponent {
                 Frame::new()
                     .border(true)
                     .border_merge_mode(BorderMergeMode::Fuzzy)
-                    .header(BorderLabels::new().left("X  Y").padding(1))
+                    .titles(BorderLabels::new().left("X  Y").padding(1))
                     .child(Text::new("body")),
             )
             .into()

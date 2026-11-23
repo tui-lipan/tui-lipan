@@ -1306,7 +1306,7 @@ impl Component for DragDropSmoke {
         let mut source = DragSource::new()
             .child(
                 Frame::new()
-                    .header_left("Source")
+                    .title("Source")
                     .border(true)
                     .padding(1)
                     .height(crate::style::Length::Px(3))
@@ -1668,7 +1668,7 @@ fn make_drop_target(
         .child(
             Element::from(
                 Frame::new()
-                    .header_left(name)
+                    .title(name)
                     .border(true)
                     .padding(1)
                     .width(crate::style::Length::Px(14))
@@ -5762,7 +5762,7 @@ impl Component for ConfigurableMouseRegion {
     fn view(&self, _ctx: &Context<Self>) -> Element {
         let changes = Rc::clone(&self.changes);
         MouseRegion::new()
-            .enabled(self.enabled.get())
+            .disabled(!self.enabled.get())
             .on_hover_change(Callback::new(move |hovered| {
                 changes.borrow_mut().push(hovered);
             }))

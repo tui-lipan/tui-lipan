@@ -22,7 +22,7 @@ impl Component for Dashboard {
         HStack::new()
             .child(
                 Frame::new()
-                    .header_left("Sidebar")
+                    .title("Sidebar")
                     .width(Length::Px(20))
                     .child(
                         List::new()
@@ -34,7 +34,7 @@ impl Component for Dashboard {
             )
             .child(
                 Frame::new()
-                    .header_left("Content")
+                    .title("Content")
                     .child(Text::new("Hello agent"))
                     .key("main"),
             )
@@ -443,7 +443,7 @@ fn markdown_escapes_backticks_and_newlines() {
 
         fn view(&self, _ctx: &Context<Self>) -> Element {
             Frame::new()
-                .header_left("tick`tick")
+                .title("tick`tick")
                 .child(Text::new("line\nbreak"))
                 .key("panel")
         }

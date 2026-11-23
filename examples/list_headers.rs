@@ -104,7 +104,7 @@ impl Component for ListHeadersDemo {
             .unwrap_or_else(|| "(none)".to_string());
 
         Frame::new()
-        .header_left("List Headers + Gutters")
+        .title("List Headers + Gutters")
             .padding(1)
             .child(
                 VStack::new()

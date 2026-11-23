@@ -70,7 +70,7 @@ display content differs from source text.
 | `width` | `Length` | Width |
 | `height` | `Length` | Height |
 | `wrap` | `bool` | Word-wrap long lines (default: `true`) |
-| `border` | `bool` | Show/hide outer border (default: `true`) |
+| `border` | `bool` | Show/hide outer border (default: `false`) |
 | `border_style` | `BorderStyle` | Border glyph variant |
 | `hover_border_style` | `BorderStyle` | Border variant when hovered |
 | `padding` | `impl Into<Padding>` | Inner padding |

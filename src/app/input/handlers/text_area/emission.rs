@@ -130,6 +130,11 @@ pub(super) fn emit_text_area_editor_change(
         editor.remember_text_area_sentinels(&new_value, &pruned);
     }
 
+    if let NodeKind::TextArea(ta) = &mut tree.node_mut(id).kind {
+        ta.uncontrolled
+            .record_reported(new_value, editor.cursor(), editor.anchor());
+    }
+
     cancel_text_area_smooth_scroll(tree, id);
     true
 }

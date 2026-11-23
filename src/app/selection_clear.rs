@@ -61,6 +61,10 @@ pub(crate) fn clear_node_selection(tree: &mut NodeTree, id: NodeId) -> bool {
 
     if let Some((on_change, value, cursor)) = clear_input {
         if let Some(cb) = on_change {
+            if let NodeKind::Input(node) = &mut tree.node_mut(id).kind {
+                node.uncontrolled
+                    .record_reported(value.clone(), cursor, None);
+            }
             cb.emit(crate::widgets::InputEvent {
                 value,
                 cursor,
@@ -68,12 +72,18 @@ pub(crate) fn clear_node_selection(tree: &mut NodeTree, id: NodeId) -> bool {
             });
         } else if let NodeKind::Input(node) = &mut tree.node_mut(id).kind {
             node.anchor = None;
+            node.uncontrolled
+                .update_reconciled_cursor(node.value.as_ref(), node.cursor, None);
         }
         dirty = true;
     }
 
     if let Some((on_change, value, cursor)) = clear_text_area {
         if let Some(cb) = on_change {
+            if let NodeKind::TextArea(node) = &mut tree.node_mut(id).kind {
+                node.uncontrolled
+                    .record_reported(value.clone(), cursor, None);
+            }
             cb.emit(crate::widgets::TextAreaEvent {
                 value,
                 cursor,
@@ -81,6 +91,8 @@ pub(crate) fn clear_node_selection(tree: &mut NodeTree, id: NodeId) -> bool {
             });
         } else if let NodeKind::TextArea(node) = &mut tree.node_mut(id).kind {
             node.anchor = None;
+            node.uncontrolled
+                .update_reconciled_cursor(node.value.as_ref(), node.cursor, None);
         }
         dirty = true;
     }

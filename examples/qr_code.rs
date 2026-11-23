@@ -176,7 +176,7 @@ impl Component for QrCodeExample {
                     style: Style::new().dim(),
                 },
                 Frame {
-                    header_left: "Scan me",
+                    title: "Scan me",
                     border: true,
                     border_style: BorderStyle::Rounded,
                     padding: 1,

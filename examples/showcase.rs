@@ -313,7 +313,7 @@ impl Showcase {
                     width: Length::Flex(1),
                     gap: 1,
                     Frame {
-                        header_left: "Accordion",
+                        title: "Accordion",
                         border: true,
                         {
                             Accordion::new()
@@ -333,7 +333,7 @@ impl Showcase {
                         },
                     },
                     Frame {
-                        header_left: "Sparkline",
+                        title: "Sparkline",
                         border: true,
                         VStack {
                             gap: 1,
@@ -359,7 +359,7 @@ impl Showcase {
                     width: Length::Flex(1),
                     gap: 1,
                     Frame {
-                        header_left: "Badges",
+                        title: "Badges",
                         border: true,
                         HStack {
                             gap: 2,
@@ -378,7 +378,7 @@ impl Showcase {
                         },
                     },
                     Frame {
-                        header_left: "Tooltip",
+                        title: "Tooltip",
                         border: true,
                         Center {
                             HStack {
@@ -432,7 +432,7 @@ impl Showcase {
                 gap: 2,
                 align: Align::Stretch,
                 Frame {
-                    header_left: "Project Navigator",
+                    title: "Project Navigator",
                     border: true,
                     padding: 1,
                     width: Length::Flex(2),
@@ -446,7 +446,7 @@ impl Showcase {
                     },
                 },
                 Frame {
-                    header_left: "Quick Actions",
+                    title: "Quick Actions",
                     border: true,
                     padding: 1,
                     width: Length::Flex(1),
@@ -494,7 +494,7 @@ impl Showcase {
 
         let context_menu = ContextMenu::new(
             Frame::new()
-                .header_left("Text View")
+                .title("Text View")
                 .border(true)
                 .child(text_view),
         )
@@ -586,7 +586,7 @@ impl Showcase {
                 HStack {
                     gap: 2,
                     Frame {
-                        header_left: "Table (auto height)",
+                        title: "Table (auto height)",
                         border: true,
                         padding: 1,
                         width: Length::Flex(1),
@@ -594,7 +594,7 @@ impl Showcase {
                         table,
                     },
                     Frame {
-                        header_left: "Tree (custom icons)",
+                        title: "Tree (custom icons)",
                         border: true,
                         padding: 1,
                         width: Length::Flex(1),
@@ -618,7 +618,7 @@ impl Showcase {
                 HStack {
                     gap: 2,
                     Frame {
-                        header_left: "Input (anchor + on_edit)",
+                        title: "Input (anchor + on_edit)",
                         border: true,
                         padding: 1,
                         width: Length::Flex(1),
@@ -629,6 +629,7 @@ impl Showcase {
                                     .cursor(ctx.state.input_cursor)
                                     .anchor(ctx.state.input_anchor)
                                     .placeholder("Type to edit")
+                                    .border(true)
                                     .on_change(ctx.link().callback(Msg::InputChanged))
                                     .on_edit(ctx.link().callback(Msg::InputEdited))
                             },
@@ -643,7 +644,7 @@ impl Showcase {
                         },
                     },
                     Frame {
-                        header_left: "TextArea (anchor + on_edit)",
+                        title: "TextArea (anchor + on_edit)",
                         border: true,
                         padding: 1,
                         width: Length::Flex(1),
@@ -751,7 +752,7 @@ impl Showcase {
         }
 
         stack
-            .child(Frame::new().header_left("Example Code").child(code_area))
+            .child(Frame::new().title("Example Code").child(code_area))
             .into()
     }
 }

@@ -162,7 +162,7 @@ impl Component for TerminalHints {
             .gap(1)
             .child(
                 Frame::new()
-                    .header_left("Terminal hints / scan + label + decorate")
+                    .title("Terminal hints / scan + label + decorate")
                     .border(true)
                     .padding(0)
                     .child(terminal.key(TERMINAL_KEY)),

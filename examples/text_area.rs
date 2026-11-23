@@ -122,9 +122,7 @@ impl Component for TextAreaDemo {
         let mut root = VStack::new()
             .child(
                 Frame::new()
-                    .header_left(
-                        "TextArea Demo (Arrows, Shift+Arrow, scrollbar is DRAGGABLE, try it!)",
-                    )
+                    .title("TextArea Demo (Arrows, Shift+Arrow, scrollbar is DRAGGABLE, try it!)")
                     .padding(1)
                     .height(Length::Flex(1))
                     .child(
@@ -146,7 +144,7 @@ impl Component for TextAreaDemo {
             )
             .child(
                 Frame::new()
-                    .header_left("Read Only Panel")
+                    .title("Read Only Panel")
                     .padding(1)
                     .height(Length::Flex(1))
                     .child(
@@ -169,7 +167,7 @@ impl Component for TextAreaDemo {
             )
             .child(
                 Frame::new()
-                    .header_left(format!("Vim Motions Panel [{:?}]", ctx.state.vim_mode))
+                    .title(format!("Vim Motions Panel [{:?}]", ctx.state.vim_mode))
                     .padding(1)
                     .height(Length::Flex(1))
                     .child(
@@ -197,9 +195,7 @@ impl Component for TextAreaDemo {
         let root = VStack::new()
             .child(
                 Frame::new()
-                    .header_left(
-                        "TextArea Demo (Arrows, Shift+Arrow, scrollbar is DRAGGABLE, try it!)",
-                    )
+                    .title("TextArea Demo (Arrows, Shift+Arrow, scrollbar is DRAGGABLE, try it!)")
                     .padding(1)
                     .height(Length::Flex(1))
                     .child(
@@ -221,7 +217,7 @@ impl Component for TextAreaDemo {
             )
             .child(
                 Frame::new()
-                    .header_left("Read Only Panel")
+                    .title("Read Only Panel")
                     .padding(1)
                     .height(Length::Flex(1))
                     .child(
@@ -244,7 +240,7 @@ impl Component for TextAreaDemo {
             )
             .child(
                 Frame::new()
-                    .header_left(format!("Vim Motions Panel [{:?}]", ctx.state.vim_mode))
+                    .title(format!("Vim Motions Panel [{:?}]", ctx.state.vim_mode))
                     .padding(1)
                     .height(Length::Flex(1))
                     .child(
@@ -272,7 +268,7 @@ impl Component for TextAreaDemo {
         {
             root = root.child(
                 Frame::new()
-                    .header_left("Syntax Highlight (syntect)")
+                    .title("Syntax Highlight (syntect)")
                     .padding(1)
                     .height(Length::Flex(1))
                     .child(

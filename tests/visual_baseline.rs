@@ -36,7 +36,7 @@ fn frame_chrome() -> Element {
         .gap(1)
         .child(
             Frame::new()
-                .header_left("Nav")
+                .title("Nav")
                 .border(true)
                 .width(Length::Px(16))
                 .child(
@@ -49,7 +49,7 @@ fn frame_chrome() -> Element {
         )
         .child(
             Frame::new()
-                .header_left("Detail")
+                .title("Detail")
                 .border(true)
                 .child(
                     VStack::new()
@@ -67,7 +67,7 @@ fn frame_chrome() -> Element {
 /// Input placeholder, masking, and button chrome.
 fn form_chrome() -> Element {
     Frame::new()
-        .header_left("Credentials")
+        .title("Credentials")
         .border(true)
         .child(
             VStack::new()
@@ -111,7 +111,7 @@ fn modal_chrome() -> Element {
     ZStack::new()
         .child(
             Frame::new()
-                .header_left("Backdrop")
+                .title("Backdrop")
                 .border(true)
                 .padding(1)
                 .child(Text::new(
@@ -143,7 +143,7 @@ fn modal_chrome() -> Element {
 /// Active/inactive tab chrome.
 fn tabs_chrome() -> Element {
     Frame::new()
-        .header_left("Tabs")
+        .title("Tabs")
         .border(true)
         .padding(1)
         .child(
@@ -161,7 +161,7 @@ fn tabs_chrome() -> Element {
 /// TextArea line-number gutter and caret.
 fn text_area_chrome() -> Element {
     Frame::new()
-        .header_left("Editor")
+        .title("Editor")
         .border(true)
         .child(
             TextArea::new("fn main() {\n    println!(\"hi\");\n}\n")
@@ -176,7 +176,7 @@ fn text_area_chrome() -> Element {
 /// Table header row plus selection gutter.
 fn table_chrome() -> Element {
     Frame::new()
-        .header_left("Processes")
+        .title("Processes")
         .border(true)
         .child(
             Table::new()
@@ -197,7 +197,7 @@ fn table_chrome() -> Element {
 /// Select with the dropdown popover open.
 fn select_expanded_chrome() -> Element {
     Frame::new()
-        .header_left("Select")
+        .title("Select")
         .border(true)
         .padding(1)
         .child(
@@ -219,14 +219,14 @@ fn splitter_chrome() -> Element {
         .handle_symbol('│')
         .child(
             Frame::new()
-                .header_left("Left")
+                .title("Left")
                 .border(true)
                 .padding(1)
                 .child(Text::new("Pane A")),
         )
         .child(
             Frame::new()
-                .header_left("Right")
+                .title("Right")
                 .border(true)
                 .padding(1)
                 .child(Text::new("Pane B")),

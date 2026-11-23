@@ -124,7 +124,7 @@ impl Component for DescriptionSpinnersDemo {
                 .padding(1)
                 .child(
                     Frame::new()
-                        .header_left("List rows")
+                        .title("List rows")
                         .child(
                             List::new()
                                 .items(task_items())
@@ -135,7 +135,7 @@ impl Component for DescriptionSpinnersDemo {
                 )
                 .child(
                     Frame::new()
-                        .header_left(
+                        .title(
                             format!("SearchPalette - placement: {}", placement_name(placement)),
                         )
                         .child(

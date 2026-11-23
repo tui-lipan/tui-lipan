@@ -142,7 +142,7 @@ impl Component for ThemeHotReload {
                     .gap(1)
                     .child(
                         Frame::new()
-                            .header_left("Theme Hot Reload")
+                            .title("Theme Hot Reload")
                             .footer_left("Ctrl+Q / Esc to quit")
                             .border(true)
                             .border_style(BorderStyle::Rounded)
@@ -171,7 +171,7 @@ impl Component for ThemeHotReload {
                     )
                     .child(
                         Frame::new()
-                            .header_left("Status Palette")
+                            .title("Status Palette")
                             .border(true)
                             .border_style(BorderStyle::Rounded)
                             .padding(1)
@@ -186,7 +186,7 @@ impl Component for ThemeHotReload {
                     )
                     .child(
                         Frame::new()
-                            .header_left("Git Status Palette")
+                            .title("Git Status Palette")
                             .border(true)
                             .border_style(BorderStyle::Rounded)
                             .padding(1)

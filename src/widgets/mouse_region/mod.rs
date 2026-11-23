@@ -276,9 +276,9 @@ impl MouseRegion {
         self
     }
 
-    /// Enable/disable click, move, and hover behavior.
-    pub fn enabled(mut self, enabled: bool) -> Self {
-        self.enabled = enabled;
+    /// Disable/enable click, move, and hover behavior.
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.enabled = !disabled;
         self
     }
 }

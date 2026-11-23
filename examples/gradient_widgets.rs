@@ -182,7 +182,7 @@ impl GradientWidgets {
         throughput_gradient: ColorGradient,
     ) -> Element {
         Frame::new()
-            .header_left("Progress + Slider Gradients")
+            .title("Progress + Slider Gradients")
             .border(true)
             .padding(1)
             .child(
@@ -266,7 +266,7 @@ impl GradientWidgets {
         .collect::<Vec<_>>();
 
         Frame::new()
-            .header_left("TableCell Heatmap Helpers")
+            .title("TableCell Heatmap Helpers")
             .border(true)
             .padding(1)
             .child(
@@ -311,7 +311,7 @@ impl GradientWidgets {
             .height(Length::Auto);
 
         Frame::new()
-            .header_left("Tree Indent Gradient")
+            .title("Tree Indent Gradient")
             .border(true)
             .padding(1)
             .child(tree)
@@ -320,7 +320,7 @@ impl GradientWidgets {
 
     fn spinner_panel(&self) -> Element {
         Frame::new()
-            .header_left("Spinner Gradient Tinting")
+            .title("Spinner Gradient Tinting")
             .border(true)
             .padding(1)
             .child(

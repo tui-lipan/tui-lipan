@@ -43,7 +43,7 @@ Node-edge structural visualization for trees, with boxed labels and orthogonal b
 | `edge_style` | `Style` | Edge line style |
 | `edge_border_style` | `BorderStyle` | Edge elbow glyph style (`Rounded` uses `╭╮╰╯`) |
 | `focusable` | `bool` | Accept focus as one widget with internal roving node focus |
-| `focused_path` | `GraphNodePath` | Controlled internally focused node path |
+| `focus_path` | `GraphNodePath` | Controlled internally focused node path |
 | `on_node_click` | `Callback<GraphNodeEvent>` | Fired when a node box is clicked |
 | `on_context_menu` | `Callback<(GraphNodeEvent, MouseEvent)>` | Right-button press on a diagram item with its semantic identity and popup coordinates; preserves focus |
 | `on_node_hover` | `Callback<GraphNodeEvent>` | Fired when hover moves to a different node |
@@ -67,7 +67,7 @@ so future DAG-style layouts can be added without reshaping builders.
 unfocusable by default, and pointer-only callbacks such as `.on_node_click(...)`
 or `.on_node_hover(...)` do not opt the graph into keyboard focus. Once focused,
 the graph keeps an internal roving node focus, styled by `.node_focus_style(...)`
-and optionally controlled with `.focused_path(...)`. Per-node focus styles patch
+and optionally controlled with `.focus_path(...)`. Per-node focus styles patch
 on top of the graph-wide focused-node style. As elsewhere in the framework,
 hover color transforms remain transient and compose over focused node colors.
 

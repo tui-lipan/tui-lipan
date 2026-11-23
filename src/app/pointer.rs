@@ -686,7 +686,7 @@ mod tests {
     fn masks_and_disabled_regions_do_not_override_a_child_pointer() {
         let tree = tree(
             MouseRegion::new()
-                .enabled(false)
+                .disabled(true)
                 .child(Input::new("text").border(false).read_only(true)),
         );
         assert_eq!(tree.pointer_shape_at(0, 0), Some(PointerShape::Text));

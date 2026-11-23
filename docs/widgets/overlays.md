@@ -892,7 +892,7 @@ if ctx.state.show_palette {
 
 ```rust
 Frame::new()
-    .header_left("Search")
+    .title("Search")
     .border(true)
     .child(SearchPalette::<Arc<str>>::new().items(my_items))
 ```

@@ -77,7 +77,7 @@ impl Component for DevtoolsDemo {
             .gap(1)
             .child(
                 Frame::new()
-                    .header_left("Devtools Demo")
+                    .title("Devtools Demo")
                     .border(true)
                     .padding(1)
                     .child(
@@ -93,7 +93,7 @@ impl Component for DevtoolsDemo {
             )
             .child(
                 Frame::new()
-                    .header_left("Live State")
+                    .title("Live State")
                     .border(true)
                     .padding(1)
                     .child(

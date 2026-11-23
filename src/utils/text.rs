@@ -12,6 +12,130 @@ use std::sync::Arc;
 /// Custom sentinel range: base codepoint, end exclusive, display widths, labels.
 type CustomSentinelTuple = (u32, u32, Vec<usize>, Vec<Arc<str>>);
 
+/// Snapshot of a text widget's value, cursor, and selection anchor.
+///
+/// Used for both the last reconciled prop state and the last state reported
+/// through `on_change` so uncontrolled cursor/selection preservation can
+/// distinguish accepted edits, rejected edits, cursor-only moves, and external
+/// value replacements.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ReportedTextState {
+    pub(crate) value: Arc<str>,
+    pub(crate) cursor: usize,
+    pub(crate) anchor: Option<usize>,
+}
+
+/// Uncontrolled cursor/selection tracking across renders for `Input` and `TextArea`.
+///
+/// `reconciled` holds the last reconciled prop value paired with the latest
+/// cursor/anchor valid for that value. It is kept separate from live node
+/// mutations (such as `sync_text_area_node_from_editor` on paste/clipboard
+/// edits) so a rejected `on_change` edit restores the pre-edit cursor and
+/// selection instead of looking like an external value replacement.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct UncontrolledTextState {
+    pub(crate) reconciled: ReportedTextState,
+    pub(crate) last_reported: Option<ReportedTextState>,
+}
+
+impl UncontrolledTextState {
+    pub(crate) fn reconciled(value: Arc<str>, cursor: usize, anchor: Option<usize>) -> Self {
+        Self {
+            reconciled: ReportedTextState {
+                value,
+                cursor,
+                anchor,
+            },
+            last_reported: None,
+        }
+    }
+
+    /// Record a state reported through `on_change`.
+    ///
+    /// When `value` still matches the last reconciled prop value (a cursor-only
+    /// move via arrows, clicks, drags, or selection clear), update the baseline
+    /// cursor/anchor too so a subsequent rejected edit before the next render
+    /// preserves the moved cursor/selection.
+    pub(crate) fn record_reported(
+        &mut self,
+        value: Arc<str>,
+        cursor: usize,
+        anchor: Option<usize>,
+    ) {
+        if value.as_ref() == self.reconciled.value.as_ref() {
+            self.reconciled.cursor = cursor;
+            self.reconciled.anchor = anchor;
+        }
+        self.last_reported = Some(ReportedTextState {
+            value,
+            cursor,
+            anchor,
+        });
+    }
+
+    /// Update the baseline cursor/anchor for a local cursor/selection-only
+    /// change that did not alter the reconciled text value (e.g. live drag,
+    /// selection clear without `on_change`, or Vim yank clearing visual
+    /// selection).
+    pub(crate) fn update_reconciled_cursor(
+        &mut self,
+        current_value: &str,
+        cursor: usize,
+        anchor: Option<usize>,
+    ) {
+        if current_value == self.reconciled.value.as_ref() {
+            self.reconciled.cursor = cursor;
+            self.reconciled.anchor = anchor;
+        }
+    }
+}
+
+/// Resolve the effective `(cursor, anchor)` for `Input` and `TextArea`.
+///
+/// When `cursor_controlled` is `true` (`.cursor(..)`, `.anchor(..)`, or
+/// `.bind(..)` was called), the caller-supplied values win directly.
+/// Otherwise, if an existing node is being reconciled:
+/// - matching `last_reported.value` keeps the reported cursor and anchor,
+/// - matching `reconciled.value` keeps the last reconciled cursor and anchor
+///   (including when an `on_change` edit was rejected),
+/// - any other value change is an external replacement and moves the cursor to
+///   the end of `value` with no selection.
+pub(crate) fn resolve_uncontrolled_cursor_and_anchor(
+    value: &str,
+    widget_cursor: usize,
+    widget_anchor: Option<usize>,
+    cursor_controlled: bool,
+    prev: Option<&UncontrolledTextState>,
+) -> (usize, Option<usize>) {
+    if cursor_controlled {
+        let cursor = clamp_cursor(value, widget_cursor);
+        let anchor = widget_anchor.map(|a| clamp_cursor(value, a));
+        return (cursor, anchor);
+    }
+
+    let Some(prev) = prev else {
+        let cursor = clamp_cursor(value, widget_cursor);
+        let anchor = widget_anchor.map(|a| clamp_cursor(value, a));
+        return (cursor, anchor);
+    };
+
+    if let Some(reported) = prev.last_reported.as_ref()
+        && reported.value.as_ref() == value
+    {
+        let cursor = clamp_cursor(value, reported.cursor);
+        let anchor = reported.anchor.map(|a| clamp_cursor(value, a));
+        return (cursor, anchor);
+    }
+
+    if prev.reconciled.value.as_ref() == value {
+        let cursor = clamp_cursor(value, prev.reconciled.cursor);
+        let anchor = prev.reconciled.anchor.map(|a| clamp_cursor(value, a));
+        return (cursor, anchor);
+    }
+
+    (value.len(), None)
+}
+
 /// Combined sentinel metadata for inline placeholder expansion.
 ///
 /// Covers two independent PUA ranges:

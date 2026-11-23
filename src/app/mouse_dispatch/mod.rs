@@ -1157,13 +1157,18 @@ impl<C: Component> MouseDispatchCtx<C> for TestBackend<C> {
         }
         if let ActiveDrag::TextArea(drag_state) = self.drag.active.clone()
             && self.core.tree.is_valid(drag_state.id)
-            && let NodeKind::TextArea(node) = &self.core.tree.node(drag_state.id).kind
+            && let NodeKind::TextArea(node) = &mut self.core.tree.node_mut(drag_state.id).kind
             && let Some(cb) = node.on_change.clone()
         {
+            let value = node.value.clone();
+            let cursor = node.cursor;
+            let anchor = node.anchor;
+            node.uncontrolled
+                .record_reported(value.clone(), cursor, anchor);
             cb.emit(crate::widgets::TextAreaEvent {
-                value: node.value.clone(),
-                cursor: node.cursor,
-                anchor: node.anchor,
+                value,
+                cursor,
+                anchor,
             });
         }
         self.drag.clear();
@@ -1368,6 +1373,16 @@ impl<C: Component> MouseDispatchCtx<C> for TestBackend<C> {
             if let NodeKind::TextArea(node) = &mut self.core.tree.node_mut(change.node_id).kind {
                 node.cursor = new_cursor;
                 node.anchor = new_anchor;
+                if change.on_change.is_some() {
+                    node.uncontrolled
+                        .record_reported(change.value.clone(), new_cursor, new_anchor);
+                } else {
+                    node.uncontrolled.update_reconciled_cursor(
+                        node.value.as_ref(),
+                        new_cursor,
+                        new_anchor,
+                    );
+                }
             }
             sync_textarea_vim_external_selection(
                 self,
@@ -1433,6 +1448,10 @@ impl<C: Component> MouseDispatchCtx<C> for TestBackend<C> {
                 anchor: anchor_for_drag,
             });
             if let Some(cb) = change.on_change {
+                if let NodeKind::Input(node) = &mut self.core.tree.node_mut(change.node_id).kind {
+                    node.uncontrolled
+                        .record_reported(change.value.clone(), new_cursor, new_anchor);
+                }
                 cb.emit(crate::widgets::InputEvent {
                     value: change.value,
                     cursor: new_cursor,

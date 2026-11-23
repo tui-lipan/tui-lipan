@@ -104,7 +104,7 @@ impl Component for InlineChoices {
 
     fn view(&self, ctx: &Context<Self>) -> Element {
         Frame::new()
-            .header_left("Inline choices")
+            .title("Inline choices")
             .border(true)
             .border_style(BorderStyle::Rounded)
             .padding(1)
@@ -151,11 +151,9 @@ impl Component for InlineChoices {
                             .cursor(ctx.state.note.cursor())
                             .anchor(ctx.state.note.anchor())
                             .placeholder("Optional note")
+                            .border(true)
                             .on_change(ctx.link().callback(Msg::NoteChanged))
-                            .on_key(ctx.link().key_handler(|key| match key.code {
-                                KeyCode::Enter => Some(Msg::Apply),
-                                _ => None,
-                            })),
+                            .on_submit(ctx.link().callback(|_| Msg::Apply)),
                     )
                     .child(
                         Button::filled("Apply")

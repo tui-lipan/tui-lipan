@@ -29,7 +29,7 @@ pub struct FrameLabel {
     /// Optional style layered on top of the containing group style.
     pub style: Option<Style>,
     /// Optional style layered on top of the group focus style while focused.
-    pub focused_style: Option<Style>,
+    pub focus_style: Option<Style>,
 }
 
 impl FrameLabel {
@@ -38,7 +38,7 @@ impl FrameLabel {
         Self {
             content: content.into(),
             style: None,
-            focused_style: None,
+            focus_style: None,
         }
     }
 
@@ -49,8 +49,8 @@ impl FrameLabel {
     }
 
     /// Set the label style while its frame is focused.
-    pub fn focused_style(mut self, style: Style) -> Self {
-        self.focused_style = Some(style);
+    pub fn focus_style(mut self, style: Style) -> Self {
+        self.focus_style = Some(style);
         self
     }
 }
@@ -97,7 +97,7 @@ pub struct BorderLabels {
     /// Default style for labels in this group.
     pub style: Style,
     /// Optional style layered on top while the frame is focused.
-    pub focused_style: Option<Style>,
+    pub focus_style: Option<Style>,
     /// Horizontal padding around each label.
     pub padding: Padding,
 }
@@ -133,8 +133,8 @@ impl BorderLabels {
     }
 
     /// Set the group style while the frame is focused.
-    pub fn focused_style(mut self, style: Style) -> Self {
-        self.focused_style = Some(style);
+    pub fn focus_style(mut self, style: Style) -> Self {
+        self.focus_style = Some(style);
         self
     }
 
@@ -481,25 +481,25 @@ impl Frame {
     }
 
     /// Set labels rendered in the top border.
-    pub fn header(mut self, header: BorderLabels) -> Self {
-        self.props.header = Box::new(header);
+    pub fn titles(mut self, titles: BorderLabels) -> Self {
+        self.props.header = Box::new(titles);
         self
     }
 
-    /// Set the left header label.
-    pub fn header_left(mut self, label: impl Into<FrameLabel>) -> Self {
+    /// Set the main (left) title label in the top border.
+    pub fn title(mut self, label: impl Into<FrameLabel>) -> Self {
         self.props.header.left = Some(label.into());
         self
     }
 
-    /// Set the centered header label.
-    pub fn header_center(mut self, label: impl Into<FrameLabel>) -> Self {
+    /// Set the centered title label in the top border.
+    pub fn title_center(mut self, label: impl Into<FrameLabel>) -> Self {
         self.props.header.center = Some(label.into());
         self
     }
 
-    /// Set the right header label.
-    pub fn header_right(mut self, label: impl Into<FrameLabel>) -> Self {
+    /// Set the right title label in the top border.
+    pub fn title_right(mut self, label: impl Into<FrameLabel>) -> Self {
         self.props.header.right = Some(label.into());
         self
     }
@@ -622,7 +622,7 @@ impl Frame {
     }
 
     /// Set a content header element rendered inside the frame.
-    pub fn header_content(mut self, header: impl Into<Element>) -> Self {
+    pub fn title_content(mut self, header: impl Into<Element>) -> Self {
         self.header = Some(Box::new(header.into()));
         self.props.has_header = true;
         self
@@ -698,15 +698,15 @@ impl Frame {
         self
     }
 
-    /// Set the header group style.
-    pub fn header_style(mut self, style: Style) -> Self {
+    /// Set the title group style.
+    pub fn title_style(mut self, style: Style) -> Self {
         self.props.header.style = style;
         self
     }
 
-    /// Set the focused header group style.
-    pub fn focused_header_style(mut self, style: Style) -> Self {
-        self.props.header.focused_style = Some(style);
+    /// Set the focused title group style.
+    pub fn focus_title_style(mut self, style: Style) -> Self {
+        self.props.header.focus_style = Some(style);
         self
     }
 
@@ -717,13 +717,13 @@ impl Frame {
     }
 
     /// Set the focused footer group style.
-    pub fn focused_footer_style(mut self, style: Style) -> Self {
-        self.props.footer.focused_style = Some(style);
+    pub fn focus_footer_style(mut self, style: Style) -> Self {
+        self.props.footer.focus_style = Some(style);
         self
     }
 
-    /// Set header label padding.
-    pub fn header_padding(mut self, padding: impl Into<Padding>) -> Self {
+    /// Set title label padding.
+    pub fn title_padding(mut self, padding: impl Into<Padding>) -> Self {
         self.props.header.padding = padding.into();
         self
     }
@@ -899,17 +899,17 @@ mod tests {
         let focused_header_style = Style::new().bold();
         let left_style = Style::new().fg(Color::Yellow);
         let focused_left_style = Style::new().underline();
-        let frame = Frame::new().header(
+        let frame = Frame::new().titles(
             BorderLabels::new()
                 .left(
                     FrameLabel::new("left")
                         .style(left_style)
-                        .focused_style(focused_left_style),
+                        .focus_style(focused_left_style),
                 )
                 .center("center")
                 .right("right")
                 .style(header_style)
-                .focused_style(focused_header_style)
+                .focus_style(focused_header_style)
                 .padding(1),
         );
 
@@ -919,7 +919,7 @@ mod tests {
             Some(left_style)
         );
         assert_eq!(
-            header.left.as_ref().and_then(|label| label.focused_style),
+            header.left.as_ref().and_then(|label| label.focus_style),
             Some(focused_left_style)
         );
         assert_eq!(
@@ -937,16 +937,16 @@ mod tests {
             Some("right".into())
         );
         assert_eq!(header.style, header_style);
-        assert_eq!(header.focused_style, Some(focused_header_style));
+        assert_eq!(header.focus_style, Some(focused_header_style));
         assert_eq!(header.padding, Padding::from(1));
     }
 
     #[test]
     fn repeated_group_setters_replace_the_previous_group() {
         let frame = Frame::new()
-            .header(BorderLabels::new().left("old").right("removed"))
+            .titles(BorderLabels::new().left("old").right("removed"))
             .footer(BorderLabels::new().center("old footer"))
-            .header(BorderLabels::new().center("new"))
+            .titles(BorderLabels::new().center("new"))
             .footer(BorderLabels::new().right("new footer"));
 
         assert!(frame.props.header.left.is_none());

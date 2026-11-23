@@ -98,7 +98,7 @@ impl Component for TodoApp {
         let main_content: Element = ui! {
             HStack::new().gap(1) => {
                 Frame::new()
-                    .header_left("Todos")
+                    .title("Todos")
                     .footer_left("Tab to focus • Enter adds • Ctrl+Q quits")
                     .border(true)
                     .border_style(panel_border_style(sidebar_active))
@@ -172,7 +172,7 @@ impl Component for TodoApp {
                     },
                 },
                 Frame::new()
-                    .header_left("New Task")
+                    .title("New Task")
                     .border(true)
                     .border_style(panel_border_style(main_active))
                     .style(panel_style(main_active))
@@ -187,13 +187,7 @@ impl Component for TodoApp {
                                 .hover_border_style(BorderStyle::Thick)
                                 .focus_style(Style::new().fg(Color::LightCyan))
                                 .on_change(ctx.link().callback(Msg::DraftChanged))
-                                .on_key(
-                                    ctx
-                                        .link()
-                                        .key_handler(|k: KeyEvent| {
-                                            if k.is(KeyCode::Enter) { Some(Msg::Add) } else { None }
-                                        }),
-                                ) @ "draft",
+                                .on_submit(ctx.link().callback(|_| Msg::Add)) @ "draft",
                             Button::new("Add")
                                 .width(Length::Px(10))
                                 .height(Length::Auto)

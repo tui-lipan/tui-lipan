@@ -378,7 +378,24 @@ fn dispatch_selection_clipboard_request(
                             id,
                         )
                     };
-                    ctx.record_copy_feedback_dispatch(dispatch)
+                    let reported = dispatch.mutated.then(|| {
+                        (
+                            std::sync::Arc::from(input.text().to_owned()),
+                            input.cursor(),
+                            input.anchor(),
+                        )
+                    });
+                    let handled = ctx.record_copy_feedback_dispatch(dispatch);
+                    if let Some((reported_value, reported_cursor, reported_anchor)) = reported
+                        && let NodeKind::Input(node) = &mut tree.node_mut(id).kind
+                    {
+                        node.uncontrolled.record_reported(
+                            reported_value,
+                            reported_cursor,
+                            reported_anchor,
+                        );
+                    }
+                    handled
                 } else {
                     let mut context = ReadOnlyClipboardContext::new(
                         value.as_ref(),
@@ -450,7 +467,24 @@ fn dispatch_selection_clipboard_request(
                             id,
                         )
                     };
-                    ctx.record_copy_feedback_dispatch(dispatch)
+                    let reported = dispatch.mutated.then(|| {
+                        (
+                            std::sync::Arc::from(editor.text().to_owned()),
+                            editor.cursor(),
+                            editor.anchor(),
+                        )
+                    });
+                    let handled = ctx.record_copy_feedback_dispatch(dispatch);
+                    if let Some((reported_value, reported_cursor, reported_anchor)) = reported
+                        && let NodeKind::TextArea(node) = &mut tree.node_mut(id).kind
+                    {
+                        node.uncontrolled.record_reported(
+                            reported_value,
+                            reported_cursor,
+                            reported_anchor,
+                        );
+                    }
+                    handled
                 } else {
                     let excluded: &[(usize, usize)] = copy_excluded_bytes
                         .as_deref()

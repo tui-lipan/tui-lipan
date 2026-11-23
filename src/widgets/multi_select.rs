@@ -154,7 +154,7 @@ impl Default for MultiSelect {
             width: Length::Flex(1),
             height: Length::Flex(1),
             list_config: ListConfig {
-                border: true,
+                border: false,
                 border_style: BorderStyle::Plain,
                 padding: Padding::default(),
                 style: Style::default(),

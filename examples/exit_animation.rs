@@ -158,7 +158,7 @@ impl Component for ExitAnimation {
         }
 
         Frame::new()
-            .header_left("ExitQueue + Animated")
+            .title("ExitQueue + Animated")
             .footer_left(format!(
                 "x remove first • a add row • q quit • live: {} • exiting: {}",
                 live_count, exiting_count

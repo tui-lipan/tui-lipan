@@ -143,7 +143,7 @@ impl Component for TerminalImages {
         VStack::new()
             .child(
                 Frame::new()
-                    .header(BorderLabels::new().center(FrameLabel::new(" kitty graphics ")))
+                    .titles(BorderLabels::new().center(FrameLabel::new(" kitty graphics ")))
                     .child(
                         Terminal::new()
                             .snapshot(ctx.state.snapshot.clone())

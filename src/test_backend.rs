@@ -9646,7 +9646,7 @@ mod tests {
             Frame::new()
                 .style(Style::new().fg(Color::Rgb(90, 91, 92)))
                 .tab_titles(["Files", "Branches"])
-                .header_left("[2]")
+                .title("[2]")
                 .footer_left("ready")
                 .child(VStack::new().child(Text::new("content")))
                 .into()

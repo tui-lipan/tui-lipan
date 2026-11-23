@@ -368,7 +368,9 @@ fn splitter_handle_preserves_focus_and_content_clicks_still_focus() {
                 MouseKind::Down(MouseButton::Left),
                 MouseKind::Up(MouseButton::Left),
             ] {
-                backend.send_mouse(mouse(2, 1, kind)).unwrap();
+                backend
+                    .send_mouse(mouse(2, u16::from(border), kind))
+                    .unwrap();
             }
             assert_eq!(backend.focused_key().unwrap().as_ref(), "first");
         }

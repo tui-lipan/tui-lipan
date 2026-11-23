@@ -107,7 +107,7 @@ impl Component for ImageDemo {
         };
 
         Frame::new()
-            .header_left("Image Widget")
+            .title("Image Widget")
             .footer_left("Ctrl+Q quit | Space play/pause | L loop | +/- speed")
             .padding(1)
             .child(
@@ -123,7 +123,7 @@ impl Component for ImageDemo {
                             .height(Length::Flex(1))
                             .child(
                                 Frame::new()
-                                    .header_left("Static PNG")
+                                    .title("Static PNG")
                                     .width(Length::Flex(1))
                                     .padding(1)
                                     .child(
@@ -136,7 +136,7 @@ impl Component for ImageDemo {
                             )
                             .child(
                                 Frame::new()
-                                    .header_left("Static PNG (Cover)")
+                                    .title("Static PNG (Cover)")
                                     .width(Length::Flex(1))
                                     .padding(1)
                                     .child(
@@ -149,7 +149,7 @@ impl Component for ImageDemo {
                             )
                             .child(
                                 Frame::new()
-                                    .header_left("Gandalf GIF")
+                                    .title("Gandalf GIF")
                                     .width(Length::Flex(1))
                                     .padding(1)
                                     .child(
@@ -165,7 +165,7 @@ impl Component for ImageDemo {
                             )
                             .child(
                                 Frame::new()
-                                    .header_left("Decode Fallback")
+                                    .title("Decode Fallback")
                                     .width(Length::Flex(1))
                                     .padding(1)
                                     .child(

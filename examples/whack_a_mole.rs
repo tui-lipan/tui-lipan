@@ -391,11 +391,11 @@ impl Component for WhackAMole {
         };
 
         let stats_panel = Frame::new()
-            .header_left("stats")
-            .header_padding(1)
+            .title("stats")
+            .title_padding(1)
             .border(true)
             .border_style(BorderStyle::Rounded)
-            .header_style(accent)
+            .title_style(accent)
             .inner_style(panel)
             .width(Length::Flex(1))
             .height(Length::Px(11))
@@ -441,11 +441,11 @@ impl Component for WhackAMole {
         };
 
         let pace_panel = Frame::new()
-            .header_left("pace")
-            .header_padding(1)
+            .title("pace")
+            .title_padding(1)
             .border(true)
             .border_style(BorderStyle::Rounded)
-            .header_style(accent)
+            .title_style(accent)
             .inner_style(panel)
             .width(Length::Flex(1))
             .height(Length::Flex(1))
@@ -544,11 +544,11 @@ impl Component for WhackAMole {
         }
 
         let grid_panel = Frame::new()
-            .header_left("targets")
-            .header_padding(1)
+            .title("targets")
+            .title_padding(1)
             .border(true)
             .border_style(BorderStyle::Rounded)
-            .header_style(accent)
+            .title_style(accent)
             .inner_style(panel)
             .width(Length::Flex(1))
             .height(Length::Flex(1))
@@ -614,13 +614,13 @@ impl Component for WhackAMole {
         );
 
         let console = Frame::new()
-            .header_left(title_text)
+            .title(title_text)
             .footer_right("click moles · 1-9 keys · space play/pause · r reset")
             .border(true)
             .height(Length::Flex(1))
             .width(Length::Flex(1))
             .border_style(BorderStyle::Rounded)
-            .header_style(accent)
+            .title_style(accent)
             .footer_style(muted)
             .inner_style(panel)
             .child(
@@ -819,7 +819,7 @@ fn mole_cell(
         .child(Text::new(" ").style(label_style));
 
     let frame = Frame::new()
-        .header_left(FrameLabel::new(full_label).style(label_style))
+        .title(FrameLabel::new(full_label).style(label_style))
         .border(true)
         .border_style(border_style)
         .inner_style(Style::default().bg(frame_bg))

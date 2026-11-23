@@ -696,7 +696,7 @@ mode-change callbacks. Mouse-created selections in Vim-enabled TextAreas
 
 ### `InputEvent`
 
-Emitted by: `Input::on_change`
+Emitted by: `Input::on_change`, `Input::on_submit`
 
 ```rust
 pub struct InputEvent {
@@ -706,9 +706,15 @@ pub struct InputEvent {
 }
 ```
 
-Use `Input::bound(&TextInput)` (recommended) or `Input::new("").bind(&TextInput)` and
-`InputEvent::apply_to(&mut TextInput)` to keep value, cursor, and selection in sync across
-rerenders. `bound` is a shorthand that creates and binds in one call.
+`Input::on_submit` fires on plain `Enter` (no modifiers) while focused and editable and consumes
+the key; disabled and read-only inputs do not submit, and `Input::key_interceptor` runs first and
+may consume `Enter`. When `on_submit` is unset, `Enter` falls through to `Input::on_key` and
+parent handlers.
+
+With `Input::new(value)`, updating your string from `ev.value` is enough — the runtime preserves
+cursor and selection across rerenders. Use `Input::bound(&TextInput)` (or
+`Input::new("").bind(&TextInput)`) with `InputEvent::apply_to(&mut TextInput)` when your app needs
+to own cursor and selection directly.
 
 ### `SentinelEvent`
 

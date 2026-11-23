@@ -45,7 +45,7 @@ impl Component for ChartShowcase {
             .height(Length::Flex(1));
 
         Frame::new()
-            .header_left("Chart Showcase")
+            .title("Chart Showcase")
             .border(true)
             .padding(1)
             .child(chart)

@@ -244,7 +244,7 @@ impl From<Modal> for Element {
                 Align::End => BorderLabels::new().right(label),
                 Align::Start | Align::Stretch => BorderLabels::new().left(label),
             };
-            base_frame = base_frame.header(header);
+            base_frame = base_frame.titles(header);
         }
 
         let element = match modal.scope {
@@ -265,7 +265,7 @@ impl From<Modal> for Element {
                     backdrop =
                         backdrop.on_click(Callback::new(move |_: MouseRegionEvent| cb.emit(())));
                 } else {
-                    backdrop = backdrop.enabled(false);
+                    backdrop = backdrop.disabled(true);
                 }
 
                 let local_width = match modal.width {

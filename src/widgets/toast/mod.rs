@@ -379,7 +379,7 @@ impl Toast {
         if render_copy_affordance {
             header = header.right(FrameLabel::new(COPY_GLYPH));
         }
-        frame = frame.header(header);
+        frame = frame.titles(header);
         if !self.decorations.is_empty() {
             frame = frame.decorations(self.decorations.clone());
         }

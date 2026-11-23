@@ -315,7 +315,7 @@ impl SearchPaletteHub {
         }
 
         Frame::new()
-            .header_left("Uncontrolled SearchPalette")
+            .title("Uncontrolled SearchPalette")
             .border(true)
             .padding(1)
             .child(body)
@@ -372,11 +372,11 @@ impl SearchPaletteHub {
 
         body.child(
             Frame::new()
-                .header_left("Files")
+                .title("Files")
                 .border_style(BorderStyle::Rounded)
                 .height(Length::Flex(1))
-                .header_content(query_input)
-                .header_padding(5)
+                .title_content(query_input)
+                .title_padding(5)
                 .child(VStack::new().gap(0).child(palette)),
         )
         .child(Text::new("↑↓ navigate  Enter open  q quit").style(Style::new().fg(Color::DarkGray)))
@@ -459,7 +459,7 @@ impl SearchPaletteHub {
         }
 
         Frame::new()
-            .header_left("Delete Workflow")
+            .title("Delete Workflow")
             .border(true)
             .padding(1)
             .child(body)
@@ -470,14 +470,14 @@ impl SearchPaletteHub {
         let placement = POPOVER_PLACEMENTS[ctx.state.popover_placement_index];
 
         let popover_content = Frame::new()
-            .header_left("Popover Content")
+            .title("Popover Content")
             .padding(1)
             .child(Text::new("This is a popover!").style(Style::new().fg(Color::Green)))
             .border(true)
             .border_style(BorderStyle::Double);
 
         Frame::new()
-            .header_left("Overlays")
+            .title("Overlays")
             .border(true)
             .padding(1)
             .child(
@@ -565,7 +565,7 @@ impl SearchPaletteHub {
         };
 
         Frame::new()
-            .header_left("Description Placement")
+            .title("Description Placement")
             .border(true)
             .padding(1)
             .child(
@@ -578,7 +578,7 @@ impl SearchPaletteHub {
                             .height(Length::Px(16))
                             .child(
                                 Frame::new()
-                                    .header_left("SearchPalette")
+                                    .title("SearchPalette")
                                     .border(true)
                                     .height(Length::Flex(1))
                                     .child(
@@ -596,7 +596,7 @@ impl SearchPaletteHub {
                             )
                             .child(
                                 Frame::new()
-                                    .header_left("MultiSelect")
+                                    .title("MultiSelect")
                                     .border(true)
                                     .height(Length::Flex(1))
                                     .child(
@@ -662,7 +662,7 @@ impl Component for SearchPaletteHub {
         };
 
         Frame::new()
-            .header_left("Search Palette Hub")
+            .title("Search Palette Hub")
             .border(true)
             .padding(1)
             .child(
