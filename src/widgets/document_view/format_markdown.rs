@@ -28,8 +28,8 @@ pub enum MarkdownSpacing {
     /// Separates sections and distinct paragraphs with a single blank row while
     /// tightening parent-to-child transitions that otherwise waste vertical
     /// space in a terminal:
-    /// - headings stay attached to the block immediately following them, with a
-    ///   blank row separating a heading from preceding content,
+    /// - headings keep a separating blank row above and below (consecutive
+    ///   headings stay tight unless separated in source),
     /// - paragraphs ending with `:` stay attached to an immediately following
     ///   list, code block, diagram, table, or blockquote,
     /// - horizontal rules absorb adjacent blank rows because the rule itself
@@ -540,9 +540,13 @@ fn needs_blank_between(
             if prev == ParsedBlockKind::HorizontalRule || next == ParsedBlockKind::HorizontalRule {
                 return false;
             }
-            // Headings stay attached to the content that immediately follows.
-            if prev == ParsedBlockKind::Heading {
-                return false;
+            // Consecutive headings stay tight unless explicitly separated in source.
+            if prev == ParsedBlockKind::Heading && next == ParsedBlockKind::Heading {
+                return had_source_blank;
+            }
+            // Headings keep a separating row both above and below.
+            if prev == ParsedBlockKind::Heading || next == ParsedBlockKind::Heading {
+                return true;
             }
             // A paragraph ending with `:` introduces an immediately following
             // list, code block, diagram, table, or blockquote.
@@ -560,10 +564,6 @@ fn needs_blank_between(
                     | ParsedBlockKind::BlockQuote
             ) {
                 return false;
-            }
-            // Start each new heading section with a separating row above it.
-            if next == ParsedBlockKind::Heading {
-                return true;
             }
             // Fenced blocks after non-lead-in prose keep a separating row even
             // when the source omitted a blank line.
@@ -1917,9 +1917,9 @@ flowchart LR
             Some(crate::style::Paint::Solid(crate::style::Color::Red))
         );
 
-        let paragraph = match &doc.blocks[1] {
+        let paragraph = match &doc.blocks[2] {
             FormattedBlock::Lines(lines) => lines,
-            _ => panic!("expected paragraph block immediately after heading"),
+            _ => panic!("expected paragraph block after heading spacer"),
         };
         assert_eq!(
             paragraph[0].spans[0].style.fg,
@@ -2111,7 +2111,7 @@ let label = \"ok\";
     }
 
     #[test]
-    fn balanced_spacing_tightens_headings_lead_ins_and_rules() {
+    fn balanced_spacing_separates_headings_and_tightens_lead_ins_and_rules() {
         let input = "\n\nIntro.\n\n\n## Lists\n\nBullets:\n\n- a\n- b\n\n## Code\n\nRust:\n\n```rust\nfn main() {}\n```\n\n> Quoted\n\n---\n\nTail.\n\n";
         let doc = MarkdownFormatter::default()
             .spacing(MarkdownSpacing::Balanced)
@@ -2127,11 +2127,13 @@ let label = \"ok\";
                 "lines", // Intro.
                 "blank", // section break before ## Lists
                 "lines", // ## Lists
-                "lines", // Bullets: (attached to heading)
+                "blank", // spacing after ## Lists
+                "lines", // Bullets:
                 "list",  // - a, - b (attached to colon lead-in)
                 "blank", // section break before ## Code
                 "lines", // ## Code
-                "lines", // Rust: (attached to heading)
+                "blank", // spacing after ## Code
+                "lines", // Rust:
                 "code",  // rust block (attached to colon lead-in)
                 "blank", // explicit blank before quote
                 "quote", // > Quoted
@@ -2143,7 +2145,7 @@ let label = \"ok\";
 
     #[test]
     fn loose_and_compact_spacing_policies_differ_from_balanced() {
-        let input = "\n\n## Title\n\n\nBody.\n\nNext.\n\n";
+        let input = "\n\n## Title\n\n\nItems:\n\n- a\n- b\n\nNext.\n\n";
 
         let balanced = MarkdownFormatter::default()
             .spacing(MarkdownSpacing::Balanced)
@@ -2154,7 +2156,7 @@ let label = \"ok\";
             });
         assert_eq!(
             block_tags(&balanced),
-            vec!["lines", "lines", "blank", "lines"]
+            vec!["lines", "blank", "lines", "list", "blank", "lines"]
         );
 
         let loose = MarkdownFormatter::default()
@@ -2166,7 +2168,7 @@ let label = \"ok\";
             });
         assert_eq!(
             block_tags(&loose),
-            vec!["lines", "blank", "lines", "blank", "lines"]
+            vec!["lines", "blank", "lines", "blank", "list", "blank", "lines"]
         );
 
         let compact = MarkdownFormatter::default()
@@ -2176,7 +2178,10 @@ let label = \"ok\";
                 content_type: Some("markdown"),
                 document_styles: None,
             });
-        assert_eq!(block_tags(&compact), vec!["lines", "lines", "lines"]);
+        assert_eq!(
+            block_tags(&compact),
+            vec!["lines", "lines", "list", "lines"]
+        );
     }
 
     #[test]

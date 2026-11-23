@@ -1851,7 +1851,7 @@ Vertical block-spacing policy for `MarkdownFormatter` and `DocumentView::markdow
 
 | Variant | Behavior |
 |---------|----------|
-| `Balanced` **(default)** | Keeps a single blank row between sections and distinct paragraphs while keeping headings attached to their following block, colon-terminated lead-in paragraphs attached to an immediately following list/code/diagram/table/blockquote, horizontal rules free of redundant surrounding blank rows, and runs of blank lines collapsed |
+| `Balanced` **(default)** | Keeps a single blank row between sections, around headings (consecutive headings stay tight unless separated in source), and between distinct paragraphs while keeping colon-terminated lead-in paragraphs attached to an immediately following list/code/diagram/table/blockquote, horizontal rules free of redundant surrounding blank rows, and runs of blank lines collapsed |
 | `Loose` | Preserves explicit single blank lines between blocks, collapses consecutive blank runs, trims leading/trailing blank lines, and adds a spacer before fenced code/diagram blocks following non-blank content |
 | `Compact` | Collapses all blank lines and block spacers so blocks sit flush against each other |
 
