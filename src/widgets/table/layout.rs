@@ -1,10 +1,188 @@
+use std::borrow::Cow;
+
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
 use crate::widgets::table::{resolved_row_total_height, table_header_reserved_height};
-use crate::widgets::{ColumnWidth, Table};
+use crate::widgets::{ColumnWidth, Table, TableDisclosureState, TableRow, TableRowRole};
+
+fn cell_display_width(content: &str) -> u16 {
+    content
+        .lines()
+        .map(UnicodeWidthStr::width)
+        .max()
+        .unwrap_or(0)
+        .min(u16::MAX as usize) as u16
+}
+
+pub(crate) fn table_inspector_prefix_width(
+    row: &TableRow,
+    inspector: bool,
+    indent_size: u16,
+    collapsed_symbol: &str,
+    expanded_symbol: &str,
+) -> u16 {
+    if !inspector {
+        return 0;
+    }
+
+    let mut width = row.depth.saturating_mul(indent_size);
+    if let Some(disclosure) = row.disclosure {
+        let symbol = match disclosure {
+            TableDisclosureState::Collapsed => collapsed_symbol,
+            TableDisclosureState::Expanded => expanded_symbol,
+        };
+        if !symbol.is_empty() {
+            width = width
+                .saturating_add(UnicodeWidthStr::width(symbol).min(u16::MAX as usize) as u16)
+                .saturating_add(1);
+        }
+    }
+    width
+}
+
+pub(crate) fn resolved_column_widths<'a>(
+    header: Option<&TableRow>,
+    rows: &[TableRow],
+    widths: &'a [ColumnWidth],
+    selection_symbol: Option<&str>,
+    unselected_symbol: Option<&str>,
+    inspector_prefix_width: impl Fn(&TableRow) -> u16,
+) -> Cow<'a, [ColumnWidth]> {
+    let content_cols = header
+        .map(|h| h.cells.len())
+        .into_iter()
+        .chain(
+            rows.iter()
+                .filter(|r| matches!(r.role, TableRowRole::Normal))
+                .map(|r| r.cells.len()),
+        )
+        .max()
+        .unwrap_or(0);
+
+    if widths.len() >= content_cols {
+        return Cow::Borrowed(widths);
+    }
+
+    let unselected_w = unselected_symbol
+        .map(|s| UnicodeWidthStr::width(s).min(u16::MAX as usize) as u16)
+        .unwrap_or(0);
+    let symbol_w = selection_symbol
+        .map(|s| UnicodeWidthStr::width(s).min(u16::MAX as usize) as u16)
+        .unwrap_or(0)
+        .max(unselected_w);
+
+    let start_col = widths.len();
+    let missing_cols = content_cols - start_col;
+    let mut derived = vec![0u16; missing_cols];
+
+    if let Some(h) = header {
+        for (col_idx, cell) in h.cells.iter().enumerate().skip(start_col) {
+            let mut w = cell_display_width(cell.content.as_ref());
+            if col_idx == 0 {
+                w = w.saturating_add(unselected_w);
+            }
+            let slot = &mut derived[col_idx - start_col];
+            *slot = (*slot).max(w);
+        }
+    }
+
+    for row in rows
+        .iter()
+        .filter(|r| matches!(r.role, TableRowRole::Normal))
+    {
+        for (col_idx, cell) in row.cells.iter().enumerate().skip(start_col) {
+            let mut w = cell_display_width(cell.content.as_ref());
+            if col_idx == 0 {
+                w = w
+                    .saturating_add(symbol_w)
+                    .saturating_add(inspector_prefix_width(row));
+            }
+            let slot = &mut derived[col_idx - start_col];
+            *slot = (*slot).max(w);
+        }
+    }
+
+    let mut out = Vec::with_capacity(content_cols);
+    out.extend_from_slice(widths);
+    out.extend(derived.into_iter().map(|w| ColumnWidth::Min(w.max(1))));
+    Cow::Owned(out)
+}
+
+pub(crate) fn resolved_table_widths(table: &Table) -> Cow<'_, [ColumnWidth]> {
+    resolved_column_widths(
+        table.header.as_ref(),
+        &table.rows,
+        &table.widths,
+        table.selection_symbol.as_deref(),
+        table.unselected_symbol.as_deref(),
+        |row| {
+            table_inspector_prefix_width(
+                row,
+                table.inspector,
+                table.inspector_indent_size,
+                table.inspector_collapsed_symbol.as_ref(),
+                table.inspector_expanded_symbol.as_ref(),
+            )
+        },
+    )
+}
+
+pub(crate) fn derived_table_widths(table: &Table) -> Option<Vec<ColumnWidth>> {
+    match resolved_table_widths(table) {
+        Cow::Borrowed(_) => None,
+        Cow::Owned(widths) => Some(widths),
+    }
+}
+
+pub(crate) fn widest_spanning_row_width(table: &Table) -> u16 {
+    let unselected_w = table
+        .unselected_symbol
+        .as_deref()
+        .map(|s| UnicodeWidthStr::width(s).min(u16::MAX as usize) as u16)
+        .unwrap_or(0);
+    let symbol_w = table
+        .selection_symbol
+        .as_deref()
+        .map(|s| UnicodeWidthStr::width(s).min(u16::MAX as usize) as u16)
+        .unwrap_or(0)
+        .max(unselected_w);
+    let separator_w = UnicodeWidthChar::width(table.inspector_separator_char)
+        .unwrap_or(1)
+        .max(1)
+        .min(u16::MAX as usize) as u16;
+
+    let mut max_w = 0u16;
+    for row in table.rows.iter() {
+        let w = match row.role {
+            TableRowRole::Normal => 0,
+            TableRowRole::Separator => separator_w,
+            TableRowRole::Section => {
+                let title_w = row
+                    .cells
+                    .first()
+                    .map(|cell| cell_display_width(cell.content.as_ref()))
+                    .unwrap_or(0);
+                let prefix_w = table_inspector_prefix_width(
+                    row,
+                    table.inspector,
+                    table.inspector_indent_size,
+                    table.inspector_collapsed_symbol.as_ref(),
+                    table.inspector_expanded_symbol.as_ref(),
+                );
+                title_w.saturating_add(symbol_w).saturating_add(prefix_w)
+            }
+        };
+        max_w = max_w.max(w);
+    }
+    max_w
+}
 
 pub(crate) fn measure_table(table: &Table) -> (u16, u16) {
+    let widths = resolved_table_widths(table);
+
     // Estimate width from constraints
     let mut min_w = 0u16;
-    for width in &table.widths {
+    for width in widths.iter() {
         match width {
             ColumnWidth::Fixed(w) | ColumnWidth::Min(w) => {
                 min_w = min_w.saturating_add(*w);
@@ -13,12 +191,14 @@ pub(crate) fn measure_table(table: &Table) -> (u16, u16) {
         }
     }
     // Add spacing
-    if !table.widths.is_empty() {
-        let spacing = table
-            .column_spacing
-            .saturating_mul(table.widths.len() as u16 - 1);
+    if !widths.is_empty() {
+        let spacing = table.column_spacing.saturating_mul(widths.len() as u16 - 1);
         min_w = min_w.saturating_add(spacing);
     }
+
+    // Spanning rows (sections/separators) contribute to intrinsic table width
+    // without inflating column 0.
+    min_w = min_w.max(widest_spanning_row_width(table));
 
     // Estimate height
     let mut h = 0usize;
@@ -87,7 +267,7 @@ mod tests {
                 TableRow::new(["row-2"]).height(1),
             ]);
 
-        assert_eq!(measure_table(&table), (0, 9));
+        assert_eq!(measure_table(&table), (6, 9));
     }
 
     #[test]
@@ -97,14 +277,14 @@ mod tests {
             .rows([TableRow::new(["row-1"]), TableRow::new(["row-2"])])
             .row_gap(2);
 
-        assert_eq!(measure_table(&table), (0, 7));
+        assert_eq!(measure_table(&table), (6, 7));
     }
 
     #[test]
     fn row_gap_not_added_after_header_only_table() {
         let table = Table::new().header(TableRow::new(["header"])).row_gap(2);
 
-        assert_eq!(measure_table(&table), (0, 1));
+        assert_eq!(measure_table(&table), (6, 1));
     }
 
     #[test]
@@ -138,7 +318,7 @@ mod tests {
         // header height + header bottom margin + header/data gap
         // + first row height + first row bottom margin + data/data gap
         // + final row height; no row_gap after the final row.
-        assert_eq!(measure_table(&table), (0, 8));
+        assert_eq!(measure_table(&table), (6, 8));
     }
 
     #[test]
@@ -147,7 +327,91 @@ mod tests {
             .row_gap(2)
             .header(TableRow::new(["header"]).height(1));
 
-        assert_eq!(measure_table(&table), (0, 1));
+        assert_eq!(measure_table(&table), (6, 1));
+    }
+
+    #[test]
+    fn default_widths_derive_min_from_widest_cell_and_symbol() {
+        let table = Table::new()
+            .header(TableRow::new(["PID", "Name", "CPU"]))
+            .rows([
+                TableRow::new(["1204", "lipan", "2.1"]),
+                TableRow::new(["2048", "cargo", "18.4"]),
+            ])
+            .selection_symbol(Some("> "))
+            .unselected_symbol(Some("  "));
+
+        assert_eq!(
+            super::resolved_table_widths(&table).as_ref(),
+            &[
+                ColumnWidth::Min(6),
+                ColumnWidth::Min(5),
+                ColumnWidth::Min(4),
+            ]
+        );
+        // 6 + 5 + 4 + 2*column_spacing(1) = 17
+        assert_eq!(measure_table(&table), (17, 3));
+    }
+
+    #[test]
+    fn partial_widths_preserve_explicit_and_derive_remaining_columns() {
+        let table = Table::new()
+            .header(TableRow::new(["PID", "Name", "CPU"]))
+            .rows([TableRow::new(["1204", "lipan", "18.4"])])
+            .widths([ColumnWidth::Fixed(8)]);
+
+        assert_eq!(
+            super::resolved_table_widths(&table).as_ref(),
+            &[
+                ColumnWidth::Fixed(8),
+                ColumnWidth::Min(5),
+                ColumnWidth::Min(4),
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_column_cells_floor_default_width_at_one() {
+        let table = Table::new().rows([TableRow::new(["", "ok"])]);
+
+        assert_eq!(
+            super::resolved_table_widths(&table).as_ref(),
+            &[ColumnWidth::Min(1), ColumnWidth::Min(2)]
+        );
+    }
+
+    #[test]
+    fn section_only_table_measures_spanning_row_width() {
+        let table = Table::new()
+            .rows([TableRow::section("Metadata")])
+            .selection_symbol(Some("> "));
+
+        assert!(super::resolved_table_widths(&table).is_empty());
+        // "> " (2) + "Metadata" (8) = 10
+        assert_eq!(measure_table(&table), (10, 1));
+    }
+
+    #[test]
+    fn spanning_section_contributes_to_table_width_without_inflating_col0() {
+        let table = Table::new().rows([
+            TableRow::section("Personal Info"),
+            TableRow::key_value("Key", "Val"),
+        ]);
+
+        assert_eq!(
+            super::resolved_table_widths(&table).as_ref(),
+            &[ColumnWidth::Min(3), ColumnWidth::Min(3)]
+        );
+        // Column width is 3 + 1 + 3 = 7, spanning section is 13 -> table measures 13.
+        assert_eq!(measure_table(&table), (13, 2));
+    }
+
+    #[test]
+    fn separator_only_table_measures_separator_glyph_width() {
+        let table = Table::new().rows([TableRow::separator()]);
+
+        assert!(super::resolved_table_widths(&table).is_empty());
+        assert_eq!(measure_table(&table), (1, 1));
     }
 
     #[test]

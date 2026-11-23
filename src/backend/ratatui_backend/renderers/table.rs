@@ -290,7 +290,7 @@ pub(crate) fn render_table(
         })
     };
 
-    // Convert constraints
+    // Convert pre-resolved column widths to constraints (O(columns), never scanning all rows)
     let constraints: Vec<Constraint> = widths
         .iter()
         .map(|w| match w {
@@ -946,7 +946,7 @@ pub(crate) fn render_table_node(
         f,
         &table_node.rows,
         header.as_ref(),
-        &table_node.widths,
+        table_node.effective_widths(),
         TableRenderParts {
             layout: TableLayoutCtx {
                 selected: table_node.selected,

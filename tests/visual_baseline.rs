@@ -214,7 +214,7 @@ fn select_expanded_chrome() -> Element {
 
 /// Splitter drag-handle glyph between two panes.
 fn splitter_chrome() -> Element {
-    Splitter::horizontal()
+    Splitter::vertical()
         .weights([1.0, 1.0])
         .handle_symbol('│')
         .child(
@@ -269,6 +269,7 @@ fn text_area_chrome_matches_baseline() -> Result<()> {
 fn table_chrome_matches_baseline() -> Result<()> {
     Sketch::view("chrome-table", table_chrome)
         .viewport(40, 10)
+        .focus_next(1)
         .dir(std::env::temp_dir().join("tui-lipan-baseline-artifacts"))
         .baseline(BASELINE_DIR)
         .quiet(true)

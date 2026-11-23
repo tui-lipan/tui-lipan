@@ -319,6 +319,8 @@ ColumnWidth::Fill(1)     // Proportional fill
 ColumnWidth::Min(5)      // Minimum width, fills remaining
 ```
 
+When `widths` is omitted or has fewer entries than the columns present in `header` and normal data rows, each unspecified column defaults to `ColumnWidth::Min(w)` where `w` is the display width of the widest cell line in that column (including column 0's selection/unselected symbol and inspector prefix, floored at `1`). Explicit entries at the start of `widths` are preserved as given.
+
 ### Row Sizing
 
 ```rust

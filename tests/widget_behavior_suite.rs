@@ -86,6 +86,8 @@ mod sequence_diagram_theme_render;
 mod splitter_drag_test_backend;
 #[path = "suites/widget_behavior/style_slot_render.rs"]
 mod style_slot_render;
+#[path = "suites/widget_behavior/table_default_columns_render.rs"]
+mod table_default_columns_render;
 #[path = "suites/widget_behavior/table_row_gap_render.rs"]
 mod table_row_gap_render;
 #[path = "suites/widget_behavior/table_styles_render.rs"]
