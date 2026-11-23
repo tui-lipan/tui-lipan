@@ -999,7 +999,7 @@ let label_style = Style::new()
 ## Color Gradients
 
 ```rust
-use tui_lipan::prelude::*; // re-exports ColorGradient, GradientDirection, GradientRange
+use tui_lipan::prelude::*; // re-exports ColorGradient, GradientDirection (GradientRange is at the crate root)
 
 let gradient = ColorGradient::new(vec![
     (0.0, Color::rgb(0, 128, 255)),
@@ -1027,6 +1027,7 @@ pointer.
 Override a region with the `IntoElement` method at the end of a builder chain:
 
 ```rust
+use tui_lipan::PointerShape;
 use tui_lipan::prelude::*;
 
 let handle = Text::new("Drag here").pointer_shape(PointerShape::Grab);

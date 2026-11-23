@@ -75,6 +75,7 @@ A terminal deals in cells; a program drawing a picture needs pixels. It learns t
 the PTY's `TIOCGWINSZ` pixel fields or by asking with `CSI 14 t`. Give both ends the same answer:
 
 ```rust
+use tui_lipan::host_cell_size;
 use tui_lipan::prelude::*;
 
 let cell = host_cell_size();

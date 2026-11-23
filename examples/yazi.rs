@@ -26,6 +26,7 @@ use std::sync::Arc;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
+use tui_lipan::SyntectDocumentFormatter;
 use tui_lipan::language_from_path;
 use tui_lipan::prelude::*;
 use tui_lipan::style::FileIconPalette;

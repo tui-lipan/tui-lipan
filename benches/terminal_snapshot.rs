@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::hint::black_box;
 use std::rc::Rc;
+use tui_lipan::TerminalScreenHandle;
 use tui_lipan::TestBackend;
 use tui_lipan::prelude::*;
 

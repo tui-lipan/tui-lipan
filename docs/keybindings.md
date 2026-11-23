@@ -240,7 +240,7 @@ formatted output shows `-` rather than `Hyphen`.
 
 If one key is both a full single-step binding and a prefix of a longer chord, the matcher stays **pending** until the next key disambiguates.
 
-Re-exported from the crate root and **`prelude`** (`ChordMatcher`, `ChordResult`).
+Re-exported from the crate root (`tui_lipan::{ChordMatcher, ChordResult}`) and `tui_lipan::input`.
 
 ### Three string forms
 

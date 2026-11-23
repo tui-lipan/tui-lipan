@@ -109,6 +109,7 @@ whose stdout/stderr should become component messages:
 
 ```rust
 use tui_lipan::prelude::*;
+use tui_lipan::{ProcessEvent, ProcessSpec};
 
 enum Msg {
     Proc(ProcessEvent),

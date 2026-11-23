@@ -6,6 +6,7 @@ use tui_lipan::TestBackend;
 use tui_lipan::core::event::{MouseButton, MouseKind};
 use tui_lipan::prelude::*;
 use tui_lipan::style::Rect;
+use tui_lipan::{DragCancelEvent, DragOverEvent, DragStartEvent, ScrollAxis};
 
 #[derive(Clone, Debug)]
 struct ItemPayload {

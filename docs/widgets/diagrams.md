@@ -177,8 +177,8 @@ Flowchart::new(FlowDirection::TopDown)
 
 Flowchart nodes and subgraphs are identified by `FlowchartNodeId` (converted from
 `&str`, `String`, or `Arc<str>`), and directed edges use `FlowchartEdge`. Both
-types are available at the crate root (`tui_lipan::{FlowchartEdge, FlowchartNodeId}`)
-and in `tui_lipan::prelude::*`.
+types are available at the crate root (`tui_lipan::{FlowchartEdge, FlowchartNodeId}`);
+`FlowchartEdge` is also in `tui_lipan::prelude::*`.
 
 ---
 

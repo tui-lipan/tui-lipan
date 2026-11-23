@@ -9,6 +9,7 @@ use criterion::{
 };
 use tui_lipan::TestBackend;
 use tui_lipan::prelude::*;
+use tui_lipan::{ContentFormatter, DocumentTableWidthMode, FormatInput};
 
 fn build_markdown(base_rows: usize) -> String {
     let mut out = String::new();

@@ -1,3 +1,4 @@
+use tui_lipan::ListItemGutter;
 use tui_lipan::prelude::*;
 
 struct ListHeadersDemo;

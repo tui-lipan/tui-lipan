@@ -4,6 +4,7 @@
 //! end. Tabs that are inactive or background-matched to the strip, or capped with a wide glyph, keep
 //! flat space padding.
 
+use tui_lipan::DraggableTabBarVariant;
 use tui_lipan::core::event::MouseKind;
 use tui_lipan::prelude::*;
 use tui_lipan::{CapturedFrame, MouseEvent, TestBackend};

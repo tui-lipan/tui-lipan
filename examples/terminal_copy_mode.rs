@@ -1,4 +1,7 @@
 use tui_lipan::prelude::*;
+use tui_lipan::{
+    CopyModeAction, CopyModeGrid, SelectionEnd, TerminalCopyMode, TerminalPos, TerminalSelection,
+};
 
 const TERMINAL_KEY: &str = "copy-mode-terminal";
 const TERMINAL_ROWS: u16 = 12;

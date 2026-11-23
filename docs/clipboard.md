@@ -23,6 +23,10 @@ Configure clipboard behavior via `App::clipboard_config(...)`:
 
 ```rust
 use tui_lipan::prelude::*;
+use tui_lipan::{
+    CopyFeedback, CopyFeedbackEffect, CopyOnSelect, PasteShiftInsertBehavior, PasteSource,
+    RightClickAction,
+};
 
 App::new()
     .clipboard_config(ClipboardConfig {
@@ -108,6 +112,7 @@ to a paste. `CopyOnly` never pastes, whether or not the copy succeeds.
 ```rust
 use std::time::Duration;
 use tui_lipan::prelude::*;
+use tui_lipan::{CopyFeedback, CopyFeedbackEffect};
 
 let feedback = CopyFeedback::new(CopyFeedbackEffect::Scan) // default duration for the effect
     .duration(Duration::from_millis(400))

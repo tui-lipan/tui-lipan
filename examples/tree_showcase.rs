@@ -2,6 +2,10 @@
 use std::collections::HashSet;
 
 use tui_lipan::prelude::*;
+use tui_lipan::{
+    FileKind, FileTreeChange, FileTreeChangeSource, FileTreeChangeStatus, FileTreeDirectoryListing,
+    FileTreeItemStyle, GitIconStyle,
+};
 
 struct FileTreeShowcase;
 

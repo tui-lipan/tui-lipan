@@ -1,6 +1,9 @@
 use std::{f32::consts::TAU, time::Duration};
 
 use tui_lipan::prelude::*;
+use tui_lipan::{
+    CellEffect, EffectCell, EffectContext, EffectPrepareContext, PreparedCellEffect, TerminalColor,
+};
 
 const VARIANT_TITLES: [&str; 4] = ["Neon Bloom", "Veiled Lights", "Ember Drift", "Hearth Glow"];
 const NEON_CHASE_TICKS: f32 = 28.0;

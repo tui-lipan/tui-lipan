@@ -4,6 +4,7 @@
 //! Controls: ↑/↓ or j/k to scroll, mouse wheel, q to quit.
 //! Run with: cargo run --example ascii_canvas_scroll
 
+use tui_lipan::AsciiCell;
 use tui_lipan::prelude::*;
 
 struct AsciiCanvasScroll;

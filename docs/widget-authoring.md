@@ -93,7 +93,7 @@ enums, and helper constructors, also check the export surfaces:
 | Defining module | Always, for the canonical module path |
 | `src/widgets/mod.rs` | Widget-owned public types and helpers |
 | `src/lib.rs` | Types expected to work as `use tui_lipan::TypeName;` |
-| `src/prelude.rs` | Common app-author types used directly in component code |
+| `src/prelude.rs` | Curated common app-author types (widgets in `docs/widgets/index.md` + their common builder types); budgeted by `scripts/check-export-parity.py` |
 
 Before finishing, verify direct imports for promoted types, for example
 `use tui_lipan::FooEvent;`, not just `use tui_lipan::prelude::*;`.

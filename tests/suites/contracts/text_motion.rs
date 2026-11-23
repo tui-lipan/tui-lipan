@@ -1,7 +1,7 @@
 //! Pins the public `tui_lipan::text_motion` re-export path: every function must stay reachable
-//! both from the crate root path and from the prelude, and behave per the documented "insertion
-//! point" cursor convention. This is the contract external apps (e.g. a terminal emulator's copy
-//! mode) build on, so accidental renames/signature drift here should fail CI.
+//! both from the `text_motion` module and from the crate root, and behave per the documented
+//! "insertion point" cursor convention. This is the contract external apps (e.g. a terminal
+//! emulator's copy mode) build on, so accidental renames/signature drift here should fail CI.
 
 use tui_lipan::text_motion::{
     big_word_backward_start, big_word_end, big_word_forward_start, cell_big_word_end,
@@ -10,10 +10,8 @@ use tui_lipan::text_motion::{
 };
 
 #[test]
-fn reachable_from_prelude_too() {
-    use tui_lipan::prelude::*;
-
-    assert_eq!(word_forward_start("cat dog", 0), 4);
+fn reachable_from_crate_root_too() {
+    assert_eq!(tui_lipan::word_forward_start("cat dog", 0), 4);
 }
 
 #[test]

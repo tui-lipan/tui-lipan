@@ -1,3 +1,4 @@
+use tui_lipan::ChartThreshold;
 use tui_lipan::prelude::*;
 
 struct ChartShowcase;

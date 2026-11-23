@@ -16,6 +16,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use tui_lipan::ListItemGutter;
 use tui_lipan::prelude::*;
 use tui_lipan::{TestBackend, UiSnapshotOptions};
 

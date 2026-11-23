@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use criterion::{Criterion, SamplingMode, criterion_group, criterion_main};
+use tui_lipan::DocumentTableWidthMode;
 use tui_lipan::TestBackend;
 use tui_lipan::prelude::*;
 

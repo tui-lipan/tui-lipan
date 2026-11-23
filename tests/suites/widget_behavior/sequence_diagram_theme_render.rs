@@ -1,5 +1,6 @@
 use tui_lipan::TestBackend;
 use tui_lipan::prelude::*;
+use tui_lipan::{FragmentKind, SequenceDiagramTheme, SequenceStep};
 
 struct AsciiSequenceDiagram;
 

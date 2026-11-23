@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check crate-root export parity against src/widgets/mod.rs and src/prelude.rs.
 
-Enforces three invariants textually across all feature gates:
+Enforces four invariants textually across all feature gates:
 1. Every public export in src/widgets/mod.rs is re-exported at the crate root
    (src/lib.rs) with matching #[cfg(...)] gates and resolves to the same
    canonical item.
@@ -11,6 +11,8 @@ Enforces three invariants textually across all feature gates:
 3. Generic collision-prone names (Msg, Step, State, Props, Event, Node, Item)
    are not exported into src/widgets/mod.rs or src/prelude.rs, and prelude
    widget re-exports do not rely on `as` rename workarounds.
+4. `src/prelude.rs` stays within `PRELUDE_EXPORT_BUDGET` so the prelude stays
+   curated instead of drifting back into a mirror of the crate root.
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ WIDGETS_MOD_RS = ROOT / "src/widgets/mod.rs"
 FORBIDDEN_GENERIC_EXPORTS = frozenset(
     {"Msg", "Step", "State", "Props", "Event", "Node", "Item"}
 )
+PRELUDE_EXPORT_BUDGET = 250
 
 PUB_ITEM_RE = re.compile(
     r"pub\s+(?:async\s+)?(?:unsafe\s+)?(?:const\s+)?"
@@ -386,6 +389,15 @@ def check_sources(lib_src: str, prelude_src: str, widgets_src: str) -> tuple[lis
             + ", ".join(aliased_widgets)
         )
 
+    # 4. Keep src/prelude.rs curated by enforcing a size budget.
+    if len(prelude_exports) > PRELUDE_EXPORT_BUDGET:
+        diagnostics.append(
+            f"src/prelude.rs exports {len(prelude_exports)} items, exceeding the budget of "
+            f"{PRELUDE_EXPORT_BUDGET}.\n"
+            "  Export new or specialized items at the crate root (src/lib.rs) instead, or raise "
+            "`PRELUDE_EXPORT_BUDGET` in scripts/check-export-parity.py deliberately."
+        )
+
     return diagnostics, (len(widget_exports), len(prelude_exports), len(lib_exports))
 
 
@@ -413,7 +425,7 @@ def main() -> int:
 
     print(
         f"Export parity OK ({n_widgets} widget exports in root, "
-        f"{n_prelude} prelude exports ⊆ {n_lib} root exports)."
+        f"{n_prelude}/{PRELUDE_EXPORT_BUDGET} prelude exports ⊆ {n_lib} root exports)."
     )
     return 0
 

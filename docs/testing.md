@@ -5,6 +5,7 @@
 ### Plain-text snapshot with `insta`
 
 ```rust
+use tui_lipan::TestBackend;
 use tui_lipan::prelude::*;
 
 struct MyWidget;

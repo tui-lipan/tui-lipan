@@ -70,6 +70,7 @@ impl TreeBranch {
 ///
 /// ```
 /// use tui_lipan::prelude::*;
+/// use tui_lipan::{TreeBranch, TreeGuides};
 ///
 /// let guides = TreeGuides::new(IndentStyle::Branch).indent(2);
 /// let project = TreeBranch::root();

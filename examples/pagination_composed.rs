@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use tui_lipan::PaginationButtonOverrides;
 use tui_lipan::prelude::*;
 
 const PAGE_SIZES: &[usize] = &[5, 10, 20, 50];

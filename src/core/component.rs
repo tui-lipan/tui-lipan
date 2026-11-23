@@ -2032,6 +2032,7 @@ impl<C: Component> Context<C> {
     ///
     /// ```no_run
     /// # use std::time::Duration;
+    /// # use tui_lipan::EffectPulse;
     /// # use tui_lipan::prelude::*;
     /// # fn example(ctx: &Context<impl Component>, pane: Element) -> Element {
     /// let alpha = ctx.pulsing_amount(

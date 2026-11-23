@@ -1260,7 +1260,7 @@ mod tests {
             std::assert_matches!(
                 effects.as_slice(),
                 [VisualEffect::Channels {
-                    channels: EffectChannels::Foreground,
+                    channels: tui_lipan::EffectChannels::Foreground,
                     ..
                 }]
             );

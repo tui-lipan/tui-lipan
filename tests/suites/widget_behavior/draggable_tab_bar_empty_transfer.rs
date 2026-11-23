@@ -1,3 +1,4 @@
+use tui_lipan::DragReorderMode;
 use tui_lipan::TestBackend;
 use tui_lipan::core::event::{MouseButton, MouseEvent, MouseKind};
 use tui_lipan::prelude::*;

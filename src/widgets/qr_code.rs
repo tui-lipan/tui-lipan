@@ -101,6 +101,7 @@ pub enum QrRender {
 ///
 /// ```
 /// # use tui_lipan::prelude::*;
+/// # use tui_lipan::{QrEcc, QrRender};
 /// QrCode::new("https://tui-lipan.dev")
 ///     .ecc(QrEcc::Quartile)
 ///     .render(QrRender::Wide);

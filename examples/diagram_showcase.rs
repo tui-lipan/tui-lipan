@@ -1,4 +1,8 @@
 use tui_lipan::prelude::*;
+use tui_lipan::{
+    ActorKind, ErAttribute, ErEntity, FragmentKind, MessageStyle, NotePlacement,
+    SequenceDiagramTheme, SequenceItemEvent, SequenceStep,
+};
 
 struct DiagramShowcase;
 

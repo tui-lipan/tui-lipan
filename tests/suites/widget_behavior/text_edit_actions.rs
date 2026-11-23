@@ -7,6 +7,7 @@ use std::sync::Arc;
 use tui_lipan::TestBackend;
 use tui_lipan::core::event::{MouseButton, MouseKind};
 use tui_lipan::prelude::*;
+use tui_lipan::{FrameworkAction, FrameworkKeymap, UserKeymapPolicy};
 
 const TARGET: &str = "target";
 

@@ -1,4 +1,5 @@
 use tui_lipan::prelude::*;
+use tui_lipan::{EdgeArrow, FlowchartEdgeEvent, FlowchartNodeEvent};
 
 struct FlowchartShowcase;
 

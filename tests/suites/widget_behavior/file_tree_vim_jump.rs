@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 
+use tui_lipan::FileTreeDirectoryListing;
 use tui_lipan::TestBackend;
 use tui_lipan::core::event::{KeyCode, KeyEvent, KeyMods};
 use tui_lipan::prelude::*;

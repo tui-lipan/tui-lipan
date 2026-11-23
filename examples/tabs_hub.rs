@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use tui_lipan::prelude::*;
+use tui_lipan::{CapStyle, DragReorderMode, DraggableTabBarVariant, TabVariant};
 
 struct TabsHubDemo;
 

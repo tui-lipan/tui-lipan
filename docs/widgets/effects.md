@@ -125,6 +125,7 @@ cargo test --release --example effect_scope_dot_field hearth_frame_cost -- --ign
 use std::fmt;
 
 use tui_lipan::prelude::*;
+use tui_lipan::{CellEffect, EffectCell, EffectContext, TerminalColor};
 
 #[derive(Clone)]
 struct Vortex {

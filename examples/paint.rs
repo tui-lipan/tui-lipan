@@ -4,6 +4,7 @@
 
 use tui_lipan::prelude::*;
 use tui_lipan::utils::braille::{braille_char, clear_pixel, line_pixels, set_pixel};
+use tui_lipan::{AsciiCanvasBuffer, AsciiCell};
 
 const CANVAS_W: u16 = 128;
 const CANVAS_H: u16 = 36;

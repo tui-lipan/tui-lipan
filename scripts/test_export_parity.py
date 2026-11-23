@@ -18,7 +18,12 @@ def load_checker():
     return module
 
 
-def run_checker(lib_rs: str, prelude_rs: str, widgets_rs: str) -> tuple[int, str]:
+def run_checker(
+    lib_rs: str,
+    prelude_rs: str,
+    widgets_rs: str,
+    prelude_budget: int | None = None,
+) -> tuple[int, str]:
     checker = load_checker()
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -32,6 +37,8 @@ def run_checker(lib_rs: str, prelude_rs: str, widgets_rs: str) -> tuple[int, str
         checker.LIB_RS = lib_path
         checker.PRELUDE_RS = prelude_path
         checker.WIDGETS_MOD_RS = widgets_path
+        if prelude_budget is not None:
+            checker.PRELUDE_EXPORT_BUDGET = prelude_budget
 
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
@@ -136,6 +143,40 @@ class ExportParityTests(unittest.TestCase):
         """
         code, output = run_checker(lib_rs, prelude_rs, widgets_rs)
         self.assertEqual(code, 0, f"expected pass for valid re-export chains:\n{output}")
+
+    def test_prelude_at_budget_passes(self):
+        lib_rs = """
+            mod widgets;
+            pub use crate::widgets::{Alpha, Beta};
+        """
+        widgets_rs = """
+            mod a;
+            pub use a::{Alpha, Beta};
+        """
+        prelude_rs = """
+            pub use crate::widgets::{Alpha, Beta};
+        """
+        code, output = run_checker(lib_rs, prelude_rs, widgets_rs, prelude_budget=2)
+        self.assertEqual(code, 0, f"expected pass at exact prelude budget:\n{output}")
+        self.assertIn("2/2 prelude exports", output)
+
+    def test_prelude_over_budget_fails_with_guidance(self):
+        lib_rs = """
+            mod widgets;
+            pub use crate::widgets::{Alpha, Beta, Gamma};
+        """
+        widgets_rs = """
+            mod a;
+            pub use a::{Alpha, Beta, Gamma};
+        """
+        prelude_rs = """
+            pub use crate::widgets::{Alpha, Beta, Gamma};
+        """
+        code, output = run_checker(lib_rs, prelude_rs, widgets_rs, prelude_budget=2)
+        self.assertEqual(code, 1, f"expected failure over prelude budget:\n{output}")
+        self.assertIn("exports 3 items, exceeding the budget of 2", output)
+        self.assertIn("crate root (src/lib.rs)", output)
+        self.assertIn("PRELUDE_EXPORT_BUDGET", output)
 
 
 if __name__ == "__main__":

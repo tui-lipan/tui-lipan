@@ -628,7 +628,7 @@ pub struct KeyMods {
 }
 ```
 
-`AltSide` is exported from the crate root and prelude. Enable
+`AltSide` is exported from the crate root (`tui_lipan::AltSide`). Enable
 `ctx.set_modifier_key_reporting(true)` while an overlay needs physical Alt identity, then disable
 it on close. Supported terminals supply standalone modifier reports; otherwise `alt_side` stays
 `Unknown`. Unix inline surfaces ignore the request until their reader supports associated text.
@@ -1151,7 +1151,7 @@ blur and focus callbacks. See [Focus events](focus.md#focus-events) for the tran
 
 `Tree::on_hover` reports composed-row pointer transitions, including interactive descendants.
 `index` is the visible row index, `path` is the node's index path, and `hovered` indicates entry or
-exit. These fields are available from `tui_lipan::TreeHoverEvent` and the prelude.
+exit. These fields are available from `tui_lipan::TreeHoverEvent`.
 
 ### Terminal paste content
 
@@ -1167,7 +1167,7 @@ file-drop path. See
 ## ForwardedMouseEvent
 
 A framework-produced terminal mouse report delivered by `Terminal::on_mouse_forward_event`.
-The type is available from the crate root, `widgets`, `widgets::terminal`, and the prelude
+The type is available from the crate root (`tui_lipan::ForwardedMouseEvent`)
 with the `terminal` feature.
 
 | Field | Meaning |

@@ -10,6 +10,7 @@
 //! or `q` to quit. The queued row remains mounted until
 //! `Animated::on_exit_complete` sends its id back to the component.
 
+use tui_lipan::ExitQueue;
 use tui_lipan::prelude::*;
 
 const EXIT_DURATION_MS: u64 = 420;

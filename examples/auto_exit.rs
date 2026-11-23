@@ -14,6 +14,7 @@
 //! Dropping a row from `state.rows` is the entire removal path, and the container
 //! keeps the already-rendered subtree around long enough to collapse it.
 
+use tui_lipan::ExitAnimation;
 use tui_lipan::prelude::*;
 
 const EXIT_DURATION_MS: u64 = 420;
