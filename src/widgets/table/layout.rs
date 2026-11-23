@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::widgets::table::{resolved_row_total_height, table_header_reserved_height};
 use crate::widgets::{ColumnWidth, Table, TableDisclosureState, TableRow, TableRowRole};
@@ -127,6 +127,56 @@ pub(crate) fn resolved_table_widths(table: &Table) -> Cow<'_, [ColumnWidth]> {
     )
 }
 
+pub(crate) fn derived_table_widths(table: &Table) -> Option<Vec<ColumnWidth>> {
+    match resolved_table_widths(table) {
+        Cow::Borrowed(_) => None,
+        Cow::Owned(widths) => Some(widths),
+    }
+}
+
+pub(crate) fn widest_spanning_row_width(table: &Table) -> u16 {
+    let unselected_w = table
+        .unselected_symbol
+        .as_deref()
+        .map(|s| UnicodeWidthStr::width(s).min(u16::MAX as usize) as u16)
+        .unwrap_or(0);
+    let symbol_w = table
+        .selection_symbol
+        .as_deref()
+        .map(|s| UnicodeWidthStr::width(s).min(u16::MAX as usize) as u16)
+        .unwrap_or(0)
+        .max(unselected_w);
+    let separator_w = UnicodeWidthChar::width(table.inspector_separator_char)
+        .unwrap_or(1)
+        .max(1)
+        .min(u16::MAX as usize) as u16;
+
+    let mut max_w = 0u16;
+    for row in table.rows.iter() {
+        let w = match row.role {
+            TableRowRole::Normal => 0,
+            TableRowRole::Separator => separator_w,
+            TableRowRole::Section => {
+                let title_w = row
+                    .cells
+                    .first()
+                    .map(|cell| cell_display_width(cell.content.as_ref()))
+                    .unwrap_or(0);
+                let prefix_w = table_inspector_prefix_width(
+                    row,
+                    table.inspector,
+                    table.inspector_indent_size,
+                    table.inspector_collapsed_symbol.as_ref(),
+                    table.inspector_expanded_symbol.as_ref(),
+                );
+                title_w.saturating_add(symbol_w).saturating_add(prefix_w)
+            }
+        };
+        max_w = max_w.max(w);
+    }
+    max_w
+}
+
 pub(crate) fn measure_table(table: &Table) -> (u16, u16) {
     let widths = resolved_table_widths(table);
 
@@ -145,6 +195,10 @@ pub(crate) fn measure_table(table: &Table) -> (u16, u16) {
         let spacing = table.column_spacing.saturating_mul(widths.len() as u16 - 1);
         min_w = min_w.saturating_add(spacing);
     }
+
+    // Spanning rows (sections/separators) contribute to intrinsic table width
+    // without inflating column 0.
+    min_w = min_w.max(widest_spanning_row_width(table));
 
     // Estimate height
     let mut h = 0usize;
@@ -324,6 +378,40 @@ mod tests {
             super::resolved_table_widths(&table).as_ref(),
             &[ColumnWidth::Min(1), ColumnWidth::Min(2)]
         );
+    }
+
+    #[test]
+    fn section_only_table_measures_spanning_row_width() {
+        let table = Table::new()
+            .rows([TableRow::section("Metadata")])
+            .selection_symbol(Some("> "));
+
+        assert!(super::resolved_table_widths(&table).is_empty());
+        // "> " (2) + "Metadata" (8) = 10
+        assert_eq!(measure_table(&table), (10, 1));
+    }
+
+    #[test]
+    fn spanning_section_contributes_to_table_width_without_inflating_col0() {
+        let table = Table::new().rows([
+            TableRow::section("Personal Info"),
+            TableRow::key_value("Key", "Val"),
+        ]);
+
+        assert_eq!(
+            super::resolved_table_widths(&table).as_ref(),
+            &[ColumnWidth::Min(3), ColumnWidth::Min(3)]
+        );
+        // Column width is 3 + 1 + 3 = 7, spanning section is 13 -> table measures 13.
+        assert_eq!(measure_table(&table), (13, 2));
+    }
+
+    #[test]
+    fn separator_only_table_measures_separator_glyph_width() {
+        let table = Table::new().rows([TableRow::separator()]);
+
+        assert!(super::resolved_table_widths(&table).is_empty());
+        assert_eq!(measure_table(&table), (1, 1));
     }
 
     #[test]

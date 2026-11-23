@@ -22,6 +22,9 @@ enum DefaultWidthCase {
     NarrowViewport,
     SelectionSymbolOnly,
     InspectorWithoutPreset,
+    SectionOnlyAutoWidth,
+    SectionWiderThanColumnsAutoWidth,
+    SeparatorOnlyAutoWidth,
 }
 
 impl Component for DefaultWidthCase {
@@ -105,6 +108,42 @@ impl Component for DefaultWidthCase {
                         .disclosure(TableDisclosureState::Expanded),
                     TableRow::separator(),
                 ])
+                .selected(None)
+                .focusable(false)
+                .into(),
+            Self::SectionOnlyAutoWidth => HStack::new()
+                .align(Align::Start)
+                .gap(1)
+                .child(
+                    Table::new()
+                        .rows([TableRow::section("Metadata")])
+                        .width(Length::Auto)
+                        .height(Length::Auto)
+                        .selected(None)
+                        .focusable(false),
+                )
+                .child(Text::new("|END"))
+                .into(),
+            Self::SectionWiderThanColumnsAutoWidth => HStack::new()
+                .align(Align::Start)
+                .gap(1)
+                .child(
+                    Table::new()
+                        .rows([
+                            TableRow::section("Personal Info"),
+                            TableRow::key_value("Key", "Val"),
+                        ])
+                        .width(Length::Auto)
+                        .height(Length::Auto)
+                        .selected(None)
+                        .focusable(false),
+                )
+                .child(Text::new("|END"))
+                .into(),
+            Self::SeparatorOnlyAutoWidth => Table::new()
+                .rows([TableRow::separator()])
+                .width(Length::Auto)
+                .height(Length::Auto)
                 .selected(None)
                 .focusable(false)
                 .into(),
@@ -263,4 +302,49 @@ fn table_without_widths_inspector_rows_render_without_section_bloating_key_col()
     let val_x = find_col(&frame, 0, "Value").expect("Value column");
     assert!(val_x < 18, "section heading bloated col 0: {header:?}");
     assert_eq!(find_col(&frame, 2, "localhost"), Some(val_x), "kv: {kv:?}");
+}
+
+#[test]
+fn table_section_only_auto_width_renders_section_title() {
+    let frame = render_case(DefaultWidthCase::SectionOnlyAutoWidth, 30, 4, false);
+    let r0 = row_text(&frame, 0);
+
+    assert!(r0.starts_with("Metadata"), "section row missing: {r0:?}");
+    // "Metadata" (8) + HStack gap (1) = "|END" at x = 9.
+    assert_eq!(find_col(&frame, 0, "|END"), Some(9), "row 0: {r0:?}");
+}
+
+#[test]
+fn table_section_wider_than_columns_auto_width_keeps_full_section_without_bloating_col0() {
+    let frame = render_case(
+        DefaultWidthCase::SectionWiderThanColumnsAutoWidth,
+        30,
+        4,
+        false,
+    );
+    let section = row_text(&frame, 0);
+    let kv = row_text(&frame, 1);
+
+    assert!(
+        section.starts_with("Personal Info"),
+        "section row truncated: {section:?}"
+    );
+    // "Personal Info" (13) + HStack gap (1) = "|END" at x = 14.
+    assert_eq!(
+        find_col(&frame, 0, "|END"),
+        Some(14),
+        "section: {section:?}"
+    );
+    // Key and Val both render and Val sits well left of 13 (col 0 was not bloated to 13).
+    assert!(kv.contains("Key") && kv.contains("Val"), "kv: {kv:?}");
+    let val_x = find_col(&frame, 1, "Val").expect("Val column");
+    assert!(val_x < 10, "section heading bloated col 0: {kv:?}");
+}
+
+#[test]
+fn table_separator_only_auto_width_renders_separator() {
+    let frame = render_case(DefaultWidthCase::SeparatorOnlyAutoWidth, 10, 2, false);
+    let r0 = row_text(&frame, 0);
+
+    assert!(r0.starts_with('─'), "separator missing: {r0:?}");
 }

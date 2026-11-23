@@ -873,6 +873,7 @@ impl crate::layout::hash::LayoutHash for Table {
         self.show_scroll_indicators.hash(hasher);
         if matches!(self.width, Length::Auto) {
             layout::resolved_table_widths(self).hash(hasher);
+            layout::widest_spanning_row_width(self).hash(hasher);
         } else {
             self.widths.hash(hasher);
         }
@@ -886,7 +887,7 @@ mod node;
 mod reconcile;
 mod shared;
 
-pub(crate) use layout::{measure_table, resolved_column_widths, table_inspector_prefix_width};
+pub(crate) use layout::measure_table;
 pub(crate) use node::TableNode;
 pub(crate) use reconcile::reconcile_table;
 pub(crate) use shared::{
