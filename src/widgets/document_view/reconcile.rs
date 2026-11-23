@@ -829,7 +829,7 @@ mod tests {
         );
 
         let node = document_node(&tree, id);
-        assert_eq!(node.visual_cache.source_line_map, vec![0, 0, 1, 2, 3]);
+        assert_eq!(node.visual_cache.source_line_map, vec![0, 0, 1, 1, 2, 3]);
         assert_eq!(
             node.scroll_offset, 2,
             "scrolling to heading source line 1 must land on the heading row, not the synthetic spacer above it"

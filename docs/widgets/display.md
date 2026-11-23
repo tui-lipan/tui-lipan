@@ -156,12 +156,12 @@ DocumentView::new(text)
 `MarkdownSpacing` controls vertical spacing between rendered blocks:
 
 - `MarkdownSpacing::Balanced` **(default for `.markdown()`)**: separates sections
-  and distinct paragraphs with a single blank row while keeping headings
-  attached to their following content, keeping colon-terminated lead-in
-  paragraphs (`Bullets:`, `Rust:`, etc.) attached to an immediately following
-  list, code block, diagram, table, or blockquote, absorbing redundant blank
-  rows around horizontal rules, collapsing consecutive blank lines, and trimming
-  leading/trailing blank lines.
+  and distinct paragraphs with a single blank row, keeping a blank row above and
+  below headings (consecutive headings stay tight unless separated in source),
+  keeping colon-terminated lead-in paragraphs (`Bullets:`, `Rust:`, etc.)
+  attached to an immediately following list, code block, diagram, table, or
+  blockquote, absorbing redundant blank rows around horizontal rules, collapsing
+  consecutive blank lines, and trimming leading/trailing blank lines.
 - `MarkdownSpacing::Loose`: preserves explicit blank source lines between blocks
   (collapsing consecutive blank runs to a single row and trimming leading/trailing
   blank lines) and adds a spacer before fenced code/diagram blocks that
