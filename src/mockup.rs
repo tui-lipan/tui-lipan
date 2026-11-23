@@ -28,7 +28,8 @@ use crate::core::event::{KeyCode, KeyEvent};
 /// the full [`Component`] implementation automatically. No messages,
 /// no state, no `update()` - just the view.
 ///
-/// Press `Esc`, `q`, or the framework quit keys (`Ctrl+Q`, `Ctrl+C`) to quit.
+/// Press `Esc`, `q`, or the framework quit keys (`Ctrl+Q`, or `Ctrl+C` outside a focused text
+/// editor) to quit.
 ///
 /// # Usage
 ///

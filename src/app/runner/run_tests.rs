@@ -4247,7 +4247,7 @@ fn ctrl_c_copies_active_input_selection_without_quitting_and_quits_when_unhandle
     assert!(!backend.core.ctx.should_quit());
     assert_eq!(backend_writes.borrow().as_slice(), &["hello"]);
 
-    // 2. No selection, nothing handles Ctrl+C: quits (runner + TestBackend).
+    // 2. Unfocused, no selection, nothing handles Ctrl+C: quits (runner + TestBackend).
     let mut runner = AppRunner::new(
         App::new()
             .mouse(false)
@@ -4260,16 +4260,13 @@ fn ctrl_c_copies_active_input_selection_without_quitting_and_quits_when_unhandle
         (),
     );
     runner.core.render_element(viewport, None, None, None);
-    let input_id = runner
-        .core
-        .tree
-        .iter()
-        .find_map(|node| matches!(node.kind, NodeKind::Input(_)).then_some(node.id))
-        .expect("input widget");
-    runner.focus.focused = Some(input_id);
+    runner.focus.focused = None;
     let res = runner.dispatch_layered_key(ctrl_char('c'));
     assert!(res.consumed);
-    assert!(res.quit, "unhandled Ctrl+C should quit");
+    assert!(
+        res.quit,
+        "unhandled Ctrl+C without editor focus should quit"
+    );
 
     let mut backend = crate::TestBackend::new_with_app(
         App::new()
@@ -4322,6 +4319,466 @@ fn ctrl_c_copies_active_input_selection_without_quitting_and_quits_when_unhandle
     assert!(!backend.core.ctx.should_quit());
     backend.send_key(ctrl_char('c')).expect("send ctrl-c");
     assert!(!backend.core.ctx.should_quit());
+}
+
+#[test]
+fn focused_editors_suppress_fallback_ctrl_c_quit() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn write_unique_temp_keymap(contents: &str) -> std::path::PathBuf {
+        static NEXT_FILE: AtomicUsize = AtomicUsize::new(0);
+        let unique = NEXT_FILE.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "tui-lipan-editor-ctrl-c-{}-{unique}.conf",
+            std::process::id()
+        ));
+        std::fs::write(&path, contents).expect("write test keymap");
+        path
+    }
+
+    #[derive(Clone, Copy)]
+    enum EditorKind {
+        Input { read_only: bool, selected: bool },
+        TextArea { read_only: bool },
+        HexArea { read_only: bool },
+        Button,
+    }
+
+    struct EditorFixture {
+        kind: EditorKind,
+        use_child_wrapper: bool,
+        ancestor_quit_on_ctrl_c: bool,
+        ancestor_saw_ctrl_c: Rc<Cell<bool>>,
+    }
+
+    struct ChildInputWrapper;
+
+    impl Component for ChildInputWrapper {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            crate::widgets::Input::new("nested").cursor(6).key("target")
+        }
+    }
+
+    impl Component for EditorFixture {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+
+        fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> crate::KeyUpdate {
+            if self.ancestor_quit_on_ctrl_c
+                && key.mods.ctrl
+                && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C'))
+            {
+                self.ancestor_saw_ctrl_c.set(true);
+                ctx.quit();
+                return crate::KeyUpdate::handled(Update::none());
+            }
+            crate::KeyUpdate::unhandled(Update::none())
+        }
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            if self.use_child_wrapper {
+                return crate::child(|| ChildInputWrapper, ());
+            }
+            match self.kind {
+                EditorKind::Input {
+                    read_only,
+                    selected,
+                } => {
+                    let mut input = crate::widgets::Input::new("hello")
+                        .cursor(5)
+                        .read_only(read_only);
+                    if selected {
+                        input = input.anchor(Some(0));
+                    }
+                    input.key("target")
+                }
+                EditorKind::TextArea { read_only } => crate::widgets::TextArea::new("hello")
+                    .cursor(5)
+                    .read_only(read_only)
+                    .key("target"),
+                EditorKind::HexArea { read_only } => {
+                    crate::widgets::HexArea::new(vec![0xDE, 0xAD, 0xBE, 0xEF])
+                        .read_only(read_only)
+                        .key("target")
+                }
+                EditorKind::Button => crate::widgets::Button::new("OK").key("target"),
+            }
+        }
+    }
+
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 60,
+        h: 12,
+    };
+
+    let focus_target_runner = |runner: &mut AppRunner<EditorFixture>| {
+        runner.core.render_element(viewport, None, None, None);
+        let id = runner
+            .core
+            .tree
+            .iter()
+            .find_map(|node| {
+                node.key
+                    .as_ref()
+                    .is_some_and(|k| k.as_ref() == "target")
+                    .then_some(node.id)
+            })
+            .expect("target node");
+        runner.focus.focused = Some(id);
+    };
+
+    // 1. Input, TextArea, HexArea (editable and read-only) with no selection -> no quit, unhandled.
+    let editor_cases = [
+        (
+            "Input",
+            EditorKind::Input {
+                read_only: false,
+                selected: false,
+            },
+        ),
+        (
+            "Input read_only",
+            EditorKind::Input {
+                read_only: true,
+                selected: false,
+            },
+        ),
+        ("TextArea", EditorKind::TextArea { read_only: false }),
+        (
+            "TextArea read_only",
+            EditorKind::TextArea { read_only: true },
+        ),
+        ("HexArea", EditorKind::HexArea { read_only: false }),
+        ("HexArea read_only", EditorKind::HexArea { read_only: true }),
+    ];
+
+    for (label, kind) in editor_cases {
+        let mut runner = AppRunner::new(
+            App::new()
+                .mouse(false)
+                .user_keymap_policy(crate::UserKeymapPolicy::Disabled),
+            EditorFixture {
+                kind,
+                use_child_wrapper: false,
+                ancestor_quit_on_ctrl_c: false,
+                ancestor_saw_ctrl_c: Rc::new(Cell::new(false)),
+            },
+            (),
+        );
+        focus_target_runner(&mut runner);
+        let res = runner.dispatch_layered_key(ctrl_char('c'));
+        assert!(
+            !res.quit,
+            "AppRunner: {label} must not fallback-quit on Ctrl+C"
+        );
+        assert!(
+            !res.consumed,
+            "AppRunner: {label} must leave unhandled Ctrl+C unconsumed"
+        );
+
+        let mut backend = crate::TestBackend::new_with_app(
+            App::new()
+                .mouse(false)
+                .user_keymap_policy(crate::UserKeymapPolicy::Disabled),
+            EditorFixture {
+                kind,
+                use_child_wrapper: false,
+                ancestor_quit_on_ctrl_c: false,
+                ancestor_saw_ctrl_c: Rc::new(Cell::new(false)),
+            },
+            (),
+        );
+        backend.render();
+        backend.focus_key(&crate::Key::from("target"));
+        let handled = backend.send_key(ctrl_char('c')).expect("send ctrl-c");
+        assert!(
+            !backend.core.ctx.should_quit(),
+            "TestBackend: {label} must not fallback-quit on Ctrl+C"
+        );
+        assert!(
+            !handled,
+            "TestBackend: {label} must report Ctrl+C as unhandled"
+        );
+    }
+
+    // 2. Selection in focused Input -> copies and does not quit (AppRunner + TestBackend).
+    for is_runner in [true, false] {
+        let writes = Rc::new(RefCell::new(Vec::new()));
+        let app = App::new()
+            .mouse(false)
+            .user_keymap_policy(crate::UserKeymapPolicy::Disabled)
+            .clipboard_provider(RecordingClipboardProvider {
+                writes: Rc::clone(&writes),
+            });
+        let comp = EditorFixture {
+            kind: EditorKind::Input {
+                read_only: false,
+                selected: true,
+            },
+            use_child_wrapper: false,
+            ancestor_quit_on_ctrl_c: false,
+            ancestor_saw_ctrl_c: Rc::new(Cell::new(false)),
+        };
+        if is_runner {
+            let mut runner = AppRunner::new(app, comp, ());
+            focus_target_runner(&mut runner);
+            let res = runner.dispatch_layered_key(ctrl_char('c'));
+            assert!(res.consumed);
+            assert!(!res.quit);
+        } else {
+            let mut backend = crate::TestBackend::new_with_app(app, comp, ());
+            backend.render();
+            backend.focus_key(&crate::Key::from("target"));
+            let handled = backend.send_key(ctrl_char('c')).expect("send ctrl-c");
+            assert!(handled);
+            assert!(!backend.core.ctx.should_quit());
+        }
+        assert_eq!(writes.borrow().as_slice(), &["hello"]);
+    }
+
+    // 3. Ancestor component on_key receives Ctrl+C from a focused child Input and may call ctx.quit().
+    for is_runner in [true, false] {
+        let saw = Rc::new(Cell::new(false));
+        let app = App::new()
+            .mouse(false)
+            .user_keymap_policy(crate::UserKeymapPolicy::Disabled);
+        let comp = EditorFixture {
+            kind: EditorKind::Input {
+                read_only: false,
+                selected: false,
+            },
+            use_child_wrapper: true,
+            ancestor_quit_on_ctrl_c: true,
+            ancestor_saw_ctrl_c: Rc::clone(&saw),
+        };
+        if is_runner {
+            let mut runner = AppRunner::new(app, comp, ());
+            focus_target_runner(&mut runner);
+            let res = runner.dispatch_layered_key(ctrl_char('c'));
+            assert!(res.consumed);
+            assert!(saw.get());
+            assert!(runner.core.ctx.should_quit());
+        } else {
+            let mut backend = crate::TestBackend::new_with_app(app, comp, ());
+            backend.render();
+            backend.focus_key(&crate::Key::from("target"));
+            let handled = backend.send_key(ctrl_char('c')).expect("send ctrl-c");
+            assert!(handled);
+            assert!(saw.get());
+            assert!(backend.core.ctx.should_quit());
+        }
+    }
+
+    // 4. App command bound to ctrl-c runs from a focused Input (AppRunner + TestBackend).
+    for is_runner in [true, false] {
+        let fired = Rc::new(Cell::new(false));
+        let fired_sink = Rc::clone(&fired);
+        let app = App::new()
+            .mouse(false)
+            .user_keymap_policy(crate::UserKeymapPolicy::Disabled);
+        let comp = EditorFixture {
+            kind: EditorKind::Input {
+                read_only: false,
+                selected: false,
+            },
+            use_child_wrapper: false,
+            ancestor_quit_on_ctrl_c: false,
+            ancestor_saw_ctrl_c: Rc::new(Cell::new(false)),
+        };
+        let entry = crate::CommandEntry::builder("app.copy_or_cancel")
+            .label("Cancel")
+            .shortcut(crate::KeyBinding::from_str("ctrl-c").expect("ctrl-c"))
+            .handler(Callback::new(move |_| fired_sink.set(true)))
+            .build();
+        if is_runner {
+            let mut runner = AppRunner::new(app, comp, ());
+            runner.core.ctx.register_command(entry);
+            focus_target_runner(&mut runner);
+            let res = runner.dispatch_layered_key(ctrl_char('c'));
+            assert!(res.consumed);
+            assert!(!res.quit);
+            assert!(fired.get());
+        } else {
+            let mut backend = crate::TestBackend::new_with_app(app, comp, ());
+            backend.core.ctx.register_command(entry);
+            backend.render();
+            backend.focus_key(&crate::Key::from("target"));
+            let handled = backend.send_key(ctrl_char('c')).expect("send ctrl-c");
+            assert!(handled);
+            assert!(!backend.core.ctx.should_quit());
+            assert!(fired.get());
+        }
+    }
+
+    // 5. Always quit (`Ctrl+Q` and chord `ctrl-x q`) still quits from a focused Input.
+    for is_runner in [true, false] {
+        let app = App::new()
+            .mouse(false)
+            .user_keymap_policy(crate::UserKeymapPolicy::Disabled);
+        let comp = EditorFixture {
+            kind: EditorKind::Input {
+                read_only: false,
+                selected: false,
+            },
+            use_child_wrapper: false,
+            ancestor_quit_on_ctrl_c: false,
+            ancestor_saw_ctrl_c: Rc::new(Cell::new(false)),
+        };
+        if is_runner {
+            let mut runner = AppRunner::new(app, comp, ());
+            focus_target_runner(&mut runner);
+            let res = runner.dispatch_layered_key(ctrl_char('q'));
+            assert!(res.consumed);
+            assert!(res.quit);
+        } else {
+            let mut backend = crate::TestBackend::new_with_app(app, comp, ());
+            backend.render();
+            backend.focus_key(&crate::Key::from("target"));
+            let handled = backend.send_key(ctrl_char('q')).expect("send ctrl-q");
+            assert!(handled);
+            assert!(backend.core.ctx.should_quit());
+        }
+
+        let chord_app = App::new()
+            .mouse(false)
+            .user_keymap_policy(crate::UserKeymapPolicy::Disabled)
+            .global_quit(Some(
+                crate::input::KeyBindings::from_str("ctrl-x q").expect("chord"),
+            ));
+        let chord_comp = EditorFixture {
+            kind: EditorKind::Input {
+                read_only: false,
+                selected: false,
+            },
+            use_child_wrapper: false,
+            ancestor_quit_on_ctrl_c: false,
+            ancestor_saw_ctrl_c: Rc::new(Cell::new(false)),
+        };
+        let q_key = KeyEvent {
+            code: KeyCode::Char('q'),
+            mods: KeyMods::default(),
+        };
+        if is_runner {
+            let mut runner = AppRunner::new(chord_app, chord_comp, ());
+            focus_target_runner(&mut runner);
+            assert!(!runner.dispatch_layered_key(ctrl_char('x')).quit);
+            assert!(runner.dispatch_layered_key(q_key).quit);
+        } else {
+            let mut backend = crate::TestBackend::new_with_app(chord_app, chord_comp, ());
+            backend.render();
+            backend.focus_key(&crate::Key::from("target"));
+            backend.send_key(ctrl_char('x')).expect("send ctrl-x");
+            assert!(!backend.core.ctx.should_quit());
+            backend.send_key(q_key).expect("send q");
+            assert!(backend.core.ctx.should_quit());
+        }
+    }
+
+    // 6. Focused Button and no focus -> Ctrl+C quits; blurring a focused Input restores it.
+    for is_runner in [true, false] {
+        // Focused Button
+        let app = App::new()
+            .mouse(false)
+            .user_keymap_policy(crate::UserKeymapPolicy::Disabled);
+        let comp = EditorFixture {
+            kind: EditorKind::Button,
+            use_child_wrapper: false,
+            ancestor_quit_on_ctrl_c: false,
+            ancestor_saw_ctrl_c: Rc::new(Cell::new(false)),
+        };
+        if is_runner {
+            let mut runner = AppRunner::new(app, comp, ());
+            focus_target_runner(&mut runner);
+            assert!(runner.dispatch_layered_key(ctrl_char('c')).quit);
+        } else {
+            let mut backend = crate::TestBackend::new_with_app(app, comp, ());
+            backend.render();
+            backend.focus_key(&crate::Key::from("target"));
+            backend.send_key(ctrl_char('c')).expect("send ctrl-c");
+            assert!(backend.core.ctx.should_quit());
+        }
+
+        // Focused Input -> does not quit -> blur -> Ctrl+C quits
+        let app = App::new()
+            .mouse(false)
+            .user_keymap_policy(crate::UserKeymapPolicy::Disabled);
+        let comp = EditorFixture {
+            kind: EditorKind::Input {
+                read_only: false,
+                selected: false,
+            },
+            use_child_wrapper: false,
+            ancestor_quit_on_ctrl_c: false,
+            ancestor_saw_ctrl_c: Rc::new(Cell::new(false)),
+        };
+        if is_runner {
+            let mut runner = AppRunner::new(app, comp, ());
+            focus_target_runner(&mut runner);
+            assert!(!runner.dispatch_layered_key(ctrl_char('c')).quit);
+            runner.focus.focused = None;
+            assert!(runner.dispatch_layered_key(ctrl_char('c')).quit);
+        } else {
+            let mut backend = crate::TestBackend::new_with_app(app, comp, ());
+            backend.render();
+            backend.focus_key(&crate::Key::from("target"));
+            backend.send_key(ctrl_char('c')).expect("send ctrl-c");
+            assert!(!backend.core.ctx.should_quit());
+            backend.blur();
+            backend
+                .send_key(ctrl_char('c'))
+                .expect("send ctrl-c after blur");
+            assert!(backend.core.ctx.should_quit());
+        }
+    }
+
+    // 7. File-configured `quit = ctrl-q, ctrl-c` with a focused Input -> Ctrl+C does not quit.
+    let path = write_unique_temp_keymap("quit = ctrl-q, ctrl-c\n");
+    for is_runner in [true, false] {
+        let app = App::new().mouse(false).keymap_path(&path);
+        let comp = EditorFixture {
+            kind: EditorKind::Input {
+                read_only: false,
+                selected: false,
+            },
+            use_child_wrapper: false,
+            ancestor_quit_on_ctrl_c: false,
+            ancestor_saw_ctrl_c: Rc::new(Cell::new(false)),
+        };
+        if is_runner {
+            let mut runner = AppRunner::new(app, comp, ());
+            focus_target_runner(&mut runner);
+            let res = runner.dispatch_layered_key(ctrl_char('c'));
+            assert!(!res.quit);
+            assert!(!res.consumed);
+        } else {
+            let mut backend = crate::TestBackend::new_with_app(app, comp, ());
+            backend.render();
+            backend.focus_key(&crate::Key::from("target"));
+            let handled = backend.send_key(ctrl_char('c')).expect("send ctrl-c");
+            assert!(!handled);
+            assert!(!backend.core.ctx.should_quit());
+        }
+    }
+    let _ = std::fs::remove_file(&path);
 }
 
 #[test]
@@ -7707,7 +8164,7 @@ fn focused_terminal_receives_ctrl_c_without_quitting() {
 #[cfg(feature = "terminal")]
 #[test]
 fn file_configured_quit_keeps_ctrl_c_fallback_for_terminal_and_selection_copy() {
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct SelectedInputSmoke;
 
@@ -7730,11 +8187,12 @@ fn file_configured_quit_keeps_ctrl_c_fallback_for_terminal_and_selection_copy() 
         }
     }
 
-    let unique = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("time should move forward")
-        .as_nanos();
-    let path = std::env::temp_dir().join(format!("tui-lipan-file-quit-{unique}.conf"));
+    static NEXT_FILE: AtomicUsize = AtomicUsize::new(0);
+    let unique = NEXT_FILE.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!(
+        "tui-lipan-file-quit-{}-{unique}.conf",
+        std::process::id()
+    ));
     std::fs::write(&path, "quit = ctrl-q, ctrl-c\n").expect("write test keymap");
 
     // 1. Focused interactive Terminal with file-configured `quit = ctrl-q, ctrl-c` (TestBackend).

@@ -55,7 +55,7 @@ fn main() -> tui_lipan::Result<()> {
 - `create_state` initializes state from properties.
 - `view` returns the UI tree. Called on every re-render.
 - `update` handles messages. Returns `(needs_redraw, optional_command)`.
-- Press `Ctrl+Q` to quit, or `Ctrl+C` when nothing else handles it (no selection to copy, and neither the focused widget nor `on_key` claims it). You do not need to wire a quit key yourself unless you want to add another key or override it (see [`keybindings.md`](keybindings.md)).
+- Press `Ctrl+Q` to quit, or `Ctrl+C` when nothing else handles it (no selection to copy, no focused `Input`/`TextArea`/`HexArea` or `Terminal`, and neither `on_key` nor an app command claims it). You do not need to wire a quit key yourself unless you want to add another key or override it (see [`keybindings.md`](keybindings.md)).
 
 ---
 

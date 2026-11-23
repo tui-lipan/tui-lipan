@@ -674,7 +674,8 @@ impl App {
 
     /// Configure the global quit shortcut. `None` disables both default quit bindings
     /// (`Ctrl+Q` and fallback `Ctrl+C`). Single-step plain `ctrl-c` bound to quit always runs in
-    /// lowest-priority fallback mode (after copy, focused widgets/terminals, and `on_key`).
+    /// lowest-priority fallback mode (after copy, focused widgets/terminals, `on_key`, and app
+    /// commands, and suppressed while an `Input`, `TextArea`, or `HexArea` has focus).
     pub fn global_quit(mut self, bindings: Option<KeyBindings>) -> Self {
         self.framework_keymap = match bindings {
             Some(bindings) => self.framework_keymap.bind(FrameworkAction::Quit, bindings),

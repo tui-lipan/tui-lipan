@@ -38,7 +38,7 @@ insert_newline = enter
 dismiss_overlay = esc
 focus_next = tab
 focus_prev = shift-tab
-quit = ctrl-q, ctrl-c   # ctrl-c is lowest-priority fallback (after copy, focused widget, and on_key)
+quit = ctrl-q, ctrl-c   # ctrl-c is lowest-priority fallback (skipped while editing text)
 toggle_devtools = f12
 ```
 
@@ -146,11 +146,15 @@ where it is configured (built-in defaults, `keymap.conf`, `FrameworkKeymap::bind
 `App::global_quit(Some(...))`): it only quits after copy (when a selection exists), the focused
 widget (including an embedded `Terminal` forwarding `Ctrl+C` to its child per `TerminalKeyPolicy`),
 component `on_key` bubbling, app command shortcuts, and normal framework bindings all decline it,
-and it does not displace performable `copy` on `Ctrl+C`. Every other key bound to `quit` —
-including `ctrl-q`, modified variants such as `ctrl-shift-c`, and chords such as `ctrl-c x` — runs
-as a normal framework shortcut. Setting `quit = none` in `keymap.conf` or calling
-`App::global_quit(None)` / `FrameworkKeymap::default().unbind(FrameworkAction::Quit)` disables both
-`Ctrl+Q` and fallback `Ctrl+C`; rebinding `quit` replaces both defaults with your explicit bindings.
+and it never fires while a text-editing widget (`Input`, `TextArea`, or `HexArea`, including
+read-only instances and composites built on `Input` such as `ComboBox`, `SearchPalette`, and
+`CommandPalette`) has focus — in those widgets an unhandled `Ctrl+C` still bubbles to `on_key` and
+app commands and otherwise remains unhandled. Fallback `ctrl-c` also does not displace performable
+`copy` on `Ctrl+C`. Every other key bound to `quit` — including `ctrl-q`, modified variants such as
+`ctrl-shift-c`, and chords such as `ctrl-c x` — runs as a normal framework shortcut and still quits
+from focused editors. Setting `quit = none` in `keymap.conf` or calling `App::global_quit(None)` /
+`FrameworkKeymap::default().unbind(FrameworkAction::Quit)` disables both `Ctrl+Q` and fallback
+`Ctrl+C`; rebinding `quit` replaces both defaults with your explicit bindings.
 
 To remap focus traversal instead of disabling it:
 

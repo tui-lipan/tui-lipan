@@ -356,7 +356,8 @@ pub use tui_lipan_macro::ui;
 /// `.into()` yourself.  The closure uses `move` capture, so local data can be
 /// referenced freely inside the body.
 ///
-/// Press `Esc`, `q`, or the framework quit keys (`Ctrl+Q`, `Ctrl+C`) to quit the preview.
+/// Press `Esc`, `q`, or the framework quit keys (`Ctrl+Q`, or `Ctrl+C` outside a focused text
+/// editor) to quit the preview.
 ///
 /// # Basic usage
 ///

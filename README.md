@@ -108,7 +108,7 @@ fn main() -> tui_lipan::Result<()> {
 ```
 
 Press `Ctrl+Q` to quit any app, or `Ctrl+C` when nothing else handles it (such
-as copying a selection or an embedded terminal); see
+as copying a selection, a focused text editor, or an embedded terminal); see
 [`docs/keybindings.md`](docs/keybindings.md) to rebind or disable framework
 quit keys.
 

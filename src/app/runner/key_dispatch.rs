@@ -668,15 +668,12 @@ impl<C: Component> DispatchOps for RunnerDispatchOps<'_, '_, C> {
     }
 
     fn dispatch_framework_fallback(&mut self, key: KeyEvent) -> FrameworkDispatch {
-        if self
-            .keymap
-            .matches(key)
-            .iter()
-            .any(|binding| binding.action == Action::Quit && binding.mode == BindingMode::Fallback)
-        {
-            return FrameworkDispatch::Quit;
-        }
-        FrameworkDispatch::None
+        crate::app::input::runtime_dispatch::dispatch_framework_fallback(
+            &self.core.tree,
+            *self.focused,
+            self.keymap,
+            key,
+        )
     }
 
     fn dispatch_terminal_preflight(&mut self, key: KeyEvent) -> TerminalPreflightDispatch {

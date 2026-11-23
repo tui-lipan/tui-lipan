@@ -246,7 +246,7 @@ fn main() -> tui_lipan::Result<()> {
 }
 ```
 
-Press `Ctrl+Q` to quit, or `Ctrl+C` when nothing else handles it (no selection to copy, and neither the focused widget nor `on_key` claims it); change or disable both with `App::global_quit(...)` or `keymap.conf` (see [`keybindings.md`](keybindings.md)).
+Press `Ctrl+Q` to quit, or `Ctrl+C` when nothing else handles it (no selection to copy, no focused `Input`/`TextArea`/`HexArea` or `Terminal`, and neither `on_key` nor an app command claims it); change or disable both with `App::global_quit(...)` or `keymap.conf` (see [`keybindings.md`](keybindings.md)).
 
 ## Fast Prototyping with `mockup!`
 
@@ -282,7 +282,7 @@ fn main() -> tui_lipan::Result<()> {
 ```
 
 **Key behaviors:**
-- Press `Esc`, `q`, or the framework quit keys (`Ctrl+Q`, `Ctrl+C`) to quit.
+- Press `Esc`, `q`, or the framework quit keys (`Ctrl+Q`, or `Ctrl+C` outside a focused text editor) to quit.
 - The body expression is auto-wrapped in `.into()` - return any widget builder directly.
 - Interactive widgets (List, Tabs, Inputs) still respond to focus and mouse.
 - The closure uses `move` capture, so local data is accessible.
