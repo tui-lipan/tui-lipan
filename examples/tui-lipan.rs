@@ -1206,7 +1206,7 @@ fn main() -> Result<()> {
     App::new()
         .title("tui-lipan AsciiCanvas showcase")
         .theme(Theme::lipan())
-        .fill_background()
+        .background(ScreenBackground::Theme)
         .mount(TuiLipanShowcase)
         .run()
 }

@@ -409,7 +409,7 @@ fn crossfade(ctx: &Context<Demo>) -> Element {
 fn main() -> Result<()> {
     App::new()
         .title("tui-lipan - Sequential Animated swap")
-        .terminal_bg(query_host_colors().map(|c| c.bg))
+        .host_background_hint(query_host_colors().map(|c| c.bg))
         .mount(Demo)
         .run()
 }

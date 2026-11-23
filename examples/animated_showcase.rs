@@ -531,7 +531,7 @@ fn schedule_tick() -> Command {
 fn main() -> Result<()> {
     App::new()
         .title("tui-lipan - Animated Showcase")
-        .terminal_bg(query_host_colors().map(|c| c.bg))
+        .host_background_hint(query_host_colors().map(|c| c.bg))
         .mount(AnimatedShowcase)
         .run()
 }

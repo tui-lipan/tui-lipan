@@ -5,7 +5,7 @@
 //!
 //! The two rows inside the panel should look the same. If the first row is
 //! visibly different from the second one, alpha foreground rendering is using
-//! `App::terminal_bg(...)` instead of the already-painted parent background.
+//! `App::host_background_hint(...)` instead of the already-painted parent background.
 
 use tui_lipan::prelude::*;
 
@@ -62,7 +62,7 @@ impl Component for AlphaForegroundBackdrop {
                             )
                             .child(
                                 Text::new(
-                                    "If row 1 differs, it probably blended against App::terminal_bg (#232329).",
+                                    "If row 1 differs, it probably blended against App::host_background_hint (#232329).",
                                 )
                                 .style(muted),
                             ),
@@ -107,7 +107,7 @@ impl Component for AlphaForegroundBackdrop {
 fn main() -> Result<()> {
     App::new()
         .title("tui-lipan - Alpha Foreground Backdrop")
-        .terminal_bg(Some(TERMINAL_FALLBACK_BG))
+        .host_background_hint(Some(TERMINAL_FALLBACK_BG))
         .mount(AlphaForegroundBackdrop)
         .run()
 }

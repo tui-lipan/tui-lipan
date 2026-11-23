@@ -337,7 +337,7 @@ Actions configurable from Rust via `FrameworkKeymap` and `App::framework_keymap(
 
 | Common variant | Default binding (typical) | Use |
 |---------|---------------------------|------------------------|
-| `Quit` | `ctrl-q` | `.unbind(FrameworkAction::Quit)` or rebind |
+| `Quit` | `ctrl-q`, fallback `ctrl-c` | `.unbind(FrameworkAction::Quit)` or rebind (plain `ctrl-c` always runs as lowest-priority fallback regardless of source and never quits while an `Input`, `TextArea`, or `HexArea` is focused; chords like `ctrl-c x` and other keys stay normal) |
 | `DismissOverlay` | `esc` | Overlay dismissal |
 | `FocusNext` | `tab` | Tab traversal |
 | `FocusPrev` | `shift-tab` | Reverse tab traversal |
@@ -424,10 +424,22 @@ Result of `TerminalCopyMode::handle_key` and `TerminalCopyMode::handle_pointer`:
 
 | Variant | Meaning | Default for |
 |---------|---------|-------------|
-| `Length::Auto` | Size to content | Leaf widgets (Text, Button, Input, etc.) |
+| `Length::Auto` | Size to content | Content-sized widgets (`Text`, `Button`, `Checkbox`, `Badge`, `Spinner`, …) and single-row widget heights |
 | `Length::Px(u16)` | Fixed cell count | - |
 | `Length::Percent(u16)` | Percentage of available space (clamped to `0..=100`) | - |
-| `Length::Flex(u16)` | Proportional share of remaining space | Containers (VStack, HStack, Frame) |
+| `Length::Flex(u16)` | Proportional share of remaining space | Containers (`VStack`, `HStack`, `Frame`) and fill widgets (`Input`, `List`, `Table`, `Tree`, `TextArea`, `ProgressBar`, `Slider`, …) on their main axes (see [`widget-defaults.md`](widget-defaults.md)) |
+
+### `ScreenBackground`
+
+Controls how `App::background(...)` paints the root viewport behind the UI tree.
+
+| Variant | Meaning |
+|---------|---------|
+| `ScreenBackground::Transparent` | Leave the host terminal background untouched **(default)** |
+| `ScreenBackground::Theme` | Fill the viewport with the active root theme's `surface.backdrop` (tracks runtime theme changes) |
+| `ScreenBackground::Custom(Style)` | Fill the viewport with an explicit style (`Color`, `Paint`, and `Style` convert into this via `Into<ScreenBackground>`) |
+
+Unlike `App::background(...)`, `App::host_background_hint(Option<Color>)` does not paint cells; it only tells opacity blending and contrast checks what RGB color lies behind `Color::Reset` cells.
 
 ### `ShrinkPriority`
 

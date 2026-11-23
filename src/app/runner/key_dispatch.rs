@@ -11,7 +11,7 @@ use crate::app::input::key_dispatch::{
     TerminalPreflightDispatch, dispatch_key,
 };
 use crate::app::input::keyboard;
-use crate::app::input::keymap::{Action, Keymap, KeymapRuntime, KeymapRuntimeResult};
+use crate::app::input::keymap::{Action, BindingMode, Keymap, KeymapRuntime, KeymapRuntimeResult};
 use crate::app::input::runtime_dispatch::{
     FrameworkSideEffect, RuntimeKeyDispatchConfig, RuntimeKeyDispatchOutcome,
     RuntimeKeyDispatchState, outcome_to_dispatch_result,
@@ -557,13 +557,18 @@ impl<C: Component> DispatchOps for RunnerDispatchOps<'_, '_, C> {
             KeymapRuntimeResult::None => None,
         };
         let action_from_chord = runtime_match.is_some_and(|binding| binding.is_chord);
-        let matches = runtime_match
-            .map(|binding| vec![binding.binding_match()])
-            .unwrap_or_else(|| self.keymap.matches(key));
+        let matches = if action_from_chord {
+            runtime_match
+                .map(|binding| vec![binding.binding_match()])
+                .unwrap_or_default()
+        } else {
+            self.keymap.matches(key)
+        };
+        let has_quit = matches
+            .iter()
+            .any(|binding| binding.action == Action::Quit && binding.mode != BindingMode::Fallback);
 
-        if !self.top_capturing_overlay_is_empty()
-            && matches.iter().any(|binding| binding.action == Action::Quit)
-        {
+        if !self.top_capturing_overlay_is_empty() && has_quit {
             return FrameworkDispatch::Quit;
         }
 
@@ -646,7 +651,7 @@ impl<C: Component> DispatchOps for RunnerDispatchOps<'_, '_, C> {
             return FrameworkDispatch::Handled;
         }
 
-        if matches.iter().any(|binding| binding.action == Action::Quit) {
+        if has_quit {
             if action_from_chord || self.top_capturing_overlay_is_empty() {
                 return FrameworkDispatch::Quit;
             }
@@ -660,6 +665,15 @@ impl<C: Component> DispatchOps for RunnerDispatchOps<'_, '_, C> {
         }
 
         FrameworkDispatch::None
+    }
+
+    fn dispatch_framework_fallback(&mut self, key: KeyEvent) -> FrameworkDispatch {
+        crate::app::input::runtime_dispatch::dispatch_framework_fallback(
+            &self.core.tree,
+            *self.focused,
+            self.keymap,
+            key,
+        )
     }
 
     fn dispatch_terminal_preflight(&mut self, key: KeyEvent) -> TerminalPreflightDispatch {

@@ -227,7 +227,7 @@ fn main() -> Result<()> {
 
     App::new()
         .title("tui-lipan - Theme Hot Reload")
-        .terminal_bg(terminal_bg)
+        .host_background_hint(terminal_bg)
         .toast_placement(ToastPlacement::BottomEnd)
         .mount(ThemeHotReload)
         .run()

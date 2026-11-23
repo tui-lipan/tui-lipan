@@ -223,7 +223,7 @@ fn out_dir() -> PathBuf {
 }
 
 fn render_theme(name: &str, theme: Theme) {
-    // Demonstrates `App::screen_background` / `App::fill_background`: fill the
+    // Demonstrates `App::background(ScreenBackground::Theme)`: fill the
     // root viewport with the theme backdrop so gaps between panels read as a
     // designed surface instead of the host terminal color.
     let backdrop = theme.surface.backdrop;

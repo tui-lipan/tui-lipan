@@ -216,7 +216,7 @@ fn animated_row(row: Row, visible: bool, ctx: &Context<ExitAnimation>) -> Elemen
 fn main() -> Result<()> {
     App::new()
         .title("tui-lipan - Exit Animation")
-        .terminal_bg(query_host_colors().map(|colors| colors.bg))
+        .host_background_hint(query_host_colors().map(|colors| colors.bg))
         .mount(ExitAnimation)
         .run()
 }

@@ -966,7 +966,7 @@ Wrapper for opacity, fg/bg color, height, and opt-in x/y position transitions. `
 
 To crossfade between two screens, put the incoming one in a `ZStack` over the outgoing one. Hold the outgoing one whole with `auto_exit(ExitAnimation::new(ms).keep_opacity())`, and fade the incoming one in from `0.0`. `animated_sequential_swap` (lane 5) shows the recipe.
 
-For correct opacity blending when backgrounds use `Color::Reset`, set `App::terminal_bg(query_host_colors().map(|c| c.bg))` before `run()` - see **quick-start.md** (`terminal_bg` / `query_host_colors`).
+For correct opacity blending when backgrounds use `Color::Reset`, set `App::host_background_hint(query_host_colors().map(|c| c.bg))` before `run()` - see **quick-start.md** (`host_background_hint` / `query_host_colors`).
 
 ### Controlled visibility
 
