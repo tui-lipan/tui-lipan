@@ -815,6 +815,28 @@ mod tests {
         assert_eq!(node.scroll_offset, expected);
     }
 
+    #[cfg(feature = "markdown")]
+    #[test]
+    fn scroll_to_source_line_lands_on_heading_not_synthetic_balanced_spacer() {
+        let (tree, id) = reconcile_document(
+            DocumentView::new("paragraph\n## Heading\nbody\ntail")
+                .markdown()
+                .border(false)
+                .wrap(false)
+                .scroll_to_source_line(1),
+            40,
+            2,
+        );
+
+        let node = document_node(&tree, id);
+        assert_eq!(node.visual_cache.source_line_map, vec![0, 0, 1, 2, 3]);
+        assert_eq!(
+            node.scroll_offset, 2,
+            "scrolling to heading source line 1 must land on the heading row, not the synthetic spacer above it"
+        );
+        assert_eq!(node.visual_cache.line_texts[2].as_ref(), "Heading");
+    }
+
     #[test]
     fn smooth_source_line_target_clamps_after_content_shrinks() {
         let first = DocumentView::new(numbered_lines(20))
