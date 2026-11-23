@@ -10,8 +10,8 @@ use crate::app::input::command_registry::CommandRegistry;
 use crate::callback::{CancellationToken, CommandLink, Dispatcher, Link, ScopeId};
 use crate::clipboard::ClipboardConfig;
 use crate::core::component::{
-    Command, CommandRuntime, Component, Context, FocusContext, HoverContext, ScrollContext,
-    TaskPolicy, Update,
+    Command, CommandRuntime, Component, Context, FocusContext, HoverContext, RuntimeId,
+    ScrollContext, TaskPolicy, Update,
 };
 use crate::core::element::{Element, ElementKind};
 use crate::core::nested::{ComponentRegistry, ComponentRegistryConfig, HostState};
@@ -24,7 +24,7 @@ use crate::widgets::{Frame, Splitter, Text, VStack};
 
 use crate::test_backend::TestBackend;
 
-fn new_registry() -> ComponentRegistry {
+fn new_registry(runtime_id: RuntimeId) -> ComponentRegistry {
     let dispatcher = Dispatcher::new(|_, _| {});
     let (command_tx, _command_rx, _wake) = super::CommandTx::channel();
     let quit = Rc::new(Cell::new(false));
@@ -34,7 +34,7 @@ fn new_registry() -> ComponentRegistry {
         dispatcher,
         command_tx,
         env: RuntimeEnv {
-            runtime_id: crate::core::component::RuntimeId::next(),
+            runtime_id,
             command_registry: CommandRegistry::default(),
             quit,
             focus: Rc::new(FocusContext::default()),
@@ -722,7 +722,7 @@ fn optional_full_command_and_command_only() {
 
 #[test]
 fn command_message_to_unmounted_component_is_dropped() {
-    let mut registry = new_registry();
+    let mut registry = new_registry(RuntimeId::next());
     let mut host = HostState::default();
 
     let epoch1 = registry.begin_epoch();
@@ -750,7 +750,7 @@ fn command_message_to_unmounted_component_is_dropped() {
 
 #[test]
 fn splitter_expands_components_in_panes_before_layout() {
-    let mut registry = new_registry();
+    let mut registry = new_registry(RuntimeId::next());
     let mut host = HostState::default();
 
     let epoch = registry.begin_epoch();
@@ -853,8 +853,8 @@ fn keyed_background_commands_coalesce_by_link_and_runtime() {
         runtime_id: super::RuntimeId::next(),
         ..runtime.clone()
     };
-    let first = Link::<()>::new(ScopeId(1), Dispatcher::new(|_, _| {}));
-    let second = Link::<()>::new(ScopeId(2), Dispatcher::new(|_, _| {}));
+    let first = Link::<()>::new(ScopeId(1), runtime.runtime_id, Dispatcher::new(|_, _| {}));
+    let second = Link::<()>::new(ScopeId(2), runtime.runtime_id, Dispatcher::new(|_, _| {}));
     let (started_tx, started_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel::<()>();
     let key = "keyed_background_commands_coalesce_by_link_and_runtime";
@@ -874,7 +874,12 @@ fn keyed_background_commands_coalesce_by_link_and_runtime() {
         !token.is_cancelled(),
         "another component shares the string key"
     );
-    first
+    let other = Link::<()>::new(
+        ScopeId(1),
+        other_runtime.runtime_id,
+        Dispatcher::new(|_, _| {}),
+    );
+    other
         .command_keyed(key, TaskPolicy::LatestOnly, |_| {})
         .run(other_runtime);
     assert!(
@@ -912,7 +917,8 @@ fn keyed_command_latest_only_coalesces_pending_tasks() {
 
     let release_rx = Rc::new(RefCell::new(Some(release_rx)));
 
-    let mut registry = new_registry();
+    let runtime_id = RuntimeId::next();
+    let mut registry = new_registry(runtime_id);
     let mut host = HostState::default();
 
     let epoch1 = registry.begin_epoch();
@@ -942,7 +948,7 @@ fn keyed_command_latest_only_coalesces_pending_tasks() {
     let (dummy_cmd_tx, _dummy_cmd_rx, _wake) = super::CommandTx::channel();
     let runtime = CommandRuntime {
         tx: dummy_cmd_tx,
-        runtime_id: super::RuntimeId::next(),
+        runtime_id,
         now: web_time::Instant::now(),
         clock_mode: crate::automation::ClockMode::Realtime,
         clock: crate::core::runtime_env::SessionClock::new(crate::automation::ClockMode::Realtime),
@@ -1019,11 +1025,12 @@ fn command_link_send_if_not_cancelled_suppresses_messages() {
 /// requiring prompt work to run proves the waiting happens elsewhere.
 #[test]
 fn after_does_not_occupy_executor_workers_while_waiting() {
-    let link = Link::<()>::new(ScopeId(1), Dispatcher::new(|_, _| {}));
+    let runtime_id = RuntimeId::next();
+    let link = Link::<()>::new(ScopeId(1), runtime_id, Dispatcher::new(|_, _| {}));
     let (cmd_tx, _cmd_rx, _wake) = super::CommandTx::channel();
     let runtime = || CommandRuntime {
         tx: cmd_tx.clone(),
-        runtime_id: super::RuntimeId::next(),
+        runtime_id,
         now: web_time::Instant::now(),
         clock_mode: crate::automation::ClockMode::Realtime,
         clock: crate::core::runtime_env::SessionClock::new(crate::automation::ClockMode::Realtime),
@@ -1050,7 +1057,8 @@ fn after_does_not_occupy_executor_workers_while_waiting() {
 
 #[test]
 fn after_runs_the_task_once_the_delay_elapses() {
-    let link = Link::<()>::new(ScopeId(1), Dispatcher::new(|_, _| {}));
+    let runtime_id = RuntimeId::next();
+    let link = Link::<()>::new(ScopeId(1), runtime_id, Dispatcher::new(|_, _| {}));
     let (cmd_tx, _cmd_rx, _wake) = super::CommandTx::channel();
     let (ran_tx, ran_rx) = mpsc::channel();
 
@@ -1060,7 +1068,7 @@ fn after_runs_the_task_once_the_delay_elapses() {
     })
     .run(CommandRuntime {
         tx: cmd_tx,
-        runtime_id: super::RuntimeId::next(),
+        runtime_id,
         now: web_time::Instant::now(),
         clock_mode: crate::automation::ClockMode::Realtime,
         clock: crate::core::runtime_env::SessionClock::new(crate::automation::ClockMode::Realtime),
@@ -1080,11 +1088,12 @@ fn after_runs_the_task_once_the_delay_elapses() {
 /// after a long tick would be held behind it.
 #[test]
 fn after_fires_in_due_order_regardless_of_submission_order() {
-    let link = Link::<()>::new(ScopeId(1), Dispatcher::new(|_, _| {}));
+    let runtime_id = RuntimeId::next();
+    let link = Link::<()>::new(ScopeId(1), runtime_id, Dispatcher::new(|_, _| {}));
     let (cmd_tx, _cmd_rx, _wake) = super::CommandTx::channel();
     let runtime = || CommandRuntime {
         tx: cmd_tx.clone(),
-        runtime_id: super::RuntimeId::next(),
+        runtime_id,
         now: web_time::Instant::now(),
         clock_mode: crate::automation::ClockMode::Realtime,
         clock: crate::core::runtime_env::SessionClock::new(crate::automation::ClockMode::Realtime),

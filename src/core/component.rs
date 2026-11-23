@@ -122,6 +122,20 @@ pub(crate) struct CommandRuntime {
     pub(crate) activity: Arc<crate::core::runtime_env::RuntimeActivity>,
 }
 
+impl CommandRuntime {
+    fn accepts_link(&self, link_runtime_id: RuntimeId) -> bool {
+        if self.runtime_id == link_runtime_id {
+            return true;
+        }
+        crate::debug::internal_log!(
+            "[tui-lipan] dropped command from runtime {:?} submitted to runtime {:?}",
+            link_runtime_id,
+            self.runtime_id
+        );
+        false
+    }
+}
+
 struct MergedCommands(Command, Command);
 
 impl CommandAction for MergedCommands {
@@ -170,12 +184,14 @@ where
 
 struct SpawnAction<Msg, F> {
     scope: ScopeId,
+    runtime_id: RuntimeId,
     f: Option<F>,
     _marker: PhantomData<fn(Msg)>,
 }
 
 struct SpawnKeyedAction<Msg, F> {
     scope: ScopeId,
+    runtime_id: RuntimeId,
     key: Arc<str>,
     policy: TaskPolicy,
     f: Option<F>,
@@ -204,6 +220,7 @@ pub(crate) fn schedule_after_for_session(
 
 struct AfterAction<Msg, F> {
     scope: ScopeId,
+    runtime_id: RuntimeId,
     delay: std::time::Duration,
     f: Option<F>,
     _marker: PhantomData<fn(Msg)>,
@@ -215,6 +232,9 @@ where
     F: FnOnce(CommandLink<Msg>) + Send + 'static,
 {
     fn run(mut self: Box<Self>, runtime: CommandRuntime) {
+        if !runtime.accepts_link(self.runtime_id) {
+            return;
+        }
         let Some(f) = self.f.take() else {
             return;
         };
@@ -251,6 +271,9 @@ where
     F: FnOnce(CommandLink<Msg>) + Send + 'static,
 {
     fn run(mut self: Box<Self>, runtime: CommandRuntime) {
+        if !runtime.accepts_link(self.runtime_id) {
+            return;
+        }
         let Some(f) = self.f.take() else {
             return;
         };
@@ -281,6 +304,9 @@ where
     F: FnOnce(CommandLink<Msg>) + Send + 'static,
 {
     fn run(mut self: Box<Self>, runtime: CommandRuntime) {
+        if !runtime.accepts_link(self.runtime_id) {
+            return;
+        }
         let Some(f) = self.f.take() else {
             return;
         };
@@ -317,6 +343,8 @@ where
 
 impl<Msg: 'static> Link<Msg> {
     /// Create a background command that sends messages to this link's component.
+    ///
+    /// The command runs only in this link's runtime.
     pub fn command<F>(&self, f: F) -> Command
     where
         Msg: Send + 'static,
@@ -325,6 +353,7 @@ impl<Msg: 'static> Link<Msg> {
         Command {
             action: Box::new(SpawnAction::<Msg, F> {
                 scope: self.scope,
+                runtime_id: self.runtime_id,
                 f: Some(f),
                 _marker: PhantomData,
             }),
@@ -332,7 +361,8 @@ impl<Msg: 'static> Link<Msg> {
     }
 
     /// Create a background command that runs after `delay` on the session clock.
-    /// The command sends messages to this link's component.
+    ///
+    /// The command runs only in this link's runtime and sends messages to its component.
     ///
     /// Use this for debounces, retries, or recurring ticks. A shared timer waits for the
     /// deadline before submitting the closure to the executor. If the target has no timer
@@ -356,6 +386,7 @@ impl<Msg: 'static> Link<Msg> {
         Command {
             action: Box::new(AfterAction::<Msg, F> {
                 scope: self.scope,
+                runtime_id: self.runtime_id,
                 delay,
                 f: Some(f),
                 _marker: PhantomData,
@@ -365,9 +396,10 @@ impl<Msg: 'static> Link<Msg> {
 
     /// Create a keyed background command with the given coalescing policy.
     ///
-    /// The command sends messages to this link's component. Coalescing applies to commands
-    /// with the same key bound to this component within the session. The key can be any
-    /// value convertible to `Arc<str>`, such as a string literal or an owned `String`.
+    /// The command runs only in this link's runtime and sends messages to its component.
+    /// Coalescing applies to commands with the same key bound to this component within the
+    /// session. The key can be any value convertible to `Arc<str>`, such as a string literal or
+    /// an owned `String`.
     pub fn command_keyed<F>(&self, key: impl Into<Arc<str>>, policy: TaskPolicy, f: F) -> Command
     where
         Msg: Send + 'static,
@@ -376,6 +408,7 @@ impl<Msg: 'static> Link<Msg> {
         Command {
             action: Box::new(SpawnKeyedAction::<Msg, F> {
                 scope: self.scope,
+                runtime_id: self.runtime_id,
                 key: key.into(),
                 policy,
                 f: Some(f),
@@ -1234,7 +1267,7 @@ impl<C: Component> Context<C> {
             state,
             props,
             viewport,
-            link: Link::new(scope, dispatcher),
+            link: Link::new(scope, env.runtime_id, dispatcher),
             env,
             scope,
         }

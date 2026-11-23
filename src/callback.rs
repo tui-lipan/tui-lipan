@@ -4,6 +4,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
 
+use crate::core::component::RuntimeId;
 use crate::core::event::KeyEvent;
 
 /// A cheap-to-clone event handler.
@@ -191,7 +192,7 @@ pub struct CommandLink<Msg: Send + 'static> {
     tx: CommandTx,
     cancellation_token: CancellationToken,
     clock: crate::core::runtime_env::SessionClock,
-    runtime_id: crate::core::component::RuntimeId,
+    runtime_id: RuntimeId,
     activity: Arc<crate::core::runtime_env::RuntimeActivity>,
     _marker: PhantomData<fn(Msg)>,
 }
@@ -219,7 +220,7 @@ impl<Msg: Send + 'static> CommandLink<Msg> {
         tx: CommandTx,
         cancellation_token: CancellationToken,
         clock: crate::core::runtime_env::SessionClock,
-        runtime_id: crate::core::component::RuntimeId,
+        runtime_id: RuntimeId,
         activity: Arc<crate::core::runtime_env::RuntimeActivity>,
     ) -> Self {
         Self {
@@ -293,6 +294,7 @@ impl<Msg: Send + 'static> CommandLink<Msg> {
 /// Type-safe handle used to send messages to a specific component instance.
 pub struct Link<Msg: 'static> {
     pub(crate) scope: ScopeId,
+    pub(crate) runtime_id: RuntimeId,
     dispatcher: Dispatcher,
     _marker: PhantomData<fn(Msg)>,
 }
@@ -301,6 +303,7 @@ impl<Msg: 'static> Clone for Link<Msg> {
     fn clone(&self) -> Self {
         Self {
             scope: self.scope,
+            runtime_id: self.runtime_id,
             dispatcher: self.dispatcher.clone(),
             _marker: PhantomData,
         }
@@ -308,9 +311,10 @@ impl<Msg: 'static> Clone for Link<Msg> {
 }
 
 impl<Msg: 'static> Link<Msg> {
-    pub(crate) fn new(scope: ScopeId, dispatcher: Dispatcher) -> Self {
+    pub(crate) fn new(scope: ScopeId, runtime_id: RuntimeId, dispatcher: Dispatcher) -> Self {
         Self {
             scope,
+            runtime_id,
             dispatcher,
             _marker: PhantomData,
         }
@@ -398,7 +402,7 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use super::{CommandLink, Dispatcher, KeyHandler, Link, ScopeId};
+    use super::{CommandLink, Dispatcher, KeyHandler, Link, RuntimeId, ScopeId};
     use crate::core::event::{KeyCode, KeyEvent, KeyMods};
 
     type TestQueue = Rc<RefCell<Vec<(ScopeId, Box<dyn Any>)>>>;
@@ -422,7 +426,7 @@ mod tests {
             let queue = queue.clone();
             Dispatcher::new(move |scope, msg| queue.borrow_mut().push((scope, msg)))
         };
-        let link: Link<Msg> = Link::new(ScopeId(1), dispatcher);
+        let link: Link<Msg> = Link::new(ScopeId(1), RuntimeId::next(), dispatcher);
         let handler = KeyHandler::new({
             let link = link.clone();
             move |_key| {
@@ -444,7 +448,7 @@ mod tests {
             let queue = queue.clone();
             Dispatcher::new(move |scope, msg| queue.borrow_mut().push((scope, msg)))
         };
-        let link: Link<Msg> = Link::new(ScopeId(1), dispatcher);
+        let link: Link<Msg> = Link::new(ScopeId(1), RuntimeId::next(), dispatcher);
         let handler = link.key_observer(|_key| Some(Msg::Ping));
 
         // A catch-all observer must never report the key as handled, or it would swallow
@@ -461,7 +465,7 @@ mod tests {
             let queue = queue.clone();
             Dispatcher::new(move |scope, msg| queue.borrow_mut().push((scope, msg)))
         };
-        let link: Link<Msg> = Link::new(ScopeId(1), dispatcher);
+        let link: Link<Msg> = Link::new(ScopeId(1), RuntimeId::next(), dispatcher);
         let handler =
             link.key_observer(|key| matches!(key.code, KeyCode::Enter).then_some(Msg::Ping));
 
@@ -478,7 +482,7 @@ mod tests {
             let queue = queue.clone();
             Dispatcher::new(move |scope, msg| queue.borrow_mut().push((scope, msg)))
         };
-        let link: Link<Msg> = Link::new(ScopeId(1), dispatcher);
+        let link: Link<Msg> = Link::new(ScopeId(1), RuntimeId::next(), dispatcher);
         let handler = link.key_handler(|key| match key.code {
             KeyCode::Enter => Some(Msg::Ping),
             _ => None,

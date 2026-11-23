@@ -626,7 +626,8 @@ pub(crate) fn evaluate_wait_condition(
 mod tests {
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
-    use std::sync::mpsc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, mpsc};
     use std::thread::JoinHandle;
 
     use crate::automation::{AutomationId, SemanticRole};
@@ -932,6 +933,96 @@ mod tests {
             .unwrap();
         session.drain_ready().unwrap();
         assert_eq!(*received.borrow(), [vec![4, 4], vec![1, 2, 3]]);
+    }
+
+    #[derive(Default)]
+    struct RuntimeCommandProbe {
+        foreign: Option<crate::Link<RuntimeCommandMsg>>,
+        foreign_runs: Arc<AtomicUsize>,
+    }
+
+    enum RuntimeCommandMsg {
+        Start,
+        Done(u8),
+    }
+
+    impl Component for RuntimeCommandProbe {
+        type Message = RuntimeCommandMsg;
+        type Properties = ();
+        type State = Vec<u8>;
+
+        fn create_state(&self, _: &()) -> Self::State {
+            Vec::new()
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            match msg {
+                RuntimeCommandMsg::Start => {
+                    let foreign = self.foreign.as_ref().expect("foreign link installed");
+                    let send_foreign = |value| {
+                        let runs = self.foreign_runs.clone();
+                        move |link: crate::CommandLink<RuntimeCommandMsg>| {
+                            runs.fetch_add(1, Ordering::Relaxed);
+                            link.send(RuntimeCommandMsg::Done(value));
+                        }
+                    };
+                    Update::command_only(foreign.command(send_foreign(1)))
+                        .merge(Update::command_only(
+                            foreign.command_after(Duration::from_millis(1), send_foreign(2)),
+                        ))
+                        .merge(Update::command_only(foreign.command_keyed(
+                            "foreign",
+                            crate::TaskPolicy::LatestOnly,
+                            send_foreign(3),
+                        )))
+                        .merge(Update::command_only(ctx.link().command(|link| {
+                            link.send(RuntimeCommandMsg::Done(4));
+                        })))
+                }
+                RuntimeCommandMsg::Done(value) => {
+                    ctx.state.push(value);
+                    Update::none()
+                }
+            }
+        }
+
+        fn view(&self, _: &Context<Self>) -> Element {
+            Text::new("runtime command probe").into()
+        }
+    }
+
+    #[test]
+    fn merged_commands_skip_links_from_another_runtime() {
+        let mut source =
+            AutomationSession::new(RuntimeCommandProbe::default(), AutomationOptions::default())
+                .unwrap();
+        let probe = RuntimeCommandProbe {
+            foreign: Some(source.engine.backend.core.ctx.link().clone()),
+            ..RuntimeCommandProbe::default()
+        };
+        let foreign_runs = probe.foreign_runs.clone();
+        let mut receiver = AutomationSession::new(probe, AutomationOptions::default()).unwrap();
+
+        receiver
+            .engine
+            .backend
+            .dispatch(RuntimeCommandMsg::Start)
+            .unwrap();
+        receiver
+            .execute(AutomationStep::advance(Duration::from_millis(1)))
+            .unwrap();
+        receiver
+            .wait_for_idle(Duration::from_secs(5), Duration::ZERO)
+            .unwrap();
+        receiver.drain_ready().unwrap();
+        source.drain_ready().unwrap();
+
+        let runs = foreign_runs.load(Ordering::Relaxed);
+        assert_eq!(
+            (runs, receiver.engine.backend.state().as_slice()),
+            (0, &[4][..])
+        );
+        assert!(source.engine.backend.state().is_empty());
     }
 
     struct DetachedCommand {

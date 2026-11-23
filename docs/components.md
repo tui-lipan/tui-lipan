@@ -322,7 +322,8 @@ Build background commands through `ctx.link()` and return them in an `Update`.
 The component link infers the message type for the closure's `CommandLink` and
 determines which component receives its messages. If another component returns
 the command in an `Update`, messages still go to the component whose link built
-the command. The message type must implement `Send`.
+the command. Commands built from a link run only in that link's runtime.
+The message type must implement `Send`.
 
 ```rust
 // Run a blocking call on a worker.
