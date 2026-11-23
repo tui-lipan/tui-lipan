@@ -6,6 +6,7 @@
 //! Run with:
 //!   cargo run --example text_area_virtual_text
 
+use tui_lipan::TextAreaVirtualText;
 use tui_lipan::prelude::*;
 
 struct VirtualTextDemo;

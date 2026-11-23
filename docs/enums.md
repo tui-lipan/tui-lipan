@@ -613,7 +613,7 @@ degrades those to `Padded` and leaves every other style unchanged.
 `TerminalCursorStyle { shape: CaretShape, blinking: bool }` specifies an emulated terminal screen's
 default cursor. Pass it to `TerminalScreen::set_default_cursor_style` to override host inheritance
 without replacing explicit cursor requests from the child program. It is exported from the crate
-root, `style`, and the prelude.
+root and `tui_lipan::style`.
 
 ### `CaretPalette`
 
@@ -1759,7 +1759,7 @@ from the old unit-returning `process_bytes` signature.
 | `GraphicsDamage` | `None` (default), `Sources`, `Placements`, `SourcesAndPlacements`, `Reset` |
 | `TerminalMutation` | `cells`, `graphics`, `cursor_changed`, `title_changed`, `modes_changed`, `semantic_changed`, `clipboard_events`, `responses` |
 
-These types are exported from the crate root, widgets module, and prelude with `terminal` enabled.
+These types are exported from the crate root with `terminal` enabled.
 
 The following types also require `terminal-images`:
 
@@ -1820,7 +1820,7 @@ Content in `TerminalPasteEvent::content` and read by `ClipboardHandle::read_cont
 ## PointerShape
 
 `PointerShape` controls the mouse pointer independently of `CaretShape`, which controls the text
-insertion cursor. It is available from the crate root, `style`, and the prelude.
+insertion cursor. It is available from the crate root and `tui_lipan::style`.
 
 The variants use the OSC 22 / CSS names in PascalCase: `Alias`, `AllScroll`, `Cell`, `Copy`,
 `Crosshair`, `Default`, `EResize`, `EwResize`, `Grab`, `Grabbing`, `Help`, `Move`, `NResize`,
@@ -1843,7 +1843,7 @@ The non-exhaustive enum identifies the item under the pointer:
 | `Edge` | `FlowchartEdgeEvent`, including edge index, endpoints and optional label |
 | `Subgraph` | `FlowchartSubgraphEvent`, including subgraph id and label |
 
-Available through `tui_lipan::FlowchartItemEvent` and the prelude.
+Available from the crate root (`tui_lipan::FlowchartItemEvent`).
 
 ## MarkdownSpacing
 
@@ -1855,4 +1855,4 @@ Vertical block-spacing policy for `MarkdownFormatter` and `DocumentView::markdow
 | `Loose` | Preserves explicit single blank lines between blocks, collapses consecutive blank runs, trims leading/trailing blank lines, and adds a spacer before fenced code/diagram blocks following non-blank content |
 | `Compact` | Collapses all blank lines and block spacers so blocks sit flush against each other |
 
-Available through `tui_lipan::MarkdownSpacing`, `tui_lipan::widgets::MarkdownSpacing`, and the prelude.
+Available from the crate root (`tui_lipan::MarkdownSpacing`).

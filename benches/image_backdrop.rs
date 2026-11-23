@@ -14,6 +14,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use tui_lipan::TestBackend;
 use tui_lipan::prelude::*;
+use tui_lipan::{TerminalCellSize, TerminalScreenHandle};
 
 const CELL: TerminalCellSize = TerminalCellSize {
     width: 10,

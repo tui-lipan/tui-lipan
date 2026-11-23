@@ -1,6 +1,7 @@
 use std::cell::Cell;
 use std::time::Duration;
 
+use tui_lipan::ExitAnimation;
 use tui_lipan::prelude::*;
 
 #[derive(Clone, Copy, PartialEq, Eq)]

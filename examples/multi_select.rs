@@ -1,3 +1,4 @@
+use tui_lipan::MultiSelectToggleEvent;
 use tui_lipan::prelude::*;
 
 struct MultiSelectDemo;

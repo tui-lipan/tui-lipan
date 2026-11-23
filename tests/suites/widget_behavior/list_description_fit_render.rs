@@ -1,5 +1,6 @@
 use tui_lipan::prelude::*;
 use tui_lipan::{CapturedFrame, TestBackend};
+use tui_lipan::{ListItemLine, ListTruncation};
 
 const W: u16 = 24;
 

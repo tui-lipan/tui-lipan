@@ -9,6 +9,8 @@ Uses `ColorGradient` stops (`min` -> optional `center` -> `max`) sampled along `
 Effects modify both color channels by default. Use `.foreground_only()`, `.background_only()`, or `.channels(EffectChannels::...)` to restrict any effect without changing its variant fields. A foreground-only gradient is useful for art rendered over an app-level fill because it leaves concrete cell backgrounds unchanged:
 
 ```rust
+use tui_lipan::EffectAxis;
+
 VisualEffect::Gradient {
     gradient,
     blend: 0.9,
@@ -24,6 +26,8 @@ VisualEffect::Gradient {
 `Ripple` uses `origin: EffectOrigin`, so the ring can be pinned to explicit scope-local cells or resolved from the current `EffectScope` bounds at render time. Its `radius: RippleRadius` is the animation knob: `Fixed` is static, and `Animated(RippleAnimation)` moves the ring between two radii over renderer ticks. The shorthands cover the common shockwaves: `RippleRadius::looping` repeats from zero to `max_radius`, `RippleRadius::once` plays a single burst from a captured renderer `start_tick`, and `RippleRadius::collapse` plays the same burst inward, from `max_radius` into the origin.
 
 ```rust
+use tui_lipan::EffectAlignment;
+
 VisualEffect::Ripple {
     origin: EffectOrigin::cell(12.0, 3.0),
     radius: RippleRadius::Fixed(4.0),
@@ -51,6 +55,8 @@ VisualEffect::Ripple {
 An `Animated` radius automatically marks the effect as animated so the runtime schedules repaint ticks. `once` and `looping` grow easing out (`1 - (1 - t)^2`) while strength fades linearly by `1 - t`. `collapse` eases in instead (`max_radius * (1 - t^2)`), so the ring gathers slowly and lands fast, and its strength rises from 30% to full as it arrives: use it for something reaching the origin, and `once` for something leaving it. A one-shot animation paints its end state on its last tick (`start_tick + duration_ticks`) and stops rendering outside that window, but callers should remove the effect or replace it with `Fixed` after completion so the animation ticker can go idle.
 
 ```rust
+use tui_lipan::EffectAlignment;
+
 VisualEffect::Ripple {
     origin: EffectOrigin::aligned(EffectAlignment::TOP_RIGHT),
     radius: RippleRadius::collapse(18.0, 45, ctx.effect_phase()),
@@ -65,6 +71,8 @@ VisualEffect::Ripple {
 The shorthands are presets of `RippleAnimation`. Build one directly for any other motion: pick the two radii, an `Easing` for the radius (any built-in curve or a `CubicBezier`), a linear strength ramp, a start tick, and a `RippleRepeat` (`Once`, `Loop`, or `PingPong`).
 
 ```rust
+use tui_lipan::{RippleAnimation, RippleRepeat};
+
 // A ring that springs past its target and settles, brightening as it goes.
 let springy = RippleAnimation::new(0.0, 12.0, 40)
     .with_easing(Easing::EASE_OUT_BACK)
@@ -125,6 +133,10 @@ cargo test --release --example effect_scope_dot_field hearth_frame_cost -- --ign
 use std::fmt;
 
 use tui_lipan::prelude::*;
+use tui_lipan::{
+    CellEffect, EffectCell, EffectContext, EffectPrepareContext, PreparedCellEffect,
+    TerminalColor,
+};
 
 #[derive(Clone)]
 struct Vortex {
@@ -228,12 +240,16 @@ the length of the transition. Its default exit animation fades to opacity 0, so 
 layer fully opaque and let the backdrop effect perform the transition:
 
 ```rust
+use tui_lipan::ExitAnimation;
+
 Animated::new(old_screen)
     .auto_exit(ExitAnimation::new(duration_ms).keep_opacity())
     .key(old_screen_key)
 ```
 
 ```rust
+use tui_lipan::{CellEffect, EffectCell, EffectContext};
+
 /// Iris transition: the new content opens from the centre over the old.
 #[derive(Debug)]
 struct Iris {

@@ -2,6 +2,9 @@ use std::sync::Arc;
 
 use tui_lipan::DiffPalette;
 use tui_lipan::prelude::*;
+use tui_lipan::{
+    DiffContextExpansion, DiffContextSeparatorEvent, DiffData, DiffDataConfig, DiffScrollEvent,
+};
 
 const BEFORE: &str = r#"fn greet(name: &str) -> String {
     format!("Hello, {}", name)

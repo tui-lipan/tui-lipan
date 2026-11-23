@@ -38,6 +38,8 @@ independent of its contents for paint-only updates; use `Update::render()` for c
 Source updates preserve styling, truncation, and the renderer's ordinary compositing rules.
 
 ```rust
+use tui_lipan::TextSource;
+
 let source = TextSource::new([Span::new("Ready")]);
 let label = Text::from_source(source.clone()).overflow(Overflow::Ellipsis);
 // Later, in update():
@@ -140,6 +142,8 @@ to the app.
 With feature `markdown`, you can use `MarkdownFormatter`:
 
 ```rust
+use tui_lipan::MarkdownSpacing;
+
 DocumentView::new("# Hello\n\n| A | B |\n|---|---|\n| 1 | 2 |")
     .markdown()
     .line_numbers(true)
@@ -246,6 +250,8 @@ separators between document boundaries.
 automatically - only set this when you want widget-local overrides.
 
 ```rust
+use tui_lipan::DocumentStyles;
+
 // Via DocumentView::doc_styles - applies to any formatter
 DocumentView::new(text)
     .markdown()
@@ -445,6 +451,8 @@ footprint including the quiet zone. Both return `None` when the payload is too
 long to encode.
 
 ```rust
+use tui_lipan::QrEcc;
+
 QrCode::new("https://tui-lipan.dev")
     .ecc(QrEcc::Quartile)
 ```
@@ -509,6 +517,8 @@ QOI, TGA, or TIFF.
 | `height` | `Length` | Height |
 
 ```rust
+use tui_lipan::ImageProtocol;
+
 Image::new("logo.png")
     .fit(ImageFit::Contain)
     .alt("Company Logo")
@@ -619,6 +629,8 @@ grid, and `Bars` draws vertical columns. Custom `point_char` and `line_char` app
 | `height` | `Length` | Height |
 
 ```rust
+use tui_lipan::ChartThreshold;
+
 let series = ChartSeries::new("CPU", cpu_data)
     .mode(ChartSeriesMode::Braille)
     .style(Style::new().fg(Color::Cyan));
@@ -689,6 +701,8 @@ the heatmap grid and the legend itself, and `legend_width(HeatmapLegendWidth::Fu
 legend ignore the row-label gutter and stretch across the full inner width.
 
 ```rust
+use tui_lipan::{HeatmapCellMode, HeatmapLegendWidth};
+
 let data = vec![
     vec![10.0, 25.0, 40.0, 55.0],
     vec![20.0, 35.0, 50.0, 65.0],

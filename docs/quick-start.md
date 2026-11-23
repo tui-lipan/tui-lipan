@@ -13,49 +13,74 @@ Key characteristics:
 ## Import Map
 
 ```rust
-// Recommended: start here for typical app-author code
+// Recommended: curated set for typical app-author modules
 use tui_lipan::prelude::*;
 
-// Or import widgets and curated prelude items directly from the crate root
-use tui_lipan::{Button, Input, List, ListItem, Modal, Tabs, VStack};
+// Specialized and lower-level types live at the crate root
+use tui_lipan::{
+    CellEffect, CursorTrailSpring, FileTreeGitStatusCache, FrameworkKeymap, KeyDispatchPolicy,
+    TestBackend, word_forward_start,
+};
 ```
 
 Every public widget export and everything in `tui_lipan::prelude::*` is
 available at the crate root (`tui_lipan::*`). `tui_lipan::prelude::*` is a
-curated subset of the crate root covering common types, widgets, and macros;
-specialized modules (such as `tui_lipan::animation`, `tui_lipan::style`, and
-`tui_lipan::utils`) keep their own nested paths for lower-level APIs.
+strictly curated subset (budgeted by `scripts/check-export-parity.py`) covering
+what an ordinary app module names regularly: the component model, `App` and its
+common builder options, input events, core styling/animation types, macros, and
+every widget entry point in [the widget index](widgets/index.md) plus a
+deliberately small set of high-frequency companion types.
+
+Specialised companion types (such as `QrEcc`, `ImageProtocol`, `GraphLayout`,
+`SequenceStep`, `ClassSpec`, `StateSpec`, or `ErEntity`) and lower-level APIs
+import from the crate root (`tui_lipan::*`) — and remain available in their
+specialized submodules (`tui_lipan::automation`, `tui_lipan::animation`,
+`tui_lipan::style`, `tui_lipan::text_motion`, `tui_lipan::input`, etc.) — so
+glob-importing the prelude does not flood your module's namespace.
 
 Representative `prelude::*` re-exports:
 
 | Symbol | Category |
 |--------|----------|
-| `App`, `AppRunner`, `ContrastPolicy`, `CursorTrail`, `CursorTrailTrigger`, `CursorTrailMotion`, `CursorTrailSpring`, `CursorTrailFill`, `CursorTrailGlyphs`, `CursorTrailParticles`, `CursorTrailSettle`, `TextAreaNewlineBinding` | App runner |
-| `Component`, `Context`, `Update`, `Command`, `Breakpoint`, `KeyUpdate`, `TaskPolicy`, `NodeId` | Component trait & core node identity |
+| `Component`, `Context`, `Update`, `Command`, `Breakpoint`, `KeyUpdate`, `TaskPolicy`, `NodeId`, `Memo` | Component model & node identity |
 | `Element`, `IntoElement`, `Key` | Tree primitives |
-| `Callback`, `CommandLink`, `KeyHandler`, `Link` | Messaging |
-| `KeyCode`, `KeyEvent`, `KeyMods`, `MouseEvent`, `MouseMoveEvent` | Events |
-| `KeyBinding`, `KeyBindings` | Common keybinding types |
-| `Style`, `Color`, `Length`, `Padding`, `Align`, `Justify`, `BorderStyle`, `BorderEdges`, `CaretPalette`, `CaretShape` | Styling |
-| `RichText`, `Span`, `Edge`, `Rect`, `Size`, `ScrollbarConfig`, `ScrollbarVariant` | Layout & text types |
-| `Theme`, `ColorGradient`, `GradientDirection`, `GradientRange`, `VisualEffect`, `RippleRadius`, `RippleAnimation`, `RippleRepeat`, `RetroPreset` | Themes & effects |
-| `ClipboardConfig`, `PasteShiftInsertBehavior` | Clipboard config |
-| `TextEditor`, `TextInput`, `TextEditEvent`, `TextEditKind` | Text editing |
-| `word_forward_start`, `word_end`, `line_start_at`, `first_nonblank_in_line`, … (`text_motion` module) | Vim-style word/line text motion helpers |
-| `OverlayId`, `OverlayScope`, `ToastHandle`, `ToastPlacement` | Overlays |
-| `App`, `CommandEntry`, `CommandRegistry` | App commands |
-| `FrameworkAction`, `FrameworkKeymap`, `KeyDispatchPolicy`, `TerminalKeyPolicy`, `UserKeymapPolicy`, `CommandConflictPolicy`, `ChordMismatchPolicy` | Layered key dispatch |
-| `child`, `mockup!`, `rsx!`, `ui!` | Macros & helpers |
-| `VStack`, `HStack`, `ZStack`, `Canvas`, `Frame`, `Button`, `Text`, `Input`, `List`, `Tabs`, `Table`, `Modal`, `TextArea`, `Tree`, `DocumentView`, `FileTree`, `Animated`, `AsciiCanvas` | Common and advanced widgets |
+| `Callback`, `CommandLink`, `KeyHandler`, `Link` | Callbacks & messaging |
+| `Result`, `child`, `mockup!`, `Mockup`, `rsx!`, `ui!` | Macros & entry helpers |
+| `App`, `ContrastPolicy`, `CursorTrail`, `DevToolsConfig`, `FocusPolicy`, `InlineHeight`, `ScreenBackground`, `TextAreaNewlineBinding` | App runtime & common config |
+| `ClipboardConfig`, `CommandEntry`, `CommandRegistry`, `KeyBinding`, `KeyBindings`, `OverlayScope`, `ToastPlacement` | Commands, keybindings & overlays |
+| `KeyCode`, `KeyEvent`, `KeyMods`, `MouseEvent`, `MouseMoveEvent`, `MouseDragEvent`, `MouseRegionEvent` | Input events |
+| `Style`, `Color`, `Paint`, `ColorTransform`, `Length`, `Padding`, `Align`, `Justify`, `BorderStyle`, `BorderEdges`, `Edge`, `Rect`, `Size` | Core styling & layout |
+| `RichText`, `Span`, `ScrollbarConfig`, `ScrollbarVariant`, `Theme`, `query_host_colors` | Text, scrollbars & themes |
+| `ColorGradient`, `GradientDirection`, `VisualEffect`, `EffectOrigin`, `RippleRadius`, `RetroPreset`, `Easing`, `TransitionConfig`, `VisibilityAnimation` | Gradients, effects & transitions |
+| `TextEditor`, `TextInput` | Text editing state |
+| `VStack`, `HStack`, `ZStack`, `Canvas`, `Frame`, `Button`, `Text`, `Input`, `List`, `Tabs`, `Table`, `Modal`, `TextArea`, `Tree`, `DocumentView`, `FileTree`, `Heatmap`, `HexArea`, `DiffView`, `ManagedTerminal`, `Terminal`, … | Every widget entry point in `docs/widgets/index.md` + high-frequency companion types |
 
-Extra imports at the crate root **not** in `prelude::*`:
+Specialized types imported from the crate root (`tui_lipan::*`, **not** in `prelude::*`):
 
 ```rust
-// Clipboard image support (requires feature "image" or "clipboard-images")
-use tui_lipan::{ImageContent, ImageFormat, ClipboardProvider, ClipboardError};
+// Testing, snapshots, and automation
+use tui_lipan::{AutomationSession, TestBackend, UiSnapshot};
 
-// Specialized widgets and configuration types
-use tui_lipan::{Heatmap, HexArea, TripleClickSelectionMode};
+// Keymap dispatch policies and clipboard sub-types
+use tui_lipan::{
+    CopyFeedback, CopyOnSelect, FrameworkAction, FrameworkKeymap, KeyDispatchPolicy,
+    TerminalKeyPolicy,
+};
+
+// Cursor-trail sub-types, custom CellEffect internals, and text-motion helpers
+use tui_lipan::{
+    CellEffect, CursorTrailMotion, CursorTrailSpring, EffectCell, EffectContext,
+    word_forward_start,
+};
+
+// Terminal internals, diagram specs/themes, FileTree git/cache, and advanced Diff/TextArea types
+use tui_lipan::{
+    DiffContextExpansion, FileTreeGitStatusCache, SequenceDiagramTheme, TerminalDamage,
+    TextAreaVimConfig, TripleClickSelectionMode,
+};
+
+// Clipboard image support (requires feature "image" or "clipboard-images")
+use tui_lipan::{ClipboardError, ClipboardProvider, ImageContent, ImageFormat};
 ```
 
 ## Feature Flags
@@ -322,6 +347,13 @@ fn view(&self, ctx: &Context<Self>) -> Element {
 ## App Configuration
 
 ```rust
+use tui_lipan::prelude::*;
+// Advanced keymap/dispatch policy types come from the crate root:
+use tui_lipan::{
+    ChordMismatchPolicy, CommandConflictPolicy, FrameworkAction, FrameworkKeymap,
+    KeyDispatchPolicy, TerminalKeyPolicy, UserKeymapPolicy,
+};
+
 App::new()
     .title("My App")           // Optional host terminal window title (see ctx.set_title)
     .theme(Theme::one_dark())  // Optional theme override

@@ -1,3 +1,4 @@
+use tui_lipan::ScrollAxis;
 use tui_lipan::prelude::*;
 
 struct BothAxesDemo;

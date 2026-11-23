@@ -625,6 +625,8 @@ search bar style, search-match/current-match styles, current-line highlighting,
 or the current line number/custom gutter style:
 
 ```rust
+use tui_lipan::{TextAreaVimConfig, TextAreaVimCurrentLineHighlight};
+
 TextArea::bound(&ctx.state.editor)
     .vim_motions(true)
     .vim_config(
@@ -642,6 +644,8 @@ bindings are not loaded from `keymap.conf`; use `TextArea::vim_keymap(...)` for
 widget-local aliases to canonical Vim command characters:
 
 ```rust
+use tui_lipan::TextAreaVimKeymap;
+
 let vim_keymap = TextAreaVimKeymap::new()
     .bind(KeyBindings::from_str("ctrl+n")?, 'j')
     .bind(KeyBindings::from_str("ctrl+p")?, 'k');
@@ -719,6 +723,8 @@ still using the selected syntect theme for tokenization and base styling.
 **Inline mode** (images embedded as Unicode PUA sentinels in text value):
 
 ```rust
+use tui_lipan::TextAreaImageMode;
+
 TextArea::new(self.input.clone())
     .image_mode(TextAreaImageMode::Inline)
     .images(self.images.clone())
@@ -734,6 +740,8 @@ Inline image placeholders can be made interactive with `on_sentinel_click`; the 
 **Attachment mode** (images in separate list, text value unchanged):
 
 ```rust
+use tui_lipan::TextAreaImageMode;
+
 VStack::new()
     .gap(0)
     .child(
@@ -872,6 +880,8 @@ soft-wrapped visual rows back into their original diff line.
 Inline review controls use stable source anchors returned by `on_line_click`:
 
 ```rust
+use tui_lipan::DiffInlineBlock;
+
 DiffView::with_content(before, after)
     .mode(DiffViewMode::Split)
     .height(Length::Auto)
@@ -919,6 +929,8 @@ complete click, gutter-drag range selection, focus, multiline edit, save, and
 delete flow using a real `TextArea`.
 
 ```rust
+use tui_lipan::{DiffData, DiffPalette, DiffScrollEvent};
+
 // Efficient: build DiffData once, reuse across renders
 let data = DiffData::with_config(before, after, config);
 let diff = DiffView::new(before, after).with_diff(data);

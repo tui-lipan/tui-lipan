@@ -1,6 +1,6 @@
 # Widget Reference
 
-All widgets are available via `use tui_lipan::prelude::*;`
+Every widget entry point below is available via `use tui_lipan::prelude::*;` along with a small set of high-frequency companion types; specialised companion types import from the crate root (`tui_lipan::*`).
 
 Item context menus are available on List, Tree, FileTree, Table, LogView,
 MultiSelect, both tab bars, DocumentView, DiffView, Graph, Flowchart, and

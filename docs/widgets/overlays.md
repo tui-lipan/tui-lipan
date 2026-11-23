@@ -586,6 +586,8 @@ Scores are zero and match highlights are empty. Group chrome follows the usual
 The caller must discard stale server responses.
 
 ```rust,ignore
+use tui_lipan::SearchMatchMode;
+
 SearchPalette::new()
     .items(results)
     .match_mode(SearchMatchMode::External)
@@ -755,6 +757,8 @@ to extend or inherit the scoped theme roles.
 for rows whose work is still running:
 
 ```rust
+use tui_lipan::{ItemDescription, ListSymbolPosition};
+
 SearchItem::new("Deploy", value).description(
     ItemDescription::new()
         .left("building")
@@ -844,6 +848,8 @@ a match that respects word boundaries: `tabs` lists `Sidebar tabs` above
   the `normalization` prop; matching runs on raw (non-normalized) characters.
 
   ```rust
+  use tui_lipan::SearchMatchMode;
+
   SearchPalette::new()
       .items(items)
       .match_mode(SearchMatchMode::Hybrid)
@@ -864,6 +870,8 @@ layout meets your needs.
 **As a modal overlay** - wrap in `Modal` and set `on_close`/size there:
 
 ```rust
+use tui_lipan::SearchEntry;
+
 if ctx.state.show_palette {
     let palette = SearchPalette::<Arc<str>>::new()
         .entries(vec![

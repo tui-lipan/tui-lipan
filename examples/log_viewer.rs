@@ -1,5 +1,6 @@
 use std::fs;
 use std::sync::Arc;
+use tui_lipan::LogFilterMode;
 use tui_lipan::prelude::*;
 
 struct LogViewer;

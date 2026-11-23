@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use tui_lipan::EffectAxis;
 use tui_lipan::prelude::*;
+use tui_lipan::{AsciiCanvasBuffer, AsciiCell, EffectChannels};
 
 #[path = "common/tui_lipan_art.rs"]
 mod art;

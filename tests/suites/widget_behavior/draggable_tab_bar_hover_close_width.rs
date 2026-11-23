@@ -8,6 +8,7 @@
 use tui_lipan::core::event::{KeyMods, MouseEvent, MouseKind};
 use tui_lipan::prelude::*;
 use tui_lipan::{CapturedFrame, TestBackend};
+use tui_lipan::{DraggableTabBarOverflow, DraggableTabBarVariant};
 
 struct HoverCloseBar;
 

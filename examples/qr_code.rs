@@ -10,6 +10,7 @@
 //! ```
 
 use tui_lipan::prelude::*;
+use tui_lipan::{QrEcc, QrRender};
 
 /// Rows and columns spent on the surrounding chrome (title, help, status,
 /// frame border, padding) rather than the symbol itself.

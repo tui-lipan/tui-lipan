@@ -9,6 +9,7 @@ use std::rc::Rc;
 
 use base64::Engine as _;
 use tui_lipan::prelude::*;
+use tui_lipan::{TerminalCellSize, host_cell_size};
 
 struct PatchLayers;
 struct State {

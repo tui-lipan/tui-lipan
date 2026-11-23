@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
 use tui_lipan::prelude::*;
+use tui_lipan::{ImagePlayback, ImageProtocol, ImageRepeat};
 
 struct ImageDemo;
 

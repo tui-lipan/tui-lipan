@@ -1,4 +1,5 @@
 use tui_lipan::prelude::*;
+use tui_lipan::{DecorationGlyph, EdgeDecoration};
 
 const SEARCH_MIN: u16 = 12;
 const SEARCH_MAX: u16 = 28;

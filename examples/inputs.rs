@@ -1,3 +1,4 @@
+use tui_lipan::CaretShape;
 use tui_lipan::prelude::*;
 struct InputsDemo;
 

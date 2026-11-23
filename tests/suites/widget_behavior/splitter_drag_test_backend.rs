@@ -1,6 +1,7 @@
 use tui_lipan::TestBackend;
 use tui_lipan::core::event::{MouseButton, MouseEvent, MouseKind};
 use tui_lipan::prelude::*;
+use tui_lipan::{PointerMode, PointerShape, SplitterHandleMode, SplitterPaneLimits};
 
 struct BorderSplitter;
 

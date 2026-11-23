@@ -1,6 +1,10 @@
 use std::sync::Arc;
 
 use tui_lipan::prelude::*;
+use tui_lipan::{
+    DescriptionOverflow, DescriptionPlacement, ItemDescription, MultiSelectDescriptionOverflow,
+    MultiSelectDescriptionPlacement, SearchEntry,
+};
 
 /// Rows the demo pretends are still being indexed, to show `ItemDescription::spinner`.
 const INDEXING_PATHS: &[&str] = &["src/widgets/list/mod.rs", "src/utils/nucleo.rs"];

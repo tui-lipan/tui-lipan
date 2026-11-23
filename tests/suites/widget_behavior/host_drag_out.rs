@@ -10,6 +10,7 @@ use tui_lipan::dnd::{
     HostEvent, OscScanner, ProgramCommand, TaggedEvent, TerminalEvent, URI_LIST,
 };
 use tui_lipan::prelude::*;
+use tui_lipan::{FileTreeChangeSource, FileTreeDirectoryListing};
 
 #[derive(Default)]
 struct State {

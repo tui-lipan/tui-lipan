@@ -1,301 +1,150 @@
-//! This prelude is intentionally curated for app authors.
+//! Curated prelude for `tui-lipan` application modules.
 //!
-//! It includes the most common types, widgets, and macros used to build
-//! tui-lipan applications. For framework internals or less common widgets and
-//! helpers, use explicit imports from `tui_lipan`.
+//! Includes what an ordinary app module names regularly: the component model,
+//! `App` and its common builder options, keyboard/mouse events, core styling
+//! and animation types, macros, and every widget entry point in
+//! `docs/widgets/index.md` plus a deliberately small set of high-frequency
+//! companion types.
+//!
+//! Specialised companion types and lower-level APIs import from the crate root
+//! (`tui_lipan::*`) instead of here — including automation/testing, terminal
+//! protocol and image internals, text-motion helpers, diagram spec/theme/layout
+//! types, `CursorTrail` sub-types, custom `CellEffect` internals, `FileTree`
+//! git/cache internals, and specialised widget options (such as `QrEcc`,
+//! `ImageProtocol`, `DiffData`, or `TextAreaVimConfig`).
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Core component model
+// Core component model & callbacks
+// Rule: types named when defining Components, state/messages, callbacks, and Element trees.
 // ─────────────────────────────────────────────────────────────────────────────
 
+pub use crate::callback::{Callback, CommandLink, KeyHandler, Link};
 pub use crate::core::component::{
-    Breakpoint, Command, Component, Context, KeyUpdate, ScrollbarVisibility, TaskPolicy, Update,
-    UpdateLevel,
+    Breakpoint, Command, Component, Context, KeyUpdate, TaskPolicy, Update,
 };
 pub use crate::core::element::{Element, IntoElement, Key};
-pub use crate::core::event::{
-    AltSide, KeyCode, KeyEvent, KeyMods, MouseDragEvent, MouseEvent, MouseMoveEvent,
-    MouseRegionEvent,
-};
 pub use crate::core::memo::Memo;
 pub use crate::core::node::NodeId;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// App runtime
+// Macros & entry helpers
+// Rule: declarative UI macros, child component mounting, mockup helpers, and Result.
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub use crate::Tag;
-pub use crate::app::{
-    App, ContrastPolicy, CursorTrail, CursorTrailFill, CursorTrailGlyphs, CursorTrailMotion,
-    CursorTrailParticles, CursorTrailSettle, CursorTrailSpring, CursorTrailTrigger,
-    DEFAULT_COLOR_ANIMATION_FRAME_RATE, DEFAULT_FRAME_RATE, DevToolsMetric, FocusChanged,
-    FocusEntry, FocusPolicy, InlineHeight, InlineStartupPolicy, ScreenBackground, SurfaceMode,
-    TextAreaNewlineBinding,
-};
-pub use crate::automation::{
-    AutomationError, AutomationId, AutomationIdError, AutomationOptions, AutomationScrollDirection,
-    AutomationSession, AutomationSnapshot, AutomationStep, AutomationStepResult, Checkpoint,
-    CheckpointBaseline, CheckpointFormat, CheckpointSink, ClockMode,
-    FocusDirection as AutomationFocusDirection, IdleReport, Selector, SemanticAction,
-    SemanticChecked, SemanticNode, SemanticRole, SemanticTree, SemanticValue, ValueSensitivity,
-    WaitCondition,
-};
-
-#[cfg(not(target_arch = "wasm32"))]
-pub use crate::app::AppRunner;
-
-#[cfg(feature = "devtools")]
-pub use crate::app::DevToolsConfig;
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Callbacks and messaging
-// ─────────────────────────────────────────────────────────────────────────────
-
-pub use crate::app::input::key_dispatch::{
-    ChordMismatchPolicy, CommandConflictPolicy, KeyDispatchPolicy, TerminalKeyPolicy,
-};
-pub use crate::app::input::keymap::{FrameworkAction, FrameworkKeymap, UserKeymapPolicy};
-pub use crate::callback::{Callback, CancellationToken, CommandLink, KeyHandler, Link};
-pub use crate::{CommandBuilder, CommandEntry, CommandId, CommandRegistry};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Animation
-// ─────────────────────────────────────────────────────────────────────────────
-
-pub use crate::animation::{
-    CubicBezier, CubicBezierCoordinate, CubicBezierError, Easing, ExitAnimation, ExitQueue,
-    ExitTransfer, Transition, TransitionConfig, VisibilityAnimation, VisibilityAnimationContext,
-    VisibilityAnimationPhase,
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Macros and helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
+pub use crate::mockup::Mockup;
 pub use crate::{Result, child, rsx, ui};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use crate::mockup;
 
-pub use crate::mockup::Mockup;
+// ─────────────────────────────────────────────────────────────────────────────
+// App runtime & common configuration
+// Rule: App and the primary option types passed to common App builders and commands.
+// Sub-types (CursorTrail*, Clipboard*, keymap dispatch policies) live at the crate root.
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub use crate::app::{
+    App, ContrastPolicy, CursorTrail, FocusPolicy, InlineHeight, ScreenBackground,
+    TextAreaNewlineBinding,
+};
+pub use crate::clipboard::ClipboardConfig;
+pub use crate::input::{KeyBinding, KeyBindings};
+pub use crate::overlay::{OverlayScope, ToastPlacement};
+pub use crate::{CommandEntry, CommandRegistry};
+
+#[cfg(feature = "devtools")]
+pub use crate::app::DevToolsConfig;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Overlays
+// Input events
+// Rule: primary keyboard and mouse events handled by components and MouseRegion.
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub use crate::overlay::{OverlayId, OverlayScope, ToastHandle, ToastPlacement};
-
-#[cfg(not(target_arch = "wasm32"))]
-pub use crate::{
-    ProcessEvent, ProcessExitStatus, ProcessSpec, process_command, process_command_keyed,
-    stream_process, stream_process_until,
+pub use crate::core::event::{
+    KeyCode, KeyEvent, KeyMods, MouseDragEvent, MouseEvent, MouseMoveEvent, MouseRegionEvent,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Styling
+// Core styling, layout, effects & animation
+// Rule: everyday styling, sizing, theme, rich-text, gradient, and common effect/transition types.
+// Custom CellEffect trait internals and low-level palette/bezier types live at the crate root.
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub use crate::style::Theme;
-pub use crate::style::query_host_colors;
+pub use crate::animation::{Easing, TransitionConfig, VisibilityAnimation};
 pub use crate::style::{
-    Align, BorderEdges, BorderStyle, CaretPalette, CaretShape, CellEffect, Color, ColorScheme,
-    ColorTransform, Edge, EffectAlignment, EffectAmount, EffectCell, EffectChannels, EffectContext,
-    EffectOrigin, EffectPrepareContext, EffectPulse, FloatRect, HostTerminalColors, Justify,
-    LayoutConstraints, Length, Padding, Paint, PointerMode, PointerShape, PreparedCellEffect, Rect,
-    RetroPreset, RichText, RippleAnimation, RippleRadius, RippleRepeat, ScrollbarConfig,
-    ScrollbarVariant, ShrinkPriority, Size, Span, Style, TerminalColor, TerminalCursorStyle,
-    VisualEffect,
+    Align, BorderEdges, BorderStyle, Color, ColorTransform, Edge, EffectOrigin, Justify, Length,
+    Padding, Paint, Rect, RetroPreset, RichText, RippleRadius, ScrollbarConfig, ScrollbarVariant,
+    Size, Span, Style, Theme, VisualEffect, query_host_colors,
 };
+pub use crate::utils::gradient::{ColorGradient, GradientDirection};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Utilities and validation
+// Text editing state
+// Rule: backing state structs for Input and TextArea. Text-motion helpers live at the crate root.
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub use crate::utils::SelectionEnd;
-pub use crate::utils::gradient::{ColorGradient, GradientDirection, GradientRange};
-pub use crate::validation::{StringValidator, ValidationError, Validator};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Text editing
-// ─────────────────────────────────────────────────────────────────────────────
-
-pub use crate::text::edit::{TextEditEvent, TextEditKind};
 pub use crate::text::editor::TextEditor;
 pub use crate::text::input::TextInput;
-pub use crate::text::line_index::{LineIndex, TextEncoding, TextPosition, TextRange};
-pub use crate::text_motion::{
-    big_word_backward_start, big_word_end, big_word_forward_start, byte_to_char_col,
-    cell_big_word_backward_start, cell_big_word_end, cell_big_word_forward_start,
-    cell_line_first_nonblank, cell_line_last, cell_word_backward_start, cell_word_end,
-    cell_word_forward_start, char_col_to_byte, first_nonblank_in_line, line_end_at, line_start_at,
-    word_backward_start, word_end, word_forward_start,
-};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Keybindings
-// ─────────────────────────────────────────────────────────────────────────────
-
-pub use crate::input::{KeyBinding, KeyBindings};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Clipboard
-// ─────────────────────────────────────────────────────────────────────────────
-
-pub use crate::clipboard::{
-    ClipboardConfig, ClipboardContent, ClipboardPasteContent, CopyFeedback, CopyFeedbackEffect,
-    CopyOnSelect, PasteOrigin, PasteShiftInsertBehavior, PasteSource, RightClickAction,
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Curated widgets
+// Widgets & high-frequency companion types
+// Rule: every widget entry point in docs/widgets/index.md plus a deliberately
+// small set of high-frequency companion types; specialised companion types
+// (themes, specs, layouts, git/cache/internal sub-types) import from the crate root.
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub use crate::widgets::{
-    Accordion, AccordionItem, ActivationTheme, ActorKind, ActorRef, Animated, AnimationFrame,
-    AsciiCanvas, AsciiCanvasBuffer, AsciiCell, AutonumberTheme, Badge, BadgePosition, BorderLabels,
-    BorderMergeMode, Breadcrumb, Button, ButtonVariant, Canvas, CanvasItem, CapSides, CapStyle,
-    Center, CenterPin, Chart, ChartAxis, ChartSeries, ChartSeriesMode, ChartThreshold, Checkbox,
-    CheckboxEvent, CheckboxState, CheckboxVariant, ClassDiagram, ClassDiagramTheme, ClassMember,
-    ClassRelation, ClassRelationKind, ClassSpec, ClassVisibility, ColumnAlign, ColumnWidth,
-    ComboBox, ComboBoxCommitEvent, CommandPalette, ContentFormatter, ContextMenu, ContextProvider,
-    DEFAULT_DRAG_THRESHOLD, DateEvent, DatePicker, DecorationGlyph, DecorationPlacement,
-    DescriptionOverflow, DescriptionPlacement, DiagramClassMemberSpec, DiagramClassNodeSpec,
-    DiagramClassRelationSpec, DiagramClassSpec, DiagramClassVisibilitySpec, DiagramDirection,
-    DiagramErAttributeSpec, DiagramErEntitySpec, DiagramErRelationSpec, DiagramErSpec,
-    DiagramFlowEdgeSpec, DiagramFlowNodeShape, DiagramFlowNodeSpec, DiagramFlowchartSpec,
-    DiagramGanttDate, DiagramGanttDuration, DiagramGanttSection, DiagramGanttSpec,
-    DiagramGanttTask, DiagramGanttTaskStart, DiagramGanttTaskStatus, DiagramPieSliceSpec,
-    DiagramPieSpec, DiagramSequenceMessageSpec, DiagramSequenceParticipantSpec,
-    DiagramSequenceSpec, DiagramStateKindSpec, DiagramStateNodeSpec, DiagramStateSpec,
-    DiagramStateTransitionSpec, Divider, DocumentClickEvent, DocumentLineNumberMode,
-    DocumentScrollMetrics, DocumentSelectEvent, DocumentStyles, DocumentTableWidthMode,
-    DocumentView, DragCancelEvent, DragLeaveEvent, DragOverEvent, DragPayload, DragPreview,
-    DragReorderMode, DragSlot, DragSlotAxis, DragSource, DragStartEvent, DragStartedEvent,
-    DraggableTab, DraggableTabActionEvent, DraggableTabBar, DraggableTabBarOverflow,
-    DraggableTabBarVariant, DraggableTabCloseEvent, DraggableTabHitPart, DraggableTabKind,
-    DraggableTabReorderEvent, DraggableTabTransferEvent, DropEvent, DropHighlight, DropSlot,
-    DropTarget, EdgeArrow, EdgeDecoration, EdgeStyle, EffectScope, ErAttribute, ErCardinality,
-    ErDiagram, ErDiagramTheme, ErEntity, ErRelation, FileIconStyle, FileKind, FileTree,
-    FileTreeChange, FileTreeChangeSource, FileTreeChangeStatus, FileTreeChangeView,
-    FileTreeDirectoryListing, FileTreeEntry, FileTreeEntryRequest, FileTreeEntrySource,
-    FileTreeEvent, FileTreeExplorerFocusOrigin, FileTreeGitStatusCache, FileTreeGitView,
-    FileTreeItemStyle, FileTreeRefreshPolicy, FileTreeSuffixPriority, FileTreeToggleEvent, Flow,
-    FlowDirection, Flowchart, FlowchartEdge, FlowchartEdgeEvent, FlowchartItemEvent,
-    FlowchartItemPath, FlowchartNodeEvent, FlowchartNodeId, FlowchartSubgraphEvent, FlowchartTheme,
-    FocusAccordion, FocusScope, FocusSizing, FormatInput, FormattedBlock, FormattedDiagramBlock,
-    FormattedDocument, FormattedLine, FragmentGlyphs, FragmentKind, Frame, FrameLabel,
-    FrameParseError, FrameSequence, FrameSequenceBuilder, GanttDate, GanttDiagram,
-    GanttDiagramTheme, GanttDuration, GanttSection, GanttSpec, GanttTask, GanttTaskStart,
-    GanttTaskStatus, GitChangeState, GitFileStatus, GitIconStyle, Graph, GraphDirection,
-    GraphLayout, GraphNode, GraphNodeEvent, GraphNodePath, Grid, GridItem, GridProps, HStack,
-    Hyperlink, HyperlinkEvent, IndentStyle, Input, InputEvent, ItemDescription, KeyCapture,
-    LifelineTheme, List, ListConfig, ListEvent, ListItem, ListItemGutter, ListItemLine,
-    ListItemRole, ListItemStatus, ListSymbolPosition, ListTruncation, LogBuffer, LogEntry,
-    LogFilterMode, LogLevel, LogView, LogViewEvent, MessageGlyphs, MessageStyle, Modal,
-    MouseRegion, MultiSelect, MultiSelectChangeEvent, MultiSelectCommitEvent,
-    MultiSelectDescriptionOverflow, MultiSelectDescriptionPlacement, MultiSelectItem,
-    MultiSelectToggleEvent, NodeShape, NotePlacement, Orientation, Overflow, PaginationAction,
-    PaginationBar, PaginationButtonOverrides, PaginationInfo, PaginationLabels, PaginationState,
-    PanEvent, PanKeymap, PanMetrics, PanView, ParsedDiagram, PlainFormatter, Popover,
-    PopoverOffset, PopoverPlacement, ProgressBar, ProgressEvent, ProgressStyle,
-    ProgressTextPosition, ProgressZone, Radio, RadioLayout, ScrollAxis, ScrollBehavior,
-    ScrollChildExitDirection, ScrollChildVisibility, ScrollClip, ScrollDistanceConfig, ScrollEvent,
-    ScrollExitedChild, ScrollKeymap, ScrollMetrics, ScrollRequest, ScrollTarget, ScrollView,
-    ScrollViewportEvent, ScrollVisibleChild, ScrollWheelBehavior, ScrollWheelConfig, SearchEntry,
-    SearchEvent, SearchHighlight, SearchItem, SearchMatchMode, SearchPalette, Select,
-    SequenceDiagram, SequenceDiagramTheme, SequenceDiagramVariant, SequenceItemEvent,
-    SequenceItemPath, SequenceMessage, SequenceStep, Slider, Spacer, Sparkline,
-    SparklineAggregation, SparklineBarsPreset, SparklineLineGlyphs, SparklineLinePreset,
-    SparklineVariant, SparklineZeroPolicy, Spinner, SpinnerSpeed, SpinnerStyle, Splitter,
-    SplitterHandleMode, SplitterPaneLimits, SplitterResizeEvent, StateDiagram, StateDiagramTheme,
-    StateKind, StateSpec, StateTransition, StatusBar, StatusBarItemSize, Tab, TabVariant, Table,
-    TableCell, TableDisclosureState, TableEvent, TableRow, TableRowRole, TableRowSeparators, Tabs,
-    TabsEvent, TabsOverflow, Text, TextArea, TextAreaCursorMetrics, TextAreaDecoration,
-    TextAreaDecorationKind, TextAreaEvent, TextAreaGutter, TextAreaGutterColumn,
-    TextAreaGutterSign, TextAreaLineNumberMode, TextAreaMetrics, TextAreaPasteEvent,
-    TextAreaStateChangeEvent, TextAreaStateChangeReason, TextAreaVimConfig,
-    TextAreaVimCurrentLineHighlight, TextAreaVimKeyBinding, TextAreaVimKeymap, TextAreaVimMode,
-    TextAreaVirtualText, TextSource, ThemeProvider, Toast, ToastCopyAffordance, Tooltip, Tree,
-    TreeBranch, TreeEvent, TreeExpansionMode, TreeGuides, TreeHoverEvent, TreeKeymap, TreeNode,
-    TreePath, TreeToggleEvent, VStack, VirtualTextPlacement, ZStack,
+    Accordion, AccordionItem, Animated, AsciiCanvas, Badge, BadgePosition, BorderLabels,
+    BorderMergeMode, Breadcrumb, Button, ButtonVariant, Canvas, Center, CenterPin, Chart,
+    ChartAxis, ChartSeries, ChartSeriesMode, Checkbox, CheckboxEvent, CheckboxState, ClassDiagram,
+    ClassRelationKind, ClassVisibility, ColumnWidth, ComboBox, ComboBoxCommitEvent, CommandPalette,
+    ContextMenu, ContextProvider, DateEvent, DatePicker, Divider, DocumentClickEvent, DocumentView,
+    DragPayload, DragSource, DraggableTab, DraggableTabBar, DraggableTabCloseEvent,
+    DraggableTabReorderEvent, DraggableTabTransferEvent, DropEvent, DropTarget, EffectScope,
+    ErCardinality, ErDiagram, FileIconStyle, FileTree, FileTreeEntry, FileTreeEntrySource,
+    FileTreeEvent, Flow, FlowDirection, Flowchart, FlowchartEdge, Frame, FrameSequence,
+    GanttDiagram, GanttSection, GanttTask, Graph, GraphDirection, GraphNode, GraphNodeEvent, Grid,
+    HStack, Heatmap, HexArea, Hyperlink, HyperlinkEvent, IndentStyle, Input, InputEvent,
+    KeyCapture, List, ListEvent, ListItem, LogEntry, LogLevel, LogView, LogViewEvent, Modal,
+    MouseRegion, MultiSelect, MultiSelectChangeEvent, MultiSelectCommitEvent, MultiSelectItem,
+    NodeShape, Orientation, Overflow, PaginationAction, PaginationBar, PaginationState, PanEvent,
+    PanView, Popover, PopoverPlacement, ProgressBar, ProgressEvent, ProgressStyle,
+    ProgressTextPosition, Radio, RadioLayout, ScrollEvent, ScrollKeymap, ScrollView, SearchEvent,
+    SearchItem, SearchPalette, Select, SequenceDiagram, SequenceMessage, Slider, Spacer, Sparkline,
+    SparklineVariant, Spinner, SpinnerSpeed, SpinnerStyle, Splitter, SplitterResizeEvent,
+    StateDiagram, StatusBar, Tab, Table, TableCell, TableEvent, TableRow, Tabs, TabsEvent, Text,
+    TextArea, TextAreaEvent, TextAreaLineNumberMode, ThemeProvider, Toast, Tooltip, Tree,
+    TreeEvent, TreeExpansionMode, TreeNode, TreeToggleEvent, VStack, ZStack,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Feature-gated curated widgets
+// Feature-gated widgets & high-frequency companion types
+// Rule: widget entry points enabled by optional Cargo features plus a small set
+// of high-frequency companion types; specialised options and terminal protocol,
+// history, damage, and graphics internals import from the crate root.
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(feature = "big-text")]
-pub use crate::widgets::{BigFont, BigText, GlyphLayout, Shadow};
-
-#[cfg(feature = "qr-code")]
-pub use crate::widgets::{QrCode, QrEcc, QrRender};
+pub use crate::widgets::{BigFont, BigText};
 
 #[cfg(feature = "diff-view")]
-pub use crate::widgets::{
-    DiffContextExpansion, DiffContextRange, DiffContextSeparatorDirection,
-    DiffContextSeparatorEvent, DiffData, DiffDataConfig, DiffHunkAnchor, DiffInlineBlock,
-    DiffLineAnchor, DiffLineClickEvent, DiffLineRange, DiffLineRangeEvent, DiffLineSide, DiffPane,
-    DiffPrefixes, DiffScrollEvent, DiffView, DiffViewBackend, DiffViewMode,
-};
+pub use crate::widgets::{DiffPane, DiffView, DiffViewBackend, DiffViewMode};
 
 #[cfg(feature = "image")]
-pub use crate::widgets::{Image, ImageFit, ImagePlayback, ImageProtocol, ImageRepeat, ImageSource};
+pub use crate::widgets::{Image, ImageFit};
 
 #[cfg(feature = "markdown")]
-pub use crate::widgets::{MarkdownFormatter, MarkdownSpacing};
+pub use crate::widgets::MarkdownFormatter;
+
+#[cfg(feature = "qr-code")]
+pub use crate::widgets::QrCode;
 
 #[cfg(feature = "syntax-syntect")]
-pub use crate::widgets::{
-    SyntectDocumentFormatter, SyntectStrategy, apply_syntect_strategy_app_theme, language_from_path,
-};
+pub use crate::widgets::SyntectStrategy;
 
-#[cfg(all(feature = "terminal-images", not(target_arch = "wasm32")))]
-pub use crate::host_cell_size;
-#[cfg(all(feature = "terminal-images", not(target_arch = "wasm32")))]
-pub use crate::host_reads_shared_frames;
-#[cfg(all(feature = "terminal", unix))]
-pub use crate::widgets::TerminalPtyHandoff;
 #[cfg(feature = "terminal")]
 pub use crate::widgets::{
-    AltScreenHistoryReader, CopyModeAction, CopyModeGrid, CopyModeViewport, DamagedRow,
-    ForwardedMouseEvent, GraphicsDamage, HistoryRead, HistoryReadError, HistoryReadFrame,
-    HistoryReadRow, HistoryReadStep, KittyKeyboardFlags, ManagedTerminal, ManagedTerminalProps,
-    ManagedTerminalStatus, MouseEncoding, MouseMode, MouseModeState, PresentedTerminal,
-    ProgramStatusCause, ProgramStatusEvent, ProgramStatusRecord, ProgramStatusSnapshot,
-    ProgramStatusState, ScrollbackLineage, SemanticMark, SemanticMarkKind, Terminal,
-    TerminalBuffer, TerminalCellSize, TerminalClipboardEvent, TerminalClipboardTarget,
-    TerminalColorPalette, TerminalCommandPhase, TerminalCopyMode, TerminalDamage,
-    TerminalDecoration, TerminalHyperlink, TerminalInputEvent, TerminalInputKind, TerminalKeyModes,
-    TerminalLinkEvent, TerminalLinkKind, TerminalLogicalLine, TerminalMutation, TerminalPasteEvent,
-    TerminalPasteShortcutBehavior, TerminalPathFilter, TerminalPos,
-    TerminalPresentationSubscription, TerminalPty, TerminalPtyConfig, TerminalPtyError,
-    TerminalPtyEvent, TerminalReadGate, TerminalReadGateStats, TerminalRenderSnapshot,
-    TerminalScreen, TerminalScreenHandle, TerminalSelection, TerminalSelectionEvent,
-    TerminalSemanticEvent, TerminalSemanticState, TerminalTextPosition, TerminalViewport,
-    TerminalWorkingDirectory, TerminalWorkingDirectorySource, absolute_line, encode_paste,
-    focus_sequences, from_viewport, key_event_to_bytes, mouse_event_to_bytes, paste_sequences,
-    terminal_selection_text, to_viewport, viewport_row,
+    ManagedTerminal, ManagedTerminalStatus, Terminal, TerminalInputEvent, TerminalLinkEvent,
+    TerminalPty, TerminalPtyConfig, TerminalPtyEvent, TerminalRenderSnapshot, TerminalScreen,
+    TerminalSelectionEvent, TerminalViewport,
 };
-#[cfg(feature = "terminal-images")]
-pub use crate::widgets::{
-    GraphicsMediaPolicy, GraphicsRelayPolicy, ImagePlacementIdentity, ImagePlacementKey,
-    ImageSourceKey, ImageSourceRevision, TerminalImage, TerminalImageCrop, TerminalImagePlacement,
-    TerminalMediaWork, TerminalPreparedInput,
-};
-#[cfg(not(target_arch = "wasm32"))]
-pub use crate::{PixelPointerStatus, pixel_pointer_status};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Feature-gated utilities
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[cfg(feature = "theme-reload")]
-pub use crate::{ThemeWatcher, load_theme_from_toml};
-
-#[cfg(feature = "terminal-images")]
-pub use crate::widgets::{
-    GraphicsDependency, TerminalImmutableFile, TerminalOutputClass, TerminalOutputMedia,
-    TerminalOutputTransaction,
-};
-
-pub use crate::{TerminalGraphicsMetrics, terminal_graphics_metrics};

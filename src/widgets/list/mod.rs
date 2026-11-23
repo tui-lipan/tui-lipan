@@ -794,6 +794,7 @@ impl ListItemLine {
     /// and a description that fits is never cut.
     ///
     /// ```
+    /// use tui_lipan::ListItemLine;
     /// use tui_lipan::prelude::*;
     ///
     /// // A long name gives way to a long description, but never below a third of the row.
@@ -1029,7 +1030,7 @@ impl ListItem {
     /// # Examples
     ///
     /// ```
-    /// # use tui_lipan::prelude::{ListItem, ListSymbolPosition, Spinner};
+    /// # use tui_lipan::{ListItem, ListSymbolPosition, Spinner};
     /// let item = ListItem::new("Indexing repository")
     ///     .label_spinner(Spinner::new())
     ///     .label_spinner_position(ListSymbolPosition::Right);

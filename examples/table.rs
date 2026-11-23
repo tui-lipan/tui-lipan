@@ -1,3 +1,4 @@
+use tui_lipan::TableDisclosureState;
 use tui_lipan::prelude::*;
 
 struct TableDemo;

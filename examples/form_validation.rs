@@ -5,6 +5,7 @@
 use std::sync::Arc;
 
 use tui_lipan::prelude::*;
+use tui_lipan::{StringValidator, ValidationError};
 
 const LOGIN_WIDTH: u16 = 50;
 

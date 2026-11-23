@@ -1,3 +1,4 @@
+use tui_lipan::CaretShape;
 use tui_lipan::OverlayScope;
 use tui_lipan::TestBackend;
 use tui_lipan::prelude::*;

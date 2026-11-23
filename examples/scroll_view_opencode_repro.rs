@@ -15,6 +15,7 @@ use std::thread;
 use std::time::Duration;
 
 use tui_lipan::prelude::*;
+use tui_lipan::{DecorationGlyph, EdgeDecoration, ScrollWheelBehavior, ScrollWheelConfig};
 
 const MESSAGE_PAIR_COUNT: usize = 90;
 const STREAM_TICK_MS: u64 = 180;

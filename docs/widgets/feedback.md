@@ -41,6 +41,8 @@ Visual progress indicator with multiple styles and optional drag interaction.
 **Text positions**: `Left`, `Right` (default), `Above`, `Below`, `Middle` (`Middle` only works with `ProgressStyle::Block`). Percentage and label text share one line when both use the same `Above`, `Below`, or `Middle` position.
 
 ```rust
+use tui_lipan::ProgressZone;
+
 ProgressBar::new(0.67)
     .progress_style(ProgressStyle::Block)
     .show_percentage(true)
@@ -184,6 +186,8 @@ Composable pagination controls for `PaginationState` with button-style personali
 | `on_action` | `Callback<PaginationAction>` | Emits `First/Prev/Next/Last` |
 
 ```rust
+use tui_lipan::PaginationButtonOverrides;
+
 PaginationBar::new(self.pagination)
     .button_variant(ButtonVariant::Outlined)
     .button_border_style(BorderStyle::Rounded)
@@ -257,6 +261,8 @@ Small status indicator overlaid on an element.
 | `cap_same_color` | `bool` | Use a contrasting thin left separator for equal-color neighbors |
 
 ```rust
+use tui_lipan::CapStyle;
+
 Badge::new("New")
     .style(Style::new().fg(Color::White).bg(Color::Red))
     .cap(CapStyle::Round)

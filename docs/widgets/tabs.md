@@ -291,6 +291,8 @@ attention state rather than adding index-based alert styling.
 ### File Icons
 
 ```rust
+use tui_lipan::FileIconPalette;
+
 DraggableTabBar::new()
     .show_file_icons(true)
     .file_icon_style(FileIconStyle::NerdFontColored)
@@ -308,6 +310,8 @@ when the tab strip overflows. To keep more tabs visible, opt into shrinking
 labels before scrolling:
 
 ```rust
+use tui_lipan::DraggableTabBarOverflow;
+
 DraggableTabBar::new()
     .overflow(DraggableTabBarOverflow::ShrinkThenScroll { min_tab_width: 8 })
 ```
@@ -338,6 +342,8 @@ position a tab is drawn in. `position_label` formats every label from the tab's
 zero-based position and the label it was created with:
 
 ```rust
+use tui_lipan::DragReorderMode;
+
 DraggableTabBar::new()
     .tabs(names.iter().map(|name| DraggableTab::new(name.as_str())))
     .reorder_mode(DragReorderMode::OnDrop)
@@ -406,6 +412,8 @@ Tabs can be dragged between bars that share the same `drag_group`. The `on_trans
 ### Full Example
 
 ```rust
+use tui_lipan::{CapStyle, DraggableTabBarOverflow, DraggableTabBarVariant};
+
 rsx! {
     DraggableTabBar {
         tabs: vec![

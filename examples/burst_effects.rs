@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use tui_lipan::CellMask;
 use tui_lipan::prelude::*;
+use tui_lipan::{CellEffect, EffectCell, EffectContext, GlyphLayout, TerminalColor};
 
 const R_CELLS_PER_SEC: f32 = 22.0;
 const R_RING_WIDTH: f32 = 2.5;

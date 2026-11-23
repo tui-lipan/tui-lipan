@@ -1,3 +1,4 @@
+use tui_lipan::ProgressZone;
 use tui_lipan::prelude::*;
 
 struct ProgressZonesDemo;

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use tui_lipan::ImageContent;
+use tui_lipan::ScrollClip;
 use tui_lipan::TextAreaImageMode;
 use tui_lipan::prelude::*;
 

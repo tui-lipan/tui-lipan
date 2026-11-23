@@ -55,7 +55,7 @@ JavaScript (Babel), PowerShell, Regular Expressions (Elixir), Salt State (SLS),
 and VimHelp. The extra syntax data adds about 0.6 MiB to the binary.
 
 Native process streaming is not part of the wasm API. The `tui_lipan::process`
-module and prelude exports such as `ProcessSpec` and `ProcessEvent` are gated
+module and crate-root exports such as `ProcessSpec` and `ProcessEvent` are gated
 with `#[cfg(not(target_arch = "wasm32"))]`; browser builds should use web APIs
 or a server bridge for subprocess-like work.
 

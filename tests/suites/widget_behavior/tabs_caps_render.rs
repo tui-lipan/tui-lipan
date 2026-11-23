@@ -6,6 +6,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
+use tui_lipan::TabsOverflow;
 use tui_lipan::core::event::{MouseButton, MouseKind};
 use tui_lipan::prelude::*;
 use tui_lipan::{CapturedFrame, MouseEvent, TestBackend};

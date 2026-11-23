@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use tui_lipan::CellMask;
 use tui_lipan::prelude::*;
+use tui_lipan::{DecorationGlyph, DecorationPlacement, EdgeDecoration};
 
 struct OpencodeHome {
     editor: TextEditor,

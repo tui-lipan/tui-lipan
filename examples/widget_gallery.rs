@@ -10,6 +10,7 @@
 //! - Spinners: Animate automatically
 //! - 'q'/Esc: Quit
 
+use tui_lipan::CheckboxVariant;
 use tui_lipan::prelude::*;
 use tui_lipan::style::palette;
 

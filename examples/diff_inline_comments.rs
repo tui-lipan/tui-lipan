@@ -1,5 +1,8 @@
 use tui_lipan::TextEditor;
 use tui_lipan::prelude::*;
+use tui_lipan::{
+    DiffInlineBlock, DiffLineClickEvent, DiffLineRange, DiffLineRangeEvent, DiffLineSide,
+};
 
 const BEFORE: &str = r#"use std::time::Duration;
 

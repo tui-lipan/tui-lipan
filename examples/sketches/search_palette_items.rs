@@ -3,6 +3,9 @@
 use std::sync::Arc;
 
 use tui_lipan::prelude::*;
+use tui_lipan::{
+    DescriptionPlacement, ItemDescription, ListConfig, ListItemGutter, ListItemStatus,
+};
 use tui_lipan::{Result, Sketch};
 
 fn view() -> Element {

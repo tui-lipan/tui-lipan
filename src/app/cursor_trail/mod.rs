@@ -299,8 +299,11 @@ impl Default for CursorTrailSettle {
 /// left to the cell it landed on, and pulled back into the caret. Inline surfaces never draw one.
 ///
 /// ```
-/// use std::time::Duration;
 /// use tui_lipan::prelude::*;
+/// use tui_lipan::{
+///     CursorTrailFill, CursorTrailMotion, CursorTrailParticles, CursorTrailSpring,
+///     CursorTrailTrigger,
+/// };
 ///
 /// let trail = CursorTrail::new()
 ///     .trigger(CursorTrailTrigger::jump())

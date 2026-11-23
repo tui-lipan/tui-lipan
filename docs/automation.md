@@ -86,6 +86,8 @@ does not mask it, so treat those artifacts as sensitive data.
 Selectors are explicit variants. They do not fall through to another strategy.
 
 ```rust
+use tui_lipan::{Selector, SemanticRole};
+
 Selector::id("save")
 Selector::role(SemanticRole::Button).name("Save")
 Selector::text_contains("Connection failed")
@@ -104,6 +106,8 @@ returns `AmbiguousMatch`. Discovery APIs may return all matches.
 `AutomationStep` is a typed, non-exhaustive operation:
 
 ```rust
+use tui_lipan::{AutomationStep, Selector};
+
 AutomationStep::click(Selector::id("save"))
 AutomationStep::resize(120, 40)
 AutomationStep::advance(Duration::from_millis(250))
@@ -147,6 +151,8 @@ the predicate, as `value=ready`, `text=Connected`, `count=3`, or
 Clock mode is fixed when a session starts:
 
 ```rust
+use tui_lipan::ClockMode;
+
 ClockMode::Realtime
 ClockMode::Controlled
 ```

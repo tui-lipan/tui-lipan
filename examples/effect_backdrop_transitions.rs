@@ -9,6 +9,7 @@
 use std::time::Duration;
 
 use tui_lipan::prelude::*;
+use tui_lipan::{CellEffect, EffectCell, EffectContext, TerminalColor};
 
 const TRANSITION: Duration = Duration::from_millis(700);
 

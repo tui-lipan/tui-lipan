@@ -1,6 +1,9 @@
 //! Shared overlay and inline visibility lifecycle contracts.
 use std::{cell::RefCell, rc::Rc, sync::Arc, time::Duration};
 use tui_lipan::prelude::*;
+use tui_lipan::{
+    CellEffect, EffectCell, EffectContext, VisibilityAnimationContext, VisibilityAnimationPhase,
+};
 use tui_lipan::{OverlayId, TestBackend};
 
 fn timing(ms: u64) -> TransitionConfig {

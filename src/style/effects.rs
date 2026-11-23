@@ -531,6 +531,7 @@ pub enum RippleRepeat {
 /// [`Self::new`], then adjust it with the `with_*` setters:
 ///
 /// ```
+/// use tui_lipan::RippleAnimation;
 /// use tui_lipan::prelude::*;
 ///
 /// // A ring that springs out past its target and settles, brightening as it goes.

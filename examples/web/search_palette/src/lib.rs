@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use wasm_bindgen::prelude::*;
 
+use tui_lipan::SearchEntry;
 use tui_lipan::WebTerminal;
 use tui_lipan::core::component::{Component, Context, KeyUpdate, Update};
 use tui_lipan::core::element::Element;

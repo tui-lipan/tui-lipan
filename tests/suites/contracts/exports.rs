@@ -115,6 +115,7 @@ fn crate_root_exports_terminal_images_feature_items() {
 mod prelude_hygiene {
     use std::any::TypeId;
     use tui_lipan::prelude::*;
+    use tui_lipan::{FlowchartNodeId, SequenceStep};
 
     // Common user-authored names must not collide with prelude re-exports.
     #[allow(dead_code)]

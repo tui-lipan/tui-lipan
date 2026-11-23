@@ -4,6 +4,10 @@ use std::rc::Rc;
 use tui_lipan::core::event::{MouseButton, MouseEvent, MouseKind};
 use tui_lipan::prelude::*;
 use tui_lipan::{CapturedFrame, TestBackend};
+use tui_lipan::{
+    DescriptionPlacement, ItemDescription, ListItemGutter, ListItemLine, ListItemStatus,
+    SearchMatchMode,
+};
 
 struct Palette(SearchPalette<usize>);
 
