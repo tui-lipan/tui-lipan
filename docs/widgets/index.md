@@ -8,7 +8,7 @@ List-like and choice widgets share one vocabulary:
 
 - **`selected(impl Into<Option<usize>>)`**: the widget's current item on `List`, `Table`, `Tree`, `Tabs`, `DraggableTabBar`, `Select`, `Radio`, and `ComboBox`. Pass `None` for no current item (no row, tab, or option highlighted); bare `usize` values work via `From<usize> for Option<usize>`.
 - **`highlighted(impl Into<Option<usize>>)`** + **`on_highlight`**: the keyboard cursor inside an open popup or multi-choice list when separate from the committed selection (`ComboBox`, `MultiSelect`).
-- **`on_select`**: the current item changed via keyboard, mouse, or picking an option from a popup (`List`, `Table`, `Tree`, `Tabs`, `DraggableTabBar`, `Select` -> `SelectEvent`, `Radio` -> `RadioEvent`). Moving the highlight inside an open `Select` popup does not fire `on_select`.
+- **`on_select`**: the current item changed via keyboard, mouse, or picking an option from a popup (`List`, `Table`, `Tree`, `Tabs`, `DraggableTabBar`, `Select` -> `SelectEvent`, `Radio` -> `RadioEvent`). On a closed `Select` trigger, `Up`/`Down`/`Home`/`End`/`PageUp`/`PageDown` move the selection and emit `on_select` once per actual change; moving the highlight inside an open `Select` popup does not fire `on_select`.
 - **`on_activate`**: commit action (Enter / click per widget rules) where present (`List`, `Table`, `Tree`).
 
 `ListItem::active` and `*_style` "active" props represent marked rows and styling roles and remain unchanged.

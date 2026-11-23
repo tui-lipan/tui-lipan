@@ -35,8 +35,21 @@ struct SelectState {
 }
 
 struct SelectApp {
+    options: Vec<&'static str>,
     initial: Option<usize>,
     initially_expanded: bool,
+    disabled: bool,
+}
+
+impl SelectApp {
+    fn new(initial: Option<usize>, initially_expanded: bool) -> Self {
+        Self {
+            options: vec!["Alpha", "Beta", "Gamma"],
+            initial,
+            initially_expanded,
+            disabled: false,
+        }
+    }
 }
 
 impl Component for SelectApp {
@@ -65,9 +78,10 @@ impl Component for SelectApp {
 
     fn view(&self, ctx: &Context<Self>) -> Element {
         Select::new()
-            .options(["Alpha", "Beta", "Gamma"])
+            .options(self.options.iter().copied())
             .selected(ctx.state.selected)
             .expanded(ctx.state.expanded)
+            .disabled(self.disabled)
             .on_toggle(ctx.link().callback(SelectMsg::Toggle))
             .on_select(ctx.link().callback(SelectMsg::Pick))
             .key("select")
@@ -82,10 +96,7 @@ fn press<C: Component>(backend: &mut TestBackend<C>, code: KeyCode) {
 
 #[test]
 fn select_emits_once_per_keyboard_pick_and_none_on_highlight() {
-    let mut backend = TestBackend::new(SelectApp {
-        initial: Some(0),
-        initially_expanded: false,
-    });
+    let mut backend = TestBackend::new(SelectApp::new(Some(0), false));
     backend.set_viewport(Rect {
         x: 0,
         y: 0,
@@ -124,10 +135,7 @@ fn select_emits_once_per_keyboard_pick_and_none_on_highlight() {
 
 #[test]
 fn select_emits_once_per_mouse_pick() {
-    let mut backend = TestBackend::new(SelectApp {
-        initial: Some(0),
-        initially_expanded: true,
-    });
+    let mut backend = TestBackend::new(SelectApp::new(Some(0), true));
     backend.set_viewport(Rect {
         x: 0,
         y: 0,
@@ -162,10 +170,7 @@ fn select_emits_once_per_mouse_pick() {
 
 #[test]
 fn select_none_clears_selection_and_requires_highlight_before_enter() {
-    let mut backend = TestBackend::new(SelectApp {
-        initial: None,
-        initially_expanded: true,
-    });
+    let mut backend = TestBackend::new(SelectApp::new(None, true));
     backend.set_viewport(Rect {
         x: 0,
         y: 0,
@@ -193,6 +198,152 @@ fn select_none_clears_selection_and_requires_highlight_before_enter() {
     assert_eq!(backend.state().picks.len(), 1);
     assert_eq!(backend.state().picks[0].index, 0);
     assert_eq!(backend.state().picks[0].label.as_ref(), "Alpha");
+}
+
+#[test]
+fn select_closed_trigger_keys_move_selection_and_emit_on_select_once() {
+    let mut backend = TestBackend::new(SelectApp {
+        options: vec!["Alpha", "Beta", "Gamma", "Delta", "Epsilon"],
+        initial: Some(0),
+        initially_expanded: false,
+        disabled: false,
+    });
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 30,
+        h: 12,
+    });
+    backend.render();
+    assert!(backend.focus_key(&Key::from("select")));
+    backend.render();
+
+    // Down on closed trigger picks index 1 without opening the popup.
+    press(&mut backend, KeyCode::Down);
+    assert!(!backend.state().expanded);
+    assert_eq!(backend.state().picks.len(), 1);
+    assert_eq!(backend.state().picks[0].index, 1);
+    assert_eq!(backend.state().picks[0].label.as_ref(), "Beta");
+
+    // Up moves back to 0; another Up at 0 emits nothing.
+    press(&mut backend, KeyCode::Up);
+    assert_eq!(backend.state().picks.len(), 2);
+    assert_eq!(backend.state().picks[1].index, 0);
+    press(&mut backend, KeyCode::Up);
+    assert_eq!(backend.state().picks.len(), 2, "Up at start emits nothing");
+
+    // End jumps to the last option; Down and PageDown at the end emit nothing.
+    press(&mut backend, KeyCode::End);
+    assert_eq!(backend.state().picks.len(), 3);
+    assert_eq!(backend.state().picks[2].index, 4);
+    assert_eq!(backend.state().picks[2].label.as_ref(), "Epsilon");
+    press(&mut backend, KeyCode::Down);
+    press(&mut backend, KeyCode::PageDown);
+    assert_eq!(
+        backend.state().picks.len(),
+        3,
+        "Down/PageDown at the last option must emit nothing"
+    );
+
+    // PageUp steps back without opening; Home jumps to 0; PageDown steps forward.
+    press(&mut backend, KeyCode::PageUp);
+    assert!(!backend.state().expanded);
+    assert_eq!(backend.state().picks.len(), 4);
+    assert_eq!(backend.state().picks[3].index, 1);
+    assert_eq!(backend.state().picks[3].label.as_ref(), "Beta");
+
+    press(&mut backend, KeyCode::Home);
+    assert_eq!(backend.state().picks.len(), 5);
+    assert_eq!(backend.state().picks[4].index, 0);
+
+    press(&mut backend, KeyCode::PageDown);
+    assert_eq!(backend.state().picks.len(), 6);
+    assert_eq!(backend.state().picks[5].index, 3);
+    assert_eq!(backend.state().picks[5].label.as_ref(), "Delta");
+
+    // Space still opens the popup without emitting on_select.
+    press(&mut backend, KeyCode::Char(' '));
+    assert!(backend.state().expanded);
+    assert_eq!(backend.state().picks.len(), 6);
+}
+
+#[test]
+fn select_closed_trigger_from_none_empty_and_disabled() {
+    // None selection: Down seeds index 0 and emits once.
+    let mut none_backend = TestBackend::new(SelectApp::new(None, false));
+    none_backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 30,
+        h: 12,
+    });
+    none_backend.render();
+    assert!(none_backend.focus_key(&Key::from("select")));
+    none_backend.render();
+
+    press(&mut none_backend, KeyCode::Down);
+    assert!(!none_backend.state().expanded);
+    assert_eq!(none_backend.state().picks.len(), 1);
+    assert_eq!(none_backend.state().picks[0].index, 0);
+    assert_eq!(none_backend.state().picks[0].label.as_ref(), "Alpha");
+
+    // Zero options: navigation keys emit nothing.
+    let mut empty_backend = TestBackend::new(SelectApp {
+        options: Vec::new(),
+        initial: None,
+        initially_expanded: false,
+        disabled: false,
+    });
+    empty_backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 30,
+        h: 12,
+    });
+    empty_backend.render();
+    assert!(empty_backend.focus_key(&Key::from("select")));
+    empty_backend.render();
+
+    for code in [
+        KeyCode::Down,
+        KeyCode::Up,
+        KeyCode::Home,
+        KeyCode::End,
+        KeyCode::PageDown,
+        KeyCode::PageUp,
+    ] {
+        press(&mut empty_backend, code);
+    }
+    assert!(empty_backend.state().picks.is_empty());
+
+    // Disabled Select: navigation and open keys emit nothing and keep popup closed.
+    let mut disabled_backend = TestBackend::new(SelectApp {
+        options: vec!["Alpha", "Beta", "Gamma"],
+        initial: Some(0),
+        initially_expanded: false,
+        disabled: true,
+    });
+    disabled_backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 30,
+        h: 12,
+    });
+    disabled_backend.render();
+    let _ = disabled_backend.focus_key(&Key::from("select"));
+    disabled_backend.render();
+
+    for code in [
+        KeyCode::Down,
+        KeyCode::End,
+        KeyCode::PageDown,
+        KeyCode::Enter,
+        KeyCode::Char(' '),
+    ] {
+        press(&mut disabled_backend, code);
+    }
+    assert!(!disabled_backend.state().expanded);
+    assert!(disabled_backend.state().picks.is_empty());
 }
 
 // ── Tabs & DraggableTabBar ───────────────────────────────────────────────────

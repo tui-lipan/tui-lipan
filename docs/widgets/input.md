@@ -1092,7 +1092,7 @@ Dropdown select widget.
 | `tab_stop` | `bool` | Include trigger in Tab traversal (default: `true`) |
 | `on_focus` / `on_blur` | `Callback<()>` | Trigger focus gained / lost |
 | `on_key` | `KeyHandler` | Key while trigger focused (caller-first) |
-| `on_select` | `Callback<SelectEvent>` | Option picked via Enter or mouse click (`SelectEvent { index, label }`); popup highlight movement does not emit `on_select` |
+| `on_select` | `Callback<SelectEvent>` | Option selected (`SelectEvent { index, label }`): fires on closed-trigger navigation or when committing a pick in the open popup (Enter or mouse click); moving the highlight inside an open popup does not emit `on_select` |
 | `on_toggle` | `Callback<bool>` | Dropdown opened/closed |
 | `button_variant` | `ButtonVariant` | Trigger button variant |
 | `button_padding` | `impl Into<Padding>` | Trigger button padding (default: 1 cell horizontally) |
@@ -1133,6 +1133,10 @@ Dropdown select widget.
 | `list_empty_text` | `String` | Dropdown empty text |
 | `list_empty_text_style` | `Style` | Dropdown empty text style |
 | `list_disabled_style` | `Style` | Dropdown disabled style |
+
+Keyboard behavior:
+- **Closed trigger (focused, enabled):** `Up`/`Down` (and `k`/`j`), `Home`/`End`, and `PageUp`/`PageDown` step through options without opening the popup and emit `on_select` once per actual change (no emission at the ends or with zero options). `Enter` and `Space` open/toggle the popup.
+- **Open popup:** arrow/page/home/end keys move the popup highlight without emitting `on_select`; `Enter` or mouse click commits the pick (emitting `on_select` once) and closes the popup; `Esc` dismisses without emitting `on_select`.
 
 Select forwards shared dropdown-list chrome through `ListConfig`, including
 `symbol_column`, `gutter_gap`, and `gutter_for_non_selectable` for row-local

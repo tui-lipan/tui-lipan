@@ -9,6 +9,9 @@ use crate::core::element::Element;
 use crate::core::event::{KeyCode, KeyEvent, MouseEvent};
 use crate::style::{Align, BorderStyle, Length, Padding, ScrollbarConfig, Style, StyleSlot};
 use crate::widgets::button::ButtonVariant;
+use crate::widgets::scroll::{
+    ScrollAction, ScrollKeymap, has_command_modifier, scroll_action_from_key,
+};
 use crate::widgets::{
     Button, List, ListConfig, ListEvent, ListItem, Popover, PopoverPlacement, ZStack,
 };
@@ -598,26 +601,61 @@ impl From<Select> for Element {
             button = button.on_click(Callback::new(move |_: MouseEvent| cb.emit(!expanded)));
         }
 
-        if select.expanded && !select.disabled {
-            let on_toggle = select.on_toggle.clone();
-            let caller_on_key = select.on_key.clone();
-            button = button.on_key(KeyHandler::new(move |key: KeyEvent| {
-                if caller_on_key
-                    .as_ref()
-                    .is_some_and(|handler| handler.handle(key))
-                {
-                    return true;
-                }
+        let options: Arc<[Arc<str>]> = select.options.into();
 
-                if key.code == KeyCode::Esc
-                    && let Some(toggle) = &on_toggle
-                {
-                    toggle.emit(false);
-                    return true;
-                }
+        if !select.disabled {
+            if select.expanded {
+                let on_toggle = select.on_toggle.clone();
+                let caller_on_key = select.on_key.clone();
+                button = button.on_key(KeyHandler::new(move |key: KeyEvent| {
+                    if caller_on_key
+                        .as_ref()
+                        .is_some_and(|handler| handler.handle(key))
+                    {
+                        return true;
+                    }
 
-                false
-            }));
+                    if key.code == KeyCode::Esc
+                        && let Some(toggle) = &on_toggle
+                    {
+                        toggle.emit(false);
+                        return true;
+                    }
+
+                    false
+                }));
+            } else {
+                let options = options.clone();
+                let selected = select.selected;
+                let on_select = select.on_select.clone();
+                let caller_on_key = select.on_key.clone();
+                let page_size = closed_page_size(
+                    select.list_height,
+                    select.list_config.border,
+                    select.list_config.padding,
+                );
+                button = button.on_key(KeyHandler::new(move |key: KeyEvent| {
+                    if caller_on_key
+                        .as_ref()
+                        .is_some_and(|handler| handler.handle(key))
+                    {
+                        return true;
+                    }
+
+                    let Some(action) = closed_trigger_action(&key, page_size) else {
+                        return false;
+                    };
+
+                    if let Some(next) = next_closed_selection(selected, options.len(), action)
+                        && let Some(cb) = &on_select
+                        && let Some(label) = options.get(next).cloned()
+                    {
+                        cb.emit(SelectEvent { index: next, label });
+                    }
+
+                    true
+                }));
+            }
         } else if let Some(handler) = select.on_key {
             button = button.on_key(handler);
         }
@@ -627,7 +665,6 @@ impl From<Select> for Element {
             .item_hover_style
             .unwrap_or(select.list_config.selection_style);
 
-        let options: Arc<[Arc<str>]> = select.options.into();
         let mut list = List::new()
             .items(options.iter().map(|s| ListItem::new(s.clone())))
             .selected(select.selected)
@@ -792,5 +829,54 @@ impl crate::Component for SelectList {
             .selected(ctx.state)
             .on_select(ctx.link().callback(|ev: ListEvent| ev.index))
             .into()
+    }
+}
+
+fn closed_page_size(list_height: Length, border: bool, padding: Padding) -> usize {
+    const DEFAULT_PAGE_SIZE: usize = 5;
+    let Length::Px(height) = list_height else {
+        return DEFAULT_PAGE_SIZE;
+    };
+    let chrome = u16::from(border) * 2 + padding.top + padding.bottom;
+    let visible = usize::from(height.saturating_sub(chrome));
+    visible.saturating_sub(1).max(1)
+}
+
+fn closed_trigger_action(key: &KeyEvent, page_size: usize) -> Option<ScrollAction> {
+    if has_command_modifier(key) {
+        return None;
+    }
+    match key.code {
+        KeyCode::PageUp => Some(ScrollAction::LineUp(page_size)),
+        KeyCode::PageDown => Some(ScrollAction::LineDown(page_size)),
+        _ => match scroll_action_from_key(key, ScrollKeymap::default())? {
+            action @ (ScrollAction::LineUp(_)
+            | ScrollAction::LineDown(_)
+            | ScrollAction::Home
+            | ScrollAction::End) => Some(action),
+            ScrollAction::LineLeft(_) | ScrollAction::LineRight(_) => None,
+        },
+    }
+}
+
+fn next_closed_selection(
+    current: Option<usize>,
+    len: usize,
+    action: ScrollAction,
+) -> Option<usize> {
+    if len == 0 {
+        return None;
+    }
+    match current {
+        Some(selected) => {
+            let clamped = selected.min(len.saturating_sub(1));
+            List::selection_for_action_in_len(clamped, len, action, false)
+                .filter(|&next| next != clamped)
+        }
+        None => match action {
+            ScrollAction::LineDown(_) | ScrollAction::Home => Some(0),
+            ScrollAction::LineUp(_) | ScrollAction::End => Some(len - 1),
+            ScrollAction::LineLeft(_) | ScrollAction::LineRight(_) => None,
+        },
     }
 }
