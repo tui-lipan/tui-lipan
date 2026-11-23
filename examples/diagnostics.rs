@@ -310,7 +310,6 @@ impl Diagnostics {
                         Input {
                             value: ctx.state.active_input_value.clone(),
                             on_change: ctx.link().callback(|e: InputEvent| Msg::ActiveInputChange(e.value.to_string())),
-                            border: true,
                         },
                         Text { content: "" },
                         Text { content: "Editable TextArea:" },

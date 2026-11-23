@@ -151,7 +151,6 @@ impl Component for InlineChoices {
                             .cursor(ctx.state.note.cursor())
                             .anchor(ctx.state.note.anchor())
                             .placeholder("Optional note")
-                            .border(true)
                             .on_change(ctx.link().callback(Msg::NoteChanged))
                             .on_submit(ctx.link().callback(|_| Msg::Apply)),
                     )

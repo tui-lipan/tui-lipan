@@ -327,7 +327,7 @@ setter is used.
 | `selection_style` | `Style` | Text selection style |
 | `extend_selection_style` / `inherit_selection_style` | `Style` / `()` | Extend or inherit the text-selection theme role instead of replacing it |
 | `placeholder` | `String` | Placeholder when empty |
-| `border` | `bool` | Draw border (default: `false`) |
+| `border` | `bool` | Draw border (default: `true`) |
 | `border_style` | `BorderStyle` | Border appearance when `border` is `true` |
 | `mask` | `Option<char>` | Masking character (e.g., `'*'` for passwords) |
 | `read_only` | `bool` | Allow selection but block keyboard input |

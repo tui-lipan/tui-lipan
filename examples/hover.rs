@@ -123,7 +123,6 @@ impl HoverDemo {
                 Input::new(ctx.state.input_value.clone())
                     .cursor(ctx.state.input_cursor)
                     .placeholder("Type here...")
-                    .border(true)
                     .border_style(BorderStyle::Rounded)
                     .style(Style::new().bg(Color::indexed(236)))
                     .hover_style(hover_style)

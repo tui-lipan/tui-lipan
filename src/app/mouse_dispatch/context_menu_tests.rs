@@ -345,7 +345,7 @@ fn context_menu_editors_do_not_move_caret_or_selection() {
         .find(|node| matches!(node.kind, NodeKind::Input(_)))
         .unwrap()
         .id;
-    right_click(&mut backend, 5, 0);
+    right_click(&mut backend, 5, 1);
     assert_eq!(input_menus.borrow().len(), 1);
     let NodeKind::Input(input) = &backend.core.tree.node(id).kind else {
         unreachable!()
