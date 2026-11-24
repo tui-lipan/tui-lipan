@@ -369,6 +369,7 @@ fn hash_document_styles(styles: &DocumentStyles) -> u64 {
     styles.heading_styles.hash(&mut hasher);
     styles.code_inline_style.hash(&mut hasher);
     styles.code_block_style.hash(&mut hasher);
+    styles.code_block_header_style.hash(&mut hasher);
     styles.emphasis_style.hash(&mut hasher);
     styles.strong_style.hash(&mut hasher);
     styles.strikethrough_style.hash(&mut hasher);
@@ -385,6 +386,7 @@ fn hash_document_styles(styles: &DocumentStyles) -> u64 {
     styles.diagram_edge_style.hash(&mut hasher);
     styles.diagram_muted_style.hash(&mut hasher);
     styles.diff_palette.hash(&mut hasher);
+    styles.file_icons.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -399,6 +401,8 @@ pub struct DocumentStyles {
     pub code_inline_style: Style,
     /// Code block background/text style.
     pub code_block_style: Style,
+    /// Code block language header style.
+    pub code_block_header_style: Style,
     /// *Emphasis* (italic) style.
     pub emphasis_style: Style,
     /// **Strong** (bold) style.
@@ -431,6 +435,8 @@ pub struct DocumentStyles {
     pub diagram_muted_style: Style,
     /// Diff palette used to colorize fenced ` ```diff ` / ` ```patch ` code blocks.
     pub diff_palette: DiffPalette,
+    /// File icon color palette used by code-block language headers.
+    pub file_icons: crate::style::FileIconPalette,
 }
 
 impl DocumentStyles {
@@ -439,6 +445,7 @@ impl DocumentStyles {
             heading_styles: theme.document.heading_styles,
             code_inline_style: theme.document.code_inline,
             code_block_style: theme.document.code_block,
+            code_block_header_style: theme.document.code_block_header,
             emphasis_style: theme.document.emphasis,
             strong_style: theme.document.strong,
             strikethrough_style: theme.document.strikethrough,
@@ -455,6 +462,7 @@ impl DocumentStyles {
             diagram_edge_style: theme.document.diagram_edge_style,
             diagram_muted_style: theme.document.diagram_muted_style,
             diff_palette: theme.diff,
+            file_icons: theme.file_icons,
         }
     }
 }
@@ -535,6 +543,50 @@ mod tests {
         let el: Element = ThemeProvider::new(Theme::default()).child(dv).into();
         let _ = apply_document_theme_carve_out(&Theme::default(), el);
         assert!(flag.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn theme_provider_preserves_theme_document_styles_when_code_block_style_overridden() {
+        let custom_bg = crate::style::Color::hex_u24(0x161B26);
+        let theme = Theme::one_dark();
+        let dv = DocumentView::new("# Heading\n\n```rust\nlet x = 1;\n```")
+            .code_block_style(Style::new().bg(custom_bg));
+        let el: Element = ThemeProvider::new(theme.clone()).child(dv).into();
+        let baked = apply_document_theme_carve_out(&theme, el);
+        let crate::core::element::ElementKind::ThemeProvider(tp) = baked.kind else {
+            panic!("expected ThemeProvider");
+        };
+        let crate::core::element::ElementKind::DocumentView(dv) = tp.child.kind else {
+            panic!("expected DocumentView");
+        };
+
+        assert_eq!(dv.doc_styles.code_block_style.bg, Some(custom_bg.into()));
+        assert_eq!(dv.doc_styles.heading_styles, theme.document.heading_styles);
+        assert_eq!(
+            dv.doc_styles.code_block_header_style,
+            theme.document.code_block_header
+        );
+        assert_eq!(dv.doc_styles.file_icons, theme.file_icons);
+    }
+
+    #[test]
+    fn theme_provider_keeps_explicit_doc_styles_exactly() {
+        let theme = Theme::one_dark();
+        let custom = DocumentStyles {
+            code_block_style: Style::new().bg(crate::style::Color::hex_u24(0x161B26)),
+            ..DocumentStyles::default()
+        };
+        let dv = DocumentView::new("*hi*").doc_styles(custom.clone());
+        let el: Element = ThemeProvider::new(theme.clone()).child(dv).into();
+        let baked = apply_document_theme_carve_out(&theme, el);
+        let crate::core::element::ElementKind::ThemeProvider(tp) = baked.kind else {
+            panic!("expected ThemeProvider");
+        };
+        let crate::core::element::ElementKind::DocumentView(dv) = tp.child.kind else {
+            panic!("expected DocumentView");
+        };
+
+        assert_eq!(dv.doc_styles, custom);
     }
 
     #[test]

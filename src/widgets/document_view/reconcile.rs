@@ -409,9 +409,14 @@ pub fn reconcile_document_view(
             dv_node.table_row_separators.hash(&mut h);
             dv_node.table_cell_padding.hash(&mut h);
             dv_node.table_border_variant.hash(&mut h);
+            dv_node.code_block_width.hash(&mut h);
+            dv_node.code_block_padding.hash(&mut h);
+            dv_node.code_block_header.hash(&mut h);
+            dv_node.code_block_inset.hash(&mut h);
             dv_node.doc_styles.heading_styles.hash(&mut h);
             dv_node.doc_styles.code_inline_style.hash(&mut h);
             dv_node.doc_styles.code_block_style.hash(&mut h);
+            dv_node.doc_styles.code_block_header_style.hash(&mut h);
             dv_node.doc_styles.emphasis_style.hash(&mut h);
             dv_node.doc_styles.strong_style.hash(&mut h);
             dv_node.doc_styles.strikethrough_style.hash(&mut h);
@@ -427,6 +432,8 @@ pub fn reconcile_document_view(
             dv_node.doc_styles.diagram_node_label_style.hash(&mut h);
             dv_node.doc_styles.diagram_edge_style.hash(&mut h);
             dv_node.doc_styles.diagram_muted_style.hash(&mut h);
+            dv_node.doc_styles.diff_palette.hash(&mut h);
+            dv_node.doc_styles.file_icons.hash(&mut h);
             h.finish()
         };
         #[cfg(feature = "diff-view")]
@@ -564,13 +571,17 @@ pub fn reconcile_document_view(
     let target_offset = if source_target_suppressed {
         None
     } else if let Some(target_source) = dv_node.scroll_to_source_line {
-        // Binary search for the first visual line matching this source line.
+        // First visual row of this source line, skipping code-block chrome so
+        // the target lands on the code rather than its padding or header.
         Some(
             dv_node
                 .visual_cache
                 .lines
                 .iter()
-                .position(|vl| vl.source_line >= target_source)
+                .position(|vl| {
+                    vl.source_line >= target_source
+                        && !matches!(vl.kind, super::node::VisualLineKind::CodeBlockChrome { .. })
+                })
                 .unwrap_or(0),
         )
     } else {
@@ -835,6 +846,35 @@ mod tests {
             "scrolling to heading source line 1 must land on the heading row, not the synthetic spacer above it"
         );
         assert_eq!(node.visual_cache.line_texts[2].as_ref(), "Heading");
+    }
+
+    #[cfg(feature = "markdown")]
+    #[test]
+    fn scroll_to_source_line_lands_on_code_not_code_block_chrome() {
+        let source = "intro\n\n```rust\nlet a = 1;\nlet b = 2;\n```\n\nend\nmore\ntail";
+        // Padding and header rows share the first code row's source line (2).
+        let target = 2;
+        let (tree, id) = reconcile_document(
+            DocumentView::new(source)
+                .markdown()
+                .border(false)
+                .code_block_padding(crate::widgets::CodeBlockPadding::Full)
+                .code_block_header(crate::widgets::CodeBlockHeader::Label)
+                .scroll_to_source_line(target),
+            40,
+            2,
+        );
+
+        let node = document_node(&tree, id);
+        let row = &node.visual_cache.lines[node.scroll_offset];
+        assert!(matches!(
+            row.kind,
+            super::super::node::VisualLineKind::CodeLine { .. }
+        ));
+        assert_eq!(
+            node.visual_cache.line_texts[node.scroll_offset].as_ref(),
+            "let a = 1;"
+        );
     }
 
     #[test]

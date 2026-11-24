@@ -961,6 +961,21 @@ pub(crate) fn cursor_at_column(spans: &[Span], column: usize) -> SpanCursor {
     cursor
 }
 
+/// Width of the widest grapheme in `spans`: the narrowest row wrapping can
+/// produce without overflowing.
+pub(crate) fn widest_grapheme_width(spans: &[Span]) -> u16 {
+    if spans.iter().all(|span| span.content.is_ascii()) {
+        return u16::from(spans.iter().any(|span| !span.content.is_empty()));
+    }
+    let mut widest = 0;
+    let mut cursor = SpanCursor::default();
+    while let Some((next, _, width)) = next_char_cursor(spans, cursor) {
+        widest = widest.max(width);
+        cursor = next;
+    }
+    widest as u16
+}
+
 pub(crate) fn next_char_cursor(
     spans: &[Span],
     cursor: SpanCursor,

@@ -18,16 +18,9 @@ fn document_view_excluded_newline_ranges(doc: &DocumentViewNode) -> Vec<(usize, 
         if !source_lines.contains(&visual.source_line) {
             continue;
         }
-        if index + 1 >= doc.visual_cache.lines.len() {
-            continue;
+        if let Some(newline) = doc.visual_cache.newline_after(index) {
+            excluded.push((newline, newline.saturating_add(1)));
         }
-        let Some(start) = doc.visual_cache.line_starts.get(index).copied() else {
-            continue;
-        };
-        let Some(len) = doc.visual_cache.line_lengths.get(index).copied() else {
-            continue;
-        };
-        excluded.push((start.saturating_add(len), start.saturating_add(len + 1)));
     }
 
     excluded
@@ -78,6 +71,9 @@ pub(crate) fn document_view_selected_text_from_node(
     let mut emitted_diagram_ranges = Vec::<(usize, usize)>::new();
 
     for (index, line) in doc.visual_cache.lines.iter().enumerate() {
+        if matches!(line.kind, VisualLineKind::CodeBlockChrome { .. }) {
+            continue;
+        }
         let line_start = *doc.visual_cache.line_starts.get(index)?;
         let line_len = *doc.visual_cache.line_lengths.get(index)?;
         let line_end = line_start.saturating_add(line_len);
@@ -98,11 +94,9 @@ pub(crate) fn document_view_selected_text_from_node(
             }
         }
 
-        if index + 1 >= doc.visual_cache.lines.len() {
+        let Some(newline_start) = doc.visual_cache.newline_after(index) else {
             continue;
-        }
-
-        let newline_start = line_end;
+        };
         let newline_end = newline_start.saturating_add(1);
         if start >= newline_end || end <= newline_start {
             continue;

@@ -376,6 +376,101 @@ fn document_view_copy_omits_render_only_markdown_chrome() {
     assert_eq!(copied, "Quote line\n\nhello");
 }
 
+#[cfg(feature = "markdown")]
+struct CodeBlockChromeCopySmoke;
+
+#[cfg(feature = "markdown")]
+impl Component for CodeBlockChromeCopySmoke {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
+        DocumentView::new("Before\n\n```rust\nlet a = 1;\nlet b = 2;\n```\n\nAfter")
+            .markdown()
+            .code_block_padding(crate::widgets::CodeBlockPadding::HalfBlock)
+            .code_block_header(crate::widgets::CodeBlockHeader::IconAndLabel)
+            .code_block_style(
+                crate::style::Style::new().bg(crate::style::Color::Rgb(0x1e, 0x22, 0x2a)),
+            )
+            .border(false)
+            .into()
+    }
+}
+
+#[cfg(feature = "markdown")]
+#[test]
+fn document_view_copy_omits_code_block_padding_and_language_header() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 60,
+        h: 14,
+    };
+    let mut runtime = RuntimeCore::new_test(
+        CodeBlockChromeCopySmoke,
+        (),
+        viewport,
+        Theme::default(),
+        SurfaceMode::Fullscreen,
+        Rc::new(Cell::new(false)),
+    );
+    runtime.init();
+    runtime.render_element(viewport, None, None, None);
+
+    let copied = runtime
+        .tree
+        .iter()
+        .find_map(|node| match &node.kind {
+            NodeKind::DocumentView(doc) => document_view_selected_text_from_node(
+                doc,
+                0,
+                doc.visual_cache.flat_text.len(),
+                false,
+            ),
+            _ => None,
+        })
+        .expect("document view exists");
+
+    assert_eq!(copied, "Before\n\nlet a = 1;\nlet b = 2;\n\nAfter");
+
+    // Excluding the last code line drops only its own newline: the bottom
+    // padding row shares that source line but must not swallow the blank
+    // line's newline after it.
+    let copied = runtime
+        .tree
+        .iter()
+        .find_map(|node| match &node.kind {
+            NodeKind::DocumentView(doc) => {
+                let mut doc = doc.clone();
+                let last_code = doc
+                    .visual_cache
+                    .lines
+                    .iter()
+                    .rev()
+                    .find(|line| matches!(line.kind, VisualLineKind::CodeLine { .. }))?
+                    .source_line;
+                doc.copy_excluded_source_lines = Some(Arc::new(vec![last_code]));
+                document_view_selected_text_from_node(
+                    &doc,
+                    0,
+                    doc.visual_cache.flat_text.len(),
+                    true,
+                )
+            }
+            _ => None,
+        })
+        .expect("document view exists");
+
+    assert_eq!(copied, "Before\n\nlet a = 1;\nlet b = 2;\nAfter");
+}
+
 #[test]
 fn reverse_table_rect_copy_trims_top_left_cell_from_cursor_side() {
     let mut doc: crate::widgets::document_view::node::DocumentViewNode =

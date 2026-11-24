@@ -20,34 +20,163 @@ use super::format::{
     FormattedLine, FormattedLink, FormattedList, FormattedListItem, FormattedTable,
 };
 
-/// Vertical spacing policy between Markdown blocks in [`MarkdownFormatter`].
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum MarkdownSpacing {
+/// Whether a block boundary gets a separating blank row, given the source.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SourceSpacing {
+    /// Never insert a blank row, even when the source has one.
+    Never,
+    /// Insert a blank row only when the source has a blank line there.
+    WhenPresent,
+    /// Always insert a blank row, even when the source has none.
+    Always,
+}
+
+impl SourceSpacing {
+    fn resolve(self, had_source_blank: bool) -> bool {
+        match self {
+            Self::Never => false,
+            Self::WhenPresent => had_source_blank,
+            Self::Always => true,
+        }
+    }
+}
+
+/// Vertical spacing rules between Markdown blocks in [`MarkdownFormatter`].
+///
+/// Start from a preset ([`BALANCED`](Self::BALANCED) is the default,
+/// [`LOOSE`](Self::LOOSE), [`COMPACT`](Self::COMPACT)) and override the knobs
+/// you need:
+///
+/// ```
+/// use tui_lipan::{MarkdownSpacing, SourceSpacing};
+///
+/// let spacing = MarkdownSpacing {
+///     heading_after: SourceSpacing::Never,
+///     ..MarkdownSpacing::BALANCED
+/// };
+/// # let _ = spacing;
+/// ```
+///
+/// Each boundary between two blocks is resolved by the first rule that
+/// applies:
+/// 1. [`horizontal_rules_absorb_spacing`](Self::horizontal_rules_absorb_spacing)
+///    and [`attach_colon_lead_ins`](Self::attach_colon_lead_ins) keep their
+///    boundaries flush.
+/// 2. [`consecutive_headings`](Self::consecutive_headings) between two
+///    headings.
+/// 3. [`fenced_block_before`](Self::fenced_block_before) above a fenced code
+///    or diagram block.
+/// 4. [`heading_after`](Self::heading_after) below a heading, then
+///    [`heading_before`](Self::heading_before) above one.
+/// 5. [`between_blocks`](Self::between_blocks) for every other boundary.
+///
+/// Runs of blank source lines always collapse to at most one row, and
+/// leading/trailing blank lines are trimmed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct MarkdownSpacing {
+    /// Fallback for boundaries no other rule covers, e.g. between paragraphs,
+    /// lists, and tables.
+    /// With [`SourceSpacing::Never`], a document made only of blank lines
+    /// renders empty instead of as a single blank row.
+    pub between_blocks: SourceSpacing,
+    /// Above a heading that follows a non-heading block.
+    pub heading_before: SourceSpacing,
+    /// Below a heading that is followed by a non-heading block.
+    pub heading_after: SourceSpacing,
+    /// Between two headings.
+    pub consecutive_headings: SourceSpacing,
+    /// Before a fenced code or diagram block, including one right after a
+    /// heading.
+    pub fenced_block_before: SourceSpacing,
+    /// Keep horizontal rules flush with their neighbours: the rule's own row
+    /// already acts as the divider.
+    pub horizontal_rules_absorb_spacing: bool,
+    /// Keep a paragraph ending with `:` (such as `Bullets:`) flush with an
+    /// immediately following list, code block, diagram, table, or blockquote.
+    pub attach_colon_lead_ins: bool,
+}
+
+impl MarkdownSpacing {
     /// Balanced terminal typography (default).
     ///
-    /// Separates sections and distinct paragraphs with a single blank row while
-    /// tightening parent-to-child transitions that otherwise waste vertical
-    /// space in a terminal:
-    /// - headings keep a separating blank row above and below (consecutive
-    ///   headings stay tight unless separated in source),
-    /// - paragraphs ending with `:` stay attached to an immediately following
-    ///   list, code block, diagram, table, or blockquote,
-    /// - horizontal rules absorb adjacent blank rows because the rule itself
-    ///   occupies a full divider row,
-    /// - consecutive blank source lines collapse to at most one row, and
-    ///   leading/trailing blank lines are trimmed.
-    #[default]
-    Balanced,
-    /// Preserve explicit blank source lines between blocks.
-    ///
-    /// Runs of multiple blank source lines collapse to at most one row, leading
-    /// and trailing blank lines are trimmed, and a visual spacer is inserted
-    /// before a fenced code/diagram block that immediately follows non-blank
-    /// content.
-    Loose,
-    /// Collapse all blank lines and block spacers so blocks sit flush against
+    /// One blank row above and below headings (consecutive headings stay
+    /// tight unless separated in source) and before fenced blocks, source
+    /// blank lines kept elsewhere, colon lead-ins attached, and horizontal
+    /// rules flush with their neighbours.
+    pub const BALANCED: Self = Self {
+        between_blocks: SourceSpacing::WhenPresent,
+        heading_before: SourceSpacing::Always,
+        heading_after: SourceSpacing::Always,
+        consecutive_headings: SourceSpacing::WhenPresent,
+        fenced_block_before: SourceSpacing::Always,
+        horizontal_rules_absorb_spacing: true,
+        attach_colon_lead_ins: true,
+    };
+
+    /// Preserve explicit blank source lines between blocks, and add a spacer
+    /// before a fenced code/diagram block that immediately follows content.
+    pub const LOOSE: Self = Self {
+        between_blocks: SourceSpacing::WhenPresent,
+        heading_before: SourceSpacing::WhenPresent,
+        heading_after: SourceSpacing::WhenPresent,
+        consecutive_headings: SourceSpacing::WhenPresent,
+        fenced_block_before: SourceSpacing::Always,
+        horizontal_rules_absorb_spacing: false,
+        attach_colon_lead_ins: false,
+    };
+
+    /// Drop all blank lines and block spacers so blocks sit flush against
     /// each other. Useful for dense previews such as chat cards or sidebars.
-    Compact,
+    pub const COMPACT: Self = Self {
+        between_blocks: SourceSpacing::Never,
+        heading_before: SourceSpacing::Never,
+        heading_after: SourceSpacing::Never,
+        consecutive_headings: SourceSpacing::Never,
+        fenced_block_before: SourceSpacing::Never,
+        horizontal_rules_absorb_spacing: true,
+        attach_colon_lead_ins: true,
+    };
+
+    fn needs_blank_between(
+        &self,
+        prev: ParsedBlockKind,
+        next: ParsedBlockKind,
+        had_source_blank: bool,
+    ) -> bool {
+        use ParsedBlockKind as K;
+
+        let touches_rule = prev == K::HorizontalRule || next == K::HorizontalRule;
+        if self.horizontal_rules_absorb_spacing && touches_rule {
+            return false;
+        }
+        let colon_lead_in = matches!(
+            prev,
+            K::Paragraph {
+                ends_with_colon: true
+            }
+        ) && matches!(
+            next,
+            K::List | K::CodeBlock | K::Diagram | K::Table | K::BlockQuote
+        );
+        if self.attach_colon_lead_ins && colon_lead_in {
+            return false;
+        }
+
+        let rule = match (prev == K::Heading, next == K::Heading) {
+            (true, true) => self.consecutive_headings,
+            _ if matches!(next, K::CodeBlock | K::Diagram) => self.fenced_block_before,
+            (true, false) => self.heading_after,
+            (false, true) => self.heading_before,
+            (false, false) => self.between_blocks,
+        };
+        rule.resolve(had_source_blank)
+    }
+}
+
+impl Default for MarkdownSpacing {
+    fn default() -> Self {
+        Self::BALANCED
+    }
 }
 
 /// Formatter that renders markdown into structured display blocks.
@@ -137,6 +266,7 @@ impl ContentFormatter for MarkdownFormatter {
         self.styles.heading_styles.hash(&mut h);
         self.styles.code_inline_style.hash(&mut h);
         self.styles.code_block_style.hash(&mut h);
+        self.styles.code_block_header_style.hash(&mut h);
         self.styles.emphasis_style.hash(&mut h);
         self.styles.strong_style.hash(&mut h);
         self.styles.strikethrough_style.hash(&mut h);
@@ -145,6 +275,7 @@ impl ContentFormatter for MarkdownFormatter {
         self.styles.table_border_style.hash(&mut h);
         self.styles.table_header_style.hash(&mut h);
         self.styles.hr_style.hash(&mut h);
+        self.styles.file_icons.hash(&mut h);
         h.finish()
     }
 
@@ -452,12 +583,10 @@ fn apply_block_spacing(parsed: Vec<ParsedBlock>, spacing: MarkdownSpacing) -> Ve
         .iter()
         .any(|item| item.kind != ParsedBlockKind::Blank);
     if !has_content {
-        return match spacing {
-            MarkdownSpacing::Compact => Vec::new(),
-            MarkdownSpacing::Balanced | MarkdownSpacing::Loose => {
-                parsed.into_iter().take(1).map(|item| item.block).collect()
-            }
-        };
+        if spacing.between_blocks == SourceSpacing::Never {
+            return Vec::new();
+        }
+        return parsed.into_iter().take(1).map(|item| item.block).collect();
     }
 
     let mut out = Vec::with_capacity(parsed.len());
@@ -474,7 +603,7 @@ fn apply_block_spacing(parsed: Vec<ParsedBlock>, spacing: MarkdownSpacing) -> Ve
         }
 
         if let Some(prev) = prev_kind
-            && needs_blank_between(prev, item.kind, pending_blank_line.is_some(), spacing)
+            && spacing.needs_blank_between(prev, item.kind, pending_blank_line.is_some())
         {
             let spacer_line = pending_blank_line
                 .unwrap_or_else(|| prev_end_source_line.unwrap_or(item.source_line));
@@ -519,59 +648,6 @@ fn last_visual_source_line(block: &FormattedBlock) -> Option<usize> {
                     .or(Some(item.source_line))
             })
             .or(Some(list.source_line_start)),
-    }
-}
-
-fn needs_blank_between(
-    prev: ParsedBlockKind,
-    next: ParsedBlockKind,
-    had_source_blank: bool,
-    spacing: MarkdownSpacing,
-) -> bool {
-    match spacing {
-        MarkdownSpacing::Compact => false,
-        MarkdownSpacing::Loose => {
-            had_source_blank
-                || matches!(next, ParsedBlockKind::CodeBlock | ParsedBlockKind::Diagram)
-        }
-        MarkdownSpacing::Balanced => {
-            // Horizontal rules occupy a full row with centered stroke and act
-            // as their own visual divider.
-            if prev == ParsedBlockKind::HorizontalRule || next == ParsedBlockKind::HorizontalRule {
-                return false;
-            }
-            // Consecutive headings stay tight unless explicitly separated in source.
-            if prev == ParsedBlockKind::Heading && next == ParsedBlockKind::Heading {
-                return had_source_blank;
-            }
-            // Headings keep a separating row both above and below.
-            if prev == ParsedBlockKind::Heading || next == ParsedBlockKind::Heading {
-                return true;
-            }
-            // A paragraph ending with `:` introduces an immediately following
-            // list, code block, diagram, table, or blockquote.
-            if matches!(
-                prev,
-                ParsedBlockKind::Paragraph {
-                    ends_with_colon: true
-                }
-            ) && matches!(
-                next,
-                ParsedBlockKind::List
-                    | ParsedBlockKind::CodeBlock
-                    | ParsedBlockKind::Diagram
-                    | ParsedBlockKind::Table
-                    | ParsedBlockKind::BlockQuote
-            ) {
-                return false;
-            }
-            // Fenced blocks after non-lead-in prose keep a separating row even
-            // when the source omitted a blank line.
-            if matches!(next, ParsedBlockKind::CodeBlock | ParsedBlockKind::Diagram) {
-                return true;
-            }
-            had_source_blank
-        }
     }
 }
 
@@ -1493,7 +1569,7 @@ mod tests {
 
     #[test]
     fn ordered_blank_line_before_fence_stays_in_item() {
-        let formatter = MarkdownFormatter::default().spacing(MarkdownSpacing::Compact);
+        let formatter = MarkdownFormatter::default().spacing(MarkdownSpacing::COMPACT);
         let doc = formatter.format(FormatInput {
             value: "1. setup\n\n   ```text\n   cargo test\n   ```\n2. next",
             content_type: Some("markdown"),
@@ -1511,7 +1587,7 @@ mod tests {
 
     #[test]
     fn nested_bullet_after_fence_with_blank_separator_stays_nested() {
-        let formatter = MarkdownFormatter::default().spacing(MarkdownSpacing::Compact);
+        let formatter = MarkdownFormatter::default().spacing(MarkdownSpacing::COMPACT);
         let doc = formatter.format(FormatInput {
             value: "- outer\n  ```text\n  code\n  ```\n\n  - nested",
             content_type: Some("markdown"),
@@ -2114,7 +2190,7 @@ let label = \"ok\";
     fn balanced_spacing_separates_headings_and_tightens_lead_ins_and_rules() {
         let input = "\n\nIntro.\n\n\n## Lists\n\nBullets:\n\n- a\n- b\n\n## Code\n\nRust:\n\n```rust\nfn main() {}\n```\n\n> Quoted\n\n---\n\nTail.\n\n";
         let doc = MarkdownFormatter::default()
-            .spacing(MarkdownSpacing::Balanced)
+            .spacing(MarkdownSpacing::BALANCED)
             .format(FormatInput {
                 value: input,
                 content_type: Some("markdown"),
@@ -2148,7 +2224,7 @@ let label = \"ok\";
         let input = "\n\n## Title\n\n\nItems:\n\n- a\n- b\n\nNext.\n\n";
 
         let balanced = MarkdownFormatter::default()
-            .spacing(MarkdownSpacing::Balanced)
+            .spacing(MarkdownSpacing::BALANCED)
             .format(FormatInput {
                 value: input,
                 content_type: Some("markdown"),
@@ -2160,7 +2236,7 @@ let label = \"ok\";
         );
 
         let loose = MarkdownFormatter::default()
-            .spacing(MarkdownSpacing::Loose)
+            .spacing(MarkdownSpacing::LOOSE)
             .format(FormatInput {
                 value: input,
                 content_type: Some("markdown"),
@@ -2172,7 +2248,7 @@ let label = \"ok\";
         );
 
         let compact = MarkdownFormatter::default()
-            .spacing(MarkdownSpacing::Compact)
+            .spacing(MarkdownSpacing::COMPACT)
             .format(FormatInput {
                 value: input,
                 content_type: Some("markdown"),
@@ -2185,10 +2261,38 @@ let label = \"ok\";
     }
 
     #[test]
+    fn custom_spacing_overrides_one_preset_knob() {
+        let input = "## Title\nBody.\n\n## Next\n\nMore.\n\nEnd.";
+        let spacing = MarkdownSpacing {
+            heading_after: SourceSpacing::Never,
+            ..MarkdownSpacing::BALANCED
+        };
+        let doc = MarkdownFormatter::default()
+            .spacing(spacing)
+            .format(FormatInput {
+                value: input,
+                content_type: Some("markdown"),
+                document_styles: None,
+            });
+        // `Never` drops the source blank after `## Next`; the blank before it
+        // comes from `heading_before`, and paragraphs keep their source blank.
+        assert_eq!(
+            block_tags(&doc),
+            vec![
+                "lines", "lines", "blank", "lines", "lines", "blank", "lines"
+            ]
+        );
+        assert_ne!(
+            MarkdownFormatter::default().spacing(spacing).cache_key(),
+            MarkdownFormatter::default().cache_key()
+        );
+    }
+
+    #[test]
     fn markdown_spacing_affects_formatter_cache_keys() {
-        let balanced = MarkdownFormatter::default().spacing(MarkdownSpacing::Balanced);
-        let loose = MarkdownFormatter::default().spacing(MarkdownSpacing::Loose);
-        let compact = MarkdownFormatter::default().spacing(MarkdownSpacing::Compact);
+        let balanced = MarkdownFormatter::default().spacing(MarkdownSpacing::BALANCED);
+        let loose = MarkdownFormatter::default().spacing(MarkdownSpacing::LOOSE);
+        let compact = MarkdownFormatter::default().spacing(MarkdownSpacing::COMPACT);
 
         assert_ne!(balanced.cache_key(), loose.cache_key());
         assert_ne!(balanced.cache_key(), compact.cache_key());
@@ -2203,7 +2307,7 @@ let label = \"ok\";
         let view = super::super::DocumentView::new("```mermaid\ngraph TD\nA --> B\n```")
             .markdown()
             .render_diagrams(false)
-            .markdown_spacing(MarkdownSpacing::Compact);
+            .markdown_spacing(MarkdownSpacing::COMPACT);
 
         let formatter = view.formatter.as_deref().expect("formatter");
         let md = formatter
@@ -2211,7 +2315,7 @@ let label = \"ok\";
             .downcast_ref::<MarkdownFormatter>()
             .expect("markdown formatter");
         assert!(!md.render_diagrams);
-        assert_eq!(md.spacing, MarkdownSpacing::Compact);
+        assert_eq!(md.spacing, MarkdownSpacing::COMPACT);
     }
 
     #[test]

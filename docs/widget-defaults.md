@@ -992,12 +992,17 @@ Source: `src/widgets/document_view/mod.rs` (`DocumentView`).
 | `table_row_separators` | `TableRowSeparators::default()` |
 | `table_cell_padding` | `0` |
 | `table_border_variant` | `BorderStyle::Plain` |
+| `code_block_width` | `Length::Flex(1)` |
+| `code_block_padding` | `CodeBlockPadding::None` |
+| `code_block_header` | `CodeBlockHeader::None` |
+| `code_block_inset` | `1` |
 | `style` | `Style::default()` |
 | `hover_style` | `StyleSlot::Inherit` |
 | `focus_style` | `StyleSlot::Inherit` |
 | `focus_content_style` | `Style::default()` |
 | `selection_style` | `StyleSlot::Inherit` |
 | `doc_styles` | `DocumentStyles::default()` |
+| `doc_styles_exact` | `false` |
 | `hover_border_style` | `None` |
 | `scroll_offset` | `None` |
 | `scroll_to_source_line` | `None` |
@@ -1027,7 +1032,6 @@ Source: `src/widgets/document_view/mod.rs` (`DocumentView`).
 | `copy_excluded_source_lines` | `None` |
 | `peer_source_lines` | `None` |
 | `peer_source_fingerprint` | `Cell::new(None)` |
-| `measure_base_key_cache` | `Cell::new(None)` |
 | `split_wrap_sync` | `None` |
 | `split_wrap_side` | `None` |
 | `diff_split_pane` | `None` |

@@ -99,8 +99,13 @@ display content differs from source text.
 | `selection_style` | `Style` | Text selection style |
 | `extend_selection_style` / `inherit_selection_style` | `Style` / `()` | Extend or inherit the text-selection theme role instead of replacing it |
 | `highlight_full_width` | `bool` | Extend per-line background highlights across full content width |
-| `doc_styles` | `DocumentStyles` | Element styles (heading/code/link/table/hr/diagram/etc.) |
-| `code_block_style` | `Style` | Shortcut - sets `doc_styles.code_block_style` |
+| `doc_styles` | `DocumentStyles` | Replace all element styles (heading/code/link/table/hr/diagram/etc.); the theme's document styles no longer apply |
+| `code_block_style` | `Style` | Shortcut - sets `doc_styles.code_block_style` (merged over active theme) |
+| `code_block_header_style` | `Style` | Shortcut - sets `doc_styles.code_block_header_style` for language header labels |
+| `code_block_width` | `Length` | Width of fenced code-block background rectangles (`Flex(1)` default, `Auto`, `Px(n)`, `Percent(p)`). `Px`/`Percent` are fixed while wrapping and minimum widths with `wrap(false)` |
+| `code_block_padding` | `CodeBlockPadding` | Vertical padding around fenced code blocks (`None` default, `HalfBlock`, `Full`) |
+| `code_block_inset` | `u16` | Blank columns between a code block's edge and its code (default `1`) |
+| `code_block_header` | `CodeBlockHeader` | Language header row at top of fenced code blocks (`None` default, `Label`, `IconAndLabel`) |
 | `scroll_offset` | `usize` | Controlled vertical scroll offset |
 | `scroll_to_source_line` | `usize` | Scroll-sync target source line |
 | `scroll_behavior` | `ScrollBehavior` | `Instant` by default; opt into smooth `scroll_to_source_line` movement |
@@ -150,27 +155,42 @@ DocumentView::new("# Hello\n\n| A | B |\n|---|---|\n| 1 | 2 |")
     .wrap(true)
 
 DocumentView::new(text)
-    .markdown_spacing(MarkdownSpacing::Compact)
+    .markdown_spacing(MarkdownSpacing::COMPACT)
 ```
 
-`MarkdownSpacing` controls vertical spacing between rendered blocks:
+`MarkdownSpacing` holds the vertical spacing rules between rendered blocks. It
+ships three presets:
 
-- `MarkdownSpacing::Balanced` **(default for `.markdown()`)**: separates sections
+- `MarkdownSpacing::BALANCED` **(default for `.markdown()`)**: separates sections
   and distinct paragraphs with a single blank row, keeping a blank row above and
   below headings (consecutive headings stay tight unless separated in source),
   keeping colon-terminated lead-in paragraphs (`Bullets:`, `Rust:`, etc.)
   attached to an immediately following list, code block, diagram, table, or
   blockquote, absorbing redundant blank rows around horizontal rules, collapsing
   consecutive blank lines, and trimming leading/trailing blank lines.
-- `MarkdownSpacing::Loose`: preserves explicit blank source lines between blocks
+- `MarkdownSpacing::LOOSE`: preserves explicit blank source lines between blocks
   (collapsing consecutive blank runs to a single row and trimming leading/trailing
   blank lines) and adds a spacer before fenced code/diagram blocks that
   immediately follow non-blank content.
-- `MarkdownSpacing::Compact`: drops blank lines and block spacers so blocks sit
+- `MarkdownSpacing::COMPACT`: drops blank lines and block spacers so blocks sit
   flush against each other, suited for dense previews such as chat cards or
   narrow side panels.
 
-Set it on `DocumentView` via `.markdown_spacing(MarkdownSpacing::...)` (which
+Override single rules with struct update syntax, for example headings that sit
+directly on their body:
+
+```rust
+use tui_lipan::{MarkdownSpacing, SourceSpacing};
+
+DocumentView::new(text).markdown_spacing(MarkdownSpacing {
+    heading_after: SourceSpacing::Never,
+    ..MarkdownSpacing::BALANCED
+})
+```
+
+See [`MarkdownSpacing`](../enums.md#markdownspacing) for every field.
+
+Set it on `DocumentView` via `.markdown_spacing(...)` (which
 updates an existing `MarkdownFormatter` in place without resetting
 `.render_diagrams(...)` or custom styles) or directly on the formatter via
 `MarkdownFormatter::spacing(MarkdownSpacing)`. Fenced code blocks follow
@@ -244,10 +264,21 @@ When sibling `DocumentView` widgets under the same `ScrollView` share
 boundaries and shared copy concatenates text in visual order with newline
 separators between document boundaries.
 
+### Code-block rectangles
+
+Fenced code blocks paint `code_block_style`'s background as a straight-edged
+rectangle. Any decoration (`code_block_padding`, `code_block_header`, or a
+non-`Flex` `code_block_width`) mirrors `code_block_inset` on the right, so code
+wraps that many columns earlier. Headers that do not fit are truncated with `…`.
+Insets never widen the rectangle: when it is too narrow, they shrink, right side
+first, until the widest character of the code fits.
+
 ### Custom markdown styles
 
-`DocumentStyles` controls per-element colors. Default values come from `Theme::document`
-automatically - only set this when you want widget-local overrides.
+Element styles come from `Theme::document`. Shortcuts such as
+`.code_block_style(...)` and `.table_border_style(...)` patch one element over
+the theme. `.doc_styles(...)` replaces every element style exactly, so empty
+fields stay empty.
 
 ```rust
 use tui_lipan::DocumentStyles;
@@ -269,17 +300,7 @@ DocumentView::new(text)
         code_block_style: Style::new().bg(Color::rgb(0x1E, 0x1E, 0x1E)),
         emphasis_style: Style::new().italic(),
         strong_style: Style::new().bold(),
-        strikethrough_style: Style::new().strikethrough(),
-        blockquote_bar_style: Style::new().fg(Color::DarkGray),
-        table_border_style: Style::new().fg(Color::DarkGray),
-        table_header_style: Style::new().bold(),
-        hr_style: Style::new().fg(Color::DarkGray).dim(),
-        list_item_style: Style::new().fg(Color::Blue).bold(),
-        list_enumeration_style: Style::new().fg(Color::Blue).bold(),
-        diagram_node_fill_style: Style::new().bg(Color::rgb(0x12, 0x18, 0x22)),
-        diagram_node_border_style: Style::new().fg(Color::Cyan),
-        diagram_node_label_style: Style::new().fg(Color::White),
-        diagram_edge_style: Style::new().fg(Color::LightBlue),
+        ..DocumentStyles::default()
     });
 
 // Via MarkdownFormatter::styles - same effect, explicit formatter path

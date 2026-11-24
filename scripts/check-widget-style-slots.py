@@ -84,6 +84,7 @@ ALLOWLIST: dict[tuple[str, str], str] = {
     ("src/widgets/diff_view/mod.rs", "vertical_separator_style"): "non-state visual part style",
     ("src/widgets/diff_view/types.rs", "hover_style"): "legacy raw state style; TODO migrate to StyleSlot",
     ("src/widgets/document_view/format.rs", "blockquote_bar_style"): "non-state visual part style",
+    ("src/widgets/document_view/format.rs", "code_block_header_style"): "non-state visual part style",
     ("src/widgets/document_view/format.rs", "code_block_style"): "non-state visual part style",
     ("src/widgets/document_view/format.rs", "code_inline_style"): "non-state visual part style",
     ("src/widgets/document_view/format.rs", "diagram_edge_style"): "document diagram edge visual part style",

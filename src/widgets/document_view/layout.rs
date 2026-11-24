@@ -394,20 +394,12 @@ fn document_measure_format_cache_key(dv: &DocumentView) -> u64 {
 }
 
 /// Base portion of the document measure cache key - all geometry fields except
-/// the mutable split-wrap sync state.  Cached on [`DocumentView::measure_base_key_cache`]
-/// to avoid re-hashing ~22 fields on every measurement call.
+/// the mutable split-wrap sync state.
 ///
-/// The cache is validated by [`DocumentView::layout_content_fingerprint`] which
-/// itself guards against stale `Arc<str>` pointer reuse. This means a cloned-
-/// then-mutated `DocumentView` still produces the correct key.
+/// Recomputed on every call: the fields are public and builders can change them
+/// on a clone of an already measured view, so caching on content alone goes stale.
+/// The expensive part, the content fingerprint, is cached separately.
 fn document_measure_base_key(dv: &DocumentView) -> u64 {
-    let content_fp = dv.layout_content_fingerprint();
-    if let Some((cached, guard_fp)) = dv.measure_base_key_cache.get()
-        && guard_fp == content_fp
-    {
-        return cached;
-    }
-
     let mut h = FxHasher::default();
 
     dv.layout_content_fingerprint().hash(&mut h);
@@ -445,10 +437,12 @@ fn document_measure_base_key(dv: &DocumentView) -> u64 {
     dv.table_row_separators.hash(&mut h);
     dv.table_cell_padding.hash(&mut h);
     dv.table_border_variant.hash(&mut h);
+    dv.code_block_width.hash(&mut h);
+    dv.code_block_padding.hash(&mut h);
+    dv.code_block_header.hash(&mut h);
+    dv.code_block_inset.hash(&mut h);
 
-    let key = h.finish();
-    dv.measure_base_key_cache.set(Some((key, content_fp)));
-    key
+    h.finish()
 }
 
 fn document_measure_cache_key(dv: &DocumentView, parent: ParentIntegrated) -> u64 {
@@ -906,6 +900,10 @@ mod tests {
                 table_row_separators: dv.table_row_separators,
                 table_cell_padding: dv.table_cell_padding,
                 table_border_variant: dv.table_border_variant,
+                code_block_width: dv.code_block_width,
+                code_block_padding: dv.code_block_padding,
+                code_block_header: dv.code_block_header,
+                code_block_inset: dv.code_block_inset,
                 doc_styles: &dv.doc_styles,
                 #[cfg(feature = "syntax-syntect")]
                 code_strategy: None,
@@ -956,6 +954,10 @@ mod tests {
                 table_row_separators: dv.table_row_separators,
                 table_cell_padding: dv.table_cell_padding,
                 table_border_variant: dv.table_border_variant,
+                code_block_width: dv.code_block_width,
+                code_block_padding: dv.code_block_padding,
+                code_block_header: dv.code_block_header,
+                code_block_inset: dv.code_block_inset,
                 doc_styles: &dv.doc_styles,
                 #[cfg(feature = "syntax-syntect")]
                 code_strategy: None,
@@ -1061,7 +1063,6 @@ mod tests {
     #[test]
     fn markdown_code_block_measure_includes_left_inset_width_for_hscroll() {
         use crate::widgets::document_view::MarkdownFormatter;
-        use crate::widgets::document_view::node::CODE_BLOCK_LEFT_INSET_COLS;
 
         let dv = DocumentView::new("```rust\n123456789\n```")
             .formatter(MarkdownFormatter::default())
@@ -1075,9 +1076,98 @@ mod tests {
 
         let (_, h) = measure_document_view_constrained(&dv, Some(9));
 
-        // One code line (9 chars) plus a 1-cell code inset forces h-scroll
-        // at content width 9, so measured height includes scrollbar row.
-        assert_eq!(CODE_BLOCK_LEFT_INSET_COLS, 1);
+        // One code line (9 chars) plus the default 1-cell code inset forces
+        // h-scroll at content width 9, so measured height includes scrollbar row.
         assert_eq!(h, 2);
+    }
+
+    #[cfg(feature = "markdown")]
+    #[test]
+    fn code_block_chrome_measure_matches_reconcile_across_widths() {
+        use crate::widgets::document_view::{CodeBlockHeader, CodeBlockPadding, MarkdownFormatter};
+
+        let md = "Lead-in:\n\n```rust\nfn greet(name: &str) -> String {\n    format!(\"Hello, {name}!\")\n}\n```\n\n- Item:\n  ```sh\n  cargo test --workspace\n  ```";
+
+        for (code_w, padding, header) in [
+            (
+                Length::Flex(1),
+                CodeBlockPadding::HalfBlock,
+                CodeBlockHeader::IconAndLabel,
+            ),
+            (Length::Auto, CodeBlockPadding::Full, CodeBlockHeader::Label),
+            (
+                Length::Px(24),
+                CodeBlockPadding::HalfBlock,
+                CodeBlockHeader::IconAndLabel,
+            ),
+            (
+                Length::Percent(70),
+                CodeBlockPadding::HalfBlock,
+                CodeBlockHeader::Label,
+            ),
+        ] {
+            for width in [20_u16, 32, 60, 80] {
+                let dv = DocumentView::new(md)
+                    .formatter(MarkdownFormatter::default())
+                    .content_type("markdown")
+                    .code_block_width(code_w)
+                    .code_block_padding(padding)
+                    .code_block_header(header)
+                    .width(Length::Px(width))
+                    .height(Length::Auto)
+                    .wrap(true)
+                    .border(false)
+                    .scrollbar(false)
+                    .h_scrollbar(false);
+
+                let (_, measured_h) = measure_document_view_constrained(&dv, Some(width));
+
+                let root: crate::core::element::Element =
+                    crate::widgets::VStack::new().child(dv.clone()).into();
+                let mut tree = crate::core::node::NodeTree::new();
+                crate::layout::LayoutEngine::reconcile_with_focus(
+                    &mut tree,
+                    &root,
+                    crate::style::Rect {
+                        x: 0,
+                        y: 0,
+                        w: width,
+                        h: 200,
+                    },
+                    None,
+                );
+                let dv_id = tree.node(tree.root).children[0];
+                let node = tree.node(dv_id);
+                assert_eq!(
+                    measured_h, node.rect.h,
+                    "width={width} code_w={code_w:?} padding={padding:?} header={header:?}"
+                );
+            }
+        }
+    }
+
+    #[cfg(feature = "markdown")]
+    #[test]
+    fn code_block_options_differentiate_measure_key_and_layout_hash() {
+        use crate::layout::hash::element_layout_hash;
+        use crate::widgets::document_view::{CodeBlockHeader, CodeBlockPadding};
+
+        let base = DocumentView::new("```rust\nlet x = 1;\n```").markdown();
+        // Key the base first so the clones below start from a measured view.
+        let k_base = super::document_measure_base_key(&base);
+        let with_auto = base.clone().code_block_width(Length::Auto);
+        let with_pad = base.clone().code_block_padding(CodeBlockPadding::HalfBlock);
+        let with_hdr = base
+            .clone()
+            .code_block_header(CodeBlockHeader::IconAndLabel);
+
+        assert_ne!(k_base, super::document_measure_base_key(&with_auto));
+        assert_ne!(k_base, super::document_measure_base_key(&with_pad));
+        assert_ne!(k_base, super::document_measure_base_key(&with_hdr));
+
+        let h_base = element_layout_hash(&base.into());
+        assert_ne!(h_base, element_layout_hash(&with_auto.into()));
+        assert_ne!(h_base, element_layout_hash(&with_pad.into()));
+        assert_ne!(h_base, element_layout_hash(&with_hdr.into()));
     }
 }

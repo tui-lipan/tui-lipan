@@ -25,7 +25,7 @@ pub use format::{
     PlainFormatter,
 };
 #[cfg(feature = "markdown")]
-pub use format_markdown::{MarkdownFormatter, MarkdownSpacing};
+pub use format_markdown::{MarkdownFormatter, MarkdownSpacing, SourceSpacing};
 pub use layout::measure_document_view;
 pub(crate) use layout::measure_document_view_constrained;
 pub use reconcile::reconcile_document_view;
@@ -110,6 +110,34 @@ pub enum TableRowSeparators {
     All,
 }
 
+/// Vertical padding rendered above and below fenced code blocks.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum CodeBlockPadding {
+    /// No extra vertical padding rows (default).
+    #[default]
+    None,
+    /// Half-cell vertical cushion using `▄` above and `▀` below in the code
+    /// block's background color over the surrounding canvas background.
+    HalfBlock,
+    /// One blank row painted in the code block's background color above and below.
+    Full,
+}
+
+/// Optional header row rendered at the top of fenced code blocks when a
+/// language tag is present.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum CodeBlockHeader {
+    /// Do not render a language header row (default).
+    #[default]
+    None,
+    /// Render the fence language label (for example `rust` or `sh`).
+    Label,
+    /// Render the language's Nerd Font icon (from [`crate::style::FileIconPalette`])
+    /// followed by the language label (for example ` rust`), falling back to
+    /// the plain label when no icon is registered for that language.
+    IconAndLabel,
+}
+
 /// A read-only rich text document viewer with pluggable formatting.
 ///
 /// # Example
@@ -190,6 +218,18 @@ pub struct DocumentView {
     /// Border glyph variant used for table lines.
     /// Default: `BorderStyle::Plain`.
     pub table_border_variant: BorderStyle,
+    /// Width of fenced code-block background rectangles.
+    /// Default: `Length::Flex(1)`.
+    pub code_block_width: Length,
+    /// Vertical padding rendered above and below fenced code blocks.
+    /// Default: [`CodeBlockPadding::None`].
+    pub code_block_padding: CodeBlockPadding,
+    /// Optional language header rendered at the top of fenced code blocks.
+    /// Default: [`CodeBlockHeader::None`].
+    pub code_block_header: CodeBlockHeader,
+    /// Blank columns between a code block's edge and its code.
+    /// Default: `1`.
+    pub code_block_inset: u16,
 
     // ── Styling ──────────────────────────────────────────────────────────
     /// Base text style.
@@ -202,8 +242,12 @@ pub struct DocumentView {
     pub focus_content_style: Style,
     /// Style for selected text regions.
     pub selection_style: StyleSlot,
-    /// Per-element style overrides.
-    pub doc_styles: DocumentStyles,
+    /// Per-element styles. Crate-private so every write goes through a builder,
+    /// which decides whether the theme still applies.
+    pub(crate) doc_styles: DocumentStyles,
+    /// Set by [`Self::doc_styles`]: use `doc_styles` exactly instead of
+    /// patching it over the theme's document styles.
+    pub(crate) doc_styles_exact: bool,
     /// Border style override when hovered.
     pub hover_border_style: Option<BorderStyle>,
 
@@ -281,10 +325,6 @@ pub struct DocumentView {
     /// addresses: `trim_render_common_indent` creates new `Arc<str>`
     /// allocations every frame even when the text is identical.
     peer_source_fingerprint: Cell<Option<u64>>,
-    /// Lazily computed base portion of [`document_measure_cache_key`](layout::document_measure_cache_key),
-    /// covering all geometry fields except the mutable split-wrap sync state.
-    /// Tuple: `(key, content_fingerprint_guard)`.
-    pub(crate) measure_base_key_cache: Cell<Option<(u64, u64)>>,
     #[cfg(feature = "diff-view")]
     pub(crate) split_wrap_sync: Option<crate::widgets::diff_view::SharedSplitWrapSync>,
     #[cfg(feature = "diff-view")]
@@ -357,12 +397,17 @@ impl Default for DocumentView {
             table_row_separators: TableRowSeparators::default(),
             table_cell_padding: 0,
             table_border_variant: BorderStyle::Plain,
+            code_block_width: Length::Flex(1),
+            code_block_padding: CodeBlockPadding::None,
+            code_block_header: CodeBlockHeader::None,
+            code_block_inset: 1,
             style: Style::default(),
             hover_style: StyleSlot::Inherit,
             focus_style: StyleSlot::Inherit,
             focus_content_style: Style::default(),
             selection_style: StyleSlot::Inherit,
             doc_styles: DocumentStyles::default(),
+            doc_styles_exact: false,
             hover_border_style: None,
             scroll_offset: None,
             scroll_to_source_line: None,
@@ -394,7 +439,6 @@ impl Default for DocumentView {
             copy_excluded_source_lines: None,
             peer_source_lines: None,
             peer_source_fingerprint: Cell::new(None),
-            measure_base_key_cache: Cell::new(None),
             #[cfg(feature = "diff-view")]
             split_wrap_sync: None,
             #[cfg(feature = "diff-view")]
@@ -708,9 +752,14 @@ impl DocumentView {
         self
     }
 
-    /// Set the document-element style overrides.
+    /// Replace the document-element styles.
+    ///
+    /// `styles` is used exactly as given; the theme's document styles no longer
+    /// apply. Shortcuts such as [`Self::code_block_style`] instead patch a single
+    /// element over the theme.
     pub fn doc_styles(mut self, styles: DocumentStyles) -> Self {
         self.doc_styles = styles;
+        self.doc_styles_exact = true;
         self
     }
 
@@ -720,6 +769,47 @@ impl DocumentView {
     /// syntax highlighting is disabled.
     pub fn code_block_style(mut self, style: Style) -> Self {
         self.doc_styles.code_block_style = style;
+        self
+    }
+
+    /// Set style applied to code block language header rows.
+    pub fn code_block_header_style(mut self, style: Style) -> Self {
+        self.doc_styles.code_block_header_style = style;
+        self
+    }
+
+    /// Set the width of fenced code-block background rectangles.
+    ///
+    /// `Length::Flex(1)` (the default) stretches each code block across the
+    /// available content width; `Length::Auto` hugs the widest line (including
+    /// the language header when enabled); `Length::Px(n)` and
+    /// `Length::Percent(p)` size the rectangle to a fixed column count or
+    /// fraction of the available width while wrapping, and act as minimum
+    /// widths with `wrap(false)`, where long lines cannot shrink.
+    pub fn code_block_width(mut self, width: impl Into<Length>) -> Self {
+        self.code_block_width = width.into();
+        self
+    }
+
+    /// Set vertical padding rendered above and below fenced code blocks.
+    pub fn code_block_padding(mut self, padding: CodeBlockPadding) -> Self {
+        self.code_block_padding = padding;
+        self
+    }
+
+    /// Set the blank columns between a fenced code block's edge and its code.
+    ///
+    /// Applies on the left, and on the right too for decorated blocks
+    /// (padding, a header, or a non-`Flex` width). Insets fit inside the
+    /// block's width and shrink until the widest character fits. Default: `1`.
+    pub fn code_block_inset(mut self, cols: u16) -> Self {
+        self.code_block_inset = cols;
+        self
+    }
+
+    /// Set the language header style rendered at the top of fenced code blocks.
+    pub fn code_block_header(mut self, header: CodeBlockHeader) -> Self {
+        self.code_block_header = header;
         self
     }
 
@@ -1058,7 +1148,7 @@ impl crate::layout::hash::LayoutHash for DocumentView {
             crate::widgets::diff_view::split_wrap_layout_pass(sync).hash(hasher);
         }
 
-        // Table layout properties that affect height.
+        // Table & code-block layout properties that affect dimensions.
         self.table_wrap.hash(hasher);
         self.table_width_mode.hash(hasher);
         self.table_outer_frame.hash(hasher);
@@ -1066,6 +1156,10 @@ impl crate::layout::hash::LayoutHash for DocumentView {
         self.table_row_separators.hash(hasher);
         self.table_cell_padding.hash(hasher);
         self.table_border_variant.hash(hasher);
+        self.code_block_width.hash(hasher);
+        self.code_block_padding.hash(hasher);
+        self.code_block_header.hash(hasher);
+        self.code_block_inset.hash(hasher);
 
         Some(())
     }

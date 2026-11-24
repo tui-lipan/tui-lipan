@@ -28,6 +28,7 @@
 //! No `Cargo.toml` change is needed: cargo discovers `examples/sketches/main.rs`
 //! as a single example, so new sketches never touch build config.
 
+mod code_blocks;
 mod login;
 mod search_palette_items;
 
@@ -38,6 +39,7 @@ type SketchFn = fn() -> Result<()>;
 
 /// Every sketch that can be run by name.
 const SKETCHES: &[(&str, SketchFn)] = &[
+    ("code-blocks", code_blocks::sketch),
     ("login", login::sketch),
     ("search-palette-items", search_palette_items::sketch),
 ];
