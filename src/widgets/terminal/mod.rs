@@ -85,13 +85,11 @@ pub use osc::{
 pub use pty::TerminalPtyHandoff;
 pub use pty::{TerminalPty, TerminalPtyConfig, TerminalPtyError, TerminalPtyEvent};
 pub use read_gate::{TerminalReadGate, TerminalReadGateStats};
-#[doc(hidden)]
-pub use screen::TerminalEngineKind;
 pub use screen::{
     SemanticMark, SemanticMarkKind, TerminalCellSize, TerminalClipboardEvent,
-    TerminalClipboardTarget, TerminalColorPalette, TerminalDecoration, TerminalHyperlink,
-    TerminalLogicalLine, TerminalRenderSnapshot, TerminalScreen, TerminalScreenHandle,
-    TerminalTextPosition, TerminalViewport,
+    TerminalClipboardTarget, TerminalColorPalette, TerminalDecoration, TerminalEngineKind,
+    TerminalHyperlink, TerminalLogicalLine, TerminalRenderSnapshot, TerminalScreen,
+    TerminalScreenHandle, TerminalTextPosition, TerminalViewport,
 };
 #[cfg(feature = "terminal")]
 pub use selection::{

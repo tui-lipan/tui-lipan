@@ -1052,10 +1052,9 @@ impl TerminalScreen {
     /// Set the Ghostty engine's initial and reset value of DEC mode 2027.
     ///
     /// Disabled by default for compatibility with legacy application cursor arithmetic.
-    /// Experimental, ignored by Alacritty. Child programs can still use DECSET/DECRST 2027.
+    /// Ignored by the Alacritty engine. Child programs can still use DECSET/DECRST 2027.
     /// Apply before feeding output; existing cells are not reflowed.
     #[cfg(feature = "terminal-ghostty")]
-    #[doc(hidden)]
     pub fn with_grapheme_clustering(mut self, enabled: bool) -> Self {
         if let Engine::Ghostty(engine) = &mut self.engine {
             engine.set_default_grapheme_clustering(enabled);
@@ -1066,10 +1065,9 @@ impl TerminalScreen {
 
     /// Create a screen backed by the given emulator engine.
     ///
-    /// Unstable: the opt-in for the experimental libghostty-vt engine
-    /// (`TerminalEngineKind::Ghostty` with `terminal-ghostty`). [`Self::new`] uses the default
-    /// engine.
-    #[doc(hidden)]
+    /// [`Self::new`] uses [`TerminalEngineKind::Alacritty`]. With the `terminal-ghostty`
+    /// feature, `TerminalEngineKind::Ghostty` selects libghostty-vt instead; nothing else
+    /// about the screen's API changes.
     pub fn with_engine(kind: TerminalEngineKind, rows: u16, cols: u16, scrollback: usize) -> Self {
         let rows = rows.max(1);
         let cols = cols.max(1);
@@ -1145,11 +1143,10 @@ impl TerminalScreen {
 
     /// Compress retained scrollback a bounded step at a time while the terminal is idle.
     ///
-    /// Experimental. Call when no output has arrived for a while (say a second), again while it
+    /// Call when no output has arrived for a while (say a second), again while it
     /// returns `true`, and stop once output resumes; it returns `false` when this idle period has
     /// nothing left to compress. The contents never change. Only engines that compress history
     /// (libghostty-vt) do anything here; the default engine returns `false` at once.
-    #[doc(hidden)]
     pub fn compress_idle(&mut self) -> bool {
         self.engine.compress_idle()
     }
@@ -5318,9 +5315,18 @@ mod tests {
             .process_bytes(b"previous output\r\n\x1b]133;A\x1b\\PS> \x1b]133;B\x1b\\echo pending");
         screen.resize(4, 12);
 
+        // Alacritty scrolls the output above the prompt into history; Ghostty keeps it on screen
+        // because everything still fits. Either way the prompt reflows and the cursor follows.
         let snapshot = screen.render_snapshot();
-        let visible: Vec<_> = snapshot.text.lines().map(str::trim_end).take(2).collect();
-        assert_eq!(visible, ["PS> echo pen", "ding"]);
+        let visible: Vec<_> = snapshot.text.lines().map(str::trim_end).collect();
+        let prompt = visible
+            .windows(2)
+            .position(|pair| pair == ["PS> echo pen", "ding"])
+            .unwrap_or_else(|| panic!("prompt not reflowed: {visible:?}"));
+        assert_eq!(
+            (usize::from(snapshot.cursor_row), snapshot.cursor_col),
+            (prompt + 1, 4)
+        );
         screen.resize(4, 40);
         screen.process_bytes(b"!");
         assert!(screen.render_snapshot().text.contains("PS> echo pending!"));

@@ -971,7 +971,7 @@ also run by `./scripts/check-format`. Recording new program streams requires the
 programs named by the capture script and must be reviewed before blessing.
 
 With `terminal-ghostty`, `terminal_corpus_ghostty` also replays every fixture through
-the experimental Ghostty engine. It compares each dump with the Alacritty golden and
+the Ghostty engine. It compares each dump with the Alacritty golden and
 checks Ghostty's own seeded chunk splits. A reviewed, intentional engine difference
 gets a `[[differences]]` entry with an exact JSON pointer `path` (which must exist in
 the golden) and a `reason`; those fields are ignored only in this comparison. A known

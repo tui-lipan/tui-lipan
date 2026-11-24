@@ -1,4 +1,4 @@
-//! Safe, thin wrapper over libghostty-vt (`ghostty-vt-sys`), the engine behind the experimental
+//! Safe, thin wrapper over libghostty-vt (`ghostty-vt-sys`), the engine behind the
 //! `terminal-ghostty` backend of [`TerminalScreen`](super::TerminalScreen).
 //!
 //! The wrapper exposes only what a screen backend needs:
