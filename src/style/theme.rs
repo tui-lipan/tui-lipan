@@ -1635,7 +1635,7 @@ impl ScrollbarConfig {
 /// Palette of semantic colors used for file icons.
 ///
 /// These categories match the semantic grouping used by `mini.icons` in Neovim.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FileIconPalette {
     /// Light blue (e.g. Markdown, documentation)
     pub azure: Color,
@@ -1809,6 +1809,8 @@ pub struct DocumentPalette {
     pub code_inline: Style,
     /// Code block style.
     pub code_block: Style,
+    /// Code block language header style.
+    pub code_block_header: Style,
     /// Emphasis style.
     pub emphasis: Style,
     /// Strong style.
@@ -1854,6 +1856,7 @@ impl Default for DocumentPalette {
             ],
             code_inline: Style::new().fg(Color::Green),
             code_block: Style::default(),
+            code_block_header: Style::new().fg(Color::DarkGray),
             emphasis: Style::new().italic(),
             strong: Style::new().bold(),
             strikethrough: Style::new().strikethrough(),
@@ -2208,6 +2211,7 @@ impl Theme {
                 ],
                 code_inline: Style::new().fg(success),
                 code_block: Style::default(),
+                code_block_header: Style::new().fg(muted),
                 emphasis: Style::new().italic(),
                 strong: Style::new().bold(),
                 strikethrough: Style::new().strikethrough(),
@@ -2768,6 +2772,7 @@ impl From<ThemePalette> for Theme {
                 ],
                 code_inline: Style::new().fg(success),
                 code_block: Style::default(),
+                code_block_header: Style::new().fg(muted_color),
                 emphasis: Style::new().italic(),
                 strong: Style::new().bold(),
                 strikethrough: Style::new().strikethrough(),

@@ -85,6 +85,7 @@ impl Theme {
                 ],
                 code_inline: super::Style::new().fg(Color::LightGreen),
                 code_block: super::Style::default(),
+                code_block_header: super::Style::new().fg(Color::DarkGray),
                 emphasis: super::Style::new().italic(),
                 strong: super::Style::new().bold(),
                 strikethrough: super::Style::new().strikethrough(),

@@ -24,8 +24,8 @@ use crate::style::{Rect, ScrollbarVariant, Style, Theme, ThemeRole, resolve_slot
 use crate::widgets::ColumnAlign;
 use crate::widgets::DocumentLineNumberMode;
 use crate::widgets::document_view::node::{
-    CODE_BLOCK_LEFT_INSET_COLS, DocumentTableRectSelection, DocumentViewNode, DocumentVisualLine,
-    TableBorderKind, VisualLineKind, span_width, visual_line_render_prefix_bytes,
+    DocumentTableRectSelection, DocumentViewNode, DocumentVisualLine, TableBorderKind,
+    VisualLineKind, span_width, visual_line_render_prefix_bytes,
 };
 use crate::widgets::table::{TableBorderLineKind, table_border_glyphs, table_border_line};
 
@@ -243,7 +243,7 @@ pub(crate) fn render_document_view(
                     VisualLineKind::Text {
                         continuation: true,
                         ..
-                    }
+                    } | VisualLineKind::CodeBlockChrome { .. }
                 );
                 let is_synthetic_padding_line = matches!(
                     vline.kind,
@@ -351,7 +351,11 @@ pub(crate) fn render_document_view(
             content_area.width as usize,
         );
 
-        let mut row_bg = if node.highlight_full_width {
+        let mut row_bg = if node.highlight_full_width
+            && !matches!(
+                vline.kind,
+                VisualLineKind::CodeLine { .. } | VisualLineKind::CodeBlockChrome { .. }
+            ) {
             full_row_bg_style(&segments)
                 .or_else(|| split_wrap_padding_row_bg_style(vline, node.split_wrap_padding_style))
         } else {
@@ -362,13 +366,6 @@ pub(crate) fn render_document_view(
             segments = patch_segments(segments, hover_style);
             row_bg = row_bg_from_hover_style(hover_style).or(row_bg);
         }
-
-        // Apply horizontal scroll to segments
-        let segments = if h_offset > 0 && !node.wrap {
-            h_scroll_segments(segments, h_offset)
-        } else {
-            segments
-        };
 
         if let Some(row_bg) = row_bg {
             ratatui::widgets::Block::default()
@@ -393,6 +390,11 @@ pub(crate) fn render_document_view(
             selection_style,
             render_prefix_len,
         );
+        // Clip horizontally only after selection offsets are assigned, so the
+        // byte mapping still sees the render prefix and trailing fill.
+        if h_offset > 0 && !node.wrap {
+            spans = crop_spans_for_viewport(spans, h_offset, usize::MAX);
+        }
 
         // Mirror TextArea: for empty lines within a linear selection that extends past
         // this line, append a highlighted space to represent the selected newline.
@@ -403,6 +405,7 @@ pub(crate) fn render_document_view(
             .is_some_and(|excl| excl.contains(&vline.source_line));
         if spans.is_empty()
             && line_len == 0
+            && !matches!(vline.kind, VisualLineKind::CodeBlockChrome { .. })
             && !line_selection_excluded
             && node.table_rect_selection.is_none()
             && let Some((sel_start, sel_end)) = linear_selection_range
@@ -423,7 +426,11 @@ pub(crate) fn render_document_view(
             render_single_line_spans(f.buffer_mut(), effective_content_area, &spans);
         } else {
             let skip_cols = effective_content_area.x.saturating_sub(content_area.x);
-            let spans = crop_spans_for_viewport(spans, skip_cols, effective_content_area.width);
+            let spans = crop_spans_for_viewport(
+                spans,
+                usize::from(skip_cols),
+                usize::from(effective_content_area.width),
+            );
             render_single_line_spans(f.buffer_mut(), effective_content_area, &spans);
         }
     }
@@ -651,24 +658,31 @@ fn is_source_mode_continuation(
     visual_idx: usize,
     first_visible_idx: usize,
 ) -> bool {
+    let Some(curr) = vis_lines.get(visual_idx) else {
+        return false;
+    };
+    // Code-block chrome shares its source line with the code but never shows it.
+    if matches!(curr.kind, VisualLineKind::CodeBlockChrome { .. }) {
+        return true;
+    }
     visual_idx > first_visible_idx
-        && vis_lines
-            .get(visual_idx - 1)
-            .zip(vis_lines.get(visual_idx))
-            .is_some_and(|(prev, curr)| prev.source_line == curr.source_line)
+        && vis_lines.get(visual_idx - 1).is_some_and(|prev| {
+            prev.source_line == curr.source_line
+                && !matches!(prev.kind, VisualLineKind::CodeBlockChrome { .. })
+        })
 }
 
 fn crop_spans_for_viewport<'a>(
     spans: Vec<Span<'a>>,
-    skip_cols: u16,
-    max_width: u16,
+    skip_cols: usize,
+    max_width: usize,
 ) -> Vec<Span<'a>> {
     if max_width == 0 {
         return Vec::new();
     }
 
-    let mut remaining_skip = skip_cols as usize;
-    let mut remaining_width = max_width as usize;
+    let mut remaining_skip = skip_cols;
+    let mut remaining_width = max_width;
     let mut out = Vec::new();
 
     for span in spans {
@@ -912,32 +926,6 @@ fn blank_gutter_spans_with_inset(
 }
 
 /// Apply horizontal scroll offset to line segments by skipping `h_offset` display columns.
-fn h_scroll_segments<'a>(
-    segments: Vec<(Cow<'a, str>, Style)>,
-    h_offset: usize,
-) -> Vec<(Cow<'a, str>, Style)> {
-    let mut remaining = h_offset;
-    let mut result = Vec::new();
-    for (text, style) in segments {
-        if remaining == 0 {
-            result.push((text, style));
-            continue;
-        }
-        let w = unicode_width::UnicodeWidthStr::width(text.as_ref());
-        if w <= remaining {
-            remaining -= w;
-            continue;
-        }
-        // Partial skip within this segment
-        let byte_pos = crate::utils::text::byte_at_col(text.as_ref(), remaining);
-        remaining = 0;
-        if byte_pos < text.len() {
-            result.push((Cow::Owned(text[byte_pos..].to_string()), style));
-        }
-    }
-    result
-}
-
 fn line_segments<'a>(
     vline: &'a DocumentVisualLine,
     base_style: Style,
@@ -1047,17 +1035,92 @@ fn line_segments<'a>(
                 )
             })
             .collect(),
-        VisualLineKind::CodeLine { spans, block_style } => {
+        VisualLineKind::CodeLine {
+            spans,
+            block_style,
+            indent_cols,
+            left_inset,
+            rect_width,
+        } => {
             let effective = base_style.patch(*block_style);
-            let mut segs = vec![(
-                Cow::Owned(" ".repeat(CODE_BLOCK_LEFT_INSET_COLS as usize)),
-                effective,
-            )];
+            let mut segs = Vec::with_capacity(spans.len() + 3);
+            if *indent_cols > 0 {
+                segs.push((Cow::Owned(" ".repeat(*indent_cols as usize)), base_style));
+            }
+            if *left_inset > 0 {
+                segs.push((Cow::Owned(" ".repeat(*left_inset as usize)), effective));
+            }
             for span in spans {
                 segs.push((
                     Cow::Borrowed(span.content.as_ref()),
                     effective.patch(span.style),
                 ));
+            }
+            if style_paints_bg(effective) {
+                let used_cols = left_inset.saturating_add(span_width(spans));
+                let trailing = rect_width.saturating_sub(used_cols);
+                if trailing > 0 {
+                    segs.push((Cow::Owned(" ".repeat(trailing as usize)), effective));
+                }
+            }
+            segs
+        }
+        VisualLineKind::CodeBlockChrome {
+            kind,
+            block_style,
+            indent_cols,
+            left_inset,
+            rect_width,
+        } => {
+            let effective = base_style.patch(*block_style);
+            let mut segs = Vec::new();
+            if *indent_cols > 0 {
+                segs.push((Cow::Owned(" ".repeat(*indent_cols as usize)), base_style));
+            }
+            match kind {
+                crate::widgets::document_view::node::CodeBlockChromeKind::TopHalfBlock
+                | crate::widgets::document_view::node::CodeBlockChromeKind::BottomHalfBlock => {
+                    let block_paints_bg = style_paints_bg(*block_style)
+                        || (block_style.bg_transform.is_some() && style_paints_bg(effective));
+                    if *rect_width > 0 && block_paints_bg && style_paints_bg(effective) {
+                        let glyph = match kind {
+                            crate::widgets::document_view::node::CodeBlockChromeKind::TopHalfBlock => "▄",
+                            _ => "▀",
+                        };
+                        let half_style = Style {
+                            fg: effective.bg,
+                            bg: base_style.bg,
+                            fg_transform: effective.bg_transform,
+                            bg_transform: base_style.bg_transform,
+                            ..Style::default()
+                        };
+                        segs.push((Cow::Owned(glyph.repeat(*rect_width as usize)), half_style));
+                    }
+                }
+                crate::widgets::document_view::node::CodeBlockChromeKind::BlankPadding => {
+                    if *rect_width > 0 && style_paints_bg(effective) {
+                        segs.push((Cow::Owned(" ".repeat(*rect_width as usize)), effective));
+                    }
+                }
+                crate::widgets::document_view::node::CodeBlockChromeKind::Header { spans } => {
+                    let header_base = effective.patch(doc_styles.code_block_header_style);
+                    if *left_inset > 0 {
+                        segs.push((Cow::Owned(" ".repeat(*left_inset as usize)), effective));
+                    }
+                    for span in spans {
+                        segs.push((
+                            Cow::Borrowed(span.content.as_ref()),
+                            header_base.patch(span.style),
+                        ));
+                    }
+                    if style_paints_bg(effective) {
+                        let used_cols = left_inset.saturating_add(span_width(spans));
+                        let trailing = rect_width.saturating_sub(used_cols);
+                        if trailing > 0 {
+                            segs.push((Cow::Owned(" ".repeat(trailing as usize)), effective));
+                        }
+                    }
+                }
             }
             segs
         }
@@ -1249,6 +1312,7 @@ fn segments_to_spans<'a>(
     }
 
     let mut with_offsets = Vec::new();
+    let line_end = line_start.saturating_add(line_len);
     let mut content_cursor = line_start;
     let mut prefix_skipped = 0usize;
     for (text, style) in segments {
@@ -1272,19 +1336,52 @@ fn segments_to_spans<'a>(
 
         if offset < len {
             let remainder_len = len.saturating_sub(offset);
-            let segment_text = if offset == 0 {
-                text
+            let selectable_budget = line_end.saturating_sub(content_cursor);
+            if selectable_budget == 0 {
+                let segment_text = if offset == 0 {
+                    text
+                } else {
+                    Cow::Owned(text[offset..].to_string())
+                };
+                with_offsets.push(StyledSegment {
+                    text: segment_text,
+                    style,
+                    start: 0,
+                    end: 0,
+                    selectable: false,
+                });
+            } else if remainder_len <= selectable_budget {
+                let selectable_text = if offset == 0 {
+                    text
+                } else {
+                    Cow::Owned(text[offset..].to_string())
+                };
+                with_offsets.push(StyledSegment {
+                    text: selectable_text,
+                    style,
+                    start: content_cursor,
+                    end: content_cursor.saturating_add(remainder_len),
+                    selectable: true,
+                });
+                content_cursor = content_cursor.saturating_add(remainder_len);
             } else {
-                Cow::Owned(text[offset..].to_string())
-            };
-            with_offsets.push(StyledSegment {
-                text: segment_text,
-                style,
-                start: content_cursor,
-                end: content_cursor.saturating_add(remainder_len),
-                selectable: true,
-            });
-            content_cursor = content_cursor.saturating_add(remainder_len);
+                let take = selectable_budget;
+                with_offsets.push(StyledSegment {
+                    text: Cow::Owned(text[offset..offset + take].to_string()),
+                    style,
+                    start: content_cursor,
+                    end: content_cursor.saturating_add(take),
+                    selectable: true,
+                });
+                content_cursor = content_cursor.saturating_add(take);
+                with_offsets.push(StyledSegment {
+                    text: Cow::Owned(text[offset + take..].to_string()),
+                    style,
+                    start: 0,
+                    end: 0,
+                    selectable: false,
+                });
+            }
         }
     }
     if content_cursor != line_start.saturating_add(line_len) {
@@ -1347,9 +1444,9 @@ mod tests {
 
     use super::{
         blank_gutter_spans_with_inset, built_in_line_number_gutter_text,
-        built_in_line_number_style, full_row_bg_style, gutter_spans_with_inset, h_scroll_segments,
-        is_source_mode_continuation, render_single_line_spans, segments_to_spans,
-        table_selection_ranges_for_line,
+        built_in_line_number_style, crop_spans_for_viewport, full_row_bg_style,
+        gutter_spans_with_inset, is_source_mode_continuation, render_single_line_spans,
+        segments_to_spans, table_selection_ranges_for_line,
     };
     use crate::backend::ratatui_backend::common::to_ratatui_style;
     use crate::style::{Color, Style};
@@ -1404,25 +1501,20 @@ mod tests {
             vec![(Cow::Borrowed(""), line_bg), (Cow::Borrowed("}"), line_bg)];
 
         assert_eq!(full_row_bg_style(&segments), Some(line_bg));
-        let scrolled = h_scroll_segments(segments, 1);
-        assert!(scrolled.is_empty());
+        let spans = segments_to_spans(segments, 0, 1, &[], Style::default(), 0);
+        assert!(crop_spans_for_viewport(spans, 1, usize::MAX).is_empty());
     }
 
     #[test]
     fn full_row_background_uses_hidden_anchor_not_scrolled_word_highlight() {
         let line_bg = Style::new().bg(Color::Green);
-        let word_bg = Style::new().bg(Color::LightGreen);
         let segments: Vec<(Cow<'_, str>, Style)> = vec![
             (Cow::Borrowed(""), line_bg),
             (Cow::Borrowed("let "), line_bg),
-            (Cow::Borrowed("changed"), word_bg),
+            (Cow::Borrowed("changed"), Style::new().bg(Color::LightGreen)),
         ];
 
         assert_eq!(full_row_bg_style(&segments), Some(line_bg));
-        assert_eq!(
-            full_row_bg_style(&h_scroll_segments(segments, 4)),
-            Some(word_bg)
-        );
     }
 
     #[test]
@@ -1671,5 +1763,158 @@ mod tests {
         let ranges = table_selection_ranges_for_line(&vline, 0, &selection);
 
         assert_eq!(ranges, vec![(0, 2)]);
+    }
+
+    #[test]
+    fn code_line_segments_fill_rect_width_and_keep_trailing_padding_non_selectable() {
+        use super::line_segments;
+        use crate::widgets::document_view::DocumentStyles;
+        use crate::widgets::document_view::node::{
+            CodeBlockChromeKind, visual_line_render_prefix_bytes,
+        };
+
+        let canvas_bg = Color::Rgb(0x10, 0x10, 0x10);
+        let code_bg = Color::Rgb(0x20, 0x24, 0x2c);
+        let base_style = Style::new().bg(canvas_bg);
+        let block_style = Style::new().bg(code_bg);
+        let doc_styles = DocumentStyles::default();
+
+        let code_line = DocumentVisualLine {
+            kind: VisualLineKind::CodeLine {
+                spans: vec![crate::style::Span::new("hi")],
+                block_style,
+                indent_cols: 2,
+                left_inset: 1,
+                rect_width: 8,
+            },
+            source_line: 0,
+        };
+        let segs = line_segments(&code_line, base_style, &doc_styles, 20);
+        // 2 canvas indent + 1 left inset + "hi" (2) + 5 trailing code_bg padding = 10 cols
+        assert_eq!(segs.len(), 4);
+        assert_eq!(segs[0].0.as_ref(), "  ");
+        assert_eq!(segs[0].1.bg, Some(canvas_bg.into()));
+        assert_eq!(segs[1].0.as_ref(), " ");
+        assert_eq!(segs[1].1.bg, Some(code_bg.into()));
+        assert_eq!(segs[2].0.as_ref(), "hi");
+        assert_eq!(segs[3].0.as_ref(), "     ");
+        assert_eq!(segs[3].1.bg, Some(code_bg.into()));
+
+        // Selection over "hi" (bytes 0..2) must NOT highlight indent, inset, or trailing rect padding.
+        let sel = Style::new().bg(Color::Blue);
+        let spans = segments_to_spans(
+            segs,
+            0,
+            2,
+            &[(0, 2)],
+            sel,
+            visual_line_render_prefix_bytes(&code_line),
+        );
+        let highlighted: Vec<&str> = spans
+            .iter()
+            .filter(|s| s.style.bg == Some(ratatui::style::Color::Blue))
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(highlighted, vec!["hi"]);
+
+        // TopHalfBlock paints ▄ in code_bg over canvas_bg and is never selectable.
+        let top = DocumentVisualLine {
+            kind: VisualLineKind::CodeBlockChrome {
+                kind: CodeBlockChromeKind::TopHalfBlock,
+                block_style,
+                indent_cols: 2,
+                left_inset: 1,
+                rect_width: 8,
+            },
+            source_line: 0,
+        };
+        let top_segs = line_segments(&top, base_style, &doc_styles, 20);
+        assert_eq!(top_segs.len(), 2);
+        assert_eq!(top_segs[0].0.as_ref(), "  ");
+        assert_eq!(top_segs[0].1.bg, Some(canvas_bg.into()));
+        assert_eq!(top_segs[1].0.as_ref(), "▄▄▄▄▄▄▄▄");
+        assert_eq!(top_segs[1].1.fg, Some(code_bg.into()));
+        assert_eq!(top_segs[1].1.bg, Some(canvas_bg.into()));
+        let top_spans = segments_to_spans(
+            top_segs,
+            0,
+            0,
+            &[(0, 10)],
+            sel,
+            visual_line_render_prefix_bytes(&top),
+        );
+        assert!(
+            top_spans
+                .iter()
+                .all(|s| s.style.bg != Some(ratatui::style::Color::Blue))
+        );
+
+        // Scrolled past "hi", only trailing fill remains and none of it is selected.
+        let short = DocumentVisualLine {
+            kind: VisualLineKind::CodeLine {
+                spans: vec![crate::style::Span::new("hi")],
+                block_style,
+                indent_cols: 0,
+                left_inset: 1,
+                rect_width: 8,
+            },
+            source_line: 0,
+        };
+        let spans = segments_to_spans(
+            line_segments(&short, base_style, &doc_styles, 20),
+            0,
+            2,
+            &[(0, 10)],
+            sel,
+            visual_line_render_prefix_bytes(&short),
+        );
+        let scrolled = crop_spans_for_viewport(spans, 3, usize::MAX);
+        assert_eq!(scrolled.iter().map(|s| s.content.len()).sum::<usize>(), 5);
+        assert!(
+            scrolled
+                .iter()
+                .all(|s| s.style.bg != Some(ratatui::style::Color::Blue))
+        );
+    }
+
+    #[test]
+    fn source_line_numbers_skip_code_block_chrome_rows() {
+        use crate::widgets::document_view::node::CodeBlockChromeKind;
+
+        let chrome = |kind| DocumentVisualLine {
+            kind: VisualLineKind::CodeBlockChrome {
+                kind,
+                block_style: Style::default(),
+                indent_cols: 0,
+                left_inset: 1,
+                rect_width: 8,
+            },
+            source_line: 3,
+        };
+        let code = |source_line| DocumentVisualLine {
+            kind: VisualLineKind::CodeLine {
+                spans: vec![crate::style::Span::new("x")],
+                block_style: Style::default(),
+                indent_cols: 0,
+                left_inset: 1,
+                rect_width: 8,
+            },
+            source_line,
+        };
+        let lines = vec![
+            chrome(CodeBlockChromeKind::TopHalfBlock),
+            chrome(CodeBlockChromeKind::Header { spans: Vec::new() }),
+            code(3),
+            code(4),
+            DocumentVisualLine {
+                source_line: 4,
+                ..chrome(CodeBlockChromeKind::BottomHalfBlock)
+            },
+        ];
+
+        let numbered: Vec<bool> = (0..lines.len())
+            .map(|vi| !is_source_mode_continuation(&lines, vi, 0))
+            .collect();
+        assert_eq!(numbered, vec![false, false, true, true, false]);
     }
 }

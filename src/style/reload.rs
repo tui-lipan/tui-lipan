@@ -527,6 +527,7 @@ struct TomlDocumentPalette {
     heading_styles: Option<[TomlStyle; 6]>,
     code_inline: Option<TomlStyle>,
     code_block: Option<TomlStyle>,
+    code_block_header: Option<TomlStyle>,
     emphasis: Option<TomlStyle>,
     strong: Option<TomlStyle>,
     strikethrough: Option<TomlStyle>,
@@ -556,6 +557,9 @@ impl TomlDocumentPalette {
         }
         if let Some(style) = self.code_block {
             base.code_block = style.apply(base.code_block);
+        }
+        if let Some(style) = self.code_block_header {
+            base.code_block_header = style.apply(base.code_block_header);
         }
         if let Some(style) = self.emphasis {
             base.emphasis = style.apply(base.emphasis);

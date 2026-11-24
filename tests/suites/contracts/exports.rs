@@ -4,15 +4,15 @@
 fn crate_root_exports_common_widgets_and_helpers() {
     #[allow(unused_imports)]
     use tui_lipan::{
-        Accordion, Badge, Breadcrumb, Button, Checkbox, ClassDiagram, Color, ColorGradient,
-        DEFAULT_COLOR_ANIMATION_FRAME_RATE, DEFAULT_FRAME_RATE, DocumentView, Easing, Edge,
-        ErDiagram, FileTree, FlowDirection, Flowchart, FlowchartEdge, FlowchartNodeId, Frame,
-        GanttDiagram, Graph, GraphNode, HStack, Heatmap, HexArea, Input, List, ListItem, Modal,
-        NodeId, NodeShape, Popover, ProgressBar, Radio, RadioEvent, ScrollView, SearchPalette,
-        Select, SelectEvent, SelectionEnd, SequenceDiagram, SequenceMessage, SequenceStep, Slider,
-        Spinner, StateDiagram, StatusBar, Tab, Table, TableCell, TableRow, Tabs, Text, TextArea,
-        TextEditor, TextInput, Tooltip, Tree, TreeNode, TripleClickSelectionMode, VStack,
-        word_forward_start,
+        Accordion, Badge, Breadcrumb, Button, Checkbox, ClassDiagram, CodeBlockHeader,
+        CodeBlockPadding, Color, ColorGradient, DEFAULT_COLOR_ANIMATION_FRAME_RATE,
+        DEFAULT_FRAME_RATE, DocumentView, Easing, Edge, ErDiagram, FileTree, FlowDirection,
+        Flowchart, FlowchartEdge, FlowchartNodeId, Frame, GanttDiagram, Graph, GraphNode, HStack,
+        Heatmap, HexArea, Input, List, ListItem, Modal, NodeId, NodeShape, Popover, ProgressBar,
+        Radio, RadioEvent, ScrollView, SearchPalette, Select, SelectEvent, SelectionEnd,
+        SequenceDiagram, SequenceMessage, SequenceStep, Slider, Spinner, StateDiagram, StatusBar,
+        Tab, Table, TableCell, TableRow, Tabs, Text, TextArea, TextEditor, TextInput, Tooltip,
+        Tree, TreeNode, TripleClickSelectionMode, VStack, word_forward_start,
     };
 
     let _ = (
@@ -45,6 +45,8 @@ fn crate_root_exports_common_widgets_and_helpers() {
     let _ = Heatmap::new([[1.0_f64]]);
     let _ = HexArea::new(vec![0u8]);
     let _ = TripleClickSelectionMode::default();
+    let _ = CodeBlockHeader::default();
+    let _ = CodeBlockPadding::default();
 }
 
 #[cfg(feature = "big-text")]

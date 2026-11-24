@@ -179,10 +179,10 @@ pub use document_view::diagram::{
     StateSpec as DiagramStateSpec, StateTransitionSpec as DiagramStateTransitionSpec,
 };
 pub use document_view::{
-    ColumnAlign, ContentFormatter, DocumentClickEvent, DocumentLineNumberMode,
-    DocumentScrollMetrics, DocumentSelectEvent, DocumentStyles, DocumentTableWidthMode,
-    DocumentView, FormatInput, FormattedBlock, FormattedDiagramBlock, FormattedDocument,
-    FormattedLine, PlainFormatter, TableRowSeparators,
+    CodeBlockHeader, CodeBlockPadding, ColumnAlign, ContentFormatter, DocumentClickEvent,
+    DocumentLineNumberMode, DocumentScrollMetrics, DocumentSelectEvent, DocumentStyles,
+    DocumentTableWidthMode, DocumentView, FormatInput, FormattedBlock, FormattedDiagramBlock,
+    FormattedDocument, FormattedLine, PlainFormatter, TableRowSeparators,
 };
 #[cfg(feature = "markdown")]
 pub use document_view::{MarkdownFormatter, MarkdownSpacing, SourceSpacing};
