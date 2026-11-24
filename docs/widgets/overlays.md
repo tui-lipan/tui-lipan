@@ -323,9 +323,9 @@ inherit ScrollView clipping from the overlay's declaration site.
 | `auto_focus` | `bool` | Focus the first focusable descendant (`true` by default); `false` suspends focus while retaining capture/trapping |
 | `on_close` | `Callback<()>` | Close callback |
 | `placement` | `PopoverPlacement` | `Above`, `Below`, `Left`, `Right` + start/center/end variants |
-| `offset` | `u16` | Distance from trigger |
+| `offset` | `impl Into<PopoverOffset>` | Shift from the placed position; mirrored on the flipped axis when `auto_flip` flips |
 | `clamp` | `bool` | Keep within screen bounds |
-| `auto_flip` | `bool` | Flip placement when out of bounds |
+| `auto_flip` | `bool` | Flip to the opposite side when out of bounds and that side has at least as much room (more room, for vertical flips); the offset flips with it |
 | `min_trigger_width` | `bool` | Keep popover at least as wide as the trigger; content may still make it wider |
 | `fit_trigger_width` | `bool` | Force popover width to exactly match the trigger, unless capped by `max_width` |
 | `max_width` | `Length` | Cap the resolved popover width; percent resolves against overlay bounds |
@@ -374,6 +374,12 @@ a tooltip over its trigger, the trigger remains hoverable and clickable.
 
 Help text on hover or focus.
 
+Set `delay` to wait before a hover opens the tooltip, as desktop apps do: sweeping the pointer
+across a toolbar then opens nothing. Once one delayed tooltip has shown, a neighbour opens at once
+if the pointer reaches it within `skip_delay`. Focus always shows the tooltip immediately. A
+controlled tooltip (`open(...)`) runs no hover timer, so it never warms its neighbours, and changing
+`delay` mid-hover counts from when the pointer arrived.
+
 | Prop | Type | Description |
 |------|------|-------------|
 | `animation` | `impl Into<Option<VisibilityAnimation>>` | Opt-in popup animation, forwarded to Popover |
@@ -382,19 +388,22 @@ Help text on hover or focus.
 | `open` | `bool` | Controlled open state; overrides automatic behavior |
 | `auto` | `bool` | Auto-show on hover/focus |
 | `show_on_focus` | `bool` | Show automatically on focus (default `true`) |
+| `delay` | `Duration` | Hover time before the tooltip opens (default zero) |
+| `skip_delay` | `Duration` | Open at once if another delayed tooltip closed this recently (default `DEFAULT_TOOLTIP_SKIP_DELAY`, 300 ms) |
 | `text_style` | `Style` | Tooltip text style |
 | `container_style` | `Style` | Tooltip container style |
 | `border` | `bool` | Show border |
 | `border_style` | `BorderStyle` | Border style |
 | `padding` | `impl Into<Padding>` | Inner padding |
 | `placement` | `PopoverPlacement` | Tooltip placement |
-| `offset` | `u16` | Distance from element |
+| `offset` | `impl Into<PopoverOffset>` | Shift from the placed position; mirrored when `auto_flip` flips |
 | `clamp` | `bool` | Keep within screen bounds |
 | `auto_flip` | `bool` | Flip when out of bounds |
 
 ```rust
 Tooltip::new("This button saves your work")
     .auto(true)
+    .delay(Duration::from_millis(800))
     .placement(PopoverPlacement::Top)
     .child(
         Button::new("Save")

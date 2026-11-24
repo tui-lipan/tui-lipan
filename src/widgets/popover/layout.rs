@@ -17,6 +17,8 @@ pub fn resolve_popover_rect(popover: &super::Popover, trigger: Rect, bounds: Rec
     let (mut width, mut height) = resolve_popover_size(popover, trigger, max_width, bounds.h);
 
     let mut placement = popover.placement;
+    let mut offset_x = popover.offset.x as i32;
+    let mut offset_y = popover.offset.y as i32;
     let bounds_left = bounds.x as i32;
     let bounds_top = bounds.y as i32;
     let bounds_right = bounds.x as i32 + bounds.w as i32;
@@ -25,13 +27,23 @@ pub fn resolve_popover_rect(popover: &super::Popover, trigger: Rect, bounds: Rec
     let mut pos = popover_position_for_placement(placement, trigger, width, height);
 
     if popover.auto_flip {
-        let (x, y) = pos;
+        // The offset belongs to the placement: a gap that pushes an above popover up must push a
+        // flipped one down, or the flip lands the popover back on its trigger.
+        let x = pos.0 + offset_x;
+        let y = pos.1 + offset_y;
         let x2 = x + width as i32;
         let y2 = y + height as i32;
         let trigger_top = trigger.y as i32;
         let trigger_bottom = trigger.y as i32 + trigger.h as i32;
         let above_space = trigger_top.saturating_sub(bounds_top);
         let below_space = bounds_bottom.saturating_sub(trigger_bottom);
+        let trigger_left = trigger.x as i32;
+        let trigger_right = trigger.x as i32 + trigger.w as i32;
+        let left_space = trigger_left.saturating_sub(bounds_left);
+        let right_space = bounds_right.saturating_sub(trigger_right);
+        // A flip carries the gap to the other side, so both sides lose the same amount to it and
+        // comparing the raw space on each side decides which one fits more. Horizontal flips keep
+        // flipping on a tie, as they always did; only a clearly smaller side is refused.
 
         placement = match placement {
             super::PopoverPlacement::BelowStart
@@ -39,6 +51,7 @@ pub fn resolve_popover_rect(popover: &super::Popover, trigger: Rect, bounds: Rec
             | super::PopoverPlacement::BelowEnd
                 if y2 > bounds_bottom && above_space > below_space =>
             {
+                offset_y = -offset_y;
                 popover_flip_vertical(placement)
             }
             super::PopoverPlacement::AboveStart
@@ -46,20 +59,23 @@ pub fn resolve_popover_rect(popover: &super::Popover, trigger: Rect, bounds: Rec
             | super::PopoverPlacement::AboveEnd
                 if y < bounds_top && below_space > above_space =>
             {
+                offset_y = -offset_y;
                 popover_flip_vertical(placement)
             }
             super::PopoverPlacement::RightStart
             | super::PopoverPlacement::RightCenter
             | super::PopoverPlacement::RightEnd
-                if x2 > bounds_right =>
+                if x2 > bounds_right && left_space >= right_space =>
             {
+                offset_x = -offset_x;
                 popover_flip_horizontal(placement)
             }
             super::PopoverPlacement::LeftStart
             | super::PopoverPlacement::LeftCenter
             | super::PopoverPlacement::LeftEnd
-                if x < bounds_left =>
+                if x < bounds_left && right_space >= left_space =>
             {
+                offset_x = -offset_x;
                 popover_flip_horizontal(placement)
             }
             _ => placement,
@@ -69,14 +85,20 @@ pub fn resolve_popover_rect(popover: &super::Popover, trigger: Rect, bounds: Rec
     }
 
     if let Some(available_height) = vertical_space_for_placement(placement, trigger, bounds)
+        // Keep the requested gap by shrinking the content, but never below one row.
+        .map(|space| {
+            space
+                .saturating_sub(vertical_gap(placement, offset_y))
+                .max(space.min(1))
+        })
         && available_height < height
     {
         (width, height) = resolve_popover_size(popover, trigger, max_width, available_height);
         pos = popover_position_for_placement(placement, trigger, width, height);
     }
 
-    let mut x = pos.0 + popover.offset.x as i32;
-    let mut y = pos.1 + popover.offset.y as i32;
+    let mut x = pos.0 + offset_x;
+    let mut y = pos.1 + offset_y;
 
     if popover.clamp {
         let max_x = (bounds_right - width as i32).max(bounds_left);
@@ -131,6 +153,21 @@ fn vertical_space_for_placement(
         }
         _ => None,
     }
+}
+
+/// Rows an offset puts between a vertical placement and its trigger; an offset toward the trigger
+/// reserves nothing.
+fn vertical_gap(placement: super::PopoverPlacement, offset_y: i32) -> u16 {
+    let away = match placement {
+        super::PopoverPlacement::AboveStart
+        | super::PopoverPlacement::AboveCenter
+        | super::PopoverPlacement::AboveEnd => -offset_y,
+        super::PopoverPlacement::BelowStart
+        | super::PopoverPlacement::BelowCenter
+        | super::PopoverPlacement::BelowEnd => offset_y,
+        _ => 0,
+    };
+    u16::try_from(away.max(0)).unwrap_or(u16::MAX)
 }
 
 fn popover_position_for_placement(
@@ -508,6 +545,86 @@ mod tests {
         assert!(clamped.y >= bounds.y);
         assert!(clamped.x + clamped.w as i16 <= bounds.x + bounds.w as i16);
         assert!(clamped.y + clamped.h as i16 <= bounds.y + bounds.h as i16);
+    }
+
+    #[test]
+    fn horizontal_overflow_from_the_offset_does_not_flip_onto_a_smaller_side() {
+        // Overflowing only because of the gap, with no room on the left: stay right and let the
+        // clamp shrink the gap rather than flip over the trigger.
+        let trigger = Rect {
+            x: 1,
+            y: 0,
+            w: 1,
+            h: 1,
+        };
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 5,
+        };
+        let popover = Popover::new()
+            .content(Text::new("x".repeat(17)))
+            .min_trigger_width(false)
+            .placement(PopoverPlacement::RightStart)
+            .offset((2, 0))
+            .auto_flip(true);
+        let rect = resolve_popover_rect(&popover, trigger, bounds);
+        assert!(rect.x >= 2, "must not cover the trigger: {rect:?}");
+    }
+
+    #[test]
+    fn vertical_gap_survives_limited_space_by_shrinking_content() {
+        let trigger = Rect {
+            x: 0,
+            y: 10,
+            w: 4,
+            h: 1,
+        };
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 11,
+        };
+        let popover = Popover::new()
+            .content(Text::new("tip").height(Length::Px(20)))
+            .placement(PopoverPlacement::AboveStart)
+            .offset((0, -1))
+            .auto_flip(false);
+        let rect = resolve_popover_rect(&popover, trigger, bounds);
+        assert_eq!(rect.y, 0);
+        assert_eq!(
+            rect.y + rect.h as i16,
+            9,
+            "one row of gap above the trigger: {rect:?}"
+        );
+    }
+
+    #[test]
+    fn auto_flip_mirrors_the_offset_so_the_gap_stays_off_the_trigger() {
+        let trigger = Rect {
+            x: 10,
+            y: 1,
+            w: 1,
+            h: 1,
+        };
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 20,
+        };
+        let popover = Popover::new()
+            .content(Text::new("tip").height(Length::Px(3)))
+            .placement(PopoverPlacement::AboveCenter)
+            .offset((0, -1))
+            .auto_flip(true);
+        let rect = resolve_popover_rect(&popover, trigger, bounds);
+        assert_eq!(
+            rect.y, 3,
+            "flipped below with the one-row gap kept: {rect:?}"
+        );
     }
 
     #[test]

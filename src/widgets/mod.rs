@@ -358,7 +358,7 @@ pub use text_area::{
     SyntectDocumentFormatter, SyntectStrategy, apply_syntect_strategy_app_theme, language_from_path,
 };
 pub use toast::{Toast, ToastCopyAffordance};
-pub use tooltip::Tooltip;
+pub use tooltip::{DEFAULT_TOOLTIP_SKIP_DELAY, Tooltip};
 pub use tree::{
     IndentStyle, Tree, TreeBranch, TreeEvent, TreeExpansionMode, TreeGuides, TreeHoverEvent,
     TreeKeymap, TreeNode, TreePath, TreeToggleEvent,

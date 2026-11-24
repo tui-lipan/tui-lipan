@@ -345,6 +345,7 @@ where
             copy_feedback_request,
             command_chord_pending_since,
             command_chord_reveal_delay,
+            tooltip_closed_at: Rc::new(Cell::new(None)),
             cursor_trail: Rc::new(Cell::new(None)),
             cursor_trail_skip: Rc::new(Cell::new(false)),
             scroll_wheel_multiplier,
