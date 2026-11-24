@@ -18,6 +18,7 @@ jobs:
   format:
     name: Format
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Check out repository
@@ -40,6 +41,7 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Check out repository
@@ -53,8 +55,11 @@ jobs:
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
 
+      # setup-zig can hang after installing Zig (#505 waited 44 min). A cold MSVC build takes
+      # about 10 min, so this fails a stuck step long before the 6-hour default.
       - name: Restore or prepare libghostty-vt
         uses: ./.github/actions/libghostty-vt
+        timeout-minutes: 25
 
       - name: Fetch dependencies
         run: cargo fetch
@@ -71,6 +76,7 @@ jobs:
   msrv:
     name: MSRV
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Check out repository
@@ -85,8 +91,11 @@ jobs:
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
 
+      # setup-zig can hang after installing Zig (#505 waited 44 min). A cold MSVC build takes
+      # about 10 min, so this fails a stuck step long before the 6-hour default.
       - name: Restore or prepare libghostty-vt
         uses: ./.github/actions/libghostty-vt
+        timeout-minutes: 25
 
       - name: Check all targets on MSRV
         run: cargo check --workspace --all-targets --all-features
@@ -105,6 +114,7 @@ jobs:
   msrv-windows:
     name: MSRV (Windows)
     runs-on: windows-latest
+    timeout-minutes: 45
 
     steps:
       - name: Check out repository
@@ -117,8 +127,11 @@ jobs:
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
 
+      # setup-zig can hang after installing Zig (#505 waited 44 min). A cold MSVC build takes
+      # about 10 min, so this fails a stuck step long before the 6-hour default.
       - name: Restore or prepare libghostty-vt
         uses: ./.github/actions/libghostty-vt
+        timeout-minutes: 25
 
       - name: Check all targets on MSRV
         run: cargo check --workspace --all-targets --all-features
@@ -126,6 +139,7 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Check out repository
@@ -137,8 +151,11 @@ jobs:
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
 
+      # setup-zig can hang after installing Zig (#505 waited 44 min). A cold MSVC build takes
+      # about 10 min, so this fails a stuck step long before the 6-hour default.
       - name: Restore or prepare libghostty-vt
         uses: ./.github/actions/libghostty-vt
+        timeout-minutes: 25
 
       - name: Fetch dependencies
         run: cargo fetch
@@ -156,6 +173,7 @@ jobs:
   test-macos-media:
     name: Test media (macOS)
     runs-on: macos-latest
+    timeout-minutes: 30
 
     steps:
       - name: Check out repository
@@ -167,8 +185,11 @@ jobs:
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
 
+      # setup-zig can hang after installing Zig (#505 waited 44 min). A cold MSVC build takes
+      # about 10 min, so this fails a stuck step long before the 6-hour default.
       - name: Restore or prepare libghostty-vt
         uses: ./.github/actions/libghostty-vt
+        timeout-minutes: 25
 
       # Darwin POSIX shm descriptors cannot be read or sought. Exercise the actual mmap
       # acquisition and cleanup here; Linux cannot detect a regression to descriptor reads.
@@ -192,6 +213,7 @@ jobs:
   test-windows:
     name: Test (Windows)
     runs-on: windows-latest
+    timeout-minutes: 45
 
     steps:
       - name: Check out repository
@@ -203,8 +225,11 @@ jobs:
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
 
+      # setup-zig can hang after installing Zig (#505 waited 44 min). A cold MSVC build takes
+      # about 10 min, so this fails a stuck step long before the 6-hour default.
       - name: Restore or prepare libghostty-vt
         uses: ./.github/actions/libghostty-vt
+        timeout-minutes: 25
 
       - name: Fetch dependencies
         run: cargo fetch
@@ -218,6 +243,7 @@ jobs:
   web-examples:
     name: Web examples
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Check out repository
@@ -252,6 +278,7 @@ jobs:
   licenses:
     name: Licenses & Advisories
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Check out repository

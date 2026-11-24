@@ -3,6 +3,8 @@ description: >-
   Restores the libghostty-vt static library that `terminal-ghostty` (tui-lipan-ghostty-vt-sys)
   builds, and installs Zig only when the library has to be built. A cold build takes about 1.5 min
   on Linux and about 10 min on Windows MSVC.
+  Composite steps cannot set `timeout-minutes`, so every caller caps this step instead (25 min):
+  setup-zig has hung after installing Zig.
 
 runs:
   using: composite
