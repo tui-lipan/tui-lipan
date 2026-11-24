@@ -250,8 +250,18 @@ struct TooltipState {
     hovered: bool,
     /// Whether a delayed tooltip has finished waiting and is shown for hover.
     revealed: bool,
-    /// Bumped on every hover change so a timer armed for an earlier hover is ignored.
+    /// Bumped on every hover change and timing change so a timer armed earlier is ignored.
     hover_generation: u64,
+    /// When the current hover began, so a changed delay counts from the original entry.
+    hovered_since: Option<std::time::Instant>,
+}
+
+impl TooltipProps {
+    /// Whether hover opens this tooltip after [`Tooltip::delay`]. A controlled tooltip
+    /// ([`Tooltip::open`]) never runs the hover timer, so it can neither reveal nor warm others.
+    fn delays_hover(&self) -> bool {
+        self.auto && self.open.is_none() && !self.delay.is_zero()
+    }
 }
 
 enum TooltipMsg {
@@ -267,16 +277,23 @@ impl TooltipComponent {
     }
 
     fn hover(hovered: bool, ctx: &mut Context<Self>) -> Update {
+        if !ctx.props.delays_hover() {
+            return Update::none();
+        }
         ctx.state.hovered = hovered;
         ctx.state.hover_generation = ctx.state.hover_generation.wrapping_add(1);
         if !hovered {
+            ctx.state.hovered_since = None;
             if !std::mem::take(&mut ctx.state.revealed) {
                 return Update::none();
             }
+            // Only a tooltip the user actually saw warms its neighbours.
             let env = ctx.env();
             env.tooltip_closed_at.set(Some(env.now()));
             return Update::render();
         }
+        let now = ctx.env().now();
+        ctx.state.hovered_since = Some(now);
         let env = ctx.env();
         let warm = env
             .tooltip_closed_at
@@ -286,8 +303,17 @@ impl TooltipComponent {
             ctx.state.revealed = true;
             return Update::render();
         }
+        Self::arm(ctx.props.delay, ctx)
+    }
+
+    /// Schedule a reveal for the current hover after `wait`, or reveal now when nothing is left.
+    fn arm(wait: Duration, ctx: &mut Context<Self>) -> Update {
+        if wait.is_zero() {
+            ctx.state.revealed = true;
+            return Update::render();
+        }
         let generation = ctx.state.hover_generation;
-        Update::command_only(ctx.link().command_after(ctx.props.delay, move |link| {
+        Update::command_only(ctx.link().command_after(wait, move |link| {
             link.send(TooltipMsg::Reveal(generation));
         }))
     }
@@ -305,7 +331,39 @@ impl Component for TooltipComponent {
             hovered: false,
             revealed: false,
             hover_generation: 0,
+            hovered_since: None,
         }
+    }
+
+    fn on_props_changed(
+        &mut self,
+        old_props: &Self::Properties,
+        ctx: &mut Context<Self>,
+    ) -> Update {
+        let delays = ctx.props.delays_hover();
+        if delays == old_props.delays_hover() && ctx.props.delay == old_props.delay {
+            return Update::none();
+        }
+        // Whatever timer is pending was armed for the old configuration.
+        ctx.state.hover_generation = ctx.state.hover_generation.wrapping_add(1);
+        if !delays {
+            // Hover is no longer tracked here; closing this way does not warm other tooltips.
+            ctx.state.hovered = false;
+            ctx.state.hovered_since = None;
+            return if std::mem::take(&mut ctx.state.revealed) {
+                Update::render()
+            } else {
+                Update::none()
+            };
+        }
+        let Some(since) = ctx.state.hovered_since.filter(|_| ctx.state.hovered) else {
+            return Update::none();
+        };
+        if ctx.state.revealed {
+            return Update::none();
+        }
+        let waited = ctx.env().elapsed(since);
+        Self::arm(ctx.props.delay.saturating_sub(waited), ctx)
     }
 
     fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
@@ -322,7 +380,7 @@ impl Component for TooltipComponent {
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {
-        let delayed = ctx.props.auto && !ctx.props.delay.is_zero();
+        let delayed = ctx.props.delays_hover();
         let trigger = if delayed {
             MouseRegion::new()
                 .on_hover_change(ctx.link().callback(TooltipMsg::Hover))

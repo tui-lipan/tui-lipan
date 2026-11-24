@@ -325,7 +325,7 @@ inherit ScrollView clipping from the overlay's declaration site.
 | `placement` | `PopoverPlacement` | `Above`, `Below`, `Left`, `Right` + start/center/end variants |
 | `offset` | `impl Into<PopoverOffset>` | Shift from the placed position; mirrored on the flipped axis when `auto_flip` flips |
 | `clamp` | `bool` | Keep within screen bounds |
-| `auto_flip` | `bool` | Flip placement when out of bounds (the offset flips with it) |
+| `auto_flip` | `bool` | Flip to the opposite side when out of bounds and that side has at least as much room (more room, for vertical flips); the offset flips with it |
 | `min_trigger_width` | `bool` | Keep popover at least as wide as the trigger; content may still make it wider |
 | `fit_trigger_width` | `bool` | Force popover width to exactly match the trigger, unless capped by `max_width` |
 | `max_width` | `Length` | Cap the resolved popover width; percent resolves against overlay bounds |

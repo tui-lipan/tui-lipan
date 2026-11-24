@@ -6,27 +6,56 @@ const DELAY: Duration = Duration::from_millis(1000);
 
 struct DelayedApp;
 
+/// Alpha's tooltip settings, changed by tests while the pointer rests on it. Beta is fixed.
+struct Alpha {
+    delay: Duration,
+    open: Option<bool>,
+    auto: bool,
+    skip_delay: Duration,
+}
+
+impl Default for Alpha {
+    fn default() -> Self {
+        Self {
+            delay: DELAY,
+            open: None,
+            auto: true,
+            skip_delay: DEFAULT_TOOLTIP_SKIP_DELAY,
+        }
+    }
+}
+
 impl Component for DelayedApp {
     type Properties = ();
-    type State = ();
+    type State = Alpha;
     type Message = ();
-    fn create_state(&self, _: &()) {}
+    fn create_state(&self, _: &()) -> Alpha {
+        Alpha::default()
+    }
     fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
         Update::none()
     }
-    fn view(&self, _: &Context<Self>) -> Element {
-        let tip = |label: &'static str, text: &'static str| -> Element {
-            Tooltip::new(text)
-                .delay(DELAY)
-                .placement(PopoverPlacement::BelowStart)
-                .child(Text::new(label))
-                .into()
-        };
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        let alpha = &ctx.state;
+        let mut first = Tooltip::new("tip-a")
+            .delay(alpha.delay)
+            .skip_delay(alpha.skip_delay)
+            .auto(alpha.auto)
+            .placement(PopoverPlacement::BelowStart)
+            .child(Text::new("Alpha"));
+        if let Some(open) = alpha.open {
+            first = first.open(open);
+        }
         HStack::new()
             .gap(2)
             .height(Length::Px(1))
-            .child(tip("Alpha", "tip-a"))
-            .child(tip("Beta", "tip-b"))
+            .child(first)
+            .child(
+                Tooltip::new("tip-b")
+                    .delay(DELAY)
+                    .placement(PopoverPlacement::BelowStart)
+                    .child(Button::new("Beta").key("beta")),
+            )
             .into()
     }
 }
@@ -125,4 +154,93 @@ fn neighbour_opens_at_once_after_a_tooltip_was_shown_until_it_cools_down() {
     wait(&mut backend, DEFAULT_TOOLTIP_SKIP_DELAY * 2);
     hover(&mut backend, ALPHA);
     assert!(!shows(&backend, "tip-a"));
+}
+
+fn configure(backend: &mut TestBackend<DelayedApp>, change: impl FnOnce(&mut Alpha)) {
+    change(backend.state_mut());
+    backend.render();
+    backend.pump().unwrap();
+    backend.render();
+}
+
+const STEP: Duration = Duration::from_millis(10);
+
+#[test]
+fn a_controlled_hidden_tooltip_never_warms_its_neighbours() {
+    let mut backend = backend();
+    configure(&mut backend, |alpha| alpha.open = Some(false));
+    hover(&mut backend, ALPHA);
+    wait(&mut backend, DELAY + STEP);
+    assert!(!shows(&backend, "tip-a"));
+    hover(&mut backend, BETA);
+    assert!(!shows(&backend, "tip-b"), "beta must wait its full delay");
+}
+
+#[test]
+fn a_delay_changed_mid_hover_counts_from_the_original_entry() {
+    let mut backend = backend();
+    hover(&mut backend, ALPHA);
+    wait(&mut backend, Duration::from_millis(200));
+    configure(&mut backend, |alpha| {
+        alpha.delay = Duration::from_millis(5000)
+    });
+    wait(&mut backend, DELAY);
+    assert!(
+        !shows(&backend, "tip-a"),
+        "the old 1 s timer must not reveal"
+    );
+
+    configure(&mut backend, |alpha| {
+        alpha.delay = Duration::from_millis(300)
+    });
+    assert!(
+        shows(&backend, "tip-a"),
+        "1.2 s already waited exceeds 300 ms"
+    );
+}
+
+#[test]
+fn turning_auto_off_mid_hover_cancels_the_reveal() {
+    let mut backend = backend();
+    hover(&mut backend, ALPHA);
+    wait(&mut backend, DELAY / 2);
+    configure(&mut backend, |alpha| alpha.auto = false);
+    wait(&mut backend, DELAY);
+    assert!(!shows(&backend, "tip-a"));
+}
+
+#[test]
+fn a_zero_skip_delay_always_waits() {
+    let mut backend = backend();
+    hover(&mut backend, BETA);
+    wait(&mut backend, DELAY + STEP);
+    assert!(shows(&backend, "tip-b"));
+    configure(&mut backend, |alpha| alpha.skip_delay = Duration::ZERO);
+    hover(&mut backend, ALPHA);
+    assert!(!shows(&backend, "tip-a"));
+    wait(&mut backend, DELAY + STEP);
+    assert!(shows(&backend, "tip-a"));
+}
+
+#[test]
+fn focus_shows_a_delayed_tooltip_at_once() {
+    let mut backend = backend();
+    assert!(backend.focus_key(&"beta".into()));
+    backend.render();
+    assert!(shows(&backend, "tip-b"));
+}
+
+#[test]
+fn only_the_current_hover_can_reveal() {
+    let mut backend = backend();
+    hover(&mut backend, ALPHA);
+    wait(&mut backend, DELAY / 2);
+    hover(&mut backend, EMPTY);
+    wait(&mut backend, Duration::from_millis(200));
+    hover(&mut backend, ALPHA);
+    // The first hover's timer comes due here.
+    wait(&mut backend, Duration::from_millis(300) + STEP);
+    assert!(!shows(&backend, "tip-a"));
+    wait(&mut backend, Duration::from_millis(700));
+    assert!(shows(&backend, "tip-a"));
 }
