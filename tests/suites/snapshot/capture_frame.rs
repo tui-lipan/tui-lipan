@@ -1385,3 +1385,79 @@ fn png_font_renderer_draws_color_emoji() {
         "a color emoji is not drawn in the white foreground"
     );
 }
+
+#[cfg(feature = "markdown")]
+struct InsetCodeBlock {
+    code: &'static str,
+    width: Length,
+    inset: u16,
+}
+
+#[cfg(feature = "markdown")]
+const CODE_BG: Color = Color::Rgb(30, 34, 42);
+
+#[cfg(feature = "markdown")]
+impl Component for InsetCodeBlock {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        DocumentView::new(format!("```\n{}\n```", self.code))
+            .markdown()
+            .wrap(true)
+            .border(false)
+            .code_block_width(self.width)
+            .code_block_inset(self.inset)
+            .code_block_style(Style::new().bg(CODE_BG))
+            .into()
+    }
+}
+
+#[cfg(feature = "markdown")]
+fn capture_code_row(code: &'static str, width: Length, inset: u16, viewport_w: u16) -> String {
+    let mut backend = TestBackend::new(InsetCodeBlock { code, width, inset });
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: viewport_w,
+        h: 3,
+    });
+    backend.render();
+    let captured = backend.capture_frame();
+    captured
+        .row(0)
+        .iter()
+        .map(|cell| {
+            if cell.bg == CODE_BG {
+                cell.symbol.as_str()
+            } else {
+                "|"
+            }
+        })
+        .collect()
+}
+
+#[cfg(feature = "markdown")]
+#[test]
+fn code_block_inset_fits_inside_explicit_width() {
+    // Px(4) stays 4 columns wide however large the inset.
+    assert_eq!(
+        capture_code_row("ab", Length::Px(4), 8, 20),
+        "   a||||||||||||||||"
+    );
+}
+
+#[cfg(feature = "markdown")]
+#[test]
+fn code_block_inset_yields_to_wide_glyph() {
+    // Four columns, inset 3: the inset shrinks so the two-column glyph shows.
+    let row = capture_code_row("中", Length::Flex(1), 3, 4);
+    assert!(row.contains('中'), "{row:?}");
+}

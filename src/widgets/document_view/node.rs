@@ -1745,8 +1745,18 @@ fn flatten_code_block(
         || !matches!(ctx.code_block_width, Length::Flex(_));
     let mut right_inset = if decorated { left_inset } else { 0 };
     let available_w = ctx.inner_w.saturating_sub(ctx.base_indent_cols);
-    // Narrowest useful rectangle: the left inset plus one content column.
-    let min_rect_w = left_inset.saturating_add(1);
+    // Content columns the insets must leave: wrapping cannot split a grapheme,
+    // so the widest one sets the floor.
+    let min_content_w = if ctx.wrap {
+        raw_lines
+            .iter()
+            .map(|(spans, _, _)| crate::utils::text::widest_grapheme_width(spans))
+            .max()
+            .unwrap_or(0)
+            .max(1)
+    } else {
+        1
+    };
 
     let header_content_w = header_spans.as_ref().map_or(0, |spans| span_width(spans));
     let max_raw_code_w = raw_lines
@@ -1759,7 +1769,8 @@ fn flatten_code_block(
         .saturating_add(left_inset.saturating_add(right_inset));
 
     // `Px`/`Percent` are fixed widths while wrapping; with wrapping off nothing
-    // can shrink the code, so they act as minimum widths instead.
+    // can shrink the code, so they act as minimum widths instead. The insets
+    // fit inside the resolved width, never widen it.
     let target_rect_w = match ctx.code_block_width {
         Length::Flex(_) => {
             if ctx.wrap {
@@ -1776,7 +1787,7 @@ fn flatten_code_block(
             }
         }
         Length::Px(px) => {
-            let px = px.max(min_rect_w);
+            let px = px.max(1);
             if ctx.wrap {
                 px.min(available_w)
             } else {
@@ -1785,7 +1796,7 @@ fn flatten_code_block(
         }
         Length::Percent(pct) => {
             let scaled = ((u32::from(available_w) * u32::from(pct.min(100))) / 100) as u16;
-            let scaled = scaled.max(min_rect_w).min(available_w);
+            let scaled = scaled.max(1).min(available_w);
             if ctx.wrap {
                 scaled
             } else {
@@ -1794,9 +1805,9 @@ fn flatten_code_block(
         }
     };
 
-    // Too narrow for the insets: shrink them to leave one content column,
-    // right side first.
-    let inset_room = target_rect_w.saturating_sub(1);
+    // Too narrow for the insets: shrink them to leave `min_content_w` content
+    // columns, right side first.
+    let inset_room = target_rect_w.saturating_sub(min_content_w);
     right_inset = right_inset.min(inset_room.saturating_sub(left_inset));
     left_inset = left_inset.min(inset_room);
     let h_insets = left_inset.saturating_add(right_inset);
@@ -3152,8 +3163,8 @@ mod tests {
             }
         }
 
-        // Rectangles narrower than both insets keep one content column and
-        // never emit an empty leading row.
+        // Rectangles narrower than both insets keep their width and one content
+        // column, and never emit an empty leading row.
         for px in 0..=3 {
             let (tiny_lines, _) = run(
                 Length::Px(px),
@@ -3171,7 +3182,7 @@ mod tests {
                 .collect();
             assert_eq!(rows.len(), 10, "Px({px})");
             assert!(
-                rows.iter().all(|&(w, rect)| w == 1 && rect >= 2),
+                rows.iter().all(|&(w, rect)| w == 1 && rect == px.max(1)),
                 "Px({px})"
             );
         }
@@ -3188,16 +3199,24 @@ mod tests {
         };
 
         let doc_styles = DocumentStyles::default();
-        for value in [
-            "```\nabcdefghij\n```",
-            "- item\n\n  ```\n  abcdefghij\n  ```",
+        for (value, glyph_w) in [
+            ("```\nabcdefghij\n```", 1),
+            ("- item\n\n  ```\n  abcdefghij\n  ```", 1),
+            ("```\n中文字符号\n```", 2),
         ] {
             let doc = MarkdownFormatter::default().format(FormatInput {
                 value,
                 content_type: Some("markdown"),
                 document_styles: None,
             });
-            for (width, inset, inner_w) in [Length::Flex(1), Length::Auto, Length::Px(10)]
+            let widths = [
+                Length::Flex(1),
+                Length::Auto,
+                Length::Px(10),
+                Length::Px(2),
+                Length::Percent(60),
+            ];
+            for (width, inset, inner_w) in widths
                 .into_iter()
                 .flat_map(|w| (0..=3u16).map(move |i| (w, i)))
                 .flat_map(|(w, i)| (1..=10u16).map(move |n| (w, i, n)))
@@ -3228,22 +3247,29 @@ mod tests {
                         spans,
                         indent_cols,
                         left_inset,
+                        rect_width,
                         ..
                     } = &line.kind
                     else {
                         continue;
                     };
-                    if *indent_cols >= inner_w {
-                        continue; // List indentation alone fills the viewport.
+                    let avail = inner_w.saturating_sub(*indent_cols);
+                    if avail < glyph_w {
+                        continue; // Not even one glyph fits the viewport.
                     }
-                    let used = indent_cols + left_inset + super::span_width(spans);
+                    let used = left_inset + super::span_width(spans);
                     let ctx = format!("{value:?} {width:?} inset={inset} inner_w={inner_w}");
-                    assert!(super::span_width(spans) >= 1 && used <= inner_w, "{ctx}");
-                    // With room for both insets and a column of code, the
-                    // inset is honored on both sides.
-                    if inner_w - indent_cols > 2 * inset {
+                    assert!(super::span_width(spans) >= 1, "{ctx}");
+                    assert!(used <= *rect_width && *rect_width <= avail, "{ctx}");
+                    // Explicit widths are not widened by the inset.
+                    if let Length::Px(px) = width {
+                        assert_eq!(*rect_width, px.max(glyph_w).min(avail), "{ctx}");
+                    }
+                    // With room for both insets and a glyph, the inset is
+                    // honored on both sides.
+                    if *rect_width >= 2 * inset + glyph_w {
                         assert_eq!(*left_inset, inset, "{ctx}");
-                        assert!(used + inset <= inner_w, "{ctx}");
+                        assert!(used + inset <= *rect_width, "{ctx}");
                     }
                 }
             }
@@ -3278,7 +3304,7 @@ mod tests {
                 table_row_separators: TableRowSeparators::default(),
                 table_cell_padding: 0,
                 table_border_variant: BorderStyle::Plain,
-                code_block_width: Length::Px(2),
+                code_block_width: Length::Px(1),
                 code_block_padding: CodeBlockPadding::None,
                 code_block_header: CodeBlockHeader::None,
                 code_block_inset: 1,
@@ -3292,10 +3318,7 @@ mod tests {
                 spans, rect_width, ..
             } = &line.kind
             {
-                assert!(
-                    super::span_width(spans) < *rect_width,
-                    "wide glyph plus 1-col inset"
-                );
+                assert!(super::span_width(spans) <= *rect_width, "{line:?}");
             }
         }
     }

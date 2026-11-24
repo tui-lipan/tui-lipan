@@ -800,8 +800,8 @@ impl DocumentView {
     /// Set the blank columns between a fenced code block's edge and its code.
     ///
     /// Applies on the left, and on the right too for decorated blocks
-    /// (padding, a header, or a non-`Flex` width). Insets shrink before the
-    /// code does in narrow viewports. Default: `1`.
+    /// (padding, a header, or a non-`Flex` width). Insets fit inside the
+    /// block's width and shrink until the widest character fits. Default: `1`.
     pub fn code_block_inset(mut self, cols: u16) -> Self {
         self.code_block_inset = cols;
         self

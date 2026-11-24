@@ -270,8 +270,8 @@ Fenced code blocks paint `code_block_style`'s background as a straight-edged
 rectangle. Any decoration (`code_block_padding`, `code_block_header`, or a
 non-`Flex` `code_block_width`) mirrors `code_block_inset` on the right, so code
 wraps that many columns earlier. Headers that do not fit are truncated with `…`.
-In narrow viewports the insets shrink, right side first, so at least one column
-of code stays visible.
+Insets never widen the rectangle: when it is too narrow, they shrink, right side
+first, until the widest character of the code fits.
 
 ### Custom markdown styles
 
