@@ -306,6 +306,7 @@ pub(crate) struct DocumentViewNode {
     pub code_block_width: Length,
     pub code_block_padding: CodeBlockPadding,
     pub code_block_header: CodeBlockHeader,
+    pub code_block_inset: u16,
 
     // ── Styling ──────────────────────────────────────────────────────────
     pub style: Style,
@@ -759,6 +760,7 @@ impl From<DocumentView> for DocumentViewNode {
             code_block_width: dv.code_block_width,
             code_block_padding: dv.code_block_padding,
             code_block_header: dv.code_block_header,
+            code_block_inset: dv.code_block_inset,
             style: dv.style,
             line_number_style: dv.line_number_style,
             hover_style: dv.hover_style,
@@ -859,6 +861,7 @@ pub(crate) struct DocumentFlattenCtx<'a> {
     pub code_block_width: Length,
     pub code_block_padding: CodeBlockPadding,
     pub code_block_header: CodeBlockHeader,
+    pub code_block_inset: u16,
     pub doc_styles: &'a DocumentStyles,
     #[cfg(feature = "syntax-syntect")]
     pub code_strategy: Option<&'a dyn crate::widgets::TextAreaColorStrategy>,
@@ -958,9 +961,6 @@ pub(crate) fn lines_only_source_heights(
 
     Some((heights, max_w))
 }
-
-pub(crate) const CODE_BLOCK_LEFT_INSET_COLS: u16 = 1;
-pub(crate) const CODE_BLOCK_RIGHT_INSET_COLS: u16 = 1;
 
 /// Display columns rendered before selectable content (code inset, blockquote bars).
 pub(crate) fn visual_line_render_prefix_cols(vline: &DocumentVisualLine) -> usize {
@@ -1163,6 +1163,7 @@ fn flatten_block(
                     code_block_width: ctx.code_block_width,
                     code_block_padding: ctx.code_block_padding,
                     code_block_header: ctx.code_block_header,
+                    code_block_inset: ctx.code_block_inset,
                     doc_styles,
                     base_indent_cols: accum.base_indent_cols,
                     #[cfg(feature = "syntax-syntect")]
@@ -1634,6 +1635,7 @@ struct CodeFlattenCtx<'a> {
     code_block_width: Length,
     code_block_padding: CodeBlockPadding,
     code_block_header: CodeBlockHeader,
+    code_block_inset: u16,
     doc_styles: &'a DocumentStyles,
     base_indent_cols: u16,
     #[cfg(feature = "syntax-syntect")]
@@ -1735,20 +1737,26 @@ fn flatten_code_block(
         ctx.doc_styles,
     );
 
-    let mut left_inset = CODE_BLOCK_LEFT_INSET_COLS;
-    // Decorated rectangles get a symmetric right inset so code never touches
-    // the visible right edge; the default flex block keeps its historic budget.
+    let mut left_inset = ctx.code_block_inset;
+    // Decorated rectangles mirror the inset on the right so code never touches
+    // the visible right edge; plain flex blocks run to the edge.
     let decorated = ctx.code_block_padding != CodeBlockPadding::None
         || ctx.code_block_header != CodeBlockHeader::None
         || !matches!(ctx.code_block_width, Length::Flex(_));
-    let mut right_inset = if decorated {
-        CODE_BLOCK_RIGHT_INSET_COLS
-    } else {
-        0
-    };
+    let mut right_inset = if decorated { left_inset } else { 0 };
     let available_w = ctx.inner_w.saturating_sub(ctx.base_indent_cols);
-    // Narrowest useful rectangle: the left inset plus one content column.
-    let min_rect_w = left_inset.saturating_add(1);
+    // Content columns the insets must leave: wrapping cannot split a grapheme,
+    // so the widest one sets the floor.
+    let min_content_w = if ctx.wrap {
+        raw_lines
+            .iter()
+            .map(|(spans, _, _)| crate::utils::text::widest_grapheme_width(spans))
+            .max()
+            .unwrap_or(0)
+            .max(1)
+    } else {
+        1
+    };
 
     let header_content_w = header_spans.as_ref().map_or(0, |spans| span_width(spans));
     let max_raw_code_w = raw_lines
@@ -1761,7 +1769,8 @@ fn flatten_code_block(
         .saturating_add(left_inset.saturating_add(right_inset));
 
     // `Px`/`Percent` are fixed widths while wrapping; with wrapping off nothing
-    // can shrink the code, so they act as minimum widths instead.
+    // can shrink the code, so they act as minimum widths instead. The insets
+    // fit inside the resolved width, never widen it.
     let target_rect_w = match ctx.code_block_width {
         Length::Flex(_) => {
             if ctx.wrap {
@@ -1778,7 +1787,7 @@ fn flatten_code_block(
             }
         }
         Length::Px(px) => {
-            let px = px.max(min_rect_w);
+            let px = px.max(1);
             if ctx.wrap {
                 px.min(available_w)
             } else {
@@ -1787,7 +1796,7 @@ fn flatten_code_block(
         }
         Length::Percent(pct) => {
             let scaled = ((u32::from(available_w) * u32::from(pct.min(100))) / 100) as u16;
-            let scaled = scaled.max(min_rect_w).min(available_w);
+            let scaled = scaled.max(1).min(available_w);
             if ctx.wrap {
                 scaled
             } else {
@@ -1796,13 +1805,11 @@ fn flatten_code_block(
         }
     };
 
-    // Too narrow for the insets: give them back to the content, right first.
-    if target_rect_w < left_inset.saturating_add(right_inset).saturating_add(1) {
-        right_inset = 0;
-    }
-    if target_rect_w < left_inset.saturating_add(1) {
-        left_inset = 0;
-    }
+    // Too narrow for the insets: shrink them to leave `min_content_w` content
+    // columns, right side first.
+    let inset_room = target_rect_w.saturating_sub(min_content_w);
+    right_inset = right_inset.min(inset_room.saturating_sub(left_inset));
+    left_inset = left_inset.min(inset_room);
     let h_insets = left_inset.saturating_add(right_inset);
     let wrap_budget = target_rect_w.saturating_sub(h_insets).max(1);
 
@@ -2353,26 +2360,21 @@ mod tests {
 
     #[test]
     fn visual_line_plain_text_omits_code_block_left_inset() {
-        use super::{
-            CODE_BLOCK_LEFT_INSET_COLS, visual_line_plain_text, visual_line_render_prefix_cols,
-        };
+        use super::{visual_line_plain_text, visual_line_render_prefix_cols};
 
         let line = DocumentVisualLine {
             kind: VisualLineKind::CodeLine {
                 spans: vec![Span::new("fn main()")],
                 block_style: crate::style::Style::default(),
                 indent_cols: 0,
-                left_inset: CODE_BLOCK_LEFT_INSET_COLS,
+                left_inset: 1,
                 rect_width: 0,
             },
             source_line: 0,
         };
 
         assert_eq!(visual_line_plain_text(&line, 0), "fn main()");
-        assert_eq!(
-            visual_line_render_prefix_cols(&line),
-            CODE_BLOCK_LEFT_INSET_COLS as usize
-        );
+        assert_eq!(visual_line_render_prefix_cols(&line), 1);
     }
 
     #[cfg(feature = "markdown")]
@@ -2403,6 +2405,7 @@ mod tests {
                 code_block_width: crate::style::Length::Flex(1),
                 code_block_padding: crate::widgets::document_view::CodeBlockPadding::None,
                 code_block_header: crate::widgets::document_view::CodeBlockHeader::None,
+                code_block_inset: 1,
                 doc_styles: &doc_styles,
                 #[cfg(feature = "syntax-syntect")]
                 code_strategy: None,
@@ -2432,7 +2435,7 @@ mod tests {
     #[cfg(feature = "markdown")]
     #[test]
     fn markdown_code_block_wraps_long_lines_when_wrap_enabled() {
-        use super::{CODE_BLOCK_LEFT_INSET_COLS, DocumentFlattenCtx, flatten_blocks, span_width};
+        use super::{DocumentFlattenCtx, flatten_blocks, span_width};
         use crate::style::BorderStyle;
         use crate::widgets::document_view::format::ContentFormatter;
         use crate::widgets::document_view::{
@@ -2466,6 +2469,7 @@ mod tests {
                 code_block_width: crate::style::Length::Flex(1),
                 code_block_padding: crate::widgets::document_view::CodeBlockPadding::None,
                 code_block_header: crate::widgets::document_view::CodeBlockHeader::None,
+                code_block_inset: 1,
                 doc_styles: &doc_styles,
                 #[cfg(feature = "syntax-syntect")]
                 code_strategy: None,
@@ -2491,7 +2495,7 @@ mod tests {
 
         let first_source_line = code_lines[0].1;
         for (spans, source_line) in &code_lines {
-            let rendered_width = span_width(spans).saturating_add(CODE_BLOCK_LEFT_INSET_COLS);
+            let rendered_width = span_width(spans).saturating_add(1);
             assert!(
                 rendered_width <= width,
                 "wrapped code line width {rendered_width} should fit {width}"
@@ -2545,6 +2549,7 @@ mod tests {
                 code_block_width: crate::style::Length::Flex(1),
                 code_block_padding: crate::widgets::document_view::CodeBlockPadding::None,
                 code_block_header: crate::widgets::document_view::CodeBlockHeader::None,
+                code_block_inset: 1,
                 doc_styles: &doc_styles,
                 code_strategy: Some(&strategy),
             },
@@ -2595,6 +2600,7 @@ mod tests {
                 code_block_width: crate::style::Length::Flex(1),
                 code_block_padding: crate::widgets::document_view::CodeBlockPadding::None,
                 code_block_header: crate::widgets::document_view::CodeBlockHeader::None,
+                code_block_inset: 1,
                 doc_styles: &doc_styles,
                 #[cfg(feature = "syntax-syntect")]
                 code_strategy: None,
@@ -2644,6 +2650,7 @@ mod tests {
                 code_block_width: crate::style::Length::Flex(1),
                 code_block_padding: crate::widgets::document_view::CodeBlockPadding::None,
                 code_block_header: crate::widgets::document_view::CodeBlockHeader::None,
+                code_block_inset: 1,
                 doc_styles: &doc_styles,
                 #[cfg(feature = "syntax-syntect")]
                 code_strategy: None,
@@ -2700,6 +2707,7 @@ mod tests {
                 code_block_width: crate::style::Length::Flex(1),
                 code_block_padding: crate::widgets::document_view::CodeBlockPadding::None,
                 code_block_header: crate::widgets::document_view::CodeBlockHeader::None,
+                code_block_inset: 1,
                 doc_styles: &doc_styles,
                 #[cfg(feature = "syntax-syntect")]
                 code_strategy: None,
@@ -2738,6 +2746,7 @@ mod tests {
                 code_block_width: crate::style::Length::Flex(1),
                 code_block_padding: crate::widgets::document_view::CodeBlockPadding::None,
                 code_block_header: crate::widgets::document_view::CodeBlockHeader::None,
+                code_block_inset: 1,
                 doc_styles: &doc_styles,
                 #[cfg(feature = "syntax-syntect")]
                 code_strategy: None,
@@ -2784,6 +2793,7 @@ mod tests {
                 code_block_width: crate::style::Length::Flex(1),
                 code_block_padding: crate::widgets::document_view::CodeBlockPadding::None,
                 code_block_header: crate::widgets::document_view::CodeBlockHeader::None,
+                code_block_inset: 1,
                 doc_styles: &doc_styles,
                 #[cfg(feature = "syntax-syntect")]
                 code_strategy: None,
@@ -2833,6 +2843,7 @@ mod tests {
                 code_block_width: crate::style::Length::Flex(1),
                 code_block_padding: crate::widgets::document_view::CodeBlockPadding::None,
                 code_block_header: crate::widgets::document_view::CodeBlockHeader::None,
+                code_block_inset: 1,
                 doc_styles: &DocumentStyles::default(),
                 #[cfg(feature = "syntax-syntect")]
                 code_strategy: None,
@@ -2879,6 +2890,7 @@ mod tests {
                 code_block_width: crate::style::Length::Flex(1),
                 code_block_padding: crate::widgets::document_view::CodeBlockPadding::None,
                 code_block_header: crate::widgets::document_view::CodeBlockHeader::None,
+                code_block_inset: 1,
                 doc_styles: &DocumentStyles::default(),
                 #[cfg(feature = "syntax-syntect")]
                 code_strategy: None,
@@ -2943,6 +2955,7 @@ mod tests {
                 code_block_width: crate::style::Length::Flex(1),
                 code_block_padding: crate::widgets::document_view::CodeBlockPadding::None,
                 code_block_header: crate::widgets::document_view::CodeBlockHeader::None,
+                code_block_inset: 1,
                 doc_styles: &DocumentStyles::default(),
                 #[cfg(feature = "syntax-syntect")]
                 code_strategy: None,
@@ -3003,6 +3016,7 @@ mod tests {
                 code_block_width: crate::style::Length::Flex(1),
                 code_block_padding: crate::widgets::document_view::CodeBlockPadding::None,
                 code_block_header: crate::widgets::document_view::CodeBlockHeader::None,
+                code_block_inset: 1,
                 doc_styles: &doc_styles,
                 #[cfg(feature = "syntax-syntect")]
                 code_strategy: None,
@@ -3064,6 +3078,7 @@ mod tests {
                     code_block_width: width,
                     code_block_padding: padding,
                     code_block_header: header,
+                    code_block_inset: 1,
                     doc_styles: &doc_styles,
                     #[cfg(feature = "syntax-syntect")]
                     code_strategy: None,
@@ -3148,8 +3163,8 @@ mod tests {
             }
         }
 
-        // Rectangles narrower than both insets keep one content column and
-        // never emit an empty leading row.
+        // Rectangles narrower than both insets keep their width and one content
+        // column, and never emit an empty leading row.
         for px in 0..=3 {
             let (tiny_lines, _) = run(
                 Length::Px(px),
@@ -3167,7 +3182,7 @@ mod tests {
                 .collect();
             assert_eq!(rows.len(), 10, "Px({px})");
             assert!(
-                rows.iter().all(|&(w, rect)| w == 1 && rect >= 2),
+                rows.iter().all(|&(w, rect)| w == 1 && rect == px.max(1)),
                 "Px({px})"
             );
         }
@@ -3175,7 +3190,7 @@ mod tests {
 
     #[cfg(feature = "markdown")]
     #[test]
-    fn code_stays_visible_in_one_to_three_column_viewports() {
+    fn code_block_inset_is_honored_and_shrinks_in_narrow_viewports() {
         use super::{DocumentFlattenCtx, VisualLineKind, flatten_blocks};
         use crate::style::{BorderStyle, Length};
         use crate::widgets::document_view::{
@@ -3184,52 +3199,77 @@ mod tests {
         };
 
         let doc_styles = DocumentStyles::default();
-        for value in ["```\nabc\n```", "- item\n\n  ```\n  abc\n  ```"] {
+        for (value, glyph_w) in [
+            ("```\nabcdefghij\n```", 1),
+            ("- item\n\n  ```\n  abcdefghij\n  ```", 1),
+            ("```\n中文字符号\n```", 2),
+        ] {
             let doc = MarkdownFormatter::default().format(FormatInput {
                 value,
                 content_type: Some("markdown"),
                 document_styles: None,
             });
-            for width in [Length::Flex(1), Length::Auto, Length::Px(10)] {
-                for inner_w in 1..=4u16 {
-                    let (lines, _) = flatten_blocks(
-                        &doc,
-                        inner_w,
-                        DocumentFlattenCtx {
-                            wrap: true,
-                            table_wrap: false,
-                            table_width_mode: DocumentTableWidthMode::default(),
-                            table_outer_frame: true,
-                            table_column_separators: true,
-                            table_row_separators: TableRowSeparators::default(),
-                            table_cell_padding: 0,
-                            table_border_variant: BorderStyle::Plain,
-                            code_block_width: width,
-                            code_block_padding: CodeBlockPadding::Full,
-                            code_block_header: CodeBlockHeader::Label,
-                            doc_styles: &doc_styles,
-                            #[cfg(feature = "syntax-syntect")]
-                            code_strategy: None,
-                        },
-                    );
-                    for line in &lines {
-                        let VisualLineKind::CodeLine {
-                            spans,
-                            indent_cols,
-                            left_inset,
-                            ..
-                        } = &line.kind
-                        else {
-                            continue;
-                        };
-                        if *indent_cols >= inner_w {
-                            continue; // List indentation alone fills the viewport.
-                        }
-                        let used = indent_cols + left_inset + super::span_width(spans);
-                        assert!(
-                            super::span_width(spans) >= 1 && used <= inner_w,
-                            "{value:?} {width:?} inner_w={inner_w}: used {used}"
-                        );
+            let widths = [
+                Length::Flex(1),
+                Length::Auto,
+                Length::Px(10),
+                Length::Px(2),
+                Length::Percent(60),
+            ];
+            for (width, inset, inner_w) in widths
+                .into_iter()
+                .flat_map(|w| (0..=3u16).map(move |i| (w, i)))
+                .flat_map(|(w, i)| (1..=10u16).map(move |n| (w, i, n)))
+            {
+                let (lines, _) = flatten_blocks(
+                    &doc,
+                    inner_w,
+                    DocumentFlattenCtx {
+                        wrap: true,
+                        table_wrap: false,
+                        table_width_mode: DocumentTableWidthMode::default(),
+                        table_outer_frame: true,
+                        table_column_separators: true,
+                        table_row_separators: TableRowSeparators::default(),
+                        table_cell_padding: 0,
+                        table_border_variant: BorderStyle::Plain,
+                        code_block_width: width,
+                        code_block_padding: CodeBlockPadding::Full,
+                        code_block_header: CodeBlockHeader::Label,
+                        code_block_inset: inset,
+                        doc_styles: &doc_styles,
+                        #[cfg(feature = "syntax-syntect")]
+                        code_strategy: None,
+                    },
+                );
+                for line in &lines {
+                    let VisualLineKind::CodeLine {
+                        spans,
+                        indent_cols,
+                        left_inset,
+                        rect_width,
+                        ..
+                    } = &line.kind
+                    else {
+                        continue;
+                    };
+                    let avail = inner_w.saturating_sub(*indent_cols);
+                    if avail < glyph_w {
+                        continue; // Not even one glyph fits the viewport.
+                    }
+                    let used = left_inset + super::span_width(spans);
+                    let ctx = format!("{value:?} {width:?} inset={inset} inner_w={inner_w}");
+                    assert!(super::span_width(spans) >= 1, "{ctx}");
+                    assert!(used <= *rect_width && *rect_width <= avail, "{ctx}");
+                    // Explicit widths are not widened by the inset.
+                    if let Length::Px(px) = width {
+                        assert_eq!(*rect_width, px.max(glyph_w).min(avail), "{ctx}");
+                    }
+                    // With room for both insets and a glyph, the inset is
+                    // honored on both sides.
+                    if *rect_width >= 2 * inset + glyph_w {
+                        assert_eq!(*left_inset, inset, "{ctx}");
+                        assert!(used + inset <= *rect_width, "{ctx}");
                     }
                 }
             }
@@ -3264,9 +3304,10 @@ mod tests {
                 table_row_separators: TableRowSeparators::default(),
                 table_cell_padding: 0,
                 table_border_variant: BorderStyle::Plain,
-                code_block_width: Length::Px(2),
+                code_block_width: Length::Px(1),
                 code_block_padding: CodeBlockPadding::None,
                 code_block_header: CodeBlockHeader::None,
+                code_block_inset: 1,
                 doc_styles: &doc_styles,
                 #[cfg(feature = "syntax-syntect")]
                 code_strategy: None,
@@ -3277,9 +3318,7 @@ mod tests {
                 spans, rect_width, ..
             } = &line.kind
             {
-                assert!(
-                    super::span_width(spans) + super::CODE_BLOCK_LEFT_INSET_COLS <= *rect_width
-                );
+                assert!(super::span_width(spans) <= *rect_width, "{line:?}");
             }
         }
     }
@@ -3316,6 +3355,7 @@ mod tests {
             code_block_width: Length::Flex(1),
             code_block_padding: padding,
             code_block_header: header,
+            code_block_inset: 1,
             doc_styles: &doc_styles,
             #[cfg(feature = "syntax-syntect")]
             code_strategy: None,
