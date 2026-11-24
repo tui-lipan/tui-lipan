@@ -104,6 +104,7 @@ display content differs from source text.
 | `code_block_header_style` | `Style` | Shortcut - sets `doc_styles.code_block_header_style` for language header labels |
 | `code_block_width` | `Length` | Width of fenced code-block background rectangles (`Flex(1)` default, `Auto`, `Px(n)`, `Percent(p)`). `Px`/`Percent` are fixed while wrapping and minimum widths with `wrap(false)` |
 | `code_block_padding` | `CodeBlockPadding` | Vertical padding around fenced code blocks (`None` default, `HalfBlock`, `Full`) |
+| `code_block_inset` | `u16` | Blank columns between a code block's edge and its code (default `1`) |
 | `code_block_header` | `CodeBlockHeader` | Language header row at top of fenced code blocks (`None` default, `Label`, `IconAndLabel`) |
 | `scroll_offset` | `usize` | Controlled vertical scroll offset |
 | `scroll_to_source_line` | `usize` | Scroll-sync target source line |
@@ -267,9 +268,10 @@ separators between document boundaries.
 
 Fenced code blocks paint `code_block_style`'s background as a straight-edged
 rectangle. Any decoration (`code_block_padding`, `code_block_header`, or a
-non-`Flex` `code_block_width`) adds a one-column right inset to match the left
-one, so code wraps one column earlier. Headers that do not fit are truncated
-with `…`; a rectangle never gets narrower than its left inset plus one column.
+non-`Flex` `code_block_width`) mirrors `code_block_inset` on the right, so code
+wraps that many columns earlier. Headers that do not fit are truncated with `…`.
+In narrow viewports the insets shrink, right side first, so at least one column
+of code stays visible.
 
 ### Custom markdown styles
 

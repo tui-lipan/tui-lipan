@@ -412,6 +412,7 @@ pub fn reconcile_document_view(
             dv_node.code_block_width.hash(&mut h);
             dv_node.code_block_padding.hash(&mut h);
             dv_node.code_block_header.hash(&mut h);
+            dv_node.code_block_inset.hash(&mut h);
             dv_node.doc_styles.heading_styles.hash(&mut h);
             dv_node.doc_styles.code_inline_style.hash(&mut h);
             dv_node.doc_styles.code_block_style.hash(&mut h);

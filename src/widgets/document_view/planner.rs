@@ -37,6 +37,7 @@ fn flatten_visual_lines(
             code_block_width: dv_node.code_block_width,
             code_block_padding: dv_node.code_block_padding,
             code_block_header: dv_node.code_block_header,
+            code_block_inset: dv_node.code_block_inset,
             doc_styles: &dv_node.doc_styles,
             #[cfg(feature = "syntax-syntect")]
             code_strategy: dv_node.code_syntax_strategy.as_deref(),

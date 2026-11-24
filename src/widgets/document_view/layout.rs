@@ -440,6 +440,7 @@ fn document_measure_base_key(dv: &DocumentView) -> u64 {
     dv.code_block_width.hash(&mut h);
     dv.code_block_padding.hash(&mut h);
     dv.code_block_header.hash(&mut h);
+    dv.code_block_inset.hash(&mut h);
 
     h.finish()
 }
@@ -902,6 +903,7 @@ mod tests {
                 code_block_width: dv.code_block_width,
                 code_block_padding: dv.code_block_padding,
                 code_block_header: dv.code_block_header,
+                code_block_inset: dv.code_block_inset,
                 doc_styles: &dv.doc_styles,
                 #[cfg(feature = "syntax-syntect")]
                 code_strategy: None,
@@ -955,6 +957,7 @@ mod tests {
                 code_block_width: dv.code_block_width,
                 code_block_padding: dv.code_block_padding,
                 code_block_header: dv.code_block_header,
+                code_block_inset: dv.code_block_inset,
                 doc_styles: &dv.doc_styles,
                 #[cfg(feature = "syntax-syntect")]
                 code_strategy: None,
@@ -1060,7 +1063,6 @@ mod tests {
     #[test]
     fn markdown_code_block_measure_includes_left_inset_width_for_hscroll() {
         use crate::widgets::document_view::MarkdownFormatter;
-        use crate::widgets::document_view::node::CODE_BLOCK_LEFT_INSET_COLS;
 
         let dv = DocumentView::new("```rust\n123456789\n```")
             .formatter(MarkdownFormatter::default())
@@ -1074,9 +1076,8 @@ mod tests {
 
         let (_, h) = measure_document_view_constrained(&dv, Some(9));
 
-        // One code line (9 chars) plus a 1-cell code inset forces h-scroll
-        // at content width 9, so measured height includes scrollbar row.
-        assert_eq!(CODE_BLOCK_LEFT_INSET_COLS, 1);
+        // One code line (9 chars) plus the default 1-cell code inset forces
+        // h-scroll at content width 9, so measured height includes scrollbar row.
         assert_eq!(h, 2);
     }
 

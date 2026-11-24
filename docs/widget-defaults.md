@@ -995,6 +995,7 @@ Source: `src/widgets/document_view/mod.rs` (`DocumentView`).
 | `code_block_width` | `Length::Flex(1)` |
 | `code_block_padding` | `CodeBlockPadding::None` |
 | `code_block_header` | `CodeBlockHeader::None` |
+| `code_block_inset` | `1` |
 | `style` | `Style::default()` |
 | `hover_style` | `StyleSlot::Inherit` |
 | `focus_style` | `StyleSlot::Inherit` |
