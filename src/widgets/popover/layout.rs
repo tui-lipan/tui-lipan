@@ -17,6 +17,8 @@ pub fn resolve_popover_rect(popover: &super::Popover, trigger: Rect, bounds: Rec
     let (mut width, mut height) = resolve_popover_size(popover, trigger, max_width, bounds.h);
 
     let mut placement = popover.placement;
+    let mut offset_x = popover.offset.x as i32;
+    let mut offset_y = popover.offset.y as i32;
     let bounds_left = bounds.x as i32;
     let bounds_top = bounds.y as i32;
     let bounds_right = bounds.x as i32 + bounds.w as i32;
@@ -25,7 +27,10 @@ pub fn resolve_popover_rect(popover: &super::Popover, trigger: Rect, bounds: Rec
     let mut pos = popover_position_for_placement(placement, trigger, width, height);
 
     if popover.auto_flip {
-        let (x, y) = pos;
+        // The offset belongs to the placement: a gap that pushes an above popover up must push a
+        // flipped one down, or the flip lands the popover back on its trigger.
+        let x = pos.0 + offset_x;
+        let y = pos.1 + offset_y;
         let x2 = x + width as i32;
         let y2 = y + height as i32;
         let trigger_top = trigger.y as i32;
@@ -39,6 +44,7 @@ pub fn resolve_popover_rect(popover: &super::Popover, trigger: Rect, bounds: Rec
             | super::PopoverPlacement::BelowEnd
                 if y2 > bounds_bottom && above_space > below_space =>
             {
+                offset_y = -offset_y;
                 popover_flip_vertical(placement)
             }
             super::PopoverPlacement::AboveStart
@@ -46,6 +52,7 @@ pub fn resolve_popover_rect(popover: &super::Popover, trigger: Rect, bounds: Rec
             | super::PopoverPlacement::AboveEnd
                 if y < bounds_top && below_space > above_space =>
             {
+                offset_y = -offset_y;
                 popover_flip_vertical(placement)
             }
             super::PopoverPlacement::RightStart
@@ -53,6 +60,7 @@ pub fn resolve_popover_rect(popover: &super::Popover, trigger: Rect, bounds: Rec
             | super::PopoverPlacement::RightEnd
                 if x2 > bounds_right =>
             {
+                offset_x = -offset_x;
                 popover_flip_horizontal(placement)
             }
             super::PopoverPlacement::LeftStart
@@ -60,6 +68,7 @@ pub fn resolve_popover_rect(popover: &super::Popover, trigger: Rect, bounds: Rec
             | super::PopoverPlacement::LeftEnd
                 if x < bounds_left =>
             {
+                offset_x = -offset_x;
                 popover_flip_horizontal(placement)
             }
             _ => placement,
@@ -75,8 +84,8 @@ pub fn resolve_popover_rect(popover: &super::Popover, trigger: Rect, bounds: Rec
         pos = popover_position_for_placement(placement, trigger, width, height);
     }
 
-    let mut x = pos.0 + popover.offset.x as i32;
-    let mut y = pos.1 + popover.offset.y as i32;
+    let mut x = pos.0 + offset_x;
+    let mut y = pos.1 + offset_y;
 
     if popover.clamp {
         let max_x = (bounds_right - width as i32).max(bounds_left);
@@ -508,6 +517,32 @@ mod tests {
         assert!(clamped.y >= bounds.y);
         assert!(clamped.x + clamped.w as i16 <= bounds.x + bounds.w as i16);
         assert!(clamped.y + clamped.h as i16 <= bounds.y + bounds.h as i16);
+    }
+
+    #[test]
+    fn auto_flip_mirrors_the_offset_so_the_gap_stays_off_the_trigger() {
+        let trigger = Rect {
+            x: 10,
+            y: 1,
+            w: 1,
+            h: 1,
+        };
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 20,
+        };
+        let popover = Popover::new()
+            .content(Text::new("tip").height(Length::Px(3)))
+            .placement(PopoverPlacement::AboveCenter)
+            .offset((0, -1))
+            .auto_flip(true);
+        let rect = resolve_popover_rect(&popover, trigger, bounds);
+        assert_eq!(
+            rect.y, 3,
+            "flipped below with the one-row gap kept: {rect:?}"
+        );
     }
 
     #[test]

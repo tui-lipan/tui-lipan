@@ -323,9 +323,9 @@ inherit ScrollView clipping from the overlay's declaration site.
 | `auto_focus` | `bool` | Focus the first focusable descendant (`true` by default); `false` suspends focus while retaining capture/trapping |
 | `on_close` | `Callback<()>` | Close callback |
 | `placement` | `PopoverPlacement` | `Above`, `Below`, `Left`, `Right` + start/center/end variants |
-| `offset` | `u16` | Distance from trigger |
+| `offset` | `impl Into<PopoverOffset>` | Shift from the placed position; mirrored on the flipped axis when `auto_flip` flips |
 | `clamp` | `bool` | Keep within screen bounds |
-| `auto_flip` | `bool` | Flip placement when out of bounds |
+| `auto_flip` | `bool` | Flip placement when out of bounds (the offset flips with it) |
 | `min_trigger_width` | `bool` | Keep popover at least as wide as the trigger; content may still make it wider |
 | `fit_trigger_width` | `bool` | Force popover width to exactly match the trigger, unless capped by `max_width` |
 | `max_width` | `Length` | Cap the resolved popover width; percent resolves against overlay bounds |
@@ -394,7 +394,7 @@ if the pointer reaches it within `skip_delay`. Focus always shows the tooltip im
 | `border_style` | `BorderStyle` | Border style |
 | `padding` | `impl Into<Padding>` | Inner padding |
 | `placement` | `PopoverPlacement` | Tooltip placement |
-| `offset` | `u16` | Distance from element |
+| `offset` | `impl Into<PopoverOffset>` | Shift from the placed position; mirrored when `auto_flip` flips |
 | `clamp` | `bool` | Keep within screen bounds |
 | `auto_flip` | `bool` | Flip when out of bounds |
 
