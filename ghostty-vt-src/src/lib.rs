@@ -1,8 +1,8 @@
-//! The libghostty-vt 1.0.1 release source and its Zig package dependencies, vendored for
+//! The libghostty-vt 1.0.2 release source and its Zig package dependencies, vendored for
 //! [`tui-lipan-ghostty-vt-sys`](https://crates.io/crates/tui-lipan-ghostty-vt-sys), so that crate
 //! builds the library with Zig alone: no network, no `curl`, no `patch`.
 //!
-//! The tree is the official release tarball (`libghostty-vt-1.0.1.tar.gz`) with tui-lipan's
+//! The tree is the official release tarball (`libghostty-vt-1.0.2.tar.gz`) with tui-lipan's
 //! patches applied, and the official dependency tarball (`-deps.tar.gz`), both checked against
 //! pinned SHA-256 sums, then trimmed of tests, documentation and examples the library build does
 //! not read. `PATCHES` names each applied patch and its SHA-256; `THIRD_PARTY.md` lists every
@@ -14,7 +14,7 @@
 use std::path::Path;
 
 /// The libghostty-vt release vendored here.
-pub const LIBGHOSTTY_VT_VERSION: &str = "1.0.1";
+pub const LIBGHOSTTY_VT_VERSION: &str = "1.0.2";
 
 /// The crate root, which holds `PATCHES` and `THIRD_PARTY.md`.
 #[must_use]

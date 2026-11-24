@@ -37,7 +37,7 @@ pub fn prepare(source: &Path, build_dir: &Path, apply_patch: bool) -> BuildResul
     let status = apply(&patch, &patched, build_dir)?;
     if !status.success() {
         return Err(format!(
-            "applying {} to {} failed ({status}); the fix requires libghostty-vt 1.0.1 sources",
+            "applying {} to {} failed ({status}); the fix requires libghostty-vt 1.0.2 sources",
             patch.display(),
             source.display(),
         ));

@@ -2,7 +2,7 @@
 // the build cannot disagree about the toolchain. Keep this file free of `use` items.
 
 /// The libghostty-vt release this crate binds and builds.
-pub const LIBGHOSTTY_VT_VERSION: &str = "1.0.1";
+pub const LIBGHOSTTY_VT_VERSION: &str = "1.0.2";
 
 /// The Zig release series that builds [`LIBGHOSTTY_VT_VERSION`] (`minimum_zig_version` in its
 /// `build.zig.zon`). Any `0.17.x` works; other minor versions fail with unrelated compile errors,

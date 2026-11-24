@@ -1494,7 +1494,7 @@ export. The reader enforces traversal and restoration deadlines and bounds retai
 ## Experimental Ghostty engine
 
 The `terminal-ghostty` feature adds a second emulator for `TerminalScreen`:
-[libghostty-vt](https://lib.ghostty.org/vt/) 1.0.1, the VT core of the Ghostty
+[libghostty-vt](https://lib.ghostty.org/vt/) 1.0.2, the VT core of the Ghostty
 terminal. It is opt-in and unstable. `TerminalScreen::new` always uses the default
 `alacritty_terminal` engine; select Ghostty with the doc-hidden
 `TerminalScreen::with_engine(TerminalEngineKind::Ghostty, rows, cols, scrollback)`.
@@ -1536,7 +1536,7 @@ Two doc-hidden methods matter only with Ghostty (the default engine ignores them
   with Alacritty. If the application has left an escape sequence longer than 4 MiB
   unfinished at that moment, the read sees an empty primary screen.
 
-`tui-lipan-ghostty-vt-src` patches libghostty-vt 1.0.1 to match Alacritty where
+`tui-lipan-ghostty-vt-src` patches libghostty-vt 1.0.2 to match Alacritty where
 upstream differs: shrinking the alternate screen keeps the rows at the cursor; in
 the default (mode 2027 off) mode, a combining mark that arrives in a later write
 still reaches the screen, and keycaps keep their VS16; and the patch adds the

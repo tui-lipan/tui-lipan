@@ -1,9 +1,9 @@
-tui-lipan's changes to libghostty-vt 1.0.1, applied by tui-lipan-ghostty-vt-src (and by
+tui-lipan's changes to libghostty-vt 1.0.2, applied by tui-lipan-ghostty-vt-src (and by
 tui-lipan-ghostty-vt-sys to a GHOSTTY_VT_SOURCE_DIR tree). Each is marked "tui-lipan patch" in
 the source.
 
 1. Alternate-screen shrink keeps the rows at the cursor (PageList.zig, Screen.zig). Upstream
-   1.0.1 crops from the top, so a full-screen program loses its top rows on resize.
+   1.0.2 crops from the top, so a full-screen program loses its top rows on resize.
 2. The legacy (mode 2027 off) zero-width append path marks the row dirty, as the clustering path
    does, so a combining mark that arrives in a later write reaches the render state; and it
    keeps VS15/VS16 after any emoji_vs_base, so keycaps (1 FE0F 20E3) keep their selector
@@ -169,7 +169,7 @@ diff -ruN a/src/terminal/PageList.zig b/src/terminal/PageList.zig
  
                  // Account for our trimmed rows in the total row cache
                  self.total_rows -= trimmed;
-@@ -3409,6 +3416,17 @@
+@@ -3420,6 +3427,17 @@
      self: *PageList,
      max: size.CellCountInt,
  ) size.CellCountInt {
@@ -187,7 +187,7 @@ diff -ruN a/src/terminal/PageList.zig b/src/terminal/PageList.zig
      var trimmed: size.CellCountInt = 0;
      var invalidated_node: ?*List.Node = null;
      const bl_pin = self.getBottomRight(.screen).?;
-@@ -3417,7 +3435,7 @@
+@@ -3428,7 +3446,7 @@
          // If the row has any text then we're done. A row marked blank
          // has no text, so we don't need to read its cells.
          const rac = row_pin.rowAndCell();
@@ -196,7 +196,7 @@ diff -ruN a/src/terminal/PageList.zig b/src/terminal/PageList.zig
              pagepkg.Cell.hasTextAny(row_pin.cells(.all))) return trimmed;
  
          // If our tracked pins are in this row then we cannot trim it
-@@ -3427,12 +3445,12 @@
+@@ -3438,12 +3456,12 @@
          for (pin_keys) |p| {
              if (p.node != row_pin.node or
                  p.y != row_pin.y) continue;
@@ -216,7 +216,7 @@ diff -ruN a/src/terminal/PageList.zig b/src/terminal/PageList.zig
 diff -ruN a/src/terminal/Screen.zig b/src/terminal/Screen.zig
 --- a/src/terminal/Screen.zig
 +++ b/src/terminal/Screen.zig
-@@ -2243,6 +2243,7 @@
+@@ -2114,6 +2114,7 @@
      // modify its X/Y for reflow. Do this before changing any state since
      // tracking the pin can fail.
      const saved_cursor_pin: ?*Pin = saved_cursor: {
@@ -224,7 +224,7 @@ diff -ruN a/src/terminal/Screen.zig b/src/terminal/Screen.zig
          const sc = self.saved_cursor orelse break :saved_cursor null;
          const pin = self.pages.pin(.{ .active = .{
              .x = sc.x,
-@@ -2328,6 +2329,7 @@
+@@ -2199,6 +2200,7 @@
          .rows = opts.rows,
          .cols = opts.cols,
          .reflow = opts.reflow,
@@ -232,7 +232,7 @@ diff -ruN a/src/terminal/Screen.zig b/src/terminal/Screen.zig
          .cursor = .{
              .x = self.cursor.x,
              .y = self.cursor.y,
-@@ -2390,6 +2392,15 @@
+@@ -2261,6 +2263,15 @@
          self.cursor.style_id = 0;
      };
  

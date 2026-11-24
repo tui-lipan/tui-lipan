@@ -1,4 +1,4 @@
-//! Raw FFI bindings to [libghostty-vt](https://lib.ghostty.org/vt/) 1.0.1.
+//! Raw FFI bindings to [libghostty-vt](https://lib.ghostty.org/vt/) 1.0.2.
 //!
 //! Everything here mirrors `<ghostty/vt.h>` one to one: the C names, the C types, and the C
 //! rules. Read the upstream documentation for what each function does and what it requires.

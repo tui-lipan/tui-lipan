@@ -12,7 +12,7 @@
 //! | `GHOSTTY_VT_LINK` | `static` or `dylib` for `GHOSTTY_VT_LIB_DIR`/pkg-config. Default `static`, `dylib` on MSVC. |
 //! | `GHOSTTY_VT_SYSTEM` | `1` to find an installed library with pkg-config. |
 //! | `GHOSTTY_VT_ALLOW_UNPATCHED` | `1` to link a system or prebuilt library that lacks [`patch::PATCH`]. |
-//! | `GHOSTTY_VT_SOURCE_DIR` | An unpacked, unpatched `libghostty-vt-1.0.1` source tree to build instead of the vendored one. [`patch::PATCH`] is applied to a private copy, which needs `patch` or `git`. Built outside the shared cache, again whenever the tree changes. |
+//! | `GHOSTTY_VT_SOURCE_DIR` | An unpacked, unpatched `libghostty-vt-1.0.2` source tree to build instead of the vendored one. [`patch::PATCH`] is applied to a private copy, which needs `patch` or `git`. Built outside the shared cache, again whenever the tree changes. |
 //! | `GHOSTTY_VT_DEPS_DIR` | Its unpacked `-deps` directory (Zig packages). Required with `GHOSTTY_VT_SOURCE_DIR`. |
 //! | `GHOSTTY_VT_CACHE_DIR` | Build cache. Default `<target>/ghostty-vt`. |
 //! | `GHOSTTY_VT_OPTIMIZE` | Zig optimize mode. Default `ReleaseFast`, also for debug profiles. |

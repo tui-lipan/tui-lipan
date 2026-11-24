@@ -225,7 +225,7 @@ unsafe fn sized<T>() -> T {
     }
 }
 
-/// The version of the linked library, such as `1.0.1`.
+/// The version of the linked library, such as `1.0.2`.
 pub(crate) fn library_version() -> &'static str {
     // SAFETY: ghostty_version returns a static NUL-terminated string.
     let version = unsafe { std::ffi::CStr::from_ptr(sys::ghostty_version()) };

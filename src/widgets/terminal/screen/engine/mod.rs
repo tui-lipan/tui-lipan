@@ -52,7 +52,7 @@ pub enum TerminalEngineKind {
     /// `alacritty_terminal`, the default.
     #[default]
     Alacritty,
-    /// libghostty-vt 1.0.1, built through `tui-lipan-ghostty-vt-sys`. Experimental.
+    /// libghostty-vt 1.0.2, built through `tui-lipan-ghostty-vt-sys`. Experimental.
     #[cfg(feature = "terminal-ghostty")]
     Ghostty,
 }
