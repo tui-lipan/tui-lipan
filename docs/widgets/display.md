@@ -150,27 +150,42 @@ DocumentView::new("# Hello\n\n| A | B |\n|---|---|\n| 1 | 2 |")
     .wrap(true)
 
 DocumentView::new(text)
-    .markdown_spacing(MarkdownSpacing::Compact)
+    .markdown_spacing(MarkdownSpacing::COMPACT)
 ```
 
-`MarkdownSpacing` controls vertical spacing between rendered blocks:
+`MarkdownSpacing` holds the vertical spacing rules between rendered blocks. It
+ships three presets:
 
-- `MarkdownSpacing::Balanced` **(default for `.markdown()`)**: separates sections
+- `MarkdownSpacing::BALANCED` **(default for `.markdown()`)**: separates sections
   and distinct paragraphs with a single blank row, keeping a blank row above and
   below headings (consecutive headings stay tight unless separated in source),
   keeping colon-terminated lead-in paragraphs (`Bullets:`, `Rust:`, etc.)
   attached to an immediately following list, code block, diagram, table, or
   blockquote, absorbing redundant blank rows around horizontal rules, collapsing
   consecutive blank lines, and trimming leading/trailing blank lines.
-- `MarkdownSpacing::Loose`: preserves explicit blank source lines between blocks
+- `MarkdownSpacing::LOOSE`: preserves explicit blank source lines between blocks
   (collapsing consecutive blank runs to a single row and trimming leading/trailing
   blank lines) and adds a spacer before fenced code/diagram blocks that
   immediately follow non-blank content.
-- `MarkdownSpacing::Compact`: drops blank lines and block spacers so blocks sit
+- `MarkdownSpacing::COMPACT`: drops blank lines and block spacers so blocks sit
   flush against each other, suited for dense previews such as chat cards or
   narrow side panels.
 
-Set it on `DocumentView` via `.markdown_spacing(MarkdownSpacing::...)` (which
+Override single rules with struct update syntax, for example headings that sit
+directly on their body:
+
+```rust
+use tui_lipan::{MarkdownSpacing, SourceSpacing};
+
+DocumentView::new(text).markdown_spacing(MarkdownSpacing {
+    heading_after: SourceSpacing::Never,
+    ..MarkdownSpacing::BALANCED
+})
+```
+
+See [`MarkdownSpacing`](../enums.md#markdownspacing) for every field.
+
+Set it on `DocumentView` via `.markdown_spacing(...)` (which
 updates an existing `MarkdownFormatter` in place without resetting
 `.render_diagrams(...)` or custom styles) or directly on the formatter via
 `MarkdownFormatter::spacing(MarkdownSpacing)`. Fenced code blocks follow

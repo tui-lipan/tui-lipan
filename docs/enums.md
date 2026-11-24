@@ -1847,12 +1847,39 @@ Available from the crate root (`tui_lipan::FlowchartItemEvent`).
 
 ## MarkdownSpacing
 
-Vertical block-spacing policy for `MarkdownFormatter` and `DocumentView::markdown_spacing(...)` (requires the `markdown` feature):
+`Copy + Eq + Hash` struct of vertical block-spacing rules for `MarkdownFormatter` and `DocumentView::markdown_spacing(...)` (requires the `markdown` feature). Start from a preset and override fields with struct update syntax:
+
+```rust
+use tui_lipan::{MarkdownSpacing, SourceSpacing};
+
+let spacing = MarkdownSpacing {
+    heading_after: SourceSpacing::Never,
+    ..MarkdownSpacing::BALANCED
+};
+```
+
+| Field | `BALANCED` **(default)** | `LOOSE` | `COMPACT` | Applies to |
+|-------|----------|---------|-----------|------------|
+| `between_blocks` | `WhenPresent` | `WhenPresent` | `Never` | Any boundary no other rule covers (paragraphs, lists, tables, …) |
+| `heading_before` | `Always` | `WhenPresent` | `Never` | Above a heading |
+| `heading_after` | `Always` | `WhenPresent` | `Never` | Below a heading |
+| `consecutive_headings` | `WhenPresent` | `WhenPresent` | `Never` | Between two headings |
+| `fenced_block_before` | `Always` | `Always` | `Never` | Above a fenced code or diagram block, including right after a heading |
+| `horizontal_rules_absorb_spacing` | `true` | `false` | `true` | Keeps rules flush with their neighbours |
+| `attach_colon_lead_ins` | `true` | `false` | `true` | Keeps `Bullets:`-style paragraphs flush with a following list/code/diagram/table/blockquote |
+
+Each boundary uses the first rule that applies: the two `bool` rules, then `consecutive_headings`, `fenced_block_before`, `heading_after`, `heading_before`, and finally `between_blocks`. So `Never` on any field really means never there. Runs of blank source lines always collapse to one row, and leading/trailing blank lines are trimmed.
+
+Available from the crate root (`tui_lipan::MarkdownSpacing`).
+
+## SourceSpacing
+
+Whether a Markdown block boundary gets a blank row, used by `MarkdownSpacing` fields:
 
 | Variant | Behavior |
 |---------|----------|
-| `Balanced` **(default)** | Keeps a single blank row between sections, around headings (consecutive headings stay tight unless separated in source), and between distinct paragraphs while keeping colon-terminated lead-in paragraphs attached to an immediately following list/code/diagram/table/blockquote, horizontal rules free of redundant surrounding blank rows, and runs of blank lines collapsed |
-| `Loose` | Preserves explicit single blank lines between blocks, collapses consecutive blank runs, trims leading/trailing blank lines, and adds a spacer before fenced code/diagram blocks following non-blank content |
-| `Compact` | Collapses all blank lines and block spacers so blocks sit flush against each other |
+| `Never` | Never insert a blank row, even when the source has one |
+| `WhenPresent` | Insert a blank row only when the source has a blank line there |
+| `Always` | Always insert a blank row |
 
-Available from the crate root (`tui_lipan::MarkdownSpacing`).
+Available from the crate root (`tui_lipan::SourceSpacing`).

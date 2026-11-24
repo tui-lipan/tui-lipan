@@ -25,7 +25,7 @@ pub use format::{
     PlainFormatter,
 };
 #[cfg(feature = "markdown")]
-pub use format_markdown::{MarkdownFormatter, MarkdownSpacing};
+pub use format_markdown::{MarkdownFormatter, MarkdownSpacing, SourceSpacing};
 pub use layout::measure_document_view;
 pub(crate) use layout::measure_document_view_constrained;
 pub use reconcile::reconcile_document_view;
