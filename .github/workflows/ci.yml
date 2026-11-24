@@ -76,7 +76,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
 
-      # Keep in sync with `rust-version` in Cargo.toml and tui-lipan-macro/Cargo.toml.
+      # Keep in sync with `rust-version` in Cargo.toml and crates/tui-lipan-macro/Cargo.toml.
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@1.96
         with:
@@ -110,7 +110,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
 
-      # Keep in sync with `rust-version` in Cargo.toml and tui-lipan-macro/Cargo.toml.
+      # Keep in sync with `rust-version` in Cargo.toml and crates/tui-lipan-macro/Cargo.toml.
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@1.96
 

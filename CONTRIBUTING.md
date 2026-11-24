@@ -80,7 +80,7 @@ crate uses language features and std APIs stabilized up to 1.96, such as
 `ceil_char_boundary`, and the infallible atomic `update`. Raise it only when a
 newer API is worth the cost to downstream users, not for minor convenience.
 When bumping it, change `rust-version` in both `Cargo.toml` and
-`tui-lipan-macro/Cargo.toml`, the toolchain pinned by both MSRV jobs in
+`crates/tui-lipan-macro/Cargo.toml`, the toolchain pinned by both MSRV jobs in
 `.github/workflows/ci.yml`, the README MSRV badge, and this section in the
 same PR, and run CI-strength clippy on the new toolchain so newly MSRV-gated
 lints surface.
@@ -90,7 +90,7 @@ lints surface.
 ```bash
 # Format
 cargo fmt --all
-./scripts/format-rust-with-macros src/ examples/ tests/ benches/ tui-lipan-macro/
+./scripts/format-rust-with-macros src/ examples/ tests/ benches/ crates/tui-lipan-macro/
 
 # Everything the CI Format job checks
 ./scripts/check-format

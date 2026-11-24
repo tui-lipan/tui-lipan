@@ -227,7 +227,7 @@ mod tests {
 
     #[test]
     fn documented_constructor_keys_match_expansion() {
-        let docs = include_str!("../../docs/macros.md");
+        let docs = include_str!("../../../docs/macros.md");
         let (_, constructor_section) = docs.split_once("### Constructor Keys\n").unwrap();
         let table = constructor_section.split("\n### ").next().unwrap();
 

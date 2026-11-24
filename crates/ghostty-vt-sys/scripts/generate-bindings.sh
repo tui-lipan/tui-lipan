@@ -4,7 +4,7 @@
 # (`cargo install bindgen-cli --locked`). Run it after bumping LIBGHOSTTY_VT_VERSION in
 # src/versions.rs:
 #
-#   ghostty-vt-sys/scripts/generate-bindings.sh [include-dir]
+#   crates/ghostty-vt-sys/scripts/generate-bindings.sh [include-dir]
 #
 # Bindings come from the unpatched release headers: src/lib.rs declares the functions tui-lipan's
 # patch adds by hand. include-dir defaults to the headers of the pinned release tarball that
@@ -15,7 +15,7 @@
 set -euo pipefail
 
 crate_dir="$(cd "$(dirname "$0")/.." && pwd)"
-workspace_dir="$(cd "$crate_dir/.." && pwd)"
+workspace_dir="$(cd "$crate_dir/../.." && pwd)"
 version="$(sed -nE 's/^pub const LIBGHOSTTY_VT_VERSION: &str = "([^"]+)";$/\1/p' "$crate_dir/src/versions.rs")"
 if (($#)); then
     include_dir="$1"

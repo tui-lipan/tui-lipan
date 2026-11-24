@@ -72,7 +72,7 @@ class FilteringTests(unittest.TestCase):
         self.assertEqual(
             exclusion_reason(
                 "release: v0.11.7",
-                ["Cargo.toml", "tui-lipan-macro/Cargo.toml"],
+                ["Cargo.toml", "crates/tui-lipan-macro/Cargo.toml"],
             ),
             "release metadata only",
         )
