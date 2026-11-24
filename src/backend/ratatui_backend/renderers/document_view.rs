@@ -243,7 +243,7 @@ pub(crate) fn render_document_view(
                     VisualLineKind::Text {
                         continuation: true,
                         ..
-                    }
+                    } | VisualLineKind::CodeBlockChrome { .. }
                 );
                 let is_synthetic_padding_line = matches!(
                     vline.kind,
@@ -367,13 +367,6 @@ pub(crate) fn render_document_view(
             row_bg = row_bg_from_hover_style(hover_style).or(row_bg);
         }
 
-        // Apply horizontal scroll to segments
-        let segments = if h_offset > 0 && !node.wrap {
-            h_scroll_segments(segments, h_offset)
-        } else {
-            segments
-        };
-
         if let Some(row_bg) = row_bg {
             ratatui::widgets::Block::default()
                 .style(to_ratatui_style(row_bg))
@@ -397,6 +390,11 @@ pub(crate) fn render_document_view(
             selection_style,
             render_prefix_len,
         );
+        // Clip horizontally only after selection offsets are assigned, so the
+        // byte mapping still sees the render prefix and trailing fill.
+        if h_offset > 0 && !node.wrap {
+            spans = crop_spans_for_viewport(spans, h_offset, usize::MAX);
+        }
 
         // Mirror TextArea: for empty lines within a linear selection that extends past
         // this line, append a highlighted space to represent the selected newline.
@@ -428,7 +426,11 @@ pub(crate) fn render_document_view(
             render_single_line_spans(f.buffer_mut(), effective_content_area, &spans);
         } else {
             let skip_cols = effective_content_area.x.saturating_sub(content_area.x);
-            let spans = crop_spans_for_viewport(spans, skip_cols, effective_content_area.width);
+            let spans = crop_spans_for_viewport(
+                spans,
+                usize::from(skip_cols),
+                usize::from(effective_content_area.width),
+            );
             render_single_line_spans(f.buffer_mut(), effective_content_area, &spans);
         }
     }
@@ -656,24 +658,31 @@ fn is_source_mode_continuation(
     visual_idx: usize,
     first_visible_idx: usize,
 ) -> bool {
+    let Some(curr) = vis_lines.get(visual_idx) else {
+        return false;
+    };
+    // Code-block chrome shares its source line with the code but never shows it.
+    if matches!(curr.kind, VisualLineKind::CodeBlockChrome { .. }) {
+        return true;
+    }
     visual_idx > first_visible_idx
-        && vis_lines
-            .get(visual_idx - 1)
-            .zip(vis_lines.get(visual_idx))
-            .is_some_and(|(prev, curr)| prev.source_line == curr.source_line)
+        && vis_lines.get(visual_idx - 1).is_some_and(|prev| {
+            prev.source_line == curr.source_line
+                && !matches!(prev.kind, VisualLineKind::CodeBlockChrome { .. })
+        })
 }
 
 fn crop_spans_for_viewport<'a>(
     spans: Vec<Span<'a>>,
-    skip_cols: u16,
-    max_width: u16,
+    skip_cols: usize,
+    max_width: usize,
 ) -> Vec<Span<'a>> {
     if max_width == 0 {
         return Vec::new();
     }
 
-    let mut remaining_skip = skip_cols as usize;
-    let mut remaining_width = max_width as usize;
+    let mut remaining_skip = skip_cols;
+    let mut remaining_width = max_width;
     let mut out = Vec::new();
 
     for span in spans {
@@ -917,32 +926,6 @@ fn blank_gutter_spans_with_inset(
 }
 
 /// Apply horizontal scroll offset to line segments by skipping `h_offset` display columns.
-fn h_scroll_segments<'a>(
-    segments: Vec<(Cow<'a, str>, Style)>,
-    h_offset: usize,
-) -> Vec<(Cow<'a, str>, Style)> {
-    let mut remaining = h_offset;
-    let mut result = Vec::new();
-    for (text, style) in segments {
-        if remaining == 0 {
-            result.push((text, style));
-            continue;
-        }
-        let w = unicode_width::UnicodeWidthStr::width(text.as_ref());
-        if w <= remaining {
-            remaining -= w;
-            continue;
-        }
-        // Partial skip within this segment
-        let byte_pos = crate::utils::text::byte_at_col(text.as_ref(), remaining);
-        remaining = 0;
-        if byte_pos < text.len() {
-            result.push((Cow::Owned(text[byte_pos..].to_string()), style));
-        }
-    }
-    result
-}
-
 fn line_segments<'a>(
     vline: &'a DocumentVisualLine,
     base_style: Style,
@@ -1462,9 +1445,9 @@ mod tests {
 
     use super::{
         blank_gutter_spans_with_inset, built_in_line_number_gutter_text,
-        built_in_line_number_style, full_row_bg_style, gutter_spans_with_inset, h_scroll_segments,
-        is_source_mode_continuation, render_single_line_spans, segments_to_spans,
-        table_selection_ranges_for_line,
+        built_in_line_number_style, crop_spans_for_viewport, full_row_bg_style,
+        gutter_spans_with_inset, is_source_mode_continuation, render_single_line_spans,
+        segments_to_spans, table_selection_ranges_for_line,
     };
     use crate::backend::ratatui_backend::common::to_ratatui_style;
     use crate::style::{Color, Style};
@@ -1519,25 +1502,20 @@ mod tests {
             vec![(Cow::Borrowed(""), line_bg), (Cow::Borrowed("}"), line_bg)];
 
         assert_eq!(full_row_bg_style(&segments), Some(line_bg));
-        let scrolled = h_scroll_segments(segments, 1);
-        assert!(scrolled.is_empty());
+        let spans = segments_to_spans(segments, 0, 1, &[], Style::default(), 0);
+        assert!(crop_spans_for_viewport(spans, 1, usize::MAX).is_empty());
     }
 
     #[test]
     fn full_row_background_uses_hidden_anchor_not_scrolled_word_highlight() {
         let line_bg = Style::new().bg(Color::Green);
-        let word_bg = Style::new().bg(Color::LightGreen);
         let segments: Vec<(Cow<'_, str>, Style)> = vec![
             (Cow::Borrowed(""), line_bg),
             (Cow::Borrowed("let "), line_bg),
-            (Cow::Borrowed("changed"), word_bg),
+            (Cow::Borrowed("changed"), Style::new().bg(Color::LightGreen)),
         ];
 
         assert_eq!(full_row_bg_style(&segments), Some(line_bg));
-        assert_eq!(
-            full_row_bg_style(&h_scroll_segments(segments, 4)),
-            Some(word_bg)
-        );
     }
 
     #[test]
@@ -1869,5 +1847,70 @@ mod tests {
                 .iter()
                 .all(|s| s.style.bg != Some(ratatui::style::Color::Blue))
         );
+
+        // Scrolled past "hi", only trailing fill remains and none of it is selected.
+        let short = DocumentVisualLine {
+            kind: VisualLineKind::CodeLine {
+                spans: vec![crate::style::Span::new("hi")],
+                block_style,
+                indent_cols: 0,
+                rect_width: 8,
+            },
+            source_line: 0,
+        };
+        let spans = segments_to_spans(
+            line_segments(&short, base_style, &doc_styles, 20),
+            0,
+            2,
+            &[(0, 10)],
+            sel,
+            visual_line_render_prefix_bytes(&short),
+        );
+        let scrolled = crop_spans_for_viewport(spans, 3, usize::MAX);
+        assert_eq!(scrolled.iter().map(|s| s.content.len()).sum::<usize>(), 5);
+        assert!(
+            scrolled
+                .iter()
+                .all(|s| s.style.bg != Some(ratatui::style::Color::Blue))
+        );
+    }
+
+    #[test]
+    fn source_line_numbers_skip_code_block_chrome_rows() {
+        use crate::widgets::document_view::node::CodeBlockChromeKind;
+
+        let chrome = |kind| DocumentVisualLine {
+            kind: VisualLineKind::CodeBlockChrome {
+                kind,
+                block_style: Style::default(),
+                indent_cols: 0,
+                rect_width: 8,
+            },
+            source_line: 3,
+        };
+        let code = |source_line| DocumentVisualLine {
+            kind: VisualLineKind::CodeLine {
+                spans: vec![crate::style::Span::new("x")],
+                block_style: Style::default(),
+                indent_cols: 0,
+                rect_width: 8,
+            },
+            source_line,
+        };
+        let lines = vec![
+            chrome(CodeBlockChromeKind::TopHalfBlock),
+            chrome(CodeBlockChromeKind::Header { spans: Vec::new() }),
+            code(3),
+            code(4),
+            DocumentVisualLine {
+                source_line: 4,
+                ..chrome(CodeBlockChromeKind::BottomHalfBlock)
+            },
+        ];
+
+        let numbered: Vec<bool> = (0..lines.len())
+            .map(|vi| !is_source_mode_continuation(&lines, vi, 0))
+            .collect();
+        assert_eq!(numbered, vec![false, false, true, true, false]);
     }
 }

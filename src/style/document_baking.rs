@@ -25,7 +25,9 @@ pub(crate) fn apply_document_theme_carve_out(theme: &Theme, mut el: Element) -> 
 fn apply_document_theme_carve_out_in_place(theme: &Theme, el: &mut Element) {
     match &mut el.kind {
         ElementKind::DocumentView(dv) => {
-            apply_document_styles(&mut dv.doc_styles, theme);
+            if !dv.doc_styles_exact {
+                apply_document_styles(&mut dv.doc_styles, theme);
+            }
             apply_document_content_formatter_theme(dv, theme);
             #[cfg(feature = "syntax-syntect")]
             apply_document_syntax_theme(dv, theme);
@@ -49,6 +51,7 @@ fn apply_document_theme_carve_out_in_place(theme: &Theme, el: &mut Element) {
     }
 }
 
+/// Patch widget-local style shortcuts over the theme's document styles.
 fn apply_document_styles(styles: &mut DocumentStyles, theme: &Theme) {
     let themed = DocumentStyles::from_theme(theme);
     for (slot, default_slot) in styles

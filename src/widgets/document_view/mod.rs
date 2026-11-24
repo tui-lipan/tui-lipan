@@ -241,6 +241,9 @@ pub struct DocumentView {
     pub selection_style: StyleSlot,
     /// Per-element style overrides.
     pub doc_styles: DocumentStyles,
+    /// Set by [`Self::doc_styles`]: use `doc_styles` exactly instead of
+    /// patching it over the theme's document styles.
+    pub(crate) doc_styles_exact: bool,
     /// Border style override when hovered.
     pub hover_border_style: Option<BorderStyle>,
 
@@ -403,6 +406,7 @@ impl Default for DocumentView {
             focus_content_style: Style::default(),
             selection_style: StyleSlot::Inherit,
             doc_styles: DocumentStyles::default(),
+            doc_styles_exact: false,
             hover_border_style: None,
             scroll_offset: None,
             scroll_to_source_line: None,
@@ -748,9 +752,14 @@ impl DocumentView {
         self
     }
 
-    /// Set the document-element style overrides.
+    /// Replace the document-element styles.
+    ///
+    /// `styles` is used exactly as given; the theme's document styles no longer
+    /// apply. Shortcuts such as [`Self::code_block_style`] instead patch a single
+    /// element over the theme.
     pub fn doc_styles(mut self, styles: DocumentStyles) -> Self {
         self.doc_styles = styles;
+        self.doc_styles_exact = true;
         self
     }
 
@@ -775,7 +784,8 @@ impl DocumentView {
     /// available content width; `Length::Auto` hugs the widest line (including
     /// the language header when enabled); `Length::Px(n)` and
     /// `Length::Percent(p)` size the rectangle to a fixed column count or
-    /// fraction of the available width.
+    /// fraction of the available width while wrapping, and act as minimum
+    /// widths with `wrap(false)`, where long lines cannot shrink.
     pub fn code_block_width(mut self, width: impl Into<Length>) -> Self {
         self.code_block_width = width.into();
         self

@@ -99,10 +99,10 @@ display content differs from source text.
 | `selection_style` | `Style` | Text selection style |
 | `extend_selection_style` / `inherit_selection_style` | `Style` / `()` | Extend or inherit the text-selection theme role instead of replacing it |
 | `highlight_full_width` | `bool` | Extend per-line background highlights across full content width |
-| `doc_styles` | `DocumentStyles` | Element styles (heading/code/link/table/hr/diagram/etc.) |
+| `doc_styles` | `DocumentStyles` | Replace all element styles (heading/code/link/table/hr/diagram/etc.); the theme's document styles no longer apply |
 | `code_block_style` | `Style` | Shortcut - sets `doc_styles.code_block_style` (merged over active theme) |
 | `code_block_header_style` | `Style` | Shortcut - sets `doc_styles.code_block_header_style` for language header labels |
-| `code_block_width` | `Length` | Width of fenced code-block background rectangles (`Flex(1)` default, `Auto`, `Px(n)`, `Percent(p)`) |
+| `code_block_width` | `Length` | Width of fenced code-block background rectangles (`Flex(1)` default, `Auto`, `Px(n)`, `Percent(p)`). `Px`/`Percent` are fixed while wrapping and minimum widths with `wrap(false)` |
 | `code_block_padding` | `CodeBlockPadding` | Vertical padding around fenced code blocks (`None` default, `HalfBlock`, `Full`) |
 | `code_block_header` | `CodeBlockHeader` | Language header row at top of fenced code blocks (`None` default, `Label`, `IconAndLabel`) |
 | `scroll_offset` | `usize` | Controlled vertical scroll offset |
@@ -263,10 +263,20 @@ When sibling `DocumentView` widgets under the same `ScrollView` share
 boundaries and shared copy concatenates text in visual order with newline
 separators between document boundaries.
 
+### Code-block rectangles
+
+Fenced code blocks paint `code_block_style`'s background as a straight-edged
+rectangle. Any decoration (`code_block_padding`, `code_block_header`, or a
+non-`Flex` `code_block_width`) adds a one-column right inset to match the left
+one, so code wraps one column earlier. Headers that do not fit are truncated
+with `…`; a rectangle never gets narrower than its left inset plus one column.
+
 ### Custom markdown styles
 
-`DocumentStyles` controls per-element colors. Default values come from `Theme::document`
-automatically - only set this when you want widget-local overrides.
+Element styles come from `Theme::document`. Shortcuts such as
+`.code_block_style(...)` and `.table_border_style(...)` patch one element over
+the theme. `.doc_styles(...)` replaces every element style exactly, so empty
+fields stay empty.
 
 ```rust
 use tui_lipan::DocumentStyles;
@@ -288,17 +298,7 @@ DocumentView::new(text)
         code_block_style: Style::new().bg(Color::rgb(0x1E, 0x1E, 0x1E)),
         emphasis_style: Style::new().italic(),
         strong_style: Style::new().bold(),
-        strikethrough_style: Style::new().strikethrough(),
-        blockquote_bar_style: Style::new().fg(Color::DarkGray),
-        table_border_style: Style::new().fg(Color::DarkGray),
-        table_header_style: Style::new().bold(),
-        hr_style: Style::new().fg(Color::DarkGray).dim(),
-        list_item_style: Style::new().fg(Color::Blue).bold(),
-        list_enumeration_style: Style::new().fg(Color::Blue).bold(),
-        diagram_node_fill_style: Style::new().bg(Color::rgb(0x12, 0x18, 0x22)),
-        diagram_node_border_style: Style::new().fg(Color::Cyan),
-        diagram_node_label_style: Style::new().fg(Color::White),
-        diagram_edge_style: Style::new().fg(Color::LightBlue),
+        ..DocumentStyles::default()
     });
 
 // Via MarkdownFormatter::styles - same effect, explicit formatter path

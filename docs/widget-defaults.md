@@ -1001,6 +1001,7 @@ Source: `src/widgets/document_view/mod.rs` (`DocumentView`).
 | `focus_content_style` | `Style::default()` |
 | `selection_style` | `StyleSlot::Inherit` |
 | `doc_styles` | `DocumentStyles::default()` |
+| `doc_styles_exact` | `false` |
 | `hover_border_style` | `None` |
 | `scroll_offset` | `None` |
 | `scroll_to_source_line` | `None` |

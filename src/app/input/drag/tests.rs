@@ -439,6 +439,36 @@ fn document_view_copy_omits_code_block_padding_and_language_header() {
         .expect("document view exists");
 
     assert_eq!(copied, "Before\n\nlet a = 1;\nlet b = 2;\n\nAfter");
+
+    // Excluding the last code line drops only its own newline: the bottom
+    // padding row shares that source line but must not swallow the blank
+    // line's newline after it.
+    let copied = runtime
+        .tree
+        .iter()
+        .find_map(|node| match &node.kind {
+            NodeKind::DocumentView(doc) => {
+                let mut doc = doc.clone();
+                let last_code = doc
+                    .visual_cache
+                    .lines
+                    .iter()
+                    .rev()
+                    .find(|line| matches!(line.kind, VisualLineKind::CodeLine { .. }))?
+                    .source_line;
+                doc.copy_excluded_source_lines = Some(Arc::new(vec![last_code]));
+                document_view_selected_text_from_node(
+                    &doc,
+                    0,
+                    doc.visual_cache.flat_text.len(),
+                    true,
+                )
+            }
+            _ => None,
+        })
+        .expect("document view exists");
+
+    assert_eq!(copied, "Before\n\nlet a = 1;\nlet b = 2;\nAfter");
 }
 
 #[test]

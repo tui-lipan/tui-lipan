@@ -570,6 +570,26 @@ mod tests {
     }
 
     #[test]
+    fn theme_provider_keeps_explicit_doc_styles_exactly() {
+        let theme = Theme::one_dark();
+        let custom = DocumentStyles {
+            code_block_style: Style::new().bg(crate::style::Color::hex_u24(0x161B26)),
+            ..DocumentStyles::default()
+        };
+        let dv = DocumentView::new("*hi*").doc_styles(custom.clone());
+        let el: Element = ThemeProvider::new(theme.clone()).child(dv).into();
+        let baked = apply_document_theme_carve_out(&theme, el);
+        let crate::core::element::ElementKind::ThemeProvider(tp) = baked.kind else {
+            panic!("expected ThemeProvider");
+        };
+        let crate::core::element::ElementKind::DocumentView(dv) = tp.child.kind else {
+            panic!("expected DocumentView");
+        };
+
+        assert_eq!(dv.doc_styles, custom);
+    }
+
+    #[test]
     fn plain_formatter_empty_input_produces_single_empty_line() {
         let formatter = PlainFormatter;
         let lines = as_lines(formatter.format(FormatInput {

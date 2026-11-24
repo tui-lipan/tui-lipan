@@ -210,6 +210,23 @@ pub(crate) struct VisualCache {
 }
 
 impl VisualCache {
+    /// Byte offset of the `\n` that follows visual row `index` in `flat_text`.
+    ///
+    /// `None` for rows that add no newline: code-block chrome, diagram rows
+    /// continued on the next row, and the final content row.
+    pub(crate) fn newline_after(&self, index: usize) -> Option<usize> {
+        let line = self.lines.get(index)?;
+        if matches!(line.kind, VisualLineKind::CodeBlockChrome { .. }) {
+            return None;
+        }
+        let line_end = self
+            .line_starts
+            .get(index)?
+            .saturating_add(*self.line_lengths.get(index)?);
+        let next_start = *self.line_starts.get(index + 1)?;
+        (next_start > line_end).then_some(line_end)
+    }
+
     fn take_active_entry(&mut self) -> Option<VisualCacheEntry> {
         Some(VisualCacheEntry {
             key: self.key.take()?,
@@ -1712,16 +1729,19 @@ fn flatten_code_block(
     );
 
     let left_inset = CODE_BLOCK_LEFT_INSET_COLS;
-    let right_inset = if ctx.code_block_padding != CodeBlockPadding::None
+    // Decorated rectangles get a symmetric right inset so code never touches
+    // the visible right edge; the default flex block keeps its historic budget.
+    let decorated = ctx.code_block_padding != CodeBlockPadding::None
         || ctx.code_block_header != CodeBlockHeader::None
-        || !matches!(ctx.code_block_width, Length::Flex(_))
-    {
+        || !matches!(ctx.code_block_width, Length::Flex(_));
+    let mut right_inset = if decorated {
         CODE_BLOCK_RIGHT_INSET_COLS
     } else {
         0
     };
-    let h_insets = left_inset.saturating_add(right_inset);
     let available_w = ctx.inner_w.saturating_sub(ctx.base_indent_cols);
+    // Narrowest useful rectangle: the left inset plus one content column.
+    let min_rect_w = left_inset.saturating_add(1);
 
     let header_content_w = header_spans.as_ref().map_or(0, |spans| span_width(spans));
     let max_raw_code_w = raw_lines
@@ -1731,8 +1751,10 @@ fn flatten_code_block(
         .unwrap_or(0);
     let natural_rect_w = max_raw_code_w
         .max(header_content_w)
-        .saturating_add(h_insets);
+        .saturating_add(left_inset.saturating_add(right_inset));
 
+    // `Px`/`Percent` are fixed widths while wrapping; with wrapping off nothing
+    // can shrink the code, so they act as minimum widths instead.
     let target_rect_w = match ctx.code_block_width {
         Length::Flex(_) => {
             if ctx.wrap {
@@ -1749,7 +1771,7 @@ fn flatten_code_block(
             }
         }
         Length::Px(px) => {
-            let px = px.max(h_insets);
+            let px = px.max(min_rect_w);
             if ctx.wrap {
                 px.min(available_w)
             } else {
@@ -1758,7 +1780,7 @@ fn flatten_code_block(
         }
         Length::Percent(pct) => {
             let scaled = ((u32::from(available_w) * u32::from(pct.min(100))) / 100) as u16;
-            let scaled = scaled.max(h_insets).min(available_w);
+            let scaled = scaled.max(min_rect_w).min(available_w);
             if ctx.wrap {
                 scaled
             } else {
@@ -1767,7 +1789,22 @@ fn flatten_code_block(
         }
     };
 
-    let wrap_budget = target_rect_w.saturating_sub(h_insets);
+    // Too narrow for both insets: give the right inset back to the content.
+    if target_rect_w < left_inset.saturating_add(right_inset).saturating_add(1) {
+        right_inset = 0;
+    }
+    let h_insets = left_inset.saturating_add(right_inset);
+    let wrap_budget = target_rect_w.saturating_sub(h_insets).max(1);
+
+    let header_spans = header_spans.map(|spans| {
+        if ctx.wrap && header_content_w > wrap_budget {
+            crate::utils::spans::truncate_spans(&spans, wrap_budget as usize)
+        } else {
+            spans
+        }
+    });
+    let header_content_w = header_spans.as_ref().map_or(0, |spans| span_width(spans));
+
     let mut rendered_rows: Vec<(Vec<Span>, Style, usize)> = Vec::with_capacity(raw_lines.len());
     let mut actual_max_content_w = header_content_w;
 
@@ -1797,7 +1834,8 @@ fn flatten_code_block(
                 content_rect_w
             }
         }
-        _ => target_rect_w,
+        // A wide glyph can exceed a one-column budget; grow so it stays inside.
+        _ => target_rect_w.max(actual_max_content_w.saturating_add(left_inset)),
     };
 
     let reported_w = match ctx.code_block_width {
@@ -3074,6 +3112,96 @@ mod tests {
             _ => None,
         });
         assert_eq!(pct_rect, Some(30));
+
+        // A header wider than a fixed rectangle is truncated to its content budget.
+        let (narrow_hdr_lines, _) = run(
+            Length::Px(8),
+            CodeBlockHeader::IconAndLabel,
+            CodeBlockPadding::Full,
+        );
+        for line in &narrow_hdr_lines {
+            if let VisualLineKind::CodeBlockChrome {
+                kind: CodeBlockChromeKind::Header { spans },
+                rect_width,
+                ..
+            } = &line.kind
+            {
+                assert_eq!(*rect_width, 8);
+                assert_eq!(super::span_width(spans), 6);
+            }
+        }
+
+        // Rectangles narrower than both insets keep one content column and
+        // never emit an empty leading row.
+        for px in 0..=3 {
+            let (tiny_lines, _) = run(
+                Length::Px(px),
+                CodeBlockHeader::None,
+                CodeBlockPadding::None,
+            );
+            let rows: Vec<_> = tiny_lines
+                .iter()
+                .filter_map(|l| match &l.kind {
+                    VisualLineKind::CodeLine {
+                        spans, rect_width, ..
+                    } => Some((super::span_width(spans), *rect_width)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(rows.len(), 10, "Px({px})");
+            assert!(
+                rows.iter().all(|&(w, rect)| w == 1 && rect >= 2),
+                "Px({px})"
+            );
+        }
+    }
+
+    #[cfg(feature = "markdown")]
+    #[test]
+    fn code_block_rect_grows_to_hold_wide_glyph_in_one_column_budget() {
+        use super::{DocumentFlattenCtx, VisualLineKind, flatten_blocks};
+        use crate::style::{BorderStyle, Length};
+        use crate::widgets::document_view::{
+            CodeBlockHeader, CodeBlockPadding, ContentFormatter, DocumentStyles,
+            DocumentTableWidthMode, FormatInput, MarkdownFormatter, TableRowSeparators,
+        };
+
+        let doc = MarkdownFormatter::default().format(FormatInput {
+            value: "```\n中a\n```",
+            content_type: Some("markdown"),
+            document_styles: None,
+        });
+        let doc_styles = DocumentStyles::default();
+        let (lines, _) = flatten_blocks(
+            &doc,
+            60,
+            DocumentFlattenCtx {
+                wrap: true,
+                table_wrap: false,
+                table_width_mode: DocumentTableWidthMode::default(),
+                table_outer_frame: true,
+                table_column_separators: true,
+                table_row_separators: TableRowSeparators::default(),
+                table_cell_padding: 0,
+                table_border_variant: BorderStyle::Plain,
+                code_block_width: Length::Px(2),
+                code_block_padding: CodeBlockPadding::None,
+                code_block_header: CodeBlockHeader::None,
+                doc_styles: &doc_styles,
+                #[cfg(feature = "syntax-syntect")]
+                code_strategy: None,
+            },
+        );
+        for line in &lines {
+            if let VisualLineKind::CodeLine {
+                spans, rect_width, ..
+            } = &line.kind
+            {
+                assert!(
+                    super::span_width(spans) + super::CODE_BLOCK_LEFT_INSET_COLS <= *rect_width
+                );
+            }
+        }
     }
 
     #[cfg(feature = "markdown")]
