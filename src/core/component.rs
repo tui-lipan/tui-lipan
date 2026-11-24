@@ -1426,7 +1426,11 @@ impl<C: Component> Context<C> {
     /// where a smear from the caret on the old screen to the caret on the new one would connect
     /// two unrelated places. The skip waits for that move: frames that still show the caret where
     /// it was, or carry it with its widget, keep it pending. Later moves trail as usual.
-    pub fn skip_cursor_trail(&mut self) {
+    ///
+    /// Unlike other runtime requests this may be called from [`Component::view`]: whether a frame
+    /// shows a different screen is often known only once its view is built, and the skip applies
+    /// to the frame that view becomes.
+    pub fn skip_cursor_trail(&self) {
         self.env.cursor_trail_skip.set(true);
     }
 

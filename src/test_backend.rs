@@ -4784,6 +4784,36 @@ mod tests {
     }
 
     #[test]
+    fn a_view_can_skip_the_cursor_trail_for_its_frame() {
+        struct SkippingView;
+        impl Component for SkippingView {
+            type Message = ();
+            type Properties = ();
+            type State = bool;
+            fn create_state(&self, _: &()) -> bool {
+                false
+            }
+            fn update(&mut self, _: (), ctx: &mut Context<Self>) -> Update {
+                ctx.state = true;
+                Update::render()
+            }
+            fn view(&self, ctx: &Context<Self>) -> Element {
+                if ctx.state {
+                    ctx.skip_cursor_trail();
+                }
+                Text::new("screen").into()
+            }
+        }
+
+        let mut backend = TestBackend::new(SkippingView);
+        backend.render();
+        assert!(!backend.take_cursor_trail_skip());
+        backend.dispatch(()).expect("update runs");
+        backend.render();
+        assert!(backend.take_cursor_trail_skip());
+    }
+
+    #[test]
     fn advance_reveals_a_time_gated_command_chord_without_sleeping() {
         let delay = std::time::Duration::from_millis(300);
         let mut backend = chord_reveal_backend(delay);
