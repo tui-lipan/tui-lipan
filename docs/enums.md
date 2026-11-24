@@ -1860,15 +1860,15 @@ let spacing = MarkdownSpacing {
 
 | Field | `BALANCED` **(default)** | `LOOSE` | `COMPACT` | Applies to |
 |-------|----------|---------|-----------|------------|
-| `between_blocks` | `WhenPresent` | `WhenPresent` | `Never` | Every boundary (paragraphs, lists, tables, …) |
+| `between_blocks` | `WhenPresent` | `WhenPresent` | `Never` | Any boundary no other rule covers (paragraphs, lists, tables, …) |
 | `heading_before` | `Always` | `WhenPresent` | `Never` | Above a heading |
 | `heading_after` | `Always` | `WhenPresent` | `Never` | Below a heading |
-| `consecutive_headings` | `WhenPresent` | `WhenPresent` | `Never` | Between two headings (replaces before/after) |
-| `fenced_block_before` | `Always` | `Always` | `Never` | Above a fenced code or diagram block |
+| `consecutive_headings` | `WhenPresent` | `WhenPresent` | `Never` | Between two headings |
+| `fenced_block_before` | `Always` | `Always` | `Never` | Above a fenced code or diagram block, including right after a heading |
 | `horizontal_rules_absorb_spacing` | `true` | `false` | `true` | Keeps rules flush with their neighbours |
 | `attach_colon_lead_ins` | `true` | `false` | `true` | Keeps `Bullets:`-style paragraphs flush with a following list/code/diagram/table/blockquote |
 
-The two `bool` rules win when they apply; otherwise the strongest applicable `SourceSpacing` wins. Runs of blank source lines always collapse to one row, and leading/trailing blank lines are trimmed.
+Each boundary uses the first rule that applies: the two `bool` rules, then `consecutive_headings`, `fenced_block_before`, `heading_after`, `heading_before`, and finally `between_blocks`. So `Never` on any field really means never there. Runs of blank source lines always collapse to one row, and leading/trailing blank lines are trimmed.
 
 Available from the crate root (`tui_lipan::MarkdownSpacing`).
 

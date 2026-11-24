@@ -21,7 +21,7 @@ use super::format::{
 };
 
 /// Whether a block boundary gets a separating blank row, given the source.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SourceSpacing {
     /// Never insert a blank row, even when the source has one.
     Never,
@@ -57,24 +57,25 @@ impl SourceSpacing {
 /// # let _ = spacing;
 /// ```
 ///
-/// Each boundary between two blocks is resolved as follows:
+/// Each boundary between two blocks is resolved by the first rule that
+/// applies:
 /// 1. [`horizontal_rules_absorb_spacing`](Self::horizontal_rules_absorb_spacing)
 ///    and [`attach_colon_lead_ins`](Self::attach_colon_lead_ins) keep their
-///    boundaries tight when they apply.
-/// 2. Otherwise every applicable rule is resolved and the strongest wins
-///    (`Always` over `WhenPresent` over `Never`):
-///    [`between_blocks`](Self::between_blocks) always applies;
-///    [`heading_after`](Self::heading_after) /
-///    [`heading_before`](Self::heading_before) apply next to a heading, or
-///    [`consecutive_headings`](Self::consecutive_headings) between two
-///    headings; [`fenced_block_before`](Self::fenced_block_before) applies
-///    before a fenced code or diagram block.
+///    boundaries flush.
+/// 2. [`consecutive_headings`](Self::consecutive_headings) between two
+///    headings.
+/// 3. [`fenced_block_before`](Self::fenced_block_before) above a fenced code
+///    or diagram block.
+/// 4. [`heading_after`](Self::heading_after) below a heading, then
+///    [`heading_before`](Self::heading_before) above one.
+/// 5. [`between_blocks`](Self::between_blocks) for every other boundary.
 ///
 /// Runs of blank source lines always collapse to at most one row, and
 /// leading/trailing blank lines are trimmed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct MarkdownSpacing {
-    /// Baseline for every boundary, e.g. between paragraphs, lists, tables.
+    /// Fallback for boundaries no other rule covers, e.g. between paragraphs,
+    /// lists, and tables.
     /// With [`SourceSpacing::Never`], a document made only of blank lines
     /// renders empty instead of as a single blank row.
     pub between_blocks: SourceSpacing,
@@ -82,9 +83,10 @@ pub struct MarkdownSpacing {
     pub heading_before: SourceSpacing,
     /// Below a heading that is followed by a non-heading block.
     pub heading_after: SourceSpacing,
-    /// Between two headings; replaces `heading_before`/`heading_after` there.
+    /// Between two headings.
     pub consecutive_headings: SourceSpacing,
-    /// Before a fenced code or diagram block.
+    /// Before a fenced code or diagram block, including one right after a
+    /// heading.
     pub fenced_block_before: SourceSpacing,
     /// Keep horizontal rules flush with their neighbours: the rule's own row
     /// already acts as the divider.
@@ -160,16 +162,13 @@ impl MarkdownSpacing {
             return false;
         }
 
-        let mut rule = self.between_blocks;
-        match (prev == K::Heading, next == K::Heading) {
-            (true, true) => rule = rule.max(self.consecutive_headings),
-            (true, false) => rule = rule.max(self.heading_after),
-            (false, true) => rule = rule.max(self.heading_before),
-            (false, false) => {}
-        }
-        if matches!(next, K::CodeBlock | K::Diagram) {
-            rule = rule.max(self.fenced_block_before);
-        }
+        let rule = match (prev == K::Heading, next == K::Heading) {
+            (true, true) => self.consecutive_headings,
+            _ if matches!(next, K::CodeBlock | K::Diagram) => self.fenced_block_before,
+            (true, false) => self.heading_after,
+            (false, true) => self.heading_before,
+            (false, false) => self.between_blocks,
+        };
         rule.resolve(had_source_blank)
     }
 }
@@ -2261,7 +2260,7 @@ let label = \"ok\";
 
     #[test]
     fn custom_spacing_overrides_one_preset_knob() {
-        let input = "## Title\nBody.\n\n## Next\n\nMore.";
+        let input = "## Title\nBody.\n\n## Next\n\nMore.\n\nEnd.";
         let spacing = MarkdownSpacing {
             heading_after: SourceSpacing::Never,
             ..MarkdownSpacing::BALANCED
@@ -2273,10 +2272,13 @@ let label = \"ok\";
                 content_type: Some("markdown"),
                 document_styles: None,
             });
-        // Source blanks after headings still count through `between_blocks`.
+        // `Never` drops the source blank after `## Next`; the blank before it
+        // comes from `heading_before`, and paragraphs keep their source blank.
         assert_eq!(
             block_tags(&doc),
-            vec!["lines", "lines", "blank", "lines", "blank", "lines"]
+            vec![
+                "lines", "lines", "blank", "lines", "lines", "blank", "lines"
+            ]
         );
         assert_ne!(
             MarkdownFormatter::default().spacing(spacing).cache_key(),
