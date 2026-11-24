@@ -1,6 +1,10 @@
 use std::time::Duration;
 
-use tui_lipan::{TestBackend, core::event::MouseKind, prelude::*};
+use tui_lipan::{
+    TestBackend,
+    core::event::{MouseButton, MouseKind},
+    prelude::*,
+};
 
 const DELAY: Duration = Duration::from_millis(1000);
 
@@ -243,4 +247,103 @@ fn only_the_current_hover_can_reveal() {
     assert!(!shows(&backend, "tip-a"));
     wait(&mut backend, Duration::from_millis(700));
     assert!(shows(&backend, "tip-a"));
+}
+
+/// A trigger with its own state, so a remount would show as a reset count.
+struct Counter;
+
+impl Component for Counter {
+    type Properties = ();
+    type State = u32;
+    type Message = ();
+    fn create_state(&self, _: &()) -> u32 {
+        0
+    }
+    fn update(&mut self, (): (), ctx: &mut Context<Self>) -> Update {
+        ctx.state += 1;
+        Update::render()
+    }
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        Button::new(format!("count {}", ctx.state))
+            .on_click(ctx.link().callback(|_| ()))
+            .into()
+    }
+}
+
+struct StatefulTriggerApp;
+
+impl Component for StatefulTriggerApp {
+    type Properties = ();
+    type State = Alpha;
+    type Message = ();
+    fn create_state(&self, _: &()) -> Alpha {
+        Alpha::default()
+    }
+    fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        let alpha = &ctx.state;
+        let mut tooltip = Tooltip::new("tip")
+            .delay(alpha.delay)
+            .auto(alpha.auto)
+            .child(tui_lipan::child(|| Counter, ()));
+        if let Some(open) = alpha.open {
+            tooltip = tooltip.open(open);
+        }
+        VStack::new().height(Length::Px(1)).child(tooltip).into()
+    }
+}
+
+#[test]
+fn changing_the_configuration_keeps_a_stateful_trigger_mounted() {
+    let mut backend = TestBackend::new(StatefulTriggerApp);
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 30,
+        h: 6,
+    });
+    backend.render();
+    let rect = backend
+        .capture_ui_snapshot()
+        .widgets
+        .iter()
+        .find(|widget| widget.label.as_deref() == Some("count 0"))
+        .expect("counter must render")
+        .rect;
+    for kind in [
+        MouseKind::Down(MouseButton::Left),
+        MouseKind::Up(MouseButton::Left),
+    ] {
+        backend
+            .send_mouse(MouseEvent {
+                x: rect.x as u16,
+                y: rect.y as u16,
+                kind,
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+    }
+    backend.pump().unwrap();
+    backend.render();
+    assert!(backend.capture_frame().plain_text().contains("count 1"));
+
+    let changes: [fn(&mut Alpha); 4] = [
+        |alpha| alpha.delay = Duration::ZERO,
+        |alpha| alpha.delay = DELAY,
+        |alpha| alpha.auto = false,
+        |alpha| alpha.open = Some(true),
+    ];
+    for change in changes {
+        change(backend.state_mut());
+        backend.render();
+        backend.pump().unwrap();
+        backend.render();
+        assert!(
+            backend.capture_frame().plain_text().contains("count 1"),
+            "the trigger was remounted:\n{}",
+            backend.capture_frame().plain_text()
+        );
+    }
 }

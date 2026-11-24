@@ -253,7 +253,7 @@ struct TooltipState {
     /// Bumped on every hover change and timing change so a timer armed earlier is ignored.
     hover_generation: u64,
     /// When the current hover began, so a changed delay counts from the original entry.
-    hovered_since: Option<std::time::Instant>,
+    hovered_since: Option<web_time::Instant>,
 }
 
 impl TooltipProps {
@@ -381,14 +381,16 @@ impl Component for TooltipComponent {
 
     fn view(&self, ctx: &Context<Self>) -> Element {
         let delayed = ctx.props.delays_hover();
-        let trigger = if delayed {
-            MouseRegion::new()
-                .on_hover_change(ctx.link().callback(TooltipMsg::Hover))
-                .child(ctx.props.child.clone())
-                .into()
-        } else {
-            ctx.props.child.clone()
-        };
+        // The trigger always sits in the same region, whatever the configuration: adding or
+        // removing a wrapper would change the child's container path and remount a stateful
+        // trigger. Only the hover callback comes and goes, and the region takes the child's sizing
+        // so a flexible child stays flexible.
+        let mut region = MouseRegion::new().child(ctx.props.child.clone());
+        if delayed {
+            region = region.on_hover_change(ctx.link().callback(TooltipMsg::Hover));
+        }
+        let mut trigger: Element = region.into();
+        trigger.layout = ctx.props.child.layout_constraints();
         let trigger = trigger.key(ctx.state.trigger_key.clone());
 
         let hover_open = if delayed {
