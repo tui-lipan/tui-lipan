@@ -91,6 +91,8 @@ pub(crate) enum VisualLineKind {
         block_style: Style,
         /// Leading container indentation (e.g. list nesting) painted with canvas background.
         indent_cols: u16,
+        /// Blank code-background columns before the code (0 in one-column viewports).
+        left_inset: u16,
         /// Target background rectangle width in columns (starting after `indent_cols`).
         rect_width: u16,
     },
@@ -100,6 +102,7 @@ pub(crate) enum VisualLineKind {
         kind: CodeBlockChromeKind,
         block_style: Style,
         indent_cols: u16,
+        left_inset: u16,
         rect_width: u16,
     },
     /// A rendered row from a parsed Mermaid diagram.
@@ -962,9 +965,11 @@ pub(crate) const CODE_BLOCK_RIGHT_INSET_COLS: u16 = 1;
 /// Display columns rendered before selectable content (code inset, blockquote bars).
 pub(crate) fn visual_line_render_prefix_cols(vline: &DocumentVisualLine) -> usize {
     match &vline.kind {
-        VisualLineKind::CodeLine { indent_cols, .. } => {
-            (*indent_cols as usize).saturating_add(CODE_BLOCK_LEFT_INSET_COLS as usize)
-        }
+        VisualLineKind::CodeLine {
+            indent_cols,
+            left_inset,
+            ..
+        } => (*indent_cols as usize).saturating_add(*left_inset as usize),
         VisualLineKind::CodeBlockChrome { .. } => usize::MAX,
         VisualLineKind::BlockQuoteLine { depth, .. } => (*depth as usize).saturating_mul(2),
         _ => 0,
@@ -974,9 +979,11 @@ pub(crate) fn visual_line_render_prefix_cols(vline: &DocumentVisualLine) -> usiz
 /// UTF-8 bytes in the render-only prefix for a visual line.
 pub(crate) fn visual_line_render_prefix_bytes(vline: &DocumentVisualLine) -> usize {
     match &vline.kind {
-        VisualLineKind::CodeLine { indent_cols, .. } => {
-            (*indent_cols as usize).saturating_add(CODE_BLOCK_LEFT_INSET_COLS as usize)
-        }
+        VisualLineKind::CodeLine {
+            indent_cols,
+            left_inset,
+            ..
+        } => (*indent_cols as usize).saturating_add(*left_inset as usize),
         VisualLineKind::CodeBlockChrome { .. } => usize::MAX,
         VisualLineKind::BlockQuoteLine { depth, .. } => "│ ".len().saturating_mul(*depth as usize),
         _ => 0,
@@ -1728,7 +1735,7 @@ fn flatten_code_block(
         ctx.doc_styles,
     );
 
-    let left_inset = CODE_BLOCK_LEFT_INSET_COLS;
+    let mut left_inset = CODE_BLOCK_LEFT_INSET_COLS;
     // Decorated rectangles get a symmetric right inset so code never touches
     // the visible right edge; the default flex block keeps its historic budget.
     let decorated = ctx.code_block_padding != CodeBlockPadding::None
@@ -1789,9 +1796,12 @@ fn flatten_code_block(
         }
     };
 
-    // Too narrow for both insets: give the right inset back to the content.
+    // Too narrow for the insets: give them back to the content, right first.
     if target_rect_w < left_inset.saturating_add(right_inset).saturating_add(1) {
         right_inset = 0;
+    }
+    if target_rect_w < left_inset.saturating_add(1) {
+        left_inset = 0;
     }
     let h_insets = left_inset.saturating_add(right_inset);
     let wrap_budget = target_rect_w.saturating_sub(h_insets).max(1);
@@ -1859,6 +1869,7 @@ fn flatten_code_block(
                     kind: CodeBlockChromeKind::TopHalfBlock,
                     block_style: base_block_style,
                     indent_cols: ctx.base_indent_cols,
+                    left_inset,
                     rect_width,
                 },
                 source_line: first_source_line,
@@ -1870,6 +1881,7 @@ fn flatten_code_block(
                     kind: CodeBlockChromeKind::BlankPadding,
                     block_style: base_block_style,
                     indent_cols: ctx.base_indent_cols,
+                    left_inset,
                     rect_width,
                 },
                 source_line: first_source_line,
@@ -1883,6 +1895,7 @@ fn flatten_code_block(
                 kind: CodeBlockChromeKind::Header { spans },
                 block_style: base_block_style,
                 indent_cols: ctx.base_indent_cols,
+                left_inset,
                 rect_width,
             },
             source_line: first_source_line,
@@ -1895,6 +1908,7 @@ fn flatten_code_block(
                 spans,
                 block_style,
                 indent_cols: ctx.base_indent_cols,
+                left_inset,
                 rect_width,
             },
             source_line,
@@ -1909,6 +1923,7 @@ fn flatten_code_block(
                     kind: CodeBlockChromeKind::BottomHalfBlock,
                     block_style: base_block_style,
                     indent_cols: ctx.base_indent_cols,
+                    left_inset,
                     rect_width,
                 },
                 source_line: last_source_line,
@@ -1920,6 +1935,7 @@ fn flatten_code_block(
                     kind: CodeBlockChromeKind::BlankPadding,
                     block_style: base_block_style,
                     indent_cols: ctx.base_indent_cols,
+                    left_inset,
                     rect_width,
                 },
                 source_line: last_source_line,
@@ -2346,6 +2362,7 @@ mod tests {
                 spans: vec![Span::new("fn main()")],
                 block_style: crate::style::Style::default(),
                 indent_cols: 0,
+                left_inset: CODE_BLOCK_LEFT_INSET_COLS,
                 rect_width: 0,
             },
             source_line: 0,
@@ -3153,6 +3170,69 @@ mod tests {
                 rows.iter().all(|&(w, rect)| w == 1 && rect >= 2),
                 "Px({px})"
             );
+        }
+    }
+
+    #[cfg(feature = "markdown")]
+    #[test]
+    fn code_stays_visible_in_one_to_three_column_viewports() {
+        use super::{DocumentFlattenCtx, VisualLineKind, flatten_blocks};
+        use crate::style::{BorderStyle, Length};
+        use crate::widgets::document_view::{
+            CodeBlockHeader, CodeBlockPadding, ContentFormatter, DocumentStyles,
+            DocumentTableWidthMode, FormatInput, MarkdownFormatter, TableRowSeparators,
+        };
+
+        let doc_styles = DocumentStyles::default();
+        for value in ["```\nabc\n```", "- item\n\n  ```\n  abc\n  ```"] {
+            let doc = MarkdownFormatter::default().format(FormatInput {
+                value,
+                content_type: Some("markdown"),
+                document_styles: None,
+            });
+            for width in [Length::Flex(1), Length::Auto, Length::Px(10)] {
+                for inner_w in 1..=4u16 {
+                    let (lines, _) = flatten_blocks(
+                        &doc,
+                        inner_w,
+                        DocumentFlattenCtx {
+                            wrap: true,
+                            table_wrap: false,
+                            table_width_mode: DocumentTableWidthMode::default(),
+                            table_outer_frame: true,
+                            table_column_separators: true,
+                            table_row_separators: TableRowSeparators::default(),
+                            table_cell_padding: 0,
+                            table_border_variant: BorderStyle::Plain,
+                            code_block_width: width,
+                            code_block_padding: CodeBlockPadding::Full,
+                            code_block_header: CodeBlockHeader::Label,
+                            doc_styles: &doc_styles,
+                            #[cfg(feature = "syntax-syntect")]
+                            code_strategy: None,
+                        },
+                    );
+                    for line in &lines {
+                        let VisualLineKind::CodeLine {
+                            spans,
+                            indent_cols,
+                            left_inset,
+                            ..
+                        } = &line.kind
+                        else {
+                            continue;
+                        };
+                        if *indent_cols >= inner_w {
+                            continue; // List indentation alone fills the viewport.
+                        }
+                        let used = indent_cols + left_inset + super::span_width(spans);
+                        assert!(
+                            super::span_width(spans) >= 1 && used <= inner_w,
+                            "{value:?} {width:?} inner_w={inner_w}: used {used}"
+                        );
+                    }
+                }
+            }
         }
     }
 

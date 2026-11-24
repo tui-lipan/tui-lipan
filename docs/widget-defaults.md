@@ -1031,7 +1031,6 @@ Source: `src/widgets/document_view/mod.rs` (`DocumentView`).
 | `copy_excluded_source_lines` | `None` |
 | `peer_source_lines` | `None` |
 | `peer_source_fingerprint` | `Cell::new(None)` |
-| `measure_base_key_cache` | `Cell::new(None)` |
 | `split_wrap_sync` | `None` |
 | `split_wrap_side` | `None` |
 | `diff_split_pane` | `None` |

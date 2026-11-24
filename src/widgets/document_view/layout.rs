@@ -394,20 +394,12 @@ fn document_measure_format_cache_key(dv: &DocumentView) -> u64 {
 }
 
 /// Base portion of the document measure cache key - all geometry fields except
-/// the mutable split-wrap sync state.  Cached on [`DocumentView::measure_base_key_cache`]
-/// to avoid re-hashing ~22 fields on every measurement call.
+/// the mutable split-wrap sync state.
 ///
-/// The cache is validated by [`DocumentView::layout_content_fingerprint`] which
-/// itself guards against stale `Arc<str>` pointer reuse. This means a cloned-
-/// then-mutated `DocumentView` still produces the correct key.
+/// Recomputed on every call: the fields are public and builders can change them
+/// on a clone of an already measured view, so caching on content alone goes stale.
+/// The expensive part, the content fingerprint, is cached separately.
 fn document_measure_base_key(dv: &DocumentView) -> u64 {
-    let content_fp = dv.layout_content_fingerprint();
-    if let Some((cached, guard_fp)) = dv.measure_base_key_cache.get()
-        && guard_fp == content_fp
-    {
-        return cached;
-    }
-
     let mut h = FxHasher::default();
 
     dv.layout_content_fingerprint().hash(&mut h);
@@ -449,9 +441,7 @@ fn document_measure_base_key(dv: &DocumentView) -> u64 {
     dv.code_block_padding.hash(&mut h);
     dv.code_block_header.hash(&mut h);
 
-    let key = h.finish();
-    dv.measure_base_key_cache.set(Some((key, content_fp)));
-    key
+    h.finish()
 }
 
 fn document_measure_cache_key(dv: &DocumentView, parent: ParentIntegrated) -> u64 {
@@ -1162,13 +1152,14 @@ mod tests {
         use crate::widgets::document_view::{CodeBlockHeader, CodeBlockPadding};
 
         let base = DocumentView::new("```rust\nlet x = 1;\n```").markdown();
+        // Key the base first so the clones below start from a measured view.
+        let k_base = super::document_measure_base_key(&base);
         let with_auto = base.clone().code_block_width(Length::Auto);
         let with_pad = base.clone().code_block_padding(CodeBlockPadding::HalfBlock);
         let with_hdr = base
             .clone()
             .code_block_header(CodeBlockHeader::IconAndLabel);
 
-        let k_base = super::document_measure_base_key(&base);
         assert_ne!(k_base, super::document_measure_base_key(&with_auto));
         assert_ne!(k_base, super::document_measure_base_key(&with_pad));
         assert_ne!(k_base, super::document_measure_base_key(&with_hdr));

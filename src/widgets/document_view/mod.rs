@@ -239,8 +239,9 @@ pub struct DocumentView {
     pub focus_content_style: Style,
     /// Style for selected text regions.
     pub selection_style: StyleSlot,
-    /// Per-element style overrides.
-    pub doc_styles: DocumentStyles,
+    /// Per-element styles. Crate-private so every write goes through a builder,
+    /// which decides whether the theme still applies.
+    pub(crate) doc_styles: DocumentStyles,
     /// Set by [`Self::doc_styles`]: use `doc_styles` exactly instead of
     /// patching it over the theme's document styles.
     pub(crate) doc_styles_exact: bool,
@@ -321,10 +322,6 @@ pub struct DocumentView {
     /// addresses: `trim_render_common_indent` creates new `Arc<str>`
     /// allocations every frame even when the text is identical.
     peer_source_fingerprint: Cell<Option<u64>>,
-    /// Lazily computed base portion of [`document_measure_cache_key`](layout::document_measure_cache_key),
-    /// covering all geometry fields except the mutable split-wrap sync state.
-    /// Tuple: `(key, content_fingerprint_guard)`.
-    pub(crate) measure_base_key_cache: Cell<Option<(u64, u64)>>,
     #[cfg(feature = "diff-view")]
     pub(crate) split_wrap_sync: Option<crate::widgets::diff_view::SharedSplitWrapSync>,
     #[cfg(feature = "diff-view")]
@@ -438,7 +435,6 @@ impl Default for DocumentView {
             copy_excluded_source_lines: None,
             peer_source_lines: None,
             peer_source_fingerprint: Cell::new(None),
-            measure_base_key_cache: Cell::new(None),
             #[cfg(feature = "diff-view")]
             split_wrap_sync: None,
             #[cfg(feature = "diff-view")]

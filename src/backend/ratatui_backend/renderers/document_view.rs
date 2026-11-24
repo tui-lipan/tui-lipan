@@ -24,8 +24,8 @@ use crate::style::{Rect, ScrollbarVariant, Style, Theme, ThemeRole, resolve_slot
 use crate::widgets::ColumnAlign;
 use crate::widgets::DocumentLineNumberMode;
 use crate::widgets::document_view::node::{
-    CODE_BLOCK_LEFT_INSET_COLS, DocumentTableRectSelection, DocumentViewNode, DocumentVisualLine,
-    TableBorderKind, VisualLineKind, span_width, visual_line_render_prefix_bytes,
+    DocumentTableRectSelection, DocumentViewNode, DocumentVisualLine, TableBorderKind,
+    VisualLineKind, span_width, visual_line_render_prefix_bytes,
 };
 use crate::widgets::table::{TableBorderLineKind, table_border_glyphs, table_border_line};
 
@@ -1039,6 +1039,7 @@ fn line_segments<'a>(
             spans,
             block_style,
             indent_cols,
+            left_inset,
             rect_width,
         } => {
             let effective = base_style.patch(*block_style);
@@ -1046,10 +1047,9 @@ fn line_segments<'a>(
             if *indent_cols > 0 {
                 segs.push((Cow::Owned(" ".repeat(*indent_cols as usize)), base_style));
             }
-            segs.push((
-                Cow::Owned(" ".repeat(CODE_BLOCK_LEFT_INSET_COLS as usize)),
-                effective,
-            ));
+            if *left_inset > 0 {
+                segs.push((Cow::Owned(" ".repeat(*left_inset as usize)), effective));
+            }
             for span in spans {
                 segs.push((
                     Cow::Borrowed(span.content.as_ref()),
@@ -1057,7 +1057,7 @@ fn line_segments<'a>(
                 ));
             }
             if style_paints_bg(effective) {
-                let used_cols = CODE_BLOCK_LEFT_INSET_COLS.saturating_add(span_width(spans));
+                let used_cols = left_inset.saturating_add(span_width(spans));
                 let trailing = rect_width.saturating_sub(used_cols);
                 if trailing > 0 {
                     segs.push((Cow::Owned(" ".repeat(trailing as usize)), effective));
@@ -1069,6 +1069,7 @@ fn line_segments<'a>(
             kind,
             block_style,
             indent_cols,
+            left_inset,
             rect_width,
         } => {
             let effective = base_style.patch(*block_style);
@@ -1103,10 +1104,9 @@ fn line_segments<'a>(
                 }
                 crate::widgets::document_view::node::CodeBlockChromeKind::Header { spans } => {
                     let header_base = effective.patch(doc_styles.code_block_header_style);
-                    segs.push((
-                        Cow::Owned(" ".repeat(CODE_BLOCK_LEFT_INSET_COLS as usize)),
-                        effective,
-                    ));
+                    if *left_inset > 0 {
+                        segs.push((Cow::Owned(" ".repeat(*left_inset as usize)), effective));
+                    }
                     for span in spans {
                         segs.push((
                             Cow::Borrowed(span.content.as_ref()),
@@ -1114,8 +1114,7 @@ fn line_segments<'a>(
                         ));
                     }
                     if style_paints_bg(effective) {
-                        let used_cols =
-                            CODE_BLOCK_LEFT_INSET_COLS.saturating_add(span_width(spans));
+                        let used_cols = left_inset.saturating_add(span_width(spans));
                         let trailing = rect_width.saturating_sub(used_cols);
                         if trailing > 0 {
                             segs.push((Cow::Owned(" ".repeat(trailing as usize)), effective));
@@ -1785,6 +1784,7 @@ mod tests {
                 spans: vec![crate::style::Span::new("hi")],
                 block_style,
                 indent_cols: 2,
+                left_inset: 1,
                 rect_width: 8,
             },
             source_line: 0,
@@ -1823,6 +1823,7 @@ mod tests {
                 kind: CodeBlockChromeKind::TopHalfBlock,
                 block_style,
                 indent_cols: 2,
+                left_inset: 1,
                 rect_width: 8,
             },
             source_line: 0,
@@ -1854,6 +1855,7 @@ mod tests {
                 spans: vec![crate::style::Span::new("hi")],
                 block_style,
                 indent_cols: 0,
+                left_inset: 1,
                 rect_width: 8,
             },
             source_line: 0,
@@ -1884,6 +1886,7 @@ mod tests {
                 kind,
                 block_style: Style::default(),
                 indent_cols: 0,
+                left_inset: 1,
                 rect_width: 8,
             },
             source_line: 3,
@@ -1893,6 +1896,7 @@ mod tests {
                 spans: vec![crate::style::Span::new("x")],
                 block_style: Style::default(),
                 indent_cols: 0,
+                left_inset: 1,
                 rect_width: 8,
             },
             source_line,
