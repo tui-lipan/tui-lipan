@@ -15,7 +15,7 @@ runs:
 
     # The sys crate's manifest pins the vendored source version, and build.rs, the patches and
     # versions.rs decide what gets built. Keep the Zig version in sync with ZIG_VERSION in
-    # ghostty-vt-sys/src/versions.rs and with the setup-zig step below.
+    # crates/ghostty-vt-sys/src/versions.rs and with the setup-zig step below.
     # Exact keys keep obsolete recipes out of future uploads and bound each CI cache to the
     # configurations built by this job. A recipe change deliberately gets a cold build.
     - name: Cache libghostty-vt
@@ -25,8 +25,8 @@ runs:
         path: ${{ runner.temp }}/ghostty-vt
         key: >-
           ghostty-vt-${{ runner.os }}-${{ runner.arch }}-zig0.17.1-${{ hashFiles(
-          'ghostty-vt-sys/Cargo.toml', 'ghostty-vt-sys/build.rs', 'ghostty-vt-sys/build/**',
-          'ghostty-vt-sys/patches/**', 'ghostty-vt-sys/src/versions.rs') }}
+          'crates/ghostty-vt-sys/Cargo.toml', 'crates/ghostty-vt-sys/build.rs', 'crates/ghostty-vt-sys/build/**',
+          'crates/ghostty-vt-sys/patches/**', 'crates/ghostty-vt-sys/src/versions.rs') }}
 
     # setup-zig verifies the tarball's minisign signature. Its own Zig caches are off: the build
     # script uses private ones and deletes them, and the installed library is cached above.

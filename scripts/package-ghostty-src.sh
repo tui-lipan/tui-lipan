@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Generates the vendored crate tree in ghostty-vt-src/ (tui-lipan-ghostty-vt-src) from the pinned
-# libghostty-vt release, with ghostty-vt-sys/patches/*.patch applied, then smoke-builds it offline
+# Generates the vendored crate tree in crates/ghostty-vt-src/ (tui-lipan-ghostty-vt-src) from the pinned
+# libghostty-vt release, with crates/ghostty-vt-sys/patches/*.patch applied, then smoke-builds it offline
 # with Zig and checks that the packaged crate stays under the size cap.
 #
 # Usage:
@@ -33,7 +33,7 @@ MAX_CRATE_BYTES=$((9 * 1024 * 1024))
 CRATE_NAME=tui-lipan-ghostty-vt-src
 
 root="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
-crate="$root/ghostty-vt-src"
+crate="$root/crates/ghostty-vt-src"
 dl="$root/target/ghostty-vt/dl"
 work="$root/target/ghostty-vt-src-work"
 smoke=1
@@ -63,11 +63,11 @@ step() { printf '==> %s\n' "$*"; }
 sha256_of() { sha256sum "$1" | cut -d' ' -f1; }
 
 grep -q "LIBGHOSTTY_VT_VERSION: &str = \"$VERSION\"" "$crate/src/lib.rs" || {
-  echo "ghostty-vt-src/src/lib.rs does not name libghostty-vt $VERSION" >&2
+  echo "crates/ghostty-vt-src/src/lib.rs does not name libghostty-vt $VERSION" >&2
   exit 1
 }
-grep -q "LIBGHOSTTY_VT_VERSION: &str = \"$VERSION\"" "$root/ghostty-vt-sys/src/versions.rs" || {
-  echo "ghostty-vt-sys/src/versions.rs does not name libghostty-vt $VERSION" >&2
+grep -q "LIBGHOSTTY_VT_VERSION: &str = \"$VERSION\"" "$root/crates/ghostty-vt-sys/src/versions.rs" || {
+  echo "crates/ghostty-vt-sys/src/versions.rs does not name libghostty-vt $VERSION" >&2
   exit 1
 }
 
@@ -123,7 +123,7 @@ deps="$work/libghostty-vt-$VERSION-deps"
 patches_manifest="$work/PATCHES"
 : >"$patches_manifest"
 shopt -s nullglob
-for patch in "$root"/ghostty-vt-sys/patches/*.patch; do
+for patch in "$root"/crates/ghostty-vt-sys/patches/*.patch; do
   rel="patches/$(basename "$patch")"
   patch --directory="$src" --batch --forward --fuzz=0 -p1 --quiet -i "$patch"
   printf '%s %s\n' "$rel" "$(sha256_of "$patch")" >>"$patches_manifest"
@@ -180,7 +180,7 @@ for e in entries:
 out.write_text("\n".join(lines) + "\n")
 PY
 
-step "Assembling ghostty-vt-src/"
+step "Assembling crates/ghostty-vt-src/"
 assemble() {
   local into="$1"
   rm -rf "$into/libghostty-vt" "$into/libghostty-vt-deps" "$into/PATCHES" "$into/THIRD_PARTY.md"
@@ -246,4 +246,4 @@ if [[ -n "$check_crate" ]]; then
 fi
 
 rm -rf "$work"
-step "Done: ghostty-vt-src/ is ready; publish with cargo publish --manifest-path ghostty-vt-src/Cargo.toml"
+step "Done: crates/ghostty-vt-src/ is ready; publish with cargo publish --manifest-path crates/ghostty-vt-src/Cargo.toml"

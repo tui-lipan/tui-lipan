@@ -8,7 +8,7 @@ set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 
 check_macro_and_rust_formatting() {
-    find src tests benches examples tui-lipan-macro -name '*.rs' -print0 \
+    find src tests benches examples crates/tui-lipan-macro -name '*.rs' -print0 \
         | xargs -0 -r ./scripts/format-rust-with-macros --check
 }
 

@@ -26,7 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # and the docs tree, which is packaged inside the published crate.
 DOC_ROOTS = [
     ROOT / "README.md",
-    ROOT / "tui-lipan-macro" / "README.md",
+    ROOT / "crates" / "tui-lipan-macro" / "README.md",
     ROOT / "docs",
 ]
 

@@ -123,8 +123,8 @@ jobs:
           grep -Fqx "version = \"$VERSION\"" <(grep '^version = ' Cargo.toml) \
             || { echo "Cargo.toml version does not match tag $GITHUB_REF_NAME"; exit 1; }
           grep -Fqx "version = \"$VERSION\"" \
-            <(grep '^version = ' tui-lipan-macro/Cargo.toml) \
-            || { echo "tui-lipan-macro/Cargo.toml version does not match tag $GITHUB_REF_NAME"; exit 1; }
+            <(grep '^version = ' crates/tui-lipan-macro/Cargo.toml) \
+            || { echo "crates/tui-lipan-macro/Cargo.toml version does not match tag $GITHUB_REF_NAME"; exit 1; }
           grep -Fq "version = \"$VERSION\"" <(grep 'tui-lipan-macro = ' Cargo.toml) \
             || { echo "tui-lipan-macro dependency version in Cargo.toml does not match tag"; exit 1; }
 

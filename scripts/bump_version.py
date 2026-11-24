@@ -27,7 +27,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 ROOT_MANIFEST = ROOT / "Cargo.toml"
-MACRO_MANIFEST = ROOT / "tui-lipan-macro" / "Cargo.toml"
+MACRO_MANIFEST = ROOT / "crates" / "tui-lipan-macro" / "Cargo.toml"
 
 # The release workflow only accepts stable `X.Y.Z` tags.
 VERSION_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")

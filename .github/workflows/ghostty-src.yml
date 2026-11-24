@@ -6,9 +6,9 @@ name: libghostty-vt source
 on:
   pull_request:
     paths:
-      - ghostty-vt-src/**
-      - ghostty-vt-sys/Cargo.toml
-      - ghostty-vt-sys/patches/**
+      - crates/ghostty-vt-src/**
+      - crates/ghostty-vt-sys/Cargo.toml
+      - crates/ghostty-vt-sys/patches/**
       - scripts/package-ghostty-src.sh
       - .github/workflows/ghostty-src.yml
   schedule:
@@ -43,10 +43,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' ghostty-vt-src/Cargo.toml | head -n 1)"
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' crates/ghostty-vt-src/Cargo.toml | head -n 1)"
           numeric="${version%%+*}"
-          grep -Fq "tui-lipan-ghostty-vt-src = \"=$numeric\"" ghostty-vt-sys/Cargo.toml || {
-            echo "::error::ghostty-vt-sys/Cargo.toml must pin tui-lipan-ghostty-vt-src = \"=$numeric\""
+          grep -Fq "tui-lipan-ghostty-vt-src = \"=$numeric\"" crates/ghostty-vt-sys/Cargo.toml || {
+            echo "::error::crates/ghostty-vt-sys/Cargo.toml must pin tui-lipan-ghostty-vt-src = \"=$numeric\""
             exit 1
           }
           status="$(curl -s -o /dev/null -w '%{http_code}' -A 'tui-lipan CI (github.com/tui-lipan/tui-lipan)' \

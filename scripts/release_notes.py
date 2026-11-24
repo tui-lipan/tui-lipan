@@ -22,7 +22,7 @@ STRAIGHT_QUOTES = str.maketrans({"“": '"', "”": '"', "‘": "'", "’": "'"}
 RELEASE_METADATA_PATHS = {
     "Cargo.lock",
     "Cargo.toml",
-    "tui-lipan-macro/Cargo.toml",
+    "crates/tui-lipan-macro/Cargo.toml",
 }
 SUMMARY_MAX_CHARS = 4_000
 # Reviewer-facing sections that never reach the notes, whichever section a PR uses for its summary.

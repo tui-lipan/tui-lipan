@@ -475,7 +475,7 @@ let same_rows = rsx! {
 ### Editor Snippets
 
 The canonical VS Code/Cursor snippet pack lives at
-`tui-lipan-macro/snippets/vscode.code-snippets`.
+`crates/tui-lipan-macro/snippets/vscode.code-snippets`.
 
 This format is compatible with:
 
@@ -490,7 +490,7 @@ Example:
 
 ```bash
 mkdir -p .vscode
-ln -s ../tui-lipan-macro/snippets/vscode.code-snippets .vscode/tui-lipan.code-snippets
+ln -s ../crates/tui-lipan-macro/snippets/vscode.code-snippets .vscode/tui-lipan.code-snippets
 ```
 
 Other editors do not consume `.code-snippets` directly, but this file is still
