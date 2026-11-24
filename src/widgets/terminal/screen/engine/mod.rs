@@ -41,18 +41,19 @@ pub(in crate::widgets::terminal) use semantic::SemanticTestDriver;
 
 /// The emulator behind a [`TerminalScreen`](super::TerminalScreen).
 ///
-/// Unstable: selects the experimental libghostty-vt engine (feature `terminal-ghostty`) through
-/// [`TerminalScreen::with_engine`](super::TerminalScreen::with_engine).
 /// [`TerminalScreen::new`](super::TerminalScreen::new) always uses
-/// [`TerminalEngineKind::Alacritty`].
-#[doc(hidden)]
+/// [`TerminalEngineKind::Alacritty`]; pass another kind to
+/// [`TerminalScreen::with_engine`](super::TerminalScreen::with_engine). Every `TerminalScreen`
+/// method has the same contract with either engine; the terminal widget guide lists where what
+/// they report differs.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TerminalEngineKind {
     /// `alacritty_terminal`, the default.
     #[default]
     Alacritty,
-    /// libghostty-vt 1.0.2, built through `tui-lipan-ghostty-vt-sys`. Experimental.
+    /// libghostty-vt 1.0.2, the VT core of the Ghostty terminal, built with Zig through
+    /// `tui-lipan-ghostty-vt-sys`. Needs the `terminal-ghostty` feature.
     #[cfg(feature = "terminal-ghostty")]
     Ghostty,
 }

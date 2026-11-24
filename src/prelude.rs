@@ -145,7 +145,7 @@ pub use crate::widgets::SyntectStrategy;
 
 #[cfg(feature = "terminal")]
 pub use crate::widgets::{
-    ManagedTerminal, ManagedTerminalStatus, Terminal, TerminalInputEvent, TerminalLinkEvent,
-    TerminalPty, TerminalPtyConfig, TerminalPtyEvent, TerminalRenderSnapshot, TerminalScreen,
-    TerminalSelectionEvent, TerminalViewport,
+    ManagedTerminal, ManagedTerminalStatus, Terminal, TerminalEngineKind, TerminalInputEvent,
+    TerminalLinkEvent, TerminalPty, TerminalPtyConfig, TerminalPtyEvent, TerminalRenderSnapshot,
+    TerminalScreen, TerminalSelectionEvent, TerminalViewport,
 };

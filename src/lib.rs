@@ -287,7 +287,6 @@ pub use crate::utils::SelectionEnd;
 pub use crate::utils::gradient::{ColorGradient, GradientDirection, GradientRange};
 pub use crate::validation::{StringValidator, ValidationError, Validator};
 #[cfg(feature = "terminal")]
-#[doc(hidden)]
 pub use crate::widgets::TerminalEngineKind;
 #[cfg(all(feature = "terminal", unix))]
 pub use crate::widgets::TerminalPtyHandoff;

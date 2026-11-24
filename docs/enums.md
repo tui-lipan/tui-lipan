@@ -615,6 +615,18 @@ default cursor. Pass it to `TerminalScreen::set_default_cursor_style` to overrid
 without replacing explicit cursor requests from the child program. It is exported from the crate
 root and `tui_lipan::style`.
 
+### `TerminalEngineKind`
+
+The emulator behind a `TerminalScreen` (feature `terminal`). `#[non_exhaustive]`. Pass it to
+`TerminalScreen::with_engine`; `TerminalScreen::new` always uses the default.
+
+| Variant | Description |
+|---------|-------------|
+| `TerminalEngineKind::Alacritty` | `alacritty_terminal` **(default)** |
+| `TerminalEngineKind::Ghostty` | libghostty-vt, the VT core of Ghostty. Needs feature `terminal-ghostty` and Zig 0.17.x to build |
+
+See [Ghostty engine](widgets/terminal.md#ghostty-engine) for how the engines differ.
+
 ### `CaretPalette`
 
 Global caret defaults for editable text-entry widgets. `ThemePalette` derives

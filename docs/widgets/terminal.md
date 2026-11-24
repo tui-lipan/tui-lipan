@@ -497,7 +497,9 @@ This is intentionally a low-level Unix-only escape hatch for multiplexers and se
 
 ## TerminalScreen
 
-VT100/VT220 screen emulator (wraps `alacritty_terminal`). Maintains scrollback buffer.
+VT100/VT220 screen emulator. Maintains scrollback buffer. It wraps `alacritty_terminal` by
+default; with the `terminal-ghostty` feature, `TerminalScreen::with_engine` can select
+libghostty-vt instead (see [Ghostty engine](#ghostty-engine)).
 
 ```rust
 use tui_lipan::TerminalColorPalette;
@@ -1491,20 +1493,28 @@ newest rows that were read. When the first scrolled page cannot be aligned, the 
 Use `TerminalScreen::is_alternate_screen()` to choose this reader instead of ordinary scrollback
 export. The reader enforces traversal and restoration deadlines and bounds retained pages and text.
 
-## Experimental Ghostty engine
+## Ghostty engine
 
 The `terminal-ghostty` feature adds a second emulator for `TerminalScreen`:
 [libghostty-vt](https://lib.ghostty.org/vt/) 1.0.2, the VT core of the Ghostty
-terminal. It is opt-in and unstable. `TerminalScreen::new` always uses the default
-`alacritty_terminal` engine; select Ghostty with the doc-hidden
-`TerminalScreen::with_engine(TerminalEngineKind::Ghostty, rows, cols, scrollback)`.
+terminal. It is opt-in. `TerminalScreen::new` always uses the default
+`alacritty_terminal` engine; select Ghostty with
+`TerminalScreen::with_engine(TerminalEngineKind::Ghostty, rows, cols, scrollback)`:
+
+```rust
+use tui_lipan::{TerminalEngineKind, TerminalScreen};
+
+let screen = TerminalScreen::with_engine(TerminalEngineKind::Ghostty, rows, cols, scrollback)
+    .with_grapheme_clustering(false);
+```
+
 Every other `TerminalScreen` method has the same contract with either engine, and
 what it reports is the same except for the differences listed below. With either
 engine, the state depends only on the bytes and the host's operations: never on how
 `process_bytes` calls split the output, and never on reads such as
 `export_last_command_output` or `write_replay_bytes`.
 
-Two doc-hidden methods matter only with Ghostty (the default engine ignores them):
+Two methods matter only with Ghostty (the default engine ignores them):
 
 - `with_grapheme_clustering(bool)` sets the initial and reset value of DEC mode
   2027. It is off by default, because legacy shell cursor arithmetic can disagree
@@ -1522,6 +1532,9 @@ Two doc-hidden methods matter only with Ghostty (the default engine ignores them
   answers more DECRQM, DECRQSS and XTGETTCAP queries.
 - After a reflowing resize, a viewport scrolled into history stays on the line it
   showed.
+- When a narrowing resize wraps the cursor's line and everything still fits on the
+  screen, Ghostty keeps the lines above it visible; Alacritty scrolls them into
+  history.
 - A cell a tab skipped holds a space, not the tab, so copied text has spaces.
 - SGR 31 and SGR 38;5;1 are stored alike, as palette index 1.
 - A replay export does not reopen the OSC 8 hyperlink of the cursor's pen.
