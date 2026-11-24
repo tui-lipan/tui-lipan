@@ -347,3 +347,101 @@ fn changing_the_configuration_keeps_a_stateful_trigger_mounted() {
         );
     }
 }
+
+/// A tooltip as the root element, so its auto-sized trigger is handed the whole viewport.
+struct RootTooltip {
+    delay: Duration,
+    open: Option<bool>,
+}
+
+impl Component for RootTooltip {
+    type Properties = ();
+    type State = ();
+    type Message = ();
+    fn create_state(&self, _: &()) {}
+    fn update(&mut self, (): (), _: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+    fn view(&self, _: &Context<Self>) -> Element {
+        let mut tooltip = Tooltip::new("Description")
+            .delay(self.delay)
+            .placement(PopoverPlacement::BelowStart)
+            .child(Text::new("Hello").width(Length::Auto).height(Length::Auto));
+        if let Some(open) = self.open {
+            tooltip = tooltip.open(open);
+        }
+        tooltip.into()
+    }
+}
+
+fn root_tooltip(delay: Duration, open: Option<bool>) -> TestBackend<RootTooltip> {
+    let mut backend = TestBackend::new(RootTooltip { delay, open });
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 30,
+        h: 6,
+    });
+    backend.render();
+    backend
+}
+
+fn move_to<C: Component>(backend: &mut TestBackend<C>, x: u16, y: u16) {
+    backend
+        .send_mouse(MouseEvent {
+            x,
+            y,
+            kind: MouseKind::Moved,
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.pump().unwrap();
+    backend.render();
+}
+
+fn rect_of<C: Component>(backend: &TestBackend<C>, label: &str) -> Option<Rect> {
+    backend
+        .capture_ui_snapshot()
+        .widgets
+        .iter()
+        .find(|widget| widget.label.as_deref() == Some(label))
+        .map(|widget| widget.rect)
+}
+
+#[test]
+fn an_auto_sized_trigger_anchors_the_tooltip_to_itself_not_its_allocation() {
+    let backend = root_tooltip(Duration::ZERO, Some(true));
+    let hello = rect_of(&backend, "Hello").unwrap();
+    let tooltip = rect_of(&backend, "Description").expect("tooltip must show");
+    assert_eq!((hello.w, hello.h), (5, 1));
+    assert_eq!(
+        tooltip.y,
+        hello.y + 1,
+        "directly below the text: {tooltip:?}"
+    );
+    assert!(tooltip.h > 0);
+}
+
+#[test]
+fn a_hover_revealed_tooltip_lands_where_an_open_one_does() {
+    let open = rect_of(&root_tooltip(Duration::ZERO, Some(true)), "Description").unwrap();
+
+    let mut backend = root_tooltip(DELAY, None);
+    let hello = rect_of(&backend, "Hello").unwrap();
+    move_to(&mut backend, hello.x as u16, hello.y as u16);
+    backend.advance(DELAY + STEP);
+    backend.pump().unwrap();
+    backend.render();
+    assert_eq!(rect_of(&backend, "Description"), Some(open));
+}
+
+#[test]
+fn hovering_the_allocation_outside_the_trigger_opens_nothing() {
+    let mut backend = root_tooltip(DELAY, None);
+    let hello = rect_of(&backend, "Hello").unwrap();
+    move_to(&mut backend, 20, hello.y as u16 + 3);
+    backend.advance(DELAY + STEP);
+    backend.pump().unwrap();
+    backend.render();
+    assert!(rect_of(&backend, "Description").is_none());
+}

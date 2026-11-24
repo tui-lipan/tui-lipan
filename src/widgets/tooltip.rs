@@ -383,9 +383,12 @@ impl Component for TooltipComponent {
         let delayed = ctx.props.delays_hover();
         // The trigger always sits in the same region, whatever the configuration: adding or
         // removing a wrapper would change the child's container path and remount a stateful
-        // trigger. Only the hover callback comes and goes, and the region takes the child's sizing
-        // so a flexible child stays flexible.
-        let mut region = MouseRegion::new().child(ctx.props.child.clone());
+        // trigger. Only the hover callback comes and goes. The region takes the child's sizing, so a
+        // flexible child stays flexible, and its reconciled rectangle, so the popup anchors to the
+        // child and hover counts only over it.
+        let mut region = MouseRegion::new()
+            .child(ctx.props.child.clone())
+            .fitted_to_child();
         if delayed {
             region = region.on_hover_change(ctx.link().callback(TooltipMsg::Hover));
         }

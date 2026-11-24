@@ -50,6 +50,10 @@ pub struct MouseRegion {
     pub(crate) hover_style: StyleSlot,
     pub(crate) hover_effects: Vec<VisualEffect>,
     pub(crate) enabled: bool,
+    /// Shrink to the child's reconciled rectangle instead of keeping the whole allocation, so the
+    /// region is geometrically transparent: for wrappers the framework inserts around an app's
+    /// element, such as a tooltip's trigger.
+    pub(crate) fit_child: bool,
 }
 
 impl MouseRegion {
@@ -276,6 +280,12 @@ impl MouseRegion {
         self
     }
 
+    /// Take the child's reconciled rectangle as this region's own, as `fit_child` describes.
+    pub(crate) fn fitted_to_child(mut self) -> Self {
+        self.fit_child = true;
+        self
+    }
+
     /// Disable/enable click, move, and hover behavior.
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.enabled = !disabled;
@@ -302,6 +312,7 @@ impl crate::layout::hash::LayoutHash for MouseRegion {
     ) -> Option<()> {
         use std::hash::Hash;
         self.enabled.hash(hasher);
+        self.fit_child.hash(hasher);
         self.on_click.is_some().hash(hasher);
         self.on_context_menu.is_some().hash(hasher);
         self.on_middle_click.is_some().hash(hasher);

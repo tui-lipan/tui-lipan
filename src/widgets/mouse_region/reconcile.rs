@@ -63,8 +63,15 @@ pub(crate) fn reconcile_mouse_region(
         },
     );
 
+    let fitted = region
+        .fit_child
+        .then(|| new_children.first().map(|child| tree.node(*child).rect))
+        .flatten();
     let node = tree.node_mut(id);
     node.children = new_children;
+    if let Some(child_rect) = fitted {
+        node.rect = child_rect;
+    }
 
     id
 }
