@@ -30,7 +30,7 @@ pub(crate) struct Decoded {
     pub hyperlink: bool,
 }
 
-/// Bit layout of `GhosttyCell` in libghostty-vt 1.0.1 (`ghostty_type_json()`, kind `packed`).
+/// Bit layout of `GhosttyCell` in libghostty-vt 1.0.2 (`ghostty_type_json()`, kind `packed`).
 pub(crate) mod layout {
     pub const CONTENT_TAG: (u32, u32) = (0, 2);
     pub const CONTENT: (u32, u32) = (2, 24);
@@ -156,7 +156,7 @@ mod tests {
     fn packed_layout_matches_the_linked_library() {
         assert_eq!(
             super::super::library_version(),
-            "1.0.1",
+            "1.0.2",
             "re-check the packed layout"
         );
         for cell in sample_cells() {

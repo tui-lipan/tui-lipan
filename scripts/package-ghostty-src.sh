@@ -18,16 +18,16 @@
 # work behind the workspace's [patch.crates-io] entry, never committed.
 set -euo pipefail
 
-VERSION=1.0.1
+VERSION=1.0.2
 ZIG_SERIES=0.17
 BASE_URL="https://release.files.ghostty.org/libghostty-vt/$VERSION"
 # Ghostty's release key (PACKAGING-LIBGHOSTTY.md).
 MINISIGN_KEY="RWQlAjJC23149WL2sEpT/l0QKy7hMIFhYdQOFy0Z7z7PbneUgvlsnYcV"
 # From the release's SHA256SUMS.
 SOURCE_TARBALL="libghostty-vt-$VERSION.tar.gz"
-SOURCE_SHA256=333dfce97641ef9b536bb9e08907ad86abaaada50e8f7417b70d9284adef37aa
+SOURCE_SHA256=1dcafa8a3357f3a6bbf4f2696e61de611400c5469518716793dfffd35f008b3e
 DEPS_TARBALL="libghostty-vt-$VERSION-deps.tar.gz"
-DEPS_SHA256=91a4e10960a52bf5bf4b15aa2a2cddaff8a89d6cd903d3055bda4fd17de3356d
+DEPS_SHA256=c56156dbea82fdf71f13bf0d704cdf4393b6a04208d7f9691e0d7f60c7f9ca4d
 # crates.io rejects uploads over 10 MiB; keep 1 MiB of headroom for upstream growth.
 MAX_CRATE_BYTES=$((9 * 1024 * 1024))
 CRATE_NAME=tui-lipan-ghostty-vt-src
