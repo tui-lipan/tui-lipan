@@ -185,7 +185,7 @@ pub use document_view::{
     FormattedLine, PlainFormatter, TableRowSeparators,
 };
 #[cfg(feature = "markdown")]
-pub use document_view::{MarkdownFormatter, MarkdownSpacing};
+pub use document_view::{MarkdownFormatter, MarkdownSpacing, SourceSpacing};
 pub use drag_drop::{
     DEFAULT_PREVIEW_MAX_HEIGHT, DEFAULT_PREVIEW_MAX_WIDTH, DragCancelEvent, DragLeaveEvent,
     DragOverEvent, DragPayload, DragPreview, DragSlot, DragSlotAxis, DragSource, DragStartEvent,

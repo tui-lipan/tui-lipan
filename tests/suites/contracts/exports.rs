@@ -75,9 +75,12 @@ fn crate_root_exports_image_feature_items() {
 #[cfg(feature = "markdown")]
 #[test]
 fn crate_root_exports_markdown_feature_items() {
-    use tui_lipan::{MarkdownFormatter, MarkdownSpacing};
+    use tui_lipan::{MarkdownFormatter, MarkdownSpacing, SourceSpacing};
     let _ = std::any::type_name::<MarkdownFormatter>();
-    let _ = MarkdownSpacing::default();
+    let _ = MarkdownSpacing {
+        heading_after: SourceSpacing::Never,
+        ..MarkdownSpacing::BALANCED
+    };
 }
 
 #[cfg(feature = "qr-code")]

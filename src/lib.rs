@@ -408,7 +408,7 @@ pub use crate::widgets::{
 #[cfg(feature = "image")]
 pub use crate::widgets::{Image, ImageFit, ImagePlayback, ImageProtocol, ImageRepeat, ImageSource};
 #[cfg(feature = "markdown")]
-pub use crate::widgets::{MarkdownFormatter, MarkdownSpacing};
+pub use crate::widgets::{MarkdownFormatter, MarkdownSpacing, SourceSpacing};
 #[cfg(feature = "qr-code")]
 pub use crate::widgets::{QrCode, QrEcc, QrRender};
 #[cfg(feature = "syntax-syntect")]
