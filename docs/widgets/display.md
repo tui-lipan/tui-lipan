@@ -100,7 +100,11 @@ display content differs from source text.
 | `extend_selection_style` / `inherit_selection_style` | `Style` / `()` | Extend or inherit the text-selection theme role instead of replacing it |
 | `highlight_full_width` | `bool` | Extend per-line background highlights across full content width |
 | `doc_styles` | `DocumentStyles` | Element styles (heading/code/link/table/hr/diagram/etc.) |
-| `code_block_style` | `Style` | Shortcut - sets `doc_styles.code_block_style` |
+| `code_block_style` | `Style` | Shortcut - sets `doc_styles.code_block_style` (merged over active theme) |
+| `code_block_header_style` | `Style` | Shortcut - sets `doc_styles.code_block_header_style` for language header labels |
+| `code_block_width` | `Length` | Width of fenced code-block background rectangles (`Flex(1)` default, `Auto`, `Px(n)`, `Percent(p)`) |
+| `code_block_padding` | `CodeBlockPadding` | Vertical padding around fenced code blocks (`None` default, `HalfBlock`, `Full`) |
+| `code_block_header` | `CodeBlockHeader` | Language header row at top of fenced code blocks (`None` default, `Label`, `IconAndLabel`) |
 | `scroll_offset` | `usize` | Controlled vertical scroll offset |
 | `scroll_to_source_line` | `usize` | Scroll-sync target source line |
 | `scroll_behavior` | `ScrollBehavior` | `Instant` by default; opt into smooth `scroll_to_source_line` movement |

@@ -409,9 +409,13 @@ pub fn reconcile_document_view(
             dv_node.table_row_separators.hash(&mut h);
             dv_node.table_cell_padding.hash(&mut h);
             dv_node.table_border_variant.hash(&mut h);
+            dv_node.code_block_width.hash(&mut h);
+            dv_node.code_block_padding.hash(&mut h);
+            dv_node.code_block_header.hash(&mut h);
             dv_node.doc_styles.heading_styles.hash(&mut h);
             dv_node.doc_styles.code_inline_style.hash(&mut h);
             dv_node.doc_styles.code_block_style.hash(&mut h);
+            dv_node.doc_styles.code_block_header_style.hash(&mut h);
             dv_node.doc_styles.emphasis_style.hash(&mut h);
             dv_node.doc_styles.strong_style.hash(&mut h);
             dv_node.doc_styles.strikethrough_style.hash(&mut h);
@@ -427,6 +431,8 @@ pub fn reconcile_document_view(
             dv_node.doc_styles.diagram_node_label_style.hash(&mut h);
             dv_node.doc_styles.diagram_edge_style.hash(&mut h);
             dv_node.doc_styles.diagram_muted_style.hash(&mut h);
+            dv_node.doc_styles.diff_palette.hash(&mut h);
+            dv_node.doc_styles.file_icons.hash(&mut h);
             h.finish()
         };
         #[cfg(feature = "diff-view")]

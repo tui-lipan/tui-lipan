@@ -992,6 +992,9 @@ Source: `src/widgets/document_view/mod.rs` (`DocumentView`).
 | `table_row_separators` | `TableRowSeparators::default()` |
 | `table_cell_padding` | `0` |
 | `table_border_variant` | `BorderStyle::Plain` |
+| `code_block_width` | `Length::Flex(1)` |
+| `code_block_padding` | `CodeBlockPadding::None` |
+| `code_block_header` | `CodeBlockHeader::None` |
 | `style` | `Style::default()` |
 | `hover_style` | `StyleSlot::Inherit` |
 | `focus_style` | `StyleSlot::Inherit` |

@@ -110,6 +110,34 @@ pub enum TableRowSeparators {
     All,
 }
 
+/// Vertical padding rendered above and below fenced code blocks.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum CodeBlockPadding {
+    /// No extra vertical padding rows (default).
+    #[default]
+    None,
+    /// Half-cell vertical cushion using `▄` above and `▀` below in the code
+    /// block's background color over the surrounding canvas background.
+    HalfBlock,
+    /// One blank row painted in the code block's background color above and below.
+    Full,
+}
+
+/// Optional header row rendered at the top of fenced code blocks when a
+/// language tag is present.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum CodeBlockHeader {
+    /// Do not render a language header row (default).
+    #[default]
+    None,
+    /// Render the fence language label (for example `rust` or `sh`).
+    Label,
+    /// Render the language's Nerd Font icon (from [`crate::style::FileIconPalette`])
+    /// followed by the language label (for example ` rust`), falling back to
+    /// the plain label when no icon is registered for that language.
+    IconAndLabel,
+}
+
 /// A read-only rich text document viewer with pluggable formatting.
 ///
 /// # Example
@@ -190,6 +218,15 @@ pub struct DocumentView {
     /// Border glyph variant used for table lines.
     /// Default: `BorderStyle::Plain`.
     pub table_border_variant: BorderStyle,
+    /// Width of fenced code-block background rectangles.
+    /// Default: `Length::Flex(1)`.
+    pub code_block_width: Length,
+    /// Vertical padding rendered above and below fenced code blocks.
+    /// Default: [`CodeBlockPadding::None`].
+    pub code_block_padding: CodeBlockPadding,
+    /// Optional language header rendered at the top of fenced code blocks.
+    /// Default: [`CodeBlockHeader::None`].
+    pub code_block_header: CodeBlockHeader,
 
     // ── Styling ──────────────────────────────────────────────────────────
     /// Base text style.
@@ -357,6 +394,9 @@ impl Default for DocumentView {
             table_row_separators: TableRowSeparators::default(),
             table_cell_padding: 0,
             table_border_variant: BorderStyle::Plain,
+            code_block_width: Length::Flex(1),
+            code_block_padding: CodeBlockPadding::None,
+            code_block_header: CodeBlockHeader::None,
             style: Style::default(),
             hover_style: StyleSlot::Inherit,
             focus_style: StyleSlot::Inherit,
@@ -723,6 +763,36 @@ impl DocumentView {
         self
     }
 
+    /// Set style applied to code block language header rows.
+    pub fn code_block_header_style(mut self, style: Style) -> Self {
+        self.doc_styles.code_block_header_style = style;
+        self
+    }
+
+    /// Set the width of fenced code-block background rectangles.
+    ///
+    /// `Length::Flex(1)` (the default) stretches each code block across the
+    /// available content width; `Length::Auto` hugs the widest line (including
+    /// the language header when enabled); `Length::Px(n)` and
+    /// `Length::Percent(p)` size the rectangle to a fixed column count or
+    /// fraction of the available width.
+    pub fn code_block_width(mut self, width: impl Into<Length>) -> Self {
+        self.code_block_width = width.into();
+        self
+    }
+
+    /// Set vertical padding rendered above and below fenced code blocks.
+    pub fn code_block_padding(mut self, padding: CodeBlockPadding) -> Self {
+        self.code_block_padding = padding;
+        self
+    }
+
+    /// Set the language header style rendered at the top of fenced code blocks.
+    pub fn code_block_header(mut self, header: CodeBlockHeader) -> Self {
+        self.code_block_header = header;
+        self
+    }
+
     /// Set explicit scroll offset (controlled mode).
     pub fn scroll_offset(mut self, offset: usize) -> Self {
         self.scroll_offset = Some(offset);
@@ -1058,7 +1128,7 @@ impl crate::layout::hash::LayoutHash for DocumentView {
             crate::widgets::diff_view::split_wrap_layout_pass(sync).hash(hasher);
         }
 
-        // Table layout properties that affect height.
+        // Table & code-block layout properties that affect dimensions.
         self.table_wrap.hash(hasher);
         self.table_width_mode.hash(hasher);
         self.table_outer_frame.hash(hasher);
@@ -1066,6 +1136,9 @@ impl crate::layout::hash::LayoutHash for DocumentView {
         self.table_row_separators.hash(hasher);
         self.table_cell_padding.hash(hasher);
         self.table_border_variant.hash(hasher);
+        self.code_block_width.hash(hasher);
+        self.code_block_padding.hash(hasher);
+        self.code_block_header.hash(hasher);
 
         Some(())
     }

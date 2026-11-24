@@ -26,6 +26,7 @@ pub(crate) mod text;
 
 pub use file_icons::{
     FileIconOverride, directory_icon, directory_icon_span, file_icon, file_icon_span,
+    language_icon, language_icon_span,
 };
 pub use open_url::{OpenUrlError, open_url};
 pub use sanitize::{sanitize_display_span, sanitize_display_spans, sanitize_display_text};

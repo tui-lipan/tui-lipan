@@ -1883,3 +1883,27 @@ Whether a Markdown block boundary gets a blank row, used by `MarkdownSpacing` fi
 | `Always` | Always insert a blank row |
 
 Available from the crate root (`tui_lipan::SourceSpacing`).
+
+## CodeBlockPadding
+
+Vertical padding rendered above and below fenced code blocks in `DocumentView::code_block_padding(...)`:
+
+| Variant | Behavior |
+|---------|----------|
+| `None` **(default)** | No extra vertical padding rows |
+| `HalfBlock` | Half-cell top (`▄`) and bottom (`▀`) extensions painted in the code block's background color over the surrounding canvas background |
+| `Full` | One blank row painted in the code block's background color above and below |
+
+Available from the crate root (`tui_lipan::CodeBlockPadding`).
+
+## CodeBlockHeader
+
+Optional language header row rendered at the top of fenced code blocks in `DocumentView::code_block_header(...)`:
+
+| Variant | Behavior |
+|---------|----------|
+| `None` **(default)** | Do not render a language header row |
+| `Label` | Render the fence language tag (for example `rust` or `sh`) when present |
+| `IconAndLabel` | Render the matching Nerd Font icon from `Theme::file_icons` (via `utils::language_icon_span`) followed by the language label, falling back to the plain label when no icon is registered |
+
+Available from the crate root (`tui_lipan::CodeBlockHeader`).

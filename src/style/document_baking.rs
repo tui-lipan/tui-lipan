@@ -50,8 +50,49 @@ fn apply_document_theme_carve_out_in_place(theme: &Theme, el: &mut Element) {
 }
 
 fn apply_document_styles(styles: &mut DocumentStyles, theme: &Theme) {
-    if *styles == DocumentStyles::default() {
-        *styles = DocumentStyles::from_theme(theme);
+    let themed = DocumentStyles::from_theme(theme);
+    for (slot, default_slot) in styles
+        .heading_styles
+        .iter_mut()
+        .zip(themed.heading_styles.iter())
+    {
+        *slot = default_slot.patch(*slot);
+    }
+    styles.code_inline_style = themed.code_inline_style.patch(styles.code_inline_style);
+    styles.code_block_style = themed.code_block_style.patch(styles.code_block_style);
+    styles.code_block_header_style = themed
+        .code_block_header_style
+        .patch(styles.code_block_header_style);
+    styles.emphasis_style = themed.emphasis_style.patch(styles.emphasis_style);
+    styles.strong_style = themed.strong_style.patch(styles.strong_style);
+    styles.strikethrough_style = themed.strikethrough_style.patch(styles.strikethrough_style);
+    styles.link_style = themed.link_style.patch(styles.link_style);
+    styles.blockquote_bar_style = themed
+        .blockquote_bar_style
+        .patch(styles.blockquote_bar_style);
+    styles.table_border_style = themed.table_border_style.patch(styles.table_border_style);
+    styles.table_header_style = themed.table_header_style.patch(styles.table_header_style);
+    styles.hr_style = themed.hr_style.patch(styles.hr_style);
+    styles.list_item_style = themed.list_item_style.patch(styles.list_item_style);
+    styles.list_enumeration_style = themed
+        .list_enumeration_style
+        .patch(styles.list_enumeration_style);
+    styles.diagram_node_fill_style = themed
+        .diagram_node_fill_style
+        .patch(styles.diagram_node_fill_style);
+    styles.diagram_node_border_style = themed
+        .diagram_node_border_style
+        .patch(styles.diagram_node_border_style);
+    styles.diagram_node_label_style = themed
+        .diagram_node_label_style
+        .patch(styles.diagram_node_label_style);
+    styles.diagram_edge_style = themed.diagram_edge_style.patch(styles.diagram_edge_style);
+    styles.diagram_muted_style = themed.diagram_muted_style.patch(styles.diagram_muted_style);
+    if styles.diff_palette == crate::style::DiffPalette::default() {
+        styles.diff_palette = themed.diff_palette;
+    }
+    if styles.file_icons == crate::style::FileIconPalette::default() {
+        styles.file_icons = themed.file_icons;
     }
 }
 

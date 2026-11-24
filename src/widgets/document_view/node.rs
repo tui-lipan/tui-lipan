@@ -9,7 +9,7 @@ use crate::core::node::{
     NodeKind, ScrollbarZone, ScrollbarZonesParams, WidgetNode, compute_scrollbar_zones,
 };
 use crate::style::{
-    BorderStyle, Padding, Rect, ScrollbarVariant, Span, Style, StyleSlot, Theme, ThemeRole,
+    BorderStyle, Length, Padding, Rect, ScrollbarVariant, Span, Style, StyleSlot, Theme, ThemeRole,
 };
 use crate::widgets::context_menu::ContextMenuHit;
 
@@ -39,8 +39,9 @@ use crate::widgets::table::{
 
 use super::format::FormatCache;
 use super::{
-    DocumentClickEvent, DocumentLineNumberMode, DocumentSelectEvent, DocumentStyles,
-    DocumentTableWidthMode, DocumentView, FormattedDocument, FormattedLink,
+    CodeBlockHeader, CodeBlockPadding, DocumentClickEvent, DocumentLineNumberMode,
+    DocumentSelectEvent, DocumentStyles, DocumentTableWidthMode, DocumentView, FormattedDocument,
+    FormattedLink,
 };
 
 /// The visual-line kind after block flattening.
@@ -88,6 +89,18 @@ pub(crate) enum VisualLineKind {
     CodeLine {
         spans: Vec<Span>,
         block_style: Style,
+        /// Leading container indentation (e.g. list nesting) painted with canvas background.
+        indent_cols: u16,
+        /// Target background rectangle width in columns (starting after `indent_cols`).
+        rect_width: u16,
+    },
+    /// Non-selectable decorative row belonging to a fenced code block (vertical
+    /// padding or language header).
+    CodeBlockChrome {
+        kind: CodeBlockChromeKind,
+        block_style: Style,
+        indent_cols: u16,
+        rect_width: u16,
     },
     /// A rendered row from a parsed Mermaid diagram.
     DiagramRow {
@@ -105,6 +118,19 @@ pub(crate) enum VisualLineKind {
         /// Source whitespace skipped at the wrap point that ends the previous row.
         wrap_gap: Option<Arc<str>>,
     },
+}
+
+/// Decorative row kind rendered around or atop a fenced code block.
+#[derive(Clone, Debug)]
+pub(crate) enum CodeBlockChromeKind {
+    /// Top half-block cushion (`▄`) painted in the code block's background over canvas.
+    TopHalfBlock,
+    /// Bottom half-block cushion (`▀`) painted in the code block's background over canvas.
+    BottomHalfBlock,
+    /// Full blank padding row painted in the code block's background.
+    BlankPadding,
+    /// Language header row (icon and/or language label).
+    Header { spans: Vec<Span> },
 }
 
 /// Position within a table border row.
@@ -257,6 +283,9 @@ pub(crate) struct DocumentViewNode {
     pub table_row_separators: super::TableRowSeparators,
     pub table_cell_padding: u16,
     pub table_border_variant: BorderStyle,
+    pub code_block_width: Length,
+    pub code_block_padding: CodeBlockPadding,
+    pub code_block_header: CodeBlockHeader,
 
     // ── Styling ──────────────────────────────────────────────────────────
     pub style: Style,
@@ -707,6 +736,9 @@ impl From<DocumentView> for DocumentViewNode {
             table_row_separators: dv.table_row_separators,
             table_cell_padding: dv.table_cell_padding,
             table_border_variant: dv.table_border_variant,
+            code_block_width: dv.code_block_width,
+            code_block_padding: dv.code_block_padding,
+            code_block_header: dv.code_block_header,
             style: dv.style,
             line_number_style: dv.line_number_style,
             hover_style: dv.hover_style,
@@ -804,6 +836,9 @@ pub(crate) struct DocumentFlattenCtx<'a> {
     pub table_row_separators: super::TableRowSeparators,
     pub table_cell_padding: u16,
     pub table_border_variant: BorderStyle,
+    pub code_block_width: Length,
+    pub code_block_padding: CodeBlockPadding,
+    pub code_block_header: CodeBlockHeader,
     pub doc_styles: &'a DocumentStyles,
     #[cfg(feature = "syntax-syntect")]
     pub code_strategy: Option<&'a dyn crate::widgets::TextAreaColorStrategy>,
@@ -905,11 +940,15 @@ pub(crate) fn lines_only_source_heights(
 }
 
 pub(crate) const CODE_BLOCK_LEFT_INSET_COLS: u16 = 1;
+pub(crate) const CODE_BLOCK_RIGHT_INSET_COLS: u16 = 1;
 
 /// Display columns rendered before selectable content (code inset, blockquote bars).
 pub(crate) fn visual_line_render_prefix_cols(vline: &DocumentVisualLine) -> usize {
     match &vline.kind {
-        VisualLineKind::CodeLine { .. } => CODE_BLOCK_LEFT_INSET_COLS as usize,
+        VisualLineKind::CodeLine { indent_cols, .. } => {
+            (*indent_cols as usize).saturating_add(CODE_BLOCK_LEFT_INSET_COLS as usize)
+        }
+        VisualLineKind::CodeBlockChrome { .. } => usize::MAX,
         VisualLineKind::BlockQuoteLine { depth, .. } => (*depth as usize).saturating_mul(2),
         _ => 0,
     }
@@ -918,7 +957,10 @@ pub(crate) fn visual_line_render_prefix_cols(vline: &DocumentVisualLine) -> usiz
 /// UTF-8 bytes in the render-only prefix for a visual line.
 pub(crate) fn visual_line_render_prefix_bytes(vline: &DocumentVisualLine) -> usize {
     match &vline.kind {
-        VisualLineKind::CodeLine { .. } => CODE_BLOCK_LEFT_INSET_COLS as usize,
+        VisualLineKind::CodeLine { indent_cols, .. } => {
+            (*indent_cols as usize).saturating_add(CODE_BLOCK_LEFT_INSET_COLS as usize)
+        }
+        VisualLineKind::CodeBlockChrome { .. } => usize::MAX,
         VisualLineKind::BlockQuoteLine { depth, .. } => "│ ".len().saturating_mul(*depth as usize),
         _ => 0,
     }
@@ -970,7 +1012,11 @@ fn merge_visual_line_spans(line: &mut DocumentVisualLine) {
         VisualLineKind::Text { spans, .. }
         | VisualLineKind::BlockQuoteLine { spans, .. }
         | VisualLineKind::CodeLine { spans, .. }
-        | VisualLineKind::DiagramRow { spans, .. } => {
+        | VisualLineKind::DiagramRow { spans, .. }
+        | VisualLineKind::CodeBlockChrome {
+            kind: CodeBlockChromeKind::Header { spans },
+            ..
+        } => {
             merge_spans(spans);
         }
         VisualLineKind::TableRow { cells, .. } => {
@@ -978,7 +1024,9 @@ fn merge_visual_line_spans(line: &mut DocumentVisualLine) {
                 merge_spans(cell);
             }
         }
-        VisualLineKind::TableBorder { .. } | VisualLineKind::HorizontalRule => {}
+        VisualLineKind::TableBorder { .. }
+        | VisualLineKind::HorizontalRule
+        | VisualLineKind::CodeBlockChrome { .. } => {}
     }
 }
 
@@ -1088,6 +1136,9 @@ fn flatten_block(
                 CodeFlattenCtx {
                     inner_w,
                     wrap,
+                    code_block_width: ctx.code_block_width,
+                    code_block_padding: ctx.code_block_padding,
+                    code_block_header: ctx.code_block_header,
                     doc_styles,
                     base_indent_cols: accum.base_indent_cols,
                     #[cfg(feature = "syntax-syntect")]
@@ -1556,17 +1607,38 @@ fn flatten_table(
 struct CodeFlattenCtx<'a> {
     inner_w: u16,
     wrap: bool,
+    code_block_width: Length,
+    code_block_padding: CodeBlockPadding,
+    code_block_header: CodeBlockHeader,
     doc_styles: &'a DocumentStyles,
     base_indent_cols: u16,
     #[cfg(feature = "syntax-syntect")]
     code_strategy: Option<&'a dyn crate::widgets::TextAreaColorStrategy>,
 }
 
-#[derive(Clone, Copy)]
-struct CodeVisualCtx {
-    inner_w: u16,
-    wrap: bool,
-    base_indent_cols: u16,
+fn code_block_header_spans(
+    language: Option<&str>,
+    header: CodeBlockHeader,
+    doc_styles: &DocumentStyles,
+) -> Option<Vec<Span>> {
+    if header == CodeBlockHeader::None {
+        return None;
+    }
+    let label = language?.trim();
+    if label.is_empty() {
+        return None;
+    }
+    match header {
+        CodeBlockHeader::None => None,
+        CodeBlockHeader::Label => Some(vec![Span::new(label.to_string())]),
+        CodeBlockHeader::IconAndLabel => {
+            if let Some(icon) = crate::utils::language_icon_span(label, &doc_styles.file_icons) {
+                Some(vec![icon, Span::new(format!(" {label}"))])
+            } else {
+                Some(vec![Span::new(label.to_string())])
+            }
+        }
+    }
 }
 
 fn flatten_code_block(
@@ -1575,121 +1647,246 @@ fn flatten_code_block(
     out: &mut Vec<DocumentVisualLine>,
     max_w: &mut u16,
 ) {
-    if let Some(lang) = cb.language.as_deref()
-        && (lang.eq_ignore_ascii_case("diff") || lang.eq_ignore_ascii_case("patch"))
-    {
-        flatten_diff_code_block(cb, &ctx, out, max_w);
-        return;
-    }
-
-    let block_style = ctx.doc_styles.code_block_style;
-
-    // Try syntax highlighting via SyntectStrategy
-    #[cfg(feature = "syntax-syntect")]
-    let highlighted: Option<Vec<Vec<Span>>> = ctx.code_strategy.and_then(|strategy| {
-        let input = crate::widgets::TextAreaColorInput {
-            value: &cb.code,
-            language: cb.language.as_deref(),
-            theme: None,
-        };
-        let result = strategy.highlight(input);
-        if result.is_empty() {
-            None
-        } else {
-            Some(result)
-        }
-    });
-    #[cfg(not(feature = "syntax-syntect"))]
-    let highlighted: Option<Vec<Vec<Span>>> = None;
-
-    let code_lines: Vec<&str> = cb.code.split('\n').collect();
-    for (i, line_text) in code_lines.iter().enumerate() {
-        let spans = if let Some(ref hl_lines) = highlighted {
-            hl_lines
-                .get(i)
-                .cloned()
-                .unwrap_or_else(|| vec![Span::new(*line_text)])
-        } else {
-            vec![Span::new(*line_text)]
-        };
-
-        push_code_visual_lines(
-            spans,
-            block_style,
-            cb.source_line_start.saturating_add(i),
-            CodeVisualCtx {
-                inner_w: ctx.inner_w,
-                wrap: ctx.wrap,
-                base_indent_cols: ctx.base_indent_cols,
-            },
-            out,
-            max_w,
-        );
-    }
-}
-
-fn flatten_diff_code_block(
-    cb: &super::FormattedCodeBlock,
-    ctx: &CodeFlattenCtx<'_>,
-    out: &mut Vec<DocumentVisualLine>,
-    max_w: &mut u16,
-) {
     let base_block_style = ctx.doc_styles.code_block_style;
-    let palette = &ctx.doc_styles.diff_palette;
+    let is_diff = cb.language.as_deref().is_some_and(|lang| {
+        lang.eq_ignore_ascii_case("diff") || lang.eq_ignore_ascii_case("patch")
+    });
 
-    for (i, line_text) in cb.code.split('\n').enumerate() {
-        let (line_bg_style, spans) = classify_diff_line(line_text, palette);
-        let block_style = base_block_style.patch(line_bg_style);
+    let raw_lines: Vec<(Vec<Span>, Style, usize)> = if is_diff {
+        let palette = &ctx.doc_styles.diff_palette;
+        cb.code
+            .split('\n')
+            .enumerate()
+            .map(|(i, line_text)| {
+                let (line_bg_style, spans) = classify_diff_line(line_text, palette);
+                (
+                    spans,
+                    base_block_style.patch(line_bg_style),
+                    cb.source_line_start.saturating_add(i),
+                )
+            })
+            .collect()
+    } else {
+        #[cfg(feature = "syntax-syntect")]
+        let highlighted: Option<Vec<Vec<Span>>> = ctx.code_strategy.and_then(|strategy| {
+            let input = crate::widgets::TextAreaColorInput {
+                value: &cb.code,
+                language: cb.language.as_deref(),
+                theme: None,
+            };
+            let result = strategy.highlight(input);
+            if result.is_empty() {
+                None
+            } else {
+                Some(result)
+            }
+        });
+        #[cfg(not(feature = "syntax-syntect"))]
+        let highlighted: Option<Vec<Vec<Span>>> = None;
 
-        push_code_visual_lines(
-            spans,
-            block_style,
-            cb.source_line_start.saturating_add(i),
-            CodeVisualCtx {
-                inner_w: ctx.inner_w,
-                wrap: ctx.wrap,
-                base_indent_cols: ctx.base_indent_cols,
-            },
-            out,
-            max_w,
-        );
-    }
-}
+        cb.code
+            .split('\n')
+            .enumerate()
+            .map(|(i, line_text)| {
+                let spans = if let Some(ref hl_lines) = highlighted {
+                    hl_lines
+                        .get(i)
+                        .cloned()
+                        .unwrap_or_else(|| vec![Span::new(line_text)])
+                } else {
+                    vec![Span::new(line_text)]
+                };
+                (
+                    spans,
+                    base_block_style,
+                    cb.source_line_start.saturating_add(i),
+                )
+            })
+            .collect()
+    };
 
-fn push_code_visual_lines(
-    spans: Vec<Span>,
-    block_style: Style,
-    source_line: usize,
-    ctx: CodeVisualCtx,
-    out: &mut Vec<DocumentVisualLine>,
-    max_w: &mut u16,
-) {
-    let content_line_w = span_width(&spans).saturating_add(CODE_BLOCK_LEFT_INSET_COLS);
-    let line_w = content_line_w.saturating_add(ctx.base_indent_cols);
+    let header_spans = code_block_header_spans(
+        cb.language.as_deref(),
+        ctx.code_block_header,
+        ctx.doc_styles,
+    );
+
+    let left_inset = CODE_BLOCK_LEFT_INSET_COLS;
+    let right_inset = if ctx.code_block_padding != CodeBlockPadding::None
+        || ctx.code_block_header != CodeBlockHeader::None
+        || !matches!(ctx.code_block_width, Length::Flex(_))
+    {
+        CODE_BLOCK_RIGHT_INSET_COLS
+    } else {
+        0
+    };
+    let h_insets = left_inset.saturating_add(right_inset);
     let available_w = ctx.inner_w.saturating_sub(ctx.base_indent_cols);
-    if ctx.wrap && line_w > ctx.inner_w {
-        let content_w = available_w.saturating_sub(CODE_BLOCK_LEFT_INSET_COLS);
-        for wrapped in
-            crate::utils::text::wrap_preformatted_spans_for_budgets(&spans, content_w, content_w)
-        {
-            let wrapped = with_visual_indent(wrapped, ctx.base_indent_cols);
-            let wrapped_w = span_width(&wrapped).saturating_add(CODE_BLOCK_LEFT_INSET_COLS);
-            *max_w = (*max_w).max(wrapped_w);
+
+    let header_content_w = header_spans.as_ref().map_or(0, |spans| span_width(spans));
+    let max_raw_code_w = raw_lines
+        .iter()
+        .map(|(spans, _, _)| span_width(spans))
+        .max()
+        .unwrap_or(0);
+    let natural_rect_w = max_raw_code_w
+        .max(header_content_w)
+        .saturating_add(h_insets);
+
+    let target_rect_w = match ctx.code_block_width {
+        Length::Flex(_) => {
+            if ctx.wrap {
+                available_w
+            } else {
+                available_w.max(natural_rect_w)
+            }
+        }
+        Length::Auto => {
+            if ctx.wrap {
+                natural_rect_w.min(available_w)
+            } else {
+                natural_rect_w
+            }
+        }
+        Length::Px(px) => {
+            let px = px.max(h_insets);
+            if ctx.wrap {
+                px.min(available_w)
+            } else {
+                px.max(natural_rect_w)
+            }
+        }
+        Length::Percent(pct) => {
+            let scaled = ((u32::from(available_w) * u32::from(pct.min(100))) / 100) as u16;
+            let scaled = scaled.max(h_insets).min(available_w);
+            if ctx.wrap {
+                scaled
+            } else {
+                scaled.max(natural_rect_w)
+            }
+        }
+    };
+
+    let wrap_budget = target_rect_w.saturating_sub(h_insets);
+    let mut rendered_rows: Vec<(Vec<Span>, Style, usize)> = Vec::with_capacity(raw_lines.len());
+    let mut actual_max_content_w = header_content_w;
+
+    for (spans, block_style, source_line) in raw_lines {
+        let code_w = span_width(&spans);
+        if ctx.wrap && code_w > wrap_budget {
+            for wrapped in crate::utils::text::wrap_preformatted_spans_for_budgets(
+                &spans,
+                wrap_budget,
+                wrap_budget,
+            ) {
+                actual_max_content_w = actual_max_content_w.max(span_width(&wrapped));
+                rendered_rows.push((wrapped, block_style, source_line));
+            }
+        } else {
+            actual_max_content_w = actual_max_content_w.max(code_w);
+            rendered_rows.push((spans, block_style, source_line));
+        }
+    }
+
+    let content_rect_w = actual_max_content_w.saturating_add(h_insets);
+    let rect_width = match ctx.code_block_width {
+        Length::Auto => {
+            if ctx.wrap {
+                content_rect_w.min(available_w)
+            } else {
+                content_rect_w
+            }
+        }
+        _ => target_rect_w,
+    };
+
+    let reported_w = match ctx.code_block_width {
+        Length::Flex(_) => ctx.base_indent_cols.saturating_add(content_rect_w),
+        _ => ctx
+            .base_indent_cols
+            .saturating_add(rect_width.max(content_rect_w)),
+    };
+    *max_w = (*max_w).max(reported_w);
+
+    let first_source_line = cb.source_line_start;
+    let last_source_line = rendered_rows
+        .last()
+        .map_or(first_source_line, |(_, _, line)| *line);
+
+    match ctx.code_block_padding {
+        CodeBlockPadding::None => {}
+        CodeBlockPadding::HalfBlock => {
             out.push(DocumentVisualLine {
-                kind: VisualLineKind::CodeLine {
-                    spans: wrapped,
-                    block_style,
+                kind: VisualLineKind::CodeBlockChrome {
+                    kind: CodeBlockChromeKind::TopHalfBlock,
+                    block_style: base_block_style,
+                    indent_cols: ctx.base_indent_cols,
+                    rect_width,
                 },
-                source_line,
+                source_line: first_source_line,
             });
         }
-    } else {
-        *max_w = (*max_w).max(line_w);
-        let spans = with_visual_indent(spans, ctx.base_indent_cols);
+        CodeBlockPadding::Full => {
+            out.push(DocumentVisualLine {
+                kind: VisualLineKind::CodeBlockChrome {
+                    kind: CodeBlockChromeKind::BlankPadding,
+                    block_style: base_block_style,
+                    indent_cols: ctx.base_indent_cols,
+                    rect_width,
+                },
+                source_line: first_source_line,
+            });
+        }
+    }
+
+    if let Some(spans) = header_spans {
         out.push(DocumentVisualLine {
-            kind: VisualLineKind::CodeLine { spans, block_style },
+            kind: VisualLineKind::CodeBlockChrome {
+                kind: CodeBlockChromeKind::Header { spans },
+                block_style: base_block_style,
+                indent_cols: ctx.base_indent_cols,
+                rect_width,
+            },
+            source_line: first_source_line,
+        });
+    }
+
+    for (spans, block_style, source_line) in rendered_rows {
+        out.push(DocumentVisualLine {
+            kind: VisualLineKind::CodeLine {
+                spans,
+                block_style,
+                indent_cols: ctx.base_indent_cols,
+                rect_width,
+            },
             source_line,
         });
+    }
+
+    match ctx.code_block_padding {
+        CodeBlockPadding::None => {}
+        CodeBlockPadding::HalfBlock => {
+            out.push(DocumentVisualLine {
+                kind: VisualLineKind::CodeBlockChrome {
+                    kind: CodeBlockChromeKind::BottomHalfBlock,
+                    block_style: base_block_style,
+                    indent_cols: ctx.base_indent_cols,
+                    rect_width,
+                },
+                source_line: last_source_line,
+            });
+        }
+        CodeBlockPadding::Full => {
+            out.push(DocumentVisualLine {
+                kind: VisualLineKind::CodeBlockChrome {
+                    kind: CodeBlockChromeKind::BlankPadding,
+                    block_style: base_block_style,
+                    indent_cols: ctx.base_indent_cols,
+                    rect_width,
+                },
+                source_line: last_source_line,
+            });
+        }
     }
 }
 
@@ -1861,6 +2058,7 @@ pub(crate) fn build_visual_text_index(
 
     for (i, line) in lines.iter().enumerate() {
         let text = visual_line_plain_text(line, hr_width);
+        let is_code_chrome = matches!(line.kind, VisualLineKind::CodeBlockChrome { .. });
         let is_diagram_row = matches!(line.kind, VisualLineKind::DiagramRow { .. });
         let is_diagram_continuation = is_diagram_row
             && i > 0
@@ -1881,7 +2079,7 @@ pub(crate) fn build_visual_text_index(
             start
         };
         let len = text.len();
-        if !is_diagram_continuation {
+        if !is_diagram_continuation && !is_code_chrome {
             flat.push_str(&text);
         }
         let next_is_diagram_continuation = lines.get(i + 1).is_some_and(|next| {
@@ -1889,7 +2087,11 @@ pub(crate) fn build_visual_text_index(
                 && next.source_line == line.source_line
                 && matches!(next.kind, VisualLineKind::DiagramRow { .. })
         });
-        if i + 1 < lines.len() && !next_is_diagram_continuation {
+        let has_later_non_chrome = lines.get(i + 1..).is_some_and(|rest| {
+            rest.iter()
+                .any(|later| !matches!(later.kind, VisualLineKind::CodeBlockChrome { .. }))
+        });
+        if !is_code_chrome && !next_is_diagram_continuation && has_later_non_chrome {
             flat.push('\n');
         }
         line_starts.push(start);
@@ -2040,6 +2242,7 @@ pub(crate) fn visual_line_plain_text(vline: &DocumentVisualLine, hr_width: u16) 
         VisualLineKind::CodeLine { spans, .. } => {
             spans.iter().map(|span| span.content.as_ref()).collect()
         }
+        VisualLineKind::CodeBlockChrome { .. } => String::new(),
         VisualLineKind::BlockQuoteLine { spans, .. } => {
             spans.iter().map(|span| span.content.as_ref()).collect()
         }
@@ -2104,6 +2307,8 @@ mod tests {
             kind: VisualLineKind::CodeLine {
                 spans: vec![Span::new("fn main()")],
                 block_style: crate::style::Style::default(),
+                indent_cols: 0,
+                rect_width: 0,
             },
             source_line: 0,
         };
@@ -2140,6 +2345,9 @@ mod tests {
                 table_row_separators: TableRowSeparators::default(),
                 table_cell_padding: 0,
                 table_border_variant: BorderStyle::Plain,
+                code_block_width: crate::style::Length::Flex(1),
+                code_block_padding: crate::widgets::document_view::CodeBlockPadding::None,
+                code_block_header: crate::widgets::document_view::CodeBlockHeader::None,
                 doc_styles: &doc_styles,
                 #[cfg(feature = "syntax-syntect")]
                 code_strategy: None,
@@ -2200,6 +2408,9 @@ mod tests {
                 table_row_separators: TableRowSeparators::default(),
                 table_cell_padding: 0,
                 table_border_variant: BorderStyle::Plain,
+                code_block_width: crate::style::Length::Flex(1),
+                code_block_padding: crate::widgets::document_view::CodeBlockPadding::None,
+                code_block_header: crate::widgets::document_view::CodeBlockHeader::None,
                 doc_styles: &doc_styles,
                 #[cfg(feature = "syntax-syntect")]
                 code_strategy: None,
@@ -2276,6 +2487,9 @@ mod tests {
                 table_row_separators: TableRowSeparators::default(),
                 table_cell_padding: 0,
                 table_border_variant: BorderStyle::Plain,
+                code_block_width: crate::style::Length::Flex(1),
+                code_block_padding: crate::widgets::document_view::CodeBlockPadding::None,
+                code_block_header: crate::widgets::document_view::CodeBlockHeader::None,
                 doc_styles: &doc_styles,
                 code_strategy: Some(&strategy),
             },
@@ -2323,25 +2537,27 @@ mod tests {
                 table_row_separators: TableRowSeparators::default(),
                 table_cell_padding: 0,
                 table_border_variant: BorderStyle::Plain,
+                code_block_width: crate::style::Length::Flex(1),
+                code_block_padding: crate::widgets::document_view::CodeBlockPadding::None,
+                code_block_header: crate::widgets::document_view::CodeBlockHeader::None,
                 doc_styles: &doc_styles,
                 #[cfg(feature = "syntax-syntect")]
                 code_strategy: None,
             },
         );
-        let code_text = lines
+        let (indent_cols, code_text) = lines
             .iter()
             .find_map(|line| match &line.kind {
-                VisualLineKind::CodeLine { .. } => Some(super::visual_line_plain_text(line, 80)),
+                VisualLineKind::CodeLine { indent_cols, .. } => {
+                    Some((*indent_cols, super::visual_line_plain_text(line, 80)))
+                }
                 _ => None,
             })
             .expect("code visual line");
 
-        assert!(
-            code_text.starts_with("  "),
-            "code was flush-left: {code_text:?}"
-        );
-        assert!(code_text.ends_with("nested code"));
-        assert!(max_w >= code_text.len() as u16);
+        assert_eq!(indent_cols, 2, "code should carry list indentation");
+        assert_eq!(code_text, "nested code");
+        assert!(max_w >= (indent_cols as usize + code_text.len()) as u16);
     }
 
     #[cfg(feature = "markdown")]
@@ -2370,20 +2586,25 @@ mod tests {
                 table_row_separators: TableRowSeparators::default(),
                 table_cell_padding: 0,
                 table_border_variant: BorderStyle::Plain,
+                code_block_width: crate::style::Length::Flex(1),
+                code_block_padding: crate::widgets::document_view::CodeBlockPadding::None,
+                code_block_header: crate::widgets::document_view::CodeBlockHeader::None,
                 doc_styles: &doc_styles,
                 #[cfg(feature = "syntax-syntect")]
                 code_strategy: None,
             },
         );
-        let code_lines: Vec<String> = lines
+        let code_lines: Vec<(u16, String)> = lines
             .iter()
             .filter_map(|line| match &line.kind {
-                VisualLineKind::CodeLine { .. } => Some(super::visual_line_plain_text(line, 10)),
+                VisualLineKind::CodeLine { indent_cols, .. } => {
+                    Some((*indent_cols, super::visual_line_plain_text(line, 10)))
+                }
                 _ => None,
             })
             .collect();
 
-        assert_eq!(code_lines, vec!["  1234567"]);
+        assert_eq!(code_lines, vec![(2, "1234567".to_string())]);
     }
 
     #[cfg(feature = "markdown")]
@@ -2421,6 +2642,9 @@ mod tests {
                 table_row_separators: TableRowSeparators::default(),
                 table_cell_padding: 0,
                 table_border_variant: BorderStyle::Plain,
+                code_block_width: crate::style::Length::Flex(1),
+                code_block_padding: crate::widgets::document_view::CodeBlockPadding::None,
+                code_block_header: crate::widgets::document_view::CodeBlockHeader::None,
                 doc_styles: &doc_styles,
                 #[cfg(feature = "syntax-syntect")]
                 code_strategy: None,
@@ -2456,6 +2680,9 @@ mod tests {
                 table_row_separators: TableRowSeparators::default(),
                 table_cell_padding: 0,
                 table_border_variant: BorderStyle::Plain,
+                code_block_width: crate::style::Length::Flex(1),
+                code_block_padding: crate::widgets::document_view::CodeBlockPadding::None,
+                code_block_header: crate::widgets::document_view::CodeBlockHeader::None,
                 doc_styles: &doc_styles,
                 #[cfg(feature = "syntax-syntect")]
                 code_strategy: None,
@@ -2499,6 +2726,9 @@ mod tests {
                 table_row_separators: TableRowSeparators::default(),
                 table_cell_padding: 0,
                 table_border_variant: BorderStyle::Plain,
+                code_block_width: crate::style::Length::Flex(1),
+                code_block_padding: crate::widgets::document_view::CodeBlockPadding::None,
+                code_block_header: crate::widgets::document_view::CodeBlockHeader::None,
                 doc_styles: &doc_styles,
                 #[cfg(feature = "syntax-syntect")]
                 code_strategy: None,
@@ -2545,6 +2775,9 @@ mod tests {
                 table_row_separators: TableRowSeparators::default(),
                 table_cell_padding: 0,
                 table_border_variant: BorderStyle::Plain,
+                code_block_width: crate::style::Length::Flex(1),
+                code_block_padding: crate::widgets::document_view::CodeBlockPadding::None,
+                code_block_header: crate::widgets::document_view::CodeBlockHeader::None,
                 doc_styles: &DocumentStyles::default(),
                 #[cfg(feature = "syntax-syntect")]
                 code_strategy: None,
@@ -2588,6 +2821,9 @@ mod tests {
                 table_row_separators: TableRowSeparators::default(),
                 table_cell_padding: 0,
                 table_border_variant: BorderStyle::Plain,
+                code_block_width: crate::style::Length::Flex(1),
+                code_block_padding: crate::widgets::document_view::CodeBlockPadding::None,
+                code_block_header: crate::widgets::document_view::CodeBlockHeader::None,
                 doc_styles: &DocumentStyles::default(),
                 #[cfg(feature = "syntax-syntect")]
                 code_strategy: None,
@@ -2649,6 +2885,9 @@ mod tests {
                 table_row_separators: TableRowSeparators::default(),
                 table_cell_padding: 0,
                 table_border_variant: BorderStyle::Plain,
+                code_block_width: crate::style::Length::Flex(1),
+                code_block_padding: crate::widgets::document_view::CodeBlockPadding::None,
+                code_block_header: crate::widgets::document_view::CodeBlockHeader::None,
                 doc_styles: &DocumentStyles::default(),
                 #[cfg(feature = "syntax-syntect")]
                 code_strategy: None,
@@ -2706,6 +2945,9 @@ mod tests {
                 table_row_separators: TableRowSeparators::default(),
                 table_cell_padding: 0,
                 table_border_variant: BorderStyle::Plain,
+                code_block_width: crate::style::Length::Flex(1),
+                code_block_padding: crate::widgets::document_view::CodeBlockPadding::None,
+                code_block_header: crate::widgets::document_view::CodeBlockHeader::None,
                 doc_styles: &doc_styles,
                 #[cfg(feature = "syntax-syntect")]
                 code_strategy: None,
@@ -2715,7 +2957,9 @@ mod tests {
         let code_lines: Vec<(Vec<Span>, Style)> = lines
             .into_iter()
             .filter_map(|l| match l.kind {
-                VisualLineKind::CodeLine { spans, block_style } => Some((spans, block_style)),
+                VisualLineKind::CodeLine {
+                    spans, block_style, ..
+                } => Some((spans, block_style)),
                 _ => None,
             })
             .collect();
@@ -2731,5 +2975,204 @@ mod tests {
         // Added line gets added bg
         assert_eq!(code_lines[3].1.bg, Some(added_bg.into()));
         assert_eq!(code_lines[3].0[0].content.as_ref(), "+");
+    }
+
+    #[cfg(feature = "markdown")]
+    #[test]
+    fn code_block_width_modes_compute_expected_rect_widths() {
+        use super::{CodeBlockChromeKind, DocumentFlattenCtx, VisualLineKind, flatten_blocks};
+        use crate::style::{BorderStyle, Length};
+        use crate::widgets::document_view::{
+            CodeBlockHeader, CodeBlockPadding, ContentFormatter, DocumentStyles,
+            DocumentTableWidthMode, FormatInput, MarkdownFormatter, TableRowSeparators,
+        };
+
+        let doc = MarkdownFormatter::default().format(FormatInput {
+            value: "```typescript\nlet x = 1;\n```",
+            content_type: Some("markdown"),
+            document_styles: None,
+        });
+        let doc_styles = DocumentStyles::default();
+        let run = |width: Length, header: CodeBlockHeader, padding: CodeBlockPadding| {
+            flatten_blocks(
+                &doc,
+                60,
+                DocumentFlattenCtx {
+                    wrap: true,
+                    table_wrap: false,
+                    table_width_mode: DocumentTableWidthMode::default(),
+                    table_outer_frame: true,
+                    table_column_separators: true,
+                    table_row_separators: TableRowSeparators::default(),
+                    table_cell_padding: 0,
+                    table_border_variant: BorderStyle::Plain,
+                    code_block_width: width,
+                    code_block_padding: padding,
+                    code_block_header: header,
+                    doc_styles: &doc_styles,
+                    #[cfg(feature = "syntax-syntect")]
+                    code_strategy: None,
+                },
+            )
+        };
+
+        // Flex(1) fills available width (60).
+        let (flex_lines, _) = run(
+            Length::Flex(1),
+            CodeBlockHeader::None,
+            CodeBlockPadding::None,
+        );
+        let flex_rect = flex_lines.iter().find_map(|l| match l.kind {
+            VisualLineKind::CodeLine { rect_width, .. } => Some(rect_width),
+            _ => None,
+        });
+        assert_eq!(flex_rect, Some(60));
+
+        // Auto hugs widest line ("let x = 1;" = 10) + 1 left + 1 right = 12.
+        let (auto_lines, _) = run(Length::Auto, CodeBlockHeader::None, CodeBlockPadding::None);
+        let auto_rect = auto_lines.iter().find_map(|l| match l.kind {
+            VisualLineKind::CodeLine { rect_width, .. } => Some(rect_width),
+            _ => None,
+        });
+        assert_eq!(auto_rect, Some(12));
+
+        // Auto expands to enclose a wider header (" typescript" = 1 + 1 + 10 = 12 -> 14 with insets).
+        let (auto_hdr_lines, _) = run(
+            Length::Auto,
+            CodeBlockHeader::IconAndLabel,
+            CodeBlockPadding::HalfBlock,
+        );
+        let hdr_rect = auto_hdr_lines.iter().find_map(|l| match &l.kind {
+            VisualLineKind::CodeBlockChrome {
+                kind: CodeBlockChromeKind::Header { .. },
+                rect_width,
+                ..
+            } => Some(*rect_width),
+            _ => None,
+        });
+        assert_eq!(hdr_rect, Some(14));
+
+        // Px(30) and Percent(50) of 60 both produce rect_width 30.
+        let (px_lines, _) = run(
+            Length::Px(30),
+            CodeBlockHeader::None,
+            CodeBlockPadding::None,
+        );
+        let px_rect = px_lines.iter().find_map(|l| match l.kind {
+            VisualLineKind::CodeLine { rect_width, .. } => Some(rect_width),
+            _ => None,
+        });
+        assert_eq!(px_rect, Some(30));
+
+        let (pct_lines, _) = run(
+            Length::Percent(50),
+            CodeBlockHeader::None,
+            CodeBlockPadding::None,
+        );
+        let pct_rect = pct_lines.iter().find_map(|l| match l.kind {
+            VisualLineKind::CodeLine { rect_width, .. } => Some(rect_width),
+            _ => None,
+        });
+        assert_eq!(pct_rect, Some(30));
+    }
+
+    #[cfg(feature = "markdown")]
+    #[test]
+    fn code_block_padding_and_header_emit_expected_chrome_rows_and_preserve_flat_text() {
+        use super::{
+            CodeBlockChromeKind, DocumentFlattenCtx, VisualLineKind, build_visual_text_index,
+            flatten_blocks, spans_plain_text,
+        };
+        use crate::style::{BorderStyle, Length};
+        use crate::widgets::document_view::{
+            CodeBlockHeader, CodeBlockPadding, ContentFormatter, DocumentStyles,
+            DocumentTableWidthMode, FormatInput, MarkdownFormatter, TableRowSeparators,
+        };
+
+        let md = "Intro\n\n```rust\nlet a = 1;\n```\n\n```customlang\nx\n```\n\n```\nbare\n```";
+        let doc = MarkdownFormatter::default().format(FormatInput {
+            value: md,
+            content_type: Some("markdown"),
+            document_styles: None,
+        });
+        let doc_styles = DocumentStyles::default();
+        let make_ctx = |padding: CodeBlockPadding, header: CodeBlockHeader| DocumentFlattenCtx {
+            wrap: true,
+            table_wrap: false,
+            table_width_mode: DocumentTableWidthMode::default(),
+            table_outer_frame: true,
+            table_column_separators: true,
+            table_row_separators: TableRowSeparators::default(),
+            table_cell_padding: 0,
+            table_border_variant: BorderStyle::Plain,
+            code_block_width: Length::Flex(1),
+            code_block_padding: padding,
+            code_block_header: header,
+            doc_styles: &doc_styles,
+            #[cfg(feature = "syntax-syntect")]
+            code_strategy: None,
+        };
+
+        let (plain_lines, _) = flatten_blocks(
+            &doc,
+            60,
+            make_ctx(CodeBlockPadding::None, CodeBlockHeader::None),
+        );
+        let (decorated_lines, _) = flatten_blocks(
+            &doc,
+            60,
+            make_ctx(CodeBlockPadding::HalfBlock, CodeBlockHeader::IconAndLabel),
+        );
+
+        let (_, _, _, plain_flat) = build_visual_text_index(&plain_lines, 60);
+        let (_, _, _, decorated_flat) = build_visual_text_index(&decorated_lines, 60);
+        assert_eq!(
+            decorated_flat, plain_flat,
+            "code-block chrome rows must not alter selectable flat_text"
+        );
+
+        let headers: Vec<String> = decorated_lines
+            .iter()
+            .filter_map(|l| match &l.kind {
+                VisualLineKind::CodeBlockChrome {
+                    kind: CodeBlockChromeKind::Header { spans },
+                    ..
+                } => Some(spans_plain_text(spans)),
+                _ => None,
+            })
+            .collect();
+        // Known language gets icon + space + label; unknown language falls back to plain label;
+        // untagged fence emits no header.
+        assert_eq!(headers.len(), 2);
+        assert!(headers[0].ends_with(" rust"), "got {:?}", headers[0]);
+        assert!(headers[0].chars().count() > " rust".chars().count());
+        assert_eq!(headers[1], "customlang");
+
+        let top_count = decorated_lines
+            .iter()
+            .filter(|l| {
+                matches!(
+                    l.kind,
+                    VisualLineKind::CodeBlockChrome {
+                        kind: CodeBlockChromeKind::TopHalfBlock,
+                        ..
+                    }
+                )
+            })
+            .count();
+        let bottom_count = decorated_lines
+            .iter()
+            .filter(|l| {
+                matches!(
+                    l.kind,
+                    VisualLineKind::CodeBlockChrome {
+                        kind: CodeBlockChromeKind::BottomHalfBlock,
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(top_count, 3);
+        assert_eq!(bottom_count, 3);
     }
 }

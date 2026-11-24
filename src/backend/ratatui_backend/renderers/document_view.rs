@@ -351,7 +351,11 @@ pub(crate) fn render_document_view(
             content_area.width as usize,
         );
 
-        let mut row_bg = if node.highlight_full_width {
+        let mut row_bg = if node.highlight_full_width
+            && !matches!(
+                vline.kind,
+                VisualLineKind::CodeLine { .. } | VisualLineKind::CodeBlockChrome { .. }
+            ) {
             full_row_bg_style(&segments)
                 .or_else(|| split_wrap_padding_row_bg_style(vline, node.split_wrap_padding_style))
         } else {
@@ -403,6 +407,7 @@ pub(crate) fn render_document_view(
             .is_some_and(|excl| excl.contains(&vline.source_line));
         if spans.is_empty()
             && line_len == 0
+            && !matches!(vline.kind, VisualLineKind::CodeBlockChrome { .. })
             && !line_selection_excluded
             && node.table_rect_selection.is_none()
             && let Some((sel_start, sel_end)) = linear_selection_range
@@ -1047,17 +1052,93 @@ fn line_segments<'a>(
                 )
             })
             .collect(),
-        VisualLineKind::CodeLine { spans, block_style } => {
+        VisualLineKind::CodeLine {
+            spans,
+            block_style,
+            indent_cols,
+            rect_width,
+        } => {
             let effective = base_style.patch(*block_style);
-            let mut segs = vec![(
+            let mut segs = Vec::with_capacity(spans.len() + 3);
+            if *indent_cols > 0 {
+                segs.push((Cow::Owned(" ".repeat(*indent_cols as usize)), base_style));
+            }
+            segs.push((
                 Cow::Owned(" ".repeat(CODE_BLOCK_LEFT_INSET_COLS as usize)),
                 effective,
-            )];
+            ));
             for span in spans {
                 segs.push((
                     Cow::Borrowed(span.content.as_ref()),
                     effective.patch(span.style),
                 ));
+            }
+            if style_paints_bg(effective) {
+                let used_cols = CODE_BLOCK_LEFT_INSET_COLS.saturating_add(span_width(spans));
+                let trailing = rect_width.saturating_sub(used_cols);
+                if trailing > 0 {
+                    segs.push((Cow::Owned(" ".repeat(trailing as usize)), effective));
+                }
+            }
+            segs
+        }
+        VisualLineKind::CodeBlockChrome {
+            kind,
+            block_style,
+            indent_cols,
+            rect_width,
+        } => {
+            let effective = base_style.patch(*block_style);
+            let mut segs = Vec::new();
+            if *indent_cols > 0 {
+                segs.push((Cow::Owned(" ".repeat(*indent_cols as usize)), base_style));
+            }
+            match kind {
+                crate::widgets::document_view::node::CodeBlockChromeKind::TopHalfBlock
+                | crate::widgets::document_view::node::CodeBlockChromeKind::BottomHalfBlock => {
+                    let block_paints_bg = style_paints_bg(*block_style)
+                        || (block_style.bg_transform.is_some() && style_paints_bg(effective));
+                    if *rect_width > 0 && block_paints_bg && style_paints_bg(effective) {
+                        let glyph = match kind {
+                            crate::widgets::document_view::node::CodeBlockChromeKind::TopHalfBlock => "▄",
+                            _ => "▀",
+                        };
+                        let half_style = Style {
+                            fg: effective.bg,
+                            bg: base_style.bg,
+                            fg_transform: effective.bg_transform,
+                            bg_transform: base_style.bg_transform,
+                            ..Style::default()
+                        };
+                        segs.push((Cow::Owned(glyph.repeat(*rect_width as usize)), half_style));
+                    }
+                }
+                crate::widgets::document_view::node::CodeBlockChromeKind::BlankPadding => {
+                    if *rect_width > 0 && style_paints_bg(effective) {
+                        segs.push((Cow::Owned(" ".repeat(*rect_width as usize)), effective));
+                    }
+                }
+                crate::widgets::document_view::node::CodeBlockChromeKind::Header { spans } => {
+                    let header_base = effective.patch(doc_styles.code_block_header_style);
+                    segs.push((
+                        Cow::Owned(" ".repeat(CODE_BLOCK_LEFT_INSET_COLS as usize)),
+                        effective,
+                    ));
+                    for span in spans {
+                        segs.push((
+                            Cow::Borrowed(span.content.as_ref()),
+                            header_base.patch(span.style),
+                        ));
+                    }
+                    if style_paints_bg(effective) {
+                        let used_cols =
+                            CODE_BLOCK_LEFT_INSET_COLS.saturating_add(span_width(spans));
+                        let trailing = rect_width.saturating_sub(used_cols);
+                        if trailing > 0 {
+                            segs.push((Cow::Owned(" ".repeat(trailing as usize)), effective));
+                        }
+                    }
+                }
             }
             segs
         }
@@ -1249,6 +1330,7 @@ fn segments_to_spans<'a>(
     }
 
     let mut with_offsets = Vec::new();
+    let line_end = line_start.saturating_add(line_len);
     let mut content_cursor = line_start;
     let mut prefix_skipped = 0usize;
     for (text, style) in segments {
@@ -1272,19 +1354,52 @@ fn segments_to_spans<'a>(
 
         if offset < len {
             let remainder_len = len.saturating_sub(offset);
-            let segment_text = if offset == 0 {
-                text
+            let selectable_budget = line_end.saturating_sub(content_cursor);
+            if selectable_budget == 0 {
+                let segment_text = if offset == 0 {
+                    text
+                } else {
+                    Cow::Owned(text[offset..].to_string())
+                };
+                with_offsets.push(StyledSegment {
+                    text: segment_text,
+                    style,
+                    start: 0,
+                    end: 0,
+                    selectable: false,
+                });
+            } else if remainder_len <= selectable_budget {
+                let selectable_text = if offset == 0 {
+                    text
+                } else {
+                    Cow::Owned(text[offset..].to_string())
+                };
+                with_offsets.push(StyledSegment {
+                    text: selectable_text,
+                    style,
+                    start: content_cursor,
+                    end: content_cursor.saturating_add(remainder_len),
+                    selectable: true,
+                });
+                content_cursor = content_cursor.saturating_add(remainder_len);
             } else {
-                Cow::Owned(text[offset..].to_string())
-            };
-            with_offsets.push(StyledSegment {
-                text: segment_text,
-                style,
-                start: content_cursor,
-                end: content_cursor.saturating_add(remainder_len),
-                selectable: true,
-            });
-            content_cursor = content_cursor.saturating_add(remainder_len);
+                let take = selectable_budget;
+                with_offsets.push(StyledSegment {
+                    text: Cow::Owned(text[offset..offset + take].to_string()),
+                    style,
+                    start: content_cursor,
+                    end: content_cursor.saturating_add(take),
+                    selectable: true,
+                });
+                content_cursor = content_cursor.saturating_add(take);
+                with_offsets.push(StyledSegment {
+                    text: Cow::Owned(text[offset + take..].to_string()),
+                    style,
+                    start: 0,
+                    end: 0,
+                    selectable: false,
+                });
+            }
         }
     }
     if content_cursor != line_start.saturating_add(line_len) {
@@ -1671,5 +1786,88 @@ mod tests {
         let ranges = table_selection_ranges_for_line(&vline, 0, &selection);
 
         assert_eq!(ranges, vec![(0, 2)]);
+    }
+
+    #[test]
+    fn code_line_segments_fill_rect_width_and_keep_trailing_padding_non_selectable() {
+        use super::line_segments;
+        use crate::widgets::document_view::DocumentStyles;
+        use crate::widgets::document_view::node::{
+            CodeBlockChromeKind, visual_line_render_prefix_bytes,
+        };
+
+        let canvas_bg = Color::Rgb(0x10, 0x10, 0x10);
+        let code_bg = Color::Rgb(0x20, 0x24, 0x2c);
+        let base_style = Style::new().bg(canvas_bg);
+        let block_style = Style::new().bg(code_bg);
+        let doc_styles = DocumentStyles::default();
+
+        let code_line = DocumentVisualLine {
+            kind: VisualLineKind::CodeLine {
+                spans: vec![crate::style::Span::new("hi")],
+                block_style,
+                indent_cols: 2,
+                rect_width: 8,
+            },
+            source_line: 0,
+        };
+        let segs = line_segments(&code_line, base_style, &doc_styles, 20);
+        // 2 canvas indent + 1 left inset + "hi" (2) + 5 trailing code_bg padding = 10 cols
+        assert_eq!(segs.len(), 4);
+        assert_eq!(segs[0].0.as_ref(), "  ");
+        assert_eq!(segs[0].1.bg, Some(canvas_bg.into()));
+        assert_eq!(segs[1].0.as_ref(), " ");
+        assert_eq!(segs[1].1.bg, Some(code_bg.into()));
+        assert_eq!(segs[2].0.as_ref(), "hi");
+        assert_eq!(segs[3].0.as_ref(), "     ");
+        assert_eq!(segs[3].1.bg, Some(code_bg.into()));
+
+        // Selection over "hi" (bytes 0..2) must NOT highlight indent, inset, or trailing rect padding.
+        let sel = Style::new().bg(Color::Blue);
+        let spans = segments_to_spans(
+            segs,
+            0,
+            2,
+            &[(0, 2)],
+            sel,
+            visual_line_render_prefix_bytes(&code_line),
+        );
+        let highlighted: Vec<&str> = spans
+            .iter()
+            .filter(|s| s.style.bg == Some(ratatui::style::Color::Blue))
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(highlighted, vec!["hi"]);
+
+        // TopHalfBlock paints ▄ in code_bg over canvas_bg and is never selectable.
+        let top = DocumentVisualLine {
+            kind: VisualLineKind::CodeBlockChrome {
+                kind: CodeBlockChromeKind::TopHalfBlock,
+                block_style,
+                indent_cols: 2,
+                rect_width: 8,
+            },
+            source_line: 0,
+        };
+        let top_segs = line_segments(&top, base_style, &doc_styles, 20);
+        assert_eq!(top_segs.len(), 2);
+        assert_eq!(top_segs[0].0.as_ref(), "  ");
+        assert_eq!(top_segs[0].1.bg, Some(canvas_bg.into()));
+        assert_eq!(top_segs[1].0.as_ref(), "▄▄▄▄▄▄▄▄");
+        assert_eq!(top_segs[1].1.fg, Some(code_bg.into()));
+        assert_eq!(top_segs[1].1.bg, Some(canvas_bg.into()));
+        let top_spans = segments_to_spans(
+            top_segs,
+            0,
+            0,
+            &[(0, 10)],
+            sel,
+            visual_line_render_prefix_bytes(&top),
+        );
+        assert!(
+            top_spans
+                .iter()
+                .all(|s| s.style.bg != Some(ratatui::style::Color::Blue))
+        );
     }
 }

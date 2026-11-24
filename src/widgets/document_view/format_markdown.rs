@@ -266,6 +266,7 @@ impl ContentFormatter for MarkdownFormatter {
         self.styles.heading_styles.hash(&mut h);
         self.styles.code_inline_style.hash(&mut h);
         self.styles.code_block_style.hash(&mut h);
+        self.styles.code_block_header_style.hash(&mut h);
         self.styles.emphasis_style.hash(&mut h);
         self.styles.strong_style.hash(&mut h);
         self.styles.strikethrough_style.hash(&mut h);
@@ -274,6 +275,7 @@ impl ContentFormatter for MarkdownFormatter {
         self.styles.table_border_style.hash(&mut h);
         self.styles.table_header_style.hash(&mut h);
         self.styles.hr_style.hash(&mut h);
+        self.styles.file_icons.hash(&mut h);
         h.finish()
     }
 

@@ -78,6 +78,9 @@ pub(crate) fn document_view_selected_text_from_node(
     let mut emitted_diagram_ranges = Vec::<(usize, usize)>::new();
 
     for (index, line) in doc.visual_cache.lines.iter().enumerate() {
+        if matches!(line.kind, VisualLineKind::CodeBlockChrome { .. }) {
+            continue;
+        }
         let line_start = *doc.visual_cache.line_starts.get(index)?;
         let line_len = *doc.visual_cache.line_lengths.get(index)?;
         let line_end = line_start.saturating_add(line_len);
@@ -99,6 +102,15 @@ pub(crate) fn document_view_selected_text_from_node(
         }
 
         if index + 1 >= doc.visual_cache.lines.len() {
+            continue;
+        }
+
+        let has_newline = doc
+            .visual_cache
+            .line_starts
+            .get(index + 1)
+            .is_some_and(|&next_start| next_start > line_end);
+        if !has_newline {
             continue;
         }
 
