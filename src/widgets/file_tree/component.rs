@@ -1593,7 +1593,7 @@ fn effective_expanded_paths<'a>(
         let mut expanded_paths = expanded_paths.clone();
         expanded_paths.insert(state.root.path.clone());
         for path in reveal_paths {
-            insert_path_with_ancestors_for(
+            insert_ancestors_for(
                 &mut expanded_paths,
                 &path,
                 &state.root.path,
@@ -1604,7 +1604,7 @@ fn effective_expanded_paths<'a>(
     } else if !reveal_paths.is_empty() {
         let mut expanded_paths = state.expanded.clone();
         for path in reveal_paths {
-            insert_path_with_ancestors_for(
+            insert_ancestors_for(
                 &mut expanded_paths,
                 &path,
                 &state.root.path,
@@ -1755,7 +1755,7 @@ fn apply_reveal_paths_to_state(state: &mut FileTreeState, props: &FileTreeProps)
     if props.expanded_paths.is_none() {
         for path in &reveal_paths {
             let before = state.expanded.len();
-            insert_path_with_ancestors_for(
+            insert_ancestors_for(
                 &mut state.expanded,
                 path,
                 &state.root.path,
@@ -2698,6 +2698,28 @@ fn insert_path_with_ancestors_for(
         insert_provided_path_with_ancestors(expanded, path, root_path);
     } else {
         insert_path_with_ancestors(expanded, path, root_path);
+    }
+}
+
+/// Expand the directories that contain `path`, so it becomes visible, without expanding `path`
+/// itself: revealing a directory shows its row, not its contents.
+fn insert_ancestors_for(
+    expanded: &mut HashSet<Arc<str>>,
+    path: &Arc<str>,
+    root_path: &Arc<str>,
+    provided: bool,
+) {
+    let parent = if provided {
+        ProvidedPath::from_path(path.as_ref())
+            .parent()
+            .map(|parent| Arc::<str>::from(parent.as_str()))
+    } else {
+        Path::new(path.as_ref())
+            .parent()
+            .map(|parent| Arc::<str>::from(parent.to_string_lossy().as_ref()))
+    };
+    if let Some(parent) = parent {
+        insert_path_with_ancestors_for(expanded, &parent, root_path, provided);
     }
 }
 
@@ -3765,15 +3787,7 @@ fn expand_changed_only_directories(
 ) {
     let root_path = state.root.path.clone();
     for path in changed_paths {
-        if provided {
-            if let Some(parent) = ProvidedPath::from_path(path.as_ref()).parent() {
-                let parent = Arc::<str>::from(parent.as_str());
-                insert_path_with_ancestors_for(&mut state.expanded, &parent, &root_path, true);
-            }
-        } else if let Some(parent) = Path::new(path.as_ref()).parent() {
-            let parent = Arc::<str>::from(parent.to_string_lossy().as_ref());
-            insert_path_with_ancestors_for(&mut state.expanded, &parent, &root_path, false);
-        }
+        insert_ancestors_for(&mut state.expanded, path, &root_path, provided);
     }
 }
 
@@ -7958,6 +7972,28 @@ mod tests {
         assert!(state.expanded.contains(src.as_ref()));
         assert!(state.expanded.contains(nested.as_ref()));
         assert!(node_by_path_mut(&mut state.root, nested.as_ref()).is_some_and(|node| node.loaded));
+
+        let _ = std::fs::remove_dir_all(root_path);
+    }
+
+    #[test]
+    fn selecting_a_directory_reveals_its_row_without_expanding_it() {
+        let root_path = unique_component_test_dir("select_directory_stays_collapsed");
+        std::fs::create_dir_all(root_path.join("src").join("nested")).unwrap();
+        let nested_dir = root_path.join("src").join("nested");
+        let props = crate::widgets::file_tree::FileTree::new(root_path.to_string_lossy().as_ref())
+            .select_path(nested_dir.to_string_lossy().into_owned())
+            .props;
+        let mut state = FileTreeComponent::new().create_state(&props);
+
+        apply_reveal_paths_to_state(&mut state, &props);
+
+        let root = state.root.path.clone();
+        let src = resolve_path_under_root(&root, "src").unwrap();
+        let nested = resolve_path_under_root(&root, "src/nested").unwrap();
+        assert!(state.expanded.contains(src.as_ref()));
+        assert!(!state.expanded.contains(nested.as_ref()));
+        assert!(!effective_expanded_paths(&props, &state).contains(nested.as_ref()));
 
         let _ = std::fs::remove_dir_all(root_path);
     }
