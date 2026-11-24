@@ -376,7 +376,9 @@ Help text on hover or focus.
 
 Set `delay` to wait before a hover opens the tooltip, as desktop apps do: sweeping the pointer
 across a toolbar then opens nothing. Once one delayed tooltip has shown, a neighbour opens at once
-if the pointer reaches it within `skip_delay`. Focus always shows the tooltip immediately.
+if the pointer reaches it within `skip_delay`. Focus always shows the tooltip immediately. A
+controlled tooltip (`open(...)`) runs no hover timer, so it never warms its neighbours, and changing
+`delay` mid-hover counts from when the pointer arrived.
 
 | Prop | Type | Description |
 |------|------|-------------|
