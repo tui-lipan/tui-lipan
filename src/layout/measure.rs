@@ -357,8 +357,18 @@ fn measure_uncached(
     // A transparent wrapper (Group, Animated, ...) reports its child's constraints;
     // tightening by those here would let the child resolve a relative bound such as
     // `Percent(50)` a second time, against the already-halved size.
-    let element_max_w = el.layout.max_w.and_then(|l| l.resolve_as_max(avail_w));
-    let element_max_h = el.layout.max_h.and_then(|l| l.resolve_as_max(avail_h));
+    let element_min_w = constraints.min_w.resolve_as_min(avail_w);
+    let element_min_h = constraints.min_h.resolve_as_min(avail_h);
+    let element_max_w = el
+        .layout
+        .max_w
+        .and_then(|l| l.resolve_as_max(avail_w))
+        .map(|max| max.max(element_min_w));
+    let element_max_h = el
+        .layout
+        .max_h
+        .and_then(|l| l.resolve_as_max(avail_h))
+        .map(|max| max.max(element_min_h));
     let effective_max_w = [element_max_w, max_w, requested_max_w]
         .into_iter()
         .flatten()

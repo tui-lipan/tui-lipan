@@ -259,7 +259,7 @@ pub use qr_code::{QrCode, QrEcc, QrRender};
 pub use radio::{Radio, RadioEvent, RadioLayout};
 pub use scroll::ScrollAxis;
 pub(crate) use scroll_view::node::{
-    HeightCacheItem, ScrollViewLayoutCache, VirtualChildEntry, VirtualHeightCache,
+    CachedChildWidth, HeightCacheItem, ScrollViewLayoutCache, VirtualChildEntry, VirtualHeightCache,
 };
 pub(crate) use scroll_view::reconcile::scroll_child_height_depends_on_width;
 pub use scroll_view::{

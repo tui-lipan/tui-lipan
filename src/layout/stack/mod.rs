@@ -11,7 +11,7 @@ use crate::style::{Align, Length, Rect};
 use crate::widgets::internal::StackProps;
 
 use self::types::StackMeasuredSize;
-use super::axis::{Axis, align_x, align_y, cap_height, cap_width, requested_cross_axis};
+use super::axis::{Axis, align_x, align_y, requested_cross_axis};
 use super::measure::min_size_constrained;
 
 pub(crate) use compute::{StackLayoutParams, compute_stack_layout};
@@ -220,14 +220,12 @@ pub(crate) fn layout_vstack(
                 .copied()
                 .flatten(),
             bounds.w,
-        )
-        .max(layout.min_w.resolve_as_min(bounds.w))
-        .min(bounds.w);
+        );
 
         if props.align == Align::Stretch {
             w = bounds.w;
         }
-        let w = cap_width(child, w, bounds.w);
+        let w = layout.clamp_width(w, bounds.w).min(bounds.w);
 
         let x = align_x(bounds, w, props.align);
 
@@ -334,14 +332,12 @@ pub(crate) fn layout_hstack(
                 .copied()
                 .flatten(),
             bounds.h,
-        )
-        .max(layout.min_h.resolve_as_min(bounds.h))
-        .min(bounds.h);
+        );
 
         if props.align == Align::Stretch {
             h = bounds.h;
         }
-        let h = cap_height(child, h, bounds.h);
+        let h = layout.clamp_height(h, bounds.h).min(bounds.h);
 
         let y = align_y(bounds, h, props.align);
 
