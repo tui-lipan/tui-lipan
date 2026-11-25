@@ -901,6 +901,7 @@ impl TerminalEngine for GhosttyEngine {
             (Mode::CURSOR_VISIBLE, ModeFlags::SHOW_CURSOR),
             (Mode::CURSOR_KEYS, ModeFlags::APP_CURSOR),
             (Mode::KEYPAD_KEYS, ModeFlags::APP_KEYPAD),
+            (Mode::MOUSE_EVENT_X10, ModeFlags::MOUSE_X10),
             (Mode::MOUSE_EVENT_NORMAL, ModeFlags::MOUSE_REPORT_CLICK),
             (Mode::BRACKETED_PASTE, ModeFlags::BRACKETED_PASTE),
             (Mode::MOUSE_FORMAT_SGR, ModeFlags::SGR_MOUSE),

@@ -13642,11 +13642,16 @@ mod structured_mouse_contract_tests {
             MouseEncoding::Sgr,
             MouseEncoding::SgrPixels,
         ] {
-            for mode in [
-                MouseMode::None,
-                MouseMode::X10,
-                MouseMode::Normal,
-                MouseMode::AnyEvent,
+            // Which of `kinds` each tracking mode reports, by DEC mode: none, 9, 1000, 1002, 1003.
+            for (mode, reported) in [
+                (MouseMode::None, [false, false, false, false, false, false]),
+                (MouseMode::X10, [true, false, false, false, false, false]),
+                (MouseMode::Normal, [true, true, false, false, true, true]),
+                (
+                    MouseMode::ButtonEvent,
+                    [true, true, true, false, true, true],
+                ),
+                (MouseMode::AnyEvent, [true; 6]),
             ] {
                 let state = MouseModeState {
                     mode,
@@ -13654,7 +13659,7 @@ mod structured_mouse_contract_tests {
                     focus_events_enabled: false,
                 };
                 let runner = runner(state);
-                for kind in kinds {
+                for (kind, mode_accepts) in kinds.into_iter().zip(reported) {
                     for mods in [KeyMods::NONE, KeyMods::ALT, KeyMods::CTRL, KeyMods::SHIFT] {
                         let event = MouseEvent {
                             kind,
@@ -13667,17 +13672,17 @@ mod structured_mouse_contract_tests {
                             event,
                             Some((1, 2)),
                         );
-                        let mode_accepts = match mode {
-                            MouseMode::None => false,
-                            MouseMode::X10 => matches!(kind, MouseKind::Down(_)),
-                            MouseMode::Normal => !matches!(kind, MouseKind::Moved),
-                            MouseMode::AnyEvent => true,
-                        };
                         let expected = mode_accepts && !mods.shift;
                         assert_eq!(plan.is_some(), expected, "{state:?} {kind:?} {mods:?}");
                         if let Some(plan) = plan {
                             assert_eq!(plan.event.kind, kind);
-                            assert_eq!(plan.event.mods, mods);
+                            // X10 reports predate modifier bits.
+                            let sent_mods = if mode == MouseMode::X10 {
+                                KeyMods::NONE
+                            } else {
+                                mods
+                            };
+                            assert_eq!(plan.event.mods, sent_mods);
                             assert_eq!(plan.event.cell, (1, 1));
                             assert!(plan.event.pixel.is_some());
                             assert_eq!(plan.event.mouse_mode, state);

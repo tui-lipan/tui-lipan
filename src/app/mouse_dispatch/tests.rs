@@ -5119,7 +5119,7 @@ fn context_menu_consumes_the_entire_terminal_right_button_gesture() {
             }
         }
     }
-    for mode in [MouseMode::Normal, MouseMode::AnyEvent] {
+    for mode in [MouseMode::ButtonEvent, MouseMode::AnyEvent] {
         let forwarded = Rc::new(RefCell::new(Vec::new()));
         let mut backend = TestBackend::new(ContextTerminal {
             mode,
@@ -5331,7 +5331,7 @@ fn middle_click_consumes_the_entire_terminal_gesture() {
             }
         }
     }
-    for mode in [MouseMode::Normal, MouseMode::AnyEvent] {
+    for mode in [MouseMode::ButtonEvent, MouseMode::AnyEvent] {
         let forwarded = Rc::new(RefCell::new(Vec::new()));
         let mut backend = TestBackend::new(ContextTerminal {
             mode,
@@ -5499,7 +5499,7 @@ fn tab_middle_close_owns_drag_and_release_after_terminal_replaces_bar() {
                 .into()
         }
     }
-    for mode in [MouseMode::Normal, MouseMode::AnyEvent] {
+    for mode in [MouseMode::ButtonEvent, MouseMode::AnyEvent] {
         let forwarded = Rc::new(RefCell::new(Vec::new()));
         let mut backend = TestBackend::new(ClosingTabs {
             mode,

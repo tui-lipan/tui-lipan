@@ -287,6 +287,8 @@ impl ModeFlags {
     pub(super) const REPORT_ASSOCIATED_TEXT: Self = Self(1 << 16);
     /// `DECSET 1016`, SGR-pixel mouse reports.
     pub(super) const SGR_PIXELS_MOUSE: Self = Self(1 << 17);
+    /// `DECSET 9`, X10 compatibility tracking. Only the Ghostty engine tracks it.
+    pub(super) const MOUSE_X10: Self = Self(1 << 18);
 
     pub(super) const fn empty() -> Self {
         Self(0)

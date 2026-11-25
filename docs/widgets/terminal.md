@@ -1060,6 +1060,11 @@ press consumption, and protocol coordinate limits. Semantic consumers can switch
 to `on_mouse_forward_event`, inspect the fields, and forward `event.bytes` to their existing
 PTY writer. No terminal-byte decoder is needed.
 
+Each tracking mode reports only what the child asked for: `MouseMode::X10` (DEC mode 9) presses
+without modifiers, `Normal` (1000) adds releases and the wheel, `ButtonEvent` (1002) adds drags,
+and `AnyEvent` (1003) adds motion with no button held. `MouseMode::allows(kind)` gives the same
+answer. The Alacritty engine does not track mode 9.
+
 ### Pixel-precise reports
 
 A child that wants to know where the pointer is more finely than which cell it is over - one dragging
