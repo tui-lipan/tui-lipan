@@ -167,6 +167,26 @@ impl ScrollWheelBehavior {
     }
 }
 
+/// Controls whether a [`ScrollView`](crate::widgets::ScrollView) automatically scrolls when an
+/// active drag-and-drop pointer hovers near its top or bottom viewport edge.
+///
+/// Text-selection drag autoscroll (`TextArea`, `DocumentView`) is unaffected by this policy.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum DragDropAutoscroll {
+    /// Autoscroll only when this scroll view participates in the active drag — either the active
+    /// `DragSource` or the currently hovered compatible `DropTarget` is a descendant of (or equal
+    /// to) this scroll view.
+    ///
+    /// Unrelated scroll views — including a scroll view wrapped inside an outer pane-level
+    /// `DropTarget` — do not scroll while a dragged item passes over them.
+    #[default]
+    Auto,
+    /// Always autoscroll near the top or bottom edge during any active drag-and-drop gesture.
+    Enabled,
+    /// Never autoscroll during drag-and-drop gestures.
+    Disabled,
+}
+
 /// Semantic target for framework-owned `ScrollView` navigation.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ScrollTarget {

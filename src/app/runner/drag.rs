@@ -165,12 +165,6 @@ impl<C: Component> AppRunner<C> {
 
         let hit = self.core.tree.hit_test(x as i16, y as i16);
 
-        // Autoscroll any ScrollView that the cursor is near the edge of.
-        let autoscrolled = hit.is_some_and(|h| self.maybe_autoscroll_scroll_view_drag_edge(h, y));
-
-        // Track the nearest ScrollView under the cursor for stationary autoscroll ticks.
-        let new_scroll_view_id = hit.and_then(|h| self.nearest_ancestor_scroll_view(h));
-
         let new_hover = hit
             .and_then(|h| self.nearest_ancestor_drop_target(h))
             .filter(|target_id| {
@@ -180,6 +174,16 @@ impl<C: Component> AppRunner<C> {
                     drag_state.payload.as_ref(),
                 )
             });
+
+        // Track and autoscroll the nearest ScrollView under the cursor only when its
+        // `DragDropAutoscroll` policy permits it for this drag.
+        let new_scroll_view_id = hit
+            .and_then(|h| self.nearest_ancestor_scroll_view(h))
+            .filter(|&sv_id| {
+                self.scroll_view_allows_drag_drop_autoscroll(sv_id, drag_state.source_id, new_hover)
+            });
+        let autoscrolled = new_scroll_view_id
+            .is_some_and(|sv_id| self.maybe_autoscroll_scroll_view_edge_for(sv_id, y));
 
         // Always repaint when a visible preview tracks the pointer position.
         let has_visible_preview = !matches!(drag_state.preview, crate::widgets::DragPreview::None);
@@ -529,12 +533,40 @@ impl<C: Component> AppRunner<C> {
         Some((next, metrics, document_view.on_scroll.clone()))
     }
 
-    fn maybe_autoscroll_scroll_view_drag_edge(&mut self, drag_node_id: NodeId, y: u16) -> bool {
-        self.maybe_autoscroll_scroll_view_drag_edge_with_margin(
-            drag_node_id,
-            y,
-            DRAG_AUTOSCROLL_EDGE_MARGIN_ROWS,
-        )
+    fn node_is_within_ancestor(&self, mut node_id: NodeId, ancestor_id: NodeId) -> bool {
+        while self.core.tree.is_valid(node_id) {
+            if node_id == ancestor_id {
+                return true;
+            }
+            let Some(parent) = self.core.tree.node(node_id).parent else {
+                break;
+            };
+            node_id = parent;
+        }
+        false
+    }
+
+    fn scroll_view_allows_drag_drop_autoscroll(
+        &self,
+        scroll_id: NodeId,
+        source_id: NodeId,
+        hovered_target: Option<NodeId>,
+    ) -> bool {
+        if !self.core.tree.is_valid(scroll_id) {
+            return false;
+        }
+        let NodeKind::ScrollView(scroll_view) = &self.core.tree.node(scroll_id).kind else {
+            return false;
+        };
+        match scroll_view.drag_drop_autoscroll {
+            crate::widgets::DragDropAutoscroll::Enabled => true,
+            crate::widgets::DragDropAutoscroll::Disabled => false,
+            crate::widgets::DragDropAutoscroll::Auto => {
+                self.node_is_within_ancestor(source_id, scroll_id)
+                    || hovered_target
+                        .is_some_and(|target_id| self.node_is_within_ancestor(target_id, scroll_id))
+            }
+        }
     }
 
     fn maybe_autoscroll_selection_scroll_view_drag_edge(
@@ -735,7 +767,12 @@ impl<C: Component> AppRunner<C> {
                 }
             }
             ActiveDrag::DragDrop(drag) => drag.scroll_view_id.is_some_and(|sv_id| {
-                self.scroll_view_edge_autoscroll_target_for(sv_id, y)
+                self.scroll_view_allows_drag_drop_autoscroll(
+                    sv_id,
+                    drag.source_id,
+                    drag.hovered_target,
+                ) && self
+                    .scroll_view_edge_autoscroll_target_for(sv_id, y)
                     .is_some()
             }),
             #[cfg(feature = "terminal")]
@@ -839,8 +876,13 @@ impl<C: Component> AppRunner<C> {
             }
             ActiveDrag::DragDrop(drag) => {
                 let sv_id = drag.scroll_view_id;
+                let source_id = drag.source_id;
+                let hovered_target = drag.hovered_target;
                 self.drag.last_autoscroll_tick = Some(self.core.ctx.env().now());
                 let Some(sv_id) = sv_id else { return false };
+                if !self.scroll_view_allows_drag_drop_autoscroll(sv_id, source_id, hovered_target) {
+                    return false;
+                }
                 let autoscrolled = self.maybe_autoscroll_scroll_view_edge_for(sv_id, y);
                 if autoscrolled {
                     self.handle_drag_drop_move(x, y) || autoscrolled

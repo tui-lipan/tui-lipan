@@ -17,10 +17,10 @@ pub(crate) use self::node::RememberedScrollAnchor;
 pub use self::node::ScrollViewNode;
 
 pub use crate::widgets::scroll::{
-    ScrollAxis, ScrollBehavior, ScrollChildExitDirection, ScrollChildVisibility, ScrollClip,
-    ScrollDistanceConfig, ScrollEvent, ScrollExitedChild, ScrollKeymap, ScrollMetrics,
-    ScrollRequest, ScrollTarget, ScrollViewportEvent, ScrollVisibleChild, ScrollWheelBehavior,
-    ScrollWheelConfig,
+    DragDropAutoscroll, ScrollAxis, ScrollBehavior, ScrollChildExitDirection,
+    ScrollChildVisibility, ScrollClip, ScrollDistanceConfig, ScrollEvent, ScrollExitedChild,
+    ScrollKeymap, ScrollMetrics, ScrollRequest, ScrollTarget, ScrollViewportEvent,
+    ScrollVisibleChild, ScrollWheelBehavior, ScrollWheelConfig,
 };
 
 /// A scrollable vertical container.
@@ -53,6 +53,8 @@ pub struct ScrollView {
     pub(crate) h_scroll_wheel_multiplier: Option<u16>,
     /// How mouse wheel deltas are applied.
     pub(crate) scroll_wheel_behavior: ScrollWheelBehavior,
+    /// Whether active drag-and-drop pointers near the top/bottom edges autoscroll this view.
+    pub(crate) drag_drop_autoscroll: DragDropAutoscroll,
     /// Allow PageUp/PageDown to target this view as an ambient fallback.
     pub(crate) ambient_page_scroll: bool,
     /// Whether the scroll view can receive focus.
@@ -112,6 +114,7 @@ impl Default for ScrollView {
             scroll_wheel_multiplier: None,
             h_scroll_wheel_multiplier: None,
             scroll_wheel_behavior: ScrollWheelBehavior::default(),
+            drag_drop_autoscroll: DragDropAutoscroll::default(),
             ambient_page_scroll: false,
             focusable: false,
             virtualize: true,
@@ -351,6 +354,16 @@ impl ScrollView {
     /// Configure how mouse wheel input is applied.
     pub fn scroll_wheel_behavior(mut self, behavior: ScrollWheelBehavior) -> Self {
         self.scroll_wheel_behavior = behavior;
+        self
+    }
+
+    /// Control whether active drag-and-drop pointers hovering near the top or bottom edge
+    /// automatically scroll this view.
+    ///
+    /// Defaults to [`DragDropAutoscroll::Auto`], which autoscrolls only when the active
+    /// `DragSource` or currently hovered compatible `DropTarget` lives inside this scroll view.
+    pub fn drag_drop_autoscroll(mut self, policy: DragDropAutoscroll) -> Self {
+        self.drag_drop_autoscroll = policy;
         self
     }
 

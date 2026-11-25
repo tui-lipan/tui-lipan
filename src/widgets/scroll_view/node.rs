@@ -13,8 +13,8 @@ use crate::widgets::internal::StackProps;
 use crate::widgets::scroll::{KineticScrollState, ScrollAxis, SmoothScrollState};
 
 use super::{
-    ScrollEvent, ScrollKeymap, ScrollRequest, ScrollTarget, ScrollViewportEvent,
-    ScrollVisibleChild, ScrollWheelBehavior,
+    DragDropAutoscroll, ScrollEvent, ScrollKeymap, ScrollRequest, ScrollTarget,
+    ScrollViewportEvent, ScrollVisibleChild, ScrollWheelBehavior,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -88,6 +88,7 @@ pub struct ScrollViewNode {
     pub scroll_wheel_multiplier: Option<u16>,
     pub h_scroll_wheel_multiplier: Option<u16>,
     pub scroll_wheel_behavior: ScrollWheelBehavior,
+    pub drag_drop_autoscroll: DragDropAutoscroll,
     pub ambient_page_scroll: bool,
     pub focusable: bool,
     pub tab_stop: bool,

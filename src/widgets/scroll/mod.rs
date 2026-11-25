@@ -11,9 +11,9 @@ pub(crate) use action::{
 pub use action::{ScrollClip, ScrollKeymap, ScrollMetrics, ScrollRequest};
 pub use axis::ScrollAxis;
 pub use behavior::{
-    ScrollBehavior, ScrollChildExitDirection, ScrollChildVisibility, ScrollDistanceConfig,
-    ScrollEvent, ScrollExitedChild, ScrollTarget, ScrollViewportEvent, ScrollVisibleChild,
-    ScrollWheelBehavior, ScrollWheelConfig,
+    DragDropAutoscroll, ScrollBehavior, ScrollChildExitDirection, ScrollChildVisibility,
+    ScrollDistanceConfig, ScrollEvent, ScrollExitedChild, ScrollTarget, ScrollViewportEvent,
+    ScrollVisibleChild, ScrollWheelBehavior, ScrollWheelConfig,
 };
 pub(crate) use offset::{cursor_margin, smart_list_offset, smart_list_offset_with_indicators};
 pub use smooth::KineticScrollState;
