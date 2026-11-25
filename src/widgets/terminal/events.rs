@@ -619,6 +619,72 @@ impl ForwardedMouseEvent {
     }
 }
 
+/// Why [`encode_mouse_event`] made no report.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum MouseReportError {
+    /// The child has mouse reporting off.
+    ReportingDisabled,
+    /// The child's tracking mode does not report this kind of event, such as a drag under
+    /// [`MouseMode::Normal`].
+    NotReported,
+    /// The event is above or left of the geometry's content origin.
+    OutsideContent,
+    /// The position does not fit the child's encoding: legacy X10 stops at cell 223.
+    CoordinateOutOfRange,
+    /// The child wants pixel reports and the geometry has a zero cell size.
+    InvalidGeometry,
+}
+
+impl std::fmt::Display for MouseReportError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::ReportingDisabled => "the application has mouse reporting off",
+            Self::NotReported => "the application's mouse tracking mode does not report this event",
+            Self::OutsideContent => "the position is outside the terminal content",
+            Self::CoordinateOutOfRange => {
+                "the position does not fit the application's mouse encoding"
+            }
+            Self::InvalidGeometry => "pixel mouse reports need a nonzero cell size",
+        })
+    }
+}
+
+impl std::error::Error for MouseReportError {}
+
+/// Encode `event` as the child asked for in `mode`, or say why it gets no report.
+///
+/// This is the report a terminal would send: it applies the child's tracking mode (see
+/// [`MouseMode::allows`]) and its encoding, with the modifiers in `event` (none under X10
+/// tracking). Use it to send a child synthetic mouse input. `event` is in the same coordinates
+/// as `geometry.content_origin`; the caller checks the upper bounds against the terminal's size.
+///
+/// # Errors
+///
+/// [`MouseReportError`] when the child would get no report for `event`.
+pub fn encode_mouse_event(
+    event: MouseEvent,
+    mode: MouseModeState,
+    geometry: MouseReportGeometry,
+) -> Result<ForwardedMouseEvent, MouseReportError> {
+    if mode.mode == MouseMode::None {
+        return Err(MouseReportError::ReportingDisabled);
+    }
+    if !mode.mode.allows(event.kind) {
+        return Err(MouseReportError::NotReported);
+    }
+    if event.x < geometry.content_origin.0 || event.y < geometry.content_origin.1 {
+        return Err(MouseReportError::OutsideContent);
+    }
+    if mode.encoding == MouseEncoding::SgrPixels
+        && (geometry.cell.width == 0 || geometry.cell.height == 0)
+    {
+        return Err(MouseReportError::InvalidGeometry);
+    }
+    ForwardedMouseEvent::from_mouse(event, mode, geometry)
+        .ok_or(MouseReportError::CoordinateOutOfRange)
+}
+
 /// One-based pixel coordinates used by SGR-pixels, including its saturation rules.
 fn mouse_pixel_position(cell: (u16, u16), geometry: MouseReportGeometry) -> (u16, u16) {
     let (sub_x, sub_y) = geometry.sub_cell.unwrap_or((0, 0));
@@ -815,6 +881,70 @@ mod selection_tests {
 mod forwarded_mouse_tests {
     use super::*;
     use crate::core::event::KeyMods;
+
+    /// The checked encoder sends what a terminal would, Shift included, which interactive
+    /// forwarding keeps for selection, and refuses what the child would never be sent.
+    #[test]
+    fn checked_encoder_reports_what_the_child_asked_for_and_refuses_the_rest() {
+        let state = |mode, encoding| MouseModeState {
+            mode,
+            encoding,
+            focus_events_enabled: false,
+        };
+        let at = |x, y, kind, mods| MouseEvent { x, y, kind, mods };
+        let left = MouseButton::Left;
+        let origin = MouseReportGeometry::at((2, 1));
+
+        let click = encode_mouse_event(
+            at(12, 6, MouseKind::Down(left), KeyMods::SHIFT),
+            state(MouseMode::Normal, MouseEncoding::Sgr),
+            origin,
+        )
+        .unwrap();
+        assert_eq!(click.bytes, b"\x1b[<4;11;6M");
+        assert_eq!(click.mods, KeyMods::SHIFT);
+
+        for (event, mode, geometry, error) in [
+            (
+                at(5, 5, MouseKind::Down(left), KeyMods::NONE),
+                state(MouseMode::None, MouseEncoding::Sgr),
+                origin,
+                MouseReportError::ReportingDisabled,
+            ),
+            (
+                at(5, 5, MouseKind::Drag(left), KeyMods::NONE),
+                state(MouseMode::Normal, MouseEncoding::Sgr),
+                origin,
+                MouseReportError::NotReported,
+            ),
+            (
+                at(1, 5, MouseKind::Down(left), KeyMods::NONE),
+                state(MouseMode::Normal, MouseEncoding::Sgr),
+                origin,
+                MouseReportError::OutsideContent,
+            ),
+            (
+                at(300, 5, MouseKind::Down(left), KeyMods::NONE),
+                state(MouseMode::Normal, MouseEncoding::X10),
+                origin,
+                MouseReportError::CoordinateOutOfRange,
+            ),
+            (
+                at(5, 5, MouseKind::Down(left), KeyMods::NONE),
+                state(MouseMode::Normal, MouseEncoding::SgrPixels),
+                MouseReportGeometry {
+                    cell: crate::widgets::TerminalCellSize {
+                        width: 0,
+                        height: 20,
+                    },
+                    ..origin
+                },
+                MouseReportError::InvalidGeometry,
+            ),
+        ] {
+            assert_eq!(encode_mouse_event(event, mode, geometry), Err(error));
+        }
+    }
 
     #[test]
     fn structured_reports_retain_semantics_and_exact_protocol_bytes() {

@@ -58,10 +58,10 @@ pub use damage::{DamagedRow, GraphicsDamage, TerminalDamage, TerminalMutation};
 pub use copy_mode::{CopyModeAction, CopyModeGrid, CopyModeViewport, TerminalCopyMode};
 pub use events::{
     ForwardedMouseEvent, KittyKeyboardFlags, MouseEncoding, MouseMode, MouseModeState,
-    MouseReportGeometry, TerminalInputEvent, TerminalInputKind, TerminalKeyModes,
+    MouseReportError, MouseReportGeometry, TerminalInputEvent, TerminalInputKind, TerminalKeyModes,
     TerminalLinkEvent, TerminalLinkKind, TerminalPasteEvent, TerminalPasteShortcutBehavior,
-    TerminalPathFilter, encode_paste, focus_sequences, key_event_to_bytes, mouse_event_to_bytes,
-    paste_sequences, terminal_selection_text,
+    TerminalPathFilter, encode_mouse_event, encode_paste, focus_sequences, key_event_to_bytes,
+    mouse_event_to_bytes, paste_sequences, terminal_selection_text,
 };
 #[cfg(feature = "terminal-images")]
 pub use graphics::{

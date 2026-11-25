@@ -1270,7 +1270,7 @@ pub(crate) fn terminal_mouse_forward_plan(
             .as_ref()
             .map_or_else(host_cell_size, |screen| screen.cell_size()),
     };
-    let event = ForwardedMouseEvent::from_mouse(mouse, mouse_mode, geometry)?;
+    let event = crate::widgets::encode_mouse_event(mouse, mouse_mode, geometry).ok()?;
     Some(TerminalMouseForward {
         hit,
         event,

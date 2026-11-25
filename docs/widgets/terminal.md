@@ -1066,6 +1066,13 @@ and `AnyEvent` (1003) adds motion with no button held. `MouseMode::allows(kind)`
 answer. Setting one tracking mode replaces the one in effect, and resetting any of them turns
 tracking off, as in xterm.
 
+To send a child synthetic mouse input, `encode_mouse_event(event, screen.mouse_mode(), geometry)`
+returns the `ForwardedMouseEvent` a terminal would send, with its `bytes`. It skips the widget's
+interactive rules, so Shift reaches the child. It returns a `MouseReportError` when the child would
+get no report: reporting off, an event its tracking mode does not report, a position left of or
+above `geometry.content_origin` or past what the encoding can express, or pixel reports without a
+cell size. Checking the position against the terminal's size is up to the caller.
+
 ### Pixel-precise reports
 
 A child that wants to know where the pointer is more finely than which cell it is over - one dragging
