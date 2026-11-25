@@ -6,8 +6,8 @@ use std::rc::Rc;
 
 use tui_lipan::TestBackend;
 use tui_lipan::dnd::{
-    CommandDecoder, DragPosition, DropOperation, HostDrag, HostDragFinished, HostDragSource,
-    HostEvent, OscScanner, ProgramCommand, TaggedEvent, TerminalEvent, URI_LIST,
+    CommandDecoder, DragPosition, DropOperation, HostDrag, HostDragFinished, HostDragItems,
+    HostDragSource, HostEvent, OscScanner, ProgramCommand, TaggedEvent, TerminalEvent, URI_LIST,
 };
 use tui_lipan::prelude::*;
 use tui_lipan::{FileTreeChangeSource, FileTreeDirectoryListing};
@@ -103,7 +103,7 @@ fn backend() -> (TestBackend<Files>, Rc<RefCell<Vec<DropOperation>>>) {
     (backend, finished)
 }
 
-fn sent(backend: &mut TestBackend<Files>) -> Vec<ProgramCommand> {
+fn sent<C: Component>(backend: &mut TestBackend<C>) -> Vec<ProgramCommand> {
     let bytes = backend.take_host_drag_and_drop_output();
     let mut decoder = CommandDecoder::default();
     OscScanner::default()
@@ -114,7 +114,7 @@ fn sent(backend: &mut TestBackend<Files>) -> Vec<ProgramCommand> {
         .collect()
 }
 
-fn host(backend: &mut TestBackend<Files>, event: TerminalEvent) {
+fn host<C: Component>(backend: &mut TestBackend<C>, event: TerminalEvent) {
     backend
         .host_drag_and_drop(TaggedEvent {
             client_id: None,
@@ -124,7 +124,7 @@ fn host(backend: &mut TestBackend<Files>, event: TerminalEvent) {
 }
 
 /// Where `label` is drawn.
-fn cell_of(backend: &mut TestBackend<Files>, label: &str) -> DragPosition {
+fn cell_of<C: Component>(backend: &mut TestBackend<C>, label: &str) -> DragPosition {
     let lines = backend.capture_frame().to_fixed_grid_lines();
     let (row, line) = lines
         .iter()
@@ -239,4 +239,63 @@ fn an_app_that_offers_drags_itself_keeps_its_registration() {
         sent(&mut backend).is_empty(),
         "the runtime does not withdraw what the app registered"
     );
+}
+
+/// A list with composed rows: a header, and one file row. Each holds a button, which a drag can
+/// begin on.
+struct ComposedRows {
+    disabled: bool,
+}
+
+impl Component for ComposedRows {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+    fn create_state(&self, _: &()) {}
+    fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+    fn view(&self, _: &Context<Self>) -> Element {
+        List::new()
+            .items([
+                ListItem::header("Group").content(Button::new("Group")),
+                ListItem::new("file").content(Button::new("file")),
+            ])
+            .disabled(self.disabled)
+            .host_drag(HostDragItems::new(|index| {
+                Some(HostDrag::text(format!("row {index}")))
+            }))
+            .into()
+    }
+}
+
+/// Composed rows offer drags only where a text list would: selectable rows of an enabled list.
+#[test]
+fn composed_list_rows_offer_drags_like_text_rows() {
+    for disabled in [false, true] {
+        let mut backend = TestBackend::new(ComposedRows { disabled });
+        backend.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 4,
+        });
+        backend.set_host_drag_and_drop_supported(true);
+        backend.render();
+        sent(&mut backend);
+        let header = cell_of(&mut backend, "Group");
+        host(
+            &mut backend,
+            TerminalEvent::DragGesture { position: header },
+        );
+        assert!(sent(&mut backend).is_empty(), "a header offers nothing");
+        let row = cell_of(&mut backend, "file");
+        host(&mut backend, TerminalEvent::DragGesture { position: row });
+        let offer = sent(&mut backend);
+        if disabled {
+            assert!(offer.is_empty(), "a disabled list offers nothing");
+        } else {
+            assert_eq!(presented(&offer, 0), b"row 1");
+        }
+    }
 }

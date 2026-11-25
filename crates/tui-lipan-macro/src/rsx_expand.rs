@@ -57,7 +57,8 @@ impl Node {
                 Entry::Prop(name, value) => {
                     let name_str = name.to_string();
 
-                    if name_str == "key" {
+                    // A list item is not an element; its key is one of its own props.
+                    if name_str == "key" && ty != "ListItem" {
                         let NodeOrExpr::Expr(expr) = value.as_ref() else {
                             return Err(syn::Error::new(
                                 name.span(),
@@ -132,7 +133,7 @@ fn finish_node(
     }
 
     if let Some((ident, expr)) = key {
-        if matches!(ty, "Tab" | "ListItem") {
+        if ty == "Tab" {
             return Err(syn::Error::new(
                 ident.span(),
                 format!("`key:` is not supported for `{ty}`"),
@@ -203,7 +204,7 @@ const CONSTRUCTOR_KEYS: &[(&str, &str)] = &[
     ("HexArea", "bytes"),
     ("Image", "src"),
     ("Input", "value"),
-    ("ListItem", "content"),
+    ("ListItem", "label"),
     ("PaginationBar", "state"),
     ("ProgressBar", "progress"),
     ("Radio", "options"),

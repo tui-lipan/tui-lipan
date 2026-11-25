@@ -54,6 +54,7 @@ pub struct MouseRegion {
     /// region is geometrically transparent: for wrappers the framework inserts around an app's
     /// element, such as a tooltip's trigger.
     pub(crate) fit_child: bool,
+    pub(crate) hover_identity: u64,
 }
 
 impl MouseRegion {
@@ -63,6 +64,14 @@ impl MouseRegion {
             enabled: true,
             ..Self::default()
         }
+    }
+
+    /// Say what the region stands for, when its node can outlive that: a keyed row that moves to
+    /// another index keeps its node. While hovered, a change reports the region leaving, with the
+    /// handler it last had, and entering again if the pointer is still over it once laid out.
+    pub(crate) fn hover_identity(mut self, identity: u64) -> Self {
+        self.hover_identity = identity;
+        self
     }
 
     /// Set wrapped child content.

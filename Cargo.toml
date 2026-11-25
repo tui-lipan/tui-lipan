@@ -351,6 +351,10 @@ name = "scroll_reorder_reconcile"
 harness = false
 
 [[bench]]
+name = "list_rows"
+harness = false
+
+[[bench]]
 name = "terminal_ingest"
 harness = false
 required-features = ["terminal"]

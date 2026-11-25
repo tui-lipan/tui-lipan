@@ -6,10 +6,19 @@ use tui_lipan::{FileTreeChangeSource, FileTreeDirectoryListing};
 #[derive(Clone, Copy)]
 enum Kind {
     List,
+    ComposedList,
     Tree,
     ComposedTree,
     FileTree,
 }
+
+const ALL: [Kind; 5] = [
+    Kind::List,
+    Kind::ComposedList,
+    Kind::Tree,
+    Kind::ComposedTree,
+    Kind::FileTree,
+];
 
 struct Entries {
     kind: Kind,
@@ -53,9 +62,17 @@ impl Component for Entries {
 
     fn view(&self, ctx: &Context<Self>) -> Element {
         match self.kind {
-            Kind::List => {
+            Kind::List | Kind::ComposedList => {
+                let item = |label: &'static str| {
+                    let item = ListItem::new(label);
+                    if matches!(self.kind, Kind::ComposedList) {
+                        item.content(Text::new(label))
+                    } else {
+                        item
+                    }
+                };
                 let mut list = List::new()
-                    .items([ListItem::new("directory"), ListItem::new("file.txt")])
+                    .items([item("directory"), item("file.txt")])
                     .activate_on_click(self.activate_on_click)
                     .on_select(ctx.link().callback(|_| Msg::Select))
                     .on_activate(
@@ -181,7 +198,7 @@ fn click<C: Component>(backend: &mut TestBackend<C>, label: &str, mods: KeyMods)
 
 #[test]
 fn ctrl_click_and_ctrl_enter_are_distinct_and_do_not_toggle_directories() {
-    for kind in [Kind::List, Kind::Tree, Kind::ComposedTree, Kind::FileTree] {
+    for kind in ALL {
         let mut backend = backend(kind, true, true);
         click(&mut backend, "directory", KeyMods::CTRL);
         assert_eq!(backend.state().ctrl_activated.len(), 1);
@@ -201,7 +218,7 @@ fn ctrl_click_and_ctrl_enter_are_distinct_and_do_not_toggle_directories() {
         assert_eq!(backend.state().toggled, 0);
         click(&mut backend, "directory", KeyMods::NONE);
         assert_eq!(backend.state().activated.len(), 1);
-        if !matches!(kind, Kind::List) {
+        if !matches!(kind, Kind::List | Kind::ComposedList) {
             assert_eq!(backend.state().toggled, 1);
             assert!(backend.capture_frame().plain_text().contains("nested"));
             click(&mut backend, "directory", KeyMods::CTRL);
@@ -232,7 +249,7 @@ fn ctrl_click_and_ctrl_enter_are_distinct_and_do_not_toggle_directories() {
 
 #[test]
 fn ctrl_click_works_when_normal_click_activation_is_disabled() {
-    for kind in [Kind::List, Kind::Tree, Kind::ComposedTree, Kind::FileTree] {
+    for kind in ALL {
         let mut backend = backend(kind, true, false);
         click(&mut backend, "directory", KeyMods::CTRL);
         assert_eq!(backend.state().ctrl_activated.len(), 1);
@@ -243,7 +260,7 @@ fn ctrl_click_works_when_normal_click_activation_is_disabled() {
 
 #[test]
 fn ctrl_click_without_a_callback_keeps_existing_activation_behavior() {
-    for kind in [Kind::List, Kind::Tree, Kind::ComposedTree, Kind::FileTree] {
+    for kind in ALL {
         let mut backend = backend(kind, false, true);
         click(&mut backend, "directory", KeyMods::CTRL);
         assert_eq!(backend.state().activated.len(), 1);

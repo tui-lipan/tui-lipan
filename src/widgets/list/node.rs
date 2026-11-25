@@ -1,3 +1,4 @@
+use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::callback::{Callback, KeyHandler};
@@ -7,11 +8,11 @@ use crate::core::node::{ScrollbarZone, ScrollbarZonesParams, WidgetNode, compute
 use crate::style::{
     BorderStyle, Padding, Rect, ScrollbarVariant, Style, StyleSlot, Theme, ThemeRole,
 };
-use crate::widgets::list::{ListEvent, ListItem, ListSymbolPosition};
+use crate::widgets::list::{ListEvent, ListHoverEvent, ListItem, ListSymbolPosition};
 /// A realized list node.
 #[derive(Clone)]
 pub struct ListNode {
-    pub items: Arc<[ListItem]>,
+    pub items: Rc<[ListItem]>,
     pub selected: Option<usize>,
     pub scroll_keys: crate::widgets::ScrollKeymap,
     pub scroll_wheel: bool,
@@ -76,6 +77,7 @@ pub struct ListNode {
     pub navigation_wrap: bool,
     pub on_focus: Option<Callback<()>>,
     pub on_blur: Option<Callback<()>>,
+    pub on_hover: Option<Callback<ListHoverEvent>>,
 }
 
 impl ListNode {
@@ -99,6 +101,12 @@ impl ListNode {
     }
 
     pub(crate) fn item_at(&self, x: i16, y: i16, inner: Rect) -> Option<usize> {
+        self.row_at(x, y, inner)
+            .filter(|index| self.items[*index].is_selectable())
+    }
+
+    /// The row under a point, selectable or not.
+    pub(crate) fn row_at(&self, x: i16, y: i16, inner: Rect) -> Option<usize> {
         if self.disabled {
             return None;
         }
@@ -116,13 +124,7 @@ impl ListNode {
             return None;
         }
         let row = row.checked_sub(usize::from(top))?;
-        let index = super::utils::item_index_at_visual_line(
-            &self.items,
-            start,
-            row,
-            end.saturating_sub(start),
-        )?;
-        self.items[index].is_selectable().then_some(index)
+        super::utils::item_index_at_visual_line(&self.items, start, row, end.saturating_sub(start))
     }
 }
 
@@ -229,6 +231,7 @@ impl WidgetNode for ListNode {
         // no visual feedback for those interactions.
         !self.disabled
             && (self.on_click.is_some()
+                || self.on_hover.is_some()
                 || self.hover_style.resolves_non_empty(theme, ThemeRole::Hover)
                 || self
                     .item_hover_style

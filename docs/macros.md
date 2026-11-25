@@ -196,8 +196,9 @@ rsx! {
 
 Use the named key below to pass an argument to a widget's `new()` constructor.
 Text bodies use `content`, labels use `label`, and edited values use `value`.
-For `ListItem`, `Tooltip`, and `Toast`, migrate the old `text` or `message` key
-to `content`.
+For `Tooltip` and `Toast`, migrate the old `text` or `message` key to `content`.
+For `ListItem`, use `label`: its `content:` key sets a composed row element
+(see [List](widgets/data.md#composed-rows)).
 
 | Widget | Key | Example |
 |--------|-----|---------|
@@ -209,7 +210,7 @@ to `content`.
 | `Tab` | `label` | `Tab { label: "Tab 1" }` |
 | `DraggableTab` | `label` | `DraggableTab { label: "file.rs" }` |
 | `AccordionItem` | `title` | `AccordionItem { title: "Section", Text { content: "Body" } }` |
-| `ListItem` | `content` | `ListItem { content: "Item 1" }` |
+| `ListItem` | `label` | `ListItem { label: "Item 1" }` |
 | `Checkbox` | `checked` | `Checkbox { checked: true }` |
 | `ProgressBar` | `progress` | `ProgressBar { progress: 0.75 }` |
 | `Radio` | `options` | `Radio { options: ["A", "B"] }` |
@@ -396,7 +397,7 @@ rsx! {
 }
 ```
 
-`key:` is not supported on `Tab` or `ListItem`.
+`key:` is not supported on `Tab`. On `ListItem` it sets the item's own key.
 
 ### Mixing Builder API and `rsx!`
 
@@ -466,8 +467,8 @@ let rows = ui! {
 
 let same_rows = rsx! {
     Rows {
-        ListItem { content: "Alpha" },
-        ListItem { content: "Beta" }
+        ListItem { label: "Alpha" },
+        ListItem { label: "Beta" }
     }
 };
 ```

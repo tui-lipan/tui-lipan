@@ -161,7 +161,7 @@ mod tests {
 
         let rows = rsx! {
             aliased :: Rows {
-                ListItem { content: "First" },
+                ListItem { label: "First" },
                 "Second",
             }
         };
@@ -224,8 +224,8 @@ mod tests {
         };
         let rsx_rows = rsx! {
             Rows {
-                ListItem { content: "First" },
-                ListItem { content: "Second" },
+                ListItem { label: "First" },
+                ListItem { label: "Second" },
             }
         };
 

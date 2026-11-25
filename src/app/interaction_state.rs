@@ -519,6 +519,8 @@ pub(crate) struct MouseTrackingState {
     /// and paint flag lets a later reconcile emit leave and repaint even when
     /// the region moved, became disabled, or changed its hit-test.
     pub mouse_region_hover_chain: Vec<MouseRegionHoverState>,
+    /// The list row last reported to `List::on_hover`, with the callback that will hear it leave.
+    pub list_row_hover: Option<ListRowHoverState>,
     /// For List/Table/Tabs: track which item is hovered to avoid re-renders on same item.
     pub hovered_item_index: Option<usize>,
     /// Richer renderer-level hover target for widgets where an item index is insufficient.
@@ -572,8 +574,17 @@ pub(crate) struct MouseTrackingState {
 }
 
 #[derive(Clone)]
+pub(crate) struct ListRowHoverState {
+    pub id: NodeId,
+    pub index: usize,
+    pub on_hover: Callback<crate::widgets::ListHoverEvent>,
+}
+
+#[derive(Clone)]
 pub(crate) struct MouseRegionHoverState {
     pub id: NodeId,
+    /// The region's `hover_identity`: the same node under another identity is another region.
+    pub identity: u64,
     pub on_hover_change: Option<Callback<bool>>,
     pub affects_paint: bool,
 }

@@ -58,6 +58,8 @@ mod list_description_fit_render;
 mod list_description_spinner_render;
 #[path = "suites/widget_behavior/list_empty_text_padding_render.rs"]
 mod list_empty_text_padding_render;
+#[path = "suites/widget_behavior/list_row_hover.rs"]
+mod list_row_hover;
 #[path = "suites/widget_behavior/list_selection_highlight_lines.rs"]
 mod list_selection_highlight_lines;
 #[path = "suites/widget_behavior/modal_reserve_height.rs"]

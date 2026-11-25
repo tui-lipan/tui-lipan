@@ -58,6 +58,7 @@ State-style setters use [StyleSlot semantics](../styling.md#state-style-slots):
 | `on_select` | `Callback<ListEvent>` | Selection changed |
 | `on_context_menu` | `Callback<(ListEvent, MouseEvent)>` | Right-button press on a data row; preserves selection and reports the clicked row with popup coordinates |
 | `on_item_click` | `Callback<ListEvent>` | Row clicked with mouse |
+| `on_hover` | `Callback<ListHoverEvent>` | Pointer entered or left a row, headers and spacers included |
 | `on_activate` | `Callback<ListEvent>` | Item activated by Enter, a single click by default, or a double-click when `activate_on_click` is false |
 | `on_ctrl_activate` | `Callback<ListEvent>` | Ctrl+click or Ctrl+Enter, independently of normal activation and `activate_on_click` |
 | `host_drag` | `HostDragItems` | What a selectable item offers when dragged out of the app, by its index; see [Drag and drop](../drag-and-drop.md#drag-out-of-the-app) |
@@ -196,6 +197,40 @@ the reserved width still comes from configured selection/unselected/active
 symbols or row status content. Use `List::symbol_column(false)` when row-local
 gutters provide the leading markers and the built-in column should not measure
 or render.
+
+### Composed rows
+
+`ListItem::content(element)` draws an element in place of the row's label, so a row can hold
+buttons, badges, tooltips, or anything else with its own clicks and hover. The label stays the
+row's accessible name, and the list still owns selection, activation, Ctrl activation, context
+menus, keyboard navigation, and scrolling the selection into view. A click on a child that
+handles it does not also activate the row.
+
+```rust
+List::new()
+    .items(threads.iter().map(|thread| {
+        let actions = HStack::new()
+            .child(Text::new(thread.title.clone()))
+            .child(Spacer::new())
+            .child(if hovered == Some(thread.index) {
+                Button::new("Snooze").on_click(ctx.link().callback(move |_| Msg::Snooze(thread.id)))
+            } else {
+                Button::new(thread.age.clone())
+            });
+        ListItem::new(thread.title.clone())
+            .content(actions)
+            .key(thread.id.clone())
+    }))
+    .on_hover(ctx.link().callback(|event: ListHoverEvent| Msg::Hover(event.index, event.hovered)))
+```
+
+A list with any content row renders every row this way; rows without content show their label.
+Set `content_height(n)` for content taller than one line, and `key(id)` so a row keeps its
+widgets' state when rows reorder. Row symbols, gutters, padding, and `hover_style` belong to text
+rows; composed rows bring their own decoration. Row, selection, active, and item hover styles
+apply to the whole row.
+
+In `rsx!`, `ListItem { label: "Inbox", content: Text { content: "Inbox" }, key: "inbox" }`.
 
 ### ListConfig
 
@@ -396,7 +431,7 @@ Hierarchical tree view with expand/collapse.
 | `controlled_expansion` | `bool` | Node `expanded` flags are authoritative; defaults to `false` |
 | `toggle_on_activate` | `bool` | Activation also toggles expandable nodes; defaults to `true` |
 | `item_hover_effect` | `Option<VisualEffect>` | Paint effect over hovered selectable or collapsible composed rows, including their interactive descendants |
-| `on_hover` | `Callback<TreeHoverEvent>` | Composed-row pointer entry and exit |
+| `on_hover` | `Callback<TreeHoverEvent>` | Pointer entry and exit for each row, including headings |
 | `on_pointer_move` | `Callback<TreeEvent>` | Pointer movement over composed rows |
 | `on_viewport_change` | `Callback<ScrollViewportEvent>` | Composed-row viewport metadata |
 | `selected` | `impl Into<Option<usize>>` | Controlled selected visible row index (`None` clears the selection highlight; leave unset for uncontrolled internal selection) |
@@ -449,7 +484,9 @@ Hierarchical tree view with expand/collapse.
 | `host_drag` | `Fn(&TreeEvent) -> Option<HostDrag>` | What a row offers when dragged out of the app; see [Drag and drop](../drag-and-drop.md#drag-out-of-the-app) |
 | `on_toggle` | `Callback<TreeToggleEvent>` | Node expanded/collapsed |
 
-Text-only `Tree` uses an inner `List` of flattened visible rows. Its per-row `item_hover_style` and pointer versus keyboard row hover match [List](#list). Trees with composed row content use a `ScrollView`, with tree navigation and arrows supplied by `Tree`.
+`Tree` renders its flattened visible rows through a [List](#list): text rows when every node is
+text, and [composed rows](#composed-rows) when any node has content, a leading column, or an
+icon. Selection, hover, clicks, and paging behave the same either way.
 
 `IndentStyle` selects guide appearance. `Line` draws vertical guides; `LineCapped` and
 `LineCappedRounded` finish the last sibling with `└` and `╰`. `Branch` and `BranchRounded` add
@@ -500,11 +537,10 @@ indices are unchanged. It is ignored on the first row and below the top level. E
 report paths starting with each root's index. `Tree::new(root)` continues to display one root.
 
 A node normally contains a `ListItem`, with styled spans, descriptions, status symbols, and detail
-lines. For independent buttons, badges, or other composed content, use `TreeNode::content(element)`.
-The original `ListItem` supplies the row's semantic label and selectable role. Set
-`content_height(n)` for content taller than one cell. `leading(element)` places a column before
-its guides, for example an active-row marker. `row_style(style)` styles the whole row, including
-the guides. `key(id)` gives composed content a stable reconciliation identity across reordering.
+lines. For independent buttons, badges, or other composed content, use `TreeNode::content(element)`,
+which sets [`ListItem::content`](#composed-rows) on the node's item, as `content_height(n)` and
+`key(id)` set its height and identity. `leading(element)` places a column before its guides, for
+example an active-row marker. `row_style(style)` styles the whole row, including the guides.
 `show_arrow(false)` makes a row a section heading: it has no arrow column, so its label starts
 where its siblings' arrows would. Use it for titles over groups, typically at the top level with
 `TreeExpansionMode::AlwaysOpen`.
@@ -524,7 +560,7 @@ TreeNode::new("agents")
 
 **Migration:** replace `TreeNode::show_disclosure(false)` with `show_arrow(false)`.
 
-Composed rows use the tree's scroll view and keyboard navigation. The view follows the selection
+Composed rows use the list's keyboard navigation. The view follows the selection
 the way a `List` follows its cursor: it scrolls only when the selected row comes within two rows of
 an edge. Item hover styles and effects
 apply only to selectable or collapsible rows. Non-selectable headings and other inert rows keep
@@ -545,7 +581,7 @@ With `controlled_expansion(true)`, every node's `expanded` value is authoritativ
 update. Store expansion under application data IDs and map `on_toggle` paths back to those IDs.
 This preserves the intended state when producers reorder nodes or supply lazy children.
 
-`on_hover`, `on_pointer_move`, and `on_viewport_change` describe composed rows. `item_hover_effect`
+`on_pointer_move` and `on_viewport_change` describe composed rows. `item_hover_effect`
 applies a paint effect over hovered selectable or collapsible composed rows, including their
 interactive descendants. Text-only trees retain their List rendering. Selection symbols and List-specific column layout apply to text rows;
 composed rows supply those decorations through their content or leading column.

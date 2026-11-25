@@ -1,5 +1,6 @@
 //! List widget.
 
+use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::callback::{Callback, KeyHandler};
@@ -9,7 +10,10 @@ use crate::style::{BorderStyle, Length, Padding, ScrollbarConfig, Span, Style, S
 use unicode_width::UnicodeWidthStr;
 
 use super::{Spinner, SpinnerSpeed, SpinnerStyle};
-use crate::widgets::scroll::{ScrollAction, ScrollKeymap, scroll_action_from_key};
+use crate::core::event::KeyCode;
+use crate::widgets::scroll::{
+    ScrollAction, ScrollKeymap, has_command_modifier, scroll_action_from_key,
+};
 
 /// Shared configuration for the inner [`List`] used by composite widgets
 /// like [`Select`](super::Select), [`ComboBox`](super::ComboBox),
@@ -272,6 +276,38 @@ impl ListConfig {
     }
 }
 
+/// Which end of the list a key should seed an empty selection from.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SeedDirection {
+    Forward,
+    Backward,
+}
+
+/// Resolve the direction a navigation key seeds an empty selection from.
+///
+/// `PageUp`/`PageDown` are handled outside [`ScrollKeymap`], so they are matched
+/// explicitly here; without that, `Down` would establish a cursor while
+/// `PageDown` stayed inert on the same list. Command-modifier chords never seed.
+pub(crate) fn selection_seed_direction(
+    key: &KeyEvent,
+    scroll_keys: crate::widgets::ScrollKeymap,
+) -> Option<SeedDirection> {
+    if has_command_modifier(key) {
+        return None;
+    }
+    match key.code {
+        KeyCode::PageDown => return Some(SeedDirection::Forward),
+        KeyCode::PageUp => return Some(SeedDirection::Backward),
+        _ => {}
+    }
+
+    match scroll_action_from_key(key, scroll_keys)? {
+        ScrollAction::LineDown(_) | ScrollAction::Home => Some(SeedDirection::Forward),
+        ScrollAction::LineUp(_) | ScrollAction::End => Some(SeedDirection::Backward),
+        ScrollAction::LineLeft(_) | ScrollAction::LineRight(_) => None,
+    }
+}
+
 /// A list selection event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -304,6 +340,16 @@ impl ListEvent {
             clicks: if click_count == 2 { 2 } else { 1 },
         }
     }
+}
+
+/// The pointer entering or leaving a list row. See [`List::on_hover`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct ListHoverEvent {
+    /// Row index.
+    pub index: usize,
+    /// Whether the pointer is now over the row.
+    pub hovered: bool,
 }
 
 /// Semantic role of a list row.
@@ -593,7 +639,39 @@ pub struct ListItem {
     /// When set, the row is drawn as a horizontal rule in this style with the label centered on
     /// it. See [`ListItem::divider`].
     pub(crate) rule: Option<Style>,
+    /// Element drawn in place of the label. See [`ListItem::content`].
+    pub(crate) content: Option<ElementSlot>,
+    pub(crate) content_height: u16,
+    pub(crate) key: Option<Arc<str>>,
 }
+
+/// An element shared by every clone of the props that hold it, compared by identity.
+#[derive(Clone)]
+pub(crate) struct ElementSlot(std::rc::Rc<Element>);
+
+impl ElementSlot {
+    pub(crate) fn new(element: impl Into<Element>) -> Self {
+        Self(std::rc::Rc::new(element.into()))
+    }
+
+    pub(crate) fn element(&self) -> Element {
+        self.0.as_ref().clone()
+    }
+}
+
+impl std::fmt::Debug for ElementSlot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ElementSlot(..)")
+    }
+}
+
+impl PartialEq for ElementSlot {
+    fn eq(&self, other: &Self) -> bool {
+        std::rc::Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for ElementSlot {}
 
 /// An additional rendered line for a [`ListItem`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -833,42 +911,31 @@ impl ListItem {
     }
 
     /// Create a new list item.
-    pub fn new(content: impl Into<Arc<str>>) -> Self {
-        Self {
-            pointer_shape: None,
-            spans: vec![Span::new(content)],
-            label_prefix_width: 0,
-            description_spans: Vec::new(),
-            label_spinner: None,
-            label_spinner_position: ListSymbolPosition::Left,
-            description_spinner: None,
-            description_spinner_position: ListSymbolPosition::Left,
-            extra_lines: Vec::new(),
-            status: None,
-            gutter: None,
-            gutter_line: 0,
-            prefix: None,
-            prefix_kind: ListItemPrefixKind::Plain,
-            prefix_style: None,
-            extra_line_indent: 0,
-            style: Style::default(),
-            role: ListItemRole::Normal,
-            active: false,
-            primary_selection_label: true,
-            primary_selection_description: true,
-            primary_hover_label: true,
-            primary_hover_description: true,
-            primary_truncate_description_first: false,
-            primary_wrap_label: false,
-            primary_wrap_description: false,
-            primary_max_label_width: None,
-            primary_max_description_width: None,
-            primary_min_label_width: None,
-            primary_description_truncation: ListTruncation::End,
-            primary_description_gap: 0,
-            symbol_line: 0,
-            rule: None,
-        }
+    pub fn new(label: impl Into<Arc<str>>) -> Self {
+        Self::from_spans([Span::new(label)])
+    }
+
+    /// Draw `content` as the row in place of its label, which stays the row's accessible name.
+    ///
+    /// The element can hold buttons, tooltips, and other interactive widgets with their own
+    /// clicks; the list keeps selection, hover, activation, and keyboard navigation. A list with
+    /// any content row renders every row as a composed row (see `docs/widgets/data.md`).
+    pub fn content(mut self, content: impl Into<Element>) -> Self {
+        self.content = Some(ElementSlot::new(content));
+        self
+    }
+
+    /// Height of the [`content`](Self::content) element in terminal rows. Default 1.
+    pub fn content_height(mut self, height: u16) -> Self {
+        self.content_height = height.max(1);
+        self
+    }
+
+    /// Stable identity for a composed row, so its widgets keep their state when rows reorder.
+    /// Rows without a key are matched by position.
+    pub fn key(mut self, key: impl Into<Arc<str>>) -> Self {
+        self.key = Some(key.into());
+        self
     }
 
     /// Create a non-selectable section/header row.
@@ -897,41 +964,7 @@ impl ListItem {
 
     /// Create a non-selectable blank spacer row.
     pub fn spacer() -> Self {
-        Self {
-            pointer_shape: None,
-            spans: vec![Span::new("")],
-            label_prefix_width: 0,
-            description_spans: Vec::new(),
-            label_spinner: None,
-            label_spinner_position: ListSymbolPosition::Left,
-            description_spinner: None,
-            description_spinner_position: ListSymbolPosition::Left,
-            extra_lines: Vec::new(),
-            status: None,
-            gutter: None,
-            gutter_line: 0,
-            prefix: None,
-            prefix_kind: ListItemPrefixKind::Plain,
-            prefix_style: None,
-            extra_line_indent: 0,
-            style: Style::default(),
-            role: ListItemRole::Spacer,
-            active: false,
-            primary_selection_label: true,
-            primary_selection_description: true,
-            primary_hover_label: true,
-            primary_hover_description: true,
-            primary_truncate_description_first: false,
-            primary_wrap_label: false,
-            primary_wrap_description: false,
-            primary_max_label_width: None,
-            primary_max_description_width: None,
-            primary_min_label_width: None,
-            primary_description_truncation: ListTruncation::End,
-            primary_description_gap: 0,
-            symbol_line: 0,
-            rule: None,
-        }
+        Self::new("").role(ListItemRole::Spacer)
     }
 
     /// Create from multiple spans.
@@ -970,6 +1003,9 @@ impl ListItem {
             primary_description_gap: 0,
             symbol_line: 0,
             rule: None,
+            content: None,
+            content_height: 1,
+            key: None,
         }
     }
 
@@ -1274,7 +1310,10 @@ impl ListItem {
     }
 
     pub(crate) fn line_count(&self) -> usize {
-        1 + self.extra_lines.len()
+        match self.content {
+            Some(_) => self.content_height as usize,
+            None => 1 + self.extra_lines.len(),
+        }
     }
 }
 
@@ -1580,9 +1619,9 @@ pub(crate) fn effective_extra_line_indent(list: &List, item: &ListItem) -> u16 {
 }
 
 /// A vertically scrolling list.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct List {
-    pub(crate) items: Arc<[ListItem]>,
+    pub(crate) items: Rc<[ListItem]>,
     pub(crate) selected: Option<usize>,
     pub(crate) scroll_keys: ScrollKeymap,
     pub(crate) scroll_wheel: bool,
@@ -1631,6 +1670,7 @@ pub struct List {
     pub(crate) tab_stop: bool,
     pub(crate) on_focus: Option<Callback<()>>,
     pub(crate) on_blur: Option<Callback<()>>,
+    pub(crate) on_hover: Option<Callback<ListHoverEvent>>,
     pub(crate) show_scroll_indicators: bool,
     pub(crate) scroll_indicator_style: Style,
     pub(crate) empty_text: Option<Arc<str>>,
@@ -1643,7 +1683,7 @@ pub struct List {
 impl Default for List {
     fn default() -> Self {
         Self {
-            items: Arc::new([]),
+            items: Rc::new([]),
             selected: Some(0),
             scroll_keys: ScrollKeymap::default(),
             scroll_wheel: true,
@@ -1692,6 +1732,7 @@ impl Default for List {
             tab_stop: true,
             on_focus: None,
             on_blur: None,
+            on_hover: None,
             show_scroll_indicators: false,
             scroll_indicator_style: Style::default(),
             empty_text: None,
@@ -1732,7 +1773,7 @@ impl List {
     /// Set items from a shared slice.
     ///
     /// This is efficient for avoiding allocations when the list items don't change often.
-    pub fn items_arc(mut self, items: Arc<[ListItem]>) -> Self {
+    pub fn items_rc(mut self, items: Rc<[ListItem]>) -> Self {
         self.items = items;
         self
     }
@@ -2202,6 +2243,15 @@ impl List {
         self
     }
 
+    /// Report the pointer entering and leaving each row, including headers and other
+    /// non-selectable rows.
+    ///
+    /// A move between rows reports the old row leaving before the new one entering.
+    pub fn on_hover(mut self, cb: Callback<ListHoverEvent>) -> Self {
+        self.on_hover = Some(cb);
+        self
+    }
+
     /// Enable "N more" scroll indicators when items are hidden.
     pub fn show_scroll_indicators(mut self, show: bool) -> Self {
         self.show_scroll_indicators = show;
@@ -2418,6 +2468,41 @@ impl List {
         }
     }
 
+    /// Where a navigation key moves the selection, or `None` when the key does not navigate.
+    ///
+    /// An empty selection is seeded from the end the key points away from. Page keys step by
+    /// `page_size` rows and land on the nearest selectable row in their direction.
+    pub(crate) fn navigation_target(
+        selected: Option<usize>,
+        items: &[ListItem],
+        key: &KeyEvent,
+        scroll_keys: ScrollKeymap,
+        wrap: bool,
+        page_size: usize,
+    ) -> Option<usize> {
+        let Some(selected) = selected else {
+            return match selection_seed_direction(key, scroll_keys)? {
+                SeedDirection::Forward => Self::first_selectable_index(items),
+                SeedDirection::Backward => Self::last_selectable_index(items),
+            };
+        };
+        let page =
+            !has_command_modifier(key) && matches!(key.code, KeyCode::PageUp | KeyCode::PageDown);
+        if !page {
+            return Self::next_selection(selected, items, key, scroll_keys, wrap);
+        }
+        let last = items.len().saturating_sub(1);
+        if key.code == KeyCode::PageDown {
+            let target = (selected + page_size).min(last);
+            Self::selectable_at_or_after(items, target)
+                .or_else(|| Self::selectable_at_or_before(items, target))
+        } else {
+            let target = selected.saturating_sub(page_size);
+            Self::selectable_at_or_before(items, target)
+                .or_else(|| Self::selectable_at_or_after(items, target))
+        }
+    }
+
     pub(crate) fn next_selection(
         selected: usize,
         items: &[ListItem],
@@ -2432,6 +2517,9 @@ impl List {
 
 impl From<List> for Element {
     fn from(value: List) -> Self {
+        if value.items.iter().any(|item| item.content.is_some()) {
+            return composed::ComposedListProps::new(value).into_element();
+        }
         Element::new(ElementKind::List(Box::new(value)))
     }
 }
@@ -2790,6 +2878,7 @@ mod tests {
     }
 }
 
+pub(crate) mod composed;
 pub(crate) mod layout;
 pub(crate) mod node;
 pub(crate) mod reconcile;

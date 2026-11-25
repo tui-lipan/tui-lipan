@@ -227,3 +227,43 @@ fn paging_counts_a_gap_as_the_lines_it_takes() {
     assert_eq!(page(false), [3, 7, 3, 1], "text tree");
     assert_eq!(page(true), [3, 7, 3, 1], "composed tree");
 }
+
+/// With composed rows, `gap` goes between rows and `gap_before` adds its lines once.
+#[test]
+fn a_gap_before_is_one_space_between_composed_rows() {
+    struct Spaced;
+    impl Component for Spaced {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+        fn create_state(&self, _: &()) {}
+        fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+        fn view(&self, _: &Context<Self>) -> Element {
+            Tree::forest((0..2).map(|index| {
+                let label = format!("row {index}");
+                TreeNode::new(label.clone())
+                    .gap_before(2)
+                    .content(Text::new(label))
+            }))
+            .gap(1)
+            .into()
+        }
+    }
+    let mut backend = TestBackend::new(Spaced);
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 10,
+    });
+    backend.render();
+    let lines = backend.capture_frame().to_fixed_grid_lines();
+    let y = lines
+        .iter()
+        .position(|line| line.contains("row 1"))
+        .unwrap();
+    // row 0, gap, two blank lines, gap, row 1.
+    assert_eq!(y, 5, "{}", lines.join("\n"));
+}
