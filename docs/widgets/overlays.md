@@ -372,7 +372,14 @@ phase, and can restore live backdrop cells for portal, scan, or wipe reveals.
 Tooltips do not capture focus or block pointer events. If viewport clamping places
 a tooltip over its trigger, the trigger remains hoverable and clickable.
 
-Help text on hover or focus.
+Help text or a rich card on hover or focus. `Tooltip::new` takes a string or any element: rich
+content (styled rows, icons, a summary card) gets the same delay, warm-up, and passive behavior as
+plain text, and shares warm state with every other tooltip. Content must stay non-interactive; the
+popup never takes focus or pointer input.
+
+`Tooltip::new` takes `impl Into<TooltipContent>`. Every standard string type converts, but a helper
+generic over `impl Into<Arc<str>>` must convert first: `let text: Arc<str> = text.into();` then
+`Tooltip::new(text)`.
 
 Set `delay` to wait before a hover opens the tooltip, as desktop apps do: sweeping the pointer
 across a toolbar then opens nothing. Once one delayed tooltip has shown, a neighbour opens at once
@@ -383,18 +390,19 @@ controlled tooltip (`open(...)`) runs no hover timer, so it never warms its neig
 | Prop | Type | Description |
 |------|------|-------------|
 | `animation` | `impl Into<Option<VisibilityAnimation>>` | Opt-in popup animation, forwarded to Popover |
-| `text` | `impl Into<String>` | **Constructor** - tooltip text |
+| `content` | `impl Into<TooltipContent>` | **Constructor** - a string, or any element for rich content |
 | `child` | `Element` | The element to add tooltip to |
 | `open` | `bool` | Controlled open state; overrides automatic behavior |
 | `auto` | `bool` | Auto-show on hover/focus |
 | `show_on_focus` | `bool` | Show automatically on focus (default `true`) |
 | `delay` | `Duration` | Hover time before the tooltip opens (default zero) |
 | `skip_delay` | `Duration` | Open at once if another delayed tooltip closed this recently (default `DEFAULT_TOOLTIP_SKIP_DELAY`, 300 ms) |
-| `text_style` | `Style` | Tooltip text style |
+| `text_style` | `Style` | Style for string content; element content carries its own styles |
 | `container_style` | `Style` | Tooltip container style |
 | `border` | `bool` | Show border |
 | `border_style` | `BorderStyle` | Border style |
 | `padding` | `impl Into<Padding>` | Inner padding |
+| `max_width` | `Length` | Cap the popup width (percent resolves against the overlay bounds) |
 | `placement` | `PopoverPlacement` | Tooltip placement |
 | `offset` | `impl Into<PopoverOffset>` | Shift from the placed position; mirrored when `auto_flip` flips |
 | `clamp` | `bool` | Keep within screen bounds |
@@ -410,6 +418,18 @@ Tooltip::new("This button saves your work")
             .on_click(ctx.link().callback(|_| Msg::Save))
             .into()
     )
+
+// Rich content: a hover card beside a list row
+Tooltip::new(
+    VStack::new()
+        .child(Text::new(thread.title.clone()).style(title_style))
+        .child(Text::new(format!("{} files changed", thread.changed)).style(muted)),
+)
+.delay(Duration::from_secs(1))
+.placement(PopoverPlacement::RightStart)
+.offset((2, 0))
+.max_width(Length::Px(56))
+.child(row)
 ```
 
 ---
