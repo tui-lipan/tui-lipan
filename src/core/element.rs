@@ -319,18 +319,55 @@ impl Element {
     }
 
     pub(crate) fn layout_constraints(&self) -> LayoutConstraints {
+        fn merge_wrapper_layout(
+            outer: LayoutConstraints,
+            mut inner: LayoutConstraints,
+        ) -> LayoutConstraints {
+            inner.max_w = match (outer.max_w, inner.max_w) {
+                (Some(Length::Px(a)), Some(Length::Px(b))) => Some(Length::Px(a.min(b))),
+                (Some(o), _) => Some(o),
+                (None, i) => i,
+            };
+            inner.max_h = match (outer.max_h, inner.max_h) {
+                (Some(Length::Px(a)), Some(Length::Px(b))) => Some(Length::Px(a.min(b))),
+                (Some(o), _) => Some(o),
+                (None, i) => i,
+            };
+            if let (Some(Length::Px(max_px)), Length::Px(min_px)) = (inner.max_w, inner.min_w)
+                && min_px > max_px
+            {
+                inner.min_w = Length::Px(max_px);
+            }
+            if let (Some(Length::Px(max_px)), Length::Px(min_px)) = (inner.max_h, inner.min_h)
+                && min_px > max_px
+            {
+                inner.min_h = Length::Px(max_px);
+            }
+            inner.focus_min_w = inner.focus_min_w.max(outer.focus_min_w);
+            inner.focus_min_h = inner.focus_min_h.max(outer.focus_min_h);
+            inner.collapse_w = outer.collapse_w.or(inner.collapse_w);
+            inner.collapse_h = outer.collapse_h.or(inner.collapse_h);
+            inner.force_compact = inner.force_compact || outer.force_compact;
+            inner.reflows = inner.reflows || outer.reflows;
+            inner.shrink_priority = inner.shrink_priority.max(outer.shrink_priority);
+            inner
+        }
+
         match &self.kind {
-            ElementKind::Group(group) => group.child.layout_constraints(),
+            ElementKind::Group(group) => {
+                merge_wrapper_layout(self.layout, group.child.layout_constraints())
+            }
             ElementKind::EffectScope(scope) => scope
                 .child
                 .as_deref()
-                .map(Element::layout_constraints)
+                .map(|child| merge_wrapper_layout(self.layout, child.layout_constraints()))
                 .unwrap_or(self.layout),
             ElementKind::Animated(animated) => {
                 if animated.height.is_some()
                     || (animated.collapse_visibility && animated.visibility.is_some())
                 {
-                    let mut layout = animated.child.layout_constraints();
+                    let mut layout =
+                        merge_wrapper_layout(self.layout, animated.child.layout_constraints());
                     layout.min_h = self.layout.min_h;
                     layout.max_h = self.layout.max_h;
                     layout.focus_min_h = self.layout.focus_min_h;
@@ -338,21 +375,25 @@ impl Element {
                     layout.force_compact = false;
                     layout
                 } else {
-                    animated.child.layout_constraints()
+                    merge_wrapper_layout(self.layout, animated.child.layout_constraints())
                 }
             }
             ElementKind::DragSource(source) => source
                 .child
                 .as_deref()
-                .map(Element::layout_constraints)
+                .map(|child| merge_wrapper_layout(self.layout, child.layout_constraints()))
                 .unwrap_or(self.layout),
             ElementKind::DropTarget(target) => target
                 .child
                 .as_deref()
-                .map(Element::layout_constraints)
+                .map(|child| merge_wrapper_layout(self.layout, child.layout_constraints()))
                 .unwrap_or(self.layout),
-            ElementKind::ThemeProvider(tp) => tp.child.layout_constraints(),
-            ElementKind::ContextProvider(cp) => cp.child.layout_constraints(),
+            ElementKind::ThemeProvider(tp) => {
+                merge_wrapper_layout(self.layout, tp.child.layout_constraints())
+            }
+            ElementKind::ContextProvider(cp) => {
+                merge_wrapper_layout(self.layout, cp.child.layout_constraints())
+            }
             ElementKind::Memo(_) => self.layout,
             _ => self.layout,
         }
