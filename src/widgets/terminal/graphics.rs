@@ -5294,51 +5294,54 @@ mod tests {
     /// would silently keep every frame on the inline path forever.
     #[cfg(all(unix, feature = "terminal-images", not(target_arch = "wasm32")))]
     #[test]
-    fn the_shared_memory_sequences_this_writes_to_a_host_are_the_ones_it_reads() {
+    fn the_named_frame_sequences_this_writes_to_a_host_are_the_ones_it_reads() {
         use crate::backend::ratatui_backend::renderers::image::kitty_transmit_shared_memory;
         use crate::backend::ratatui_backend::shared_frame::{
-            SharedFrame, kitty_shared_memory_probe,
+            Medium, SharedFrame, kitty_frame_probe,
         };
 
-        let (mut probe_frame, query) = kitty_shared_memory_probe(300).expect("probe frame");
-        probe_frame.handed_over();
-        let mut graphics = TerminalGraphics::default();
-        let mut scanner = GraphicsScanner::default();
-        let (_, commands) = scan_all(&mut scanner, query.as_bytes());
-        let outcome = graphics.apply(commands[0].clone(), context());
-        assert_eq!(
-            outcome.response.as_deref(),
-            Some(b"\x1b_Gi=300;OK\x1b\\".as_ref()),
-            "the probe a host is asked with has to be a transmission it can answer"
-        );
+        for medium in [Medium::SharedMemory, Medium::TempFile] {
+            let (mut probe_frame, query) = kitty_frame_probe(300, medium).expect("probe frame");
+            probe_frame.handed_over();
+            let mut graphics = TerminalGraphics::default();
+            let mut scanner = GraphicsScanner::default();
+            let (_, commands) = scan_all(&mut scanner, query.as_bytes());
+            let outcome = graphics.apply(commands[0].clone(), context());
+            assert_eq!(
+                outcome.response.as_deref(),
+                Some(b"\x1b_Gi=300;OK\x1b\\".as_ref()),
+                "the {medium:?} probe a host is asked with has to be a transmission it can answer"
+            );
 
-        let mut frame = SharedFrame::write(&[0x40u8; 4 * 3 * 3]).expect("frame");
-        let transmit = kitty_transmit_shared_memory(
-            frame.name(),
-            4,
-            3,
-            24,
-            7,
-            ratatui::layout::Size::new(6, 2),
-        );
-        frame.handed_over();
-        let (_, commands) = scan_all(&mut scanner, transmit.as_bytes());
-        graphics.apply(commands[0].clone(), context());
+            let mut frame = SharedFrame::write_in(medium, &[0x40u8; 4 * 3 * 3]).expect("frame");
+            let transmit = kitty_transmit_shared_memory(
+                frame.name(),
+                frame.medium(),
+                4,
+                3,
+                24,
+                7,
+                ratatui::layout::Size::new(6, 2),
+            );
+            frame.handed_over();
+            let (_, commands) = scan_all(&mut scanner, transmit.as_bytes());
+            graphics.apply(commands[0].clone(), context());
 
-        // A `U=1` transmission draws nothing where it happens, so what proves it arrived is the
-        // stored image the placeholder cells will later name.
-        let stored = graphics.images.get(&7).expect("stored under its own id");
-        assert_eq!((stored.image.width(), stored.image.height()), (4, 3));
+            // A `U=1` transmission draws nothing where it happens, so what proves it arrived is the
+            // stored image the placeholder cells will later name.
+            let stored = graphics.images.get(&7).expect("stored under its own id");
+            assert_eq!((stored.image.width(), stored.image.height()), (4, 3));
 
-        // And the cell box travels with it. The renderer transmits a frame at whatever resolution it
-        // arrived in and leaves the fitting to the terminal, so the box has to be what placeholder
-        // positions are read against: against the pixels' own cell grid instead, these six columns
-        // of a four-pixel-wide image would each claim a whole cell's worth and show the first
-        // fraction of it magnified.
-        let placement = whole_box_placement(&graphics, 7, 6, 2);
-        assert_eq!((placement.cols, placement.rows), (6, 2));
-        let crop = placement.source_crop.expect("a source region");
-        assert_eq!((crop.x, crop.y, crop.width, crop.height), (0, 0, 4, 3));
+            // And the cell box travels with it. The renderer transmits a frame at whatever
+            // resolution it arrived in and leaves the fitting to the terminal, so the box has to be
+            // what placeholder positions are read against: against the pixels' own cell grid
+            // instead, these six columns of a four-pixel-wide image would each claim a whole cell's
+            // worth and show the first fraction of it magnified.
+            let placement = whole_box_placement(&graphics, 7, 6, 2);
+            assert_eq!((placement.cols, placement.rows), (6, 2));
+            let crop = placement.source_crop.expect("a source region");
+            assert_eq!((crop.x, crop.y, crop.width, crop.height), (0, 0, 4, 3));
+        }
     }
 
     /// A named frame is never a continuation chunk: one arriving after a direct run whose sender

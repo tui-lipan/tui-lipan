@@ -234,6 +234,10 @@ fn wait_until_writable(fd: libc::c_int) {
 /// Image id for the startup graphics probe, high enough not to collide with a real placement's.
 #[cfg(feature = "terminal-images")]
 const GRAPHICS_PROBE_ID: u32 = u32::MAX;
+/// The image id of the startup probe's temporary-file question, asked alongside the
+/// shared-memory one.
+#[cfg(feature = "terminal-images")]
+const TEMP_FILE_PROBE_ID: u32 = u32::MAX - 1;
 
 pub(crate) type Terminal = ratatui::Terminal<HostBackend<TerminalWriter>>;
 
@@ -1079,15 +1083,32 @@ impl TerminalGuard {
         // Nothing is asked of a host that cannot answer. This runs before the alternate screen is
         // entered, so a terminal that prints an `APC` string instead of consuming one leaves the
         // question in the user's scrollback for good.
+        //
+        // Both media are asked about in the one round trip, shared memory first because it is
+        // cheaper: a terminal that declines it can still read a temporary file (Ghostty on macOS).
         #[cfg(feature = "terminal-images")]
-        let graphics_probe = super::shared_frame::worth_asking_about_shared_memory()
-            .then(|| super::shared_frame::kitty_shared_memory_probe(GRAPHICS_PROBE_ID))
-            .flatten();
+        let graphics_probes: Vec<_> = if super::shared_frame::worth_asking_about_shared_memory() {
+            use super::shared_frame::Medium;
+            [
+                (GRAPHICS_PROBE_ID, Medium::SharedMemory),
+                (TEMP_FILE_PROBE_ID, Medium::TempFile),
+            ]
+            .into_iter()
+            .filter_map(|(id, medium)| {
+                let probe = super::shared_frame::kitty_frame_probe(id, medium)?;
+                Some((id, medium, probe))
+            })
+            .collect()
+        } else {
+            Vec::new()
+        };
         #[cfg(feature = "terminal-images")]
-        let probe_bytes = graphics_probe
-            .as_ref()
-            .map(|(_, query)| query.as_bytes())
-            .unwrap_or_default();
+        let probe_bytes: Vec<u8> = graphics_probes
+            .iter()
+            .flat_map(|(_, _, (_, query))| query.bytes())
+            .collect();
+        #[cfg(feature = "terminal-images")]
+        let probe_bytes = probe_bytes.as_slice();
         #[cfg(not(feature = "terminal-images"))]
         let probe_bytes: &[u8] = &[];
         #[cfg(unix)]
@@ -1127,8 +1148,14 @@ impl TerminalGuard {
             }
         }
         #[cfg(feature = "terminal-images")]
-        super::shared_frame::note_host_support(
-            graphics_probe.is_some() && capabilities.graphics_query_ok,
+        super::shared_frame::note_host_medium(
+            graphics_probes
+                .iter()
+                .find(|(id, _, _)| {
+                    capabilities.graphics_query_ok
+                        && crate::style::terminal_colors::host_answered_graphics_query(*id)
+                })
+                .map(|(_, medium, _)| *medium),
         );
         let plan = enter_plan(policy, mouse_enabled, keyboard_enhancement);
         let mut executor = CrosstermTransitionExecutor::new(stdout);

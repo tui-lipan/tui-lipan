@@ -460,7 +460,7 @@ pub(super) fn encode_native_source(
     let file = p
         .image
         .file_pixels()
-        .filter(|_| shared_frame::host_reads_shared_memory());
+        .filter(|_| shared_frame::host_reads_named_frames());
     let encoded = file
         .and_then(|input| {
             CompressedKitty::from_file(input, (p.image.width(), p.image.height()), size, id, 0)
@@ -1143,7 +1143,7 @@ mod tests {
 
     #[test]
     fn a_large_inline_source_keeps_the_asynchronous_composed_path() {
-        assert!(!shared_frame::host_reads_shared_memory());
+        assert!(!shared_frame::host_reads_named_frames());
         let p = scene("i=1", (300, 300)).remove(0);
         assert!(native_protocol(&p).is_none());
         assert!(

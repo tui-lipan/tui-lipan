@@ -11,7 +11,11 @@
 //! once it has the pixels, which is what makes the medium self-cleaning rather than a temporary file
 //! somebody has to remember to delete.
 //!
-//! Not every terminal implements it, so [`host_reads_shared_memory`] records what the startup probe
+//! A terminal that declines shared memory may still read a temporary file (`t=t`) - Ghostty on
+//! macOS does. The objects here then live in the temporary directory instead and everything else is
+//! the same: the host deletes the name it was handed, and pooling works through hard links there.
+//!
+//! Not every terminal implements either, so [`host_medium`] records what the startup probe
 //! found and the caller keeps the inline path for everything else. The probe is not put to every
 //! host either: see [`worth_asking_about_shared_memory`] for which ones are asked, and why asking
 //! the rest costs more than the answer is worth.
@@ -30,42 +34,102 @@
 //! there is simply not reused, and a frame that finds every slot busy falls back to allocating,
 //! which is what every frame used to do.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU8, Ordering};
 
-/// Whether the host answered the startup probe saying it can read a shared-memory transmission.
-static HOST_READS_SHARED_MEMORY: AtomicBool = AtomicBool::new(false);
+/// Where a named frame lives, which is also the Kitty `t=` key that names it.
+///
+/// Shared memory is the cheaper of the two, but not every terminal that reads named frames reads
+/// it: Ghostty on macOS declines `t=s` and accepts `t=t`. A temporary file costs a filesystem
+/// write rather than a memory copy, which is still nothing next to deflating and base64-ing the
+/// pixels down the PTY.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Medium {
+    /// `t=s`: a POSIX shared-memory object.
+    SharedMemory,
+    /// `t=t`: a file in the temporary directory, whose path names the graphics protocol as the
+    /// protocol requires. The host deletes it once read.
+    TempFile,
+}
 
+impl Medium {
+    /// The transmission-medium key for this medium.
+    pub(crate) fn key(self) -> char {
+        match self {
+            Self::SharedMemory => 's',
+            Self::TempFile => 't',
+        }
+    }
+}
+
+/// What the startup probe found: 0 for neither medium, else `1 + Medium as u8`.
+static HOST_MEDIUM: AtomicU8 = AtomicU8::new(0);
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
 /// Names are per-process and monotonic, so a frame never collides with one still in flight, and a
 /// previous run's leftovers cannot be mistaken for this run's.
 static NEXT_NAME: AtomicU64 = AtomicU64::new(0);
 
-/// Record what the startup probe found. See [`host_reads_shared_memory`].
-pub(crate) fn note_host_support(supported: bool) {
-    HOST_READS_SHARED_MEMORY.store(supported, Ordering::Release);
+/// Record what the startup probe found. See [`host_medium`].
+pub(crate) fn note_host_medium(medium: Option<Medium>) {
+    let value = match medium {
+        None => 0,
+        Some(Medium::SharedMemory) => 1,
+        Some(Medium::TempFile) => 2,
+    };
+    HOST_MEDIUM.store(value, Ordering::Release);
 }
 
-/// Whether to hand frames to the host through shared memory rather than inline.
-pub(crate) fn host_reads_shared_memory() -> bool {
-    HOST_READS_SHARED_MEMORY.load(Ordering::Acquire)
+/// The medium to hand frames to the host through, or `None` to send them inline.
+pub(crate) fn host_medium() -> Option<Medium> {
+    match HOST_MEDIUM.load(Ordering::Acquire) {
+        1 => Some(Medium::SharedMemory),
+        2 => Some(Medium::TempFile),
+        _ => None,
+    }
 }
 
-/// A name in the POSIX shared-memory namespace: one leading slash and no others.
-fn next_name() -> String {
-    format!(
-        "/tui-lipan-{}-{}",
-        std::process::id(),
-        NEXT_NAME.fetch_add(1, Ordering::Relaxed)
-    )
+/// Whether the host reads named frames at all, through either medium.
+///
+/// A host that reads either one also reads the `t=t` hard links file-backed pane frames are
+/// forwarded as: both media are named, consumed reads of a local object.
+pub(crate) fn host_reads_named_frames() -> bool {
+    host_medium().is_some()
+}
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+/// The prefix of every temporary file this process hands the host. Kitty and Ghostty only read a
+/// `t=t` path that contains `tty-graphics-protocol`.
+const TEMP_PREFIX: &str = "tty-graphics-protocol-tui-lipan-";
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+/// A fresh name for `medium`: a shared-memory name with one leading slash and no others, or a
+/// path in the temporary directory. `pool` marks an object the pool keeps rather than hands over.
+fn next_name(medium: Medium, pool: bool) -> Option<String> {
+    let pool = if pool { "pool-" } else { "" };
+    let pid = std::process::id();
+    let n = NEXT_NAME.fetch_add(1, Ordering::Relaxed);
+    match medium {
+        Medium::SharedMemory => Some(format!("/tui-lipan-{pool}{pid}-{n}")),
+        Medium::TempFile => std::env::temp_dir()
+            .join(format!("{TEMP_PREFIX}{pool}{pid}-{n}"))
+            .into_os_string()
+            .into_string()
+            .ok(),
+    }
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
 mod imp {
     #![allow(unsafe_code)]
 
-    use std::ffi::CString;
+    use std::ffi::{CStr, CString};
     use std::io::Write as _;
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
+
+    use super::Medium;
 
     /// How many objects to keep alive for reuse.
     ///
@@ -127,6 +191,7 @@ mod imp {
         source: CString,
         /// The same object as a filesystem path, which is what `link` needs.
         source_path: CString,
+        medium: Medium,
         map: *mut libc::c_void,
         len: usize,
         /// The link most recently handed to the host, and when. `None` means nothing is outstanding.
@@ -151,34 +216,69 @@ mod imp {
         fn destroy(self) {
             unsafe {
                 libc::munmap(self.map, self.len);
-                libc::shm_unlink(self.source.as_ptr());
             }
+            remove(self.medium, &self.source);
             if let Some((link, _)) = &self.handed {
                 unsafe { libc::unlink(link.as_ptr()) };
             }
         }
     }
 
-    /// Where a POSIX shared-memory name lands in the filesystem, which is the only way to hard-link
-    /// one object under a second name. Linux puts the namespace on a tmpfs mount; a platform that
-    /// does not is simply left with the allocate-per-frame path.
-    fn shm_path(name: &str) -> Option<CString> {
-        if !cfg!(target_os = "linux") {
-            return None;
+    /// Where a name lands in the filesystem, which is the only way to hard-link one object under a
+    /// second name. Linux puts the shared-memory namespace on a tmpfs mount; a platform that does
+    /// not is simply left with the allocate-per-frame path. A temporary file is its own path.
+    fn link_path(medium: Medium, name: &str) -> Option<CString> {
+        match medium {
+            Medium::SharedMemory if cfg!(target_os = "linux") => {
+                CString::new(format!("/dev/shm{name}")).ok()
+            }
+            Medium::SharedMemory => None,
+            Medium::TempFile => CString::new(name).ok(),
         }
-        CString::new(format!("/dev/shm{name}")).ok()
+    }
+
+    /// Create `name` exclusively, readable and writable by this user only. `O_EXCL` so a name that
+    /// somehow already exists is an error rather than a frame silently overwriting something.
+    fn create(medium: Medium, name: &CStr) -> libc::c_int {
+        let flags = libc::O_CREAT | libc::O_EXCL | libc::O_RDWR;
+        // SAFETY: `name` is a valid C string for the duration of the call.
+        unsafe {
+            match medium {
+                Medium::SharedMemory => libc::shm_open(name.as_ptr(), flags, 0o600),
+                Medium::TempFile => libc::open(
+                    name.as_ptr(),
+                    flags | libc::O_CLOEXEC,
+                    0o600 as libc::c_uint,
+                ),
+            }
+        }
+    }
+
+    /// Remove `name`, whether or not anyone still holds it open.
+    fn remove(medium: Medium, name: &CStr) {
+        // SAFETY: `name` is a valid C string for the duration of the call.
+        unsafe {
+            match medium {
+                Medium::SharedMemory => libc::shm_unlink(name.as_ptr()),
+                Medium::TempFile => libc::unlink(name.as_ptr()),
+            };
+        }
     }
 
     /// Remove pool objects left behind by a run that was killed before it could clean up. Their
     /// names carry the process id that made them, so a dead one is unambiguous.
-    fn sweep_dead_runs() {
-        let Ok(entries) = std::fs::read_dir("/dev/shm") else {
+    fn sweep_dead_runs(medium: Medium) {
+        let (directory, prefix) = match medium {
+            Medium::SharedMemory => (std::path::PathBuf::from("/dev/shm"), "tui-lipan-"),
+            Medium::TempFile => (std::env::temp_dir(), super::TEMP_PREFIX),
+        };
+        let Ok(entries) = std::fs::read_dir(directory) else {
             return;
         };
         for entry in entries.flatten() {
             let name = entry.file_name();
             let Some(name) = name.to_str() else { continue };
-            let Some(rest) = name.strip_prefix("tui-lipan-") else {
+            let Some(rest) = name.strip_prefix(prefix) else {
                 continue;
             };
             let rest = rest.strip_prefix("pool-").unwrap_or(rest);
@@ -196,42 +296,40 @@ mod imp {
             // belongs to somebody else, which is not ours to remove.
             let alive = unsafe { libc::kill(pid, 0) } == 0
                 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM);
-            if !alive {
+            // The temporary directory can be shared, so a matching name proves nothing about who
+            // made it: only this user's own regular files are leftovers of ours.
+            let ours = || {
+                use std::os::unix::fs::MetadataExt as _;
+                std::fs::symlink_metadata(entry.path()).is_ok_and(|metadata| {
+                    metadata.is_file() && metadata.uid() == unsafe { libc::geteuid() }
+                })
+            };
+            if !alive && ours() {
                 let _ = std::fs::remove_file(entry.path());
             }
         }
     }
 
-    fn create_slot(len: usize) -> Option<Slot> {
+    fn create_slot(len: usize, medium: Medium) -> Option<Slot> {
         use std::os::fd::FromRawFd as _;
 
-        let name = format!(
-            "/tui-lipan-pool-{}-{}",
-            std::process::id(),
-            super::NEXT_NAME.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        );
-        let source_path = shm_path(&name)?;
+        let name = super::next_name(medium, true)?;
+        let source_path = link_path(medium, &name)?;
         let source = CString::new(name).ok()?;
-        let descriptor = unsafe {
-            libc::shm_open(
-                source.as_ptr(),
-                libc::O_CREAT | libc::O_EXCL | libc::O_RDWR,
-                0o600,
-            )
-        };
+        let descriptor = create(medium, &source);
         if descriptor < 0 {
             return None;
         }
-        // SAFETY: `shm_open` just produced this descriptor and nothing else holds a copy, so the
+        // SAFETY: `create` just produced this descriptor and nothing else holds a copy, so the
         // `File` owns it and closes it on every path out of here. The mapping outlives the
         // descriptor, which is what `mmap` guarantees.
         let file = unsafe { std::fs::File::from_raw_fd(descriptor) };
         let Some(length) = libc::off_t::try_from(len).ok() else {
-            unsafe { libc::shm_unlink(source.as_ptr()) };
+            remove(medium, &source);
             return None;
         };
         if unsafe { libc::ftruncate(descriptor, length) } < 0 {
-            unsafe { libc::shm_unlink(source.as_ptr()) };
+            remove(medium, &source);
             return None;
         }
         let map = unsafe {
@@ -246,7 +344,7 @@ mod imp {
         };
         drop(file);
         if map == libc::MAP_FAILED {
-            unsafe { libc::shm_unlink(source.as_ptr()) };
+            remove(medium, &source);
             return None;
         }
         // Touch every page once here rather than during the first frame, so the frame that happens
@@ -255,6 +353,7 @@ mod imp {
         Some(Slot {
             source,
             source_path,
+            medium,
             map,
             len,
             handed: None,
@@ -262,18 +361,22 @@ mod imp {
     }
 
     /// Take a slot able to hold `len` bytes, or `None` to say the caller should allocate.
-    fn claim(len: usize) -> Option<Slot> {
+    fn claim(len: usize, medium: Medium) -> Option<Slot> {
         // Swept outside the lock: a machine with a lot of shared memory (a browser leaves hundreds
         // of objects there) makes this a directory walk plus a signal per entry, and no frame
         // should wait behind it.
-        static SWEEP: std::sync::Once = std::sync::Once::new();
-        SWEEP.call_once(sweep_dead_runs);
+        static SWEEP_SHARED: std::sync::Once = std::sync::Once::new();
+        static SWEEP_TEMP: std::sync::Once = std::sync::Once::new();
+        match medium {
+            Medium::SharedMemory => SWEEP_SHARED.call_once(|| sweep_dead_runs(medium)),
+            Medium::TempFile => SWEEP_TEMP.call_once(|| sweep_dead_runs(medium)),
+        }
 
         let mut pool = pool();
         if let Some(index) = pool
             .slots
             .iter()
-            .position(|slot| slot.len == len && slot.reusable())
+            .position(|slot| slot.len == len && slot.medium == medium && slot.reusable())
         {
             pool.claimed += 1;
             pool.claimed_bytes += len;
@@ -287,13 +390,13 @@ mod imp {
             let index = pool
                 .slots
                 .iter()
-                .position(|slot| slot.len != len && slot.reusable())?;
+                .position(|slot| (slot.len != len || slot.medium != medium) && slot.reusable())?;
             pool.slots.swap_remove(index).destroy();
             if pool.resident() + len > POOL_BUDGET {
                 return None;
             }
         }
-        let slot = create_slot(len)?;
+        let slot = create_slot(len, medium)?;
         pool.claimed += 1;
         pool.claimed_bytes += len;
         Some(slot)
@@ -337,13 +440,15 @@ mod imp {
         pool().trim_idle();
     }
 
-    /// Pixels in a shared-memory object, waiting for the host to read them.
+    /// Pixels in a named object - shared memory or a temporary file - waiting for the host to read
+    /// them.
     ///
     /// Owns the name until the host is told about it. A frame that is encoded and then never
     /// drawn - a pane closed mid-encode, a placement replaced by a newer one - would otherwise leave
     /// its object behind, one per frame, until the machine reboots.
     pub(crate) struct SharedFrame {
         name: CString,
+        medium: Medium,
         /// The pool slot backing this frame, held until the transmission is written so nothing can
         /// overwrite the pixels the host has not been told about yet. `None` for a frame that
         /// allocated its own object.
@@ -358,21 +463,26 @@ mod imp {
     }
 
     impl SharedFrame {
-        /// Put `pixels` where the host can read them, or `None` if the shared-memory namespace
-        /// refused.
+        /// Put `pixels` in shared memory, or `None` if the namespace refused.
+        #[cfg(test)]
         pub(crate) fn write(pixels: &[u8]) -> Option<Self> {
-            match Self::pooled(pixels) {
+            Self::write_in(Medium::SharedMemory, pixels)
+        }
+
+        /// Put `pixels` where the host can read them through `medium`, or `None` if that
+        /// namespace refused.
+        pub(crate) fn write_in(medium: Medium, pixels: &[u8]) -> Option<Self> {
+            match Self::pooled(medium, pixels) {
                 Some(frame) => Some(frame),
-                None => Self::allocated(pixels),
+                None => Self::allocated(medium, pixels),
             }
         }
 
         /// Copy into a reused object and hand the host a fresh link to it.
-        fn pooled(pixels: &[u8]) -> Option<Self> {
-            let slot = claim(pixels.len())?;
-            let named = CString::new(super::next_name())
-                .ok()
-                .and_then(|name| Some((shm_path(name.to_str().ok()?)?, name)));
+        fn pooled(medium: Medium, pixels: &[u8]) -> Option<Self> {
+            let slot = claim(pixels.len(), medium)?;
+            let named = super::next_name(medium, false)
+                .and_then(|name| Some((link_path(medium, &name)?, CString::new(name).ok()?)));
             let Some((link, name)) = named else {
                 release(slot);
                 return None;
@@ -392,6 +502,7 @@ mod imp {
             }
             Some(Self {
                 name,
+                medium,
                 // The clock starts when the host is told, not now. See `handed_over`.
                 slot: Some(Slot {
                     handed: Some((link, Instant::now())),
@@ -404,28 +515,21 @@ mod imp {
         }
 
         /// Put `pixels` in a fresh object, which is what happens when every slot is still out.
-        fn allocated(pixels: &[u8]) -> Option<Self> {
+        fn allocated(medium: Medium, pixels: &[u8]) -> Option<Self> {
             use std::os::fd::FromRawFd as _;
 
             let length = libc::off_t::try_from(pixels.len()).ok()?;
-            let name = CString::new(super::next_name()).ok()?;
-            // `O_EXCL` so a name that somehow already exists is an error rather than a frame
-            // silently overwriting something; 0600 so only this user can read the pixels.
-            let descriptor = unsafe {
-                libc::shm_open(
-                    name.as_ptr(),
-                    libc::O_CREAT | libc::O_EXCL | libc::O_RDWR,
-                    0o600,
-                )
-            };
+            let name = CString::new(super::next_name(medium, false)?).ok()?;
+            let descriptor = create(medium, &name);
             if descriptor < 0 {
                 return None;
             }
-            // SAFETY: `shm_open` just produced this descriptor and nothing else holds a copy, so the
+            // SAFETY: `create` just produced this descriptor and nothing else holds a copy, so the
             // `File` is its sole owner and closes it on every path out of here.
             let mut file = unsafe { std::fs::File::from_raw_fd(descriptor) };
             let mut frame = Self {
                 name,
+                medium,
                 slot: None,
                 backing: None,
                 reuse_after_retry: true,
@@ -444,10 +548,13 @@ mod imp {
             use std::io::{Seek as _, SeekFrom};
             use std::os::fd::FromRawFd as _;
 
-            let name = CString::new(super::next_name()).map_err(std::io::Error::other)?;
+            let medium = self.medium;
+            let name = super::next_name(medium, false)
+                .ok_or_else(|| std::io::Error::other("frame name unavailable"))?;
+            let name = CString::new(name).map_err(std::io::Error::other)?;
             if let Some(slot) = self.slot.as_mut() {
-                let link = shm_path(name.to_str().unwrap_or_default())
-                    .ok_or_else(|| std::io::Error::other("shared memory path unavailable"))?;
+                let link = link_path(medium, name.to_str().unwrap_or_default())
+                    .ok_or_else(|| std::io::Error::other("frame path unavailable"))?;
                 if unsafe { libc::link(slot.source_path.as_ptr(), link.as_ptr()) } < 0 {
                     return Err(std::io::Error::last_os_error());
                 }
@@ -463,13 +570,7 @@ mod imp {
                     .backing
                     .as_mut()
                     .ok_or_else(|| std::io::Error::other("shared upload already handed over"))?;
-                let descriptor = unsafe {
-                    libc::shm_open(
-                        name.as_ptr(),
-                        libc::O_CREAT | libc::O_EXCL | libc::O_RDWR,
-                        0o600,
-                    )
-                };
+                let descriptor = create(medium, &name);
                 if descriptor < 0 {
                     return Err(std::io::Error::last_os_error());
                 }
@@ -485,12 +586,12 @@ mod imp {
                     std::io::copy(source, &mut file)
                 })();
                 if let Err(error) = copied {
-                    unsafe { libc::shm_unlink(name.as_ptr()) };
+                    remove(medium, &name);
                     return Err(error);
                 }
                 self.backing = Some(file);
             }
-            unsafe { libc::shm_unlink(self.name.as_ptr()) };
+            remove(medium, &self.name);
             self.name = name;
             Ok(())
         }
@@ -500,9 +601,14 @@ mod imp {
             self.reuse_after_retry = false;
         }
 
-        /// The object's name, for the `t=s` payload.
+        /// The object's name, for the transmission payload.
         pub(crate) fn name(&self) -> &str {
             self.name.to_str().unwrap_or_default()
+        }
+
+        /// The medium the name belongs to, which picks the transmission's `t=` key.
+        pub(crate) fn medium(&self) -> Medium {
+            self.medium
         }
 
         /// The host has been told the name and will unlink it once it has read the pixels.
@@ -540,7 +646,7 @@ mod imp {
     impl Drop for SharedFrame {
         fn drop(&mut self) {
             if self.owned {
-                unsafe { libc::shm_unlink(self.name.as_ptr()) };
+                remove(self.medium, &self.name);
             }
             if let Some(mut slot) = self.slot.take() {
                 // Never handed over, so nothing outside this process ever knew the link existed and
@@ -555,12 +661,16 @@ mod imp {
     mod tests {
         use super::*;
 
+        fn shm_name() -> String {
+            super::super::next_name(Medium::SharedMemory, false).unwrap()
+        }
+
         #[cfg(target_os = "linux")]
         fn private_pooled_frame(pixels: &[u8]) -> SharedFrame {
             // A private slot avoids depending on other tests filling the process-wide pool.
-            let mut slot = create_slot(pixels.len()).unwrap();
-            let name = CString::new(super::super::next_name()).unwrap();
-            let link = shm_path(name.to_str().unwrap()).unwrap();
+            let mut slot = create_slot(pixels.len(), Medium::SharedMemory).unwrap();
+            let name = CString::new(shm_name()).unwrap();
+            let link = link_path(Medium::SharedMemory, name.to_str().unwrap()).unwrap();
             assert_eq!(
                 unsafe { libc::link(slot.source_path.as_ptr(), link.as_ptr()) },
                 0
@@ -576,6 +686,7 @@ mod imp {
             }
             SharedFrame {
                 name,
+                medium: Medium::SharedMemory,
                 slot: Some(slot),
                 backing: None,
                 owned: true,
@@ -642,7 +753,7 @@ mod imp {
         #[cfg(target_os = "linux")]
         fn allocated_upload_can_renew_after_the_host_unlinks_its_name() {
             let pixels = [1, 2, 3, 255];
-            let mut frame = SharedFrame::allocated(&pixels).unwrap();
+            let mut frame = SharedFrame::allocated(Medium::SharedMemory, &pixels).unwrap();
             let first = frame.name().to_owned();
             std::fs::remove_file(format!("/dev/shm{first}")).unwrap();
             frame.renew().unwrap();
@@ -656,14 +767,13 @@ mod imp {
         #[test]
         #[cfg(target_os = "linux")]
         fn idle_pool_slots_expire_after_the_host_finishes_reading() {
-            let mut idle = create_slot(4096).unwrap();
-            let mut pending = create_slot(4096).unwrap();
-            let mut recent = create_slot(4096).unwrap();
-            let gone = CString::new(format!("/dev/shm{}", super::super::next_name())).unwrap();
+            let mut idle = create_slot(4096, Medium::SharedMemory).unwrap();
+            let mut pending = create_slot(4096, Medium::SharedMemory).unwrap();
+            let mut recent = create_slot(4096, Medium::SharedMemory).unwrap();
+            let gone = CString::new(format!("/dev/shm{}", shm_name())).unwrap();
             idle.handed = Some((gone.clone(), Instant::now() - Duration::from_secs(2)));
             recent.handed = Some((gone, Instant::now()));
-            let outstanding =
-                CString::new(format!("/dev/shm{}", super::super::next_name())).unwrap();
+            let outstanding = CString::new(format!("/dev/shm{}", shm_name())).unwrap();
             assert_eq!(
                 unsafe { libc::link(pending.source_path.as_ptr(), outstanding.as_ptr()) },
                 0
@@ -703,7 +813,7 @@ mod imp {
         #[cfg(target_os = "linux")]
         fn a_slot_is_reusable_only_once_the_host_removed_the_link_it_was_given() {
             let _lock = TEST_POOL.lock().unwrap_or_else(|e| e.into_inner());
-            let mut slot = create_slot(4096).expect("create slot");
+            let mut slot = create_slot(4096, Medium::SharedMemory).expect("create slot");
             assert!(slot.reusable(), "a slot that handed nothing out is free");
 
             let link = CString::new(format!("/dev/shm/tui-lipan-test-{}", std::process::id()))
@@ -826,12 +936,16 @@ mod imp {
     pub(crate) struct SharedFrame;
 
     impl SharedFrame {
-        pub(crate) fn write(_pixels: &[u8]) -> Option<Self> {
+        pub(crate) fn write_in(_medium: super::Medium, _pixels: &[u8]) -> Option<Self> {
             None
         }
 
         pub(crate) fn name(&self) -> &str {
             ""
+        }
+
+        pub(crate) fn medium(&self) -> super::Medium {
+            super::Medium::SharedMemory
         }
 
         pub(crate) fn renew(&mut self) -> std::io::Result<()> {
@@ -936,7 +1050,7 @@ fn parse_override(value: &str) -> Option<bool> {
     }
 }
 
-/// Ask whether the host can read a transmission out of shared memory, and the object to ask about.
+/// Ask whether the host can read a transmission through `medium`, and the object to ask about.
 ///
 /// The question cannot be asked in the abstract: the protocol's query action reports on a real
 /// transmission, so a terminal handed a name it cannot resolve answers that the *name* was bad rather
@@ -946,11 +1060,11 @@ fn parse_override(value: &str) -> Option<bool> {
 /// This only builds the question. Whether it is worth putting to this host is
 /// [`worth_asking_about_shared_memory`], which the caller decides first.
 #[cfg(feature = "terminal-images")]
-pub(crate) fn kitty_shared_memory_probe(id: u32) -> Option<(SharedFrame, String)> {
+pub(crate) fn kitty_frame_probe(id: u32, medium: Medium) -> Option<(SharedFrame, String)> {
     use base64::Engine as _;
 
-    let frame = SharedFrame::write(&[0, 0, 0])?;
-    let mut query = format!("\x1b_Ga=q,i={id},f=24,s=1,v=1,t=s;");
+    let frame = SharedFrame::write_in(medium, &[0, 0, 0])?;
+    let mut query = format!("\x1b_Ga=q,i={id},f=24,s=1,v=1,t={};", medium.key());
     base64::engine::general_purpose::STANDARD.encode_string(frame.name(), &mut query);
     query.push_str("\x1b\\");
     Some((frame, query))

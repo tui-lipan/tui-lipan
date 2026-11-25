@@ -402,8 +402,10 @@ So a frame goes into a POSIX shared-memory object and the escape sequence carrie
 configures this. At startup the host is asked - with a `t=s` query it can only answer by reading a
 real object - and only a terminal that answers `OK` is handed frames that way; everything else keeps
 the inline path, including a terminal reached through `tmux`, whose reader is not the terminal.
-Objects are unlinked by the host as it reads them, and by this process for any frame the host was
-never told about.
+A terminal that declines `t=s` but answers a `t=t` query asked in the same round trip, as Ghostty on
+macOS does, is handed frames as `tty-graphics-protocol-tui-lipan-*` files in the temporary directory
+instead. Objects are unlinked by the host as it reads them, and by this process for any frame the
+host was never told about.
 
 The question is only put to a host that could answer it, and that is judged from the environment
 before anything is written. A terminal on the other end of an `ssh` connection is never asked: it
