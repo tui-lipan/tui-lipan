@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use crate::core::component::{Component, Context, Update};
 use crate::core::element::{Element, IntoElement, Key};
-use crate::style::{BorderStyle, Padding, Style};
+use crate::style::{BorderStyle, Length, Padding, Style};
 use crate::widgets::{Frame, MouseRegion, Popover, PopoverOffset, PopoverPlacement, Text};
 
 static TOOLTIP_ID: AtomicUsize = AtomicUsize::new(1);
@@ -16,11 +16,71 @@ static TOOLTIP_ID: AtomicUsize = AtomicUsize::new(1);
 /// still opens at once.
 pub const DEFAULT_TOOLTIP_SKIP_DELAY: Duration = Duration::from_millis(300);
 
-/// A tooltip widget that displays help text on hover or focus.
+/// What a [`Tooltip`] shows: plain text, or any element for a rich card.
+///
+/// Strings convert to [`TooltipContent::Text`] and anything that converts into an [`Element`] to
+/// [`TooltipContent::Element`], so [`Tooltip::new`] accepts either.
+#[derive(Clone)]
+pub enum TooltipContent {
+    /// Plain text, styled by [`Tooltip::text_style`].
+    Text(Arc<str>),
+    /// An arbitrary element. It must stay passive: the tooltip never takes focus or pointer input.
+    Element(Box<Element>),
+}
+
+impl<E: IntoElement> From<E> for TooltipContent {
+    fn from(element: E) -> Self {
+        Self::Element(Box::new(element.into()))
+    }
+}
+
+impl From<&str> for TooltipContent {
+    fn from(text: &str) -> Self {
+        Self::Text(text.into())
+    }
+}
+
+impl From<String> for TooltipContent {
+    fn from(text: String) -> Self {
+        Self::Text(text.into())
+    }
+}
+
+impl From<Arc<str>> for TooltipContent {
+    fn from(text: Arc<str>) -> Self {
+        Self::Text(text)
+    }
+}
+
+impl From<&String> for TooltipContent {
+    fn from(text: &String) -> Self {
+        Self::Text(text.as_str().into())
+    }
+}
+
+impl From<Box<str>> for TooltipContent {
+    fn from(text: Box<str>) -> Self {
+        Self::Text(text.into())
+    }
+}
+
+impl From<std::borrow::Cow<'_, str>> for TooltipContent {
+    fn from(text: std::borrow::Cow<'_, str>) -> Self {
+        Self::Text(text.into())
+    }
+}
+
+impl From<&Arc<str>> for TooltipContent {
+    fn from(text: &Arc<str>) -> Self {
+        Self::Text(text.clone())
+    }
+}
+
+/// A passive popup shown on hover or focus: help text or a rich, non-interactive card.
 #[derive(Clone)]
 pub struct Tooltip {
     child: Element,
-    text: Arc<str>,
+    content: TooltipContent,
     open: Option<bool>,
     pub(crate) animation: Option<VisibilityAnimation>,
     auto: bool,
@@ -32,6 +92,7 @@ pub struct Tooltip {
     border: bool,
     border_style: BorderStyle,
     padding: Padding,
+    max_width: Option<Length>,
     placement: PopoverPlacement,
     offset: PopoverOffset,
     clamp: bool,
@@ -46,11 +107,11 @@ impl Tooltip {
         self
     }
 
-    /// Create a new tooltip wrapping a child element.
-    pub fn new(text: impl Into<Arc<str>>) -> Self {
+    /// Create a tooltip showing `content`: a string, or any element for a rich card.
+    pub fn new(content: impl Into<TooltipContent>) -> Self {
         Self {
             child: crate::widgets::Spacer::new().into(),
-            text: text.into(),
+            content: content.into(),
             open: None,
             animation: None,
             auto: true,
@@ -62,6 +123,7 @@ impl Tooltip {
             border: false,
             border_style: BorderStyle::Plain,
             padding: 0.into(),
+            max_width: None,
             placement: PopoverPlacement::BelowStart,
             offset: PopoverOffset::ZERO,
             clamp: true,
@@ -112,7 +174,7 @@ impl Tooltip {
         self
     }
 
-    /// Set text style.
+    /// Set the style of text content. Element content carries its own styles.
     pub fn text_style(mut self, style: Style) -> Self {
         self.text_style = style;
         self
@@ -139,6 +201,12 @@ impl Tooltip {
     /// Set padding.
     pub fn padding(mut self, padding: impl Into<Padding>) -> Self {
         self.padding = padding.into();
+        self
+    }
+
+    /// Cap the popup width. Percent values resolve against the overlay bounds.
+    pub fn max_width(mut self, max_width: Length) -> Self {
+        self.max_width = Some(max_width);
         self
     }
 
@@ -170,7 +238,7 @@ impl Tooltip {
 #[derive(Clone)]
 struct TooltipProps {
     child: Element,
-    text: Arc<str>,
+    content: TooltipContent,
     open: Option<bool>,
     pub(crate) animation: Option<VisibilityAnimation>,
     auto: bool,
@@ -182,6 +250,7 @@ struct TooltipProps {
     border: bool,
     border_style: BorderStyle,
     padding: Padding,
+    max_width: Option<Length>,
     placement: PopoverPlacement,
     offset: PopoverOffset,
     clamp: bool,
@@ -201,7 +270,7 @@ impl From<Tooltip> for TooltipProps {
     fn from(tooltip: Tooltip) -> Self {
         Self {
             child: tooltip.child,
-            text: tooltip.text,
+            content: tooltip.content,
             open: tooltip.open,
             animation: tooltip.animation,
             auto: tooltip.auto,
@@ -213,6 +282,7 @@ impl From<Tooltip> for TooltipProps {
             border: tooltip.border,
             border_style: tooltip.border_style,
             padding: tooltip.padding,
+            max_width: tooltip.max_width,
             placement: tooltip.placement,
             offset: tooltip.offset,
             clamp: tooltip.clamp,
@@ -385,14 +455,20 @@ impl Component for TooltipComponent {
                     && ctx.has_focus_within_key(ctx.state.trigger_key.clone())));
         let open = ctx.props.open.unwrap_or(auto_open);
 
+        let body = match &ctx.props.content {
+            TooltipContent::Text(text) => {
+                Text::new(text.clone()).style(ctx.props.text_style).into()
+            }
+            TooltipContent::Element(element) => (**element).clone(),
+        };
         let content = Frame::new()
             .border(ctx.props.border)
             .border_style(ctx.props.border_style)
             .padding(ctx.props.padding)
             .style(ctx.props.container_style)
-            .child(Text::new(ctx.props.text.clone()).style(ctx.props.text_style));
+            .child(body);
 
-        Popover::new()
+        let mut popover = Popover::new()
             .animation(ctx.props.animation.clone())
             .trigger(trigger)
             .content(content)
@@ -404,8 +480,11 @@ impl Component for TooltipComponent {
             .placement(ctx.props.placement)
             .offset(ctx.props.offset)
             .clamp(ctx.props.clamp)
-            .auto_flip(ctx.props.auto_flip)
-            .into()
+            .auto_flip(ctx.props.auto_flip);
+        if let Some(max_width) = ctx.props.max_width {
+            popover = popover.max_width(max_width);
+        }
+        popover.into()
     }
 }
 

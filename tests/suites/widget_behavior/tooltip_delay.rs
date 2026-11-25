@@ -10,7 +10,8 @@ const DELAY: Duration = Duration::from_millis(1000);
 
 struct DelayedApp;
 
-/// Alpha's tooltip settings, changed by tests while the pointer rests on it. Beta is fixed.
+/// Alpha's text tooltip settings, changed by tests while the pointer rests on it. Beta is a fixed
+/// rich tooltip, so the warm-up tests also cover text and element content sharing one warm state.
 struct Alpha {
     delay: Duration,
     open: Option<bool>,
@@ -55,10 +56,14 @@ impl Component for DelayedApp {
             .height(Length::Px(1))
             .child(first)
             .child(
-                Tooltip::new("tip-b")
-                    .delay(DELAY)
-                    .placement(PopoverPlacement::BelowStart)
-                    .child(Button::new("Beta").key("beta")),
+                Tooltip::new(
+                    VStack::new()
+                        .child(Text::new("tip-b"))
+                        .child(Text::new("rich-b")),
+                )
+                .delay(DELAY)
+                .placement(PopoverPlacement::BelowStart)
+                .child(Button::new("Beta").key("beta")),
             )
             .into()
     }
@@ -102,7 +107,7 @@ fn hover(backend: &mut TestBackend<DelayedApp>, label: Option<&str>) {
     backend.render();
 }
 
-fn wait(backend: &mut TestBackend<DelayedApp>, dt: Duration) {
+fn wait<C: Component>(backend: &mut TestBackend<C>, dt: Duration) {
     backend.advance(dt);
     backend.pump().unwrap();
     backend.render();
@@ -127,6 +132,14 @@ fn delayed_tooltip_waits_then_shows_and_hides_on_leave() {
     assert!(shows(&backend, "tip-a"));
     hover(&mut backend, EMPTY);
     assert!(!shows(&backend, "tip-a"));
+}
+
+#[test]
+fn rich_tooltip_renders_its_element_content() {
+    let mut backend = backend();
+    hover(&mut backend, BETA);
+    wait(&mut backend, DELAY + STEP);
+    assert!(shows(&backend, "tip-b") && shows(&backend, "rich-b"));
 }
 
 #[test]
@@ -444,4 +457,123 @@ fn hovering_the_allocation_outside_the_trigger_opens_nothing() {
     backend.pump().unwrap();
     backend.render();
     assert!(rect_of(&backend, "Description").is_none());
+}
+
+/// A row with a rich hover card whose child button has its own tooltip.
+struct NestedApp;
+
+impl Component for NestedApp {
+    type Properties = ();
+    type State = ();
+    type Message = ();
+    fn create_state(&self, _: &()) {}
+    fn update(&mut self, (): (), _: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+    fn view(&self, _: &Context<Self>) -> Element {
+        let snooze = Tooltip::new("tip-inner")
+            .delay(DELAY)
+            .placement(PopoverPlacement::BelowStart)
+            .child(Button::new("Snooze"));
+        let row = HStack::new()
+            .height(Length::Px(1))
+            .gap(1)
+            .child(Text::new("Row").width(Length::Auto))
+            .child(snooze);
+        let card = Tooltip::new(VStack::new().child(Text::new("card")))
+            .delay(DELAY)
+            .placement(PopoverPlacement::BelowEnd)
+            .offset((0, 2))
+            .child(row);
+        VStack::new().child(card).into()
+    }
+}
+
+#[test]
+fn a_child_tooltip_opens_and_closes_without_closing_the_row_card() {
+    let mut backend = TestBackend::new(NestedApp);
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 30,
+        h: 8,
+    });
+    backend.render();
+    let shows = |backend: &TestBackend<NestedApp>, text| {
+        backend.capture_frame().plain_text().contains(text)
+    };
+
+    let at = |backend: &TestBackend<NestedApp>, label: &str| {
+        let rect = backend
+            .capture_ui_snapshot()
+            .widgets
+            .iter()
+            .find(|widget| widget.label.as_deref() == Some(label))
+            .expect("label must be rendered")
+            .rect;
+        (rect.x as u16, rect.y as u16)
+    };
+    let (row_x, row_y) = at(&backend, "Row");
+    let (button_x, button_y) = at(&backend, "Snooze");
+
+    move_to(&mut backend, row_x, row_y);
+    wait(&mut backend, DELAY + STEP);
+    assert!(
+        shows(&backend, "card"),
+        "{:?} {:?}",
+        (row_x, row_y),
+        backend.capture_frame().plain_text()
+    );
+
+    move_to(&mut backend, button_x, button_y);
+    assert!(
+        shows(&backend, "card"),
+        "entering a child keeps the row hovered"
+    );
+    wait(&mut backend, DELAY + STEP);
+    assert!(shows(&backend, "tip-inner") && shows(&backend, "card"));
+
+    move_to(&mut backend, row_x, row_y);
+    assert!(!shows(&backend, "tip-inner"));
+    assert!(
+        shows(&backend, "card"),
+        "the child tooltip closing leaves the card open"
+    );
+
+    move_to(&mut backend, 29, 7);
+    assert!(!shows(&backend, "card"));
+}
+
+struct WideApp;
+
+impl Component for WideApp {
+    type Properties = ();
+    type State = ();
+    type Message = ();
+    fn create_state(&self, _: &()) {}
+    fn update(&mut self, (): (), _: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+    fn view(&self, _: &Context<Self>) -> Element {
+        Tooltip::new(Text::new("abcdefghijklmnopqrstuvwxyz"))
+            .open(true)
+            .max_width(Length::Px(10))
+            .child(Text::new("T").width(Length::Auto).height(Length::Auto))
+            .into()
+    }
+}
+
+#[test]
+fn max_width_caps_the_popup() {
+    let mut backend = TestBackend::new(WideApp);
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 40,
+        h: 6,
+    });
+    backend.render();
+    let frame = backend.capture_frame().plain_text();
+    assert!(frame.contains("abcdefghij"), "{frame}");
+    assert!(!frame.contains("abcdefghijk"), "{frame}");
 }
