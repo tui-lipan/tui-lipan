@@ -66,6 +66,8 @@ Source: `src/widgets/button/mod.rs` (`Button`).
 | `hover_border_style` | `None` |
 | `focus_border_style` | `None` |
 | `padding` | `Padding { left: 1, right: 1, top: 0, bottom: 0, }` |
+| `cap` | `CapStyle::Padded` |
+| `cap_behind` | `Color::Reset` |
 | `disabled` | `false` |
 | `disabled_style` | `Style::default()` |
 | `on_click` | `None` |

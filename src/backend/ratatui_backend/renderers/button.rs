@@ -10,9 +10,9 @@ use crate::backend::ratatui_backend::common::{
 use crate::backend::ratatui_backend::render::RenderState;
 use crate::backend::ratatui_backend::renderers::theme::{with_theme_muted, with_theme_primary};
 use crate::core::node::NodeId;
-use crate::style::{Align, BorderStyle, Padding, Rect, Style, ThemeRole, resolve_slot};
+use crate::style::{Align, BorderStyle, Color, Padding, Rect, Style, ThemeRole, resolve_slot};
 use crate::utils::text::end_at_width;
-use crate::widgets::ButtonVariant;
+use crate::widgets::{ButtonVariant, CapStyle};
 
 pub(crate) struct ButtonRenderCtx {
     pub icon_style: Style,
@@ -28,6 +28,8 @@ pub(crate) struct ButtonRenderCtx {
     pub hover_border_style: Option<BorderStyle>,
     pub focus_border_style: Option<BorderStyle>,
     pub padding: Padding,
+    pub cap: CapStyle,
+    pub cap_behind: Color,
     pub is_focused: bool,
     pub is_hovered: bool,
     pub disabled: bool,
@@ -59,6 +61,8 @@ pub(crate) fn render_button(
         hover_border_style,
         focus_border_style,
         padding,
+        cap,
+        cap_behind,
         is_focused,
         is_hovered,
         disabled,
@@ -181,6 +185,14 @@ pub(crate) fn render_button(
             f.render_widget(p, effective_label);
         }
         ButtonVariant::Filled => {
+            let (rect, padding) = if cap.chars().is_some() {
+                let content = content_width(label, icon, shortcut, icon_gap, shortcut_gap);
+                let rect = draw_caps(f, rect, rrect, cap, cap_behind, s, content);
+                (rect, fit_padding(padding, rect.w, content))
+            } else {
+                (rect, padding)
+            };
+            let rrect = to_ratatui_rect(rect).intersection(rrect);
             if style_paints_bg(s) {
                 f.render_widget(Clear, rrect);
             }
@@ -422,6 +434,116 @@ fn build_button_spans(
     spans
 }
 
+/// Draw `cap` at both ends of a filled button and return the rect left for the body.
+///
+/// The caps take the fill the body shows: its background, or its foreground when the style is
+/// reversed. A button with no opaque fill, or too narrow to keep `content` cells beside the caps,
+/// keeps square ends.
+fn draw_caps(
+    f: &mut ratatui::Frame<'_>,
+    rect: Rect,
+    rrect: ratatui::layout::Rect,
+    cap: CapStyle,
+    behind: Color,
+    s: Style,
+    content: u16,
+) -> Rect {
+    let Some((left, right)) = cap.chars() else {
+        return rect;
+    };
+    let Some(fill) = visible_fill(s) else {
+        return rect;
+    };
+    if rect.w < content.max(1).saturating_add(2) {
+        return rect;
+    }
+    let cap_style = ratatui::style::Style {
+        fg: Some(fill),
+        bg: (behind != Color::Reset)
+            .then(|| crate::backend::ratatui_backend::common::to_ratatui_color(behind)),
+        ..Default::default()
+    };
+    let right_x = rect.x.saturating_add(rect.w as i16 - 1);
+    for row in 0..rect.h {
+        let y = rect.y.saturating_add(row as i16);
+        for (x, glyph) in [(rect.x, left), (right_x, right)] {
+            let (Ok(cx), Ok(cy)) = (u16::try_from(x), u16::try_from(y)) else {
+                continue;
+            };
+            let position = ratatui::layout::Position { x: cx, y: cy };
+            if !rrect.contains(position) {
+                continue;
+            }
+            if let Some(cell) = f.buffer_mut().cell_mut(position) {
+                cell.reset();
+                cell.set_char(glyph);
+                cell.set_style(cap_style);
+            }
+        }
+    }
+    Rect {
+        x: rect.x.saturating_add(1),
+        w: rect.w - 2,
+        ..rect
+    }
+}
+
+/// The color a filled button visibly paints: its background, or its foreground when reversed.
+/// `None` when that is transparent, the backdrop, or the terminal default.
+fn visible_fill(s: Style) -> Option<ratatui::style::Color> {
+    let resolved = to_ratatui_style(s);
+    let reversed = resolved
+        .add_modifier
+        .contains(ratatui::style::Modifier::REVERSED)
+        && !resolved
+            .sub_modifier
+            .contains(ratatui::style::Modifier::REVERSED);
+    let fill = if reversed {
+        resolved.fg
+    } else if style_paints_bg(s) {
+        resolved.bg
+    } else {
+        None
+    };
+    fill.filter(|color| *color != ratatui::style::Color::Reset)
+}
+
+/// Columns the button's icon, label and shortcut take with their gaps.
+fn content_width(
+    label: &str,
+    icon: Option<&str>,
+    shortcut: Option<&str>,
+    icon_gap: u16,
+    shortcut_gap: u16,
+) -> u16 {
+    let width = |text: &str| u16::try_from(UnicodeWidthStr::width(text)).unwrap_or(u16::MAX);
+    let mut total = width(label);
+    if let Some(icon) = icon.filter(|icon| !icon.is_empty()) {
+        total = total.saturating_add(width(icon)).saturating_add(icon_gap);
+    }
+    if let Some(shortcut) = shortcut.filter(|shortcut| !shortcut.is_empty()) {
+        total = total
+            .saturating_add(width(shortcut))
+            .saturating_add(shortcut_gap);
+    }
+    total
+}
+
+/// Horizontal padding that leaves `content` columns of `width` for the content: a capped button
+/// gives up padding before its label. Right padding goes first, so a centered label stays put.
+fn fit_padding(padding: Padding, width: u16, content: u16) -> Padding {
+    let spare = width.saturating_sub(content);
+    let left = padding
+        .left
+        .min(spare.div_ceil(2).max(spare.saturating_sub(padding.right)));
+    let right = padding.right.min(spare.saturating_sub(left));
+    Padding {
+        left,
+        right,
+        ..padding
+    }
+}
+
 pub(crate) fn render_button_node(
     state: &mut RenderState<'_, '_, '_>,
     node_id: NodeId,
@@ -461,6 +583,8 @@ pub(crate) fn render_button_node(
             hover_border_style: node.hover_border_style,
             focus_border_style: node.focus_border_style,
             padding: node.padding,
+            cap: node.cap,
+            cap_behind: node.cap_behind,
             is_focused,
             is_hovered,
             disabled: node.disabled,
@@ -475,13 +599,14 @@ pub(crate) fn render_button_node(
 mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::buffer::Buffer;
     use ratatui::style::Color as RColor;
 
     use super::{ButtonRenderCtx, render_button};
     use crate::app::ContrastPolicy;
     use crate::backend::ratatui_backend::common::blend_paint_over_ratatui;
     use crate::style::{Align, BorderStyle, Color, Padding, Paint, Rect, Style};
-    use crate::widgets::ButtonVariant;
+    use crate::widgets::{ButtonVariant, CapStyle};
 
     #[test]
     fn filled_button_hover_lighten_recomputes_contrast_from_raw_style() {
@@ -528,6 +653,8 @@ mod tests {
                             hover_border_style: None,
                             focus_border_style: None,
                             padding: Padding::default(),
+                            cap: CapStyle::Padded,
+                            cap_behind: Color::Reset,
                             is_focused: false,
                             is_hovered,
                             disabled: false,
@@ -549,6 +676,216 @@ mod tests {
         assert_ne!(bg_hover, bg_idle);
         assert_ne!(fg_hover, fg_idle);
         assert_ne!(bg_hover, RColor::Reset);
+    }
+
+    /// A round-capped filled button `label` in `width` cells with the default padding, over a
+    /// `#0e0e0e` surface.
+    fn capped(label: &str, width: u16, state: impl FnOnce(&mut ButtonRenderCtx)) -> Buffer {
+        let mut ctx = ButtonRenderCtx {
+            icon_style: Style::default(),
+            icon_gap: 1,
+            shortcut_style: Style::default(),
+            shortcut_gap: 1,
+            style: Style::new().fg(Color::White).bg(CAP_FILL),
+            hover_style: Style::default(),
+            focus_style: Style::default(),
+            align: Align::Center,
+            variant: ButtonVariant::Filled,
+            border_style: BorderStyle::Plain,
+            hover_border_style: None,
+            focus_border_style: None,
+            padding: Padding {
+                left: 1,
+                right: 1,
+                top: 0,
+                bottom: 0,
+            },
+            cap: CapStyle::Round,
+            cap_behind: CAP_BEHIND,
+            is_focused: false,
+            is_hovered: false,
+            disabled: false,
+            disabled_style: Style::default(),
+            contrast_policy: ContrastPolicy::Off,
+            clip_rect: None,
+        };
+        state(&mut ctx);
+        let mut terminal = Terminal::new(TestBackend::new(width, 1)).expect("terminal");
+        terminal
+            .draw(|f| {
+                let rect = Rect {
+                    x: 0,
+                    y: 0,
+                    w: width,
+                    h: 1,
+                };
+                render_button(
+                    f,
+                    label,
+                    None,
+                    None,
+                    rect,
+                    ratatui::layout::Rect::new(0, 0, width, 1),
+                    ctx,
+                );
+            })
+            .expect("draw");
+        terminal.backend().buffer().clone()
+    }
+
+    const CAP_FILL: Color = Color::Rgb(0x34, 0x6b, 0xf1);
+    const CAP_BEHIND: Color = Color::Rgb(0x0e, 0x0e, 0x0e);
+
+    fn row(buffer: &Buffer) -> String {
+        (0..buffer.area.width)
+            .map(|x| buffer[(x, 0)].symbol().to_owned())
+            .collect()
+    }
+
+    fn has_caps(buffer: &Buffer) -> bool {
+        let (left, right) = CapStyle::Round.chars().expect("round caps");
+        let last = buffer.area.width - 1;
+        buffer[(0, 0)].symbol() == left.to_string()
+            && buffer[(last, 0)].symbol() == right.to_string()
+    }
+
+    #[test]
+    fn capped_button_keeps_its_label_before_its_caps_and_padding() {
+        // (label, width, caps expected): the label shows whenever it fits the width; caps take
+        // two cells only once the label fits beside them; padding goes first.
+        let cases = [
+            ("↑", 1, false),
+            ("↑", 2, false),
+            ("↑", 3, true),
+            ("↑", 4, true),
+            ("↑", 5, true),
+            ("中", 2, false),
+            ("中", 3, false),
+            ("中", 4, true),
+            ("中", 5, true),
+        ];
+        for (label, width, caps) in cases {
+            let buffer = capped(label, width, |_| {});
+            assert!(
+                row(&buffer).contains(label),
+                "{label:?} in {width} cells shows {:?}",
+                row(&buffer)
+            );
+            assert_eq!(has_caps(&buffer), caps, "{label:?} in {width} cells");
+        }
+        // A double-width label cannot fit one cell; the button stays square and empty-ended.
+        assert!(!has_caps(&capped("中", 1, |_| {})));
+    }
+
+    #[test]
+    fn caps_take_the_visible_fill() {
+        let rgb = |color: Color| crate::backend::ratatui_backend::common::to_ratatui_color(color);
+        let cap_fg = |buffer: &Buffer| buffer[(0, 0)].fg;
+
+        // Reversed: the body shows the foreground as its fill, so the caps do too.
+        let reversed = capped("Go", 6, |ctx| {
+            ctx.style = Style::new().fg(CAP_FILL).bg(Color::White).reverse();
+        });
+        assert!(has_caps(&reversed));
+        assert_eq!(cap_fg(&reversed), rgb(CAP_FILL));
+
+        // No fill, or a transparent one: no caps in the terminal's default color.
+        for style in [
+            Style::new().fg(Color::White),
+            Style::new().fg(Color::White).bg(Color::Transparent),
+        ] {
+            let buffer = capped("Go", 6, |ctx| ctx.style = style);
+            assert!(!has_caps(&buffer), "{style:?}");
+            assert!(row(&buffer).contains("Go"));
+        }
+
+        // Focus and disabled styles reach the caps like hover does.
+        let focus = Color::Rgb(0x50, 0x80, 0xff);
+        let focused = capped("Go", 6, |ctx| {
+            ctx.focus_style = Style::new().bg(focus);
+            ctx.is_focused = true;
+        });
+        assert_eq!(cap_fg(&focused), rgb(focus));
+        let muted = Color::Rgb(0x2a, 0x2a, 0x2a);
+        let disabled = capped("Go", 6, |ctx| {
+            ctx.disabled_style = Style::new().bg(muted);
+            ctx.disabled = true;
+        });
+        assert_eq!(cap_fg(&disabled), rgb(muted));
+        for buffer in [&focused, &disabled] {
+            assert_eq!(buffer[(0, 0)].bg, rgb(CAP_BEHIND));
+        }
+    }
+
+    #[test]
+    fn filled_button_caps_take_the_current_fill() {
+        let idle = Color::rgb(0x34, 0x6b, 0xf1);
+        let hover = Color::rgb(0x50, 0x80, 0xff);
+        let behind = Color::rgb(0x0e, 0x0e, 0x0e);
+        let draw = |is_hovered| {
+            let mut terminal = Terminal::new(TestBackend::new(5, 1)).expect("terminal");
+            terminal
+                .draw(|f| {
+                    let rect = Rect {
+                        x: 0,
+                        y: 0,
+                        w: 5,
+                        h: 1,
+                    };
+                    render_button(
+                        f,
+                        "↑",
+                        None,
+                        None,
+                        rect,
+                        ratatui::layout::Rect::new(0, 0, 5, 1),
+                        ButtonRenderCtx {
+                            icon_style: Style::default(),
+                            icon_gap: 0,
+                            shortcut_style: Style::default(),
+                            shortcut_gap: 0,
+                            style: Style::new().fg(Color::White).bg(idle),
+                            hover_style: Style::new().bg(hover),
+                            focus_style: Style::default(),
+                            align: Align::Center,
+                            variant: ButtonVariant::Filled,
+                            border_style: BorderStyle::Plain,
+                            hover_border_style: None,
+                            focus_border_style: None,
+                            padding: Padding {
+                                left: 1,
+                                right: 1,
+                                top: 0,
+                                bottom: 0,
+                            },
+                            cap: CapStyle::Round,
+                            cap_behind: behind,
+                            is_focused: false,
+                            is_hovered,
+                            disabled: false,
+                            disabled_style: Style::default(),
+                            contrast_policy: ContrastPolicy::Off,
+                            clip_rect: None,
+                        },
+                    );
+                })
+                .expect("draw");
+            terminal.backend().buffer().clone()
+        };
+
+        let rgb = |color: Color| crate::backend::ratatui_backend::common::to_ratatui_color(color);
+        for (hovered, fill) in [(false, idle), (true, hover)] {
+            let buffer = draw(hovered);
+            let (left, right) = CapStyle::Round.chars().expect("round caps");
+            assert_eq!(buffer[(0, 0)].symbol(), left.to_string());
+            assert_eq!(buffer[(4, 0)].symbol(), right.to_string());
+            for x in [0, 4] {
+                assert_eq!(buffer[(x, 0)].fg, rgb(fill));
+                assert_eq!(buffer[(x, 0)].bg, rgb(behind));
+            }
+            assert_eq!(buffer[(2, 0)].symbol(), "↑");
+            assert_eq!(buffer[(2, 0)].bg, rgb(fill));
+        }
     }
 
     #[test]
@@ -596,6 +933,8 @@ mod tests {
                         hover_border_style: None,
                         focus_border_style: None,
                         padding: Padding::default(),
+                        cap: CapStyle::Padded,
+                        cap_behind: Color::Reset,
                         is_focused: false,
                         is_hovered: true,
                         disabled: false,

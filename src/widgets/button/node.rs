@@ -3,7 +3,8 @@ use std::sync::Arc;
 use crate::callback::{Callback, KeyHandler};
 use crate::core::event::MouseEvent;
 use crate::core::node::{NodeKind, WidgetNode};
-use crate::style::{Align, BorderStyle, Padding, Style, StyleSlot, Theme, ThemeRole};
+use crate::style::{Align, BorderStyle, Color, Padding, Style, StyleSlot, Theme, ThemeRole};
+use crate::widgets::CapStyle;
 
 use super::{Button, ButtonVariant};
 
@@ -25,6 +26,8 @@ pub struct ButtonNode {
     pub hover_border_style: Option<BorderStyle>,
     pub focus_border_style: Option<BorderStyle>,
     pub padding: Padding,
+    pub cap: CapStyle,
+    pub cap_behind: Color,
     pub disabled: bool,
     pub disabled_style: Style,
     pub on_click: Option<Callback<MouseEvent>>,
@@ -95,6 +98,8 @@ impl From<Button> for ButtonNode {
             hover_border_style: button.hover_border_style,
             focus_border_style: button.focus_border_style,
             padding: button.padding,
+            cap: button.cap,
+            cap_behind: button.cap_behind,
             disabled: button.disabled,
             disabled_style: button.disabled_style,
             on_click: button.on_click,

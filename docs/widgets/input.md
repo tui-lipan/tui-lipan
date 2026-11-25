@@ -54,6 +54,8 @@ Interactive button.
 | `focus_border_style` | `BorderStyle` | Focus border |
 | `align` | `Align` | Label alignment |
 | `padding` | `impl Into<Padding>` | Inner padding |
+| `cap` | `CapStyle` | Caps at both ends of a `Filled` button, in the fill it shows (`CapStyle::Round` for a pill). Padding shrinks before the label; a button with no opaque fill, or too narrow for its label beside the caps, keeps square ends |
+| `cap_behind` | `Color` | Color behind the caps, usually the surface the button sits on |
 | `icon` | `Span` | Icon span (prepended to label) |
 | `icon_style` | `Style` | Icon style |
 | `icon_gap` | `u16` | Space between icon and label |

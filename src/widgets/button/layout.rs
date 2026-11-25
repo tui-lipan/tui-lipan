@@ -36,7 +36,10 @@ pub fn measure_button(button: &Button) -> (u16, u16) {
             (w, 1)
         }
         ButtonVariant::Filled => {
-            let w = content_w.saturating_add(button.padding.horizontal());
+            let caps = if button.cap.chars().is_some() { 2 } else { 0 };
+            let w = content_w
+                .saturating_add(button.padding.horizontal())
+                .saturating_add(caps);
             let h = button.padding.vertical().saturating_add(1);
             (w, h)
         }
