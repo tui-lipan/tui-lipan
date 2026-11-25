@@ -509,6 +509,9 @@ fn row(ctx: &Context<ComposedList>, index: usize, item: &ListItem, selected: boo
         region = region.hover_effect(effect.clone());
     }
     let mut element: Element = region.into();
+    if item.content.is_some() && item.content_height == 0 {
+        element = element.min_height(Length::Px(0));
+    }
     // Only rows a text list would let you drag: selectable ones, in an enabled list.
     if let Some(drag) = list
         .host_drag

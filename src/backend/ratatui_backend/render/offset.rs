@@ -9,6 +9,10 @@ pub(crate) struct RenderOffset {
 impl RenderOffset {
     pub(crate) const ZERO: Self = Self { x: 0, y: 0 };
 
+    pub(crate) const fn from_cells(x: i32, y: i32) -> Self {
+        Self { x, y }
+    }
+
     pub(crate) fn add_cells(self, (x, y): (i16, i16)) -> Self {
         Self {
             x: self.x.saturating_add(i32::from(x)),

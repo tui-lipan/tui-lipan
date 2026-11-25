@@ -138,7 +138,7 @@ fn element_has_split_wrap_measure_state(_el: &Element) -> bool {
 /// returned before `measure_drag_source` has a chance to check the hint.
 fn drag_source_should_skip_measure_cache(el: &Element) -> bool {
     if let ElementKind::DragSource(source) = &el.kind {
-        matches!(source.preview, crate::widgets::DragPreview::SourceSnapshot)
+        source.preview.uses_source_slot()
             && super::drag_source_layout_hint::drag_source_snapshot_collapse_key().is_some()
     } else {
         false

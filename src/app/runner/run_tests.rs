@@ -15204,6 +15204,7 @@ fn inline_auto_height_expands_viewport_for_open_select_and_shrinks_on_close() {
             drag_preview_label: None,
             drag_preview_at_mouse: false,
             drag_preview_snapshot_rect: None,
+            drag_preview_node: None,
             dnd_snapshot_cells: &dnd_snapshot_cells,
             drag_preview_max_width: None,
             drag_preview_max_height: None,

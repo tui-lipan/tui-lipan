@@ -226,7 +226,7 @@ fn fit_reflow_children_to_content<C: Borrow<Element>>(
 /// key matches the active collapse hint (layout then uses `drag_slot`).
 fn is_drag_source_collapse_target(child: &Element) -> bool {
     if let ElementKind::DragSource(source) = &child.kind
-        && matches!(source.preview, crate::widgets::DragPreview::SourceSnapshot)
+        && source.preview.uses_source_slot()
         && let (Some(ek), Some(collapse)) =
             (child.key.as_ref(), drag_source_snapshot_collapse_key())
     {

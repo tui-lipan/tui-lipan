@@ -12,7 +12,7 @@ pub(crate) fn measure_drag_source(
     max_h: Option<u16>,
 ) -> (u16, u16) {
     if let Some(child) = source.child.as_deref() {
-        if matches!(source.preview, crate::widgets::DragPreview::SourceSnapshot)
+        if source.preview.uses_source_slot()
             && let (Some(ek), Some(collapse)) = (element_key, drag_source_snapshot_collapse_key())
             && ek == &collapse
         {

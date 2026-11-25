@@ -1532,6 +1532,38 @@ where
     fn capture_interaction(
         &self,
     ) -> crate::backend::ratatui_backend::capture_render::CaptureInteraction<'_> {
+        let (drag_preview_node, drag_preview_grab_offset) = match &self.drag.active {
+            crate::app::interaction_state::ActiveDrag::DragDrop(drag)
+                if drag.started && matches!(drag.preview, crate::widgets::DragPreview::Element) =>
+            {
+                let node = self
+                    .core
+                    .tree
+                    .is_valid(drag.source_id)
+                    .then(|| {
+                        self.core
+                            .tree
+                            .node(drag.source_id)
+                            .kind
+                            .drag_preview_child()
+                    })
+                    .flatten();
+                let grab = drag.preview_snapshot_anchor.and_then(|r| {
+                    if r.x < 0 || r.y < 0 || r.w == 0 || r.h == 0 {
+                        return None;
+                    }
+                    let gx = (i32::from(drag.start_x) - i32::from(r.x))
+                        .clamp(0, i32::from(r.w.saturating_sub(1)))
+                        as u16;
+                    let gy = (i32::from(drag.start_y) - i32::from(r.y))
+                        .clamp(0, i32::from(r.h.saturating_sub(1)))
+                        as u16;
+                    Some((gx, gy))
+                });
+                (node, grab)
+            }
+            _ => (None, None),
+        };
         crate::backend::ratatui_backend::capture_render::CaptureInteraction {
             copy_feedback: Some(&self.copy_feedback),
             focused: self.focused,
@@ -1541,6 +1573,8 @@ where
                 .focused
                 .and_then(|id| self.widgets.text_area_vim_state.get(&id))
                 .map(|state| state.mode),
+            drag_preview_node,
+            drag_preview_grab_offset,
         }
     }
 

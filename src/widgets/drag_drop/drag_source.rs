@@ -25,6 +25,7 @@ pub struct DragSource {
     pub(crate) on_drag_started: Option<crate::callback::Callback<DragStartedEvent>>,
     pub(crate) drag_group: Option<Arc<str>>,
     pub(crate) preview: DragPreview,
+    pub(crate) preview_element: Option<Box<Element>>,
     pub(crate) dragging_style: StyleSlot,
     pub(crate) drag_slot: DragSlot,
     pub(crate) drag_slot_axis: DragSlotAxis,
@@ -43,6 +44,7 @@ impl Default for DragSource {
             on_drag_started: None,
             drag_group: None,
             preview: DragPreview::None,
+            preview_element: None,
             dragging_style: StyleSlot::Inherit,
             drag_slot: DragSlot::Collapse,
             drag_slot_axis: DragSlotAxis::default(),
@@ -114,12 +116,24 @@ impl DragSource {
     /// Render a snapshot of the drag source's cells near the cursor as a drag preview.
     pub fn preview_snapshot(mut self) -> Self {
         self.preview = DragPreview::SourceSnapshot;
+        self.preview_element = None;
+        self
+    }
+
+    /// Render a live floating element near the pointer while dragging.
+    ///
+    /// Unlike [`Self::preview_snapshot`], the element reconciles on every render so the floating
+    /// preview can update dynamically (for example, showing a badge for the hovered drop target).
+    pub fn preview_element(mut self, element: impl Into<Element>) -> Self {
+        self.preview = DragPreview::Element;
+        self.preview_element = Some(Box::new(element.into()));
         self
     }
 
     /// Disable preview rendering.
     pub fn no_preview(mut self) -> Self {
         self.preview = DragPreview::None;
+        self.preview_element = None;
         self
     }
 
@@ -219,7 +233,7 @@ impl From<DragSource> for Element {
         let (min_w, min_h) = measure_drag_source(&value, None, None, None);
         // SourceSnapshot sources may collapse to zero height during a drag,
         // so their min_height must be 0 to allow that.
-        let min_h = if matches!(value.preview, DragPreview::SourceSnapshot) {
+        let min_h = if value.preview.uses_source_slot() {
             0
         } else {
             min_h
@@ -252,8 +266,11 @@ impl LayoutHash for DragSource {
         self.threshold.hash(hasher);
         // Include the collapse hint so the global measure cache invalidates
         // when a SourceSnapshot drag starts or ends.
-        if matches!(self.preview, DragPreview::SourceSnapshot) {
+        if self.preview.uses_source_slot() {
             drag_source_snapshot_collapse_key().hash(hasher);
+        }
+        if let Some(preview_el) = self.preview_element.as_deref() {
+            recurse(preview_el)?.hash(hasher);
         }
         if let Some(child) = self.child.as_ref() {
             recurse(child.as_ref())?.hash(hasher);

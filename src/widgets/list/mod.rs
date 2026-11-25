@@ -926,8 +926,11 @@ impl ListItem {
     }
 
     /// Height of the [`content`](Self::content) element in terminal rows. Default 1.
+    ///
+    /// `0` collapses the row while keeping its content mounted at the row's width, for example to
+    /// keep an active [`DragSource`](crate::widgets::DragSource) alive while its slot closes.
     pub fn content_height(mut self, height: u16) -> Self {
-        self.content_height = height.max(1);
+        self.content_height = height;
         self
     }
 

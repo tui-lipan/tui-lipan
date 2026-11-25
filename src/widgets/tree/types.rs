@@ -278,6 +278,9 @@ impl TreeNode {
     }
 
     /// Height of composed content in terminal rows, including its detail lines. Default 1.
+    ///
+    /// `0` collapses the row while keeping its content mounted; see
+    /// [`ListItem::content_height`](crate::widgets::ListItem::content_height).
     pub fn content_height(mut self, height: u16) -> Self {
         self.item = self.item.content_height(height);
         self

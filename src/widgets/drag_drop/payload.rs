@@ -133,9 +133,18 @@ pub enum DragPreview {
     Label(Arc<str>),
     /// Render a snapshot of the drag source's cells near the pointer while dragging.
     SourceSnapshot,
+    /// Render a live floating element supplied via [`crate::widgets::DragSource::preview_element`].
+    Element,
     /// Do not render a drag preview.
     #[default]
     None,
+}
+
+impl DragPreview {
+    /// Whether this preview floats the source representation and supports source-slot hiding/collapse.
+    pub(crate) const fn uses_source_slot(&self) -> bool {
+        matches!(self, Self::SourceSnapshot | Self::Element)
+    }
 }
 
 /// Suggested maximum width (cells) when capping a [`DragPreview::SourceSnapshot`] float preview.
