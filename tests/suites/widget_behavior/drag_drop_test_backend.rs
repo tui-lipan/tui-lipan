@@ -6,7 +6,7 @@ use tui_lipan::TestBackend;
 use tui_lipan::core::event::{MouseButton, MouseKind};
 use tui_lipan::prelude::*;
 use tui_lipan::style::Rect;
-use tui_lipan::{DragCancelEvent, DragOverEvent, DragStartEvent, ScrollAxis};
+use tui_lipan::{DragCancelEvent, DragOverEvent, DragPreviewAnchor, DragStartEvent, ScrollAxis};
 
 #[derive(Clone, Debug)]
 struct ItemPayload {
@@ -870,4 +870,153 @@ fn collapsed_tree_node_keeps_drag_source_and_live_preview_alive() {
 
     send(&mut backend, MouseKind::Up(MouseButton::Left), 2, 0);
     assert_eq!(backend.state().dropped_on, Some("Pinned"));
+}
+
+struct RailAndContextApp;
+
+impl Component for RailAndContextApp {
+    type Message = LivePreviewMsg;
+    type Properties = ();
+    type State = LivePreviewState;
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {
+        LivePreviewState::default()
+    }
+
+    fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+        match msg {
+            LivePreviewMsg::Started => ctx.state.dragging = true,
+            LivePreviewMsg::Hover(target) => ctx.state.hovered_target = target,
+            LivePreviewMsg::Drop(target) => {
+                ctx.state.dragging = false;
+                ctx.state.hovered_target = None;
+                ctx.state.dropped_on = Some(target);
+            }
+            LivePreviewMsg::Cancel => {
+                ctx.state.dragging = false;
+                ctx.state.hovered_target = None;
+            }
+        }
+        Update::full()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        let over_main = ctx.state.hovered_target == Some("main");
+        let preview: Element = if over_main {
+            Text::new("chip-preview")
+                .width(Length::Auto)
+                .height(Length::Px(1))
+                .style(Style::new().bg(Color::Blue))
+                .into()
+        } else {
+            Text::new("rail-preview")
+                .width(Length::Flex(1))
+                .height(Length::Px(1))
+                .style(Style::new().bg(Color::DarkGray))
+                .into()
+        };
+
+        let source = DragSource::new()
+            .child(
+                Text::new("source-item")
+                    .width(Length::Flex(1))
+                    .height(Length::Px(1)),
+            )
+            .drag_group("g")
+            .threshold(1)
+            .preview_element(preview)
+            .preview_anchor(if over_main {
+                DragPreviewAnchor::CursorOffset(1, 0)
+            } else {
+                DragPreviewAnchor::VerticalRail
+            })
+            .hide_source_while_dragging(!over_main)
+            .on_drag_start(|_| Some(Box::new(ItemPayload { id: 3 }) as Box<dyn DragPayload>))
+            .on_drag_started(ctx.link().callback(|_| LivePreviewMsg::Started))
+            .on_drag_cancel(ctx.link().callback(|_| LivePreviewMsg::Cancel))
+            .key("rail-src");
+
+        let rail = DropTarget::new()
+            .child(
+                VStack::new()
+                    .width(Length::Px(16))
+                    .height(Length::Flex(1))
+                    .child(source)
+                    .child(Spacer::new()),
+            )
+            .accept_group("g")
+            .on_drag_over(ctx.link().callback(|_| LivePreviewMsg::Hover(Some("rail"))));
+
+        let main = DropTarget::new()
+            .child(
+                VStack::new()
+                    .width(Length::Flex(1))
+                    .height(Length::Flex(1))
+                    .child(Text::new("main-pane")),
+            )
+            .accept_group("g")
+            .on_drag_over(ctx.link().callback(|_| LivePreviewMsg::Hover(Some("main"))))
+            .on_drop(ctx.link().callback(|_| LivePreviewMsg::Drop("main")));
+
+        HStack::new().gap(0).child(rail).child(main).into()
+    }
+}
+
+#[test]
+fn preview_anchor_locks_vertical_rail_then_switches_to_cursor_chip_with_visible_source() {
+    let mut backend = TestBackend::new(RailAndContextApp);
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 44,
+        h: 8,
+    });
+    backend.render();
+
+    let send = |backend: &mut TestBackend<RailAndContextApp>, kind: MouseKind, x: u16, y: u16| {
+        backend
+            .send_mouse(MouseEvent {
+                kind,
+                x,
+                y,
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+        backend.render();
+    };
+
+    // Grab at x=2, y=0 and drag diagonally within the rail to x=10, y=3:
+    // VerticalRail must keep rail-preview locked at column 0 (not column 8!).
+    send(&mut backend, MouseKind::Down(MouseButton::Left), 2, 0);
+    send(&mut backend, MouseKind::Drag(MouseButton::Left), 10, 3);
+    let in_rail = backend.capture_frame().plain_text();
+    let row3 = in_rail.lines().nth(3).unwrap_or("");
+    assert!(
+        row3.starts_with("rail-preview"),
+        "VerticalRail should lock X to column 0 even when mouse drifted to x=10:\n{in_rail}"
+    );
+    assert!(
+        !in_rail.contains("source-item"),
+        "source should stay hidden while hide_source_while_dragging(true):\n{in_rail}"
+    );
+
+    // Move right into main-pane (x=24, y=4):
+    // preview switches to CursorOffset(1, 0) at x=25, y=4, and source-item reappears!
+    send(&mut backend, MouseKind::Drag(MouseButton::Left), 24, 4);
+    let in_main = backend.capture_frame().plain_text();
+    assert!(
+        in_main.contains("source-item"),
+        "source should remain visible when hide_source_while_dragging(false):\n{in_main}"
+    );
+    let row4 = in_main.lines().nth(4).unwrap_or("");
+    let chip_col = row4
+        .find("chip-preview")
+        .unwrap_or_else(|| panic!("expected chip-preview on row 4:\n{in_main}"));
+    assert_eq!(
+        chip_col, 25,
+        "CursorOffset(1, 0) from x=24 should start at col 25"
+    );
+
+    send(&mut backend, MouseKind::Up(MouseButton::Left), 24, 4);
+    assert_eq!(backend.state().dropped_on, Some("main"));
 }

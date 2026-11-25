@@ -453,12 +453,39 @@ pub(crate) fn render(f: &mut ratatui::Frame<'_>, ctx: &RenderContext<'_>) {
     if let (Some(preview_node), Some((mx, my))) = (ctx.drag_preview_node, ctx.mouse_pos)
         && tree.is_valid(preview_node)
     {
-        let (ox, oy) = drag_snapshot_preview_origin(
-            mx,
-            my,
-            ctx.drag_preview_grab_offset.unwrap_or((0, 0)),
-            ctx.drag_preview_at_mouse,
-        );
+        let (anchor, source_rect) = tree
+            .node(preview_node)
+            .parent
+            .filter(|&pid| tree.is_valid(pid))
+            .and_then(|pid| {
+                let parent = tree.node(pid);
+                match &parent.kind {
+                    NodeKind::DragSource(source) => Some((source.preview_anchor, parent.rect)),
+                    _ => None,
+                }
+            })
+            .unwrap_or((
+                crate::widgets::DragPreviewAnchor::Free,
+                crate::style::Rect::default(),
+            ));
+        let (gx, gy) = ctx.drag_preview_grab_offset.unwrap_or((0, 0));
+        let (ox, oy) = match anchor {
+            crate::widgets::DragPreviewAnchor::Free => {
+                drag_snapshot_preview_origin(mx, my, (gx, gy), ctx.drag_preview_at_mouse)
+            }
+            crate::widgets::DragPreviewAnchor::VerticalRail => (
+                i32::from(source_rect.x),
+                i32::from(my).saturating_sub(i32::from(gy)),
+            ),
+            crate::widgets::DragPreviewAnchor::HorizontalRail => (
+                i32::from(mx).saturating_sub(i32::from(gx)),
+                i32::from(source_rect.y),
+            ),
+            crate::widgets::DragPreviewAnchor::CursorOffset(dx, dy) => (
+                i32::from(mx).saturating_add(i32::from(dx)),
+                i32::from(my).saturating_add(i32::from(dy)),
+            ),
+        };
         let offset = RenderOffset::from_cells(
             ox.saturating_sub(i32::from(state.content.x)),
             oy.saturating_sub(i32::from(state.content.y)),
@@ -1810,8 +1837,9 @@ fn render_node(
             );
             if source.is_dragging && source.preview.uses_source_slot() {
                 let reserve_strip = !matches!(source.drag_slot, DragSlot::Collapse);
-                let hide_source = matches!(source.preview, crate::widgets::DragPreview::Element)
-                    || state.ctx.dnd_snapshot_cells.borrow().is_some();
+                let hide_source = source.hide_source_while_dragging
+                    && (matches!(source.preview, crate::widgets::DragPreview::Element)
+                        || state.ctx.dnd_snapshot_cells.borrow().is_some());
                 if hide_source {
                     if reserve_strip
                         && !dragging_style.is_empty()

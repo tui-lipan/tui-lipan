@@ -147,6 +147,20 @@ impl DragPreview {
     }
 }
 
+/// Positioning mode for a floating [`DragPreview::Element`] while dragging.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum DragPreviewAnchor {
+    /// Follow both X and Y of the pointer using the initial grab offset (default).
+    #[default]
+    Free,
+    /// Lock X to the drag source's column and follow pointer Y with the initial grab offset.
+    VerticalRail,
+    /// Lock Y to the drag source's row and follow pointer X with the initial grab offset.
+    HorizontalRail,
+    /// Position relative to the pointer cursor `(mouse_x + dx, mouse_y + dy)`.
+    CursorOffset(i16, i16),
+}
+
 /// Suggested maximum width (cells) when capping a [`DragPreview::SourceSnapshot`] float preview.
 ///
 /// Not applied automatically — pass `Some(DEFAULT_PREVIEW_MAX_WIDTH)` to

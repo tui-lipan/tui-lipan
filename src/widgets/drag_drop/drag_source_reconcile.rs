@@ -1,12 +1,13 @@
 use crate::core::component::FocusContext;
 use crate::core::node::{NodeId, NodeKind, NodeTree};
+use crate::layout::axis::{Axis, requested_main_axis};
 use crate::layout::measure::min_size_constrained;
 use crate::layout::reconcile::{
     ElementReconcile, OverlayState, ReconcileCtx, SingleChildReconcile, reconcile_element,
     reconcile_single_child,
 };
 use crate::layout::tag::can_reuse;
-use crate::style::Rect;
+use crate::style::{Length, Rect};
 
 use super::drag_source::DragSource;
 use super::drag_source_node::DragSourceNode;
@@ -35,6 +36,8 @@ pub(crate) fn reconcile_drag_source(
             drag_group: source.drag_group.clone(),
             preview: source.preview.clone(),
             preview_child: None,
+            preview_anchor: source.preview_anchor,
+            hide_source_while_dragging: source.hide_source_while_dragging,
             dragging_style: source.dragging_style,
             drag_slot: source.drag_slot,
             preview_max_width: source.preview_max_width,
@@ -71,16 +74,22 @@ pub(crate) fn reconcile_drag_source(
     );
 
     let preview_child = if is_dragging && let Some(preview_el) = source.preview_element.as_deref() {
-        let width_cap = source
-            .preview_max_width
-            .or_else(|| (rect.w > 0).then_some(rect.w));
+        let requested_w = requested_main_axis(preview_el, Axis::Horizontal, None);
+        let width_cap = source.preview_max_width.or_else(|| {
+            if matches!(requested_w, Length::Auto) {
+                None
+            } else {
+                (rect.w > 0).then_some(rect.w)
+            }
+        });
         let (mw, mh) = min_size_constrained(preview_el, width_cap, source.preview_max_height);
-        let preview_w = if rect.w > 0 {
-            source
+        let preview_w = match requested_w {
+            Length::Px(px) => source.preview_max_width.map_or(px, |max| px.min(max)),
+            Length::Auto => source.preview_max_width.map_or(mw, |max| mw.min(max)),
+            _ if rect.w > 0 => source
                 .preview_max_width
-                .map_or(rect.w, |max| rect.w.min(max))
-        } else {
-            mw
+                .map_or(rect.w, |max| rect.w.min(max)),
+            _ => mw,
         };
         let preview_h = if mh > 0 { mh } else { rect.h };
         let preview_h = source

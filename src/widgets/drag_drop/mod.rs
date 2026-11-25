@@ -20,6 +20,6 @@ pub use self::drop_target_node::DropTargetNode;
 pub(crate) use self::drop_target_reconcile::reconcile_drop_target;
 pub use self::payload::{
     DEFAULT_PREVIEW_MAX_HEIGHT, DEFAULT_PREVIEW_MAX_WIDTH, DragCancelEvent, DragLeaveEvent,
-    DragOverEvent, DragPayload, DragPreview, DragSlot, DragSlotAxis, DragStartEvent,
-    DragStartedEvent, DropEvent, DropSlot,
+    DragOverEvent, DragPayload, DragPreview, DragPreviewAnchor, DragSlot, DragSlotAxis,
+    DragStartEvent, DragStartedEvent, DropEvent, DropSlot,
 };

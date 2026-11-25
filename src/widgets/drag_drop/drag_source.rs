@@ -8,8 +8,8 @@ use crate::style::{LayoutConstraints, Length, Style, StyleSlot};
 
 use super::drag_source_layout::measure_drag_source;
 use super::payload::{
-    DragCancelEvent, DragPayload, DragPreview, DragSlot, DragSlotAxis, DragStartEvent,
-    DragStartedEvent,
+    DragCancelEvent, DragPayload, DragPreview, DragPreviewAnchor, DragSlot, DragSlotAxis,
+    DragStartEvent, DragStartedEvent,
 };
 
 /// Callback used to start a drag and produce its payload.
@@ -26,6 +26,8 @@ pub struct DragSource {
     pub(crate) drag_group: Option<Arc<str>>,
     pub(crate) preview: DragPreview,
     pub(crate) preview_element: Option<Box<Element>>,
+    pub(crate) preview_anchor: DragPreviewAnchor,
+    pub(crate) hide_source_while_dragging: bool,
     pub(crate) dragging_style: StyleSlot,
     pub(crate) drag_slot: DragSlot,
     pub(crate) drag_slot_axis: DragSlotAxis,
@@ -45,6 +47,8 @@ impl Default for DragSource {
             drag_group: None,
             preview: DragPreview::None,
             preview_element: None,
+            preview_anchor: DragPreviewAnchor::Free,
+            hide_source_while_dragging: true,
             dragging_style: StyleSlot::Inherit,
             drag_slot: DragSlot::Collapse,
             drag_slot_axis: DragSlotAxis::default(),
@@ -127,6 +131,23 @@ impl DragSource {
     pub fn preview_element(mut self, element: impl Into<Element>) -> Self {
         self.preview = DragPreview::Element;
         self.preview_element = Some(Box::new(element.into()));
+        self
+    }
+
+    /// Control how a floating [`DragPreview::Element`] tracks the pointer.
+    ///
+    /// Can change dynamically while dragging (for example, switching from
+    /// [`DragPreviewAnchor::VerticalRail`] inside a sidebar to
+    /// [`DragPreviewAnchor::CursorOffset`] when dragged out to another pane).
+    pub fn preview_anchor(mut self, anchor: DragPreviewAnchor) -> Self {
+        self.preview_anchor = anchor;
+        self
+    }
+
+    /// Whether the wrapped child is hidden in place while this drag source is actively dragging
+    /// with [`DragPreview::SourceSnapshot`] or [`DragPreview::Element`]. Default `true`.
+    pub fn hide_source_while_dragging(mut self, hide: bool) -> Self {
+        self.hide_source_while_dragging = hide;
         self
     }
 
@@ -258,6 +279,8 @@ impl LayoutHash for DragSource {
         self.on_drag_started.is_some().hash(hasher);
         self.drag_group.hash(hasher);
         self.preview.hash(hasher);
+        self.preview_anchor.hash(hasher);
+        self.hide_source_while_dragging.hash(hasher);
         self.dragging_style.hash(hasher);
         self.drag_slot.hash(hasher);
         self.drag_slot_axis.hash(hasher);
