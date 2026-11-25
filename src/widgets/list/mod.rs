@@ -306,6 +306,16 @@ impl ListEvent {
     }
 }
 
+/// The pointer entering or leaving a list row. See [`List::on_hover`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct ListHoverEvent {
+    /// Row index.
+    pub index: usize,
+    /// Whether the pointer is now over the row.
+    pub hovered: bool,
+}
+
 /// Semantic role of a list row.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum ListItemRole {
@@ -1631,6 +1641,7 @@ pub struct List {
     pub(crate) tab_stop: bool,
     pub(crate) on_focus: Option<Callback<()>>,
     pub(crate) on_blur: Option<Callback<()>>,
+    pub(crate) on_hover: Option<Callback<ListHoverEvent>>,
     pub(crate) show_scroll_indicators: bool,
     pub(crate) scroll_indicator_style: Style,
     pub(crate) empty_text: Option<Arc<str>>,
@@ -1692,6 +1703,7 @@ impl Default for List {
             tab_stop: true,
             on_focus: None,
             on_blur: None,
+            on_hover: None,
             show_scroll_indicators: false,
             scroll_indicator_style: Style::default(),
             empty_text: None,
@@ -2199,6 +2211,15 @@ impl List {
     /// Set the callback fired when the list loses focus.
     pub fn on_blur(mut self, cb: Callback<()>) -> Self {
         self.on_blur = Some(cb);
+        self
+    }
+
+    /// Report the pointer entering and leaving each row, including headers and other
+    /// non-selectable rows.
+    ///
+    /// A move between rows reports the old row leaving before the new one entering.
+    pub fn on_hover(mut self, cb: Callback<ListHoverEvent>) -> Self {
+        self.on_hover = Some(cb);
         self
     }
 

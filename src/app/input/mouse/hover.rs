@@ -1,4 +1,4 @@
-use crate::app::interaction_state::{MouseRegionHoverState, MouseTrackingState};
+use crate::app::interaction_state::{ListRowHoverState, MouseRegionHoverState, MouseTrackingState};
 use crate::core::node::{NodeId, NodeKind, NodeTree};
 use crate::style::Rect;
 
@@ -115,7 +115,53 @@ pub(crate) fn emit_mouse_region_hover_changes(
     emit_mouse_region_entries(previous, current);
 }
 
+/// The row under the pointer when the hovered node is a list that reports row hover.
+pub(crate) fn list_row_hover_state(
+    tree: &NodeTree,
+    hovered: Option<NodeId>,
+    x: u16,
+    y: u16,
+) -> Option<ListRowHoverState> {
+    let id = hovered.filter(|id| tree.is_valid(*id))?;
+    let node = tree.node(id);
+    let NodeKind::List(list) = &node.kind else {
+        return None;
+    };
+    let on_hover = list.on_hover.clone()?;
+    let index = list.row_at(x as i16, y as i16, list.content_rect(node.rect, None))?;
+    Some(ListRowHoverState {
+        id,
+        index,
+        on_hover,
+    })
+}
+
+/// Record the hovered list row, reporting the old row leaving before the new one entering.
+pub(crate) fn set_list_row_hover(state: &mut MouseTrackingState, next: Option<ListRowHoverState>) {
+    let unchanged = match (&state.list_row_hover, &next) {
+        (Some(previous), Some(next)) => previous.id == next.id && previous.index == next.index,
+        (previous, next) => previous.is_none() && next.is_none(),
+    };
+    if !unchanged {
+        if let Some(previous) = &state.list_row_hover {
+            previous.on_hover.emit(crate::widgets::ListHoverEvent {
+                index: previous.index,
+                hovered: false,
+            });
+        }
+        if let Some(next) = &next {
+            next.on_hover.emit(crate::widgets::ListHoverEvent {
+                index: next.index,
+                hovered: true,
+            });
+        }
+    }
+    // Keep the newest callback, so a leave reaches the handler the view last supplied.
+    state.list_row_hover = next;
+}
+
 pub(crate) fn clear_mouse_hover_state(state: &mut MouseTrackingState) -> bool {
+    set_list_row_hover(state, None);
     let previous_regions = std::mem::take(&mut state.mouse_region_hover_chain);
     emit_mouse_region_hover_changes(&previous_regions, &[]);
     state.hovered_item_index = None;

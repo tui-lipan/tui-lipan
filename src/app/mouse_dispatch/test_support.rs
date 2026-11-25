@@ -65,6 +65,10 @@ pub(crate) fn update_hover_test_backend<C: Component>(
         .tree
         .hover_test(x as i16, y as i16)
         .filter(|id| mouse::should_hover(&backend.core.tree, *id, x, y));
+    mouse::set_list_row_hover(
+        &mut backend.mouse,
+        mouse::list_row_hover_state(&backend.core.tree, hovered, x, y),
+    );
     let prev_hovered = backend.mouse.hovered;
     let changed = backend.mouse.hovered != hovered;
     let previous_regions = std::mem::take(&mut backend.mouse.mouse_region_hover_chain);

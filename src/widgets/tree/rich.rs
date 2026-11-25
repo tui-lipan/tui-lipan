@@ -50,7 +50,12 @@ pub(super) fn hover(ctx: &mut Context<TreeComponent>, index: usize, hovered: boo
             hovered,
         });
     }
-    Update::full()
+    // Only composed rows paint from the tree's hover state; text rows are the list's to paint.
+    if has_content(&ctx.props.root) {
+        Update::full()
+    } else {
+        Update::none()
+    }
 }
 
 pub(super) fn pointer_move(ctx: &Context<TreeComponent>, index: usize) -> Update {

@@ -785,6 +785,10 @@ impl<C: Component> AppRunner<C> {
             .tree
             .hover_test(x as i16, y as i16)
             .filter(|id| mouse::should_hover(&self.core.tree, *id, x, y));
+        mouse::set_list_row_hover(
+            &mut self.mouse,
+            mouse::list_row_hover_state(&self.core.tree, hovered, x, y),
+        );
         let prev_hovered = self.mouse.hovered;
         let node_changed = hovered != prev_hovered;
         let previous_regions = std::mem::take(&mut self.mouse.mouse_region_hover_chain);

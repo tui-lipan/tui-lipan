@@ -273,6 +273,17 @@ impl Component for TreeComponent {
                     .flatten()
             }));
         }
+        if ctx.props.on_hover.is_some() {
+            let rows = rows.clone();
+            list = list.on_hover(ctx.link().callback_opt(
+                move |event: crate::widgets::ListHoverEvent| {
+                    // A gap is space between rows, not a row of its own.
+                    let row = rows.row(event.index);
+                    (rows.position(row) == Some(event.index))
+                        .then_some(TreeMsg::Hover(row, event.hovered))
+                },
+            ));
+        }
         if ctx.props.on_context_menu.is_some() {
             let rows = rows.clone();
             list = list.on_context_menu(ctx.link().callback(
