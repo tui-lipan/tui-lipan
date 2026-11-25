@@ -37,6 +37,7 @@ pub(crate) fn reconcile_center(
         Rect { x, y, w, h }
     });
 
+    let prev_constraint_avail = overlay_state.constraint_avail.replace((rect.w, rect.h));
     let new_children = reconcile_single_child(
         &mut ReconcileCtx {
             tree,
@@ -51,6 +52,7 @@ pub(crate) fn reconcile_center(
             old_children,
         },
     );
+    overlay_state.constraint_avail = prev_constraint_avail;
 
     let node = tree.node_mut(id);
     node.children = new_children;

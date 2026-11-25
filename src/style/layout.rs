@@ -150,6 +150,32 @@ impl LayoutConstraints {
         }
         h
     }
+
+    /// Resolve any `Percent` min/max constraints against `(avail_w, avail_h)` into concrete `Px`
+    /// constraints so downstream widget reconcilers that only see a child's allocated rect do not
+    /// reapply percentage bounds a second time.
+    pub(crate) fn resolve_percentages(&self, avail_w: u16, avail_h: u16) -> Self {
+        let mut resolved = *self;
+        if let Length::Percent(_) = resolved.min_w {
+            resolved.min_w = Length::Px(resolved.min_w.resolve_as_min(avail_w));
+        }
+        if let Length::Percent(_) = resolved.min_h {
+            resolved.min_h = Length::Px(resolved.min_h.resolve_as_min(avail_h));
+        }
+        if let Some(Length::Percent(_)) = resolved.max_w {
+            resolved.max_w = resolved
+                .max_w
+                .and_then(|l| l.resolve_as_max(avail_w))
+                .map(Length::Px);
+        }
+        if let Some(Length::Percent(_)) = resolved.max_h {
+            resolved.max_h = resolved
+                .max_h
+                .and_then(|l| l.resolve_as_max(avail_h))
+                .map(Length::Px);
+        }
+        resolved
+    }
 }
 
 /// Flexbox-inspired sizing.

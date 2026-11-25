@@ -3,16 +3,17 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::core::element::{Element, ElementKind, Key};
 use crate::core::node::{NodeId, NodeKind, NodeTree};
-use crate::layout::axis::{Axis, requested_cross_axis};
 use crate::layout::hash::{element_layout_hash, layout_hasher};
 use crate::layout::stack::{
     ScrollContentLayout, ScrollVirtualLayoutParams, VIRTUAL_THRESHOLD, layout_scroll_content,
     layout_scroll_content_virtual, make_scroll_content_layout, scroll_rect_gaps_after,
     sync_virtual_cache_entry_widths,
 };
-use crate::style::{Length, Rect};
+use crate::style::Rect;
 use crate::widgets::scroll_view::node::SingleDocSelection;
-use crate::widgets::{HeightCacheItem, ScrollTarget, ScrollViewLayoutCache, VirtualHeightCache};
+use crate::widgets::{
+    CachedChildWidth, HeightCacheItem, ScrollTarget, ScrollViewLayoutCache, VirtualHeightCache,
+};
 
 use super::recompute_from_height_cache;
 pub(crate) static SCROLL_LAYOUT_CACHE_CALLS: AtomicU64 = AtomicU64::new(0);
@@ -283,6 +284,7 @@ pub(crate) fn layout_scroll_content_cached(
                 children,
                 &layout,
                 viewport_w,
+                horizontal_overflow,
                 width_sensitive_children,
                 virtual_cache,
             );
@@ -322,6 +324,7 @@ pub(crate) fn layout_scroll_content_cached(
                 children,
                 &result,
                 viewport_w,
+                horizontal_overflow,
                 width_sensitive_children,
                 virtual_cache,
             );
@@ -385,7 +388,8 @@ pub(crate) fn layout_scroll_content_cached(
                 );
             }
             if let Some(ch) = content_hash {
-                let items = build_height_cache_items(children, &layout);
+                let items =
+                    build_height_cache_items(children, &layout, viewport_w, horizontal_overflow);
                 cache.store_heights(ch, width_sensitive_children, items);
             }
         }
@@ -412,7 +416,7 @@ pub(crate) fn layout_scroll_content_cached(
 
     // Populate height cache for future width-only changes.
     if let Some(ch) = content_hash {
-        let items = build_height_cache_items(children, &layout);
+        let items = build_height_cache_items(children, &layout, viewport_w, horizontal_overflow);
         cache.store_heights(ch, width_sensitive_children, items);
     }
 
@@ -423,6 +427,7 @@ pub(crate) fn layout_scroll_content_cached(
             children,
             &layout,
             viewport_w,
+            horizontal_overflow,
             width_sensitive_children,
             virtual_cache,
         );
@@ -488,6 +493,8 @@ pub(crate) fn scroll_content_hashes(
 pub(crate) fn build_height_cache_items(
     children: &[crate::core::element::Element],
     layout: &ScrollContentLayout,
+    viewport_w: u16,
+    horizontal_overflow: bool,
 ) -> Vec<HeightCacheItem> {
     let gaps = scroll_rect_gaps_after(children, &layout.rects);
     let mut items = Vec::with_capacity(children.len());
@@ -495,29 +502,24 @@ pub(crate) fn build_height_cache_items(
     for (index, (child, rect)) in children.iter().zip(layout.rects.iter()).enumerate() {
         if matches!(child.kind, ElementKind::Portal(_)) {
             items.push(HeightCacheItem {
-                natural_w: 0,
+                width_spec: CachedChildWidth::default(),
                 h: 0,
-                flex_w: false,
-                percent_w: None,
                 gap_after: false,
                 is_portal: true,
             });
             continue;
         }
 
-        let requested_w = requested_cross_axis(child, Axis::Vertical);
-        let flex_w = matches!(requested_w, Length::Flex(_));
-        let percent_w = match requested_w {
-            Length::Percent(percent) => Some(percent.min(100)),
-            _ => None,
-        };
         let gap_after = gaps.get(index).copied().unwrap_or(false);
 
         items.push(HeightCacheItem {
-            natural_w: rect.w,
+            width_spec: CachedChildWidth::from_element(
+                child,
+                rect.w,
+                viewport_w,
+                horizontal_overflow,
+            ),
             h: rect.h,
-            flex_w,
-            percent_w,
             gap_after,
             is_portal: false,
         });
@@ -532,10 +534,10 @@ pub(crate) fn populate_virtual_cache_from_layout(
     children: &[Element],
     layout: &ScrollContentLayout,
     viewport_w: u16,
+    horizontal_overflow: bool,
     width_sensitive: bool,
     virtual_cache: &mut VirtualHeightCache,
 ) {
-    use crate::layout::axis::{Axis, requested_cross_axis};
     use crate::layout::hash::element_layout_hash;
     use crate::widgets::VirtualChildEntry;
 
@@ -554,8 +556,7 @@ pub(crate) fn populate_virtual_cache_from_layout(
                 h: 0,
                 w: 0,
                 x: 0,
-                flex_w: false,
-                percent_w: None,
+                width_spec: CachedChildWidth::default(),
                 gap_after: false,
                 is_portal: true,
                 stale: false,
@@ -563,12 +564,6 @@ pub(crate) fn populate_virtual_cache_from_layout(
             continue;
         }
 
-        let requested_w = requested_cross_axis(child, Axis::Vertical);
-        let flex_w = matches!(requested_w, Length::Flex(_));
-        let percent_w = match requested_w {
-            Length::Percent(percent) => Some(percent.min(100)),
-            _ => None,
-        };
         let gap_after = gaps.get(index).copied().unwrap_or(false);
 
         entries.push(Some(VirtualChildEntry {
@@ -577,8 +572,12 @@ pub(crate) fn populate_virtual_cache_from_layout(
             h: rect.h,
             w: rect.w,
             x: rect.x,
-            flex_w,
-            percent_w,
+            width_spec: CachedChildWidth::from_element(
+                child,
+                rect.w,
+                viewport_w,
+                horizontal_overflow,
+            ),
             gap_after,
             is_portal: false,
             stale: false,

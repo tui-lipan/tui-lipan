@@ -977,6 +977,8 @@ pub(crate) fn reconcile_scroll_view(
         ScrollVisibleReconcileCtx {
             epoch,
             parent_id: id,
+            viewport_w,
+            viewport_h: viewport_height,
             old_children,
             visible_doc_restores: &mut visible_doc_restores,
             focus,
@@ -1159,6 +1161,8 @@ pub(crate) fn reconcile_scroll_view(
                 ScrollVisibleReconcileCtx {
                     epoch,
                     parent_id: id,
+                    viewport_w,
+                    viewport_h: viewport_height,
                     old_children: new_children,
                     visible_doc_restores: &mut visible_doc_restores,
                     focus,

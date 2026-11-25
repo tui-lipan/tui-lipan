@@ -40,6 +40,8 @@ impl MeasureContext {
 pub(crate) struct MeasureCacheEntry {
     pub max_w: Option<u16>,
     pub max_h: Option<u16>,
+    pub avail_w: u16,
+    pub avail_h: u16,
     pub context: MeasureContext,
     pub image_measure_epoch: u64,
     pub size: (u16, u16),
@@ -946,6 +948,8 @@ mod tests {
             Some(MeasureCacheEntry {
                 max_w: Some(1),
                 max_h: Some(1),
+                avail_w: 1,
+                avail_h: 1,
                 context: MeasureContext::NONE,
                 image_measure_epoch: 0,
                 size: (1, 1),

@@ -5,10 +5,10 @@ use rustc_hash::FxHashMap;
 use crate::core::element::{Element, Key};
 use crate::layout::axis::{Axis, align_x, requested_cross_axis, requested_main_axis};
 use crate::layout::hash::element_layout_hash;
-use crate::layout::measure::min_size_constrained;
+use crate::layout::measure::{min_size_constrained, min_size_within};
 use crate::style::{Align, Length, Rect};
 use crate::widgets::internal::StackProps;
-use crate::widgets::{VirtualChildEntry, VirtualHeightCache};
+use crate::widgets::{CachedChildWidth, VirtualChildEntry, VirtualHeightCache};
 
 use super::types::ScrollContentLayout;
 use super::{is_portal, zero_rect};
@@ -129,6 +129,80 @@ fn refresh_virtual_gap_after(children: &[Element], cache: &mut VirtualHeightCach
     }
 }
 
+struct MeasuredScrollChild {
+    w: u16,
+    h: u16,
+    x: i16,
+}
+
+fn measure_scroll_child(
+    child: &Element,
+    props: &StackProps,
+    viewport_width: u16,
+    viewport_height: u16,
+    horizontal_overflow: bool,
+) -> MeasuredScrollChild {
+    let layout = child.layout_constraints();
+    let requested_w = requested_cross_axis(child, Axis::Vertical);
+
+    let known_w = if horizontal_overflow {
+        match requested_w {
+            Length::Px(px) => Some(px),
+            Length::Percent(percent) => Some(Length::Percent(percent).resolve(viewport_width, 0)),
+            Length::Auto | Length::Flex(_) => None,
+        }
+    } else {
+        let requested = if props.align == Align::Stretch {
+            Some(viewport_width)
+        } else {
+            match requested_w {
+                Length::Px(px) => Some(px),
+                Length::Percent(percent) => {
+                    Some(Length::Percent(percent).resolve(viewport_width, 0))
+                }
+                Length::Flex(_) => Some(viewport_width),
+                Length::Auto => None,
+            }
+        };
+        requested.map(|w| layout.clamp_width(w, viewport_width).min(viewport_width))
+    };
+
+    let (cw, ch) = if horizontal_overflow {
+        min_size_constrained(child, None, None)
+    } else {
+        // Keep the child's measurement bound distinct from `viewport_width` so
+        // percentage constraints (such as `max_width(Percent(50))`) resolve
+        // against the viewport rather than a second time against the capped width.
+        let measure_max_w = Some(known_w.unwrap_or(viewport_width));
+        min_size_within(child, measure_max_w, None, viewport_width, u16::MAX)
+    };
+
+    let w = match known_w {
+        Some(w) => w,
+        None if horizontal_overflow => cw,
+        None => layout.clamp_width(cw, viewport_width).min(viewport_width),
+    };
+
+    let resolved_min_h = layout.min_h.resolve_as_min(viewport_height);
+    let natural_h = match requested_main_axis(child, Axis::Vertical, None) {
+        Length::Px(px) => px.max(resolved_min_h),
+        Length::Percent(percent) => Length::Percent(percent)
+            .resolve(viewport_height, ch)
+            .max(resolved_min_h),
+        Length::Auto | Length::Flex(_) => ch.max(resolved_min_h),
+    };
+
+    let bounds = Rect {
+        x: 0,
+        y: 0,
+        w: viewport_width,
+        h: 0,
+    };
+    let x = align_x(bounds, w, props.align);
+
+    MeasuredScrollChild { w, h: natural_h, x }
+}
+
 pub(crate) fn layout_scroll_content(
     props: &StackProps,
     children: &[Element],
@@ -155,75 +229,19 @@ pub(crate) fn layout_scroll_content(
             continue;
         }
 
-        let mut w = match requested_cross_axis(child, Axis::Vertical) {
-            Length::Px(px) => {
-                if horizontal_overflow {
-                    px
-                } else {
-                    px.min(viewport_width)
-                }
-            }
-            Length::Percent(percent) => {
-                let resolved = Length::Percent(percent).resolve(viewport_width, 0);
-                if horizontal_overflow {
-                    resolved
-                } else {
-                    resolved.min(viewport_width)
-                }
-            }
-            Length::Auto => 0,
-            Length::Flex(_) => {
-                if horizontal_overflow {
-                    0
-                } else {
-                    viewport_width
-                }
-            }
-        };
-
-        if props.align == Align::Stretch && !horizontal_overflow {
-            w = viewport_width;
-        }
-
-        let measure_max_w = if horizontal_overflow {
-            None
-        } else {
-            Some(if w > 0 { w } else { viewport_width })
-        };
-        let (cw, ch) = min_size_constrained(child, measure_max_w, None);
-
-        if w == 0 {
-            w = if horizontal_overflow {
-                cw
-            } else {
-                cw.min(viewport_width)
-            };
-        }
-
-        let layout = child.layout_constraints();
-        let resolved_min_h = layout.min_h.resolve_as_min(viewport_height);
-
-        let natural_h = match requested_main_axis(child, Axis::Vertical, None) {
-            Length::Px(px) => px.max(resolved_min_h),
-            Length::Percent(percent) => Length::Percent(percent)
-                .resolve(viewport_height, ch)
-                .max(resolved_min_h),
-            Length::Auto | Length::Flex(_) => ch.max(resolved_min_h),
-        };
-
-        let bounds = Rect {
-            x: 0,
-            y: 0,
-            w: viewport_width,
-            h: 0,
-        };
-        let x = align_x(bounds, w, props.align);
+        let measured = measure_scroll_child(
+            child,
+            props,
+            viewport_width,
+            viewport_height,
+            horizontal_overflow,
+        );
 
         out.push(Rect {
-            x,
+            x: measured.x,
             y: 0,
-            w,
-            h: natural_h,
+            w: measured.w,
+            h: measured.h,
         });
     }
 
@@ -392,8 +410,7 @@ pub(crate) fn layout_scroll_content_virtual(
                 h: 0,
                 w: 0,
                 x: 0,
-                flex_w: false,
-                percent_w: None,
+                width_spec: CachedChildWidth::default(),
                 gap_after: false,
                 is_portal: true,
                 stale: false,
@@ -535,10 +552,18 @@ fn resolve_child_width(
             }
         }
     };
-    if align == Align::Stretch && !horizontal_overflow {
-        viewport_width
-    } else {
+    if horizontal_overflow {
         w
+    } else {
+        let w = if align == Align::Stretch {
+            viewport_width
+        } else {
+            w
+        };
+        child
+            .layout_constraints()
+            .clamp_width(w, viewport_width)
+            .min(viewport_width)
     }
 }
 
@@ -561,76 +586,13 @@ fn measure_and_cache_child(
         viewport_height,
         horizontal_overflow,
     } = params;
-    let mut w = match requested_cross_axis(child, Axis::Vertical) {
-        Length::Px(px) => {
-            if horizontal_overflow {
-                px
-            } else {
-                px.min(viewport_width)
-            }
-        }
-        Length::Percent(percent) => {
-            let resolved = Length::Percent(percent).resolve(viewport_width, 0);
-            if horizontal_overflow {
-                resolved
-            } else {
-                resolved.min(viewport_width)
-            }
-        }
-        Length::Auto => 0,
-        Length::Flex(_) => {
-            if horizontal_overflow {
-                0
-            } else {
-                viewport_width
-            }
-        }
-    };
-
-    if props.align == Align::Stretch && !horizontal_overflow {
-        w = viewport_width;
-    }
-
-    let measure_max_w = if horizontal_overflow {
-        None
-    } else {
-        Some(if w > 0 { w } else { viewport_width })
-    };
-    let (cw, ch) = min_size_constrained(child, measure_max_w, None);
-
-    if w == 0 {
-        w = if horizontal_overflow {
-            cw
-        } else {
-            cw.min(viewport_width)
-        };
-    }
-
-    let layout = child.layout_constraints();
-    let resolved_min_h = layout.min_h.resolve_as_min(viewport_height);
-
-    let natural_h = match requested_main_axis(child, Axis::Vertical, None) {
-        Length::Px(px) => px.max(resolved_min_h),
-        Length::Percent(percent) => Length::Percent(percent)
-            .resolve(viewport_height, ch)
-            .max(resolved_min_h),
-        Length::Auto | Length::Flex(_) => ch.max(resolved_min_h),
-    };
-
-    let bounds = Rect {
-        x: 0,
-        y: 0,
-        w: viewport_width,
-        h: 0,
-    };
-    let x = align_x(bounds, w, props.align);
-
-    let requested_w = requested_cross_axis(child, Axis::Vertical);
-    let flex_w = !horizontal_overflow && matches!(requested_w, Length::Flex(_));
-    let percent_w = match requested_w {
-        Length::Percent(percent) => Some(percent.min(100)),
-        _ => None,
-    };
+    let measured = measure_scroll_child(
+        child,
+        props,
+        viewport_width,
+        viewport_height,
+        horizontal_overflow,
+    );
 
     let child_hash = element_layout_hash(child).unwrap_or(0);
 
@@ -644,16 +606,20 @@ fn measure_and_cache_child(
     cache.entries[idx] = Some(VirtualChildEntry {
         layout_hash: child_hash,
         key: child.key.clone(),
-        h: natural_h,
-        w,
-        x,
-        flex_w,
-        percent_w,
+        h: measured.h,
+        w: measured.w,
+        x: measured.x,
+        width_spec: CachedChildWidth::from_element(
+            child,
+            measured.w,
+            viewport_width,
+            horizontal_overflow,
+        ),
         gap_after: false,
         is_portal: false,
         stale: false,
     });
-    cache.record_measurement(natural_h);
+    cache.record_measurement(measured.h);
 }
 
 struct PremeasureStalePrefixParams {
@@ -745,15 +711,9 @@ fn refresh_entry_width(
         return;
     }
 
-    let w = if horizontal_overflow {
-        entry.w
-    } else if align == Align::Stretch || entry.flex_w {
-        viewport_width
-    } else if let Some(percent) = entry.percent_w {
-        Length::Percent(percent).resolve(viewport_width, 0)
-    } else {
-        entry.w.min(viewport_width)
-    };
+    let w = entry
+        .width_spec
+        .resolve(viewport_width, align, horizontal_overflow);
 
     entry.w = w;
     entry.x = align_x(
@@ -1227,8 +1187,12 @@ mod tests {
                 h: 3,
                 w: 70,
                 x: 0,
-                flex_w: true,
-                percent_w: None,
+                width_spec: CachedChildWidth {
+                    requested: Length::Flex(1),
+                    natural: 70,
+                    min: Length::Px(0),
+                    max: None,
+                },
                 gap_after: false,
                 is_portal: false,
                 stale: false,
@@ -1358,5 +1322,144 @@ mod tests {
             );
         }
         assert_eq!(result.content_height, 12);
+    }
+
+    #[test]
+    fn scroll_percent_max_width_measures_wrapping_content_once() {
+        use crate::core::element::IntoElement;
+        use crate::widgets::{Overflow, VStack};
+
+        let make_child = |i: usize| -> Element {
+            VStack::new()
+                .height(Length::Auto)
+                .child(Text::new("a".repeat(60)).overflow(Overflow::Wrap))
+                .key(format!("row-{i}"))
+                .max_width(Length::Percent(50))
+        };
+
+        let mut props = default_props();
+        props.align = Align::Center;
+
+        // Full layout pass: 100-col viewport, max_width(50%) => width 50,
+        // so 60-char wrapping text takes 2 lines (not 3 lines from 25-col double cap).
+        let single = vec![make_child(0)];
+        let full = layout_scroll_content(&props, &single, 100, 20, false);
+        assert_eq!(full.rects[0].w, 50);
+        assert_eq!(full.rects[0].x, 25);
+        assert_eq!(full.rects[0].h, 2);
+
+        // Virtual layout pass (`measure_and_cache_child`): same expectation.
+        let many: Vec<Element> = (0..10).map(make_child).collect();
+        let mut cache = VirtualHeightCache::default();
+        let virt = layout_scroll_content_virtual(
+            &props,
+            &many,
+            &mut cache,
+            ScrollVirtualLayoutParams {
+                viewport_width: 100,
+                viewport_height: 10,
+                scroll_offset: 0,
+                estimated_child_height: 2,
+                horizontal_overflow: false,
+            },
+        );
+        assert_eq!(virt.rects[0].w, 50);
+        assert_eq!(virt.rects[0].x, 25);
+        assert_eq!(virt.rects[0].h, 2);
+    }
+
+    #[test]
+    fn virtual_cache_recovers_width_after_viewport_grows_and_honors_min_over_max() {
+        use crate::core::element::IntoElement;
+        let props = default_props();
+        let mut cache = VirtualHeightCache::default();
+
+        // 10 children with Px(30) width and Percent(50) max_width, fixed height (not width_sensitive).
+        let children: Vec<Element> = (0..10)
+            .map(|i| {
+                Text::new("x")
+                    .width(Length::Px(30))
+                    .height(Length::Px(2))
+                    .key(format!("row-{i}"))
+                    .max_width(Length::Percent(50))
+            })
+            .collect();
+
+        // Viewport 40 => max_width(50%) = 20 caps Px(30) to 20.
+        let narrow = layout_scroll_content_virtual(
+            &props,
+            &children,
+            &mut cache,
+            ScrollVirtualLayoutParams {
+                viewport_width: 40,
+                viewport_height: 30,
+                scroll_offset: 0,
+                estimated_child_height: 2,
+                horizontal_overflow: false,
+            },
+        );
+        let measured_before = cache.measured_count;
+        assert_eq!(narrow.rects[0].w, 20);
+
+        // Resize to viewport 80 => max_width(50%) = 40, child regains its intended Px(30).
+        let wide = layout_scroll_content_virtual(
+            &props,
+            &children,
+            &mut cache,
+            ScrollVirtualLayoutParams {
+                viewport_width: 80,
+                viewport_height: 30,
+                scroll_offset: 0,
+                estimated_child_height: 2,
+                horizontal_overflow: false,
+            },
+        );
+        assert_eq!(cache.measured_count, measured_before);
+        assert_eq!(wide.rects[0].w, 30);
+
+        // sync_virtual_cache_entry_widths preserves the same behavior across shrink -> grow.
+        sync_virtual_cache_entry_widths(&mut cache, 40, Align::Start, false);
+        assert_eq!(cache.entries[0].as_ref().unwrap().w, 20);
+        sync_virtual_cache_entry_widths(&mut cache, 80, Align::Start, false);
+        assert_eq!(cache.entries[0].as_ref().unwrap().w, 30);
+
+        // Min takes precedence over max in virtual cache width refresh.
+        let mut min_wins_cache = VirtualHeightCache::default();
+        let min_wins_children: Vec<Element> = (0..10)
+            .map(|i| {
+                Text::new("x")
+                    .width(Length::Flex(1))
+                    .height(Length::Px(2))
+                    .key(format!("min-{i}"))
+                    .max_width(Length::Px(20))
+                    .min_width(Length::Px(30))
+            })
+            .collect();
+        let first = layout_scroll_content_virtual(
+            &props,
+            &min_wins_children,
+            &mut min_wins_cache,
+            ScrollVirtualLayoutParams {
+                viewport_width: 40,
+                viewport_height: 30,
+                scroll_offset: 0,
+                estimated_child_height: 2,
+                horizontal_overflow: false,
+            },
+        );
+        assert_eq!(first.rects[0].w, 30);
+        let resized = layout_scroll_content_virtual(
+            &props,
+            &min_wins_children,
+            &mut min_wins_cache,
+            ScrollVirtualLayoutParams {
+                viewport_width: 80,
+                viewport_height: 30,
+                scroll_offset: 0,
+                estimated_child_height: 2,
+                horizontal_overflow: false,
+            },
+        );
+        assert_eq!(resized.rects[0].w, 30);
     }
 }

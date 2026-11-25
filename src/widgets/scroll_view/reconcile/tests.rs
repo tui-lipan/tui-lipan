@@ -5607,8 +5607,12 @@ fn virtual_entry(h: u16, gap_after: bool, stale: bool) -> VirtualChildEntry {
         h,
         w: 1,
         x: 0,
-        flex_w: false,
-        percent_w: None,
+        width_spec: crate::widgets::CachedChildWidth {
+            requested: Length::Px(1),
+            natural: 1,
+            min: Length::Px(0),
+            max: None,
+        },
         gap_after,
         is_portal: false,
         stale,
@@ -5987,4 +5991,124 @@ fn key_navigation_uses_the_last_builder_and_resumes_when_its_mode_changes() {
     };
     assert_eq!(scroll.offset, 2);
     assert!(scroll.cancelled_scroll_target.is_none());
+}
+
+#[test]
+fn height_cache_recovers_intended_width_and_honors_stretch_on_resize() {
+    use crate::style::Align;
+    use crate::widgets::internal::StackProps;
+
+    // 1. Non-Stretch: Px(30) and Auto(30) capped by max_width(50%) at viewport 40
+    //    must recover width 30 when resized to viewport 80 via the Tier-2 height cache,
+    //    and min_width(30) must beat max_width(20).
+    let props = StackProps {
+        align: Align::Center,
+        ..StackProps::default()
+    };
+    let children: Vec<Element> = vec![
+        Text::new("x")
+            .width(Length::Px(30))
+            .height(Length::Px(2))
+            .max_width(Length::Percent(50)),
+        Text::new("a".repeat(30))
+            .height(Length::Px(1))
+            .max_width(Length::Percent(50)),
+        Text::new("x")
+            .width(Length::Flex(1))
+            .height(Length::Px(2))
+            .max_width(Length::Px(20))
+            .min_width(Length::Px(30)),
+    ];
+    let mut layout_cache = ScrollViewLayoutCache::default();
+    let mut virtual_cache = VirtualHeightCache::default();
+
+    let narrow = layout_scroll_content_cached(
+        &props,
+        &children,
+        &mut layout_cache,
+        &mut virtual_cache,
+        ScrollLayoutCachedParams {
+            virtualize: true,
+            viewport_w: 40,
+            viewport_h: 20,
+            scroll_offset: 0,
+            estimated_child_height: 2,
+            horizontal_overflow: false,
+        },
+    );
+    assert_eq!(narrow.rects[0].w, 20);
+    assert_eq!(narrow.rects[1].w, 20);
+    assert_eq!(narrow.rects[2].w, 30);
+
+    let hc = layout_cache
+        .height_cache
+        .as_ref()
+        .expect("height cache populated");
+    assert!(!hc.width_sensitive);
+    let content_hash = hc.content_hash;
+
+    // Directly exercise Tier-2 height cache recomputation at viewport 80 and 25.
+    let wide = super::recompute_from_height_cache(&props, 80, &layout_cache, content_hash, false)
+        .expect("Tier-2 height cache hit at width 80");
+    assert_eq!((wide.rects[0].x, wide.rects[0].w), (25, 30));
+    assert_eq!((wide.rects[1].x, wide.rects[1].w), (25, 30));
+    assert_eq!((wide.rects[2].x, wide.rects[2].w), (25, 30));
+
+    let tight = super::recompute_from_height_cache(&props, 25, &layout_cache, content_hash, false)
+        .expect("Tier-2 height cache hit at width 25");
+    assert_eq!(tight.rects[0].w, 12);
+    assert_eq!(tight.rects[1].w, 12);
+    assert_eq!(tight.rects[2].w, 25);
+
+    // 2. Align::Stretch: Tier-2 height cache must stretch children to the new
+    //    viewport width while still clamping to max_width.
+    let stretch_props = StackProps {
+        align: Align::Stretch,
+        ..StackProps::default()
+    };
+    let stretch_children: Vec<Element> = vec![
+        Text::new("x")
+            .width(Length::Px(10))
+            .height(Length::Px(2))
+            .into(),
+        Text::new("x")
+            .width(Length::Px(10))
+            .height(Length::Px(2))
+            .max_width(Length::Px(50)),
+    ];
+    let mut stretch_layout_cache = ScrollViewLayoutCache::default();
+    let mut stretch_virtual_cache = VirtualHeightCache::default();
+
+    let first = layout_scroll_content_cached(
+        &stretch_props,
+        &stretch_children,
+        &mut stretch_layout_cache,
+        &mut stretch_virtual_cache,
+        ScrollLayoutCachedParams {
+            virtualize: true,
+            viewport_w: 40,
+            viewport_h: 20,
+            scroll_offset: 0,
+            estimated_child_height: 2,
+            horizontal_overflow: false,
+        },
+    );
+    assert_eq!(first.rects[0].w, 40);
+    assert_eq!(first.rects[1].w, 40);
+
+    let stretch_hash = stretch_layout_cache
+        .height_cache
+        .as_ref()
+        .expect("stretch height cache populated")
+        .content_hash;
+    let grown = super::recompute_from_height_cache(
+        &stretch_props,
+        80,
+        &stretch_layout_cache,
+        stretch_hash,
+        false,
+    )
+    .expect("Tier-2 stretch height cache hit at width 80");
+    assert_eq!(grown.rects[0].w, 80);
+    assert_eq!(grown.rects[1].w, 50);
 }

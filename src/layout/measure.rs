@@ -55,7 +55,7 @@ fn requested_measure_bound(len: Length, available: u16) -> Option<u16> {
     }
 }
 
-type GlobalMeasureCacheKey = (u64, Option<u16>, Option<u16>, MeasureContext, u64);
+type GlobalMeasureCacheKey = (u64, Option<u16>, Option<u16>, u16, u16, MeasureContext, u64);
 type GlobalMeasureCache = crate::utils::gen_cache::GenerationalCache<
     GlobalMeasureCacheKey,
     (u16, u16),
@@ -204,6 +204,30 @@ pub(crate) fn min_size_constrained(
     max_w: Option<u16>,
     max_h: Option<u16>,
 ) -> (u16, u16) {
+    // Use the parent's offered size as the reference for resolving Percent constraints.
+    // When no parent bound is given, u16::MAX means "unconstrained".
+    min_size_within(
+        el,
+        max_w,
+        max_h,
+        max_w.unwrap_or(u16::MAX),
+        max_h.unwrap_or(u16::MAX),
+    )
+}
+
+/// Measure `el` within `max_w`/`max_h`, resolving its relative constraints against
+/// `avail_w`/`avail_h` instead of against the bound.
+///
+/// Overlay and `ScrollView` sizing need the two apart: a child capped at `Percent(50)` resolves
+/// that cap against the parent/viewport, then is measured at its final, already-capped width.
+/// Passing that width as the parent's offered size would apply the percentage a second time.
+pub(crate) fn min_size_within(
+    el: &Element,
+    max_w: Option<u16>,
+    max_h: Option<u16>,
+    avail_w: u16,
+    avail_h: u16,
+) -> (u16, u16) {
     let measure_context = current_measure_context();
     let image_measure_epoch = current_image_measure_epoch();
     let split_wrap_measure_state = element_has_split_wrap_measure_state(el);
@@ -214,6 +238,8 @@ pub(crate) fn min_size_constrained(
         for entry in el.measure_cache.get().into_iter().flatten() {
             if entry.max_w == max_w
                 && entry.max_h == max_h
+                && entry.avail_w == avail_w
+                && entry.avail_h == avail_h
                 && entry.context == measure_context
                 && entry.image_measure_epoch == image_measure_epoch
             {
@@ -223,8 +249,17 @@ pub(crate) fn min_size_constrained(
     }
 
     let global_cache_key = if !skip_global_cache {
-        element_layout_hash(el)
-            .map(|hash| (hash, max_w, max_h, measure_context, image_measure_epoch))
+        element_layout_hash(el).map(|hash| {
+            (
+                hash,
+                max_w,
+                max_h,
+                avail_w,
+                avail_h,
+                measure_context,
+                image_measure_epoch,
+            )
+        })
     } else {
         None
     };
@@ -235,6 +270,8 @@ pub(crate) fn min_size_constrained(
             let new_entry = Some(MeasureCacheEntry {
                 max_w,
                 max_h,
+                avail_w,
+                avail_h,
                 context: measure_context,
                 image_measure_epoch,
                 size,
@@ -247,21 +284,22 @@ pub(crate) fn min_size_constrained(
         return size;
     }
 
-    // Use the parent's offered size as the reference for resolving Percent constraints.
-    // When no parent bound is given, u16::MAX means "unconstrained".
-    let size = measure_uncached(
-        el,
-        max_w,
-        max_h,
-        max_w.unwrap_or(u16::MAX),
-        max_h.unwrap_or(u16::MAX),
-        measure_context,
-    );
+    // A wrapper measures its child against the bound alone inside `measure_uncached`,
+    // which would lose distinct `avail_w`/`avail_h`. Preserve them by delegating directly.
+    let size = if (max_w.unwrap_or(u16::MAX) != avail_w || max_h.unwrap_or(u16::MAX) != avail_h)
+        && let Some(child) = same_size_child(el)
+    {
+        min_size_within(child, max_w, max_h, avail_w, avail_h)
+    } else {
+        measure_uncached(el, max_w, max_h, avail_w, avail_h, measure_context)
+    };
 
     if !skip_local_cache {
         let new_entry = Some(MeasureCacheEntry {
             max_w,
             max_h,
+            avail_w,
+            avail_h,
             context: measure_context,
             image_measure_epoch,
             size,
@@ -280,36 +318,6 @@ pub(crate) fn min_size_constrained(
     }
 
     size
-}
-
-/// Measure `el` within `max_w`/`max_h`, resolving its relative constraints against
-/// `avail_w`/`avail_h` instead of against the bound.
-///
-/// Overlay sizing needs the two apart: a toast capped at `Percent(80)` resolves that cap against
-/// the screen, then is measured again at its final, already-capped width. Passing that width as
-/// the parent's offered size would apply the percentage a second time.
-pub(crate) fn min_size_within(
-    el: &Element,
-    max_w: Option<u16>,
-    max_h: Option<u16>,
-    avail_w: u16,
-    avail_h: u16,
-) -> (u16, u16) {
-    if max_w.unwrap_or(u16::MAX) == avail_w && max_h.unwrap_or(u16::MAX) == avail_h {
-        return min_size_constrained(el, max_w, max_h);
-    }
-    // A wrapper measures its child against the bound alone, which would lose `avail`.
-    if let Some(child) = same_size_child(el) {
-        return min_size_within(child, max_w, max_h, avail_w, avail_h);
-    }
-    measure_uncached(
-        el,
-        max_w,
-        max_h,
-        avail_w,
-        avail_h,
-        current_measure_context(),
-    )
 }
 
 /// The child of a wrapper that always measures exactly as that child does.
@@ -349,16 +357,28 @@ fn measure_uncached(
     // content and the requested size is clamped away (see Input in form_validation).
     let req_w = requested_main_axis(el, Axis::Horizontal, None);
     let req_h = requested_main_axis(el, Axis::Vertical, None);
-    let requested_max_w = requested_measure_bound(req_w, avail_w);
-    let requested_max_h = requested_measure_bound(req_h, avail_h);
 
-    // Resolve the element's own max constraints to pixels, then take the tighter of
+    // Resolve the element's own min/max constraints to pixels, then take the tighter of
     // the element's resolved max, requested size, and the parent's offered size.
+    // Minimum constraints take precedence over both `max_*` and explicit requested bounds,
+    // while still remaining capped by the parent's `max_w`/`max_h`.
     // A transparent wrapper (Group, Animated, ...) reports its child's constraints;
     // tightening by those here would let the child resolve a relative bound such as
     // `Percent(50)` a second time, against the already-halved size.
-    let element_max_w = el.layout.max_w.and_then(|l| l.resolve_as_max(avail_w));
-    let element_max_h = el.layout.max_h.and_then(|l| l.resolve_as_max(avail_h));
+    let element_min_w = constraints.min_w.resolve_as_min(avail_w);
+    let element_min_h = constraints.min_h.resolve_as_min(avail_h);
+    let requested_max_w = requested_measure_bound(req_w, avail_w).map(|req| req.max(element_min_w));
+    let requested_max_h = requested_measure_bound(req_h, avail_h).map(|req| req.max(element_min_h));
+    let element_max_w = el
+        .layout
+        .max_w
+        .and_then(|l| l.resolve_as_max(avail_w))
+        .map(|max| max.max(element_min_w));
+    let element_max_h = el
+        .layout
+        .max_h
+        .and_then(|l| l.resolve_as_max(avail_h))
+        .map(|max| max.max(element_min_h));
     let effective_max_w = [element_max_w, max_w, requested_max_w]
         .into_iter()
         .flatten()
@@ -647,6 +667,67 @@ mod tests {
         assert_eq!(calls.get(), 1);
         assert!(a.measure_cache.get()[0].is_some());
         assert!(b.measure_cache.get()[0].is_some());
+    }
+
+    #[test]
+    fn min_size_within_uses_local_and_global_caches_keyed_by_avail() {
+        use super::min_size_within;
+        use crate::core::element::IntoElement;
+        use crate::layout::stack::layout_scroll_content;
+        use crate::widgets::internal::StackProps;
+
+        let calls = Rc::new(Cell::new(0));
+        let make_doc = || -> Element {
+            DocumentView::new("a".repeat(60))
+                .formatter(CountingFormatter {
+                    calls: calls.clone(),
+                })
+                .wrap(true)
+                .border(false)
+                .scrollbar(false)
+                .width(Length::Flex(1))
+                .height(Length::Auto)
+                .max_width(Length::Percent(50))
+        };
+
+        let a = make_doc();
+        let b = make_doc();
+
+        // First call computes and populates local + global caches.
+        assert_eq!(min_size_within(&a, Some(50), None, 100, u16::MAX), (50, 2));
+        assert_eq!(calls.get(), 1);
+        let slot = a.measure_cache.get()[0].expect("local cache populated");
+        assert_eq!(
+            (slot.max_w, slot.avail_w, slot.size),
+            (Some(50), 100, (50, 2))
+        );
+
+        // Repeated call on same element hits local cache.
+        assert_eq!(min_size_within(&a, Some(50), None, 100, u16::MAX), (50, 2));
+        assert_eq!(calls.get(), 1);
+
+        // Fresh equal element hits global cache (including through ScrollView layout).
+        assert_eq!(min_size_within(&b, Some(50), None, 100, u16::MAX), (50, 2));
+        assert_eq!(calls.get(), 1);
+        assert!(b.measure_cache.get()[0].is_some());
+
+        let c = make_doc();
+        let layout = layout_scroll_content(&StackProps::default(), &[c], 100, 20, false);
+        assert_eq!((layout.rects[0].w, layout.rects[0].h), (50, 2));
+        assert_eq!(calls.get(), 1);
+
+        // Same `max_w` with a different `avail_w` must not collide in either cache:
+        // Percent(50) of 80 resolves to 40, not the cached 50 from avail_w = 100.
+        assert_eq!(min_size_within(&b, Some(50), None, 80, u16::MAX), (40, 2));
+        let slots = b.measure_cache.get();
+        assert_eq!(
+            slots[0].map(|entry| (entry.max_w, entry.avail_w, entry.size)),
+            Some((Some(50), 80, (40, 2)))
+        );
+        assert_eq!(
+            slots[1].map(|entry| (entry.max_w, entry.avail_w, entry.size)),
+            Some((Some(50), 100, (50, 2)))
+        );
     }
 
     #[test]

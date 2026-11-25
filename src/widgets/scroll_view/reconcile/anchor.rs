@@ -2,7 +2,7 @@ use crate::core::element::{Element, Key};
 use crate::core::node::{NodeId, NodeKind, NodeTree};
 use crate::layout::axis::align_x;
 use crate::layout::stack::ScrollContentLayout;
-use crate::style::{Length, Rect};
+use crate::style::Rect;
 use crate::widgets::internal::{RememberedScrollAnchor, ScrollViewNode};
 use crate::widgets::{ScrollViewLayoutCache, VirtualHeightCache};
 
@@ -510,21 +510,9 @@ pub(crate) fn recompute_from_height_cache(
             continue;
         }
 
-        let w = if horizontal_overflow {
-            if item.flex_w {
-                item.natural_w
-            } else if let Some(percent) = item.percent_w {
-                Length::Percent(percent).resolve(viewport_w, 0)
-            } else {
-                item.natural_w
-            }
-        } else if item.flex_w {
-            viewport_w
-        } else if let Some(percent) = item.percent_w {
-            Length::Percent(percent).resolve(viewport_w, 0)
-        } else {
-            item.natural_w.min(viewport_w)
-        };
+        let w = item
+            .width_spec
+            .resolve(viewport_w, props.align, horizontal_overflow);
         let x = align_x(bounds, w, props.align);
         let h = item.h;
 

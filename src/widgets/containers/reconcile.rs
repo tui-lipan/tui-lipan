@@ -181,6 +181,10 @@ pub(crate) fn reconcile_stack(
     #[cfg(not(feature = "diff-view"))]
     let reconcile_passes: &[u8] = &[0];
 
+    let prev_constraint_avail = ctx
+        .overlay_state
+        .constraint_avail
+        .replace((bounds.w, bounds.h));
     let mut child_ids: Vec<NodeId> = Vec::new();
     for (pass_idx, _) in reconcile_passes.iter().enumerate() {
         #[cfg(feature = "diff-view")]
@@ -217,6 +221,7 @@ pub(crate) fn reconcile_stack(
         }
         child_ids = next_ids;
     }
+    ctx.overlay_state.constraint_avail = prev_constraint_avail;
 
     exit_retention::store_retained(
         ctx.tree,

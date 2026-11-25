@@ -43,6 +43,10 @@ pub(crate) fn reconcile_flow(
     let mut new_children = old_children;
     new_children.clear();
 
+    let prev_constraint_avail = ctx
+        .overlay_state
+        .constraint_avail
+        .replace((inner.w, inner.h));
     for ((child, reuse_id), child_rect) in flow.children.iter().zip(plan).zip(child_rects) {
         let child_id = reconcile_element(
             ctx,
@@ -55,6 +59,7 @@ pub(crate) fn reconcile_flow(
         );
         new_children.push(child_id);
     }
+    ctx.overlay_state.constraint_avail = prev_constraint_avail;
 
     let node = ctx.tree.node_mut(id);
     node.children = new_children;

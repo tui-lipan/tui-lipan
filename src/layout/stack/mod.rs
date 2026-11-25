@@ -220,13 +220,12 @@ pub(crate) fn layout_vstack(
                 .copied()
                 .flatten(),
             bounds.w,
-        )
-        .max(layout.min_w.resolve_as_min(bounds.w))
-        .min(bounds.w);
+        );
 
         if props.align == Align::Stretch {
             w = bounds.w;
         }
+        let w = layout.clamp_width(w, bounds.w).min(bounds.w);
 
         let x = align_x(bounds, w, props.align);
 
@@ -333,13 +332,12 @@ pub(crate) fn layout_hstack(
                 .copied()
                 .flatten(),
             bounds.h,
-        )
-        .max(layout.min_h.resolve_as_min(bounds.h))
-        .min(bounds.h);
+        );
 
         if props.align == Align::Stretch {
             h = bounds.h;
         }
+        let h = layout.clamp_height(h, bounds.h).min(bounds.h);
 
         let y = align_y(bounds, h, props.align);
 

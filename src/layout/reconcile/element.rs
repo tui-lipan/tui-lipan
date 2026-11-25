@@ -132,22 +132,44 @@ pub(crate) fn reconcile_element(ctx: &mut ReconcileCtx<'_>, args: ElementReconci
         node.set_active_theme(active_theme);
     }
 
+    let (avail_w, avail_h) = ctx
+        .overlay_state
+        .constraint_avail
+        .unwrap_or((rect.w, rect.h));
+    let resolved_layout = el.layout.resolve_percentages(avail_w, avail_h);
+    let preserves_constraint_avail = matches!(
+        el.kind,
+        ElementKind::Group(_)
+            | ElementKind::EffectScope(_)
+            | ElementKind::Animated(_)
+            | ElementKind::DragSource(_)
+            | ElementKind::DropTarget(_)
+    );
+    let prev_constraint_avail = if preserves_constraint_avail {
+        None
+    } else {
+        Some(ctx.overlay_state.constraint_avail.take())
+    };
+
     let result_id = match &el.kind {
-        ElementKind::Text(text) => reconcile_text(ctx.tree, id, text, rect, &el.layout),
+        ElementKind::Text(text) => reconcile_text(ctx.tree, id, text, rect, &resolved_layout),
         #[cfg(feature = "big-text")]
         ElementKind::BigText(big_text) => {
-            reconcile_big_text(ctx.tree, id, big_text, rect, &el.layout)
+            reconcile_big_text(ctx.tree, id, big_text, rect, &resolved_layout)
         }
         ElementKind::AsciiCanvas(canvas) => {
-            reconcile_ascii_canvas(ctx.tree, id, canvas, rect, &el.layout)
+            reconcile_ascii_canvas(ctx.tree, id, canvas, rect, &resolved_layout)
         }
-        ElementKind::Button(button) => reconcile_button(ctx.tree, id, button, rect, &el.layout),
+        ElementKind::Button(button) => {
+            reconcile_button(ctx.tree, id, button, rect, &resolved_layout)
+        }
         #[cfg(feature = "image")]
-        ElementKind::Image(image) => reconcile_image(ctx.tree, id, image, rect, &el.layout),
+        ElementKind::Image(image) => reconcile_image(ctx.tree, id, image, rect, &resolved_layout),
 
         ElementKind::Input(input) => {
             let (w, h) = measure_input(input);
-            let rect = resolve_rect_with_auto(rect, &el.layout, input.width, input.height, w, h);
+            let rect =
+                resolve_rect_with_auto(rect, &resolved_layout, input.width, input.height, w, h);
 
             let node = ctx.tree.node_mut(id);
             node.rect = rect;
@@ -161,14 +183,14 @@ pub(crate) fn reconcile_element(ctx: &mut ReconcileCtx<'_>, args: ElementReconci
             id
         }
         ElementKind::HexArea(hex_area) => {
-            reconcile_hex_area(ctx.tree, id, hex_area, rect, &el.layout)
+            reconcile_hex_area(ctx.tree, id, hex_area, rect, &resolved_layout)
         }
         ElementKind::TextArea(text_area) => {
-            reconcile_text_area(ctx.tree, id, text_area, rect, &el.layout)
+            reconcile_text_area(ctx.tree, id, text_area, rect, &resolved_layout)
         }
         #[cfg(feature = "terminal")]
         ElementKind::Terminal(terminal) => {
-            reconcile_terminal(ctx.tree, id, terminal, rect, &el.layout)
+            reconcile_terminal(ctx.tree, id, terminal, rect, &resolved_layout)
         }
         ElementKind::Popover(popover) => crate::widgets::internal::reconcile_popover(
             ctx.tree,
@@ -192,7 +214,7 @@ pub(crate) fn reconcile_element(ctx: &mut ReconcileCtx<'_>, args: ElementReconci
         ElementKind::Table(table) => {
             crate::widgets::internal::reconcile_table(ctx.tree, id, table, rect)
         }
-        ElementKind::Tabs(tabs) => reconcile_tabs(ctx.tree, id, tabs, rect, &el.layout),
+        ElementKind::Tabs(tabs) => reconcile_tabs(ctx.tree, id, tabs, rect, &resolved_layout),
         ElementKind::DraggableTabBar(bar) => reconcile_draggable_tab_bar(ctx.tree, id, bar, rect),
         ElementKind::Component(_component) => {
             if cfg!(debug_assertions) {
@@ -281,7 +303,7 @@ pub(crate) fn reconcile_element(ctx: &mut ReconcileCtx<'_>, args: ElementReconci
                     pan,
                     pan_key,
                     rect,
-                    constraints: &el.layout,
+                    constraints: &resolved_layout,
                 },
             )
         }
@@ -291,13 +313,19 @@ pub(crate) fn reconcile_element(ctx: &mut ReconcileCtx<'_>, args: ElementReconci
                 id,
                 divider: div,
                 rect,
-                constraints: &el.layout,
+                constraints: &resolved_layout,
             },
         ),
-        ElementKind::Spacer(spacer) => reconcile_spacer(ctx.tree, id, spacer, rect, &el.layout),
-        ElementKind::KeyCapture(capture) => {
-            crate::widgets::internal::reconcile_key_capture(ctx.tree, id, capture, rect, &el.layout)
+        ElementKind::Spacer(spacer) => {
+            reconcile_spacer(ctx.tree, id, spacer, rect, &resolved_layout)
         }
+        ElementKind::KeyCapture(capture) => crate::widgets::internal::reconcile_key_capture(
+            ctx.tree,
+            id,
+            capture,
+            rect,
+            &resolved_layout,
+        ),
         ElementKind::VStack(vs) => {
             let old_children = {
                 let node = ctx.tree.node_mut(id);
@@ -427,7 +455,7 @@ pub(crate) fn reconcile_element(ctx: &mut ReconcileCtx<'_>, args: ElementReconci
                 id,
                 canvas,
                 rect,
-                constraints: &el.layout,
+                constraints: &resolved_layout,
             },
         ),
         ElementKind::Splitter(splitter) => {
@@ -444,7 +472,7 @@ pub(crate) fn reconcile_element(ctx: &mut ReconcileCtx<'_>, args: ElementReconci
                     old_children,
                     splitter,
                     bounds: rect,
-                    constraints: &el.layout,
+                    constraints: &resolved_layout,
                 },
             );
 
@@ -471,21 +499,29 @@ pub(crate) fn reconcile_element(ctx: &mut ReconcileCtx<'_>, args: ElementReconci
                 id,
                 layout,
                 rect,
-                constraints: &el.layout,
+                constraints: &resolved_layout,
             },
         ),
         ElementKind::Checkbox(checkbox) => {
-            reconcile_checkbox(ctx.tree, id, checkbox, rect, &el.layout)
+            reconcile_checkbox(ctx.tree, id, checkbox, rect, &resolved_layout)
         }
         ElementKind::ProgressBar(progress) => {
-            reconcile_progress_bar(ctx.tree, id, progress, rect, &el.layout)
+            reconcile_progress_bar(ctx.tree, id, progress, rect, &resolved_layout)
         }
         ElementKind::Spinner(spinner) => reconcile_spinner(ctx.tree, id, spinner, rect),
-        ElementKind::Slider(slider) => reconcile_slider(ctx.tree, id, slider, rect, &el.layout),
+        ElementKind::Slider(slider) => {
+            reconcile_slider(ctx.tree, id, slider, rect, &resolved_layout)
+        }
         ElementKind::Sparkline(sparkline) => {
             let (w, h) = crate::widgets::internal::measure_sparkline(sparkline);
-            let rect =
-                resolve_rect_with_auto(rect, &el.layout, sparkline.width, sparkline.height, w, h);
+            let rect = resolve_rect_with_auto(
+                rect,
+                &resolved_layout,
+                sparkline.width,
+                sparkline.height,
+                w,
+                h,
+            );
             let alloc_w = Some(rect.w);
 
             let node = ctx.tree.node_mut(id);
@@ -518,7 +554,8 @@ pub(crate) fn reconcile_element(ctx: &mut ReconcileCtx<'_>, args: ElementReconci
         }
         ElementKind::Chart(chart) => {
             let (w, h) = crate::widgets::internal::measure_chart(chart);
-            let rect = resolve_rect_with_auto(rect, &el.layout, chart.width, chart.height, w, h);
+            let rect =
+                resolve_rect_with_auto(rect, &resolved_layout, chart.width, chart.height, w, h);
 
             let node = ctx.tree.node_mut(id);
             node.rect = rect;
@@ -541,7 +578,8 @@ pub(crate) fn reconcile_element(ctx: &mut ReconcileCtx<'_>, args: ElementReconci
         }
         ElementKind::Graph(graph) => {
             let (w, h) = crate::widgets::internal::measure_graph(graph);
-            let rect = resolve_rect_with_auto(rect, &el.layout, graph.width, graph.height, w, h);
+            let rect =
+                resolve_rect_with_auto(rect, &resolved_layout, graph.width, graph.height, w, h);
 
             let node = ctx.tree.node_mut(id);
             node.rect = rect;
@@ -564,8 +602,14 @@ pub(crate) fn reconcile_element(ctx: &mut ReconcileCtx<'_>, args: ElementReconci
         }
         ElementKind::SequenceDiagram(sequence) => {
             let (w, h) = crate::widgets::internal::measure_sequence_diagram(sequence);
-            let rect =
-                resolve_rect_with_auto(rect, &el.layout, sequence.width, sequence.height, w, h);
+            let rect = resolve_rect_with_auto(
+                rect,
+                &resolved_layout,
+                sequence.width,
+                sequence.height,
+                w,
+                h,
+            );
 
             let node = ctx.tree.node_mut(id);
             node.rect = rect;
@@ -602,8 +646,14 @@ pub(crate) fn reconcile_element(ctx: &mut ReconcileCtx<'_>, args: ElementReconci
         }
         ElementKind::Flowchart(flowchart) => {
             let (w, h) = crate::widgets::internal::measure_flowchart(flowchart);
-            let rect =
-                resolve_rect_with_auto(rect, &el.layout, flowchart.width, flowchart.height, w, h);
+            let rect = resolve_rect_with_auto(
+                rect,
+                &resolved_layout,
+                flowchart.width,
+                flowchart.height,
+                w,
+                h,
+            );
 
             let node = ctx.tree.node_mut(id);
             node.rect = rect;
@@ -625,21 +675,21 @@ pub(crate) fn reconcile_element(ctx: &mut ReconcileCtx<'_>, args: ElementReconci
             id
         }
         ElementKind::ClassDiagram(diagram) => {
-            reconcile_class_diagram(ctx.tree, id, diagram, rect, &el.layout)
+            reconcile_class_diagram(ctx.tree, id, diagram, rect, &resolved_layout)
         }
         ElementKind::StateDiagram(diagram) => {
-            reconcile_state_diagram(ctx.tree, id, diagram, rect, &el.layout)
+            reconcile_state_diagram(ctx.tree, id, diagram, rect, &resolved_layout)
         }
         ElementKind::ErDiagram(diagram) => {
-            reconcile_er_diagram(ctx.tree, id, diagram, rect, &el.layout)
+            reconcile_er_diagram(ctx.tree, id, diagram, rect, &resolved_layout)
         }
         ElementKind::GanttDiagram(diagram) => {
-            reconcile_gantt_diagram(ctx.tree, id, diagram, rect, &el.layout)
+            reconcile_gantt_diagram(ctx.tree, id, diagram, rect, &resolved_layout)
         }
         ElementKind::Heatmap(heatmap) => {
             let (w, h) = crate::widgets::internal::measure_heatmap(heatmap);
             let rect =
-                resolve_rect_with_auto(rect, &el.layout, heatmap.width, heatmap.height, w, h);
+                resolve_rect_with_auto(rect, &resolved_layout, heatmap.width, heatmap.height, w, h);
 
             let node = ctx.tree.node_mut(id);
             node.rect = rect;
@@ -661,7 +711,7 @@ pub(crate) fn reconcile_element(ctx: &mut ReconcileCtx<'_>, args: ElementReconci
             id
         }
         ElementKind::DocumentView(dv) => {
-            reconcile_document_view(ctx.tree, id, parent, dv, rect, &el.layout)
+            reconcile_document_view(ctx.tree, id, parent, dv, rect, &resolved_layout)
         }
         ElementKind::ThemeProvider(_) => {
             // Handled by early return above; unreachable.
@@ -672,6 +722,10 @@ pub(crate) fn reconcile_element(ctx: &mut ReconcileCtx<'_>, args: ElementReconci
         }
         ElementKind::Memo(_) => unreachable!("Memo should be handled before node allocation"),
     };
+
+    if let Some(prev) = prev_constraint_avail {
+        ctx.overlay_state.constraint_avail = prev;
+    }
 
     // Incrementally track hover/mouse/animation capabilities instead of a
     // post-reconciliation full-tree DFS (refresh_hoverables).

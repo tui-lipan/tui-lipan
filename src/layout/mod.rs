@@ -1200,6 +1200,313 @@ mod tests {
     }
 
     #[test]
+    fn max_width_caps_filling_children_on_the_cross_axis() {
+        use crate::style::Align;
+        use crate::widgets::ScrollView;
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 10,
+        };
+        let column = |key: &'static str| -> Element {
+            VStack::new()
+                .height(Length::Px(1))
+                .child(Text::new("x"))
+                .key(key)
+                .max_width(Length::Px(20))
+        };
+
+        for align in [Align::Center, Align::Stretch] {
+            let mut tree = NodeTree::new();
+            let root: Element = VStack::new().align(align).child(column("stack")).into();
+            LayoutEngine::reconcile_with_focus(&mut tree, &root, bounds, None);
+            let rect = tree.node(find_by_key(&tree, "stack")).rect;
+            assert_eq!(rect.w, 20, "{align:?}");
+            let expected_x = if align == Align::Center { 10 } else { 0 };
+            assert_eq!(rect.x, expected_x, "{align:?}");
+        }
+
+        let mut tree = NodeTree::new();
+        let root: Element = ScrollView::new()
+            .align(Align::Center)
+            .child(column("scrolled"))
+            .into();
+        LayoutEngine::reconcile_with_focus(&mut tree, &root, bounds, None);
+        let rect = tree.node(find_by_key(&tree, "scrolled")).rect;
+        assert_eq!((rect.x, rect.w), (10, 20));
+    }
+
+    #[test]
+    fn max_height_caps_filling_children_in_horizontal_stack() {
+        use crate::style::Align;
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 20,
+        };
+
+        for (cap, expected_h) in [(Length::Px(8), 8), (Length::Percent(50), 10)] {
+            for align in [Align::Center, Align::Stretch] {
+                let mut tree = NodeTree::new();
+                let child: Element = VStack::new()
+                    .width(Length::Px(10))
+                    .child(Text::new("x"))
+                    .key("panel")
+                    .max_height(cap);
+                let root: Element = HStack::new().align(align).child(child).into();
+                LayoutEngine::reconcile_with_focus(&mut tree, &root, bounds, None);
+                let rect = tree.node(find_by_key(&tree, "panel")).rect;
+                assert_eq!(rect.h, expected_h, "cap={cap:?} align={align:?}");
+                let expected_y = if align == Align::Center {
+                    ((bounds.h - expected_h) / 2) as i16
+                } else {
+                    0
+                };
+                assert_eq!(rect.y, expected_y, "cap={cap:?} align={align:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn min_constraint_wins_over_max_on_stack_and_scroll_cross_axis() {
+        use crate::style::Align;
+        use crate::widgets::ScrollView;
+
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 40,
+        };
+
+        for align in [Align::Center, Align::Stretch] {
+            // Vertical stack: min_width(30) wins over max_width(20) (both explicit
+            // and when a percentage max_width resolves below min_width).
+            let mut tree = NodeTree::new();
+            let vchild: Element = VStack::new()
+                .height(Length::Px(1))
+                .child(Text::new("x"))
+                .key("vchild")
+                .max_width(Length::Px(20))
+                .min_width(Length::Px(30));
+            let vroot: Element = VStack::new().align(align).child(vchild).into();
+            LayoutEngine::reconcile_with_focus(&mut tree, &vroot, bounds, None);
+            let rect = tree.node(find_by_key(&tree, "vchild")).rect;
+            assert_eq!(rect.w, 30, "vstack {align:?}");
+            assert_eq!(rect.x, if align == Align::Center { 5 } else { 0 });
+
+            // Horizontal stack: min_height(30) wins over max_height(20).
+            let mut tree = NodeTree::new();
+            let hchild: Element = VStack::new()
+                .width(Length::Px(5))
+                .child(Text::new("x"))
+                .key("hchild")
+                .max_height(Length::Px(20))
+                .min_height(Length::Px(30));
+            let hroot: Element = HStack::new().align(align).child(hchild).into();
+            LayoutEngine::reconcile_with_focus(&mut tree, &hroot, bounds, None);
+            let rect = tree.node(find_by_key(&tree, "hchild")).rect;
+            assert_eq!(rect.h, 30, "hstack {align:?}");
+            assert_eq!(rect.y, if align == Align::Center { 5 } else { 0 });
+
+            // ScrollView: min_width(30) wins over max_width(50%) (= 20 at width 40)
+            // and measures wrapping content at 30 columns (so 25 chars fit on 1 line, not 2).
+            let mut tree = NodeTree::new();
+            let schild: Element = VStack::new()
+                .height(Length::Auto)
+                .child(Text::new("a".repeat(25)).overflow(crate::widgets::Overflow::Wrap))
+                .key("schild")
+                .min_width(Length::Px(30))
+                .max_width(Length::Percent(50));
+            let sroot: Element = ScrollView::new()
+                .scrollbar(false)
+                .align(align)
+                .child(schild)
+                .into();
+            LayoutEngine::reconcile_with_focus(&mut tree, &sroot, bounds, None);
+            let rect = tree.node(find_by_key(&tree, "schild")).rect;
+            assert_eq!(rect.w, 30, "scroll {align:?}");
+            assert_eq!(rect.h, 1, "scroll wrap height {align:?}");
+            assert_eq!(rect.x, if align == Align::Center { 5 } else { 0 });
+        }
+
+        // Still clamped to parent bounds when parent is narrower than min_width.
+        let mut tree = NodeTree::new();
+        let narrow = Rect {
+            x: 0,
+            y: 0,
+            w: 25,
+            h: 10,
+        };
+        let child: Element = VStack::new()
+            .height(Length::Px(1))
+            .child(Text::new("x"))
+            .key("narrow")
+            .max_width(Length::Px(20))
+            .min_width(Length::Px(30));
+        let root: Element = VStack::new().align(Align::Center).child(child).into();
+        LayoutEngine::reconcile_with_focus(&mut tree, &root, narrow, None);
+        assert_eq!(tree.node(find_by_key(&tree, "narrow")).rect.w, 25);
+    }
+
+    #[test]
+    fn percent_max_constraints_are_not_reapplied_during_leaf_reconcile() {
+        use crate::style::Align;
+        use crate::widgets::{EffectScope, Overflow, ScrollView};
+
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            w: 100,
+            h: 20,
+        };
+
+        // Filling Text directly inside a 100-col VStack with max_width(50%)
+        // must keep its 50-col final node rect (not be halved again to 25).
+        for align in [Align::Center, Align::Stretch] {
+            let mut tree = NodeTree::new();
+            let text: Element = Text::new("a".repeat(60))
+                .width(Length::Flex(1))
+                .overflow(Overflow::Wrap)
+                .key("leaf")
+                .max_width(Length::Percent(50));
+            let root: Element = VStack::new().align(align).child(text).into();
+            LayoutEngine::reconcile_with_focus(&mut tree, &root, bounds, None);
+            let rect = tree.node(find_by_key(&tree, "leaf")).rect;
+            assert_eq!(rect.w, 50, "vstack leaf text {align:?}");
+            assert_eq!(rect.h, 2, "vstack leaf text height {align:?}");
+            assert_eq!(rect.x, if align == Align::Center { 25 } else { 0 });
+        }
+
+        // Filling Input directly inside a 100-col VStack.
+        let mut tree = NodeTree::new();
+        let input: Element = Input::new("hello")
+            .key("inp")
+            .max_width(Length::Percent(50));
+        let root: Element = VStack::new().align(Align::Center).child(input).into();
+        LayoutEngine::reconcile_with_focus(&mut tree, &root, bounds, None);
+        let rect = tree.node(find_by_key(&tree, "inp")).rect;
+        assert_eq!((rect.x, rect.w), (25, 50));
+
+        // Filling Text directly inside a 100-col ScrollView.
+        let mut tree = NodeTree::new();
+        let text: Element = Text::new("a".repeat(60))
+            .width(Length::Flex(1))
+            .overflow(Overflow::Wrap)
+            .key("scroll-leaf")
+            .max_width(Length::Percent(50));
+        let root: Element = ScrollView::new()
+            .scrollbar(false)
+            .align(Align::Center)
+            .child(text)
+            .into();
+        LayoutEngine::reconcile_with_focus(&mut tree, &root, bounds, None);
+        let rect = tree.node(find_by_key(&tree, "scroll-leaf")).rect;
+        assert_eq!((rect.x, rect.w, rect.h), (25, 50, 2));
+
+        // Filling Text directly inside a 20-row HStack with max_height(50%).
+        let mut tree = NodeTree::new();
+        let text: Element = Text::new("x")
+            .height(Length::Flex(1))
+            .key("h-leaf")
+            .max_height(Length::Percent(50));
+        let root: Element = HStack::new().align(Align::Center).child(text).into();
+        LayoutEngine::reconcile_with_focus(&mut tree, &root, bounds, None);
+        let rect = tree.node(find_by_key(&tree, "h-leaf")).rect;
+        assert_eq!((rect.y, rect.h), (5, 10));
+
+        // Transparent wrapper (EffectScope) preserves the stack's available bounds.
+        let mut tree = NodeTree::new();
+        let wrapped: Element = EffectScope::new()
+            .child(
+                Text::new("a".repeat(60))
+                    .width(Length::Flex(1))
+                    .overflow(Overflow::Wrap)
+                    .key("wrapped-leaf")
+                    .max_width(Length::Percent(50)),
+            )
+            .into();
+        let root: Element = VStack::new().align(Align::Center).child(wrapped).into();
+        LayoutEngine::reconcile_with_focus(&mut tree, &root, bounds, None);
+        let rect = tree.node(find_by_key(&tree, "wrapped-leaf")).rect;
+        assert_eq!((rect.x, rect.w, rect.h), (25, 50, 2));
+
+        // Nested VStack: inner 50% stack (50 cols) -> child 50% text resolves against 50 -> 25.
+        let mut tree = NodeTree::new();
+        let inner_leaf: Element = Text::new("x")
+            .width(Length::Flex(1))
+            .key("nested-leaf")
+            .max_width(Length::Percent(50));
+        let inner_stack: Element = VStack::new()
+            .align(Align::Center)
+            .child(inner_leaf)
+            .key("nested-stack")
+            .max_width(Length::Percent(50));
+        let root: Element = VStack::new().align(Align::Center).child(inner_stack).into();
+        LayoutEngine::reconcile_with_focus(&mut tree, &root, bounds, None);
+        assert_eq!(tree.node(find_by_key(&tree, "nested-stack")).rect.w, 50);
+        assert_eq!(tree.node(find_by_key(&tree, "nested-leaf")).rect.w, 25);
+    }
+
+    #[test]
+    fn min_constraint_wins_over_explicit_width_during_measurement() {
+        use crate::style::Align;
+        use crate::widgets::{Overflow, ScrollView};
+
+        let make_text = |key: &'static str| -> Element {
+            Text::new("a".repeat(25))
+                .width(Length::Px(10))
+                .overflow(Overflow::Wrap)
+                .key(key)
+                .max_width(Length::Px(20))
+                .min_width(Length::Px(30))
+        };
+
+        // 40-col parent: min_width(30) beats both width(10) and max_width(20),
+        // so 25 chars fit on 1 row instead of wrapping at 10 cols into 3 rows.
+        let wide = Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 10,
+        };
+        let mut tree = NodeTree::new();
+        let vroot: Element = VStack::new()
+            .align(Align::Center)
+            .child(make_text("v"))
+            .into();
+        LayoutEngine::reconcile_with_focus(&mut tree, &vroot, wide, None);
+        let vrect = tree.node(find_by_key(&tree, "v")).rect;
+        assert_eq!((vrect.x, vrect.w, vrect.h), (5, 30, 1));
+
+        let mut tree = NodeTree::new();
+        let sroot: Element = ScrollView::new()
+            .scrollbar(false)
+            .align(Align::Center)
+            .child(make_text("s"))
+            .into();
+        LayoutEngine::reconcile_with_focus(&mut tree, &sroot, wide, None);
+        let srect = tree.node(find_by_key(&tree, "s")).rect;
+        assert_eq!((srect.x, srect.w, srect.h), (5, 30, 1));
+
+        // 20-col parent: measurement still respects parent's available width (20),
+        // wrapping 25 chars into 2 rows.
+        let narrow = Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 10,
+        };
+        let mut tree = NodeTree::new();
+        let nroot: Element = VStack::new().child(make_text("n")).into();
+        LayoutEngine::reconcile_with_focus(&mut tree, &nroot, narrow, None);
+        let nrect = tree.node(find_by_key(&tree, "n")).rect;
+        assert_eq!((nrect.w, nrect.h), (20, 2));
+    }
+
+    #[test]
     fn bounded_flex_scrollable_child_keeps_footer_visible() {
         let mut tree = NodeTree::new();
         let bounds = Rect {

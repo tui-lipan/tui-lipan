@@ -2,9 +2,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::callback::Callback;
-use crate::core::element::Key;
+use crate::core::element::{Element, Key};
 use crate::core::node::{ScrollbarZone, ScrollbarZonesParams, WidgetNode, compute_scrollbar_zones};
-use crate::style::{Rect, ScrollbarVariant, Style};
+use crate::layout::axis::{Axis, requested_cross_axis};
+use crate::layout::measure::min_size_constrained;
+use crate::style::{Align, LayoutConstraints, Length, Rect, ScrollbarVariant, Style};
 use crate::widgets::document_view::FormatCache;
 use crate::widgets::document_view::node::{DocumentTableRectSelection, VisualCache};
 use crate::widgets::internal::StackProps;
@@ -155,16 +157,94 @@ pub struct SingleDocSelection {
     pub shared_selection_id: Option<Arc<str>>,
 }
 
+/// Width specification saved alongside a cached scroll child so its rect width
+/// can be reconstructed accurately for any viewport width without re-measuring.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CachedChildWidth {
+    /// Requested cross-axis length (`Auto`, `Px`, `Percent`, `Flex`).
+    pub requested: Length,
+    /// Uncapped natural content width (used for `Auto`, or `Flex` under `horizontal_overflow`).
+    pub natural: u16,
+    /// Child's `min_width` constraint.
+    pub min: Length,
+    /// Child's `max_width` constraint.
+    pub max: Option<Length>,
+}
+
+impl CachedChildWidth {
+    /// Capture a child's width specification from a layout computed at `viewport_w`.
+    pub(crate) fn from_element(
+        child: &Element,
+        rect_w: u16,
+        viewport_w: u16,
+        horizontal_overflow: bool,
+    ) -> Self {
+        let requested = requested_cross_axis(child, Axis::Vertical);
+        let constraints = child.layout_constraints();
+        let natural = match requested {
+            Length::Px(px) => px,
+            Length::Auto if !horizontal_overflow => {
+                let min_resolved = constraints.min_w.resolve_as_min(viewport_w);
+                let max_resolved = constraints
+                    .max_w
+                    .and_then(|max| max.resolve_as_max(viewport_w));
+                let may_be_clamped = rect_w >= viewport_w
+                    || max_resolved.is_some_and(|max| rect_w >= max)
+                    || (min_resolved > 0 && rect_w <= min_resolved);
+                if may_be_clamped && !super::reconcile::scroll_child_height_depends_on_width(child)
+                {
+                    min_size_constrained(child, None, None).0
+                } else {
+                    rect_w
+                }
+            }
+            _ => rect_w,
+        };
+        Self {
+            requested,
+            natural,
+            min: constraints.min_w,
+            max: constraints.max_w,
+        }
+    }
+
+    /// Reconstruct the child's resolved width for a given viewport width and alignment.
+    pub(crate) fn resolve(self, viewport_w: u16, align: Align, horizontal_overflow: bool) -> u16 {
+        if horizontal_overflow {
+            return match self.requested {
+                Length::Px(px) => px,
+                Length::Percent(percent) => Length::Percent(percent).resolve(viewport_w, 0),
+                Length::Auto | Length::Flex(_) => self.natural,
+            };
+        }
+
+        let base = if align == Align::Stretch {
+            viewport_w
+        } else {
+            match self.requested {
+                Length::Px(px) => px,
+                Length::Percent(percent) => Length::Percent(percent).resolve(viewport_w, 0),
+                Length::Flex(_) => viewport_w,
+                Length::Auto => self.natural,
+            }
+        };
+
+        LayoutConstraints {
+            min_w: self.min,
+            max_w: self.max,
+            ..LayoutConstraints::default()
+        }
+        .clamp_width(base, viewport_w)
+        .min(viewport_w)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct HeightCacheItem {
-    /// Width at which `h` was measured (for non-flex items).
-    pub natural_w: u16,
+    /// Width specification used to reconstruct the child's width on resize.
+    pub width_spec: CachedChildWidth,
     /// Measured height of the child.
     pub h: u16,
-    /// Whether the child fills the full viewport width (flex).
-    pub flex_w: bool,
-    /// Percentage width (0-100) when width is relative to viewport.
-    pub percent_w: Option<u16>,
     /// Whether a gap should follow this item.
     pub gap_after: bool,
     /// Whether this item is a portal (zero-size placeholder).
@@ -279,10 +359,8 @@ pub struct VirtualChildEntry {
     pub w: u16,
     /// X offset from alignment.
     pub x: i16,
-    /// Whether width fills viewport (Flex).
-    pub flex_w: bool,
-    /// Percentage width if applicable.
-    pub percent_w: Option<u16>,
+    /// Width specification used to reconstruct `w` when the viewport width changes.
+    pub width_spec: CachedChildWidth,
     /// Whether a gap follows this item.
     pub gap_after: bool,
     /// Whether this is a portal (zero-size).
