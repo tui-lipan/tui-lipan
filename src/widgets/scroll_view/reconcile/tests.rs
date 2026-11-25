@@ -5609,6 +5609,7 @@ fn virtual_entry(h: u16, gap_after: bool, stale: bool) -> VirtualChildEntry {
         x: 0,
         flex_w: false,
         percent_w: None,
+        max_w: None,
         gap_after,
         is_portal: false,
         stale,

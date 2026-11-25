@@ -1200,6 +1200,44 @@ mod tests {
     }
 
     #[test]
+    fn max_width_caps_filling_children_on_the_cross_axis() {
+        use crate::style::Align;
+        use crate::widgets::ScrollView;
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 10,
+        };
+        let column = |key: &'static str| -> Element {
+            VStack::new()
+                .height(Length::Px(1))
+                .child(Text::new("x"))
+                .key(key)
+                .max_width(Length::Px(20))
+        };
+
+        for align in [Align::Center, Align::Stretch] {
+            let mut tree = NodeTree::new();
+            let root: Element = VStack::new().align(align).child(column("stack")).into();
+            LayoutEngine::reconcile_with_focus(&mut tree, &root, bounds, None);
+            let rect = tree.node(find_by_key(&tree, "stack")).rect;
+            assert_eq!(rect.w, 20, "{align:?}");
+            let expected_x = if align == Align::Center { 10 } else { 0 };
+            assert_eq!(rect.x, expected_x, "{align:?}");
+        }
+
+        let mut tree = NodeTree::new();
+        let root: Element = ScrollView::new()
+            .align(Align::Center)
+            .child(column("scrolled"))
+            .into();
+        LayoutEngine::reconcile_with_focus(&mut tree, &root, bounds, None);
+        let rect = tree.node(find_by_key(&tree, "scrolled")).rect;
+        assert_eq!((rect.x, rect.w), (10, 20));
+    }
+
+    #[test]
     fn bounded_flex_scrollable_child_keeps_footer_visible() {
         let mut tree = NodeTree::new();
         let bounds = Rect {

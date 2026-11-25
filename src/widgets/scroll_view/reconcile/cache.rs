@@ -499,6 +499,7 @@ pub(crate) fn build_height_cache_items(
                 h: 0,
                 flex_w: false,
                 percent_w: None,
+                max_w: None,
                 gap_after: false,
                 is_portal: true,
             });
@@ -518,6 +519,7 @@ pub(crate) fn build_height_cache_items(
             h: rect.h,
             flex_w,
             percent_w,
+            max_w: child.layout_constraints().max_w,
             gap_after,
             is_portal: false,
         });
@@ -556,6 +558,7 @@ pub(crate) fn populate_virtual_cache_from_layout(
                 x: 0,
                 flex_w: false,
                 percent_w: None,
+                max_w: None,
                 gap_after: false,
                 is_portal: true,
                 stale: false,
@@ -579,6 +582,7 @@ pub(crate) fn populate_virtual_cache_from_layout(
             x: rect.x,
             flex_w,
             percent_w,
+            max_w: child.layout_constraints().max_w,
             gap_after,
             is_portal: false,
             stale: false,

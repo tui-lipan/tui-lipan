@@ -165,6 +165,8 @@ pub struct HeightCacheItem {
     pub flex_w: bool,
     /// Percentage width (0-100) when width is relative to viewport.
     pub percent_w: Option<u16>,
+    /// The child's `max_width`, reapplied when the viewport width changes.
+    pub max_w: Option<crate::style::Length>,
     /// Whether a gap should follow this item.
     pub gap_after: bool,
     /// Whether this item is a portal (zero-size placeholder).
@@ -283,6 +285,8 @@ pub struct VirtualChildEntry {
     pub flex_w: bool,
     /// Percentage width if applicable.
     pub percent_w: Option<u16>,
+    /// The child's `max_width`, reapplied when the viewport width changes.
+    pub max_w: Option<crate::style::Length>,
     /// Whether a gap follows this item.
     pub gap_after: bool,
     /// Whether this is a portal (zero-size).

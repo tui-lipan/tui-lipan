@@ -11,7 +11,7 @@ use crate::style::{Align, Length, Rect};
 use crate::widgets::internal::StackProps;
 
 use self::types::StackMeasuredSize;
-use super::axis::{Axis, align_x, align_y, requested_cross_axis};
+use super::axis::{Axis, align_x, align_y, cap_height, cap_width, requested_cross_axis};
 use super::measure::min_size_constrained;
 
 pub(crate) use compute::{StackLayoutParams, compute_stack_layout};
@@ -227,6 +227,7 @@ pub(crate) fn layout_vstack(
         if props.align == Align::Stretch {
             w = bounds.w;
         }
+        let w = cap_width(child, w, bounds.w);
 
         let x = align_x(bounds, w, props.align);
 
@@ -340,6 +341,7 @@ pub(crate) fn layout_hstack(
         if props.align == Align::Stretch {
             h = bounds.h;
         }
+        let h = cap_height(child, h, bounds.h);
 
         let y = align_y(bounds, h, props.align);
 

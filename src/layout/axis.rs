@@ -192,6 +192,25 @@ pub(crate) fn requested_cross_axis(el: &Element, axis: Axis) -> Length {
     Length::Auto
 }
 
+/// Cap a resolved cross-axis width at the child's `max_width`, so the cap also holds for children
+/// that fill (`Flex`) or are stretched to the available width.
+pub(crate) fn cap_width(child: &Element, w: u16, available: u16) -> u16 {
+    child
+        .layout_constraints()
+        .max_w
+        .and_then(|max| max.resolve_as_max(available))
+        .map_or(w, |max| w.min(max))
+}
+
+/// Cap a resolved cross-axis height at the child's `max_height`; see [`cap_width`].
+pub(crate) fn cap_height(child: &Element, h: u16, available: u16) -> u16 {
+    child
+        .layout_constraints()
+        .max_h
+        .and_then(|max| max.resolve_as_max(available))
+        .map_or(h, |max| h.min(max))
+}
+
 /// Align a child horizontally within bounds.
 pub(crate) fn align_x(bounds: Rect, child_w: u16, align: Align) -> i16 {
     match align {

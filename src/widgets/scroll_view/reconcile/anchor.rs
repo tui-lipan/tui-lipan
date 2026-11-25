@@ -525,6 +525,10 @@ pub(crate) fn recompute_from_height_cache(
         } else {
             item.natural_w.min(viewport_w)
         };
+        let w = match item.max_w.and_then(|max| max.resolve_as_max(viewport_w)) {
+            Some(max) if !horizontal_overflow => w.min(max),
+            _ => w,
+        };
         let x = align_x(bounds, w, props.align);
         let h = item.h;
 

@@ -3,7 +3,7 @@
 use rustc_hash::FxHashMap;
 
 use crate::core::element::{Element, Key};
-use crate::layout::axis::{Axis, align_x, requested_cross_axis, requested_main_axis};
+use crate::layout::axis::{Axis, align_x, cap_width, requested_cross_axis, requested_main_axis};
 use crate::layout::hash::element_layout_hash;
 use crate::layout::measure::min_size_constrained;
 use crate::style::{Align, Length, Rect};
@@ -183,6 +183,9 @@ pub(crate) fn layout_scroll_content(
 
         if props.align == Align::Stretch && !horizontal_overflow {
             w = viewport_width;
+        }
+        if !horizontal_overflow {
+            w = cap_width(child, w, viewport_width);
         }
 
         let measure_max_w = if horizontal_overflow {
@@ -394,6 +397,7 @@ pub(crate) fn layout_scroll_content_virtual(
                 x: 0,
                 flex_w: false,
                 percent_w: None,
+                max_w: None,
                 gap_after: false,
                 is_portal: true,
                 stale: false,
@@ -535,10 +539,12 @@ fn resolve_child_width(
             }
         }
     };
-    if align == Align::Stretch && !horizontal_overflow {
-        viewport_width
-    } else {
+    if horizontal_overflow {
         w
+    } else if align == Align::Stretch {
+        cap_width(child, viewport_width, viewport_width)
+    } else {
+        cap_width(child, w, viewport_width)
     }
 }
 
@@ -589,6 +595,9 @@ fn measure_and_cache_child(
 
     if props.align == Align::Stretch && !horizontal_overflow {
         w = viewport_width;
+    }
+    if !horizontal_overflow {
+        w = cap_width(child, w, viewport_width);
     }
 
     let measure_max_w = if horizontal_overflow {
@@ -649,6 +658,7 @@ fn measure_and_cache_child(
         x,
         flex_w,
         percent_w,
+        max_w: child.layout_constraints().max_w,
         gap_after: false,
         is_portal: false,
         stale: false,
@@ -753,6 +763,13 @@ fn refresh_entry_width(
         Length::Percent(percent).resolve(viewport_width, 0)
     } else {
         entry.w.min(viewport_width)
+    };
+    let w = match entry
+        .max_w
+        .and_then(|max| max.resolve_as_max(viewport_width))
+    {
+        Some(max) if !horizontal_overflow => w.min(max),
+        _ => w,
     };
 
     entry.w = w;
@@ -1229,6 +1246,7 @@ mod tests {
                 x: 0,
                 flex_w: true,
                 percent_w: None,
+                max_w: None,
                 gap_after: false,
                 is_portal: false,
                 stale: false,
