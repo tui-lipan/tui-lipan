@@ -305,8 +305,10 @@ impl Button {
     }
 
     /// Draw caps at both ends of a filled button, such as [`CapStyle::Round`] for a pill. The
-    /// caps take the button's current fill, so hover, focus and disabled styles reach them too.
-    /// Each cap takes one cell beside the padding.
+    /// caps take the fill the button shows (its background, or its foreground when reversed),
+    /// so hover, focus and disabled styles reach them too. Each cap takes one cell beside the
+    /// padding; when space runs short, padding goes before the label, and a button too narrow
+    /// for its label beside the caps, or with no opaque fill, keeps square ends.
     pub fn cap(mut self, cap: CapStyle) -> Self {
         self.cap = cap;
         self
