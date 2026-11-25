@@ -189,33 +189,11 @@ struct TooltipProps {
 }
 
 impl PartialEq for TooltipProps {
-    fn eq(&self, other: &Self) -> bool {
-        if self.text != other.text
-            || self.animation != other.animation
-            || self.open != other.open
-            || self.auto != other.auto
-            || self.show_on_focus != other.show_on_focus
-            || self.delay != other.delay
-            || self.skip_delay != other.skip_delay
-            || self.text_style != other.text_style
-            || self.container_style != other.container_style
-            || self.border != other.border
-            || self.border_style != other.border_style
-            || self.padding != other.padding
-            || self.placement != other.placement
-            || self.offset != other.offset
-            || self.clamp != other.clamp
-            || self.auto_flip != other.auto_flip
-        {
-            return false;
-        }
-
-        let left = crate::layout::hash::element_layout_hash(&self.child);
-        let right = crate::layout::hash::element_layout_hash(&other.child);
-        match (left, right) {
-            (Some(left), Some(right)) => left == right,
-            _ => false,
-        }
+    /// Always changed: the child is a fresh element on every parent render, and nothing short of
+    /// rendering it tells a changed style or callback from an unchanged one (its layout hash only
+    /// covers geometry). Re-rendering keeps the state and the hover timer.
+    fn eq(&self, _other: &Self) -> bool {
+        false
     }
 }
 
