@@ -96,6 +96,8 @@ mod table_styles_render;
 mod tabs_caps_render;
 #[path = "suites/widget_behavior/text_edit_actions.rs"]
 mod text_edit_actions;
+#[path = "suites/widget_behavior/tooltip_child_update.rs"]
+mod tooltip_child_update;
 #[path = "suites/widget_behavior/tooltip_delay.rs"]
 mod tooltip_delay;
 #[path = "suites/widget_behavior/tooltip_trigger_gestures.rs"]
