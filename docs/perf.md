@@ -585,6 +585,7 @@ cargo bench --bench text_area_reconcile
 cargo bench --bench document_view_wrap --features markdown
 cargo bench --bench scroll_view_rich_children --features markdown
 cargo bench --bench scroll_reorder_reconcile
+cargo bench --bench list_rows
 cargo bench --bench image_backdrop --features terminal-images
 cargo bench --bench terminal_snapshot --features terminal -- terminal_resize
 cargo bench --bench terminal_ingest --features terminal -- program_status_ingest

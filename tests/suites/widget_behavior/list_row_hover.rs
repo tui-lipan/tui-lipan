@@ -77,3 +77,66 @@ fn text_rows_report_entry_and_exit() {
 fn composed_rows_report_entry_and_exit() {
     assert_eq!(hover_trail(true), TRAIL);
 }
+
+/// Keyed rows: `b` sits on line 2 at index 1, then on line 2 at index 2.
+struct Reordered;
+
+impl Component for Reordered {
+    type Message = Option<ListHoverEvent>;
+    type Properties = ();
+    type State = (bool, Vec<(usize, bool)>);
+    fn create_state(&self, _: &()) -> Self::State {
+        (false, Vec::new())
+    }
+    fn update(&mut self, event: Option<ListHoverEvent>, ctx: &mut Context<Self>) -> Update {
+        match event {
+            Some(event) => ctx.state.1.push((event.index, event.hovered)),
+            None => ctx.state.0 = true,
+        }
+        Update::full()
+    }
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        let row = |label: &'static str, height: u16| {
+            ListItem::new(label)
+                .key(label)
+                .content(Text::new(label))
+                .content_height(height)
+        };
+        let items = if ctx.state.0 {
+            vec![row("x", 1), row("y", 1), row("b", 1)]
+        } else {
+            vec![row("a", 2), row("b", 1)]
+        };
+        List::new()
+            .items(items)
+            .on_hover(ctx.link().callback(Some))
+            .into()
+    }
+}
+
+/// A hovered keyed row that moves to another index while staying under the pointer reports the
+/// move, so the index the app last heard is the row's.
+#[test]
+fn a_hovered_row_that_moves_reports_its_new_index() {
+    let mut backend = TestBackend::new(Reordered);
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 6,
+    });
+    backend.render();
+    backend
+        .send_mouse(MouseEvent {
+            x: 0,
+            y: 2,
+            kind: MouseKind::Moved,
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.render();
+    backend.dispatch(None).unwrap();
+    backend.render();
+    backend.pump().unwrap();
+    assert_eq!(backend.state().1, [(1, true), (1, false), (2, true)]);
+}

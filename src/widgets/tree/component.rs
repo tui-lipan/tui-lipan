@@ -166,7 +166,18 @@ impl Component for TreeComponent {
         let mut items = Vec::with_capacity(entries.len());
         let mut positions = Vec::with_capacity(entries.len());
         for (index, entry) in entries.iter().enumerate() {
-            items.extend((0..gap_before(index, entry)).map(|_| ListItem::spacer()));
+            let gap = gap_before(index, entry);
+            if composed && gap > 0 {
+                // One spacer of the gap's height: the scroll view's `gap` goes between each pair of
+                // rows, so a spacer per line would widen the gap.
+                items.push(
+                    ListItem::spacer()
+                        .content(crate::widgets::Text::new(""))
+                        .content_height(gap),
+                );
+            } else {
+                items.extend((0..gap).map(|_| ListItem::spacer()));
+            }
             positions.push(items.len());
             items.push(if composed {
                 rich::item(entry)
