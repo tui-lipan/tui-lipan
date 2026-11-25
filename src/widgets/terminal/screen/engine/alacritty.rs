@@ -46,7 +46,7 @@ use super::{
 
 mod ledger;
 
-use super::semantic;
+use super::semantic::{self, MouseTracking};
 
 use ledger::{CursorStyleOverrides, HostModes, LedgerTerm, ledger_capacity, settle_history};
 
@@ -196,6 +196,7 @@ pub(in super::super) struct AlacrittyEngine {
     /// Reads raw bytes ahead of `processor` for the sequences the observer interprets; see
     /// [`semantic`](super::semantic).
     semantic_parser: SemanticVteParser,
+    mouse_tracking: MouseTracking,
     default_cursor_style: TermCursorStyle,
     cursor_overrides: CursorStyleOverrides,
     /// Scrollback depth exposed to callers.
@@ -522,6 +523,7 @@ impl TerminalEngine for AlacrittyEngine {
             term,
             listener,
             semantic_parser: SemanticVteParser::new(),
+            mouse_tracking: MouseTracking::default(),
             default_cursor_style,
             cursor_overrides: CursorStyleOverrides::default(),
             scrollback_len: config.scrollback,
@@ -549,6 +551,7 @@ impl TerminalEngine for AlacrittyEngine {
         self.processor = VteProcessor::new();
         // Drop any in-flight partial OSC/CSI sequence.
         self.semantic_parser = SemanticVteParser::new();
+        self.mouse_tracking = MouseTracking::default();
         self.pixel_mouse = false;
     }
 
@@ -589,6 +592,7 @@ impl TerminalEngine for AlacrittyEngine {
                 &mut self.semantic_parser,
                 observer,
                 None,
+                &mut self.mouse_tracking,
                 &bytes[processed..],
             );
             if consumed == 0 {
@@ -735,14 +739,11 @@ impl TerminalEngine for AlacrittyEngine {
             (TermMode::SHOW_CURSOR, ModeFlags::SHOW_CURSOR),
             (TermMode::APP_CURSOR, ModeFlags::APP_CURSOR),
             (TermMode::APP_KEYPAD, ModeFlags::APP_KEYPAD),
-            (TermMode::MOUSE_REPORT_CLICK, ModeFlags::MOUSE_REPORT_CLICK),
             (TermMode::BRACKETED_PASTE, ModeFlags::BRACKETED_PASTE),
             (TermMode::SGR_MOUSE, ModeFlags::SGR_MOUSE),
-            (TermMode::MOUSE_MOTION, ModeFlags::MOUSE_MOTION),
             (TermMode::LINE_WRAP, ModeFlags::LINE_WRAP),
             (TermMode::FOCUS_IN_OUT, ModeFlags::FOCUS_IN_OUT),
             (TermMode::ALT_SCREEN, ModeFlags::ALT_SCREEN),
-            (TermMode::MOUSE_DRAG, ModeFlags::MOUSE_DRAG),
             (TermMode::UTF8_MOUSE, ModeFlags::UTF8_MOUSE),
             (
                 TermMode::DISAMBIGUATE_ESC_CODES,
@@ -765,11 +766,12 @@ impl TerminalEngine for AlacrittyEngine {
             flags.set(flag, mode.contains(term));
         }
         flags.set(ModeFlags::SGR_PIXELS_MOUSE, self.pixel_mouse);
+        flags.set(self.mouse_tracking.flags(), true);
         flags
     }
 
     fn mode_fingerprint(&self) -> u64 {
-        u64::from(self.term.mode().bits())
+        u64::from(self.term.mode().bits()) | self.mouse_tracking.fingerprint() << 48
     }
 
     fn cursor(&self) -> GridPoint {

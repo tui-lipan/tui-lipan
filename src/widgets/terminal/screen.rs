@@ -3351,9 +3351,22 @@ fn write_modes<E: TerminalEngine, W: Write>(engine: &E, writer: &mut W) -> io::R
     write_dec_mode(writer, 1, mode.contains(ModeFlags::APP_CURSOR))?;
     write_dec_mode(writer, 7, mode.contains(ModeFlags::LINE_WRAP))?;
     write_dec_mode(writer, 25, mode.contains(ModeFlags::SHOW_CURSOR))?;
-    write_dec_mode(writer, 1000, mode.contains(ModeFlags::MOUSE_REPORT_CLICK))?;
-    write_dec_mode(writer, 1002, mode.contains(ModeFlags::MOUSE_DRAG))?;
-    write_dec_mode(writer, 1003, mode.contains(ModeFlags::MOUSE_MOTION))?;
+    // Turning off any tracking mode turns tracking off in xterm and Ghostty, so every tracking mode
+    // is cleared before the enabled ones are set, or a later reset would undo an earlier set.
+    let tracking = [
+        (9, ModeFlags::MOUSE_X10),
+        (1000, ModeFlags::MOUSE_REPORT_CLICK),
+        (1002, ModeFlags::MOUSE_DRAG),
+        (1003, ModeFlags::MOUSE_MOTION),
+    ];
+    for (number, _) in tracking {
+        write_dec_mode(writer, number, false)?;
+    }
+    for (number, flag) in tracking {
+        if mode.contains(flag) {
+            write_dec_mode(writer, number, true)?;
+        }
+    }
     write_dec_mode(writer, 1004, mode.contains(ModeFlags::FOCUS_IN_OUT))?;
     write_dec_mode(writer, 1005, mode.contains(ModeFlags::UTF8_MOUSE))?;
     write_dec_mode(writer, 1006, mode.contains(ModeFlags::SGR_MOUSE))?;
@@ -3394,6 +3407,8 @@ struct SemanticAnchor {
     pointer_response: Option<Vec<u8>>,
     /// Reply to XTVERSION.
     xtversion_response: Option<Vec<u8>>,
+    /// Replies the shared parser made, such as `DECRPM` for a mouse tracking mode.
+    ordered_replies: Vec<Vec<u8>>,
     /// The command phase changed: record marks for the semantic events before this count.
     marks_until: Option<usize>,
 }
@@ -3504,6 +3519,10 @@ impl EngineObserver for FeedObserver<'_> {
         self.semantic.alternate_screen(active);
     }
 
+    fn ordered_reply(&mut self, reply: Vec<u8>) {
+        self.semantic.ordered_reply(reply);
+    }
+
     fn wants_anchor(&self) -> bool {
         self.semantic.wants_cursor() || self.semantic.wants_order()
     }
@@ -3523,6 +3542,7 @@ impl EngineObserver for FeedObserver<'_> {
             boundary: self.semantic.take_prompt_boundary(),
             pointer_response: self.semantic.pointer.response.take(),
             xtversion_response: xtversion.then(|| xtversion_response(self.identity)),
+            ordered_replies: self.semantic.take_ordered_replies(),
             marks_until,
         })
     }
@@ -3542,6 +3562,7 @@ impl EngineObserver for FeedObserver<'_> {
         }
         self.responses.extend(anchor.pointer_response);
         self.responses.extend(anchor.xtversion_response);
+        self.responses.extend(anchor.ordered_replies);
         if let (Some(until), Some(cursor)) = (anchor.marks_until, cursor) {
             self.record_semantic_marks_until(until, cursor);
         }
@@ -3970,8 +3991,12 @@ fn mouse_mode_from_modes(mode: ModeFlags) -> MouseModeState {
 
     let mouse_mode = if mode.contains(ModeFlags::MOUSE_MOTION) {
         MouseMode::AnyEvent
-    } else if mode.contains(ModeFlags::MOUSE_DRAG) || mode.contains(ModeFlags::MOUSE_REPORT_CLICK) {
+    } else if mode.contains(ModeFlags::MOUSE_DRAG) {
+        MouseMode::ButtonEvent
+    } else if mode.contains(ModeFlags::MOUSE_REPORT_CLICK) {
         MouseMode::Normal
+    } else if mode.contains(ModeFlags::MOUSE_X10) {
+        MouseMode::X10
     } else {
         MouseMode::None
     };
@@ -5824,6 +5849,71 @@ mod tests {
         assert_eq!(screen.mouse_mode().encoding, MouseEncoding::Sgr);
         let answered = String::from_utf8(screen.drain_responses().concat()).unwrap();
         assert!(answered.contains("\x1b[?1016;2$y"), "{answered:?}");
+    }
+
+    /// Each DEC tracking mode asks for a different set of events, so collapsing two of them would
+    /// send a child reports it never asked for, and a replayed screen has to come back in the same
+    /// one.
+    #[test]
+    fn each_dec_tracking_mode_maps_to_its_own_mouse_mode_and_survives_replay() {
+        let mut engines = vec![TerminalEngineKind::Alacritty];
+        #[cfg(feature = "terminal-ghostty")]
+        engines.push(TerminalEngineKind::Ghostty);
+        for engine in engines {
+            for (input, expected) in [
+                (&b"\x1b[?9h"[..], MouseMode::X10),
+                (b"\x1b[?1000h", MouseMode::Normal),
+                (b"\x1b[?1002h", MouseMode::ButtonEvent),
+                (b"\x1b[?1003h", MouseMode::AnyEvent),
+                (b"\x1b[?1003h\x1b[?1003l\x1b[?1000h", MouseMode::Normal),
+                // The last mode set wins, without a reset in between.
+                (b"\x1b[?1002h\x1b[?1000h", MouseMode::Normal),
+                (b"\x1b[?1003h\x1b[?1000h", MouseMode::Normal),
+                (b"\x1b[?1000h\x1b[?1003h", MouseMode::AnyEvent),
+                // Resetting any tracking mode turns tracking off.
+                (b"\x1b[?1000h\x1b[?1002h\x1b[?1000l", MouseMode::None),
+                (b"\x1b[?9h\x1b[?1000h\x1b[?1000l", MouseMode::None),
+                (b"\x1b[?1002h\x1bc", MouseMode::None),
+                // XTSAVE and XTRESTORE save and restore the mode in effect.
+                (
+                    b"\x1b[?1002h\x1b[?1002s\x1b[?1002l\x1b[?1002r",
+                    MouseMode::ButtonEvent,
+                ),
+                (b"\x1b[?1002s\x1b[?1003h\x1b[?1002r", MouseMode::None),
+            ] {
+                let mut source = TerminalScreen::with_engine(engine, 3, 10, 10);
+                source.process_bytes(input);
+                assert_eq!(source.mouse_mode().mode, expected, "{engine:?} {input:?}");
+
+                let mut target = TerminalScreen::with_engine(engine, 3, 10, 10);
+                target.process_bytes(&source.export_replay_bytes());
+                assert_eq!(
+                    target.mouse_mode(),
+                    source.mouse_mode(),
+                    "{engine:?} {input:?}"
+                );
+            }
+        }
+    }
+
+    /// `DECRQM` for a tracking mode is answered from the mode in effect where the query sits,
+    /// once, in order with the engine's own replies.
+    #[test]
+    fn tracking_mode_queries_answer_the_mode_in_effect_at_the_query() {
+        let mut engines = vec![TerminalEngineKind::Alacritty];
+        #[cfg(feature = "terminal-ghostty")]
+        engines.push(TerminalEngineKind::Ghostty);
+        for engine in engines {
+            let mut screen = TerminalScreen::with_engine(engine, 3, 10, 10);
+            screen.process_bytes(
+                b"\x1b[?1002h\x1b[?1002$p\x1b[?25$p\x1b[?1000h\x1b[?1002$p\x1b[?1000$p\x1b[?9$p",
+            );
+            let answered = String::from_utf8(screen.drain_responses().concat()).unwrap();
+            assert_eq!(
+                answered, "\x1b[?1002;1$y\x1b[?25;1$y\x1b[?1002;2$y\x1b[?1000;1$y\x1b[?9;2$y",
+                "{engine:?}"
+            );
+        }
     }
 
     #[test]

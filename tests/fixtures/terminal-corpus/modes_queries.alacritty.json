@@ -14,7 +14,7 @@
       "history_rows": 0,
       "key_modes": "TerminalKeyModes { app_cursor: true, bracketed_paste: true, kitty_keyboard: KittyKeyboardFlags { disambiguate_escape_codes: true, report_event_types: true, report_alternate_keys: false, report_all_keys_as_escape_codes: false, report_associated_text: false } }",
       "marks": "[]",
-      "mouse_mode": "MouseModeState { mode: Normal, encoding: Sgr, focus_events_enabled: true }",
+      "mouse_mode": "MouseModeState { mode: ButtonEvent, encoding: Sgr, focus_events_enabled: true }",
       "responses": [
         [
           27,

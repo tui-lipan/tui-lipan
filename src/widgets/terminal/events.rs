@@ -467,7 +467,9 @@ fn ctrl_char(ch: char) -> Option<u8> {
     })
 }
 
-/// Mouse reporting mode requested by PTY application.
+/// Mouse tracking mode requested by PTY application: which events it wants reported.
+///
+/// Independent of [`MouseEncoding`], which only says how a report is framed on the wire.
 #[cfg_attr(
     feature = "terminal-serde",
     derive(serde::Serialize, serde::Deserialize)
@@ -477,12 +479,28 @@ pub enum MouseMode {
     /// No mouse reporting.
     #[default]
     None,
-    /// X10 compatibility mode (1000) - button press only.
+    /// X10 compatibility tracking (`DECSET 9`): button presses only, without modifiers.
     X10,
-    /// Normal tracking (1002) - button press/release.
+    /// Normal tracking (`DECSET 1000`): presses, releases and the wheel.
     Normal,
-    /// Any-event tracking (1003) - all motion.
+    /// Button-event tracking (`DECSET 1002`): also motion while a button is held.
+    ButtonEvent,
+    /// Any-event tracking (`DECSET 1003`): also motion with no button held.
     AnyEvent,
+}
+
+impl MouseMode {
+    /// Whether a terminal in this mode reports `kind` to the application.
+    #[must_use]
+    pub fn allows(self, kind: MouseKind) -> bool {
+        match self {
+            Self::None => false,
+            Self::X10 => matches!(kind, MouseKind::Down(_)),
+            Self::Normal => !matches!(kind, MouseKind::Drag(_) | MouseKind::Moved),
+            Self::ButtonEvent => !matches!(kind, MouseKind::Moved),
+            Self::AnyEvent => true,
+        }
+    }
 }
 
 /// Mouse protocol encoding.
@@ -571,10 +589,14 @@ pub struct ForwardedMouseEvent {
 
 impl ForwardedMouseEvent {
     pub(crate) fn from_mouse(
-        event: MouseEvent,
+        mut event: MouseEvent,
         mouse_mode: MouseModeState,
         geometry: MouseReportGeometry,
     ) -> Option<Self> {
+        if mouse_mode.mode == MouseMode::X10 {
+            // X10 tracking predates modifier bits; its reports carry none.
+            event.mods = KeyMods::default();
+        }
         let cell = (
             event.x.saturating_sub(geometry.content_origin.0),
             event.y.saturating_sub(geometry.content_origin.1),

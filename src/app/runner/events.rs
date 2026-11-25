@@ -10,9 +10,9 @@ use crate::core::node::{NodeId, NodeKind};
 use crate::runtime::BubbleKeyResult;
 use crate::style::ThemeRole;
 #[cfg(feature = "terminal")]
-use crate::widgets::internal::terminal_mouse_content_rect;
+use crate::widgets::ForwardedMouseEvent;
 #[cfg(feature = "terminal")]
-use crate::widgets::{ForwardedMouseEvent, MouseMode};
+use crate::widgets::internal::terminal_mouse_content_rect;
 use std::sync::Arc;
 
 use super::AppRunner;
@@ -1247,27 +1247,7 @@ pub(crate) fn terminal_mouse_forward_plan(
         return None;
     };
     let mouse_mode = term.input_mouse_mode();
-    if mouse_mode.mode == MouseMode::None {
-        return None;
-    }
-
-    let should_forward = match mouse_mode.mode {
-        MouseMode::X10 => matches!(mouse.kind, MouseKind::Down(_)),
-        MouseMode::Normal => matches!(
-            mouse.kind,
-            MouseKind::Down(_)
-                | MouseKind::Up(_)
-                | MouseKind::Drag(_)
-                | MouseKind::ScrollUp
-                | MouseKind::ScrollDown
-        ),
-        MouseMode::AnyEvent => true,
-        MouseMode::None => false,
-    };
-    if !should_forward {
-        return None;
-    }
-    if matches!(mouse.kind, MouseKind::Moved) && mouse_mode.mode != MouseMode::AnyEvent {
+    if !mouse_mode.mode.allows(mouse.kind) {
         return None;
     }
 

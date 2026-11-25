@@ -142,6 +142,8 @@ pub(super) struct SemanticObserver {
     phase_changed: bool,
     /// Set by every `OSC 133;A`/`C`, changed phase or not, until the screen takes it.
     boundary: Option<PromptBoundary>,
+    /// Replies the shared parser made, such as `DECRPM` for a mouse tracking mode.
+    ordered_replies: Vec<Vec<u8>>,
 }
 
 impl SemanticObserver {
@@ -169,6 +171,14 @@ impl SemanticObserver {
         self.events.len()
     }
 
+    pub(super) fn ordered_reply(&mut self, reply: Vec<u8>) {
+        self.ordered_replies.push(reply);
+    }
+
+    pub(super) fn take_ordered_replies(&mut self) -> Vec<Vec<u8>> {
+        std::mem::take(&mut self.ordered_replies)
+    }
+
     pub(super) fn take_xtversion_query(&mut self) -> bool {
         std::mem::take(&mut self.xtversion_query)
     }
@@ -184,7 +194,7 @@ impl SemanticObserver {
 
     /// Whether the last sequence queued something that must keep its place among replies.
     pub(super) fn wants_order(&self) -> bool {
-        self.xtversion_query || self.pointer.response.is_some()
+        self.xtversion_query || self.pointer.response.is_some() || !self.ordered_replies.is_empty()
     }
 
     /// `OSC 7`, `OSC 9;9`, `OSC 22` or `OSC 133`, split on `;`.
