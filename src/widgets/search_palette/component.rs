@@ -12,7 +12,7 @@ use crate::core::element::{Element, IntoElement};
 use crate::core::event::KeyCode;
 use crate::style::Length;
 use crate::text::input::TextInput;
-use crate::widgets::{Divider, Input, InputEvent, List, ListEvent, ListItem, Spacer, VStack};
+use crate::widgets::{Divider, Input, InputEvent, List, ListEvent, ListItem, VStack};
 
 use super::matching::{SearchResult, all_item_results, build_search_entries, match_items};
 use super::render::{
@@ -640,10 +640,6 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                     .style(ctx.props.input_divider_style)
                     .join_frame(ctx.props.input_divider_join_frame);
                 stack = stack.child(divider);
-            } else {
-                // When the divider is disabled, keep a 1-line vertical gap so the
-                // palette layout stays consistent with the default appearance.
-                stack = stack.child(Spacer::new().height(Length::Px(1)));
             }
         }
 

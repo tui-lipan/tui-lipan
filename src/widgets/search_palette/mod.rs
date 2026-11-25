@@ -1281,7 +1281,7 @@ impl<T: Clone + PartialEq> SearchPalette<T> {
         self
     }
 
-    /// Control whether a divider is rendered below the input (uncontrolled mode).
+    /// Reserve a row for a divider below the input (uncontrolled mode).
     ///
     /// Default: `true`.
     pub fn input_divider(mut self, divider: bool) -> Self {
