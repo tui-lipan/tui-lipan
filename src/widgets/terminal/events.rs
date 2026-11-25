@@ -515,7 +515,7 @@ pub enum MouseEncoding {
     X10,
     /// SGR extended encoding (1006) - no coordinate limits.
     Sgr,
-    /// UTF-8 extended encoding (1005) - no coordinate limits.
+    /// UTF-8 extended encoding (1005) - coordinates limited to 2015.
     Utf8,
     /// SGR-pixels encoding (1016) - SGR's shape, reporting pixels instead of cells.
     ///
@@ -601,10 +601,13 @@ impl ForwardedMouseEvent {
             event.x.saturating_sub(geometry.content_origin.0),
             event.y.saturating_sub(geometry.content_origin.1),
         );
-        let pixel = geometry.sub_cell.map(|_| {
-            let (x, y) = mouse_pixel_position(cell, geometry);
-            (x.saturating_sub(1), y.saturating_sub(1))
-        });
+        let pixel = match geometry.sub_cell {
+            Some(_) => {
+                let (x, y) = mouse_pixel_position(cell, geometry);
+                Some((u16::try_from(x - 1).ok()?, u16::try_from(y - 1).ok()?))
+            }
+            None => None,
+        };
         let mut forwarded = Self {
             kind: event.kind,
             mods: event.mods,
@@ -619,13 +622,78 @@ impl ForwardedMouseEvent {
     }
 }
 
-/// One-based pixel coordinates used by SGR-pixels, including its saturation rules.
-fn mouse_pixel_position(cell: (u16, u16), geometry: MouseReportGeometry) -> (u16, u16) {
+/// Why [`encode_mouse_event`] made no report.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum MouseReportError {
+    /// The child has mouse reporting off.
+    ReportingDisabled,
+    /// The child's tracking mode does not report this kind of event, such as a drag under
+    /// [`MouseMode::Normal`].
+    NotReported,
+    /// The event is above or left of the geometry's content origin.
+    OutsideContent,
+    /// The position does not fit the child's encoding: legacy X10 stops at cell 223 and UTF-8
+    /// at cell 2015.
+    CoordinateOutOfRange,
+    /// The child wants pixel reports and the geometry has a zero cell size.
+    InvalidGeometry,
+}
+
+impl std::fmt::Display for MouseReportError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::ReportingDisabled => "the application has mouse reporting off",
+            Self::NotReported => "the application's mouse tracking mode does not report this event",
+            Self::OutsideContent => "the position is outside the terminal content",
+            Self::CoordinateOutOfRange => {
+                "the position does not fit the application's mouse encoding"
+            }
+            Self::InvalidGeometry => "pixel mouse reports need a nonzero cell size",
+        })
+    }
+}
+
+impl std::error::Error for MouseReportError {}
+
+/// Encode `event` as the child asked for in `mode`, or say why it gets no report.
+///
+/// This is the report a terminal would send: it applies the child's tracking mode (see
+/// [`MouseMode::allows`]) and its encoding, with the modifiers in `event` (none under X10
+/// tracking). Use it to send a child synthetic mouse input. `event` is in the same coordinates
+/// as `geometry.content_origin`; the caller checks the upper bounds against the terminal's size.
+///
+/// # Errors
+///
+/// [`MouseReportError`] when the child would get no report for `event`.
+pub fn encode_mouse_event(
+    event: MouseEvent,
+    mode: MouseModeState,
+    geometry: MouseReportGeometry,
+) -> Result<ForwardedMouseEvent, MouseReportError> {
+    if mode.mode == MouseMode::None {
+        return Err(MouseReportError::ReportingDisabled);
+    }
+    if !mode.mode.allows(event.kind) {
+        return Err(MouseReportError::NotReported);
+    }
+    if event.x < geometry.content_origin.0 || event.y < geometry.content_origin.1 {
+        return Err(MouseReportError::OutsideContent);
+    }
+    if mode.encoding == MouseEncoding::SgrPixels
+        && (geometry.cell.width == 0 || geometry.cell.height == 0)
+    {
+        return Err(MouseReportError::InvalidGeometry);
+    }
+    ForwardedMouseEvent::from_mouse(event, mode, geometry)
+        .ok_or(MouseReportError::CoordinateOutOfRange)
+}
+
+/// One-based pixel coordinates used by SGR-pixels, with the sub-cell offset clamped to the cell.
+fn mouse_pixel_position(cell: (u16, u16), geometry: MouseReportGeometry) -> (u32, u32) {
     let (sub_x, sub_y) = geometry.sub_cell.unwrap_or((0, 0));
     let coordinate = |cell: u16, size: u16, sub: u16| {
-        cell.saturating_mul(size)
-            .saturating_add(sub.min(size.saturating_sub(1)))
-            .saturating_add(1)
+        u32::from(cell) * u32::from(size) + u32::from(sub.min(size.saturating_sub(1))) + 1
     };
     (
         coordinate(cell.0, geometry.cell.width, sub_x),
@@ -675,8 +743,12 @@ pub fn mouse_event_to_bytes(
     let viewport_offset = geometry.content_origin;
     let (cb, is_release) = mouse_report_code(event, encoding);
 
-    let cx = event.x.saturating_sub(viewport_offset.0).saturating_add(1);
-    let cy = event.y.saturating_sub(viewport_offset.1).saturating_add(1);
+    let cell = (
+        event.x.saturating_sub(viewport_offset.0),
+        event.y.saturating_sub(viewport_offset.1),
+    );
+    let cx = u32::from(cell.0) + 1;
+    let cy = u32::from(cell.1) + 1;
 
     match encoding {
         MouseEncoding::Sgr => {
@@ -684,8 +756,7 @@ pub fn mouse_event_to_bytes(
             Some(format!("\x1b[<{};{};{}{}", cb, cx, cy, suffix).into_bytes())
         }
         MouseEncoding::SgrPixels => {
-            let (px, py) =
-                mouse_pixel_position((cx.saturating_sub(1), cy.saturating_sub(1)), geometry);
+            let (px, py) = mouse_pixel_position(cell, geometry);
             let suffix = if is_release { 'm' } else { 'M' };
             Some(format!("\x1b[<{};{};{}{}", cb, px, py, suffix).into_bytes())
         }
@@ -694,16 +765,20 @@ pub fn mouse_event_to_bytes(
                 return None;
             }
             let cb = cb.saturating_add(32);
-            let cx = cx.saturating_add(32) as u8;
-            let cy = cy.saturating_add(32) as u8;
+            let cx = (cx + 32) as u8;
+            let cy = (cy + 32) as u8;
             Some(vec![0x1b, b'[', b'M', cb, cx, cy])
         }
         MouseEncoding::Utf8 => {
+            // Each coordinate is one UTF-8 character of at most two bytes: 2047 - 32.
+            if cx > 2015 || cy > 2015 {
+                return None;
+            }
             let mut out = Vec::with_capacity(6);
             out.extend_from_slice(b"\x1b[M");
             out.push(cb.saturating_add(32));
-            push_utf8_coord(&mut out, cx.saturating_add(32))?;
-            push_utf8_coord(&mut out, cy.saturating_add(32))?;
+            push_utf8_coord(&mut out, cx + 32)?;
+            push_utf8_coord(&mut out, cy + 32)?;
             Some(out)
         }
     }
@@ -728,9 +803,9 @@ mod terminal_serde_tests {
     }
 }
 
-fn push_utf8_coord(out: &mut Vec<u8>, value: u16) -> Option<()> {
+fn push_utf8_coord(out: &mut Vec<u8>, value: u32) -> Option<()> {
     let mut buffer = [0u8; 4];
-    let ch = char::from_u32(u32::from(value))?;
+    let ch = char::from_u32(value)?;
     let encoded = ch.encode_utf8(&mut buffer);
     out.extend_from_slice(encoded.as_bytes());
     Some(())
@@ -815,6 +890,70 @@ mod selection_tests {
 mod forwarded_mouse_tests {
     use super::*;
     use crate::core::event::KeyMods;
+
+    /// The checked encoder sends what a terminal would, Shift included, which interactive
+    /// forwarding keeps for selection, and refuses what the child would never be sent.
+    #[test]
+    fn checked_encoder_reports_what_the_child_asked_for_and_refuses_the_rest() {
+        let state = |mode, encoding| MouseModeState {
+            mode,
+            encoding,
+            focus_events_enabled: false,
+        };
+        let at = |x, y, kind, mods| MouseEvent { x, y, kind, mods };
+        let left = MouseButton::Left;
+        let origin = MouseReportGeometry::at((2, 1));
+
+        let click = encode_mouse_event(
+            at(12, 6, MouseKind::Down(left), KeyMods::SHIFT),
+            state(MouseMode::Normal, MouseEncoding::Sgr),
+            origin,
+        )
+        .unwrap();
+        assert_eq!(click.bytes, b"\x1b[<4;11;6M");
+        assert_eq!(click.mods, KeyMods::SHIFT);
+
+        for (event, mode, geometry, error) in [
+            (
+                at(5, 5, MouseKind::Down(left), KeyMods::NONE),
+                state(MouseMode::None, MouseEncoding::Sgr),
+                origin,
+                MouseReportError::ReportingDisabled,
+            ),
+            (
+                at(5, 5, MouseKind::Drag(left), KeyMods::NONE),
+                state(MouseMode::Normal, MouseEncoding::Sgr),
+                origin,
+                MouseReportError::NotReported,
+            ),
+            (
+                at(1, 5, MouseKind::Down(left), KeyMods::NONE),
+                state(MouseMode::Normal, MouseEncoding::Sgr),
+                origin,
+                MouseReportError::OutsideContent,
+            ),
+            (
+                at(300, 5, MouseKind::Down(left), KeyMods::NONE),
+                state(MouseMode::Normal, MouseEncoding::X10),
+                origin,
+                MouseReportError::CoordinateOutOfRange,
+            ),
+            (
+                at(5, 5, MouseKind::Down(left), KeyMods::NONE),
+                state(MouseMode::Normal, MouseEncoding::SgrPixels),
+                MouseReportGeometry {
+                    cell: crate::widgets::TerminalCellSize {
+                        width: 0,
+                        height: 20,
+                    },
+                    ..origin
+                },
+                MouseReportError::InvalidGeometry,
+            ),
+        ] {
+            assert_eq!(encode_mouse_event(event, mode, geometry), Err(error));
+        }
+    }
 
     #[test]
     fn structured_reports_retain_semantics_and_exact_protocol_bytes() {
@@ -956,5 +1095,56 @@ mod forwarded_mouse_tests {
         .unwrap();
         assert_eq!(utf8.cell, (300, 2));
         assert_eq!(utf8.bytes, "\x1b[M ō#".as_bytes());
+
+        // UTF-8 coordinates are at most two-byte characters: one-based 2015 is the last cell.
+        let utf8_mode = MouseModeState {
+            encoding: MouseEncoding::Utf8,
+            ..mode
+        };
+        let last = encode_mouse_event(MouseEvent { x: 2014, ..event }, utf8_mode, geometry)
+            .expect("cell 2015 fits UTF-8");
+        assert_eq!(last.bytes, "\x1b[M \u{7ff}#".as_bytes());
+        assert_eq!(
+            encode_mouse_event(MouseEvent { x: 2015, ..event }, utf8_mode, geometry),
+            Err(MouseReportError::CoordinateOutOfRange)
+        );
+    }
+
+    #[test]
+    fn pixel_reports_past_u16_are_exact_or_refused() {
+        let event = MouseEvent {
+            kind: MouseKind::Down(MouseButton::Left),
+            x: 3000,
+            y: 2,
+            mods: KeyMods::default(),
+        };
+        let mode = MouseModeState {
+            mode: MouseMode::Normal,
+            encoding: MouseEncoding::SgrPixels,
+            ..MouseModeState::default()
+        };
+        let geometry = MouseReportGeometry {
+            content_origin: (0, 0),
+            sub_cell: None,
+            cell: super::super::TerminalCellSize {
+                width: 22,
+                height: 40,
+            },
+        };
+        // SGR text has no ceiling: 3000 * 22 + 1 is sent as is, not saturated to 65535.
+        let coarse = encode_mouse_event(event, mode, geometry).unwrap();
+        assert_eq!(coarse.bytes, b"\x1b[<0;66001;81M");
+        // A pixel position that does not fit the reported field is refused, never clamped.
+        assert_eq!(
+            encode_mouse_event(
+                event,
+                mode,
+                MouseReportGeometry {
+                    sub_cell: Some((0, 0)),
+                    ..geometry
+                },
+            ),
+            Err(MouseReportError::CoordinateOutOfRange)
+        );
     }
 }
