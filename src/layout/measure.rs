@@ -349,16 +349,18 @@ fn measure_uncached(
     // content and the requested size is clamped away (see Input in form_validation).
     let req_w = requested_main_axis(el, Axis::Horizontal, None);
     let req_h = requested_main_axis(el, Axis::Vertical, None);
-    let requested_max_w = requested_measure_bound(req_w, avail_w);
-    let requested_max_h = requested_measure_bound(req_h, avail_h);
 
-    // Resolve the element's own max constraints to pixels, then take the tighter of
+    // Resolve the element's own min/max constraints to pixels, then take the tighter of
     // the element's resolved max, requested size, and the parent's offered size.
+    // Minimum constraints take precedence over both `max_*` and explicit requested bounds,
+    // while still remaining capped by the parent's `max_w`/`max_h`.
     // A transparent wrapper (Group, Animated, ...) reports its child's constraints;
     // tightening by those here would let the child resolve a relative bound such as
     // `Percent(50)` a second time, against the already-halved size.
     let element_min_w = constraints.min_w.resolve_as_min(avail_w);
     let element_min_h = constraints.min_h.resolve_as_min(avail_h);
+    let requested_max_w = requested_measure_bound(req_w, avail_w).map(|req| req.max(element_min_w));
+    let requested_max_h = requested_measure_bound(req_h, avail_h).map(|req| req.max(element_min_h));
     let element_max_w = el
         .layout
         .max_w

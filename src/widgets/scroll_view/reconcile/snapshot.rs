@@ -359,6 +359,8 @@ pub(crate) fn take_visible_doc_restores(
 pub(crate) struct ScrollVisibleReconcileCtx<'a> {
     pub epoch: u32,
     pub parent_id: NodeId,
+    pub viewport_w: u16,
+    pub viewport_h: u16,
     pub old_children: Vec<NodeId>,
     pub visible_doc_restores: &'a mut HashMap<Key, OffscreenDocSelection>,
     pub focus: Option<&'a FocusContext>,
@@ -375,6 +377,8 @@ pub(crate) fn reconcile_visible_scroll_children(
     let ScrollVisibleReconcileCtx {
         epoch,
         parent_id,
+        viewport_w,
+        viewport_h,
         old_children,
         visible_doc_restores,
         focus,
@@ -383,6 +387,9 @@ pub(crate) fn reconcile_visible_scroll_children(
     let visible_children: Vec<_> = visible_indices.iter().map(|&i| &children[i]).collect();
     let plan = stack_reuse_plan(tree, &old_children, &visible_children);
 
+    let prev_constraint_avail = overlay_state
+        .constraint_avail
+        .replace((viewport_w, viewport_h));
     let mut new_children = Vec::with_capacity(visible_children.len());
     for ((child, reuse_id), child_rect) in
         visible_children.iter().zip(plan).zip(visible_rects.iter())
@@ -415,6 +422,7 @@ pub(crate) fn reconcile_visible_scroll_children(
         }
         new_children.push(child_id);
     }
+    overlay_state.constraint_avail = prev_constraint_avail;
 
     new_children
 }

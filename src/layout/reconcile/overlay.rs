@@ -219,6 +219,7 @@ pub(crate) fn reconcile_portal(
         .y
         .saturating_add((bounds.h.saturating_sub(reserved_h) / 2) as i16);
 
+    let prev_constraint_avail = overlay_state.constraint_avail.replace((bounds.w, bounds.h));
     let content_id = reconcile_element(
         &mut ReconcileCtx {
             tree,
@@ -233,6 +234,7 @@ pub(crate) fn reconcile_portal(
             rect: content_rect,
         },
     );
+    overlay_state.constraint_avail = prev_constraint_avail;
 
     let node = tree.node_mut(id);
     node.children = vec![content_id];
@@ -303,6 +305,10 @@ pub(crate) fn reconcile_overlay_entries(ctx: &mut ReconcileCtx<'_>, overlays: &[
             .map(|&(_, root)| root);
         crate::widgets::internal::prepare_visibility_reflow(tree, &entry.content, reuse);
         overlay_state.sized_root = true;
+        let overlay_bounds = overlay_state.bounds;
+        let prev_constraint_avail = overlay_state
+            .constraint_avail
+            .replace((overlay_bounds.w, overlay_bounds.h));
         let id = reconcile_element(
             &mut ReconcileCtx {
                 tree,
@@ -317,6 +323,7 @@ pub(crate) fn reconcile_overlay_entries(ctx: &mut ReconcileCtx<'_>, overlays: &[
                 rect,
             },
         );
+        overlay_state.constraint_avail = prev_constraint_avail;
         overlay_state.sized_root = false;
 
         let copy_text = if entry.pending_dismiss {

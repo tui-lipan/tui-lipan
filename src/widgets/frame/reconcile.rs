@@ -187,6 +187,9 @@ pub(crate) fn reconcile_frame(
                 Rect { x, y, w, h }
             }
         };
+        let prev_constraint_avail = overlay_state
+            .constraint_avail
+            .replace((content.w, content.h));
         let child_id = reconcile_element(
             &mut ReconcileCtx {
                 tree,
@@ -201,6 +204,7 @@ pub(crate) fn reconcile_frame(
                 rect: child_rect,
             },
         );
+        overlay_state.constraint_avail = prev_constraint_avail;
         new_children.push(child_id);
     }
 

@@ -72,6 +72,7 @@ pub(crate) fn reconcile_popover(
                 (i32::from(desired.y) + i32::from(desired.h)).clamp(0, i32::from(u16::MAX)) as u16;
         }
 
+        let prev_constraint_avail = overlay_state.constraint_avail.replace((bounds.w, bounds.h));
         let content_id = reconcile_element(
             &mut ReconcileCtx {
                 tree,
@@ -86,6 +87,7 @@ pub(crate) fn reconcile_popover(
                 rect: resolved,
             },
         );
+        overlay_state.constraint_avail = prev_constraint_avail;
         new_children.push(content_id);
         if matches!(popover.scope, OverlayScope::Local) {
             content_rect = Some(resolved);

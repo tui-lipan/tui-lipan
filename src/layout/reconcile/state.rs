@@ -160,6 +160,11 @@ pub(crate) struct OverlayState {
     /// Set while reconciling an application overlay. Its root has no parent, yet the overlay
     /// layout already sized its rectangle, percentages included.
     pub(crate) sized_root: bool,
+    /// Parent's available `(w, h)` against which the element currently being reconciled
+    /// resolves percentage `min_*`/`max_*` constraints. Containers that already sized a
+    /// child against their own bounds set this so leaf reconcilers do not apply percentage
+    /// constraints a second time against the child's already-clamped `rect`.
+    pub(crate) constraint_avail: Option<(u16, u16)>,
 }
 
 impl OverlayState {
@@ -176,6 +181,7 @@ impl OverlayState {
             order: 0,
             previous_entry_roots: Vec::new(),
             sized_root: false,
+            constraint_avail: None,
         }
     }
 
