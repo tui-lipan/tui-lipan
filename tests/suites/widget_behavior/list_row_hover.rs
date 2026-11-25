@@ -78,8 +78,11 @@ fn composed_rows_report_entry_and_exit() {
     assert_eq!(hover_trail(true), TRAIL);
 }
 
-/// Keyed rows: `b` sits on line 2 at index 1, then on line 2 at index 2.
-struct Reordered;
+/// Keyed rows that start as `a` (two lines) and `b`, with `b` on line 2 at index 1, then change to
+/// `after`.
+struct Reordered {
+    after: &'static [(&'static str, u16)],
+}
 
 impl Component for Reordered {
     type Message = Option<ListHoverEvent>;
@@ -96,29 +99,26 @@ impl Component for Reordered {
         Update::full()
     }
     fn view(&self, ctx: &Context<Self>) -> Element {
-        let row = |label: &'static str, height: u16| {
-            ListItem::new(label)
-                .key(label)
-                .content(Text::new(label))
-                .content_height(height)
-        };
-        let items = if ctx.state.0 {
-            vec![row("x", 1), row("y", 1), row("b", 1)]
+        let rows: &[(&str, u16)] = if ctx.state.0 {
+            self.after
         } else {
-            vec![row("a", 2), row("b", 1)]
+            &[("a", 2), ("b", 1)]
         };
         List::new()
-            .items(items)
+            .items(rows.iter().map(|&(label, height)| {
+                ListItem::new(label)
+                    .key(label)
+                    .content(Text::new(label))
+                    .content_height(height)
+            }))
             .on_hover(ctx.link().callback(Some))
             .into()
     }
 }
 
-/// A hovered keyed row that moves to another index while staying under the pointer reports the
-/// move, so the index the app last heard is the row's.
-#[test]
-fn a_hovered_row_that_moves_reports_its_new_index() {
-    let mut backend = TestBackend::new(Reordered);
+/// What the app hears while the pointer rests on line 2 and the rows change to `after`.
+fn reorder_trail(after: &'static [(&'static str, u16)]) -> Vec<(usize, bool)> {
+    let mut backend = TestBackend::new(Reordered { after });
     backend.set_viewport(Rect {
         x: 0,
         y: 0,
@@ -138,5 +138,25 @@ fn a_hovered_row_that_moves_reports_its_new_index() {
     backend.dispatch(None).unwrap();
     backend.render();
     backend.pump().unwrap();
-    assert_eq!(backend.state().1, [(1, true), (1, false), (2, true)]);
+    backend.state().1.clone()
+}
+
+/// A hovered keyed row that moves to another index while staying under the pointer reports the
+/// move, so the index the app last heard is the row's.
+#[test]
+fn a_hovered_row_that_moves_under_the_pointer_reports_its_new_index() {
+    assert_eq!(
+        reorder_trail(&[("x", 1), ("y", 1), ("b", 1)]),
+        [(1, true), (1, false), (2, true)]
+    );
+}
+
+/// A hovered keyed row that moves out from under the pointer, leaving it over empty space, only
+/// leaves.
+#[test]
+fn a_hovered_row_that_moves_away_only_leaves() {
+    assert_eq!(
+        reorder_trail(&[("b", 1), ("c", 1)]),
+        [(1, true), (1, false)]
+    );
 }

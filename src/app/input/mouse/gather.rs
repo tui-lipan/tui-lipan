@@ -1484,6 +1484,7 @@ mod tests {
                 hover_style: Default::default(),
                 hover_effects: Default::default(),
                 enabled: true,
+                hover_identity: 0,
             });
         }
         {
@@ -1521,6 +1522,7 @@ mod tests {
                 hover_style: Default::default(),
                 hover_effects: Default::default(),
                 enabled: true,
+                hover_identity: 0,
             });
         }
         {
@@ -1587,6 +1589,7 @@ mod tests {
                 hover_style: Default::default(),
                 hover_effects: Default::default(),
                 enabled: true,
+                hover_identity: 0,
             });
         }
         {
@@ -1653,6 +1656,7 @@ mod tests {
                 hover_style: Default::default(),
                 hover_effects: Default::default(),
                 enabled: true,
+                hover_identity: 0,
             });
         }
         {
@@ -1734,6 +1738,7 @@ mod tests {
                 hover_style: Default::default(),
                 hover_effects: Default::default(),
                 enabled: true,
+                hover_identity: 0,
             });
         }
         {
@@ -1765,6 +1770,7 @@ mod tests {
                 hover_style: Default::default(),
                 hover_effects: Default::default(),
                 enabled: true,
+                hover_identity: 0,
             });
         }
         {
@@ -1824,6 +1830,7 @@ mod tests {
                 hover_style: Default::default(),
                 hover_effects: Default::default(),
                 enabled: false, // disabled - should be skipped
+                hover_identity: 0,
             });
         }
         {

@@ -44,6 +44,7 @@ pub(crate) fn reconcile_mouse_region(
             hover_style: region.hover_style,
             hover_effects: region.hover_effects.clone(),
             enabled: region.enabled,
+            hover_identity: region.hover_identity,
         });
         std::mem::take(&mut node.children)
     };

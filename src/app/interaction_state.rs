@@ -583,6 +583,8 @@ pub(crate) struct ListRowHoverState {
 #[derive(Clone)]
 pub(crate) struct MouseRegionHoverState {
     pub id: NodeId,
+    /// The region's `hover_identity`: the same node under another identity is another region.
+    pub identity: u64,
     pub on_hover_change: Option<Callback<bool>>,
     pub affects_paint: bool,
 }

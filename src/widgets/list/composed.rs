@@ -110,15 +110,8 @@ impl ComposedList {
 
 #[derive(Default)]
 pub(crate) struct ComposedListState {
-    hovered: Option<HoveredRow>,
+    hovered: Option<usize>,
     last_click: Option<ClickState>,
-}
-
-/// The row under the pointer, by identity as well as index: a keyed row can move to another index
-/// while its widgets, and the pointer, stay on it.
-struct HoveredRow {
-    key: String,
-    index: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -136,11 +129,6 @@ impl Component for ComposedList {
 
     fn create_state(&self, _props: &Self::Properties) -> Self::State {
         ComposedListState::default()
-    }
-
-    fn on_props_changed(&mut self, _old: &Self::Properties, ctx: &mut Context<Self>) -> Update {
-        follow_hovered_row(ctx);
-        Update::none()
     }
 
     fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
@@ -175,20 +163,13 @@ impl Component for ComposedList {
     }
 }
 
+/// Hover arrives per row region. A keyed row that moves keeps its region, which then reports
+/// leaving its old index and, if still under the pointer once laid out, entering its new one: see
+/// `MouseRegion::hover_identity`.
 fn hover(ctx: &mut Context<ComposedList>, index: usize, hovered: bool) -> Update {
     if hovered {
-        if let Some(item) = ctx.props.list.items.get(index) {
-            ctx.state.hovered = Some(HoveredRow {
-                key: row_key(index, item),
-                index,
-            });
-        }
-    } else if ctx
-        .state
-        .hovered
-        .as_ref()
-        .is_some_and(|row| row.index == index)
-    {
+        ctx.state.hovered = Some(index);
+    } else if ctx.state.hovered == Some(index) {
         ctx.state.hovered = None;
     }
     if let Some(cb) = &ctx.props.list.on_hover {
@@ -198,40 +179,6 @@ fn hover(ctx: &mut Context<ComposedList>, index: usize, hovered: bool) -> Update
         Update::full()
     } else {
         Update::none()
-    }
-}
-
-/// A hovered keyed row that moved keeps its node, so the pointer never leaves it and no hover
-/// transition fires. Report the move as the old index leaving and the new one entering, as a text
-/// list does when a different row comes under the pointer. A row that is gone leaves through its
-/// region instead.
-fn follow_hovered_row(ctx: &mut Context<ComposedList>) {
-    let Some(row) = &ctx.state.hovered else {
-        return;
-    };
-    let moved_to = ctx
-        .props
-        .list
-        .items
-        .iter()
-        .enumerate()
-        .position(|(index, item)| row_key(index, item) == row.key)
-        .filter(|index| *index != row.index);
-    let (Some(index), old) = (moved_to, row.index) else {
-        return;
-    };
-    if let Some(row) = &mut ctx.state.hovered {
-        row.index = index;
-    }
-    if let Some(cb) = &ctx.props.list.on_hover {
-        cb.emit(ListHoverEvent {
-            index: old,
-            hovered: false,
-        });
-        cb.emit(ListHoverEvent {
-            index,
-            hovered: true,
-        });
     }
 }
 
@@ -509,12 +456,7 @@ fn row(ctx: &Context<ComposedList>, index: usize, item: &ListItem, selected: boo
     let props = &ctx.props;
     let list = &props.list;
     let hoverable = props.hoverable(index);
-    let hovered = hoverable
-        && ctx
-            .state
-            .hovered
-            .as_ref()
-            .is_some_and(|row| row.index == index);
+    let hovered = hoverable && ctx.state.hovered == Some(index);
     let style = row_style(ctx, item, hovered, selected);
     let content = match &props.render {
         Some(render) => (render.0)(RowView {
@@ -543,7 +485,8 @@ fn row(ctx: &Context<ComposedList>, index: usize, item: &ListItem, selected: boo
         .on_hover_change(
             ctx.link()
                 .callback(move |hovered| ComposedListMsg::Hover(index, hovered)),
-        );
+        )
+        .hover_identity(index as u64);
     if props.on_pointer_move.is_some() {
         region = region.on_mouse_move(
             ctx.link()

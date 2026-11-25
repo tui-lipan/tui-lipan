@@ -61,6 +61,7 @@ pub(crate) fn mouse_region_hover_state(
             };
             Some(MouseRegionHoverState {
                 id,
+                identity: region.hover_identity,
                 on_hover_change: region.on_hover_change.clone(),
                 affects_paint: node.hover_affects_paint(),
             })
@@ -68,8 +69,10 @@ pub(crate) fn mouse_region_hover_state(
         .collect()
 }
 
-fn contains_region(regions: &[MouseRegionHoverState], id: NodeId) -> bool {
-    regions.iter().any(|region| region.id == id)
+fn contains_region(regions: &[MouseRegionHoverState], target: &MouseRegionHoverState) -> bool {
+    regions
+        .iter()
+        .any(|region| region.id == target.id && region.identity == target.identity)
 }
 
 pub(crate) fn mouse_region_hover_chains_differ(
@@ -78,15 +81,15 @@ pub(crate) fn mouse_region_hover_chains_differ(
 ) -> bool {
     previous
         .iter()
-        .any(|region| !contains_region(current, region.id))
+        .any(|region| !contains_region(current, region))
         || current
             .iter()
-            .any(|region| !contains_region(previous, region.id))
+            .any(|region| !contains_region(previous, region))
 }
 
 fn emit_mouse_region_leaves(previous: &[MouseRegionHoverState], current: &[MouseRegionHoverState]) {
     for region in previous {
-        if !contains_region(current, region.id)
+        if !contains_region(current, region)
             && let Some(callback) = &region.on_hover_change
         {
             callback.emit(false);
@@ -99,7 +102,7 @@ fn emit_mouse_region_entries(
     current: &[MouseRegionHoverState],
 ) {
     for region in current.iter().rev() {
-        if !contains_region(previous, region.id)
+        if !contains_region(previous, region)
             && let Some(callback) = &region.on_hover_change
         {
             callback.emit(true);

@@ -35,6 +35,8 @@ pub struct MouseRegionNode {
     pub hover_style: StyleSlot,
     pub hover_effects: Vec<VisualEffect>,
     pub enabled: bool,
+    /// What the region stands for; see [`MouseRegion::hover_identity`](super::MouseRegion).
+    pub hover_identity: u64,
 }
 
 impl MouseRegionNode {
@@ -190,6 +192,7 @@ impl From<MouseRegion> for MouseRegionNode {
             hover_style: value.hover_style,
             hover_effects: value.hover_effects,
             enabled: value.enabled,
+            hover_identity: value.hover_identity,
         }
     }
 }
