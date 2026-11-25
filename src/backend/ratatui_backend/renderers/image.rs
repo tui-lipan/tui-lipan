@@ -950,6 +950,7 @@ impl CompressedKitty {
             Some(frame) => (
                 kitty_transmit_shared_memory_at_z(
                     frame.name(),
+                    frame.medium(),
                     width,
                     height,
                     format,
@@ -1727,33 +1728,35 @@ pub(crate) struct PreparedKittyDraw<'a> {
 
 #[cfg(feature = "terminal-images")]
 fn shared_frame(pixels: &[u8]) -> Option<SharedFrame> {
-    if !shared_frame::host_reads_shared_memory() {
-        return None;
-    }
-    // A name only means something to a terminal reading this machine's own shared memory. Under
-    // tmux the reader is tmux, which passes the sequence through to a terminal that may be anywhere.
+    let medium = shared_frame::host_medium()?;
+    // A name only means something to a terminal reading this machine's own shared memory or
+    // files. Under tmux the reader is tmux, which passes the sequence through to a terminal that
+    // may be anywhere.
     if std::env::var_os("TMUX").is_some() {
         return None;
     }
-    SharedFrame::write(pixels)
+    SharedFrame::write_in(medium, pixels)
 }
 
-/// A `t=s` transmission: the pixels are in `name`, and this only says where.
+/// A `t=s` or `t=t` transmission: the pixels are in `name`, and this only says where.
 #[cfg(all(feature = "terminal-images", test))]
 pub(crate) fn kitty_transmit_shared_memory(
     name: &str,
+    medium: shared_frame::Medium,
     width: u32,
     height: u32,
     format: u8,
     id: u32,
     cells: ratatui::layout::Size,
 ) -> String {
-    kitty_transmit_shared_memory_at_z(name, width, height, format, id, cells, 0)
+    kitty_transmit_shared_memory_at_z(name, medium, width, height, format, id, cells, 0)
 }
 
 #[cfg(feature = "terminal-images")]
+#[allow(clippy::too_many_arguments)]
 fn kitty_transmit_shared_memory_at_z(
     name: &str,
+    medium: shared_frame::Medium,
     width: u32,
     height: u32,
     format: u8,
@@ -1768,7 +1771,8 @@ fn kitty_transmit_shared_memory_at_z(
         String::new()
     };
     let mut data = format!(
-        "\x1b_Gq=2,i={id},a=T,U=1,f={format},t=s,s={width},v={height},c={columns},r={rows}{z_index};"
+        "\x1b_Gq=2,i={id},a=T,U=1,f={format},t={},s={width},v={height},c={columns},r={rows}{z_index};",
+        medium.key()
     );
     BASE64.encode_string(name, &mut data);
     data.push_str("\x1b\\");
@@ -3167,7 +3171,7 @@ pub(crate) fn draw_file_terminal_image(
 ) -> bool {
     if capturing_images()
         || image_support::image_rendering_suspended()
-        || !shared_frame::host_reads_shared_memory()
+        || !shared_frame::host_reads_named_frames()
         || placement.source_crop.is_some()
     {
         return false;
@@ -5561,6 +5565,7 @@ mod tests {
         .unwrap();
         *encoded.upload.transmit.lock().unwrap() = Some(kitty_transmit_shared_memory(
             shared.name(),
+            shared.medium(),
             1,
             1,
             32,

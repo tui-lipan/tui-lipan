@@ -146,10 +146,11 @@ impl PixelPointerStatus {
     }
 }
 
-/// Whether frames reach the host terminal through shared memory rather than through the PTY.
+/// Whether frames reach the host terminal by name - shared memory (`t=s`) or a temporary file
+/// (`t=t`) - rather than through the PTY.
 ///
-/// The difference is not a detail. A `t=s` transmission is a few hundred bytes naming an object the
-/// host maps; the fallback deflates and base64s every pixel of every frame and writes the result
+/// The difference is not a detail. A named transmission is a few hundred bytes naming an object the
+/// host reads; the fallback deflates and base64s every pixel of every frame and writes the result
 /// down the PTY, which for a full-window animation is tens of megabytes a second and shows up as
 /// both CPU and visible stutter. Which one is in use is decided once, by whether the host answered
 /// the startup probe, and is otherwise invisible - hence this.
@@ -157,7 +158,7 @@ impl PixelPointerStatus {
 /// Always false under `TMUX`, where the reader is tmux rather than a terminal on this machine.
 #[cfg(all(feature = "terminal-images", not(target_arch = "wasm32")))]
 pub fn host_reads_shared_frames() -> bool {
-    crate::backend::ratatui_backend::shared_frame::host_reads_shared_memory()
+    crate::backend::ratatui_backend::shared_frame::host_reads_named_frames()
         && std::env::var_os("TMUX").is_none()
 }
 

@@ -243,6 +243,59 @@ pub fn host_speaks_drag_and_drop() -> bool {
 #[cfg(unix)]
 static HOST_DRAG_AND_DROP: AtomicBool = AtomicBool::new(false);
 
+/// The image ids whose graphics query the last startup probe saw answered `OK`.
+#[cfg(unix)]
+static HOST_GRAPHICS_OK: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
+
+/// Whether the last startup probe saw the graphics query with image id `id` answered `OK`.
+///
+/// [`HostCapabilities::graphics_query_ok`] says only that *some* query was; a probe that asks
+/// about two transmission media at once needs to know which.
+#[cfg(unix)]
+pub(crate) fn host_answered_graphics_query(id: u32) -> bool {
+    HOST_GRAPHICS_OK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .contains(&id)
+}
+
+/// No startup probe runs outside Unix, so no query was answered.
+#[cfg(not(unix))]
+pub(crate) fn host_answered_graphics_query(_id: u32) -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn record_graphics_ok(ids: Vec<u32>) {
+    *HOST_GRAPHICS_OK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = ids;
+}
+
+/// The image id of every graphics reply in `response` that says `OK`.
+#[cfg(unix)]
+fn graphics_ok_ids(response: &[u8]) -> Vec<u32> {
+    let mut ids = Vec::new();
+    let mut rest = response;
+    while let Some(start) = rest.windows(3).position(|w| w == b"\x1b_G") {
+        let reply = &rest[start..];
+        let Some(end) = find_string_terminator(reply) else {
+            break;
+        };
+        let body = &reply[3..end];
+        if let Some(control) = body.strip_suffix(b";OK")
+            && let Some(id) = control
+                .split(|b| *b == b',')
+                .find_map(|field| field.strip_prefix(b"i="))
+                .and_then(|id| std::str::from_utf8(id).ok()?.parse().ok())
+        {
+            ids.push(id);
+        }
+        rest = &reply[end..];
+    }
+    ids
+}
+
 /// Whether `response` holds the host's answer to the drag-and-drop query ahead of its primary
 /// device attributes. The protocol reads an answer that comes after them as no answer at all.
 #[cfg(unix)]
@@ -352,6 +405,7 @@ pub(crate) fn query_host_capabilities_with(
     ask_utf8: bool,
 ) -> Option<(HostCapabilities, Option<TerminalCursorStyle>)> {
     record_utf8(None);
+    record_graphics_ok(Vec::new());
     // Cleared before the first thing that can fail. Opening the TTY and raw mode can both return
     // early, and a guard may be entering a different terminal than the one an earlier probe
     // measured. Without this, a probe that never establishes that the current host answers at all
@@ -416,6 +470,9 @@ pub(crate) fn query_host_capabilities_with(
     }
 
     super::startup_input::keep(&super::startup_input::split(&buffer).input);
+    if answered.is_some() {
+        record_graphics_ok(graphics_ok_ids(&buffer));
+    }
     HOST_DRAG_AND_DROP.store(
         answered.is_some() && answers_drag_and_drop_query(&buffer),
         Ordering::Relaxed,
@@ -1787,6 +1844,17 @@ mod tests {
                 graphics_query_ok: true,
             }),
             "three answers and a terminator in one round trip"
+        );
+    }
+
+    /// Two media are asked about in one batch, so each reply has to be told apart by its id.
+    #[test]
+    fn graphics_replies_are_told_apart_by_image_id() {
+        assert_eq!(
+            super::graphics_ok_ids(
+                b"\x1b_Gi=4294967295;EINVAL: invalid data\x1b\\\x1b_Gi=4294967294;OK\x1b\\\x1b[?62;22c"
+            ),
+            vec![4294967294]
         );
     }
 
