@@ -490,6 +490,16 @@ pub(crate) fn render(f: &mut ratatui::Frame<'_>, ctx: &RenderContext<'_>) {
             ox.saturating_sub(i32::from(state.content.x)),
             oy.saturating_sub(i32::from(state.content.y)),
         );
+        // Clear the preview's screen rectangle before painting its subtree so underlying
+        // glyphs, modifiers, and box-drawing seams (e.g. markdown tables) cannot bleed through
+        // or trigger border-merge title preservation on the floating preview.
+        let mut preview_screen_rect = offset.apply_to_rect(tree.node(preview_node).rect);
+        preview_screen_rect.x = preview_screen_rect.x.saturating_add(state.content.x as i16);
+        preview_screen_rect.y = preview_screen_rect.y.saturating_add(state.content.y as i16);
+        let clear_rect = clip_overlay_clear_rect(content_rect, preview_screen_rect);
+        if clear_rect.width > 0 && clear_rect.height > 0 {
+            state.f.render_widget(Clear, clear_rect);
+        }
         render_subtree(&mut state, preview_node, Some(content_rect), offset);
     }
 

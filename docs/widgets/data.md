@@ -225,7 +225,8 @@ List::new()
 ```
 
 A list with any content row renders every row this way; rows without content show their label.
-Set `content_height(n)` for content taller than one line, and `key(id)` so a row keeps its
+Set `content_height(n)` for content taller than one line (or `0` to collapse a row out of layout
+while keeping an active `DragSource` mounted), and `key(id)` so a row keeps its
 widgets' state when rows reorder. Row symbols, gutters, padding, and `hover_style` belong to text
 rows; composed rows bring their own decoration. Row, selection, active, and item hover styles
 apply to the whole row.

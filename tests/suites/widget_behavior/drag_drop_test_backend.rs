@@ -1020,3 +1020,119 @@ fn preview_anchor_locks_vertical_rail_then_switches_to_cursor_chip_with_visible_
     send(&mut backend, MouseKind::Up(MouseButton::Left), 24, 4);
     assert_eq!(backend.state().dropped_on, Some("main"));
 }
+
+struct PreviewOverTableApp;
+
+impl Component for PreviewOverTableApp {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        let preview = Frame::new()
+            .border(true)
+            .border_style(BorderStyle::Rounded)
+            .padding((0, 1))
+            .style(
+                Style::new()
+                    .fg(Color::White)
+                    .bg(Color::Rgb(0x11, 0x11, 0x11)),
+            )
+            .width(Length::Auto)
+            .height(Length::Px(3))
+            .child(
+                Text::new("Print Markdown Test Text")
+                    .style(
+                        Style::new()
+                            .fg(Color::White)
+                            .bg(Color::Rgb(0x11, 0x11, 0x11)),
+                    )
+                    .width(Length::Auto)
+                    .height(Length::Px(1)),
+            );
+
+        let source = DragSource::new()
+            .child(
+                Text::new("drag-me")
+                    .width(Length::Px(10))
+                    .height(Length::Px(1)),
+            )
+            .drag_group("g")
+            .threshold(1)
+            .preview_element(preview)
+            .preview_anchor(DragPreviewAnchor::CursorOffset(1, 0))
+            .on_drag_start(|_| Some(Box::new(ItemPayload { id: 1 }) as Box<dyn DragPayload>));
+
+        let table = Table::new()
+            .border(true)
+            .border_style(BorderStyle::Rounded)
+            .header(["Widget", "Module", "Default size"])
+            .rows([
+                vec!["Button", "src/widgets/", "content"],
+                vec!["ScrollView", "src/widgets/", "Flex(1)"],
+                vec!["Text", "src/widgets/", "Auto"],
+            ]);
+
+        HStack::new()
+            .gap(0)
+            .child(VStack::new().width(Length::Px(12)).child(source))
+            .child(table)
+            .into()
+    }
+}
+
+#[test]
+fn preview_element_clears_underlying_table_cells_without_bleed_through() {
+    let mut backend = TestBackend::new(PreviewOverTableApp);
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 60,
+        h: 10,
+    });
+    backend.render();
+
+    let send = |backend: &mut TestBackend<PreviewOverTableApp>, kind: MouseKind, x: u16, y: u16| {
+        backend
+            .send_mouse(MouseEvent {
+                kind,
+                x,
+                y,
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+        backend.render();
+    };
+
+    // Drag over the table header + first data row so the 3-row bordered preview covers them.
+    send(&mut backend, MouseKind::Down(MouseButton::Left), 2, 0);
+    send(&mut backend, MouseKind::Drag(MouseButton::Left), 13, 1);
+
+    let frame = backend.capture_frame().plain_text();
+    let lines: Vec<&str> = frame.lines().collect();
+    // Preview starts at x=14 (CursorOffset(1, 0) from x=13), y=1, height=3 -> rows 1..=3.
+    let preview_top = lines[1];
+    let preview_mid = lines[2];
+    let preview_bot = lines[3];
+
+    assert!(
+        preview_mid.contains("Print Markdown Test Text"),
+        "expected floating preview label on row 2:\n{frame}"
+    );
+    for (label, row) in [
+        ("top border row", preview_top),
+        ("middle content row", preview_mid),
+        ("bottom border row", preview_bot),
+    ] {
+        assert!(
+            !row.contains("Widget") && !row.contains("Module") && !row.contains("Button"),
+            "underlying table text bled through {label}:\n{frame}"
+        );
+    }
+}
