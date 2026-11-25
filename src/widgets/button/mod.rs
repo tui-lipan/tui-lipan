@@ -14,7 +14,10 @@ use crate::callback::{Callback, KeyHandler};
 use crate::core::element::{Element, ElementKind};
 use crate::core::event::MouseEvent;
 use crate::input::KeyBindings;
-use crate::style::{Align, BorderStyle, LayoutConstraints, Length, Padding, Style, StyleSlot};
+use crate::style::{
+    Align, BorderStyle, Color, LayoutConstraints, Length, Padding, Style, StyleSlot,
+};
+use crate::widgets::CapStyle;
 
 /// Visual variant for a [`Button`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -72,6 +75,12 @@ pub struct Button {
     /// Padding inside the button.
     /// Default: `Padding { left: 1, right: 1, top: 0, bottom: 0 }`.
     pub padding: Padding,
+    /// Caps drawn at both ends of a `ButtonVariant::Filled` button, in its current fill.
+    /// Default: `CapStyle::Padded` (no caps).
+    pub cap: CapStyle,
+    /// Color painted behind the caps, usually the surface the button sits on.
+    /// Default: `Color::Reset`.
+    pub cap_behind: Color,
     /// Whether the button is disabled.
     pub disabled: bool,
     /// Style applied when disabled.
@@ -121,6 +130,8 @@ impl Button {
                 top: 0,
                 bottom: 0,
             },
+            cap: CapStyle::Padded,
+            cap_behind: Color::Reset,
             disabled: false,
             disabled_style: Style::default(),
             on_click: None,
@@ -293,6 +304,20 @@ impl Button {
         self
     }
 
+    /// Draw caps at both ends of a filled button, such as [`CapStyle::Round`] for a pill. The
+    /// caps take the button's current fill, so hover, focus and disabled styles reach them too.
+    /// Each cap takes one cell beside the padding.
+    pub fn cap(mut self, cap: CapStyle) -> Self {
+        self.cap = cap;
+        self
+    }
+
+    /// Set the color painted behind the caps, usually the surface the button sits on.
+    pub fn cap_behind(mut self, color: Color) -> Self {
+        self.cap_behind = color;
+        self
+    }
+
     /// Set disabled state.
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
@@ -379,6 +404,7 @@ impl crate::layout::hash::LayoutHash for Button {
         self.icon_gap.hash(hasher);
         self.shortcut.hash(hasher);
         self.shortcut_gap.hash(hasher);
+        self.cap.hash(hasher);
         Some(())
     }
 }
