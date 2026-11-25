@@ -192,10 +192,21 @@ mod imp {
         /// The same object as a filesystem path, which is what `link` needs.
         source_path: CString,
         medium: Medium,
-        map: *mut libc::c_void,
+        backing: Backing,
         len: usize,
         /// The link most recently handed to the host, and when. `None` means nothing is outstanding.
         handed: Option<(CString, Instant)>,
+    }
+
+    /// How a slot's pixels are written.
+    enum Backing {
+        /// Shared memory, written through a mapping: a copy into pages that are already resident.
+        Mapped(*mut libc::c_void),
+        /// A temporary file, written with `pwrite`. Never mapped: a store into a mapped file page
+        /// that the filesystem cannot back - a full disk, or any overwrite on a copy-on-write
+        /// filesystem such as APFS - raises `SIGBUS` and takes the process down, where a write
+        /// just fails and the frame falls back to inline.
+        File(std::fs::File),
     }
 
     // SAFETY: the mapping is `MAP_SHARED` memory owned by this slot alone; the pool hands a slot to
@@ -203,6 +214,29 @@ mod imp {
     unsafe impl Send for Slot {}
 
     impl Slot {
+        /// Put `pixels`, exactly `len` bytes, into the slot.
+        fn write(&self, pixels: &[u8]) -> std::io::Result<()> {
+            debug_assert_eq!(self.len, pixels.len());
+            match &self.backing {
+                Backing::Mapped(map) => {
+                    // SAFETY: the mapping is exactly `self.len` bytes, which is the length the
+                    // slot was claimed for, and no other thread holds this slot.
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(
+                            pixels.as_ptr(),
+                            *map as *mut u8,
+                            pixels.len().min(self.len),
+                        )
+                    };
+                    Ok(())
+                }
+                Backing::File(file) => {
+                    use std::os::unix::fs::FileExt as _;
+                    file.write_all_at(pixels, 0)
+                }
+            }
+        }
+
         /// Whether the host is demonstrably finished with what this slot last handed over.
         fn reusable(&self) -> bool {
             let Some((link, at)) = &self.handed else {
@@ -214,8 +248,8 @@ mod imp {
         }
 
         fn destroy(self) {
-            unsafe {
-                libc::munmap(self.map, self.len);
+            if let Backing::Mapped(map) = self.backing {
+                unsafe { libc::munmap(map, self.len) };
             }
             remove(self.medium, &self.source);
             if let Some((link, _)) = &self.handed {
@@ -324,6 +358,17 @@ mod imp {
         // `File` owns it and closes it on every path out of here. The mapping outlives the
         // descriptor, which is what `mmap` guarantees.
         let file = unsafe { std::fs::File::from_raw_fd(descriptor) };
+        if medium == Medium::TempFile {
+            // Sized by its first write, which can fail rather than fault. See `Backing::File`.
+            return Some(Slot {
+                source,
+                source_path,
+                medium,
+                backing: Backing::File(file),
+                len,
+                handed: None,
+            });
+        }
         let Some(length) = libc::off_t::try_from(len).ok() else {
             remove(medium, &source);
             return None;
@@ -354,7 +399,7 @@ mod imp {
             source,
             source_path,
             medium,
-            map,
+            backing: Backing::Mapped(map),
             len,
             handed: None,
         })
@@ -487,12 +532,12 @@ mod imp {
                 release(slot);
                 return None;
             };
-            debug_assert_eq!(slot.len, pixels.len());
-            // SAFETY: the mapping is exactly `slot.len` bytes, which is the length the slot was
-            // claimed for, and no other thread holds this slot.
-            unsafe {
-                std::ptr::copy_nonoverlapping(pixels.as_ptr(), slot.map as *mut u8, pixels.len())
-            };
+            if slot.write(pixels).is_err() {
+                // Out of space, most likely. Allocating will fail the same way and send the frame
+                // inline, which is the right outcome.
+                discard(slot);
+                return None;
+            }
             if unsafe { libc::link(slot.source_path.as_ptr(), link.as_ptr()) } < 0 {
                 // Hard links inside the namespace are what the whole scheme rests on, so a failure
                 // here means this platform cannot pool at all rather than that this frame is
@@ -675,9 +720,7 @@ mod imp {
                 unsafe { libc::link(slot.source_path.as_ptr(), link.as_ptr()) },
                 0
             );
-            unsafe {
-                std::ptr::copy_nonoverlapping(pixels.as_ptr(), slot.map as *mut u8, pixels.len())
-            };
+            slot.write(pixels).unwrap();
             slot.handed = Some((link, Instant::now()));
             {
                 let mut pool = pool();
