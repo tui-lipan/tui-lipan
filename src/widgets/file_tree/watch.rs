@@ -587,23 +587,49 @@ mod backend {
         }
 
         /// Wait until the batch satisfies `done`, merging batches as they are taken.
+        /// Wait until the changes reported since the last call satisfy `done`, and return them.
+        ///
+        /// Flushes are merged rather than judged one by one: the events of one change can land
+        /// on either side of a flush, and judging each part alone would never see them together.
+        /// The deadline only matters on failure, so it leaves room for a loaded CI runner.
         fn wait_for_batch(
             pending: &SharedPending,
             rx: &std::sync::mpsc::Receiver<()>,
             mut done: impl FnMut(&super::super::ChangeBatch) -> bool,
-        ) {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        ) -> super::super::ChangeBatch {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            let mut seen = super::super::ChangeBatch::default();
             loop {
                 rx.recv_timeout(std::time::Duration::from_millis(100)).ok();
-                let batch = pending.lock().unwrap().take();
-                if done(&batch) {
-                    return;
+                absorb(&mut seen, pending.lock().unwrap().take());
+                if done(&seen) {
+                    return seen;
                 }
                 assert!(
                     std::time::Instant::now() < deadline,
-                    "the watcher never reported the change"
+                    "the watcher never reported the change; it reported {seen:?}"
                 );
             }
+        }
+
+        fn absorb(seen: &mut super::super::ChangeBatch, batch: super::super::ChangeBatch) {
+            for (dir, mask) in batch.dirs {
+                seen.dirs
+                    .entry(dir)
+                    .and_modify(|seen| seen.merge(mask))
+                    .or_insert(mask);
+            }
+            seen.rescan |= batch.rescan;
+            seen.git |= batch.git;
+            seen.repository_changed |= batch.repository_changed;
+            seen.ignore_rules_changed |= batch.ignore_rules_changed;
+        }
+
+        /// Let the events of earlier changes arrive and drop them, so they cannot satisfy or spoil
+        /// the next check.
+        fn settle(pending: &SharedPending) {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            pending.lock().unwrap().take();
         }
 
         #[test]
@@ -691,8 +717,7 @@ mod backend {
                 !batch.ignore_rules_changed && batch.dirs.contains_key(&dir_key)
             });
 
-            std::thread::sleep(std::time::Duration::from_millis(200));
-            pending.lock().unwrap().take();
+            settle(&pending);
             std::fs::write(dir.join(".ignore"), "*.log\n").unwrap();
             wait_for_batch(&pending, &rx, |batch| batch.ignore_rules_changed);
 
@@ -759,25 +784,26 @@ mod backend {
                 complete: true,
             }));
 
+            // Editing a tracked file in a collapsed directory only invalidates Git status.
             std::fs::write(collapsed.join("main.rs"), "fn main() {}\n").unwrap();
-            wait_for_batch(&pending, &rx, |batch| {
-                batch.git
-                    && !batch.repository_changed
-                    && !batch.ignore_rules_changed
-                    && batch.dirs.is_empty()
-            });
+            let edit = wait_for_batch(&pending, &rx, |batch| batch.git);
+            settle(&pending);
+            assert!(
+                !edit.repository_changed && !edit.ignore_rules_changed && edit.dirs.is_empty(),
+                "a content edit changed more than Git status: {edit:?}"
+            );
 
             std::fs::write(metadata.join("index"), "").unwrap();
             wait_for_batch(&pending, &rx, |batch| batch.git && batch.repository_changed);
+            settle(&pending);
 
             // A new directory may need covering itself, such as an untracked one.
             std::fs::create_dir_all(dir.join("scratch")).unwrap();
             wait_for_batch(&pending, &rx, |batch| batch.git && batch.repository_changed);
+            settle(&pending);
 
             // Editing ignore rules in place is only a content change, yet it decides what is
-            // untracked. Let earlier events settle so they cannot satisfy this check.
-            std::thread::sleep(std::time::Duration::from_millis(200));
-            pending.lock().unwrap().take();
+            // untracked.
             std::fs::write(dir.join(".gitignore"), "").unwrap();
             wait_for_batch(&pending, &rx, |batch| {
                 batch.git && batch.repository_changed && batch.ignore_rules_changed
