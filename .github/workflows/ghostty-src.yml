@@ -26,6 +26,7 @@ jobs:
   vendored-source:
     name: Vendored source
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Check out repository
@@ -63,9 +64,11 @@ jobs:
           REQUIRE_MINISIGN: "1"
         run: ./scripts/package-ghostty-src.sh --no-smoke --check-crate "${{ steps.src.outputs.version }}"
 
+      # setup-zig can hang after installing Zig; fail fast instead of at the 6-hour default.
       - name: Install Zig 0.17.1
         if: steps.src.outputs.published != 'true'
         uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        timeout-minutes: 10
         with:
           version: 0.17.1
           use-cache: false

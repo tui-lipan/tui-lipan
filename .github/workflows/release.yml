@@ -12,6 +12,8 @@ jobs:
   release-notes:
     name: Generate release notes
     runs-on: ubuntu-latest
+    # Up to four writer attempts over the whole tagged range; generous so a long range still fits.
+    timeout-minutes: 60
     environment:
       name: release
     permissions:
@@ -100,6 +102,7 @@ jobs:
   verify:
     name: Verify release
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Check out repository
@@ -111,8 +114,11 @@ jobs:
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
 
+      # setup-zig can hang after installing Zig (#505 waited 44 min). A cold MSVC build takes
+      # about 10 min, so this fails a stuck step long before the 6-hour default.
       - name: Restore or prepare libghostty-vt
         uses: ./.github/actions/libghostty-vt
+        timeout-minutes: 25
 
       - name: Check tag matches crate versions
         shell: bash
@@ -137,6 +143,8 @@ jobs:
   publish:
     name: Publish to crates.io
     runs-on: ubuntu-latest
+    # Two publishes plus a crates.io index wait of up to 30 polls.
+    timeout-minutes: 45
     needs: [verify, release-notes]
     environment: release
     permissions:
@@ -207,6 +215,7 @@ jobs:
   github-release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: publish
     permissions:
       # Required to create the release.
