@@ -661,7 +661,7 @@ emits SGR only, keeps every row at the frame's width, and does not draw the curs
 A wide glyph sits in its first cell and the column it covers holds an empty symbol, so a row's
 symbols join to text at its true display width. A row that wrapped a wide glyph early keeps the
 blank column it left. Hidden text captures as spaces. `cursor` is set while the cursor lies in
-the viewport, and is visible only when the program shows it and the view is not scrolled back.
+the viewport, and is visible when the program shows it.
 Its `shape` and `blinking` follow the program's `DECSCUSR` request (`CSI Ps SP q`), and until it
 makes one they are the screen's configured default. Live screens inherit the host cursor style;
 standalone headless screens default to a blinking block. Its `color` is the one the program set
