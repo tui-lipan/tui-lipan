@@ -185,8 +185,8 @@ pub(crate) fn render_button(
             f.render_widget(p, effective_label);
         }
         ButtonVariant::Filled => {
-            let content = content_width(label, icon, shortcut, icon_gap, shortcut_gap);
             let (rect, padding) = if cap.chars().is_some() {
+                let content = content_width(label, icon, shortcut, icon_gap, shortcut_gap);
                 let rect = draw_caps(f, rect, rrect, cap, cap_behind, s, content);
                 (rect, fit_padding(padding, rect.w, content))
             } else {
