@@ -110,6 +110,16 @@ fn compatible_response(reply: &[u8]) -> Option<&[u8]> {
     if reply.starts_with(b"\x1b[48;") {
         return None;
     }
+    // The shared parser answers DECRQM for mouse tracking, which it owns; see `MouseTracking`.
+    if let Some(mode) = reply
+        .strip_prefix(b"\x1b[?")
+        .and_then(|rest| rest.split(|&byte| byte == b';').next())
+        .and_then(|mode| std::str::from_utf8(mode).ok()?.parse().ok())
+        && reply.ends_with(b"$y")
+        && semantic::is_mouse_tracking_mode(mode)
+    {
+        return None;
+    }
     // The shared screen answers XTVERSION and owns the optional OSC 72 protocol.
     (!reply.starts_with(b"\x1bP>|") && !reply.starts_with(b"\x1b]72;")).then_some(reply)
 }

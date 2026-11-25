@@ -368,6 +368,8 @@ pub(super) trait EngineObserver {
     fn pointer_reset(&mut self);
     /// `DECSET`/`DECRST` 47, 1047 or 1049.
     fn alternate_screen(&mut self, active: bool);
+    /// A reply the shared parser makes, to go out after the bytes before its request.
+    fn ordered_reply(&mut self, reply: Vec<u8>);
     /// Whether the notifications so far need an anchor before parsing continues.
     fn wants_anchor(&self) -> bool;
     /// Take the anchor [`Self::wants_anchor`] asked for.

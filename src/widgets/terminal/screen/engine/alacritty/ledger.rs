@@ -26,6 +26,7 @@
 //! Alacritty's scrolling semantics are reimplemented here - the count comes
 //! from the grid itself, not from a model of when it scrolls.
 
+use super::super::semantic::is_mouse_tracking_mode;
 use super::super::{GridStep, PRIMARY_DEVICE_ATTRIBUTES, SGR_PIXELS_MOUSE};
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions;
@@ -430,6 +431,10 @@ impl<T: EventListener> Handler for LedgerTerm<'_, T> {
                     .as_bytes()
                     .to_vec(),
             );
+            return;
+        }
+        // The shared parser answers for mouse tracking, which it owns; see `MouseTracking`.
+        if is_mouse_tracking_mode(mode.raw()) {
             return;
         }
         self.inner.report_private_mode(mode);
