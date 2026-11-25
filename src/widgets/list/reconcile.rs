@@ -4,7 +4,7 @@ use crate::style::Span;
 use crate::widgets::list::layout::measure_list;
 use crate::widgets::list::{effective_extra_line_indent, effective_prefix, leading_metrics};
 use crate::widgets::{List, ListItem, ListItemLine};
-use std::sync::Arc;
+use std::rc::Rc;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -324,7 +324,7 @@ pub fn reconcile_list(tree: &mut NodeTree, id: NodeId, list: &List, rect: Rect) 
     id
 }
 
-pub(crate) fn wrap_right_lines_for_runtime(list: &List, inner_w: u16) -> Arc<[ListItem]> {
+pub(crate) fn wrap_right_lines_for_runtime(list: &List, inner_w: u16) -> Rc<[ListItem]> {
     if inner_w == 0 {
         return list.items.clone();
     }

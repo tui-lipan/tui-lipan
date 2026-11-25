@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use tui_lipan::prelude::*;
@@ -12,7 +12,7 @@ struct StressTest {
 #[derive(Default)]
 struct State {
     text: String,
-    items: Arc<[ListItem]>,
+    items: Rc<[ListItem]>,
     selected: usize,
     show_fps: bool,
 }
@@ -122,7 +122,7 @@ impl Component for StressTest {
                     width: Length::Flex(1),
                     border: true,
                     List {
-                        items_arc: ctx.state.items.clone(),
+                        items_rc: ctx.state.items.clone(),
                         selected: ctx.state.selected,
                         on_select: ctx.link().callback(|e: ListEvent| Msg::Select(e.index)),
                         scrollbar: true,

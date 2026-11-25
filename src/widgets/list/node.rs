@@ -1,3 +1,4 @@
+use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::callback::{Callback, KeyHandler};
@@ -11,7 +12,7 @@ use crate::widgets::list::{ListEvent, ListHoverEvent, ListItem, ListSymbolPositi
 /// A realized list node.
 #[derive(Clone)]
 pub struct ListNode {
-    pub items: Arc<[ListItem]>,
+    pub items: Rc<[ListItem]>,
     pub selected: Option<usize>,
     pub scroll_keys: crate::widgets::ScrollKeymap,
     pub scroll_wheel: bool,

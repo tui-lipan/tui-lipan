@@ -4,48 +4,15 @@ use crate::callback::KeyHandler;
 use crate::core::event::{KeyCode, KeyEvent, KeyMods};
 use crate::core::node::{NodeId, NodeKind, NodeTree};
 use crate::style::Rect;
-use crate::widgets::internal::{
-    ScrollAction, apply_scroll_action, has_command_modifier, scroll_action_from_key,
-};
+use crate::widgets::internal::{ScrollAction, apply_scroll_action, has_command_modifier};
 use crate::widgets::list::utils::{
     calc_list_window, calc_list_window_for_items_with_indicators, visible_items_for_height,
 };
+use crate::widgets::list::{SeedDirection, selection_seed_direction};
 use crate::widgets::table::{table_header_reserved_height, visible_rows_for_height};
 use crate::widgets::{ListEvent, ScrollMetrics, TableEvent};
 
 // ── Keyboard ────────────────────────────────────────────────────────────────
-
-/// Which end of the list a key should seed an empty selection from.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum SeedDirection {
-    Forward,
-    Backward,
-}
-
-/// Resolve the direction a navigation key seeds an empty selection from.
-///
-/// `PageUp`/`PageDown` are handled outside [`ScrollKeymap`], so they are matched
-/// explicitly here; without that, `Down` would establish a cursor while
-/// `PageDown` stayed inert on the same list. Command-modifier chords never seed.
-fn selection_seed_direction(
-    key: &KeyEvent,
-    scroll_keys: crate::widgets::ScrollKeymap,
-) -> Option<SeedDirection> {
-    if has_command_modifier(key) {
-        return None;
-    }
-    match key.code {
-        KeyCode::PageDown => return Some(SeedDirection::Forward),
-        KeyCode::PageUp => return Some(SeedDirection::Backward),
-        _ => {}
-    }
-
-    match scroll_action_from_key(key, scroll_keys)? {
-        ScrollAction::LineDown(_) | ScrollAction::Home => Some(SeedDirection::Forward),
-        ScrollAction::LineUp(_) | ScrollAction::End => Some(SeedDirection::Backward),
-        ScrollAction::LineLeft(_) | ScrollAction::LineRight(_) => None,
-    }
-}
 
 /// Handle keyboard input for a focused List node.
 pub(crate) fn handle_list_key(tree: &mut NodeTree, id: NodeId, key: KeyEvent) -> bool {
@@ -82,85 +49,26 @@ pub(crate) fn handle_list_key(tree: &mut NodeTree, id: NodeId, key: KeyEvent) ->
             .and_then(|s| crate::widgets::List::nearest_selectable_index(items.as_ref(), s));
 
         if let Some(cb) = on_select.as_ref() {
-            if let Some(selected) = selected {
-                // Handle PageUp/PageDown (hardcoded, not in ScrollKeymap). Command-modifier
-                // chords fall through to `on_key` and app shortcuts.
-                if !has_command_modifier(&key)
-                    && matches!(key.code, KeyCode::PageUp | KeyCode::PageDown)
-                {
-                    let node_ref = tree.node(id);
-                    let inner = node_ref.rect.inner(border_val, padding_val);
-                    let visible_items =
-                        visible_items_for_height(items.as_ref(), offset_val, inner.h);
-                    let page_size = visible_items.saturating_sub(1).max(1);
-                    let target = match key.code {
-                        KeyCode::PageDown => (selected + page_size).min(len.saturating_sub(1)),
-                        KeyCode::PageUp => selected.saturating_sub(page_size),
-                        _ => unreachable!(),
-                    };
-                    let next =
-                        match key.code {
-                            KeyCode::PageDown => {
-                                crate::widgets::List::selectable_at_or_after(items.as_ref(), target)
-                                    .or_else(|| {
-                                        crate::widgets::List::selectable_at_or_before(
-                                            items.as_ref(),
-                                            target,
-                                        )
-                                    })
-                            }
-                            KeyCode::PageUp => crate::widgets::List::selectable_at_or_before(
-                                items.as_ref(),
-                                target,
-                            )
-                            .or_else(|| {
-                                crate::widgets::List::selectable_at_or_after(items.as_ref(), target)
-                            }),
-                            _ => unreachable!(),
-                        };
-                    if let Some(next) = next
-                        && next != selected
-                    {
-                        cb.emit(ListEvent::key(next));
-                        if let NodeKind::List(list_node) = &mut tree.node_mut(id).kind {
-                            list_node.scroll_override = None;
-                        }
-                    }
-                    handled = true;
-                } else if let Some(next) = crate::widgets::List::next_selection(
-                    selected,
-                    items.as_ref(),
-                    &key,
-                    scroll_keys_val,
-                    navigation_wrap,
-                ) {
-                    if next != selected {
-                        cb.emit(ListEvent::key(next));
-                        if let NodeKind::List(list_node) = &mut tree.node_mut(id).kind {
-                            list_node.scroll_override = None;
-                        }
-                    }
-                    handled = true;
-                }
-            } else {
-                // Empty selection: the first navigation key establishes a cursor
-                // rather than staying inert. Subsequent keys navigate normally.
-                let next = match selection_seed_direction(&key, scroll_keys_val) {
-                    Some(SeedDirection::Forward) => {
-                        crate::widgets::List::first_selectable_index(items.as_ref())
-                    }
-                    Some(SeedDirection::Backward) => {
-                        crate::widgets::List::last_selectable_index(items.as_ref())
-                    }
-                    None => None,
-                };
-                if let Some(next) = next {
+            let node_ref = tree.node(id);
+            let inner = node_ref.rect.inner(border_val, padding_val);
+            let page_size = visible_items_for_height(items.as_ref(), offset_val, inner.h)
+                .saturating_sub(1)
+                .max(1);
+            if let Some(next) = crate::widgets::List::navigation_target(
+                selected,
+                items.as_ref(),
+                &key,
+                scroll_keys_val,
+                navigation_wrap,
+                page_size,
+            ) {
+                if Some(next) != selected {
                     cb.emit(ListEvent::key(next));
                     if let NodeKind::List(list_node) = &mut tree.node_mut(id).kind {
                         list_node.scroll_override = None;
                     }
-                    handled = true;
                 }
+                handled = true;
             }
         }
 

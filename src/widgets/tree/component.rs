@@ -9,7 +9,6 @@ use super::guides::{TreeBranch, TreeGuides};
 use super::types::*;
 use crate::core::component::{Component, Context, Update};
 use crate::core::element::{Element, IntoElement};
-use crate::core::event::{KeyCode, KeyEvent};
 use crate::style::{Length, Span};
 use crate::widgets::ListItem;
 use std::borrow::Cow;
@@ -20,7 +19,6 @@ use unicode_width::UnicodeWidthStr;
 pub(crate) struct TreeState {
     pub expanded: HashSet<TreePath>,
     pub selected: Option<usize>,
-    pub hovered: Option<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -52,7 +50,6 @@ impl Component for TreeComponent {
 
     fn create_state(&self, props: &Self::Properties) -> Self::State {
         TreeState {
-            hovered: None,
             expanded: expanded_paths_from_root(&props.root),
             selected: match props.selected {
                 Some(selected) => selected,
@@ -155,21 +152,7 @@ impl Component for TreeComponent {
         }
     }
 
-    fn on_key(
-        &mut self,
-        key: KeyEvent,
-        ctx: &mut Context<Self>,
-    ) -> crate::core::component::KeyUpdate {
-        if rich::has_content(&ctx.props.root) {
-            return rich::on_key(self, key, ctx);
-        }
-        crate::core::component::KeyUpdate::unhandled(Update::none())
-    }
-
     fn view(&self, ctx: &Context<Self>) -> Element {
-        if rich::has_content(&ctx.props.root) {
-            return rich::view(ctx);
-        }
         let expanded = resolved_expanded(ctx);
         let entries = visible_entries(&ctx.props, expanded.as_ref());
         let max_depth = entries
@@ -177,6 +160,7 @@ impl Component for TreeComponent {
             .map(|entry| entry.branch.depth())
             .max()
             .unwrap_or(0);
+        let composed = rich::has_content(&ctx.props.root);
         // Gaps before top-level nodes are spacer items, so the list's positions run ahead of the
         // tree's row indices; `rows` maps one onto the other.
         let mut items = Vec::with_capacity(entries.len());
@@ -184,155 +168,168 @@ impl Component for TreeComponent {
         for (index, entry) in entries.iter().enumerate() {
             items.extend((0..gap_before(index, entry)).map(|_| ListItem::spacer()));
             positions.push(items.len());
-            items.push(build_item(entry, &ctx.props, max_depth));
+            items.push(if composed {
+                rich::item(entry)
+            } else {
+                build_item(entry, &ctx.props, max_depth)
+            });
         }
         let rows = ListRows(Arc::from(positions));
-
-        let selected = selected_index(ctx)
-            .map(|s| s.min(entries.len().saturating_sub(1)))
-            .and_then(|s| rows.position(s));
-
-        let on_select = {
-            let rows = rows.clone();
-            ctx.link()
-                .callback(move |event: crate::widgets::ListEvent| {
-                    TreeMsg::Select(rows.row(event.index))
-                })
+        let list = list(ctx, items, &rows, &entries, composed);
+        if composed {
+            return rich::view(ctx, list, &entries, &rows, max_depth);
+        }
+        let list: Element = match ctx.props.focus_key.clone() {
+            Some(key) => list.key(key),
+            None => list.into(),
         };
-        let on_activate = {
-            let rows = rows.clone();
-            ctx.link()
-                .callback(move |event: crate::widgets::ListEvent| {
-                    TreeMsg::Activate(rows.row(event.index))
-                })
-        };
-        let on_item_click = {
-            let rows = rows.clone();
-            ctx.link()
-                .callback(move |event: crate::widgets::ListEvent| {
-                    TreeMsg::Click(
-                        rows.row(event.index),
-                        Click {
-                            mods: event.mods,
-                            double: event.clicks == 2,
-                        },
-                    )
-                })
-        };
-
-        let keymap = ctx.props.keymap;
-        let interceptor = ctx.props.key_interceptor.clone();
-        let tree_on_key = ctx
-            .link()
-            .key_handler(move |key| tree_action_from_key(&key, keymap).map(TreeMsg::Action));
-        let on_key = match interceptor {
-            Some(interceptor) => crate::callback::KeyHandler::new(move |key| {
-                if interceptor.handle(key) {
-                    true
-                } else {
-                    tree_on_key.handle(key)
-                }
-            }),
-            None => tree_on_key,
-        };
-
-        let mut list = crate::widgets::List::new()
-            .items(items)
-            .selected(selected)
-            .style(ctx.props.style)
-            .hover_style_slot(ctx.props.hover_style)
-            .item_hover_style_slot(ctx.props.item_hover_style)
-            .selection_full_width(ctx.props.selection_full_width)
-            .unselected_symbol(ctx.props.unselected_symbol.clone())
-            .width(ctx.props.width)
-            .height(ctx.props.height)
-            .force_scroll_to_selected(ctx.props.force_scroll_to_selected)
-            .scrollbar(ctx.props.scrollbar)
-            .scrollbar_config(ctx.props.scrollbar_config.clone())
-            // Disable horizontal VIM keys (h/l) so Tree can use them for expand/collapse
-            // while keeping vertical VIM keys (j/k) for navigation
-            .scroll_keys(ctx.props.scroll_keys.without_vim_horizontal())
-            .scroll_wheel(ctx.props.scroll_wheel)
-            .show_scroll_indicators(ctx.props.show_scroll_indicators)
-            .scroll_indicator_style(ctx.props.scroll_indicator_style)
-            .activate_on_click(ctx.props.activate_on_click)
-            .focusable(ctx.props.focusable)
-            .tab_stop(ctx.props.tab_stop)
-            .on_select(on_select)
-            .on_item_click(on_item_click)
-            .on_activate(on_activate)
-            .on_key(on_key);
-        if let Some(drag) = ctx.props.host_drag.clone() {
-            let rows = rows.clone();
-            let paths: Arc<[TreePath]> = entries.iter().map(|entry| entry.path.clone()).collect();
-            list = list.host_drag(crate::dnd::HostDragItems::new(move |position| {
-                let row = rows.row(position);
-                // A spacer is not a row; its position maps to the row after it.
-                (rows.position(row) == Some(position))
-                    .then(|| drag.offer(row, paths.get(row)?.clone()))
-                    .flatten()
-            }));
-        }
-        if ctx.props.on_hover.is_some() {
-            let rows = rows.clone();
-            list = list.on_hover(ctx.link().callback_opt(
-                move |event: crate::widgets::ListHoverEvent| {
-                    // A gap is space between rows, not a row of its own.
-                    let row = rows.row(event.index);
-                    (rows.position(row) == Some(event.index))
-                        .then_some(TreeMsg::Hover(row, event.hovered))
-                },
-            ));
-        }
-        if ctx.props.on_context_menu.is_some() {
-            let rows = rows.clone();
-            list = list.on_context_menu(ctx.link().callback(
-                move |(event, mouse): (crate::widgets::ListEvent, _)| {
-                    TreeMsg::ContextMenu(rows.row(event.index), mouse)
-                },
-            ));
-        }
-        if ctx.props.on_ctrl_activate.is_some() {
-            list = list.on_ctrl_activate(ctx.link().callback(
-                move |event: crate::widgets::ListEvent| {
-                    TreeMsg::CtrlActivate(rows.row(event.index))
-                },
-            ));
-        }
-        if let Some(cb) = ctx.props.on_focus.clone() {
-            list = list.on_focus(cb);
-        }
-        if let Some(cb) = ctx.props.on_blur.clone() {
-            list = list.on_blur(cb);
-        }
-        list = list
-            .selection_style_slot(ctx.props.selection_style)
-            .unfocused_selection_style_slot(ctx.props.unfocused_selection_style);
-
-        if let Some(symbol) = ctx.props.selection_symbol.clone() {
-            list = list.selection_symbol(Some(symbol));
-        }
-        if let Some(style) = ctx.props.selection_symbol_style {
-            list = list.selection_symbol_style(style);
-        }
-        if let Some(style) = ctx.props.unfocused_selection_symbol_style {
-            list = list.unfocused_selection_symbol_style(style);
-        }
-        if let Some(text) = ctx.props.empty_text.clone() {
-            list = list
-                .empty_text(text)
-                .empty_text_style(ctx.props.empty_text_style);
-        }
-
-        let mut stack = crate::widgets::VStack::new().gap(ctx.props.gap);
-        let list: Element = if let Some(key) = ctx.props.focus_key.clone() {
-            list.key(key)
-        } else {
-            list.into()
-        };
-        stack = stack.child(list);
-        stack.into()
+        crate::widgets::VStack::new()
+            .gap(ctx.props.gap)
+            .child(list)
+            .into()
     }
+}
+
+/// The list a tree renders through, as text rows or composed rows. Its positions include the
+/// spacers that gaps add, which `rows` maps back to tree rows.
+fn list(
+    ctx: &Context<TreeComponent>,
+    items: Vec<ListItem>,
+    rows: &ListRows,
+    entries: &[TreeEntry<'_>],
+    composed: bool,
+) -> crate::widgets::List {
+    let selected = selected_index(ctx)
+        .map(|s| s.min(entries.len().saturating_sub(1)))
+        .and_then(|s| rows.position(s));
+
+    let on_select = {
+        let rows = rows.clone();
+        ctx.link()
+            .callback(move |event: crate::widgets::ListEvent| {
+                TreeMsg::Select(rows.row(event.index))
+            })
+    };
+    let on_activate = {
+        let rows = rows.clone();
+        ctx.link()
+            .callback(move |event: crate::widgets::ListEvent| {
+                TreeMsg::Activate(rows.row(event.index))
+            })
+    };
+    let on_item_click = {
+        let rows = rows.clone();
+        ctx.link()
+            .callback(move |event: crate::widgets::ListEvent| {
+                TreeMsg::Click(
+                    rows.row(event.index),
+                    Click {
+                        mods: event.mods,
+                        double: event.clicks == 2,
+                    },
+                )
+            })
+    };
+
+    let keymap = ctx.props.keymap;
+    // Composed rows run the interceptor before navigation themselves.
+    let interceptor = ctx.props.key_interceptor.clone().filter(|_| !composed);
+    let tree_on_key = ctx
+        .link()
+        .key_handler(move |key| tree_action_from_key(&key, keymap).map(TreeMsg::Action));
+    let on_key = match interceptor {
+        Some(interceptor) => crate::callback::KeyHandler::new(move |key| {
+            if interceptor.handle(key) {
+                true
+            } else {
+                tree_on_key.handle(key)
+            }
+        }),
+        None => tree_on_key,
+    };
+
+    let mut list = crate::widgets::List::new()
+        .items(items)
+        .selected(selected)
+        .style(ctx.props.style)
+        .hover_style_slot(ctx.props.hover_style)
+        .item_hover_style_slot(ctx.props.item_hover_style)
+        .selection_full_width(ctx.props.selection_full_width)
+        .unselected_symbol(ctx.props.unselected_symbol.clone())
+        .width(ctx.props.width)
+        .height(ctx.props.height)
+        .force_scroll_to_selected(ctx.props.force_scroll_to_selected)
+        .scrollbar(ctx.props.scrollbar)
+        .scrollbar_config(ctx.props.scrollbar_config.clone())
+        // Disable horizontal VIM keys (h/l) so Tree can use them for expand/collapse
+        // while keeping vertical VIM keys (j/k) for navigation
+        .scroll_keys(ctx.props.scroll_keys.without_vim_horizontal())
+        .scroll_wheel(ctx.props.scroll_wheel)
+        .show_scroll_indicators(ctx.props.show_scroll_indicators)
+        .scroll_indicator_style(ctx.props.scroll_indicator_style)
+        .activate_on_click(ctx.props.activate_on_click)
+        .focusable(ctx.props.focusable)
+        .tab_stop(ctx.props.tab_stop)
+        .on_select(on_select)
+        .on_item_click(on_item_click)
+        .on_activate(on_activate)
+        .on_key(on_key);
+    if let Some(drag) = ctx.props.host_drag.clone() {
+        let rows = rows.clone();
+        let paths: Arc<[TreePath]> = entries.iter().map(|entry| entry.path.clone()).collect();
+        list = list.host_drag(crate::dnd::HostDragItems::new(move |position| {
+            let row = rows.row_at(position)?;
+            drag.offer(row, paths.get(row)?.clone())
+        }));
+    }
+    if ctx.props.on_hover.is_some() {
+        let rows = rows.clone();
+        list = list.on_hover(ctx.link().callback_opt(
+            move |event: crate::widgets::ListHoverEvent| {
+                rows.row_at(event.index)
+                    .map(|row| TreeMsg::Hover(row, event.hovered))
+            },
+        ));
+    }
+    if ctx.props.on_context_menu.is_some() {
+        let rows = rows.clone();
+        list = list.on_context_menu(ctx.link().callback(
+            move |(event, mouse): (crate::widgets::ListEvent, _)| {
+                TreeMsg::ContextMenu(rows.row(event.index), mouse)
+            },
+        ));
+    }
+    if ctx.props.on_ctrl_activate.is_some() {
+        let rows = rows.clone();
+        list = list.on_ctrl_activate(ctx.link().callback(
+            move |event: crate::widgets::ListEvent| TreeMsg::CtrlActivate(rows.row(event.index)),
+        ));
+    }
+    if let Some(cb) = ctx.props.on_focus.clone() {
+        list = list.on_focus(cb);
+    }
+    if let Some(cb) = ctx.props.on_blur.clone() {
+        list = list.on_blur(cb);
+    }
+    list = list
+        .selection_style_slot(ctx.props.selection_style)
+        .unfocused_selection_style_slot(ctx.props.unfocused_selection_style);
+
+    if let Some(symbol) = ctx.props.selection_symbol.clone() {
+        list = list.selection_symbol(Some(symbol));
+    }
+    if let Some(style) = ctx.props.selection_symbol_style {
+        list = list.selection_symbol_style(style);
+    }
+    if let Some(style) = ctx.props.unfocused_selection_symbol_style {
+        list = list.unfocused_selection_symbol_style(style);
+    }
+    if let Some(text) = ctx.props.empty_text.clone() {
+        list = list
+            .empty_text(text)
+            .empty_text_style(ctx.props.empty_text_style);
+    }
+    list
 }
 
 #[derive(Clone, Debug)]
@@ -475,9 +472,9 @@ fn gap_before(index: usize, entry: &TreeEntry<'_>) -> u16 {
     }
 }
 
-/// Where each tree row sits in a text tree's list, which also holds the gaps' spacers.
+/// Where each tree row sits in the tree's list, which also holds the gaps' spacers.
 #[derive(Clone)]
-struct ListRows(Arc<[usize]>);
+pub(super) struct ListRows(Arc<[usize]>);
 
 impl ListRows {
     /// The list position of tree row `row`.
@@ -489,6 +486,13 @@ impl ListRows {
     /// list never reports since it cannot be selected.
     fn row(&self, position: usize) -> usize {
         self.0.partition_point(|&row| row < position)
+    }
+
+    /// The tree row at list position `position`, or `None` for a spacer: a gap is space between
+    /// rows, not a row of its own.
+    fn row_at(&self, position: usize) -> Option<usize> {
+        let row = self.row(position);
+        (self.position(row) == Some(position)).then_some(row)
     }
 }
 
@@ -971,7 +975,6 @@ mod tests {
         // Both branches of on_props_changed must run the same sync; the
         // expansion branch used to skip the restore and leave the tree blank.
         let mut state = TreeState {
-            hovered: None,
             expanded: HashSet::new(),
             selected: None,
         };

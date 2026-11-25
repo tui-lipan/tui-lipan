@@ -98,6 +98,7 @@ The layout uses two columns in wider terminals and a scrollable single column in
 |---------|-------------|
 | `table` | `Table`: header, rows, selection, scroll + inspector preset (tabs, sections, key/value, disclosure) |
 | `list_headers` | `List` with section headers and spacers |
+| `list_rows` | `List` with composed rows: hover reveals per-row Snooze and Settle buttons |
 | `list_description_spinners` | Spinners anchored to row text in `List` and `SearchPalette`, across every `DescriptionPlacement` |
 | `log_viewer` | `LogView` over a sample file: filter, follow, pause, level coloring |
 | `provided_file_tree` | Async application-provided `FileTree` listings with loading, Git, and ignore metadata |

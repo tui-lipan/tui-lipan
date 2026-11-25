@@ -76,6 +76,19 @@ pub struct ListEvent {
 }
 ```
 
+### `ListHoverEvent`
+
+Emitted by: `List::on_hover`, once as the pointer enters a row and once as it leaves. A move
+between rows reports the old row leaving first. Composed rows count the row's interactive
+children as part of it.
+
+```rust
+pub struct ListHoverEvent {
+    pub index: usize,   // Row index, headers and spacers included
+    pub hovered: bool,  // Entered (true) or left (false)
+}
+```
+
 ### Context-menu requests
 
 `on_context_menu` is an opt-in callback. The application builds and opens its own
@@ -979,6 +992,7 @@ Quick lookup - which callbacks does each widget support?
 | `on_activate` | `ListEvent` | Enter key (or click if `activate_on_click` is true) |
 | `on_ctrl_activate` | `ListEvent` | Ctrl+Enter or Ctrl+click; replaces ordinary activation when configured |
 | `on_item_click` | `ListEvent` | Row clicked with mouse |
+| `on_hover` | `ListHoverEvent` | Pointer entered or left a row |
 | `on_click` | `MouseEvent` | Raw mouse click on list area |
 | `on_scroll_to` | `usize` | Scrollbar interaction |
 | `on_key` | `KeyHandler` | Key while focused |
@@ -1170,7 +1184,8 @@ blur and focus callbacks. See [Focus events](focus.md#focus-events) for the tran
 
 ### TreeHoverEvent
 
-`Tree::on_hover` reports composed-row pointer transitions, including interactive descendants.
+`Tree::on_hover` reports row pointer transitions, including a composed row's interactive
+descendants; gaps between rows report nothing.
 `index` is the visible row index, `path` is the node's index path, and `hovered` indicates entry or
 exit. These fields are available from `tui_lipan::TreeHoverEvent`.
 

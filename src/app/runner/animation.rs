@@ -103,7 +103,7 @@ fn advance_list_spinners(
     next_tick: &mut usize,
 ) -> bool {
     let mut changed = false;
-    for item in std::sync::Arc::make_mut(&mut node.items) {
+    for item in std::rc::Rc::make_mut(&mut node.items) {
         changed |= advance_list_spinner(
             item.status.as_mut().and_then(|s| s.spinner_mut()),
             tick,

@@ -1,3 +1,4 @@
+use std::rc::Rc;
 use std::sync::Arc;
 
 use nucleo::pattern::{CaseMatching, Normalization};
@@ -16,7 +17,7 @@ pub struct LogViewState {
     last_mode: super::LogFilterMode,
     last_case_sensitive: bool,
     // Cache for rendered items - using Arc to avoid clone on every render
-    cached_items: Arc<[ListItem]>,
+    cached_items: Rc<[ListItem]>,
     cached_entries_id: usize,
     cached_show_level: bool,
 }
@@ -29,7 +30,7 @@ impl Default for LogViewState {
             last_query: String::new(),
             last_mode: super::LogFilterMode::Fuzzy,
             last_case_sensitive: true,
-            cached_items: Arc::new([]),
+            cached_items: Rc::new([]),
             cached_entries_id: 0,
             cached_show_level: true,
         }
@@ -186,7 +187,7 @@ impl Component for LogViewComponent {
         };
 
         let mut list = List::new()
-            .items_arc(ctx.state.cached_items.clone())
+            .items_rc(ctx.state.cached_items.clone())
             .selected(selected)
             .force_scroll_to_selected(following_live)
             .style(ctx.props.style)

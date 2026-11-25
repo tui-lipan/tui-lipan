@@ -272,7 +272,7 @@ Source: `src/widgets/list/mod.rs` (`List`).
 
 | Field | Default initializer |
 |---|---|
-| `items` | `Arc::new([])` |
+| `items` | `Rc::new([])` |
 | `selected` | `Some(0)` |
 | `scroll_keys` | `ScrollKeymap::default()` |
 | `scroll_wheel` | `true` |
@@ -321,6 +321,7 @@ Source: `src/widgets/list/mod.rs` (`List`).
 | `tab_stop` | `true` |
 | `on_focus` | `None` |
 | `on_blur` | `None` |
+| `on_hover` | `None` |
 | `show_scroll_indicators` | `false` |
 | `scroll_indicator_style` | `Style::default()` |
 | `empty_text` | `None` |

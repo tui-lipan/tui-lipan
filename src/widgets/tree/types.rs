@@ -6,8 +6,8 @@ use crate::core::event::{KeyCode, KeyEvent, KeyMods};
 use crate::style::{Length, Style, StyleSlot};
 use crate::utils::gradient::ColorGradient;
 use crate::widgets::ScrollKeymap;
+use crate::widgets::list::ElementSlot;
 use crate::widgets::{FocusAccordion, ListItem};
-use std::rc::Rc;
 use std::sync::Arc;
 
 /// A path to a tree node (index-based).
@@ -171,27 +171,6 @@ mod tests {
     }
 }
 
-/// A composed tree row's immutable visual content.
-#[derive(Clone)]
-pub(crate) struct TreeContent(Rc<Element>);
-
-impl std::fmt::Debug for TreeContent {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("TreeContent(..)")
-    }
-}
-impl PartialEq for TreeContent {
-    fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.0, &other.0)
-    }
-}
-impl Eq for TreeContent {}
-impl TreeContent {
-    pub(super) fn element(&self) -> Element {
-        self.0.as_ref().clone()
-    }
-}
-
 /// Pointer entering or leaving a tree row, including non-selectable rows.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -222,14 +201,11 @@ pub enum TreeExpansionMode {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TreeNode {
     pub(crate) item: ListItem,
-    pub(crate) content: Option<TreeContent>,
-    pub(crate) leading: Option<TreeContent>,
-    pub(crate) icon: Option<TreeContent>,
+    pub(crate) leading: Option<ElementSlot>,
+    pub(crate) icon: Option<ElementSlot>,
     pub(crate) arrow_style: Option<Style>,
-    pub(crate) content_height: u16,
     pub(crate) show_arrow: bool,
     pub(crate) gap_before: u16,
-    pub(crate) key: Option<Arc<str>>,
     pub(crate) children: Vec<TreeNode>,
     pub(crate) expanded: bool,
     pub(crate) expansion_mode: TreeExpansionMode,
@@ -240,14 +216,11 @@ impl TreeNode {
     pub fn new(item: impl Into<ListItem>) -> Self {
         Self {
             item: item.into(),
-            content: None,
             leading: None,
             icon: None,
             arrow_style: None,
-            content_height: 1,
             show_arrow: true,
             gap_before: 0,
-            key: None,
             children: Vec::new(),
             expanded: false,
             expansion_mode: TreeExpansionMode::Auto,
@@ -269,16 +242,16 @@ impl TreeNode {
         self
     }
 
-    /// Supply composed row content. The tree still owns guides, disclosure, and navigation.
-    /// Interactive descendants may consume clicks independently of row activation.
+    /// Supply composed row content, as [`ListItem::content`] does for a list row. The tree
+    /// still owns guides, arrows, and navigation.
     pub fn content(mut self, content: impl Into<Element>) -> Self {
-        self.content = Some(TreeContent(Rc::new(content.into())));
+        self.item = self.item.content(content);
         self
     }
 
     /// A visual column before the tree guides, such as an active-row marker.
     pub fn leading(mut self, content: impl Into<Element>) -> Self {
-        self.leading = Some(TreeContent(Rc::new(content.into())));
+        self.leading = Some(ElementSlot::new(content));
         self
     }
 
@@ -286,7 +259,7 @@ impl TreeNode {
     /// arrow column and content gap. The column is [`Tree::icon_width`](crate::widgets::Tree::icon_width)
     /// cells wide and clips the element. Setting an icon renders the tree with composed rows.
     pub fn icon(mut self, icon: impl Into<Element>) -> Self {
-        self.icon = Some(TreeContent(Rc::new(icon.into())));
+        self.icon = Some(ElementSlot::new(icon));
         self
     }
 
@@ -306,13 +279,13 @@ impl TreeNode {
 
     /// Height of composed content in terminal rows, including its detail lines. Default 1.
     pub fn content_height(mut self, height: u16) -> Self {
-        self.content_height = height.max(1);
+        self.item = self.item.content_height(height);
         self
     }
 
     /// Stable reconciliation identity for composed content, independent of its index path.
     pub fn key(mut self, key: impl Into<Arc<str>>) -> Self {
-        self.key = Some(key.into());
+        self.item = self.item.key(key);
         self
     }
 

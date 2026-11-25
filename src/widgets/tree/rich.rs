@@ -1,12 +1,15 @@
 //! Composed rows use the same tree model and selection events as text rows.
+use std::rc::Rc;
+
 use super::*;
-use crate::core::component::KeyUpdate;
+use crate::callback::Link;
 use crate::core::event::{KeyMods, MouseRegionEvent};
-use crate::widgets::scroll::{ScrollAction, has_command_modifier, scroll_action_from_key};
-use crate::widgets::{HStack, MouseRegion, ScrollKeymap, ScrollView, Text, VStack};
+use crate::widgets::list::ElementSlot;
+use crate::widgets::list::composed::{ComposedListProps, RowRenderer, RowView, text_row};
+use crate::widgets::{HStack, MouseRegion, ScrollKeymap, Text, VStack};
 
 pub(super) fn has_content(node: &TreeNode) -> bool {
-    node.content.is_some()
+    node.item.content.is_some()
         || node.leading.is_some()
         || node.icon.is_some()
         || node.children.iter().any(has_content)
@@ -36,11 +39,6 @@ pub(super) fn toggle(ctx: &mut Context<TreeComponent>, index: usize) -> Update {
 }
 
 pub(super) fn hover(ctx: &mut Context<TreeComponent>, index: usize, hovered: bool) -> Update {
-    if hovered {
-        ctx.state.hovered = Some(index);
-    } else if ctx.state.hovered == Some(index) {
-        ctx.state.hovered = None;
-    }
     if let Some(cb) = &ctx.props.on_hover
         && let Some(entry) = entry_at_index(&ctx.props, &ctx.state, index)
     {
@@ -50,12 +48,7 @@ pub(super) fn hover(ctx: &mut Context<TreeComponent>, index: usize, hovered: boo
             hovered,
         });
     }
-    // Only composed rows paint from the tree's hover state; text rows are the list's to paint.
-    if has_content(&ctx.props.root) {
-        Update::full()
-    } else {
-        Update::none()
-    }
+    Update::none()
 }
 
 pub(super) fn pointer_move(ctx: &Context<TreeComponent>, index: usize) -> Update {
@@ -131,380 +124,170 @@ fn select(ctx: &mut Context<TreeComponent>, index: usize) -> Update {
     Update::full()
 }
 
-pub(super) fn on_key(
-    component: &mut TreeComponent,
-    key: KeyEvent,
-    ctx: &mut Context<TreeComponent>,
-) -> KeyUpdate {
-    if ctx
-        .props
-        .key_interceptor
-        .as_ref()
-        .is_some_and(|cb| cb.handle(key))
-    {
-        return KeyUpdate::handled(Update::none());
+/// A composed row's item: the node's, keyed by its path unless the node has a key of its own, so
+/// a row keeps its widgets' state as rows above it expand and collapse.
+pub(super) fn item(entry: &TreeEntry<'_>) -> ListItem {
+    let mut item = entry.node.item.clone();
+    if item.key.is_none() {
+        item.key = Some(format!("tree-path-{:?}", entry.path.segments()).into());
     }
-    if let Some(action) = tree_action_from_key(&key, ctx.props.keymap) {
-        return KeyUpdate::handled(self::action(ctx, action));
-    }
-    if key.code == KeyCode::Enter
-        && key.mods == KeyMods::CTRL
-        && ctx.props.on_ctrl_activate.is_some()
-        && let Some(index) = selected_index(ctx)
-    {
-        return KeyUpdate::handled(component.update(TreeMsg::CtrlActivate(index), ctx));
-    }
-    if has_command_modifier(&key) {
-        return KeyUpdate::unhandled(Update::none());
-    }
-    if key.code == KeyCode::Enter {
-        return match selected_index(ctx) {
-            Some(index) => KeyUpdate::handled(component.update(TreeMsg::Activate(index), ctx)),
-            None => KeyUpdate::unhandled(Update::none()),
-        };
-    }
-    let entries = visible_entries(&ctx.props, &ctx.state.expanded);
-    let Some((target, forward)) = navigation_target(ctx, &entries, key) else {
-        return KeyUpdate::unhandled(Update::none());
-    };
-    let items = entries
-        .iter()
-        .map(|entry| entry.node.item.clone())
-        .collect::<Vec<_>>();
-    let next = if forward {
-        crate::widgets::List::selectable_at_or_after(&items, target)
-            .or_else(|| crate::widgets::List::selectable_at_or_before(&items, target))
-    } else {
-        crate::widgets::List::selectable_at_or_before(&items, target)
-            .or_else(|| crate::widgets::List::selectable_at_or_after(&items, target))
-    };
-    KeyUpdate::handled(
-        next.map(|index| select(ctx, index))
-            .unwrap_or_else(Update::none),
-    )
+    item
 }
 
-fn navigation_target(
+/// Composed rows render through the list's composed-row engine, which owns selection, hover,
+/// clicks, and navigation. The tree adds its guides, arrows, and icons in front of each row.
+pub(super) fn view(
     ctx: &Context<TreeComponent>,
+    list: crate::widgets::List,
     entries: &[TreeEntry<'_>],
-    key: KeyEvent,
-) -> Option<(usize, bool)> {
-    let last = entries.len().checked_sub(1)?;
-    let selected = selected_index(ctx);
-    let current = selected.unwrap_or(0).min(last);
-    let step = match key.code {
-        KeyCode::PageDown | KeyCode::PageUp => {
-            return Some((
-                page_target(ctx, entries, current, key.code == KeyCode::PageDown),
-                key.code == KeyCode::PageDown,
-            ));
-        }
-        _ => scroll_action_from_key(&key, ctx.props.scroll_keys.without_vim_horizontal())?,
-    };
-    match step {
-        ScrollAction::Home => Some((0, true)),
-        ScrollAction::End => Some((last, false)),
-        ScrollAction::LineDown(n) => {
-            Some((selected.map(|_| (current + n).min(last)).unwrap_or(0), true))
-        }
-        ScrollAction::LineUp(n) => Some((
-            selected.map(|_| current.saturating_sub(n)).unwrap_or(last),
-            false,
-        )),
-        _ => None,
-    }
-}
-
-fn page_target(
-    ctx: &Context<TreeComponent>,
-    entries: &[TreeEntry<'_>],
-    current: usize,
-    forward: bool,
-) -> usize {
-    let mut remaining = ctx.viewport().h.saturating_sub(1).max(1) as usize;
-    let mut target = current;
-    while remaining > 0 {
-        let next = if forward {
-            (target + 1).min(entries.len() - 1)
-        } else {
-            target.saturating_sub(1)
-        };
-        if next == target {
-            break;
-        }
-        // The distance between neighbouring rows includes the gap above the lower of the two: the
-        // row entered going down, the row left going up.
-        let lower = target.max(next);
-        let gap = gap_before(lower, &entries[lower]) as usize;
-        target = next;
-        remaining = remaining.saturating_sub(gap + row_height(entries[target].node) as usize);
-    }
-    target
-}
-
-fn row_height(node: &TreeNode) -> u16 {
-    if node.content.is_some() {
-        node.content_height
-    } else {
-        node.item
-            .extra_lines
-            .len()
-            .saturating_add(1)
-            .min(u16::MAX as usize) as u16
-    }
-}
-
-fn row_key(entry: &TreeEntry<'_>) -> String {
-    entry
-        .node
-        .key
-        .as_ref()
-        .map(|key| format!("tree-row-{key}"))
-        .unwrap_or_else(|| format!("tree-row-{:?}", entry.path.segments()))
-}
-
-pub(super) fn view(ctx: &Context<TreeComponent>) -> Element {
-    let expanded = resolved_expanded(ctx);
-    let entries = visible_entries(&ctx.props, expanded.as_ref());
-    let max_depth = entries
-        .iter()
-        .map(|entry| entry.branch.depth())
-        .max()
-        .unwrap_or(0);
-    let selected = selected_index(ctx);
-    let mut view = scroll_view(ctx);
-    if let Some(entry) = selected.and_then(|index| entries.get(index))
-        && (ctx.has_focus_within() || ctx.props.force_scroll_to_selected)
-    {
-        // Follow the cursor the way a List does: scroll only when it nears an edge.
-        view = view.reveal_key(row_key(entry)).reveal_margin(2);
-    }
+    rows: &ListRows,
+    max_depth: usize,
+) -> Element {
+    let mut parts: Vec<Option<Rc<RowParts>>> = vec![None; list.items.len()];
+    let mut hoverable = vec![false; list.items.len()];
     for (index, entry) in entries.iter().enumerate() {
-        let gap = gap_before(index, entry);
-        if gap > 0 {
-            // Space, not a row: nothing in it hovers, selects, or takes an index.
-            view = view.child(
-                Text::new("")
-                    .height(Length::Px(gap))
-                    .key(format!("{}-gap", row_key(entry))),
-            );
+        if let Some(position) = rows.position(index) {
+            parts[position] = Some(Rc::new(RowParts::new(ctx, entry, index, max_depth)));
+            hoverable[position] = row_interactive(entry);
         }
-        let mut element = row(ctx, entry, index, max_depth, selected).key(row_key(entry));
-        if let Some(drag) = ctx.props.host_drag.clone() {
-            let path = entry.path.clone();
-            element = element.host_drag(crate::dnd::HostDragSource::new(move |_| {
-                drag.offer(index, path.clone())
-            }));
+    }
+    let parts: Rc<[Option<Rc<RowParts>>]> = parts.into();
+    let link = ctx.link().clone();
+    let ctrl = ctx.props.on_ctrl_activate.is_some();
+    let mut props = ComposedListProps::new(list);
+    props.render = Some(RowRenderer::new(move |row: RowView<'_>| {
+        match parts.get(row.index).cloned().flatten() {
+            Some(parts) => parts.render(&row, &link, ctrl),
+            None => text_row(row.item),
         }
-        view = view.child(element);
-    }
-    if entries.is_empty()
-        && let Some(text) = &ctx.props.empty_text
-    {
-        view = view.child(Text::new(text.clone()).style(ctx.props.empty_text_style));
-    }
-    match &ctx.props.focus_key {
-        Some(key) => view.key(key.clone()),
-        None => view.into(),
-    }
-}
-
-fn scroll_view(ctx: &Context<TreeComponent>) -> ScrollView {
-    let mut view = ScrollView::new()
-        .gap(ctx.props.gap)
-        .width(ctx.props.width)
-        .height(ctx.props.height)
-        .style(ctx.props.style)
-        .scrollbar(ctx.props.scrollbar)
-        .scrollbar_config(ctx.props.scrollbar_config.clone())
-        .show_scroll_indicators(ctx.props.show_scroll_indicators)
-        .scroll_indicator_style(ctx.props.scroll_indicator_style)
-        .focusable(ctx.props.focusable)
-        .tab_stop(ctx.props.tab_stop)
-        .scroll_keys(ScrollKeymap::NONE)
-        .scroll_wheel(ctx.props.scroll_wheel);
-    if let Some(cb) = &ctx.props.on_focus {
-        view = view.on_focus(cb.clone());
-    }
-    if let Some(cb) = &ctx.props.on_blur {
-        view = view.on_blur(cb.clone());
-    }
-    if let Some(cb) = &ctx.props.on_viewport_change {
-        view = view.on_viewport_change(cb.clone());
-    }
-    view
-}
-
-fn row(
-    ctx: &Context<TreeComponent>,
-    entry: &TreeEntry<'_>,
-    index: usize,
-    max_depth: usize,
-    selected: Option<usize>,
-) -> Element {
-    let content = entry
-        .node
-        .content
-        .as_ref()
-        .map(|content| content.element())
-        .unwrap_or_else(|| {
-            crate::widgets::List::new()
-                .items([entry.node.item.clone()])
-                .height(Length::Auto)
-                .focusable(false)
-                .tab_stop(false)
-                .symbol_column(false)
-                .selected(None)
-                .scroll_keys(ScrollKeymap::NONE)
-                // A wheel-scrollable list is a hit target and would keep clicks on the label
-                // from reaching the row. The tree's own scroll view owns the wheel.
-                .scroll_wheel(false)
-                .into()
-        });
-    let style = row_style(ctx, entry, index, selected);
-    let content = composed_content(ctx, entry, index, max_depth, content, style);
-    let mut region = MouseRegion::new()
-        .child(
-            HStack::new()
-                .gap(0)
-                .height(Length::Auto)
-                .style(style)
-                .child(content),
-        )
-        .on_hover_change(
+    }));
+    props.hoverable = Some(hoverable.into());
+    props.hover_effect = ctx.props.item_hover_effect.clone();
+    props.on_viewport_change = ctx.props.on_viewport_change.clone();
+    props.key_interceptor = ctx.props.key_interceptor.clone();
+    props.focus_key = ctx.props.focus_key.clone();
+    props.gap = ctx.props.gap;
+    if ctx.props.on_pointer_move.is_some() {
+        let rows = rows.clone();
+        props.on_pointer_move = Some(
             ctx.link()
-                .callback(move |hovered| TreeMsg::Hover(index, hovered)),
-        )
-        .on_mouse_move(ctx.link().callback(move |_| TreeMsg::PointerMove(index)));
-    if entry.node.item.is_selectable() && ctx.props.on_context_menu.is_some() {
-        region = region.on_context_menu(ctx.link().callback(move |mouse: MouseRegionEvent| {
-            TreeMsg::ContextMenu(
-                index,
-                crate::core::event::MouseEvent {
-                    x: mouse.x,
-                    y: mouse.y,
-                    kind: mouse.kind,
-                    mods: mouse.mods,
-                },
-            )
-        }));
+                .callback_opt(move |position| rows.row_at(position).map(TreeMsg::PointerMove)),
+        );
     }
-    if entry.node.item.is_selectable() {
-        let link = ctx.link().clone();
-        let activate = ctx.props.activate_on_click;
-        let ctrl = ctx.props.on_ctrl_activate.is_some();
-        region = region.on_click(crate::callback::Callback::new(
-            move |mouse: MouseRegionEvent| {
-                link.send(TreeMsg::Select(index));
-                if ctrl && mouse.mods == KeyMods::CTRL {
-                    link.send(TreeMsg::CtrlActivate(index));
-                    return;
-                }
-                if activate {
-                    link.send(TreeMsg::Activate(index));
-                }
-                // With no arrow to click, the row itself expands and collapses.
-                link.send(TreeMsg::Click(
-                    index,
-                    Click {
-                        mods: mouse.mods,
-                        double: false,
-                    },
-                ));
-            },
-        ));
-    }
-    if row_interactive(entry)
-        && let Some(effect) = &ctx.props.item_hover_effect
-    {
-        region = region.hover_effect(effect.clone());
-    }
-    region.into()
+    props.into_element()
 }
 
-fn composed_content(
-    ctx: &Context<TreeComponent>,
-    entry: &TreeEntry<'_>,
+/// What stands in front of a composed row's content, resolved when the tree renders. Hover and
+/// selection arrive later, with the row.
+struct RowParts {
     index: usize,
-    max_depth: usize,
-    content: Element,
-    style: crate::style::Style,
-) -> Element {
-    let height = row_height(entry.node);
-    let hovered = row_hovered(ctx, entry, index);
-    let prefix = prefix(entry, &ctx.props, max_depth);
-    let width = prefix.width();
-    let blank = |cells: u16| {
-        chrome(
-            vec![crate::style::Span::new(" ".repeat(cells as usize))],
-            style,
-            hovered,
-        )
-    };
+    prefix: Prefix,
+    collapsible: bool,
+    selectable: bool,
+    icon: Option<ElementSlot>,
+    leading: Option<ElementSlot>,
+    /// The prefix of each extra line.
+    continuation: Vec<Span>,
+}
 
-    let mut first =
-        HStack::new()
-            .gap(0)
-            .height(Length::Px(1))
-            .child(chrome(prefix.guides, style, hovered));
-    if !prefix.arrow.is_empty() {
-        let arrow = chrome(prefix.arrow, style, hovered);
-        first = if entry.node.is_collapsible() {
-            let ctrl = ctx.props.on_ctrl_activate.is_some();
-            let selectable = entry.node.item.is_selectable();
-            let link = ctx.link().clone();
-            first.child(
-                MouseRegion::new()
-                    .child(arrow)
-                    .on_click(ctx.link().callback(move |mouse: MouseRegionEvent| {
-                        if ctrl && mouse.mods == KeyMods::CTRL {
-                            if selectable {
-                                link.send(TreeMsg::Select(index));
-                            }
-                            TreeMsg::CtrlActivate(index)
-                        } else {
-                            TreeMsg::Toggle(index)
-                        }
-                    })),
-            )
-        } else {
-            first.child(arrow)
-        };
-    }
-    if prefix.content_gap > 0 {
-        first = first.child(blank(prefix.content_gap));
-    }
-    if let Some((icon_width, icon_gap)) = prefix.icon {
-        let mut cell = HStack::new()
-            .gap(0)
-            .width(Length::Px(icon_width))
-            .height(Length::Px(1));
-        if let Some(icon) = &entry.node.icon {
-            cell = cell.child(icon.element());
-        }
-        first = first.child(cell);
-        if icon_gap > 0 {
-            first = first.child(blank(icon_gap));
+impl RowParts {
+    fn new(
+        ctx: &Context<TreeComponent>,
+        entry: &TreeEntry<'_>,
+        index: usize,
+        max_depth: usize,
+    ) -> Self {
+        let prefix = prefix(entry, &ctx.props, max_depth);
+        let continuation = continuation_spans(entry, &ctx.props, max_depth, prefix.width());
+        Self {
+            index,
+            prefix,
+            collapsible: entry.node.is_collapsible(),
+            selectable: entry.node.item.is_selectable(),
+            icon: entry.node.icon.clone(),
+            leading: entry.node.leading.clone(),
+            continuation,
         }
     }
 
-    let mut column = VStack::new()
-        .gap(0)
-        .width(Length::Px(width))
-        .height(Length::Px(height))
-        .child(first);
-    for _ in 1..height {
-        column = column.child(chrome(
-            continuation_spans(entry, &ctx.props, max_depth, width),
+    fn render(&self, row: &RowView<'_>, link: &Link<TreeMsg>, ctrl: bool) -> Element {
+        let content = row
+            .item
+            .content
+            .as_ref()
+            .map(|content| content.element())
+            .unwrap_or_else(|| text_row(row.item));
+        let height = row.item.line_count().min(u16::MAX as usize) as u16;
+        let (style, hovered) = (row.style, row.hovered);
+        let prefix = &self.prefix;
+        let blank =
+            |cells: u16| chrome(vec![Span::new(" ".repeat(cells as usize))], style, hovered);
+
+        let mut first = HStack::new().gap(0).height(Length::Px(1)).child(chrome(
+            prefix.guides.clone(),
             style,
             hovered,
         ));
+        if !prefix.arrow.is_empty() {
+            let arrow = chrome(prefix.arrow.clone(), style, hovered);
+            first = if self.collapsible {
+                first.child(self.arrow_toggle(arrow, link, ctrl))
+            } else {
+                first.child(arrow)
+            };
+        }
+        if prefix.content_gap > 0 {
+            first = first.child(blank(prefix.content_gap));
+        }
+        if let Some((icon_width, icon_gap)) = prefix.icon {
+            let mut cell = HStack::new()
+                .gap(0)
+                .width(Length::Px(icon_width))
+                .height(Length::Px(1));
+            if let Some(icon) = &self.icon {
+                cell = cell.child(icon.element());
+            }
+            first = first.child(cell);
+            if icon_gap > 0 {
+                first = first.child(blank(icon_gap));
+            }
+        }
+
+        let mut column = VStack::new()
+            .gap(0)
+            .width(Length::Px(prefix.width()))
+            .height(Length::Px(height))
+            .child(first);
+        for _ in 1..height {
+            column = column.child(chrome(self.continuation.clone(), style, hovered));
+        }
+        let mut row = HStack::new().gap(0).height(Length::Px(height));
+        if let Some(leading) = &self.leading {
+            row = row.child(leading.element());
+        }
+        row.child(column).child(content).into()
     }
-    let mut row = HStack::new().gap(0).height(Length::Px(height));
-    if let Some(leading) = &entry.node.leading {
-        row = row.child(leading.element());
+
+    /// The arrow of a collapsible row toggles it; with Ctrl activation, a Ctrl+click activates it.
+    fn arrow_toggle(&self, arrow: Element, link: &Link<TreeMsg>, ctrl: bool) -> Element {
+        let (index, selectable) = (self.index, self.selectable);
+        let link = link.clone();
+        MouseRegion::new()
+            .child(arrow)
+            .on_click(crate::callback::Callback::new(
+                move |mouse: MouseRegionEvent| {
+                    if ctrl && mouse.mods == KeyMods::CTRL {
+                        if selectable {
+                            link.send(TreeMsg::Select(index));
+                        }
+                        link.send(TreeMsg::CtrlActivate(index));
+                    } else {
+                        link.send(TreeMsg::Toggle(index));
+                    }
+                },
+            ))
+            .into()
     }
-    row.child(column).child(content).into()
 }
 
 /// Hover adjusts chrome contrast without recoloring guides on selected or active rows alone.
@@ -530,35 +313,6 @@ fn chrome(spans: Vec<crate::style::Span>, style: crate::style::Style, hovered: b
         .into()
 }
 
-fn row_style(
-    ctx: &Context<TreeComponent>,
-    entry: &TreeEntry<'_>,
-    index: usize,
-    selected: Option<usize>,
-) -> crate::style::Style {
-    let mut style = entry.node.item.style;
-    if row_hovered(ctx, entry, index) {
-        style = style.patch(crate::style::resolve_slot(
-            &ctx.theme(),
-            crate::style::ThemeRole::ItemHover,
-            &ctx.props.item_hover_style,
-        ));
-    }
-    if selected == Some(index) {
-        style = style.patch(crate::style::resolve_selection_slot(
-            &ctx.theme(),
-            &ctx.props.selection_style,
-            &ctx.props.unfocused_selection_style,
-            ctx.has_focus_within(),
-        ));
-    }
-    style
-}
-
 fn row_interactive(entry: &TreeEntry<'_>) -> bool {
     entry.node.item.is_selectable() || entry.node.is_collapsible()
-}
-
-fn row_hovered(ctx: &Context<TreeComponent>, entry: &TreeEntry<'_>, index: usize) -> bool {
-    ctx.state.hovered == Some(index) && row_interactive(entry)
 }

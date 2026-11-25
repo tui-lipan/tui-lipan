@@ -52,7 +52,7 @@ constructor_examples! {
     #[cfg(feature = "image")]
     Image { src: "logo.png" };
     Input { value: "Edited value" };
-    ListItem { content: "Item 1" } in List;
+    ListItem { label: "Item 1" } in List;
     PaginationBar { state: PaginationState::new(12, 5) };
     ProgressBar { progress: 0.75 };
     Radio { options: ["A", "B"] };

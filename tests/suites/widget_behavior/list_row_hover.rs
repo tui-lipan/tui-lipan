@@ -20,8 +20,12 @@ impl Component for Rows {
     }
     fn view(&self, ctx: &Context<Self>) -> Element {
         let item = |label: &'static str| {
-            let _ = self.composed;
-            ListItem::new(label)
+            let item = ListItem::new(label);
+            if self.composed {
+                item.content(Text::new(label))
+            } else {
+                item
+            }
         };
         List::new()
             .item(ListItem::header("Group"))
@@ -67,4 +71,9 @@ const TRAIL: [(usize, bool); 6] = [
 #[test]
 fn text_rows_report_entry_and_exit() {
     assert_eq!(hover_trail(false), TRAIL);
+}
+
+#[test]
+fn composed_rows_report_entry_and_exit() {
+    assert_eq!(hover_trail(true), TRAIL);
 }
