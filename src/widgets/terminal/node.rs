@@ -117,12 +117,13 @@ pub(crate) struct TerminalLinkHover {
 }
 
 impl TerminalNode {
-    /// Whether this terminal shows a caret at all, before focus and blink. Scrollback and a
-    /// selection hide the child's caret; one the app placed (`cursor_override`) stays through both.
+    /// Whether this terminal shows a caret at all, before focus and blink. A selection hides the
+    /// child's caret; one the app placed (`cursor_override`) stays through it. Scrolled back, the
+    /// snapshot places the child's caret, so it hides while a pending scroll shows another offset.
     pub(crate) fn shows_caret(&self) -> bool {
         self.cursor_visible
             && (self.cursor_position_override.is_some()
-                || (self.scrollback_offset == 0
+                || (self.scrollback_offset == self.snapshot_scrollback_offset
                     && self
                         .selection
                         .as_ref()
