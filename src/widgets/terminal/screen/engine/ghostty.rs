@@ -31,7 +31,7 @@ use super::super::super::ghostty::{
 use super::super::{
     TerminalCellSize, TerminalClipboardEvent, TerminalClipboardTarget, TerminalColorPalette,
 };
-use super::semantic::{self, CursorRequests};
+use super::semantic::{self, CursorRequests, MouseTracking};
 use super::{
     AnchorKind, CellAttrs, CursorAnchor, CursorTemplate, EngineAnchor, EngineConfig,
     EngineCursorShape, EngineCursorStyle, EngineObserver, GridPoint, GridStep, ModeFlags,
@@ -253,6 +253,7 @@ pub(in super::super) struct GhosttyEngine {
     effects: Rc<Effects>,
     semantic_parser: SemanticVteParser,
     cursor_requests: CursorRequests,
+    mouse_tracking: MouseTracking,
     default_cursor_style: EngineCursorStyle,
     scratch: RefCell<ReadScratch>,
     /// History lines exposed to callers.
@@ -661,6 +662,7 @@ impl TerminalEngine for GhosttyEngine {
             effects,
             semantic_parser: SemanticVteParser::new(),
             cursor_requests: CursorRequests::default(),
+            mouse_tracking: MouseTracking::default(),
             default_cursor_style: config.default_cursor_style,
             scratch: RefCell::new(ReadScratch::default()),
             scrollback: config.scrollback,
@@ -686,6 +688,7 @@ impl TerminalEngine for GhosttyEngine {
         *self.effects.title.borrow_mut() = None;
         self.semantic_parser = SemanticVteParser::new();
         self.cursor_requests = CursorRequests::default();
+        self.mouse_tracking = MouseTracking::default();
         self.held.clear();
         self.display_offset = 0;
         self.window_top = None;
@@ -747,6 +750,7 @@ impl TerminalEngine for GhosttyEngine {
                 &mut self.semantic_parser,
                 observer,
                 Some(&mut self.cursor_requests),
+                &mut self.mouse_tracking,
                 &bytes[processed..],
             );
             if consumed == 0 {
@@ -901,20 +905,17 @@ impl TerminalEngine for GhosttyEngine {
             (Mode::CURSOR_VISIBLE, ModeFlags::SHOW_CURSOR),
             (Mode::CURSOR_KEYS, ModeFlags::APP_CURSOR),
             (Mode::KEYPAD_KEYS, ModeFlags::APP_KEYPAD),
-            (Mode::MOUSE_EVENT_X10, ModeFlags::MOUSE_X10),
-            (Mode::MOUSE_EVENT_NORMAL, ModeFlags::MOUSE_REPORT_CLICK),
             (Mode::BRACKETED_PASTE, ModeFlags::BRACKETED_PASTE),
             (Mode::MOUSE_FORMAT_SGR, ModeFlags::SGR_MOUSE),
-            (Mode::MOUSE_EVENT_ANY, ModeFlags::MOUSE_MOTION),
             (Mode::WRAPAROUND, ModeFlags::LINE_WRAP),
             (Mode::FOCUS_EVENT, ModeFlags::FOCUS_IN_OUT),
-            (Mode::MOUSE_EVENT_BUTTON, ModeFlags::MOUSE_DRAG),
             (Mode::MOUSE_FORMAT_UTF8, ModeFlags::UTF8_MOUSE),
             (Mode::MOUSE_FORMAT_SGR_PIXELS, ModeFlags::SGR_PIXELS_MOUSE),
         ] {
             flags.set(flag, on(mode));
         }
         flags.set(ModeFlags::ALT_SCREEN, self.alternate());
+        flags.set(self.mouse_tracking.flags(), true);
         let kitty = self.terminal.kitty_keyboard_flags();
         for (bit, flag) in [
             (1, ModeFlags::DISAMBIGUATE_ESC_CODES),
@@ -960,6 +961,7 @@ impl TerminalEngine for GhosttyEngine {
         }
         bits |= u64::from(self.terminal.kitty_keyboard_flags()) << 32;
         bits |= u64::from(self.alternate()) << 40;
+        bits |= self.mouse_tracking.fingerprint() << 48;
         bits
     }
 
@@ -1138,6 +1140,7 @@ impl TerminalEngine for GhosttyEngine {
             effects: Rc::clone(&self.effects),
             semantic_parser: SemanticVteParser::new(),
             cursor_requests: self.cursor_requests,
+            mouse_tracking: self.mouse_tracking,
             default_cursor_style: self.default_cursor_style,
             scratch: RefCell::new(ReadScratch::default()),
             scrollback: self.scrollback,

@@ -7,7 +7,7 @@
 
 use alacritty_terminal::vte::{Params, Parser, Perform};
 
-use super::EngineObserver;
+use super::{EngineObserver, ModeFlags};
 
 /// Which cursor properties the child explicitly set, for an engine that cannot tell its own
 /// defaults from the child's requests.
@@ -47,18 +47,61 @@ impl CursorRequests {
     }
 }
 
+/// The mouse tracking mode in effect, by xterm's rules: setting `DECSET 9`, `1000`, `1002` or
+/// `1003` replaces whichever was on, and resetting any of them turns tracking off.
+///
+/// Neither engine's mode bits say this. Ghostty keeps each mode's bit apart from the mode in
+/// effect, so `?1002h ?1000h` leaves both bits set, and Alacritty keeps `1002` on through a
+/// `?1000l`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct MouseTracking(Option<u16>);
+
+impl MouseTracking {
+    fn csi(&mut self, params: &Params, intermediates: &[u8], action: char) {
+        if intermediates != b"?" || !matches!(action, 'h' | 'l') {
+            return;
+        }
+        for param in params.iter() {
+            if let &[mode @ (9 | 1000 | 1002 | 1003)] = param {
+                self.0 = (action == 'h').then_some(mode);
+            }
+        }
+    }
+
+    /// The mode in effect as its [`ModeFlags`] bit, or none.
+    pub(super) fn flags(self) -> ModeFlags {
+        match self.0 {
+            Some(9) => ModeFlags::MOUSE_X10,
+            Some(1000) => ModeFlags::MOUSE_REPORT_CLICK,
+            Some(1002) => ModeFlags::MOUSE_DRAG,
+            Some(1003) => ModeFlags::MOUSE_MOTION,
+            _ => ModeFlags::empty(),
+        }
+    }
+
+    /// A distinct small number per mode, for a mode fingerprint.
+    pub(super) fn fingerprint(self) -> u64 {
+        u64::from(self.0.unwrap_or(0))
+    }
+}
+
 /// Parse `bytes` until the observer wants an anchor. Returns how many bytes were consumed.
 pub(super) fn advance_until_anchor<O: EngineObserver>(
     parser: &mut Parser,
     observer: &mut O,
     cursor: Option<&mut CursorRequests>,
+    mouse: &mut MouseTracking,
     bytes: &[u8],
 ) -> usize {
-    parser.advance_until_terminated(&mut SemanticPerform(observer, cursor), bytes)
+    parser.advance_until_terminated(&mut SemanticPerform(observer, cursor, mouse), bytes)
 }
 
 /// Every callback besides OSC, CSI, and ESC dispatch keeps the trait's no-op default.
-struct SemanticPerform<'o, O>(&'o mut O, Option<&'o mut CursorRequests>);
+struct SemanticPerform<'o, O>(
+    &'o mut O,
+    Option<&'o mut CursorRequests>,
+    &'o mut MouseTracking,
+);
 
 impl<O: EngineObserver> SemanticPerform<'_, O> {
     fn pointer_csi(&mut self, params: &Params, intermediates: &[u8], action: char) {
@@ -83,6 +126,7 @@ impl<O: EngineObserver> Perform for SemanticPerform<'_, O> {
         if let Some(cursor) = self.1.as_deref_mut() {
             cursor.csi(params, intermediates, action);
         }
+        self.2.csi(params, intermediates, action);
         self.pointer_csi(params, intermediates, action);
         if action != 'q' || intermediates != b">" {
             return;
@@ -105,6 +149,7 @@ impl<O: EngineObserver> Perform for SemanticPerform<'_, O> {
             if let Some(cursor) = self.1.as_deref_mut() {
                 *cursor = CursorRequests::default();
             }
+            *self.2 = MouseTracking::default();
         }
     }
 
@@ -174,7 +219,9 @@ impl SemanticTestDriver {
                 match *self {}
             }
         }
-        self.0
-            .advance(&mut SemanticPerform(&mut Forward(observer), None), bytes);
+        self.0.advance(
+            &mut SemanticPerform(&mut Forward(observer), None, &mut MouseTracking::default()),
+            bytes,
+        );
     }
 }

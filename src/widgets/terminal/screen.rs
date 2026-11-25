@@ -5852,18 +5852,20 @@ mod tests {
         #[cfg(feature = "terminal-ghostty")]
         engines.push(TerminalEngineKind::Ghostty);
         for engine in engines {
-            // Alacritty does not implement X10 tracking.
-            let x10 = if engine == TerminalEngineKind::Alacritty {
-                MouseMode::None
-            } else {
-                MouseMode::X10
-            };
             for (input, expected) in [
-                (&b"\x1b[?9h"[..], x10),
+                (&b"\x1b[?9h"[..], MouseMode::X10),
                 (b"\x1b[?1000h", MouseMode::Normal),
                 (b"\x1b[?1002h", MouseMode::ButtonEvent),
                 (b"\x1b[?1003h", MouseMode::AnyEvent),
                 (b"\x1b[?1003h\x1b[?1003l\x1b[?1000h", MouseMode::Normal),
+                // The last mode set wins, without a reset in between.
+                (b"\x1b[?1002h\x1b[?1000h", MouseMode::Normal),
+                (b"\x1b[?1003h\x1b[?1000h", MouseMode::Normal),
+                (b"\x1b[?1000h\x1b[?1003h", MouseMode::AnyEvent),
+                // Resetting any tracking mode turns tracking off.
+                (b"\x1b[?1000h\x1b[?1002h\x1b[?1000l", MouseMode::None),
+                (b"\x1b[?9h\x1b[?1000h\x1b[?1000l", MouseMode::None),
+                (b"\x1b[?1002h\x1bc", MouseMode::None),
             ] {
                 let mut source = TerminalScreen::with_engine(engine, 3, 10, 10);
                 source.process_bytes(input);
