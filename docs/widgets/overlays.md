@@ -377,6 +377,10 @@ content (styled rows, icons, a summary card) gets the same delay, warm-up, and p
 plain text, and shares warm state with every other tooltip. Content must stay non-interactive; the
 popup never takes focus or pointer input.
 
+`Tooltip::new` takes `impl Into<TooltipContent>`. Every standard string type converts, but a helper
+generic over `impl Into<Arc<str>>` must convert first: `let text: Arc<str> = text.into();` then
+`Tooltip::new(text)`.
+
 Set `delay` to wait before a hover opens the tooltip, as desktop apps do: sweeping the pointer
 across a toolbar then opens nothing. Once one delayed tooltip has shown, a neighbour opens at once
 if the pointer reaches it within `skip_delay`. Focus always shows the tooltip immediately. A
