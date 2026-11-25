@@ -102,7 +102,7 @@ same live screen does not repeat the report. Paint-only updates also synchronize
 | `show_cursor` | `bool` | Show the hardware caret |
 | `cursor_shape` | `CaretShape` | Hardware caret shape |
 | `cursor_blinking` | `bool` | Override blinking, including child requests on live screens |
-| `cursor_override` | `Option<(u16, u16)>` | Put the caret at a viewport `(row, col)` over a live screen's own and show it even while the child hides its cursor, a selection is active, or the view is scrolled back, for an app-driven cursor such as copy mode; `show_cursor(false)` still hides it. `None` (default) follows the screen |
+| `cursor_override` | `Option<(u16, u16)>` | Put the caret at a viewport `(row, col)` over a live screen's own and show it even while the child hides its cursor or a selection is active, for an app-driven cursor such as copy mode; `show_cursor(false)` still hides it. `None` (default) follows the screen |
 | `caret_color` | `Color` | Hardware caret color via OSC 12 (terminal support required) |
 | `style` | `Style` | Container style |
 | `hover_style` | `Style` | Hover style |
@@ -661,7 +661,7 @@ emits SGR only, keeps every row at the frame's width, and does not draw the curs
 A wide glyph sits in its first cell and the column it covers holds an empty symbol, so a row's
 symbols join to text at its true display width. A row that wrapped a wide glyph early keeps the
 blank column it left. Hidden text captures as spaces. `cursor` is set while the cursor lies in
-the viewport, and is visible only when the program shows it and the view is not scrolled back.
+the viewport, and is visible when the program shows it.
 Its `shape` and `blinking` follow the program's `DECSCUSR` request (`CSI Ps SP q`), and until it
 makes one they are the screen's configured default. Live screens inherit the host cursor style;
 standalone headless screens default to a blinking block. Its `color` is the one the program set
@@ -1013,7 +1013,7 @@ Msg::ScrollTo(offset) => {
 }
 ```
 
-The cursor is hidden while scrolled into history. Typing input snaps back to live view (set scrollback to 0).
+While scrolled into history, the cursor shows as long as its row is still in view. Typing input snaps back to live view (set scrollback to 0).
 
 `TerminalScreen::process_bytes()` automatically preserves the user's scrollback position when new output arrives while scrolled up - the offset is adjusted for newly added rows.
 

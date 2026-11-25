@@ -245,7 +245,7 @@ impl Terminal {
 
     /// Put the caret at `(row, col)` in the visible viewport, including on live screens, and show
     /// it there even while the child program hides its own cursor, a selection is active, or the
-    /// view is scrolled back, all of which hide the child's caret.
+    /// view is scrolled past the child's cursor.
     ///
     /// For a cursor the app drives over the child's output, such as a copy-mode cursor.
     /// [`Self::show_cursor`]`(false)` still hides it. `None` (the default) follows the screen.

@@ -2542,8 +2542,9 @@ impl TerminalScreen {
             let cursor_view = usize::try_from(cursor.line + display_offset as i32).ok();
             let cursor_row = cursor_view.map(|row| row as u16).unwrap_or(0);
             let cursor_col = cursor_view.map(|_| cursor.column as u16).unwrap_or(0);
-            let cursor_visible =
-                mode.contains(ModeFlags::SHOW_CURSOR) && self.scrollback_offset == 0;
+            // Scrolled back, the cursor shows while its row is still in the viewport.
+            let cursor_visible = mode.contains(ModeFlags::SHOW_CURSOR)
+                && cursor_view.is_some_and(|row| row < usize::from(self.rows));
             let cursor_style = self.engine.cursor_style();
             let cursor_shape = caret_shape_from_engine(cursor_style.shape);
             let cursor_blinking = cursor_style.blinking;
@@ -2737,8 +2738,7 @@ impl TerminalScreen {
                 CursorState::new(point.column as u16, line as u16)
                     .visible(
                         modes.contains(ModeFlags::SHOW_CURSOR)
-                            && style.shape != EngineCursorShape::Hidden
-                            && display_offset == 0,
+                            && style.shape != EngineCursorShape::Hidden,
                     )
                     .shape(shape)
                     .color(color)
@@ -4788,6 +4788,26 @@ mod tests {
         screen.process_bytes(b"\x1b[?25l");
         let cursor = screen.capture_frame().cursor.expect("cursor in viewport");
         assert!(!cursor.visible);
+    }
+
+    /// A shell cleared with Ctrl-L sits at the top with history above it. Scrolling back a little
+    /// keeps its prompt in view, so the cursor must still show there.
+    #[test]
+    fn scrolled_back_cursor_shows_while_its_row_is_in_view() {
+        let mut screen = TerminalScreen::new(3, 6, 10);
+        screen.process_bytes(b"1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\x1b[H$ ");
+        screen.set_scrollback(2);
+        let snapshot = screen.render_snapshot();
+        assert!(snapshot.cursor_visible);
+        assert_eq!((snapshot.cursor_row, snapshot.cursor_col), (2, 2));
+        assert_eq!(
+            screen.capture_frame().cursor.map(|c| (c.y, c.visible)),
+            Some((2, true))
+        );
+
+        screen.set_scrollback(3);
+        assert!(!screen.render_snapshot().cursor_visible);
+        assert_eq!(screen.capture_frame().cursor, None);
     }
 
     #[test]
