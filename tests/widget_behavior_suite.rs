@@ -13,6 +13,8 @@ mod disabled_focus;
 #[cfg(feature = "markdown")]
 #[path = "suites/widget_behavior/document_tooltips.rs"]
 mod document_tooltips;
+#[path = "suites/widget_behavior/drag_wrapper_clicks.rs"]
+mod drag_wrapper_clicks;
 #[path = "suites/widget_behavior/drag_drop_test_backend.rs"]
 mod drag_drop_test_backend;
 #[path = "suites/widget_behavior/draggable_tab_bar_caps_render.rs"]
@@ -158,3 +160,4 @@ mod search_palette_items;
 #[cfg(feature = "terminal")]
 #[path = "suites/widget_behavior/terminal_corpus.rs"]
 mod terminal_corpus;
+
