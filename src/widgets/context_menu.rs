@@ -978,13 +978,12 @@ enum MenuStackMsg {
     OpenSubmenu {
         depth: usize,
     },
-    CloseSubmenu {
-        depth: usize,
-    },
     CloseSubmenuFrom {
         depth: usize,
     },
-    CloseDeepest,
+    CloseDeepest {
+        close_root: bool,
+    },
     Scrolled {
         depth: usize,
     },
@@ -1234,18 +1233,6 @@ impl crate::Component for MenuStack {
                 open_submenu_and_focus(ctx, depth, index, &sub.children);
                 crate::Update::render()
             }
-            MenuStackMsg::CloseSubmenu { depth } => {
-                cancel_pending_hover(&mut ctx.state);
-                if depth == 0 {
-                    return crate::Update::none();
-                }
-                ctx.state.levels.truncate(depth);
-                if let Some(parent) = ctx.state.levels.get_mut(depth - 1) {
-                    parent.open_child = None;
-                }
-                ctx.request_focus(level_key(depth - 1));
-                crate::Update::render()
-            }
             MenuStackMsg::CloseSubmenuFrom { depth } => {
                 cancel_pending_hover(&mut ctx.state);
                 let had_open = ctx
@@ -1263,7 +1250,7 @@ impl crate::Component for MenuStack {
                 ctx.request_focus(level_key(depth));
                 crate::Update::render()
             }
-            MenuStackMsg::CloseDeepest => {
+            MenuStackMsg::CloseDeepest { close_root } => {
                 cancel_pending_hover(&mut ctx.state);
                 if ctx.state.levels.len() > 1 {
                     let parent_depth = ctx.state.levels.len() - 2;
@@ -1273,10 +1260,12 @@ impl crate::Component for MenuStack {
                     }
                     ctx.request_focus(level_key(parent_depth));
                     crate::Update::render()
-                } else {
+                } else if close_root {
                     if let Some(on_close) = &ctx.props.on_close {
                         on_close.emit(());
                     }
+                    crate::Update::none()
+                } else {
                     crate::Update::none()
                 }
             }
@@ -1402,12 +1391,12 @@ fn render_menu_level(
             link_open.send(MenuStackMsg::OpenSubmenu { depth });
             true
         }
-        KeyCode::Left if depth > 0 => {
-            link_close.send(MenuStackMsg::CloseSubmenu { depth });
+        KeyCode::Left => {
+            link_close.send(MenuStackMsg::CloseDeepest { close_root: false });
             true
         }
         KeyCode::Esc => {
-            link_close.send(MenuStackMsg::CloseDeepest);
+            link_close.send(MenuStackMsg::CloseDeepest { close_root: true });
             true
         }
         KeyCode::Tab => {

@@ -509,6 +509,47 @@ fn escape_closes_hover_opened_submenu_before_root_menu() {
     assert!(!*backend.state(), "second Esc must close root menu");
 }
 
+#[test]
+fn left_closes_hover_opened_submenu_without_closing_root_menu() {
+    let mut backend = TestBackend::new(CascadingMenu::default());
+    backend.render();
+    assert!(*backend.state());
+
+    let text = backend.capture_frame().plain_text();
+    let (copy_x, copy_y) = text
+        .lines()
+        .enumerate()
+        .find_map(|(y, line)| line.find("Copy").map(|x| (x as u16 + 1, y as u16)))
+        .expect("Copy row should be visible");
+
+    // Hover Copy to open the submenu while root keeps keyboard focus.
+    backend
+        .send_mouse(MouseEvent {
+            x: copy_x,
+            y: copy_y,
+            kind: MouseKind::Moved,
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.render();
+    assert!(backend.capture_frame().plain_text().contains("Thread ID"));
+
+    // First Left closes only the hover-opened submenu.
+    key(&mut backend, KeyCode::Left);
+    assert!(*backend.state(), "root menu must stay open on Left");
+    assert!(
+        !backend.capture_frame().plain_text().contains("Thread ID"),
+        "Left must close hover-opened submenu even when root holds focus"
+    );
+
+    // Second Left on the root menu with no open submenu must keep the root menu open.
+    key(&mut backend, KeyCode::Left);
+    assert!(
+        *backend.state(),
+        "Left must never dismiss the root context menu"
+    );
+}
+
 struct SizedMenu {
     width: Option<Length>,
     height: Length,

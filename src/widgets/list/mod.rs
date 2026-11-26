@@ -2545,6 +2545,7 @@ fn hash_list_item_layout(item: &ListItem, hasher: &mut impl std::hash::Hasher) {
     use std::hash::Hash;
 
     item.role.hash(hasher);
+    item.disabled.hash(hasher);
     item.active.hash(hasher);
     item.status.as_ref().map(ListItemStatus::width).hash(hasher);
     item.gutter.as_ref().map(ListItemGutter::width).hash(hasher);
@@ -2880,6 +2881,40 @@ mod tests {
             .into();
 
         assert_ne!(element_layout_hash(&base), element_layout_hash(&wrapped));
+    }
+
+    #[test]
+    fn layout_hash_and_measurement_track_disabled_rows() {
+        let enabled_list = List::new()
+            .width(Length::Auto)
+            .symbol_column(true)
+            .selection_symbol(None::<&str>)
+            .items(vec![
+                ListItem::new("item").status(ListItemStatus::from_spans([Span::new("[STATUS] ")])),
+            ]);
+        let disabled_list = List::new()
+            .width(Length::Auto)
+            .symbol_column(true)
+            .selection_symbol(None::<&str>)
+            .items(vec![
+                ListItem::new("item")
+                    .status(ListItemStatus::from_spans([Span::new("[STATUS] ")]))
+                    .disabled(true),
+            ]);
+
+        let (enabled_w, _) = layout::measure_list(&enabled_list);
+        let (disabled_w, _) = layout::measure_list(&disabled_list);
+        assert!(
+            enabled_w > disabled_w,
+            "disabled row's status symbol should not reserve symbol width ({enabled_w} vs {disabled_w})"
+        );
+
+        let enabled_el: Element = enabled_list.into();
+        let disabled_el: Element = disabled_list.into();
+        assert_ne!(
+            element_layout_hash(&enabled_el),
+            element_layout_hash(&disabled_el)
+        );
     }
 
     #[test]
