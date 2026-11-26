@@ -377,6 +377,7 @@ Source: `src/widgets/scroll_view/mod.rs` (`ScrollView`).
 | `scroll_wheel_multiplier` | `None` |
 | `h_scroll_wheel_multiplier` | `None` |
 | `scroll_wheel_behavior` | `ScrollWheelBehavior::default()` |
+| `drag_drop_autoscroll` | `DragDropAutoscroll::default()` |
 | `ambient_page_scroll` | `false` |
 | `focusable` | `false` |
 | `virtualize` | `true` |

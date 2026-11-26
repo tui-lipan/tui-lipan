@@ -931,6 +931,7 @@ pub(crate) fn reconcile_scroll_view(
             scroll_wheel_multiplier: sv.scroll_wheel_multiplier,
             h_scroll_wheel_multiplier: sv.h_scroll_wheel_multiplier,
             scroll_wheel_behavior: sv.scroll_wheel_behavior,
+            drag_drop_autoscroll: sv.drag_drop_autoscroll,
             ambient_page_scroll: sv.ambient_page_scroll,
             focusable: sv.focusable,
             tab_stop: sv.tab_stop,

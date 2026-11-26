@@ -263,8 +263,8 @@ pub(crate) use scroll_view::node::{
 };
 pub(crate) use scroll_view::reconcile::scroll_child_height_depends_on_width;
 pub use scroll_view::{
-    ScrollBehavior, ScrollChildExitDirection, ScrollChildVisibility, ScrollClip,
-    ScrollDistanceConfig, ScrollEvent, ScrollExitedChild, ScrollKeymap, ScrollMetrics,
+    DragDropAutoscroll, ScrollBehavior, ScrollChildExitDirection, ScrollChildVisibility,
+    ScrollClip, ScrollDistanceConfig, ScrollEvent, ScrollExitedChild, ScrollKeymap, ScrollMetrics,
     ScrollRequest, ScrollTarget, ScrollView, ScrollViewportEvent, ScrollVisibleChild,
     ScrollWheelBehavior, ScrollWheelConfig,
 };

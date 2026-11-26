@@ -182,7 +182,6 @@ pub(crate) fn try_activate_drag_drop(
         preview,
         on_cancel,
         hovered_target: None,
-        scroll_view_id: None,
         start_x,
         start_y,
         threshold,
