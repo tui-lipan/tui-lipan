@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::text::edit::{TextEdit, TextEditEvent, TextEditFields, TextEditKind, TextTarget};
@@ -8,67 +9,206 @@ use crate::utils::text::{
 use undo::Record;
 
 const DEFAULT_HISTORY_LIMIT: usize = 1000;
+const MAX_STAGED_HISTORY_STEPS: usize = 64;
 
-type CoreEdit = TextEdit<TextBufferCore>;
+pub(crate) type CoreEdit = TextEdit<TextBufferCore>;
+
+#[derive(Debug)]
+struct StagedHistoryStep {
+    expected_text: Arc<str>,
+    record: Record<CoreEdit>,
+}
+
+#[derive(Debug)]
+struct StagedHistory {
+    base_generation: u64,
+    steps: VecDeque<StagedHistoryStep>,
+}
+
+#[derive(Debug)]
+struct SharedHistoryInner {
+    record: Record<CoreEdit>,
+    generation: u64,
+    staged: Option<StagedHistory>,
+}
 
 /// Undo history backing a [`TextBufferCore`].
 ///
-/// Cloning a `SharedHistory` deep-clones the underlying undo record so cloning a
+/// Cloning a `SharedHistory` deep-clones only the committed undo record so cloning a
 /// [`TextEditor`](super::TextEditor) or [`TextInput`](super::TextInput) produces an independent
 /// history. Sharing the same history with a bound [`TextArea`](crate::widgets::TextArea) goes
-/// explicitly through [`SharedHistoryHandle`].
+/// explicitly through [`SharedHistoryHandle`], where runtime edits are staged until accepted via
+/// [`TextAreaEvent::apply_to`](crate::widgets::TextAreaEvent::apply_to).
 #[derive(Debug)]
-pub(crate) struct SharedHistory(Arc<Mutex<Record<CoreEdit>>>);
+pub(crate) struct SharedHistory(Arc<Mutex<SharedHistoryInner>>);
 
 impl SharedHistory {
     pub(crate) fn fresh() -> Self {
-        Self(Arc::new(Mutex::new(TextBufferCore::fresh_record())))
+        Self::from_record(TextBufferCore::fresh_record())
     }
 
-    pub(crate) fn from_handle(handle: &SharedHistoryHandle) -> Self {
-        Self(Arc::clone(&handle.0))
+    pub(crate) fn from_record(record: Record<CoreEdit>) -> Self {
+        Self(Arc::new(Mutex::new(SharedHistoryInner {
+            record,
+            generation: 0,
+            staged: None,
+        })))
     }
 
     pub(crate) fn handle(&self) -> SharedHistoryHandle {
         SharedHistoryHandle(Arc::clone(&self.0))
     }
 
-    fn lock(&self) -> MutexGuard<'_, Record<CoreEdit>> {
+    fn lock(&self) -> MutexGuard<'_, SharedHistoryInner> {
         self.0
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     pub(crate) fn can_undo(&self) -> bool {
-        self.lock().can_undo()
+        self.lock().record.can_undo()
     }
 
     pub(crate) fn can_redo(&self) -> bool {
-        self.lock().can_redo()
+        self.lock().record.can_redo()
+    }
+
+    pub(crate) fn generation(&self) -> u64 {
+        self.lock().generation
+    }
+
+    pub(crate) fn snapshot(&self) -> Record<CoreEdit> {
+        self.lock().record.clone()
     }
 
     pub(crate) fn clear(&self) {
-        *self.lock() = TextBufferCore::fresh_record();
+        let mut inner = self.lock();
+        inner.record = TextBufferCore::fresh_record();
+        inner.generation = inner.generation.wrapping_add(1);
+        inner.staged = None;
     }
 
     pub(crate) fn take(&self) -> Record<CoreEdit> {
-        std::mem::replace(&mut *self.lock(), TextBufferCore::fresh_record())
+        std::mem::replace(&mut self.lock().record, TextBufferCore::fresh_record())
     }
 
-    pub(crate) fn put_back(&self, record: Record<CoreEdit>) {
-        *self.lock() = record;
+    pub(crate) fn put_back_committed(&self, record: Record<CoreEdit>, changed: bool) {
+        let mut inner = self.lock();
+        inner.record = record;
+        if changed {
+            inner.generation = inner.generation.wrapping_add(1);
+            inner.staged = None;
+        }
+    }
+
+    pub(crate) fn commit_staged(&self, expected_text: &str) -> bool {
+        let mut inner = self.lock();
+        let current_generation = inner.generation;
+        let Some(staged) = inner.staged.as_mut() else {
+            return false;
+        };
+        if staged.base_generation != current_generation {
+            inner.staged = None;
+            return false;
+        }
+        let Some(pos) = staged
+            .steps
+            .iter()
+            .position(|step| step.expected_text.as_ref() == expected_text)
+        else {
+            inner.staged = None;
+            return false;
+        };
+        for _ in 0..pos {
+            staged.steps.pop_front();
+        }
+        let step = staged
+            .steps
+            .pop_front()
+            .expect("matched staged history step must exist");
+        let next_generation = current_generation.wrapping_add(1);
+        let remaining_empty = staged.steps.is_empty();
+        if !remaining_empty {
+            staged.base_generation = next_generation;
+        }
+        inner.record = step.record;
+        inner.generation = next_generation;
+        if remaining_empty {
+            inner.staged = None;
+        }
+        true
     }
 }
 
 impl Clone for SharedHistory {
     fn clone(&self) -> Self {
-        Self(Arc::new(Mutex::new(self.lock().clone())))
+        Self::from_record(self.snapshot())
     }
 }
 
 /// Shared handle to a bound [`TextEditor`](super::TextEditor)'s authoritative undo history.
 #[derive(Clone, Debug)]
-pub(crate) struct SharedHistoryHandle(Arc<Mutex<Record<CoreEdit>>>);
+pub(crate) struct SharedHistoryHandle(Arc<Mutex<SharedHistoryInner>>);
+
+impl SharedHistoryHandle {
+    fn lock(&self) -> MutexGuard<'_, SharedHistoryInner> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Check out a working snapshot of the bound history for runtime `TextArea` handling.
+    ///
+    /// If uncommitted staged steps from the current generation end at `text` (e.g. a second
+    /// runtime operation arrived before the first `on_change` event was drained), continues from
+    /// that staged snapshot; otherwise drops stale staged steps and starts from the committed
+    /// record.
+    pub(crate) fn checkout_for_text(&self, text: &str) -> (Record<CoreEdit>, u64) {
+        let mut inner = self.lock();
+        if let Some(staged) = inner.staged.as_ref()
+            && staged.base_generation == inner.generation
+            && let Some(last) = staged.steps.back()
+            && last.expected_text.as_ref() == text
+        {
+            return (last.record.clone(), staged.base_generation);
+        }
+        inner.staged = None;
+        (inner.record.clone(), inner.generation)
+    }
+
+    /// Stage a runtime history checkpoint to be committed when the matching `TextAreaEvent` is
+    /// accepted by `TextAreaEvent::apply_to`.
+    pub(crate) fn stage_step(
+        &self,
+        base_generation: u64,
+        expected_text: Arc<str>,
+        record: Record<CoreEdit>,
+    ) {
+        let mut inner = self.lock();
+        if inner.generation != base_generation {
+            return;
+        }
+        let step = StagedHistoryStep {
+            expected_text,
+            record,
+        };
+        if let Some(staged) = inner.staged.as_mut()
+            && staged.base_generation == base_generation
+        {
+            if staged.steps.len() >= MAX_STAGED_HISTORY_STEPS {
+                staged.steps.pop_front();
+            }
+            staged.steps.push_back(step);
+        } else {
+            let mut steps = VecDeque::with_capacity(2);
+            steps.push_back(step);
+            inner.staged = Some(StagedHistory {
+                base_generation,
+                steps,
+            });
+        }
+    }
+}
 
 /// Shared text buffer backing both `TextInput` (single-line) and `TextEditor` (multi-line).
 ///
@@ -173,7 +313,7 @@ impl TextBufferCore {
     pub fn undo(&mut self) -> bool {
         let mut history = self.history.take();
         let changed = history.undo(self).is_some();
-        self.history.put_back(history);
+        self.history.put_back_committed(history, changed);
         changed
     }
 
@@ -181,7 +321,7 @@ impl TextBufferCore {
     pub fn redo(&mut self) -> bool {
         let mut history = self.history.take();
         let changed = history.redo(self).is_some();
-        self.history.put_back(history);
+        self.history.put_back_committed(history, changed);
         changed
     }
 
@@ -216,6 +356,24 @@ impl TextBufferCore {
         cursor_after: usize,
         anchor_after: Option<usize>,
     ) {
+        self.record_full_replace_edit(
+            text,
+            cursor_before,
+            anchor_before,
+            cursor_after,
+            anchor_after,
+        );
+        self.last_edit = None;
+    }
+
+    pub(crate) fn record_full_replace_edit(
+        &mut self,
+        text: &str,
+        cursor_before: usize,
+        anchor_before: Option<usize>,
+        cursor_after: usize,
+        anchor_after: Option<usize>,
+    ) -> TextEditEvent {
         let deleted = self.text.clone();
         let cursor_before = clamp_cursor(&deleted, cursor_before);
         let anchor_before = anchor_before.map(|anchor| clamp_cursor(&deleted, anchor));
@@ -231,8 +389,32 @@ impl TextBufferCore {
             anchor_after,
             kind: TextEditKind::Replace,
         });
+        let event = TextEditEvent::from(&edit);
         self.record_edit(edit);
-        self.last_edit = None;
+        event
+    }
+
+    /// Apply a controlled `TextAreaEvent` back to a bound buffer, committing the matching staged
+    /// runtime history step when the text was accepted verbatim, or recording a clean replacement
+    /// edit when the application transformed the text.
+    pub(crate) fn apply_controlled_change(
+        &mut self,
+        value: &str,
+        cursor: usize,
+        anchor: Option<usize>,
+    ) {
+        if self.history.commit_staged(value) {
+            self.text = value.to_string();
+            self.cursor = clamp_cursor(&self.text, cursor);
+            self.anchor = anchor.map(|a| clamp_cursor(&self.text, a));
+        } else if self.text != value {
+            let prev_cursor = self.cursor;
+            let prev_anchor = self.anchor;
+            self.sync_external_edit_from(value, prev_cursor, prev_anchor, cursor, anchor);
+        } else {
+            self.cursor = clamp_cursor(&self.text, cursor);
+            self.anchor = anchor.map(|a| clamp_cursor(&self.text, a));
+        }
     }
 
     /// Set the text, clamping the cursor and clearing selection.
@@ -294,7 +476,7 @@ impl TextBufferCore {
         self.last_edit = Some(TextEditEvent::from(&edit));
         let mut history = self.history.take();
         history.edit(self, edit);
-        self.history.put_back(history);
+        self.history.put_back_committed(history, true);
     }
 
     pub(crate) fn take_last_edit(&mut self) -> Option<TextEditEvent> {

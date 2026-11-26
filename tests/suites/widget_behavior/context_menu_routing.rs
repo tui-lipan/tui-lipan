@@ -2041,3 +2041,453 @@ fn coalesced_programmatic_edits_preserve_exact_undo_and_redo_semantics() {
     backend.render();
     assert_eq!(backend.state().text(), "");
 }
+
+#[test]
+fn rejected_controlled_edits_do_not_corrupt_bound_history_or_panic() {
+    #[derive(Clone, Debug)]
+    enum Msg {
+        Edited(tui_lipan::TextAreaEvent),
+        Undo,
+        Redo,
+    }
+
+    struct DigitsOnlyHarness;
+
+    impl Component for DigitsOnlyHarness {
+        type Properties = ();
+        type State = tui_lipan::TextEditor;
+        type Message = Msg;
+
+        fn create_state(&self, _: &()) -> Self::State {
+            tui_lipan::TextEditor::default()
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            match msg {
+                Msg::Edited(ev) => {
+                    if ev.value.chars().all(|ch| ch.is_ascii_digit()) {
+                        ev.apply_to(&mut ctx.state);
+                    }
+                    Update::full()
+                }
+                Msg::Undo => {
+                    ctx.state.undo();
+                    Update::full()
+                }
+                Msg::Redo => {
+                    ctx.state.redo();
+                    Update::full()
+                }
+            }
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            TextArea::bound(&ctx.state)
+                .height(Length::Px(4))
+                .on_change(ctx.link().callback(Msg::Edited))
+                .key("digits-only-editor")
+        }
+    }
+
+    let mut backend = TestBackend::new(DigitsOnlyHarness);
+    backend.focus_key(&tui_lipan::Key::from("digits-only-editor"));
+    backend.render();
+
+    let undo = KeyEvent {
+        code: KeyCode::Char('z'),
+        mods: KeyMods::CTRL,
+    };
+
+    // Rejected edit on an empty bound editor must not leave a stale undo record.
+    backend
+        .send_key(KeyEvent {
+            code: KeyCode::Char('a'),
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "");
+    assert!(!backend.state().can_undo());
+
+    // Neither programmatic undo nor Ctrl+Z should panic.
+    backend.dispatch(Msg::Undo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "");
+    backend.send_key(undo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "");
+
+    // Type accepted digits, then a rejected letter: prior history stays intact for both paths.
+    for ch in ['1', '2'] {
+        backend
+            .send_key(KeyEvent {
+                code: KeyCode::Char(ch),
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+        backend.render();
+    }
+    assert_eq!(backend.state().text(), "12");
+
+    backend
+        .send_key(KeyEvent {
+            code: KeyCode::Char('x'),
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "12");
+
+    backend.dispatch(Msg::Undo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "");
+
+    backend.dispatch(Msg::Redo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "12");
+
+    backend
+        .send_key(KeyEvent {
+            code: KeyCode::Char('y'),
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "12");
+
+    backend.send_key(undo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "");
+}
+
+#[test]
+fn transformed_controlled_edits_keep_bound_history_consistent() {
+    #[derive(Clone, Debug)]
+    enum Msg {
+        Edited(tui_lipan::TextAreaEvent),
+        Undo,
+        Redo,
+    }
+
+    struct UppercaseAlphaHarness;
+
+    impl Component for UppercaseAlphaHarness {
+        type Properties = ();
+        type State = tui_lipan::TextEditor;
+        type Message = Msg;
+
+        fn create_state(&self, _: &()) -> Self::State {
+            tui_lipan::TextEditor::default()
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            match msg {
+                Msg::Edited(mut ev) => {
+                    let sanitized: String = ev
+                        .value
+                        .chars()
+                        .filter(|ch| ch.is_ascii_alphabetic())
+                        .map(|ch| ch.to_ascii_uppercase())
+                        .collect();
+                    ev.value = std::sync::Arc::from(sanitized);
+                    ev.cursor = ev.cursor.min(ev.value.len());
+                    ev.apply_to(&mut ctx.state);
+                    Update::full()
+                }
+                Msg::Undo => {
+                    ctx.state.undo();
+                    Update::full()
+                }
+                Msg::Redo => {
+                    ctx.state.redo();
+                    Update::full()
+                }
+            }
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            TextArea::bound(&ctx.state)
+                .height(Length::Px(4))
+                .on_change(ctx.link().callback(Msg::Edited))
+                .key("uppercase-editor")
+        }
+    }
+
+    let mut backend = TestBackend::new(UppercaseAlphaHarness);
+    backend.focus_key(&tui_lipan::Key::from("uppercase-editor"));
+    backend.render();
+
+    for ch in ['a', 'b', '9'] {
+        backend
+            .send_key(KeyEvent {
+                code: KeyCode::Char(ch),
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+        backend.render();
+    }
+    assert_eq!(backend.state().text(), "AB");
+
+    let undo = KeyEvent {
+        code: KeyCode::Char('z'),
+        mods: KeyMods::CTRL,
+    };
+    let redo = KeyEvent {
+        code: KeyCode::Char('y'),
+        mods: KeyMods::CTRL,
+    };
+
+    backend.send_key(undo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "A");
+
+    backend.dispatch(Msg::Undo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "");
+
+    backend.send_key(redo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "A");
+
+    backend.dispatch(Msg::Redo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "AB");
+}
+
+#[test]
+fn bound_inline_image_sentinel_remap_is_atomic_across_undo_and_redo() {
+    #[derive(Clone, Debug)]
+    enum Msg {
+        Edited(tui_lipan::TextAreaEvent),
+        Images(Vec<tui_lipan::ImageContent>),
+        Undo,
+        Redo,
+    }
+
+    struct State {
+        editor: tui_lipan::TextEditor,
+        images: Vec<tui_lipan::ImageContent>,
+    }
+
+    struct ImageSentinelHarness;
+
+    let s0 = tui_lipan::IMAGE_SENTINEL_BASE;
+    let s1 = char::from_u32(tui_lipan::IMAGE_SENTINEL_BASE as u32 + 1).unwrap();
+    let img0 = tui_lipan::ImageContent::from_bytes(b"img-zero", tui_lipan::ImageFormat::Png);
+    let img1 = tui_lipan::ImageContent::from_bytes(b"img-one", tui_lipan::ImageFormat::Png);
+
+    impl Component for ImageSentinelHarness {
+        type Properties = ();
+        type State = State;
+        type Message = Msg;
+
+        fn create_state(&self, _: &()) -> Self::State {
+            let s0 = tui_lipan::IMAGE_SENTINEL_BASE;
+            let s1 = char::from_u32(tui_lipan::IMAGE_SENTINEL_BASE as u32 + 1).unwrap();
+            let mut editor = tui_lipan::TextEditor::new(format!("{s0}{s1}"));
+            editor.set_cursor(s0.len_utf8());
+            State {
+                editor,
+                images: vec![
+                    tui_lipan::ImageContent::from_bytes(b"img-zero", tui_lipan::ImageFormat::Png),
+                    tui_lipan::ImageContent::from_bytes(b"img-one", tui_lipan::ImageFormat::Png),
+                ],
+            }
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            match msg {
+                Msg::Edited(ev) => {
+                    ev.apply_to(&mut ctx.state.editor);
+                    Update::full()
+                }
+                Msg::Images(images) => {
+                    ctx.state.images = images;
+                    Update::full()
+                }
+                Msg::Undo => {
+                    ctx.state.editor.undo();
+                    Update::full()
+                }
+                Msg::Redo => {
+                    ctx.state.editor.redo();
+                    Update::full()
+                }
+            }
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            TextArea::bound(&ctx.state.editor)
+                .height(Length::Px(4))
+                .image_mode(tui_lipan::TextAreaImageMode::Inline)
+                .images(ctx.state.images.clone())
+                .on_change(ctx.link().callback(Msg::Edited))
+                .on_images_change(ctx.link().callback(Msg::Images))
+                .key("image-sentinel-editor")
+        }
+    }
+
+    let mut backend = TestBackend::new(ImageSentinelHarness);
+    backend.focus_key(&tui_lipan::Key::from("image-sentinel-editor"));
+    backend.render();
+
+    // Delete the first image sentinel ([E000]); the remaining sentinel remaps from [E001] to [E000].
+    backend
+        .send_key(KeyEvent {
+            code: KeyCode::Backspace,
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.render();
+    assert_eq!(backend.state().editor.text(), format!("{s0}"));
+    assert_eq!(backend.state().images, vec![img1.clone()]);
+
+    let undo = KeyEvent {
+        code: KeyCode::Char('z'),
+        mods: KeyMods::CTRL,
+    };
+    let redo = KeyEvent {
+        code: KeyCode::Char('y'),
+        mods: KeyMods::CTRL,
+    };
+
+    // Undo restores distinct [E000][E001] identifiers (not [E000][E000]) and both images.
+    backend.send_key(undo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().editor.text(), format!("{s0}{s1}"));
+    assert_eq!(backend.state().images, vec![img0.clone(), img1.clone()]);
+
+    // Redo re-applies the remapped deletion and restores only img1 (not img0).
+    backend.send_key(redo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().editor.text(), format!("{s0}"));
+    assert_eq!(backend.state().images, vec![img1.clone()]);
+
+    // Programmatic undo/redo on the bound TextEditor also sees distinct identifiers.
+    backend.dispatch(Msg::Undo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().editor.text(), format!("{s0}{s1}"));
+
+    backend.dispatch(Msg::Redo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().editor.text(), format!("{s0}"));
+}
+
+#[test]
+fn bound_custom_sentinel_middle_delete_remap_is_atomic_across_undo_and_redo() {
+    #[derive(Clone, Debug)]
+    enum Msg {
+        Edited(tui_lipan::TextAreaEvent),
+        Sentinels(Vec<tui_lipan::TextAreaSentinel>),
+    }
+
+    struct State {
+        editor: tui_lipan::TextEditor,
+        sentinels: Vec<tui_lipan::TextAreaSentinel>,
+    }
+
+    struct CustomSentinelHarness;
+
+    let c0 = tui_lipan::SENTINEL_BASE;
+    let c1 = char::from_u32(tui_lipan::SENTINEL_BASE as u32 + 1).unwrap();
+    let c2 = char::from_u32(tui_lipan::SENTINEL_BASE as u32 + 2).unwrap();
+
+    impl Component for CustomSentinelHarness {
+        type Properties = ();
+        type State = State;
+        type Message = Msg;
+
+        fn create_state(&self, _: &()) -> Self::State {
+            let mut sentinels = Vec::new();
+            let (v, cursor) = tui_lipan::insert_sentinel(
+                "",
+                0,
+                &mut sentinels,
+                tui_lipan::TextAreaSentinel::new("@first"),
+            );
+            let (v, cursor_after_middle) = tui_lipan::insert_sentinel(
+                &v,
+                cursor,
+                &mut sentinels,
+                tui_lipan::TextAreaSentinel::new("@middle"),
+            );
+            let (v, _) = tui_lipan::insert_sentinel(
+                &v,
+                cursor_after_middle,
+                &mut sentinels,
+                tui_lipan::TextAreaSentinel::new("@last"),
+            );
+            let mut editor = tui_lipan::TextEditor::new(v);
+            editor.set_cursor(cursor_after_middle);
+            State { editor, sentinels }
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            match msg {
+                Msg::Edited(ev) => {
+                    ev.apply_to(&mut ctx.state.editor);
+                    Update::full()
+                }
+                Msg::Sentinels(sentinels) => {
+                    ctx.state.sentinels = sentinels;
+                    Update::full()
+                }
+            }
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            TextArea::bound(&ctx.state.editor)
+                .height(Length::Px(4))
+                .sentinels(ctx.state.sentinels.clone())
+                .on_change(ctx.link().callback(Msg::Edited))
+                .on_sentinels_change(ctx.link().callback(Msg::Sentinels))
+                .key("custom-sentinel-editor")
+        }
+    }
+
+    let mut backend = TestBackend::new(CustomSentinelHarness);
+    backend.focus_key(&tui_lipan::Key::from("custom-sentinel-editor"));
+    backend.render();
+    assert_eq!(backend.state().editor.text(), format!("{c0}{c1}{c2}"));
+    let [s0, s1, s2]: [tui_lipan::TextAreaSentinel; 3] = backend
+        .state()
+        .sentinels
+        .clone()
+        .try_into()
+        .expect("three initial sentinels");
+
+    // Delete the middle sentinel ([E101]); [E102] remaps down to [E101].
+    backend
+        .send_key(KeyEvent {
+            code: KeyCode::Backspace,
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.render();
+    assert_eq!(backend.state().editor.text(), format!("{c0}{c1}"));
+    assert_eq!(backend.state().sentinels, vec![s0.clone(), s2.clone()]);
+
+    let undo = KeyEvent {
+        code: KeyCode::Char('z'),
+        mods: KeyMods::CTRL,
+    };
+    let redo = KeyEvent {
+        code: KeyCode::Char('y'),
+        mods: KeyMods::CTRL,
+    };
+
+    // Undo restores all three distinct sentinel codepoints and metadata.
+    backend.send_key(undo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().editor.text(), format!("{c0}{c1}{c2}"));
+    assert_eq!(
+        backend.state().sentinels,
+        vec![s0.clone(), s1.clone(), s2.clone()]
+    );
+
+    // Redo re-applies the remapped deletion with [@first, @last].
+    backend.send_key(redo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().editor.text(), format!("{c0}{c1}"));
+    assert_eq!(backend.state().sentinels, vec![s0, s2]);
+}

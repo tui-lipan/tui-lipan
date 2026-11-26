@@ -1439,12 +1439,14 @@ pub struct TextAreaPasteEvent {
 
 impl TextAreaEvent {
     /// Apply this event to a [`TextEditor`] state bundle.
+    ///
+    /// When the event matches an uncommitted edit from a bound [`TextArea`], commits that edit's
+    /// undo history atomically. If the application transformed `value` before calling `apply_to`,
+    /// records a consistent replacement edit instead of committing the mismatched runtime record.
     pub fn apply_to(&self, state: &mut TextEditor) {
-        state.core.text = self.value.to_string();
-        state.core.cursor = crate::utils::text::clamp_cursor(&state.core.text, self.cursor);
-        state.core.anchor = self
-            .anchor
-            .map(|anchor| crate::utils::text::clamp_cursor(&state.core.text, anchor));
+        state
+            .core
+            .apply_controlled_change(self.value.as_ref(), self.cursor, self.anchor);
     }
 }
 

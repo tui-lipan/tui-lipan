@@ -2,11 +2,13 @@
 
 use crate::clipboard::ImageContent;
 use crate::core::event::KeyEvent;
-use crate::text::buffer::{SharedHistory, SharedHistoryHandle, TextBufferCore};
-use crate::text::edit::TextEditKind;
+use crate::text::buffer::{CoreEdit, SharedHistory, SharedHistoryHandle, TextBufferCore};
+use crate::text::edit::{TextEditEvent, TextEditKind};
 use crate::utils::text::clamp_cursor;
 use crate::widgets::{TextAreaEvent, TextAreaSentinel};
 use std::ops::{Deref, DerefMut};
+use std::sync::Arc;
+use undo::Record;
 
 const SENTINEL_SNAPSHOT_LIMIT: usize = 1000;
 
@@ -33,14 +35,38 @@ pub struct TextEditor {
     /// Set after moving to the end of a soft-wrapped row. That byte is also where the next row
     /// starts, so this records that the caret still counts as on the row it came from.
     pub(crate) visual_row_end: Option<usize>,
+    /// Pre-edit snapshot and optional bound history target active during a single runtime
+    /// `TextArea` key/paste/clipboard operation.
+    active_tx: ActiveEditTransaction,
 }
 
-/// RAII guard that temporarily attaches a bound [`TextEditor`]'s shared undo history to the
-/// runtime [`TextArea`](crate::widgets::TextArea) editor so keyboard and programmatic edits
-/// share one authoritative undo stack.
+#[derive(Debug, Default)]
+struct ActiveEditTransaction(Option<PendingEditTransaction>);
+
+impl Clone for ActiveEditTransaction {
+    fn clone(&self) -> Self {
+        Self(None)
+    }
+}
+
+#[derive(Debug)]
+struct PendingEditTransaction {
+    pre_text: String,
+    pre_cursor: usize,
+    pre_anchor: Option<usize>,
+    pre_record: Record<CoreEdit>,
+    pre_generation: u64,
+    bound: Option<(SharedHistoryHandle, u64)>,
+}
+
+/// RAII guard that scopes a single runtime [`TextArea`](crate::widgets::TextArea) edit
+/// transaction against an optional bound [`TextEditor`]'s shared undo history.
+///
+/// Bound edits run on a local snapshot and are staged on the bound history handle right before
+/// emitting `on_change`, so rejected or transformed controlled events can never corrupt the
+/// bound `TextEditor`'s committed undo stack.
 pub(crate) struct BoundEditorGuard<'a> {
     editor: &'a mut TextEditor,
-    previous_history: Option<SharedHistory>,
 }
 
 impl Deref for BoundEditorGuard<'_> {
@@ -59,9 +85,7 @@ impl DerefMut for BoundEditorGuard<'_> {
 
 impl Drop for BoundEditorGuard<'_> {
     fn drop(&mut self) {
-        if let Some(previous_history) = self.previous_history.take() {
-            self.editor.core.history = previous_history;
-        }
+        self.editor.active_tx.0 = None;
     }
 }
 
@@ -129,6 +153,7 @@ impl TextEditor {
             sentinel_snapshots: Vec::new(),
             visual_nav_col: None,
             visual_row_end: None,
+            active_tx: ActiveEditTransaction::default(),
         }
     }
 
@@ -174,9 +199,10 @@ impl TextEditor {
     /// Reconcile the runtime editor with a [`TextArea`](crate::widgets::TextArea) node's current
     /// `(text, cursor, anchor)`.
     ///
-    /// When `bound_history` is `Some`, attaches the bound [`TextEditor`]'s authoritative undo
-    /// history for the lifetime of the returned guard so keyboard and programmatic edits operate
-    /// on a single undo stack. When `None`, falls back to the runtime editor's local history.
+    /// When `bound_history` is `Some`, checks out a local working snapshot of the bound
+    /// [`TextEditor`]'s authoritative history so runtime edits remain transactional until
+    /// accepted via [`TextAreaEvent::apply_to`]. When `None`, falls back to the runtime editor's
+    /// local history while still capturing a pre-edit checkpoint for atomic sentinel remapping.
     pub(crate) fn sync_for_widget<'a>(
         &'a mut self,
         text: &str,
@@ -197,19 +223,84 @@ impl TextEditor {
                 self.visual_nav_col = None;
                 self.visual_row_end = None;
             }
-            let previous_history =
-                std::mem::replace(&mut self.core.history, SharedHistory::from_handle(handle));
-            BoundEditorGuard {
-                editor: self,
-                previous_history: Some(previous_history),
-            }
+            let (starting_record, base_generation) = handle.checkout_for_text(&self.core.text);
+            self.core.history = SharedHistory::from_record(starting_record.clone());
+            self.active_tx.0 = Some(PendingEditTransaction {
+                pre_text: self.core.text.clone(),
+                pre_cursor: self.core.cursor,
+                pre_anchor: self.core.anchor,
+                pre_record: starting_record,
+                pre_generation: 0,
+                bound: Some((handle.clone(), base_generation)),
+            });
+            BoundEditorGuard { editor: self }
         } else {
             self.sync_from(text, cursor, anchor);
-            BoundEditorGuard {
-                editor: self,
-                previous_history: None,
-            }
+            let pre_record = self.core.history.snapshot();
+            let pre_generation = self.core.history.generation();
+            self.active_tx.0 = Some(PendingEditTransaction {
+                pre_text: self.core.text.clone(),
+                pre_cursor: self.core.cursor,
+                pre_anchor: self.core.anchor,
+                pre_record,
+                pre_generation,
+                bound: None,
+            });
+            BoundEditorGuard { editor: self }
         }
+    }
+
+    /// Replace the active edit transaction's history entry with a single atomic replacement from
+    /// the pre-edit text to `final_text` (e.g. after sentinel renumbering).
+    pub(crate) fn rewrite_pending_edit_to(
+        &mut self,
+        final_text: &str,
+        final_cursor: usize,
+        final_anchor: Option<usize>,
+    ) -> Option<TextEditEvent> {
+        let pre = self.active_tx.0.as_ref()?;
+        let pre_text = pre.pre_text.clone();
+        let pre_cursor = pre.pre_cursor;
+        let pre_anchor = pre.pre_anchor;
+        let pre_record = pre.pre_record.clone();
+
+        self.core.text = pre_text;
+        self.core.cursor = pre_cursor;
+        self.core.anchor = pre_anchor;
+        self.core.history = SharedHistory::from_record(pre_record);
+        let event = self.core.record_full_replace_edit(
+            final_text,
+            pre_cursor,
+            pre_anchor,
+            final_cursor,
+            final_anchor,
+        );
+        self.core.last_edit = None;
+        if let Some(tx) = self.active_tx.0.as_mut() {
+            // `from_record` starts local generation at 0 and `record_full_replace_edit` bumped it
+            // to 1, so `pre_generation` must be 0 to mark the transaction as mutated.
+            tx.pre_generation = 0;
+        }
+        Some(event)
+    }
+
+    /// Stage the working history snapshot onto the bound handle right before emitting `on_change`
+    /// so `TextAreaEvent::apply_to` can commit it atomically if the application accepts the text.
+    pub(crate) fn stage_bound_history(&self, expected_text: &Arc<str>) {
+        let Some(tx) = self.active_tx.0.as_ref() else {
+            return;
+        };
+        let Some((handle, base_generation)) = tx.bound.as_ref() else {
+            return;
+        };
+        if self.core.history.generation() == tx.pre_generation {
+            return;
+        }
+        handle.stage_step(
+            *base_generation,
+            expected_text.clone(),
+            self.core.history.snapshot(),
+        );
     }
 
     pub(crate) fn expect_external_paste_change(&mut self) {

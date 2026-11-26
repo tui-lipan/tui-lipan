@@ -314,6 +314,7 @@ impl<'a> TextAreaClipboardContext<'a> {
         let value: Arc<str> = Arc::from(self.editor.text().to_owned());
         let cursor = self.editor.cursor();
         let anchor = self.editor.anchor();
+        self.editor.stage_bound_history(&value);
         if let Some(cb) = self.on_change {
             cb.emit(TextAreaEvent {
                 value: value.clone(),
