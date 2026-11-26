@@ -788,13 +788,24 @@ impl From<ContextMenu> for Element {
                 .item_hover_style_slot(menu.item_hover_style.unwrap_or(menu.selection_style));
 
             if let Some(cb) = menu.on_select {
-                list = list.activate_on_click(true).on_activate(Callback::new(
-                    move |ev: crate::widgets::ListEvent| cb.emit(ev.index),
-                ));
+                let activate_cb = cb.clone();
+                list = list
+                    .activate_on_click(true)
+                    .on_activate(Callback::new(move |ev: crate::widgets::ListEvent| {
+                        activate_cb.emit(ev.index);
+                    }))
+                    .on_context_menu(Callback::new(
+                        move |(ev, _): (
+                            crate::widgets::ListEvent,
+                            crate::core::event::MouseEvent,
+                        )| {
+                            cb.emit(ev.index);
+                        },
+                    ));
             }
-            let close_on_right = on_close.clone();
+            let close_on_chrome = on_close.clone();
             crate::widgets::MouseRegion::new()
-                .on_context_menu(Callback::new(move |_| close_on_right.emit(())))
+                .on_context_menu(Callback::new(move |_| close_on_chrome.emit(())))
                 .child(crate::child(|| MenuList, MenuListProps(Rc::new(list))))
                 .into()
         };
@@ -1260,6 +1271,14 @@ fn render_menu_level(
                 index: ev.index,
             }
         }))
+        .on_context_menu(ctx.link().callback(
+            move |(ev, _): (crate::widgets::ListEvent, crate::core::event::MouseEvent)| {
+                MenuStackMsg::Activate {
+                    depth,
+                    index: ev.index,
+                }
+            },
+        ))
         .on_key(on_key);
     list = list
         .selection_style_slot(cfg.selection_style)

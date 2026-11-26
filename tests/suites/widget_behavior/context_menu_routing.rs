@@ -258,7 +258,7 @@ fn hovering_submenu_opens_and_clicking_outside_dismisses_entire_stack() {
 }
 
 #[test]
-fn right_click_closes_open_context_menu_outside_and_inside() {
+fn right_click_outside_closes_and_inside_activates_item() {
     let mut backend = TestBackend::new(CascadingMenu::default());
     backend.render();
     assert!(*backend.state());
@@ -286,8 +286,10 @@ fn right_click_closes_open_context_menu_outside_and_inside() {
         "right-clicking outside an open context menu should close it"
     );
 
-    // Re-open and verify right-clicking inside the menu itself also closes it.
-    let mut backend = TestBackend::new(CascadingMenu::default());
+    // Re-open and verify right-clicking an enabled action activates it and closes the menu.
+    let app = CascadingMenu::default();
+    let log = Rc::clone(&app.0);
+    let mut backend = TestBackend::new(app);
     backend.render();
     assert!(*backend.state());
 
@@ -295,8 +297,11 @@ fn right_click_closes_open_context_menu_outside_and_inside() {
     let (item_x, item_y) = frame
         .lines()
         .enumerate()
-        .find_map(|(row, line)| line.find("Copy").map(|col| (col as u16 + 1, row as u16)))
-        .expect("Copy should be rendered inside the menu");
+        .find_map(|(row, line)| {
+            line.find("Pin thread")
+                .map(|col| (col as u16 + 1, row as u16))
+        })
+        .expect("Pin thread should be rendered inside the menu");
 
     backend
         .send_mouse(MouseEvent {
@@ -315,8 +320,35 @@ fn right_click_closes_open_context_menu_outside_and_inside() {
         })
         .unwrap();
     backend.render();
+    assert_eq!(&*log.borrow(), &["pin"]);
     assert!(
         !*backend.state(),
-        "right-clicking inside an open context menu should close it"
+        "right-clicking an action inside the context menu should activate and close it"
+    );
+
+    // Re-open and verify right-clicking on the anchor border corner closes the menu cleanly.
+    let mut backend = TestBackend::new(CascadingMenu::default());
+    backend.render();
+    assert!(*backend.state());
+    backend
+        .send_mouse(MouseEvent {
+            x: 2,
+            y: 2,
+            kind: MouseKind::Down(MouseButton::Right),
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend
+        .send_mouse(MouseEvent {
+            x: 2,
+            y: 2,
+            kind: MouseKind::Up(MouseButton::Right),
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.render();
+    assert!(
+        !*backend.state(),
+        "right-clicking the menu's border corner (same spot as anchor) should close it"
     );
 }
