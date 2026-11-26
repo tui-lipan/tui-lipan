@@ -694,13 +694,18 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                     return Update::none();
                 };
 
-                text_input.set_text(event.value.as_ref().to_string());
+                let query_changed = text_input.text() != event.value.as_ref();
+                if query_changed {
+                    text_input.set_text(event.value.as_ref().to_owned());
+                }
                 text_input.set_cursor(event.cursor);
                 text_input.set_anchor(event.anchor);
+                if !query_changed {
+                    return Update::render();
+                }
 
-                let query: Arc<str> = Arc::from(text_input.text().to_owned());
                 if let Some(cb) = &ctx.props.on_query_change {
-                    cb.emit(query.clone());
+                    cb.emit(event.value.clone());
                 }
 
                 refresh_results(ctx, SelectionRefresh::ResetToInitial)
@@ -1839,6 +1844,17 @@ mod tests {
 
         press(&mut backend, KeyCode::Char('a'), KeyMods::default());
         press(&mut backend, KeyCode::Enter, KeyMods::default());
+        assert_eq!(submitted.get(), 2);
+
+        press(&mut backend, KeyCode::Down, KeyMods::default());
+        activated.set(None);
+        press(&mut backend, KeyCode::Left, KeyMods::default());
+        press(&mut backend, KeyCode::Enter, KeyMods::default());
+        assert_eq!(
+            activated.get(),
+            Some(1),
+            "moving the cursor keeps the row selected"
+        );
         assert_eq!(submitted.get(), 2);
     }
 
