@@ -128,3 +128,30 @@ fn nested_tooltip_waits_its_delay_when_the_outer_one_never_opened() {
     assert!(shows(&backend, "button-tip"));
     assert!(!shows(&backend, "card-tip"));
 }
+
+#[test]
+fn hovering_a_nested_trigger_restarts_the_outer_delay() {
+    let half = Duration::from_millis(600);
+    let mut backend = backend();
+    hover(&mut backend, "row text");
+    backend.advance(half);
+    backend.pump().unwrap();
+    hover(&mut backend, "Snooze");
+    backend.advance(half);
+    backend.pump().unwrap();
+    hover(&mut backend, "row text");
+    assert!(
+        !shows(&backend, "card-tip"),
+        "time on the nested trigger counted toward the card's delay"
+    );
+
+    backend.advance(half);
+    backend.pump().unwrap();
+    backend.render();
+    assert!(
+        !shows(&backend, "card-tip"),
+        "the card did not wait its full delay again"
+    );
+    wait(&mut backend);
+    assert!(shows(&backend, "card-tip"));
+}

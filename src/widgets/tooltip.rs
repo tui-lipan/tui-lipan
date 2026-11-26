@@ -331,6 +331,17 @@ impl HoverReveal {
         self.arm(config.delay)
     }
 
+    /// The pointer moved onto something inside the trigger that suspends the wait, such as a
+    /// nested tooltip's trigger: cancel a pending reveal. A tooltip already revealed stays so.
+    pub(crate) fn pause(&mut self) {
+        if self.revealed {
+            return;
+        }
+        self.generation = self.generation.wrapping_add(1);
+        self.hovered = false;
+        self.hovered_since = None;
+    }
+
     /// The pointer entered the trigger to take over from a tooltip already showing: open at once.
     pub(crate) fn hover_revealed(&mut self, env: &RuntimeEnv) -> RevealStep {
         self.hovered = true;
@@ -534,6 +545,8 @@ struct TooltipState {
     trigger_key: Key,
     /// Hover timing, used only for delayed tooltips.
     reveal: HoverReveal,
+    /// Whether the pointer is on the trigger, nested triggers included.
+    trigger_hovered: bool,
     /// Whether the pointer is on the trigger of a tooltip nested in this one's trigger.
     nested_hovered: bool,
     /// Whether this tooltip is showing, or would be but for a hovered nested trigger, as of the
@@ -603,6 +616,7 @@ impl Component for TooltipComponent {
         TooltipState {
             trigger_key: Key::from(format!("tooltip-trigger-{}", id)),
             reveal: HoverReveal::default(),
+            trigger_hovered: false,
             nested_hovered: false,
             shown: Rc::default(),
         }
@@ -635,7 +649,17 @@ impl Component for TooltipComponent {
                 if let Some(outer) = &outer {
                     outer.report.emit(hovered);
                 }
+                ctx.state.trigger_hovered = hovered;
+                if !hovered {
+                    // A nested trigger's leave may arrive after this one's: the pointer is gone.
+                    ctx.state.nested_hovered = false;
+                }
                 if !ctx.props.delays_hover() {
+                    return Update::none();
+                }
+                if hovered && ctx.state.nested_hovered {
+                    // Entered straight onto a nested trigger: this one waits until the pointer
+                    // comes back to its own part.
                     return Update::none();
                 }
                 let env = ctx.env().clone();
@@ -659,10 +683,24 @@ impl Component for TooltipComponent {
                 if ctx.state.nested_hovered == hovered {
                     return Update::none();
                 }
-                // Hidden, not closed: the tooltip stays revealed and shows again at once when
-                // the pointer comes back from the nested trigger.
                 ctx.state.nested_hovered = hovered;
-                Update::render()
+                // A revealed tooltip is hidden, not closed, so it shows again at once when the
+                // pointer comes back. One still waiting starts over: its delay counts only time
+                // spent on its own part of the trigger.
+                if !ctx.props.delays_hover() || ctx.state.reveal.revealed() {
+                    return Update::render();
+                }
+                if hovered {
+                    ctx.state.reveal.pause();
+                    return Update::none();
+                }
+                if !ctx.state.trigger_hovered {
+                    return Update::none();
+                }
+                let config = ctx.props.config.clone();
+                let env = ctx.env().clone();
+                let step = ctx.state.reveal.hover(true, &config, &env);
+                Self::step(step, ctx)
             }
         }
     }

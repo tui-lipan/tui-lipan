@@ -392,6 +392,8 @@ One tooltip shows at a time between nested tooltips: while the pointer is on a t
 inside another tooltip's trigger, such as a button on a row with a hover card, the outer tooltip
 hides. If the outer tooltip was showing, the nested one takes over at once instead of waiting for
 its `delay`. The outer tooltip stays revealed and shows again at once when the pointer moves back.
+An outer tooltip still waiting counts only time spent on its own part of the trigger: moving onto a
+nested trigger cancels its delay, and moving back starts it again.
 
 Warm-up stays within a `warmup_group`. Give large hover cards their own group, so that closing one
 does not open the small tooltips of nearby controls at once. With a zero `skip_delay` as well, each
