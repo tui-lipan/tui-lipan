@@ -293,8 +293,11 @@ impl HoverReveal {
             if !std::mem::take(&mut self.revealed) {
                 return RevealStep::Nothing;
             }
-            // Only a tooltip the user actually saw warms its neighbours.
-            env.tooltip_closed_at.set(Some(env.now()));
+            // Only a delayed tooltip the user actually saw warms its neighbours: one that opens at
+            // once never made the user wait, as with a plain `Tooltip` that has no delay.
+            if !config.delay.is_zero() {
+                env.tooltip_closed_at.set(Some(env.now()));
+            }
             return RevealStep::Render;
         }
         self.hovered_since = Some(env.now());

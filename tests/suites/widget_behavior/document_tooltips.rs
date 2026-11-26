@@ -211,3 +211,76 @@ fn delayed_tooltip_waits_before_opening() {
     wait(&mut backend, Duration::from_millis(500));
     assert!(screen(&backend).contains("rust"));
 }
+
+/// An instant document tooltip beside a delayed regular one.
+struct Mixed;
+
+impl Component for Mixed {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+    fn create_state(&self, _: &()) {}
+    fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+    fn view(&self, _: &Context<Self>) -> Element {
+        VStack::new()
+            .child(
+                Tooltip::new("save-tip")
+                    .delay(Duration::from_millis(500))
+                    .placement(PopoverPlacement::RightCenter)
+                    .child(Text::new("Save")),
+            )
+            .child(
+                DocumentView::new("```rust\nlet answer = 42;\n```")
+                    .markdown()
+                    .border(false)
+                    .scrollbar(false)
+                    .code_block_header(CodeBlockHeader::Icon)
+                    .tooltips(TooltipConfig::new().placement(PopoverPlacement::BelowStart)),
+            )
+            .into()
+    }
+}
+
+#[test]
+fn instant_document_tooltip_does_not_warm_delayed_tooltips() {
+    let mut backend = TestBackend::new(Mixed);
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 40,
+        h: 8,
+    });
+    backend.render();
+    let text = |backend: &TestBackend<Mixed>| backend.capture_frame().plain_text();
+    let code_y = text(&backend)
+        .lines()
+        .position(|line| line.contains("let answer"))
+        .expect("code must be on screen") as u16;
+    let hover = |backend: &mut TestBackend<Mixed>, x: u16, y: u16| {
+        backend
+            .send_mouse(MouseEvent {
+                x,
+                y,
+                kind: MouseKind::Moved,
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+        backend.pump().unwrap();
+        backend.render();
+    };
+
+    hover(&mut backend, 1, code_y - 1);
+    assert!(text(&backend).contains("rust"));
+
+    hover(&mut backend, 1, 0);
+    assert!(
+        !text(&backend).contains("save-tip"),
+        "the instant document tooltip skipped the delay"
+    );
+    backend.advance(Duration::from_millis(500));
+    backend.pump().unwrap();
+    backend.render();
+    assert!(text(&backend).contains("save-tip"));
+}
