@@ -1179,3 +1179,163 @@ fn hovering_submenu_applies_the_extended_active_detail_style_to_its_indicator() 
     assert_eq!(indicator.fg, Color::Blue);
     assert!(indicator.modifiers.bold);
 }
+
+struct TextAreaContextMenuHarness;
+
+struct TextAreaMenuState {
+    editor: tui_lipan::TextEditor,
+    anchor: Option<(u16, u16)>,
+    copied_on_action: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+enum TextAreaMenuMsg {
+    Edited(tui_lipan::TextAreaEvent),
+    Open(MouseEvent),
+    Action(std::sync::Arc<str>),
+    Close,
+}
+
+impl Component for TextAreaContextMenuHarness {
+    type Properties = ();
+    type State = TextAreaMenuState;
+    type Message = TextAreaMenuMsg;
+
+    fn create_state(&self, _: &()) -> Self::State {
+        let mut editor = tui_lipan::TextEditor::new("hello world");
+        editor.set_cursor(11);
+        editor.set_anchor(Some(6));
+        TextAreaMenuState {
+            editor,
+            anchor: None,
+            copied_on_action: None,
+        }
+    }
+
+    fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+        match msg {
+            TextAreaMenuMsg::Edited(ev) => {
+                ev.apply_to(&mut ctx.state.editor);
+                Update::full()
+            }
+            TextAreaMenuMsg::Open(mouse) => {
+                ctx.state.anchor = Some((mouse.x, mouse.y));
+                Update::full()
+            }
+            TextAreaMenuMsg::Action(id) => {
+                if id.as_ref() == "copy" {
+                    ctx.state.copied_on_action =
+                        ctx.state.editor.selected_text().map(ToOwned::to_owned);
+                }
+                ctx.state.anchor = None;
+                Update::full()
+            }
+            TextAreaMenuMsg::Close => {
+                ctx.state.anchor = None;
+                Update::full()
+            }
+        }
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        let trigger = VStack::new()
+            .child(Text::new("Header").height(Length::Px(1)))
+            .child(
+                TextArea::bound(&ctx.state.editor)
+                    .height(Length::Px(4))
+                    .on_change(ctx.link().callback(TextAreaMenuMsg::Edited))
+                    .on_context_menu(ctx.link().callback(TextAreaMenuMsg::Open)),
+            );
+        ContextMenu::new(trigger)
+            .open(ctx.state.anchor.is_some())
+            .anchor(ctx.state.anchor)
+            .entries([
+                ContextMenuEntry::action("copy", "Copy"),
+                ContextMenuEntry::action("paste", "Paste"),
+            ])
+            .on_action(ctx.link().callback(TextAreaMenuMsg::Action))
+            .on_close(ctx.link().callback(|()| TextAreaMenuMsg::Close))
+            .into()
+    }
+}
+
+#[test]
+fn clicking_context_menu_item_preserves_underlying_textarea_selection() {
+    let mut backend = TestBackend::new(TextAreaContextMenuHarness);
+    backend.render();
+
+    // Right-click inside the TextArea (row 2) to open the context menu.
+    backend
+        .send_mouse(MouseEvent {
+            x: 4,
+            y: 2,
+            kind: MouseKind::Down(MouseButton::Right),
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend
+        .send_mouse(MouseEvent {
+            x: 4,
+            y: 2,
+            kind: MouseKind::Up(MouseButton::Right),
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.render();
+
+    let frame = backend.capture_frame().plain_text();
+    let (copy_x, copy_y) = frame
+        .lines()
+        .enumerate()
+        .find_map(|(y, line)| {
+            line.find("Copy")
+                .map(|x| (u16::try_from(x).unwrap(), u16::try_from(y).unwrap()))
+        })
+        .unwrap_or_else(|| panic!("expected Copy row in open context menu:\n{frame}"));
+
+    // Left-click "Copy" inside the context menu: selection must remain intact when on_action runs.
+    backend
+        .send_mouse(MouseEvent {
+            x: copy_x + 1,
+            y: copy_y,
+            kind: MouseKind::Down(MouseButton::Left),
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend
+        .send_mouse(MouseEvent {
+            x: copy_x + 1,
+            y: copy_y,
+            kind: MouseKind::Up(MouseButton::Left),
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.render();
+
+    assert_eq!(
+        backend.state().copied_on_action.as_deref(),
+        Some("world"),
+        "clicking a context menu item must not clear TextArea selection before on_action runs"
+    );
+    assert_eq!(
+        backend.state().editor.selected_text(),
+        Some("world"),
+        "Copy should leave the TextArea selection intact"
+    );
+
+    // Clicking outside the TextArea (on the header at row 0) while the menu is closed still
+    // clears the selection normally.
+    backend
+        .send_mouse(MouseEvent {
+            x: 2,
+            y: 0,
+            kind: MouseKind::Down(MouseButton::Left),
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.render();
+    assert!(
+        backend.state().editor.selected_text().is_none(),
+        "clicking outside the TextArea when the context menu is closed should still clear selection"
+    );
+}

@@ -860,6 +860,7 @@ impl From<ContextMenu> for Element {
             .min_trigger_width(false)
             .anchor(menu.anchor)
             .close_on_escape(!is_structured)
+            .preserve_selection(true)
             .on_close(on_close)
             .into()
     }
@@ -1537,6 +1538,7 @@ fn render_menu_level(
         .capture_focus(false)
         .auto_focus(false)
         .capture_pointer(true)
+        .preserve_selection(true)
         .into()
 }
 

@@ -321,39 +321,7 @@ pub(crate) fn clear_selectable_widget_selections_test_backend<C: Component>(
         }) {
             continue;
         }
-        let node = backend.core.tree.node_mut(id);
-        match &mut node.kind {
-            NodeKind::Input(input) if input.anchor.is_some_and(|a| a != input.cursor) => {
-                input.anchor = None;
-                input.uncontrolled.update_reconciled_cursor(
-                    input.value.as_ref(),
-                    input.cursor,
-                    None,
-                );
-                dirty = true;
-            }
-            NodeKind::TextArea(ta) if ta.anchor.is_some_and(|a| a != ta.cursor) => {
-                ta.anchor = None;
-                ta.uncontrolled
-                    .update_reconciled_cursor(ta.value.as_ref(), ta.cursor, None);
-                dirty = true;
-            }
-            NodeKind::HexArea(hex) if hex.anchor.is_some_and(|a| a != hex.cursor) => {
-                hex.anchor = None;
-                dirty = true;
-            }
-            NodeKind::DocumentView(doc)
-                if (doc.table_rect_selection.is_some()
-                    || doc
-                        .selection_anchor
-                        .is_some_and(|a| a != doc.selection_cursor)) =>
-            {
-                doc.selection_anchor = None;
-                doc.table_rect_selection = None;
-                dirty = true;
-            }
-            _ => {}
-        }
+        dirty |= crate::app::selection_clear::clear_node_selection(&mut backend.core.tree, id);
     }
 
     dirty

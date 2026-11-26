@@ -322,6 +322,19 @@ impl FrameworkKeymap {
         self.with_override(action, FrameworkBindingOverride::Unbind)
     }
 
+    /// Primary effective key binding for `action` after applying overrides to the framework
+    /// defaults. Returns `None` if `action` has no binding or was unbound.
+    pub fn binding_for(&self, action: FrameworkAction) -> Option<KeyBinding> {
+        let mut bindings = default_bindings(&KeymapConfig::from_clipboard_config(
+            &ClipboardConfig::default(),
+        ));
+        apply_framework_keymap_overrides(&mut bindings, self);
+        bindings
+            .into_iter()
+            .find(|binding| binding.action == action.action())
+            .map(|binding| binding.combination)
+    }
+
     fn with_override(mut self, action: FrameworkAction, value: FrameworkBindingOverride) -> Self {
         self.overrides.retain(|(existing, _)| *existing != action);
         self.overrides.push((action, value));
@@ -2076,5 +2089,44 @@ mod tests {
         );
         assert_eq!(keymap.resolve_action(ctrl_key('k')), Action::None);
         assert_eq!(keymap.resolve_action(ctrl_key('c')), Action::None);
+    }
+
+    #[test]
+    fn framework_keymap_binding_for_reflects_defaults_and_overrides() {
+        let default = FrameworkKeymap::default();
+        assert_eq!(
+            default.binding_for(FrameworkAction::Cut).map(|b| b.label()),
+            Some("Ctrl+X".to_owned())
+        );
+        assert_eq!(
+            default
+                .binding_for(FrameworkAction::Copy)
+                .map(|b| b.label()),
+            Some("Ctrl+C".to_owned())
+        );
+        assert_eq!(
+            default
+                .binding_for(FrameworkAction::Paste)
+                .map(|b| b.label()),
+            Some("Ctrl+V".to_owned())
+        );
+        assert_eq!(
+            default
+                .binding_for(FrameworkAction::SelectAll)
+                .map(|b| b.label()),
+            Some("Ctrl+A".to_owned())
+        );
+
+        let custom = FrameworkKeymap::default()
+            .bind(
+                FrameworkAction::Copy,
+                KeyBindings::from_str("ctrl-shift-c").unwrap(),
+            )
+            .unbind(FrameworkAction::Cut);
+        assert_eq!(
+            custom.binding_for(FrameworkAction::Copy).map(|b| b.label()),
+            Some("Ctrl+Shift+C".to_owned())
+        );
+        assert_eq!(custom.binding_for(FrameworkAction::Cut), None);
     }
 }
