@@ -314,11 +314,12 @@ pub(crate) fn resolve_left_click_target(
     hit
 }
 
-pub(crate) fn ancestor_mouse_region_captures_mods(
+/// Find the nearest region that captures the event's modifiers at its position.
+pub(crate) fn find_mouse_region_modifier_capture(
     tree: &NodeTree,
     start: NodeId,
-    mods: KeyMods,
-) -> bool {
+    mouse: crate::core::event::MouseEvent,
+) -> Option<NodeId> {
     let mut cur = Some(start);
     while let Some(id) = cur {
         if !tree.is_valid(id) {
@@ -326,14 +327,14 @@ pub(crate) fn ancestor_mouse_region_captures_mods(
         }
         let node = tree.node(id);
         if let NodeKind::MouseRegion(region) = &node.kind
-            && region.enabled
-            && mouse_region_captures_mods(region, mods)
+            && mouse_region_captures_mods(region, mouse.mods)
+            && super::mouse_region_accepts_point(region, node.rect, mouse.x, mouse.y)
         {
-            return true;
+            return Some(id);
         }
         cur = node.parent;
     }
-    false
+    None
 }
 
 fn mouse_region_captures_mods(

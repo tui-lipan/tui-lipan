@@ -1,4 +1,4 @@
-use crate::app::input::mouse::{ancestor_mouse_region_captures_mods, mods_contain};
+use crate::app::input::mouse::mods_contain;
 use crate::app::runner::events::{
     TerminalMouseForward, terminal_mouse_cell_size, terminal_mouse_forward_plan,
     terminal_mouse_forward_plan_at,
@@ -61,6 +61,7 @@ pub(super) fn application_first_press<C: Component, T: MouseDispatchCtx<C>>(
     ctx: &mut T,
     hit: NodeId,
     mouse: MouseEvent,
+    ancestor_capture: bool,
 ) -> RightPressRoute {
     let tree = ctx.tree();
     let Some(terminal) = terminal_content_hit(tree, hit, mouse) else {
@@ -75,7 +76,6 @@ pub(super) fn application_first_press<C: Component, T: MouseDispatchCtx<C>>(
     };
     let tracking =
         terminal.on_mouse_forward.is_some() && terminal.input_mouse_mode().mode.allows(mouse.kind);
-    let ancestor_capture = ancestor_mouse_region_captures_mods(tree, hit, mouse.mods);
     let force_menu = override_mods.is_some_and(|required| mods_contain(required, mouse.mods));
     let use_menu = force_menu || (!ancestor_capture && !tracking && open_when_untracked);
     if let Some(callback) = &terminal.on_context_menu

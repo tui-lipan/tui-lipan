@@ -246,6 +246,10 @@ impl MouseRegion {
 
     /// Capture pointer handling over descendants while these modifiers are held.
     ///
+    /// The press must be inside the region's hit area, including its custom
+    /// hit test or cell mask. A captured right press goes to this region's
+    /// right-drag gesture when configured.
+    ///
     /// This is useful for compositor-style wrappers around focusable children such as
     /// terminals: `capture_requires_mods(KeyMods::ALT)` lets Alt-click/Alt-drag be
     /// consumed by the wrapper instead of starting terminal selection or forwarding a

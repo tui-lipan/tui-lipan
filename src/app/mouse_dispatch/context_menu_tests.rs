@@ -1775,6 +1775,7 @@ fn context_menu_terminal_chrome_reaches_lower_passthrough_handler() {
 fn context_menu_yields_modifiers_an_ancestor_captures() {
     let (menus, on_menu) = capture();
     let (drags, on_drag) = capture();
+    let (nested_drags, on_nested_drag) = capture();
     let mut backend = mount(
         MouseRegion::new()
             .capture_requires_mods(KeyMods::ALT)
@@ -1782,28 +1783,17 @@ fn context_menu_yields_modifiers_an_ancestor_captures() {
             .drag_threshold(1, 1)
             .on_right_drag_start(on_drag)
             .child(
-                MouseRegion::new().on_context_menu(on_menu).child(
-                    Text::new("border")
-                        .width(Length::Px(12))
-                        .height(Length::Px(2)),
-                ),
+                MouseRegion::new()
+                    .on_right_drag_start(on_nested_drag)
+                    .child(
+                        MouseRegion::new()
+                            .on_context_menu(on_menu)
+                            .child(resize_border()),
+                    ),
             ),
     );
     for mods in [KeyMods::NONE, KeyMods::ALT] {
-        for (kind, x) in [
-            (MouseKind::Down(MouseButton::Right), 1),
-            (MouseKind::Drag(MouseButton::Right), 4),
-            (MouseKind::Up(MouseButton::Right), 4),
-        ] {
-            backend
-                .send_mouse(MouseEvent {
-                    x,
-                    y: 0,
-                    kind,
-                    mods,
-                })
-                .unwrap();
-        }
+        right_drag(&mut backend, 1, 4, mods);
     }
     assert_eq!(
         menus.borrow().len(),
@@ -1815,4 +1805,86 @@ fn context_menu_yields_modifiers_an_ancestor_captures() {
         1,
         "Alt keeps the window's resize drag"
     );
+    assert!(nested_drags.borrow().is_empty());
+}
+
+#[test]
+fn context_menu_modifier_capture_respects_the_ancestor_hit_area() {
+    for use_mask in [false, true] {
+        let (menus, on_menu) = capture();
+        let (drags, on_drag) = capture();
+        let wrapper = MouseRegion::new()
+            .capture_requires_mods(KeyMods::ALT)
+            .right_drag_requires_mods(KeyMods::ALT)
+            .drag_threshold(1, 1)
+            .on_right_drag_start(on_drag)
+            .child(
+                MouseRegion::new()
+                    .on_context_menu(on_menu)
+                    .child(resize_border()),
+            );
+        let wrapper = if use_mask {
+            wrapper.cell_mask(std::sync::Arc::new(crate::CellMask {
+                origin: (1, 0),
+                w: 1,
+                h: 1,
+                bits: [1].into(),
+            }))
+        } else {
+            wrapper.hit_test(|x, y| x == 1 && y == 0)
+        };
+        let mut backend = mount(wrapper);
+
+        right_drag(&mut backend, 4, 1, KeyMods::ALT);
+        assert_eq!(menus.borrow().len(), 1, "use_mask={use_mask}");
+        assert!(drags.borrow().is_empty(), "use_mask={use_mask}");
+
+        right_drag(&mut backend, 1, 4, KeyMods::ALT);
+        assert_eq!(menus.borrow().len(), 1, "use_mask={use_mask}");
+        assert_eq!(drags.borrow().len(), 1, "use_mask={use_mask}");
+    }
+}
+
+#[test]
+fn context_menu_right_drag_fallback_respects_ancestor_hit_test() {
+    let (drags, on_drag) = capture();
+    let mut backend = mount(
+        MouseRegion::new()
+            .hit_test(|x, _| x == 1)
+            .on_right_drag_start(on_drag)
+            .child(
+                MouseRegion::new()
+                    .on_click(Callback::new(|_| {}))
+                    .child(resize_border()),
+            ),
+    );
+
+    right_drag(&mut backend, 4, 1, KeyMods::ALT);
+    assert!(drags.borrow().is_empty());
+
+    right_drag(&mut backend, 1, 4, KeyMods::ALT);
+    assert_eq!(drags.borrow().len(), 1);
+}
+
+fn resize_border() -> Text {
+    Text::new("border")
+        .width(Length::Px(12))
+        .height(Length::Px(2))
+}
+
+fn right_drag(backend: &mut TestBackend<View>, from_x: u16, to_x: u16, mods: KeyMods) {
+    for (kind, x) in [
+        (MouseKind::Down(MouseButton::Right), from_x),
+        (MouseKind::Drag(MouseButton::Right), to_x),
+        (MouseKind::Up(MouseButton::Right), to_x),
+    ] {
+        backend
+            .send_mouse(MouseEvent {
+                x,
+                y: 0,
+                kind,
+                mods,
+            })
+            .unwrap();
+    }
 }

@@ -1257,7 +1257,7 @@ pub(crate) fn terminal_mouse_forward_plan(
     if !tree.is_valid(hit) {
         return None;
     }
-    if mouse::ancestor_mouse_region_captures_mods(tree, hit, mouse.mods) {
+    if mouse::find_mouse_region_modifier_capture(tree, hit, mouse).is_some() {
         return None;
     }
 

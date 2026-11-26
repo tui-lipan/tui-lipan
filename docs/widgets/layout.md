@@ -731,8 +731,11 @@ MouseRegion::new()
 > `capture_click(true)` only reroutes left-button handling when this region has a left-click,
 > left-down/up, or left-drag callback. Right-drag callbacks are resolved through the
 > target's ancestor chain and do not require `capture_click`.
-> `capture_requires_mods(...)` applies the same rerouting only while the required
-> modifiers are held, and prevents terminal mouse forwarding for those events.
+> With `capture_requires_mods(...)`, the nearest region that accepts the press
+> position and modifiers owns the right press. Its right-drag callbacks run if
+> the drag requirements are met. Outside its hit area, context menus and other
+> right-drag handlers follow normal routing. Terminal mouse forwarding also
+> respects the region's hit area and modifier requirements.
 
 ---
 

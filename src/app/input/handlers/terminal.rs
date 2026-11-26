@@ -29,7 +29,7 @@ pub(crate) fn modified_link_hit(tree: &NodeTree, mouse: MouseEvent) -> Option<Te
     };
     term.on_link_activate.as_ref()?;
     if !mods_contain(term.link_activation_mods, mouse.mods)
-        || crate::app::input::mouse::ancestor_mouse_region_captures_mods(tree, hit, mouse.mods)
+        || crate::app::input::mouse::find_mouse_region_modifier_capture(tree, hit, mouse).is_some()
     {
         return None;
     }

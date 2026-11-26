@@ -254,28 +254,28 @@ pub(crate) fn mouse_region_drag_target_accepts_mods(
 }
 
 pub(crate) fn find_ancestor_mouse_region_drag_target(
-    tree: &crate::core::node::NodeTree,
-    start: crate::core::node::NodeId,
+    tree: &NodeTree,
+    start: NodeId,
     button: MouseButton,
-    mods: KeyMods,
-    allow_ungated_ancestors: bool,
-) -> Option<crate::core::node::NodeId> {
+    mouse: MouseEvent,
+) -> Option<NodeId> {
     let mut current = Some(start);
-    let mut is_start = true;
     while let Some(id) = current {
         if !tree.is_valid(id) {
             break;
         }
         let node = tree.node(id);
         if let NodeKind::MouseRegion(region) = &node.kind
-            && region.accepts_drag_press(button, mods)
-            && (is_start
+            && region.accepts_drag_press(button, mouse.mods)
+            && (id == start
                 || region.drag_required_mods_for(button).is_some()
-                || allow_ungated_ancestors)
+                || button == MouseButton::Right)
+            && crate::app::input::mouse::mouse_region_accepts_point(
+                region, node.rect, mouse.x, mouse.y,
+            )
         {
             return Some(id);
         }
-        is_start = false;
         current = node.parent;
     }
     None
