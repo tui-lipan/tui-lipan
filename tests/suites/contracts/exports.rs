@@ -12,7 +12,8 @@ fn crate_root_exports_common_widgets_and_helpers() {
         Radio, RadioEvent, ScrollView, SearchPalette, Select, SelectEvent, SelectionEnd,
         SequenceDiagram, SequenceMessage, SequenceStep, Slider, Spinner, StateDiagram, StatusBar,
         Tab, Table, TableCell, TableRow, Tabs, Text, TextArea, TextEditor, TextInput, Tooltip,
-        TooltipContent, Tree, TreeNode, TripleClickSelectionMode, VStack, word_forward_start,
+        TooltipConfig, TooltipContent, Tree, TreeNode, TripleClickSelectionMode, VStack,
+        word_forward_start,
     };
 
     let _ = (

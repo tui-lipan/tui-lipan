@@ -81,6 +81,7 @@ pub struct Popover {
     pub(crate) fit_trigger_width: bool,
     pub(crate) max_width: Option<Length>,
     pub(crate) anchor: Option<(u16, u16)>,
+    pub(crate) anchor_area: Option<crate::style::Rect>,
     pub(crate) capture_focus: bool,
     pub(crate) capture_pointer: bool,
     pub(crate) auto_focus: bool,
@@ -117,6 +118,7 @@ impl Popover {
             fit_trigger_width: false,
             max_width: None,
             anchor: None,
+            anchor_area: None,
             capture_focus: true,
             capture_pointer: true,
             auto_focus: true,
@@ -231,6 +233,14 @@ impl Popover {
         self
     }
 
+    /// Place the popover against an area inside the trigger instead of the whole trigger, such
+    /// as one word of a document. The area is relative to the trigger's top-left corner and
+    /// follows the trigger when it moves. [`anchor`](Self::anchor) takes precedence.
+    pub fn anchor_area(mut self, area: impl Into<Option<crate::style::Rect>>) -> Self {
+        self.anchor_area = area.into();
+        self
+    }
+
     /// Set on-close callback.
     pub fn on_close(mut self, cb: Callback<()>) -> Self {
         self.on_close = Some(cb);
@@ -263,6 +273,7 @@ impl crate::layout::hash::LayoutHash for Popover {
         self.fit_trigger_width.hash(hasher);
         self.max_width.hash(hasher);
         self.anchor.hash(hasher);
+        self.anchor_area.hash(hasher);
         self.capture_focus.hash(hasher);
         self.capture_pointer.hash(hasher);
         self.auto_focus.hash(hasher);

@@ -679,6 +679,7 @@ Source: `src/widgets/popover/mod.rs` (`Popover`).
 | `fit_trigger_width` | `false` |
 | `max_width` | `None` |
 | `anchor` | `None` |
+| `anchor_area` | `None` |
 | `capture_focus` | `true` |
 | `capture_pointer` | `true` |
 | `auto_focus` | `true` |
@@ -1028,6 +1029,8 @@ Source: `src/widgets/document_view/mod.rs` (`DocumentView`).
 | `on_context_menu` | `None` |
 | `on_select` | `None` |
 | `on_key` | `None` |
+| `tooltips` | `None` |
+| `on_hover_hint` | `None` |
 | `shared_selection_id` | `None` |
 | `code_syntax_strategy` | `None` |
 | `gutter_lines` | `None` |

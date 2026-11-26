@@ -7,8 +7,10 @@ use std::time::Duration;
 
 use crate::core::component::{Component, Context, Update};
 use crate::core::element::{Element, IntoElement, Key};
+use crate::core::runtime_env::RuntimeEnv;
 use crate::style::{BorderStyle, Length, Padding, Style};
 use crate::widgets::{Frame, MouseRegion, Popover, PopoverOffset, PopoverPlacement, Text};
+use web_time::Instant;
 
 static TOOLTIP_ID: AtomicUsize = AtomicUsize::new(1);
 
@@ -76,16 +78,15 @@ impl From<&Arc<str>> for TooltipContent {
     }
 }
 
-/// A passive popup shown on hover or focus: help text or a rich, non-interactive card.
+/// How a tooltip looks and when it opens: its timing, surface and placement.
+///
+/// [`Tooltip`] carries one, and widgets that show tooltips for parts of themselves take one
+/// directly, such as [`DocumentView::tooltips`](crate::widgets::DocumentView::tooltips). Build it
+/// once and pass it to each, so every tooltip in an app opens and looks the same.
 #[derive(Clone)]
-pub struct Tooltip {
-    child: Element,
-    content: TooltipContent,
-    open: Option<bool>,
+pub struct TooltipConfig {
     pub(crate) animation: Option<VisibilityAnimation>,
-    auto: bool,
-    show_on_focus: bool,
-    delay: Duration,
+    pub(crate) delay: Duration,
     skip_delay: Duration,
     text_style: Style,
     container_style: Style,
@@ -99,23 +100,17 @@ pub struct Tooltip {
     auto_flip: bool,
 }
 
-impl Tooltip {
-    /// Animate popup content using shared visibility timing and effects.
-    /// Root-portal scope only; the trigger remains active while content closes.
-    pub fn animation(mut self, animation: impl Into<Option<VisibilityAnimation>>) -> Self {
-        self.animation = animation.into();
-        self
+impl Default for TooltipConfig {
+    fn default() -> Self {
+        Self::new()
     }
+}
 
-    /// Create a tooltip showing `content`: a string, or any element for a rich card.
-    pub fn new(content: impl Into<TooltipContent>) -> Self {
+impl TooltipConfig {
+    /// An immediate, borderless, unstyled tooltip placed below the start of its trigger.
+    pub fn new() -> Self {
         Self {
-            child: crate::widgets::Spacer::new().into(),
-            content: content.into(),
-            open: None,
             animation: None,
-            auto: true,
-            show_on_focus: true,
             delay: Duration::ZERO,
             skip_delay: DEFAULT_TOOLTIP_SKIP_DELAY,
             text_style: Style::default(),
@@ -131,27 +126,10 @@ impl Tooltip {
         }
     }
 
-    /// Set the child element.
-    pub fn child(mut self, child: impl IntoElement) -> Self {
-        self.child = child.into();
-        self
-    }
-
-    /// Set open state.
-    pub fn open(mut self, open: bool) -> Self {
-        self.open = Some(open);
-        self
-    }
-
-    /// Enable or disable auto-open on hover/focus.
-    pub fn auto(mut self, auto: bool) -> Self {
-        self.auto = auto;
-        self
-    }
-
-    /// Enable or disable automatic display while the trigger has focus.
-    pub fn show_on_focus(mut self, show_on_focus: bool) -> Self {
-        self.show_on_focus = show_on_focus;
+    /// Animate popup content using shared visibility timing and effects.
+    /// Root-portal scope only; the trigger remains active while content closes.
+    pub fn animation(mut self, animation: impl Into<Option<VisibilityAnimation>>) -> Self {
+        self.animation = animation.into();
         self
     }
 
@@ -233,6 +211,260 @@ impl Tooltip {
         self.auto_flip = auto_flip;
         self
     }
+
+    /// The passive popover showing `content` beside `trigger`.
+    pub(crate) fn popover(
+        &self,
+        trigger: Element,
+        content: &TooltipContent,
+        open: bool,
+    ) -> Popover {
+        let body = match content {
+            TooltipContent::Text(text) => Text::new(text.clone()).style(self.text_style).into(),
+            TooltipContent::Element(element) => (**element).clone(),
+        };
+        let content = Frame::new()
+            .border(self.border)
+            .border_style(self.border_style)
+            .padding(self.padding)
+            .style(self.container_style)
+            .child(body);
+        let mut popover = Popover::new()
+            .animation(self.animation.clone())
+            .trigger(trigger)
+            .content(content)
+            .open(open)
+            .capture_focus(false)
+            .capture_pointer(false)
+            .auto_focus(false)
+            .min_trigger_width(false)
+            .placement(self.placement)
+            .offset(self.offset)
+            .clamp(self.clamp)
+            .auto_flip(self.auto_flip);
+        if let Some(max_width) = self.max_width {
+            popover = popover.max_width(max_width);
+        }
+        popover
+    }
+}
+
+/// What a hover change asks of the component that owns a [`HoverReveal`].
+#[must_use]
+pub(crate) enum RevealStep {
+    /// Nothing visible changed.
+    Nothing,
+    /// The tooltip opened or closed: render again.
+    Render,
+    /// Send a reveal for `generation` after `wait`.
+    Arm { wait: Duration, generation: u64 },
+}
+
+/// The hover timing behind a delayed tooltip: wait [`TooltipConfig::delay`] after the pointer
+/// arrives, and skip the wait while another tooltip closed moments ago.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct HoverReveal {
+    /// Whether the pointer is over the trigger.
+    hovered: bool,
+    /// Whether the tooltip has finished waiting and is shown.
+    revealed: bool,
+    /// Bumped on every hover change and timing change so a timer armed earlier is ignored.
+    generation: u64,
+    /// When the current hover began, so a changed delay counts from the original entry.
+    hovered_since: Option<Instant>,
+}
+
+impl HoverReveal {
+    pub(crate) fn revealed(&self) -> bool {
+        self.revealed
+    }
+
+    /// The pointer entered (`true`) or left (`false`) the trigger.
+    pub(crate) fn hover(
+        &mut self,
+        hovered: bool,
+        config: &TooltipConfig,
+        env: &RuntimeEnv,
+    ) -> RevealStep {
+        self.hovered = hovered;
+        self.generation = self.generation.wrapping_add(1);
+        if !hovered {
+            self.hovered_since = None;
+            if !std::mem::take(&mut self.revealed) {
+                return RevealStep::Nothing;
+            }
+            // Only a delayed tooltip the user actually saw warms its neighbours: one that opens at
+            // once never made the user wait, as with a plain `Tooltip` that has no delay.
+            if !config.delay.is_zero() {
+                env.tooltip_closed_at.set(Some(env.now()));
+            }
+            return RevealStep::Render;
+        }
+        self.hovered_since = Some(env.now());
+        let warm = env
+            .tooltip_closed_at
+            .get()
+            .is_some_and(|closed| env.elapsed(closed) < config.skip_delay);
+        if warm {
+            self.revealed = true;
+            return RevealStep::Render;
+        }
+        self.arm(config.delay)
+    }
+
+    /// A timer armed for `generation` elapsed; returns whether the tooltip opened.
+    pub(crate) fn reveal(&mut self, generation: u64) -> bool {
+        if generation != self.generation || !self.hovered {
+            return false;
+        }
+        self.revealed = true;
+        true
+    }
+
+    /// Hover stopped being timed here: forget it without warming other tooltips.
+    pub(crate) fn reset(&mut self) -> RevealStep {
+        self.generation = self.generation.wrapping_add(1);
+        self.hovered = false;
+        self.hovered_since = None;
+        if std::mem::take(&mut self.revealed) {
+            RevealStep::Render
+        } else {
+            RevealStep::Nothing
+        }
+    }
+
+    /// The delay changed: re-arm the current hover, counting from when it began.
+    pub(crate) fn retime(&mut self, config: &TooltipConfig, env: &RuntimeEnv) -> RevealStep {
+        // Whatever timer is pending was armed for the old delay.
+        self.generation = self.generation.wrapping_add(1);
+        let Some(since) = self.hovered_since.filter(|_| self.hovered) else {
+            return RevealStep::Nothing;
+        };
+        if self.revealed {
+            return RevealStep::Nothing;
+        }
+        let waited = env.elapsed(since);
+        self.arm(config.delay.saturating_sub(waited))
+    }
+
+    /// Schedule a reveal for the current hover after `wait`, or reveal now when nothing is left.
+    fn arm(&mut self, wait: Duration) -> RevealStep {
+        if wait.is_zero() {
+            self.revealed = true;
+            return RevealStep::Render;
+        }
+        RevealStep::Arm {
+            wait,
+            generation: self.generation,
+        }
+    }
+}
+
+/// Forward [`TooltipConfig`] builders onto a widget that holds one in `config`.
+macro_rules! forward_tooltip_config {
+    ($($(#[$doc:meta])* $name:ident($arg:ident: $ty:ty);)*) => {
+        $(
+            $(#[$doc])*
+            pub fn $name(mut self, $arg: $ty) -> Self {
+                self.config = self.config.$name($arg);
+                self
+            }
+        )*
+    };
+}
+
+/// A passive popup shown on hover or focus: help text or a rich, non-interactive card.
+#[derive(Clone)]
+pub struct Tooltip {
+    child: Element,
+    content: TooltipContent,
+    open: Option<bool>,
+    auto: bool,
+    show_on_focus: bool,
+    config: TooltipConfig,
+}
+
+impl Tooltip {
+    /// Create a tooltip showing `content`: a string, or any element for a rich card.
+    pub fn new(content: impl Into<TooltipContent>) -> Self {
+        Self {
+            child: crate::widgets::Spacer::new().into(),
+            content: content.into(),
+            open: None,
+            auto: true,
+            show_on_focus: true,
+            config: TooltipConfig::new(),
+        }
+    }
+
+    /// Set the child element.
+    pub fn child(mut self, child: impl IntoElement) -> Self {
+        self.child = child.into();
+        self
+    }
+
+    /// Set open state.
+    pub fn open(mut self, open: bool) -> Self {
+        self.open = Some(open);
+        self
+    }
+
+    /// Enable or disable auto-open on hover/focus.
+    pub fn auto(mut self, auto: bool) -> Self {
+        self.auto = auto;
+        self
+    }
+
+    /// Enable or disable automatic display while the trigger has focus.
+    pub fn show_on_focus(mut self, show_on_focus: bool) -> Self {
+        self.show_on_focus = show_on_focus;
+        self
+    }
+
+    /// Replace the timing, surface and placement with a shared [`TooltipConfig`].
+    pub fn config(mut self, config: TooltipConfig) -> Self {
+        self.config = config;
+        self
+    }
+
+    forward_tooltip_config! {
+        /// Animate popup content using shared visibility timing and effects.
+        /// Root-portal scope only; the trigger remains active while content closes.
+        animation(animation: impl Into<Option<VisibilityAnimation>>);
+        /// Wait this long after the pointer enters the trigger before showing the tooltip.
+        ///
+        /// Zero (the default) shows it at once. Leaving the trigger before the delay elapses
+        /// cancels it, so sweeping the pointer across a row of controls opens nothing. Focus is
+        /// not delayed.
+        delay(delay: Duration);
+        /// Skip [`delay`](Self::delay) when another delayed tooltip closed less than this long
+        /// ago.
+        ///
+        /// Once the user has waited for one tooltip, moving to a neighbouring control shows its
+        /// tooltip immediately, as desktop toolkits do. Defaults to
+        /// [`DEFAULT_TOOLTIP_SKIP_DELAY`]; zero always waits.
+        skip_delay(skip_delay: Duration);
+        /// Set the style of text content. Element content carries its own styles.
+        text_style(style: Style);
+        /// Set container style.
+        container_style(style: Style);
+        /// Draw a border around the tooltip.
+        border(border: bool);
+        /// Set border style.
+        border_style(border_style: BorderStyle);
+        /// Set padding.
+        padding(padding: impl Into<Padding>);
+        /// Cap the popup width. Percent values resolve against the overlay bounds.
+        max_width(max_width: Length);
+        /// Set popover placement.
+        placement(placement: PopoverPlacement);
+        /// Set popover offset.
+        offset(offset: impl Into<PopoverOffset>);
+        /// Clamp popover to the viewport bounds.
+        clamp(clamp: bool);
+        /// Automatically flip placement when it overflows the viewport.
+        auto_flip(auto_flip: bool);
+    }
 }
 
 #[derive(Clone)]
@@ -240,21 +472,9 @@ struct TooltipProps {
     child: Element,
     content: TooltipContent,
     open: Option<bool>,
-    pub(crate) animation: Option<VisibilityAnimation>,
     auto: bool,
     show_on_focus: bool,
-    delay: Duration,
-    skip_delay: Duration,
-    text_style: Style,
-    container_style: Style,
-    border: bool,
-    border_style: BorderStyle,
-    padding: Padding,
-    max_width: Option<Length>,
-    placement: PopoverPlacement,
-    offset: PopoverOffset,
-    clamp: bool,
-    auto_flip: bool,
+    config: TooltipConfig,
 }
 
 impl PartialEq for TooltipProps {
@@ -272,21 +492,9 @@ impl From<Tooltip> for TooltipProps {
             child: tooltip.child,
             content: tooltip.content,
             open: tooltip.open,
-            animation: tooltip.animation,
             auto: tooltip.auto,
             show_on_focus: tooltip.show_on_focus,
-            delay: tooltip.delay,
-            skip_delay: tooltip.skip_delay,
-            text_style: tooltip.text_style,
-            container_style: tooltip.container_style,
-            border: tooltip.border,
-            border_style: tooltip.border_style,
-            padding: tooltip.padding,
-            max_width: tooltip.max_width,
-            placement: tooltip.placement,
-            offset: tooltip.offset,
-            clamp: tooltip.clamp,
-            auto_flip: tooltip.auto_flip,
+            config: tooltip.config,
         }
     }
 }
@@ -294,21 +502,15 @@ impl From<Tooltip> for TooltipProps {
 #[derive(Clone, Debug)]
 struct TooltipState {
     trigger_key: Key,
-    /// Whether the pointer is over the trigger, tracked only for delayed tooltips.
-    hovered: bool,
-    /// Whether a delayed tooltip has finished waiting and is shown for hover.
-    revealed: bool,
-    /// Bumped on every hover change and timing change so a timer armed earlier is ignored.
-    hover_generation: u64,
-    /// When the current hover began, so a changed delay counts from the original entry.
-    hovered_since: Option<web_time::Instant>,
+    /// Hover timing, used only for delayed tooltips.
+    reveal: HoverReveal,
 }
 
 impl TooltipProps {
     /// Whether hover opens this tooltip after [`Tooltip::delay`]. A controlled tooltip
     /// ([`Tooltip::open`]) never runs the hover timer, so it can neither reveal nor warm others.
     fn delays_hover(&self) -> bool {
-        self.auto && self.open.is_none() && !self.delay.is_zero()
+        self.auto && self.open.is_none() && !self.config.delay.is_zero()
     }
 }
 
@@ -324,46 +526,16 @@ impl TooltipComponent {
         Self
     }
 
-    fn hover(hovered: bool, ctx: &mut Context<Self>) -> Update {
-        if !ctx.props.delays_hover() {
-            return Update::none();
-        }
-        ctx.state.hovered = hovered;
-        ctx.state.hover_generation = ctx.state.hover_generation.wrapping_add(1);
-        if !hovered {
-            ctx.state.hovered_since = None;
-            if !std::mem::take(&mut ctx.state.revealed) {
-                return Update::none();
+    fn step(step: RevealStep, ctx: &mut Context<Self>) -> Update {
+        match step {
+            RevealStep::Nothing => Update::none(),
+            RevealStep::Render => Update::render(),
+            RevealStep::Arm { wait, generation } => {
+                Update::command_only(ctx.link().command_after(wait, move |link| {
+                    link.send(TooltipMsg::Reveal(generation));
+                }))
             }
-            // Only a tooltip the user actually saw warms its neighbours.
-            let env = ctx.env();
-            env.tooltip_closed_at.set(Some(env.now()));
-            return Update::render();
         }
-        let now = ctx.env().now();
-        ctx.state.hovered_since = Some(now);
-        let env = ctx.env();
-        let warm = env
-            .tooltip_closed_at
-            .get()
-            .is_some_and(|closed| env.elapsed(closed) < ctx.props.skip_delay);
-        if warm {
-            ctx.state.revealed = true;
-            return Update::render();
-        }
-        Self::arm(ctx.props.delay, ctx)
-    }
-
-    /// Schedule a reveal for the current hover after `wait`, or reveal now when nothing is left.
-    fn arm(wait: Duration, ctx: &mut Context<Self>) -> Update {
-        if wait.is_zero() {
-            ctx.state.revealed = true;
-            return Update::render();
-        }
-        let generation = ctx.state.hover_generation;
-        Update::command_only(ctx.link().command_after(wait, move |link| {
-            link.send(TooltipMsg::Reveal(generation));
-        }))
     }
 }
 
@@ -376,10 +548,7 @@ impl Component for TooltipComponent {
         let id = TOOLTIP_ID.fetch_add(1, Ordering::Relaxed);
         TooltipState {
             trigger_key: Key::from(format!("tooltip-trigger-{}", id)),
-            hovered: false,
-            revealed: false,
-            hover_generation: 0,
-            hovered_since: None,
+            reveal: HoverReveal::default(),
         }
     }
 
@@ -389,40 +558,37 @@ impl Component for TooltipComponent {
         ctx: &mut Context<Self>,
     ) -> Update {
         let delays = ctx.props.delays_hover();
-        if delays == old_props.delays_hover() && ctx.props.delay == old_props.delay {
+        if delays == old_props.delays_hover() && ctx.props.config.delay == old_props.config.delay {
             return Update::none();
         }
-        // Whatever timer is pending was armed for the old configuration.
-        ctx.state.hover_generation = ctx.state.hover_generation.wrapping_add(1);
-        if !delays {
+        let step = if delays {
+            let config = ctx.props.config.clone();
+            let env = ctx.env().clone();
+            ctx.state.reveal.retime(&config, &env)
+        } else {
             // Hover is no longer tracked here; closing this way does not warm other tooltips.
-            ctx.state.hovered = false;
-            ctx.state.hovered_since = None;
-            return if std::mem::take(&mut ctx.state.revealed) {
-                Update::render()
-            } else {
-                Update::none()
-            };
-        }
-        let Some(since) = ctx.state.hovered_since.filter(|_| ctx.state.hovered) else {
-            return Update::none();
+            ctx.state.reveal.reset()
         };
-        if ctx.state.revealed {
-            return Update::none();
-        }
-        let waited = ctx.env().elapsed(since);
-        Self::arm(ctx.props.delay.saturating_sub(waited), ctx)
+        Self::step(step, ctx)
     }
 
     fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
         match msg {
-            TooltipMsg::Hover(hovered) => Self::hover(hovered, ctx),
-            TooltipMsg::Reveal(generation) => {
-                if generation != ctx.state.hover_generation || !ctx.state.hovered {
+            TooltipMsg::Hover(hovered) => {
+                if !ctx.props.delays_hover() {
                     return Update::none();
                 }
-                ctx.state.revealed = true;
-                Update::render()
+                let config = ctx.props.config.clone();
+                let env = ctx.env().clone();
+                let step = ctx.state.reveal.hover(hovered, &config, &env);
+                Self::step(step, ctx)
+            }
+            TooltipMsg::Reveal(generation) => {
+                if ctx.state.reveal.reveal(generation) {
+                    Update::render()
+                } else {
+                    Update::none()
+                }
             }
         }
     }
@@ -444,7 +610,7 @@ impl Component for TooltipComponent {
         let trigger = trigger.key(ctx.state.trigger_key.clone());
 
         let hover_open = if delayed {
-            ctx.state.revealed
+            ctx.state.reveal.revealed()
         } else {
             ctx.has_hover_within_key(ctx.state.trigger_key.clone())
         };
@@ -453,37 +619,10 @@ impl Component for TooltipComponent {
                 || (ctx.props.show_on_focus
                     && ctx.has_focus_within_key(ctx.state.trigger_key.clone())));
         let open = ctx.props.open.unwrap_or(auto_open);
-
-        let body = match &ctx.props.content {
-            TooltipContent::Text(text) => {
-                Text::new(text.clone()).style(ctx.props.text_style).into()
-            }
-            TooltipContent::Element(element) => (**element).clone(),
-        };
-        let content = Frame::new()
-            .border(ctx.props.border)
-            .border_style(ctx.props.border_style)
-            .padding(ctx.props.padding)
-            .style(ctx.props.container_style)
-            .child(body);
-
-        let mut popover = Popover::new()
-            .animation(ctx.props.animation.clone())
-            .trigger(trigger)
-            .content(content)
-            .open(open)
-            .capture_focus(false)
-            .capture_pointer(false)
-            .auto_focus(false)
-            .min_trigger_width(false)
-            .placement(ctx.props.placement)
-            .offset(ctx.props.offset)
-            .clamp(ctx.props.clamp)
-            .auto_flip(ctx.props.auto_flip);
-        if let Some(max_width) = ctx.props.max_width {
-            popover = popover.max_width(max_width);
-        }
-        popover.into()
+        ctx.props
+            .config
+            .popover(trigger, &ctx.props.content, open)
+            .into()
     }
 }
 

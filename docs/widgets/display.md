@@ -105,7 +105,8 @@ display content differs from source text.
 | `code_block_width` | `Length` | Width of fenced code-block background rectangles (`Flex(1)` default, `Auto`, `Px(n)`, `Percent(p)`). `Px`/`Percent` are fixed while wrapping and minimum widths with `wrap(false)` |
 | `code_block_padding` | `CodeBlockPadding` | Vertical padding around fenced code blocks (`None` default, `HalfBlock`, `Full`) |
 | `code_block_inset` | `u16` | Blank columns between a code block's edge and its code (default `1`) |
-| `code_block_header` | `CodeBlockHeader` | Language header row at top of fenced code blocks (`None` default, `Label`, `IconAndLabel`) |
+| `code_block_header` | `CodeBlockHeader` | Language header row at top of fenced code blocks (`None` default, `Label`, `Icon`, `IconAndLabel`) |
+| `tooltips` | `TooltipConfig` | Hover tooltips for parts that hide information: an icon-only header names its language, a link shows its URL |
 | `scroll_offset` | `usize` | Controlled vertical scroll offset |
 | `scroll_to_source_line` | `usize` | Scroll-sync target source line |
 | `scroll_behavior` | `ScrollBehavior` | `Instant` by default; opt into smooth `scroll_to_source_line` movement |
@@ -272,6 +273,27 @@ non-`Flex` `code_block_width`) mirrors `code_block_inset` on the right, so code
 wraps that many columns earlier. Headers that do not fit are truncated with `…`.
 Insets never widen the rectangle: when it is too narrow, they shrink, right side
 first, until the widest character of the code fits.
+
+### Tooltips
+
+`.tooltips(config)` shows a tooltip while the pointer rests on a part of the
+document that hides information: the icon of a `CodeBlockHeader::Icon` header
+names its language, and a link whose text is not its URL shows the URL. The
+`TooltipConfig` sets the delay, surface and placement, so the document's
+tooltips can match the app's other `Tooltip`s:
+
+```rust
+let tips = TooltipConfig::new()
+    .delay(Duration::from_secs(1))
+    .placement(PopoverPlacement::AboveStart)
+    .container_style(Style::new().bg(Color::rgb(0x2A, 0x2A, 0x2E)))
+    .padding((0, 1));
+
+DocumentView::new(text)
+    .markdown()
+    .code_block_header(CodeBlockHeader::Icon)
+    .tooltips(tips)
+```
 
 ### Custom markdown styles
 

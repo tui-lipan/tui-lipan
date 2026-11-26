@@ -41,7 +41,7 @@ use super::format::FormatCache;
 use super::{
     CodeBlockHeader, CodeBlockPadding, DocumentClickEvent, DocumentLineNumberMode,
     DocumentSelectEvent, DocumentStyles, DocumentTableWidthMode, DocumentView, FormattedDocument,
-    FormattedLink,
+    FormattedLine,
 };
 
 /// The visual-line kind after block flattening.
@@ -52,7 +52,7 @@ pub(crate) enum VisualLineKind {
         spans: Vec<Span>,
         indent_cols: u16,
         continuation: bool,
-        links: Vec<FormattedLink>,
+        links: Vec<VisualLink>,
         /// Source whitespace skipped at the wrap point that ends the previous row.
         /// It is not rendered, but copy restores it across the soft break.
         wrap_gap: Option<Arc<str>>,
@@ -117,7 +117,7 @@ pub(crate) enum VisualLineKind {
     BlockQuoteLine {
         spans: Vec<Span>,
         depth: u16,
-        links: Vec<FormattedLink>,
+        links: Vec<VisualLink>,
         /// Source whitespace skipped at the wrap point that ends the previous row.
         wrap_gap: Option<Arc<str>>,
     },
@@ -133,7 +133,53 @@ pub(crate) enum CodeBlockChromeKind {
     /// Full blank padding row painted in the code block's background.
     BlankPadding,
     /// Language header row (icon and/or language label).
-    Header { spans: Vec<Span> },
+    Header {
+        spans: Vec<Span>,
+        /// The language name when the header shows only its icon, offered on hover.
+        hint: Option<Arc<str>>,
+    },
+}
+
+/// A link's range on one visual row, with what holds for the whole link it belongs to.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct VisualLink {
+    /// Start byte offset (inclusive) in the row text.
+    pub start: usize,
+    /// End byte offset (exclusive) in the row text.
+    pub end: usize,
+    /// Link destination URL.
+    pub url: Arc<str>,
+    /// Where the whole link starts in its formatted line: the same on every row it wraps onto.
+    pub origin: usize,
+    /// Whether the whole link text, not just this row's part of it, already shows the URL.
+    pub label_shows_url: bool,
+}
+
+/// Which part of a document a hint belongs to: two parts with the same text are still two parts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HintPart {
+    /// The header of the code block starting on this source line.
+    CodeBlockHeader { source_line: usize },
+    /// The link starting at `origin` in the formatted line of `source_line`.
+    Link { source_line: usize, origin: usize },
+}
+
+/// Text a [`DocumentView`](super::DocumentView) offers for the part of it under the pointer,
+/// shown by its [`tooltips`](super::DocumentView::tooltips).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DocumentHoverHint {
+    /// The part the hint belongs to, stable while it scrolls or rewraps.
+    pub part: HintPart,
+    /// What the tooltip says.
+    pub text: Arc<str>,
+    /// The hinted part, relative to the document view's top-left corner.
+    pub area: Rect,
+}
+
+/// Whether a link's visible text already says where it goes, so a tooltip would only repeat it.
+fn link_label_shows_url(label: &str, url: &str) -> bool {
+    let label = label.trim();
+    label == url || url.strip_prefix("mailto:") == Some(label)
 }
 
 /// Position within a table border row.
@@ -358,6 +404,7 @@ pub(crate) struct DocumentViewNode {
     pub on_context_menu: Option<Callback<(DocumentClickEvent, crate::core::event::MouseEvent)>>,
     pub on_select: Option<Callback<DocumentSelectEvent>>,
     pub on_key: Option<KeyHandler>,
+    pub(crate) on_hover_hint: Option<Callback<Option<DocumentHoverHint>>>,
     pub shared_selection_id: Option<Arc<str>>,
 
     // ── Code block highlighting ──────────────────────────────────────────
@@ -487,6 +534,7 @@ impl WidgetNode for DocumentViewNode {
 
     fn is_hoverable(&self) -> bool {
         self.on_click.is_some()
+            || self.on_hover_hint.is_some()
             || self.has_diff_context_separator_hover()
             || self.hover_style.has_explicit_style()
             || self.hover_border_style.is_some()
@@ -494,6 +542,7 @@ impl WidgetNode for DocumentViewNode {
 
     fn is_hoverable_for_theme(&self, theme: &Theme) -> bool {
         self.on_click.is_some()
+            || self.on_hover_hint.is_some()
             || self.has_diff_context_separator_hover()
             || self.hover_style.resolves_non_empty(theme, ThemeRole::Hover)
             || self.hover_border_style.is_some()
@@ -616,6 +665,98 @@ impl DocumentViewNode {
                 .map(|link| link.url.clone())
         });
         Some(DocumentClickEvent { source_line, link })
+    }
+
+    /// The hint under the pointer at `(x, y)`: the language of an icon-only code-block header, or
+    /// the URL of a link whose text does not already show it.
+    pub(crate) fn hover_hint_at(&self, rect: Rect, x: i16, y: i16) -> Option<DocumentHoverHint> {
+        let inner = rect.inner(self.border, self.padding);
+        let cl = self.content_layout(inner);
+        let content = Rect {
+            x: cl.content_x,
+            y: cl.content_y,
+            w: cl.content_width,
+            h: cl.content_height,
+        };
+        if !content.contains(x, y) {
+            return None;
+        }
+        let visual_idx = self
+            .scroll_offset
+            .saturating_add(y.saturating_sub(inner.y) as usize);
+        let vline = self.visual_cache.lines.get(visual_idx)?;
+        let h_scroll = if self.wrap { 0 } else { self.h_scroll_offset };
+        let visual_col = (x.saturating_sub(cl.content_x) as usize).saturating_add(h_scroll);
+        let (part, text, start_col, end_col) = match &vline.kind {
+            VisualLineKind::CodeBlockChrome {
+                kind:
+                    CodeBlockChromeKind::Header {
+                        spans,
+                        hint: Some(hint),
+                    },
+                indent_cols,
+                left_inset,
+                ..
+            } => {
+                let start = usize::from(indent_cols.saturating_add(*left_inset));
+                (
+                    HintPart::CodeBlockHeader {
+                        source_line: vline.source_line,
+                    },
+                    hint.clone(),
+                    start,
+                    start.saturating_add(span_width(spans) as usize),
+                )
+            }
+            VisualLineKind::Text { links, .. } | VisualLineKind::BlockQuoteLine { links, .. } => {
+                let line_text = self.visual_cache.line_texts.get(visual_idx)?;
+                let byte = document_view_byte_in_line_from_visual_col(line_text, vline, visual_col);
+                let link = links
+                    .iter()
+                    .find(|link| byte >= link.start && byte < link.end)
+                    .filter(|link| !link.label_shows_url)?;
+                let start = link.start.min(line_text.len());
+                let end = link.end.min(line_text.len());
+                let prefix = visual_line_render_prefix_cols(vline);
+                let col = |byte: usize| {
+                    prefix.saturating_add(crate::utils::text::str_visual_width(
+                        line_text.get(..byte).unwrap_or_default(),
+                        None,
+                    ))
+                };
+                (
+                    HintPart::Link {
+                        source_line: vline.source_line,
+                        origin: link.origin,
+                    },
+                    link.url.clone(),
+                    col(start),
+                    col(end),
+                )
+            }
+            _ => return None,
+        };
+        if visual_col < start_col || visual_col >= end_col {
+            return None;
+        }
+        let left = (cl.content_x as i32)
+            .saturating_add(start_col as i32)
+            .saturating_sub(h_scroll as i32);
+        let right = (cl.content_x as i32)
+            .saturating_add(end_col as i32)
+            .saturating_sub(h_scroll as i32);
+        let left = left.max(i32::from(content.x));
+        let right = right.min(i32::from(content.x) + i32::from(content.w));
+        Some(DocumentHoverHint {
+            part,
+            text,
+            area: Rect {
+                x: (left - i32::from(rect.x)) as i16,
+                y: y.saturating_sub(rect.y),
+                w: right.saturating_sub(left).max(0) as u16,
+                h: 1,
+            },
+        })
     }
 
     fn has_diff_context_separator_click(&self) -> bool {
@@ -803,6 +944,7 @@ impl From<DocumentView> for DocumentViewNode {
             on_context_menu: dv.on_context_menu,
             on_select: dv.on_select,
             on_key: dv.on_key,
+            on_hover_hint: dv.on_hover_hint,
             shared_selection_id: dv.shared_selection_id,
             #[cfg(feature = "syntax-syntect")]
             code_syntax_strategy: dv.code_syntax_strategy,
@@ -1038,7 +1180,7 @@ fn merge_visual_line_spans(line: &mut DocumentVisualLine) {
         | VisualLineKind::CodeLine { spans, .. }
         | VisualLineKind::DiagramRow { spans, .. }
         | VisualLineKind::CodeBlockChrome {
-            kind: CodeBlockChromeKind::Header { spans },
+            kind: CodeBlockChromeKind::Header { spans, .. },
             ..
         } => {
             merge_spans(spans);
@@ -1082,7 +1224,7 @@ fn flatten_text_lines(
         if wrap && line_w + indent_cols > inner_w {
             // Word-wrap this line
             let avail = inner_w.saturating_sub(indent_cols);
-            let wrapped = wrap_spans_with_links(&fl.spans, &fl.links, avail, avail);
+            let wrapped = wrap_spans_with_links(&fl.spans, &visual_links(fl), avail, avail);
             let anchor = extract_bg_anchor(&fl.spans);
             for (i, (mut wline, links, wrap_gap)) in wrapped.into_iter().enumerate() {
                 if let Some(ref anchor) = anchor {
@@ -1114,7 +1256,7 @@ fn flatten_text_lines(
                     VisualLineKind::BlockQuoteLine {
                         spans: fl.spans.clone(),
                         depth: bq_depth,
-                        links: fl.links.clone(),
+                        links: visual_links(fl),
                         wrap_gap: None,
                     }
                 } else {
@@ -1123,7 +1265,7 @@ fn flatten_text_lines(
                         spans: fl.spans.clone(),
                         indent_cols,
                         continuation: false,
-                        links: shift_links(&fl.links, indent_bytes),
+                        links: shift_links(&visual_links(fl), indent_bytes),
                         wrap_gap: None,
                     }
                 },
@@ -1256,7 +1398,7 @@ fn flatten_block(
                                         let anchor = extract_bg_anchor(&fl.spans);
                                         for (mut wline, links, wrap_gap) in wrap_spans_with_links(
                                             &spans,
-                                            &shift_links(&fl.links, line_prefix_bytes),
+                                            &shift_links(&visual_links(fl), line_prefix_bytes),
                                             first_budget,
                                             cont_budget,
                                         ) {
@@ -1278,7 +1420,10 @@ fn flatten_block(
                                             kind: VisualLineKind::BlockQuoteLine {
                                                 spans,
                                                 depth: bq_depth,
-                                                links: shift_links(&fl.links, line_prefix_bytes),
+                                                links: shift_links(
+                                                    &visual_links(fl),
+                                                    line_prefix_bytes,
+                                                ),
                                                 wrap_gap: None,
                                             },
                                             source_line: fl.source_line,
@@ -1288,7 +1433,7 @@ fn flatten_block(
                                     let wrapped = wrap_spans_with_links(
                                         &spans,
                                         &shift_links(
-                                            &fl.links,
+                                            &visual_links(fl),
                                             if li == 0 { prefix.len() } else { 0 },
                                         ),
                                         first_budget,
@@ -1319,9 +1464,9 @@ fn flatten_block(
                                     }
                                 } else {
                                     let links = if li == 0 {
-                                        shift_links(&fl.links, prefix.len())
+                                        shift_links(&visual_links(fl), prefix.len())
                                     } else {
-                                        fl.links.clone()
+                                        visual_links(fl)
                                     };
                                     accum.out.push(DocumentVisualLine {
                                         kind: VisualLineKind::Text {
@@ -1642,11 +1787,12 @@ struct CodeFlattenCtx<'a> {
     code_strategy: Option<&'a dyn crate::widgets::TextAreaColorStrategy>,
 }
 
+/// The header row's spans, and the language name when only its icon is shown.
 fn code_block_header_spans(
     language: Option<&str>,
     header: CodeBlockHeader,
     doc_styles: &DocumentStyles,
-) -> Option<Vec<Span>> {
+) -> Option<(Vec<Span>, Option<Arc<str>>)> {
     if header == CodeBlockHeader::None {
         return None;
     }
@@ -1654,14 +1800,18 @@ fn code_block_header_spans(
     if label.is_empty() {
         return None;
     }
+    let plain = || Some((vec![Span::new(label.to_string())], None));
     match header {
         CodeBlockHeader::None => None,
-        CodeBlockHeader::Label => Some(vec![Span::new(label.to_string())]),
-        CodeBlockHeader::IconAndLabel => {
-            if let Some(icon) = crate::utils::language_icon_span(label, &doc_styles.file_icons) {
-                Some(vec![icon, Span::new(format!(" {label}"))])
+        CodeBlockHeader::Label => plain(),
+        CodeBlockHeader::Icon | CodeBlockHeader::IconAndLabel => {
+            let Some(icon) = crate::utils::language_icon_span(label, &doc_styles.file_icons) else {
+                return plain();
+            };
+            if header == CodeBlockHeader::Icon {
+                Some((vec![icon], Some(Arc::from(label))))
             } else {
-                Some(vec![Span::new(label.to_string())])
+                Some((vec![icon, Span::new(format!(" {label}"))], None))
             }
         }
     }
@@ -1758,7 +1908,9 @@ fn flatten_code_block(
         1
     };
 
-    let header_content_w = header_spans.as_ref().map_or(0, |spans| span_width(spans));
+    let header_content_w = header_spans
+        .as_ref()
+        .map_or(0, |(spans, _)| span_width(spans));
     let max_raw_code_w = raw_lines
         .iter()
         .map(|(spans, _, _)| span_width(spans))
@@ -1813,14 +1965,19 @@ fn flatten_code_block(
     let h_insets = left_inset.saturating_add(right_inset);
     let wrap_budget = target_rect_w.saturating_sub(h_insets).max(1);
 
-    let header_spans = header_spans.map(|spans| {
+    let header_spans = header_spans.map(|(spans, hint)| {
         if ctx.wrap && header_content_w > wrap_budget {
-            crate::utils::spans::truncate_spans(&spans, wrap_budget as usize)
+            (
+                crate::utils::spans::truncate_spans(&spans, wrap_budget as usize),
+                hint,
+            )
         } else {
-            spans
+            (spans, hint)
         }
     });
-    let header_content_w = header_spans.as_ref().map_or(0, |spans| span_width(spans));
+    let header_content_w = header_spans
+        .as_ref()
+        .map_or(0, |(spans, _)| span_width(spans));
 
     let mut rendered_rows: Vec<(Vec<Span>, Style, usize)> = Vec::with_capacity(raw_lines.len());
     let mut actual_max_content_w = header_content_w;
@@ -1896,10 +2053,10 @@ fn flatten_code_block(
         }
     }
 
-    if let Some(spans) = header_spans {
+    if let Some((spans, hint)) = header_spans {
         out.push(DocumentVisualLine {
             kind: VisualLineKind::CodeBlockChrome {
-                kind: CodeBlockChromeKind::Header { spans },
+                kind: CodeBlockChromeKind::Header { spans, hint },
                 block_style: base_block_style,
                 indent_cols: ctx.base_indent_cols,
                 left_inset,
@@ -2040,12 +2197,12 @@ fn spans_plain_text(spans: &[Span]) -> String {
 
 /// One wrapped row: its spans, its link ranges, and the source whitespace
 /// skipped at the wrap point before it.
-type WrappedRow = (Vec<Span>, Vec<FormattedLink>, Option<Arc<str>>);
+type WrappedRow = (Vec<Span>, Vec<VisualLink>, Option<Arc<str>>);
 
 /// Preserve semantic link ranges through wrapping, including a link spanning several rows.
 fn wrap_spans_with_links(
     spans: &[Span],
-    links: &[FormattedLink],
+    links: &[VisualLink],
     first_budget: u16,
     cont_budget: u16,
 ) -> Vec<WrappedRow> {
@@ -2083,10 +2240,10 @@ fn wrap_spans_with_links(
                 .filter_map(|link| {
                     let first = start.max(link.start);
                     let last = end.min(link.end);
-                    (first < last).then(|| FormattedLink {
+                    (first < last).then(|| VisualLink {
                         start: first - start,
                         end: last - start,
-                        url: link.url.clone(),
+                        ..link.clone()
                     })
                 })
                 .collect();
@@ -2095,13 +2252,33 @@ fn wrap_spans_with_links(
         .collect()
 }
 
-fn shift_links(links: &[FormattedLink], shift_bytes: usize) -> Vec<FormattedLink> {
+fn shift_links(links: &[VisualLink], shift_bytes: usize) -> Vec<VisualLink> {
     links
         .iter()
-        .map(|link| FormattedLink {
+        .map(|link| VisualLink {
             start: link.start.saturating_add(shift_bytes),
             end: link.end.saturating_add(shift_bytes),
+            ..link.clone()
+        })
+        .collect()
+}
+
+/// A formatted line's links, each knowing its whole extent before wrapping splits it into rows.
+fn visual_links(fl: &FormattedLine) -> Vec<VisualLink> {
+    if fl.links.is_empty() {
+        return Vec::new();
+    }
+    let text = spans_plain_text(&fl.spans);
+    fl.links
+        .iter()
+        .map(|link| VisualLink {
+            start: link.start,
+            end: link.end,
             url: link.url.clone(),
+            origin: link.start,
+            label_shows_url: text
+                .get(link.start..link.end)
+                .is_some_and(|label| link_label_shows_url(label, &link.url)),
         })
         .collect()
 }
@@ -3153,7 +3330,7 @@ mod tests {
         );
         for line in &narrow_hdr_lines {
             if let VisualLineKind::CodeBlockChrome {
-                kind: CodeBlockChromeKind::Header { spans },
+                kind: CodeBlockChromeKind::Header { spans, .. },
                 rect_width,
                 ..
             } = &line.kind
@@ -3383,7 +3560,7 @@ mod tests {
             .iter()
             .filter_map(|l| match &l.kind {
                 VisualLineKind::CodeBlockChrome {
-                    kind: CodeBlockChromeKind::Header { spans },
+                    kind: CodeBlockChromeKind::Header { spans, .. },
                     ..
                 } => Some(spans_plain_text(spans)),
                 _ => None,
@@ -3395,6 +3572,32 @@ mod tests {
         assert!(headers[0].ends_with(" rust"), "got {:?}", headers[0]);
         assert!(headers[0].chars().count() > " rust".chars().count());
         assert_eq!(headers[1], "customlang");
+
+        let (icon_lines, _) = flatten_blocks(
+            &doc,
+            60,
+            make_ctx(CodeBlockPadding::HalfBlock, CodeBlockHeader::Icon),
+        );
+        let icon_headers: Vec<String> = icon_lines
+            .iter()
+            .filter_map(|l| match &l.kind {
+                VisualLineKind::CodeBlockChrome {
+                    kind: CodeBlockChromeKind::Header { spans, .. },
+                    ..
+                } => Some(spans_plain_text(spans)),
+                _ => None,
+            })
+            .collect();
+        // Icon alone for a known language; the label stands in when there is no icon.
+        assert_eq!(icon_headers.len(), 2);
+        assert_eq!(
+            icon_headers[0].trim().chars().count(),
+            1,
+            "got {:?}",
+            icon_headers[0]
+        );
+        assert!(!icon_headers[0].contains("rust"));
+        assert_eq!(icon_headers[1], "customlang");
 
         let top_count = decorated_lines
             .iter()

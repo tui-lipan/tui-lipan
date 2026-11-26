@@ -364,9 +364,9 @@ pub use crate::widgets::{
     TextAreaSnapshot, TextAreaStateChangeEvent, TextAreaStateChangeReason, TextAreaVimConfig,
     TextAreaVimCurrentLineHighlight, TextAreaVimKeyBinding, TextAreaVimKeymap, TextAreaVimMode,
     TextAreaVirtualText, TextSource, ThemeProvider, Toast, ToastCopyAffordance, Tooltip,
-    TooltipContent, Tree, TreeBranch, TreeEvent, TreeExpansionMode, TreeGuides, TreeHoverEvent,
-    TreeKeymap, TreeNode, TreePath, TreeToggleEvent, TripleClickSelectionMode, VStack,
-    VirtualTextPlacement, ZStack, insert_sentinel, rank_search_palette_indices,
+    TooltipConfig, TooltipContent, Tree, TreeBranch, TreeEvent, TreeExpansionMode, TreeGuides,
+    TreeHoverEvent, TreeKeymap, TreeNode, TreePath, TreeToggleEvent, TripleClickSelectionMode,
+    VStack, VirtualTextPlacement, ZStack, insert_sentinel, rank_search_palette_indices,
     rank_search_palette_indices_with_mode, rank_search_palette_indices_with_score,
     terminal_graphics_metrics,
 };

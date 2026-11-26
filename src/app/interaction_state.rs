@@ -521,6 +521,9 @@ pub(crate) struct MouseTrackingState {
     pub mouse_region_hover_chain: Vec<MouseRegionHoverState>,
     /// The list row last reported to `List::on_hover`, with the callback that will hear it leave.
     pub list_row_hover: Option<ListRowHoverState>,
+    /// The document hint last reported to its tooltip host, with the callback that will hear it
+    /// leave.
+    pub document_hint_hover: Option<DocumentHintHoverState>,
     /// For List/Table/Tabs: track which item is hovered to avoid re-renders on same item.
     pub hovered_item_index: Option<usize>,
     /// Richer renderer-level hover target for widgets where an item index is insufficient.
@@ -578,6 +581,13 @@ pub(crate) struct ListRowHoverState {
     pub id: NodeId,
     pub index: usize,
     pub on_hover: Callback<crate::widgets::ListHoverEvent>,
+}
+
+#[derive(Clone)]
+pub(crate) struct DocumentHintHoverState {
+    pub id: NodeId,
+    pub hint: crate::widgets::document_view::node::DocumentHoverHint,
+    pub on_hover_hint: Callback<Option<crate::widgets::document_view::node::DocumentHoverHint>>,
 }
 
 #[derive(Clone)]

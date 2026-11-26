@@ -17,12 +17,14 @@ pub(crate) mod mermaid;
 pub(crate) mod node;
 pub(crate) mod planner;
 pub(crate) mod reconcile;
+mod tooltips;
 
 pub(crate) use format::FormatCache;
+#[cfg(test)]
+pub(crate) use format::FormattedLink;
 pub use format::{
     ColumnAlign, ContentFormatter, DocumentStyles, FormatInput, FormattedBlock, FormattedCodeBlock,
-    FormattedDiagramBlock, FormattedDocument, FormattedLine, FormattedLink, FormattedTable,
-    PlainFormatter,
+    FormattedDiagramBlock, FormattedDocument, FormattedLine, FormattedTable, PlainFormatter,
 };
 #[cfg(feature = "markdown")]
 pub use format_markdown::{MarkdownFormatter, MarkdownSpacing, SourceSpacing};
@@ -132,6 +134,10 @@ pub enum CodeBlockHeader {
     None,
     /// Render the fence language label (for example `rust` or `sh`).
     Label,
+    /// Render only the language's Nerd Font icon (from
+    /// [`crate::style::FileIconPalette`]), falling back to the plain label when
+    /// no icon is registered for that language.
+    Icon,
     /// Render the language's Nerd Font icon (from [`crate::style::FileIconPalette`])
     /// followed by the language label (for example ` rust`), falling back to
     /// the plain label when no icon is registered for that language.
@@ -294,6 +300,10 @@ pub struct DocumentView {
     pub on_select: Option<Callback<DocumentSelectEvent>>,
     /// Keyboard handler (when focused).
     pub on_key: Option<KeyHandler>,
+    /// Tooltips for parts that hide information; see [`Self::tooltips`].
+    pub(crate) tooltips: Option<crate::widgets::TooltipConfig>,
+    /// Reports the hint under the pointer to the tooltip host.
+    pub(crate) on_hover_hint: Option<Callback<Option<node::DocumentHoverHint>>>,
     /// Optional shared selection group identifier.
     ///
     /// When multiple `DocumentView`s under the same `ScrollView` share this id,
@@ -430,6 +440,8 @@ impl Default for DocumentView {
             on_context_menu: None,
             on_select: None,
             on_key: None,
+            tooltips: None,
+            on_hover_hint: None,
             shared_selection_id: None,
             #[cfg(feature = "syntax-syntect")]
             code_syntax_strategy: None,
@@ -983,6 +995,14 @@ impl DocumentView {
         self
     }
 
+    /// Show a tooltip over parts of the document that hide information: an icon-only code-block
+    /// header ([`CodeBlockHeader::Icon`]) names its language, and a link whose text differs from
+    /// its target shows the URL. `config` sets the tooltip's timing, surface and placement.
+    pub fn tooltips(mut self, config: crate::widgets::TooltipConfig) -> Self {
+        self.tooltips = Some(config);
+        self
+    }
+
     /// Set the text selection callback.
     pub fn on_select(mut self, cb: Callback<DocumentSelectEvent>) -> Self {
         self.on_select = Some(cb);
@@ -1093,7 +1113,10 @@ impl DocumentView {
 }
 
 impl From<DocumentView> for Element {
-    fn from(value: DocumentView) -> Self {
+    fn from(mut value: DocumentView) -> Self {
+        if let Some(config) = value.tooltips.take() {
+            return tooltips::document_tooltips(value, config);
+        }
         Element::new(crate::core::element::ElementKind::DocumentView(Box::new(
             value,
         )))
