@@ -418,6 +418,90 @@ fn context_menu_terminal_preempts_mouse_forwarding_for_the_whole_gesture() {
 
 #[cfg(feature = "terminal")]
 #[test]
+fn terminal_left_gestures_do_not_forward_partial_reports_across_capture_boundary() {
+    let outside_to_inside = terminal_capture_reports(MouseButton::Left, 5, 1, KeyMods::ALT);
+    let inside_to_outside = terminal_capture_reports(MouseButton::Left, 1, 5, KeyMods::ALT);
+    assert_eq!(
+        (outside_to_inside.as_slice(), inside_to_outside.as_slice()),
+        (&[][..], &[][..])
+    );
+    assert_eq!(
+        terminal_capture_reports(MouseButton::Left, 5, 1, KeyMods::NONE),
+        [
+            MouseKind::Down(MouseButton::Left),
+            MouseKind::Drag(MouseButton::Left),
+            MouseKind::Up(MouseButton::Left),
+        ]
+    );
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn terminal_right_gestures_keep_the_press_owner_across_capture_boundary() {
+    assert_eq!(
+        terminal_capture_reports(MouseButton::Right, 5, 1, KeyMods::ALT),
+        [
+            MouseKind::Down(MouseButton::Right),
+            MouseKind::Drag(MouseButton::Right),
+            MouseKind::Up(MouseButton::Right),
+        ]
+    );
+    assert!(terminal_capture_reports(MouseButton::Right, 1, 5, KeyMods::ALT).is_empty());
+}
+
+#[cfg(feature = "terminal")]
+fn terminal_capture_reports(
+    button: MouseButton,
+    press_x: u16,
+    release_x: u16,
+    mods: KeyMods,
+) -> Vec<MouseKind> {
+    let (reports, callback) = capture();
+    let mut terminal = Terminal::new()
+        .content("terminal")
+        .width(Length::Px(12))
+        .height(Length::Px(3))
+        .scrollbar(false)
+        .on_mouse_forward_event(callback);
+    terminal.mouse_mode = MouseModeState {
+        mode: MouseMode::AnyEvent,
+        encoding: MouseEncoding::Sgr,
+        ..Default::default()
+    };
+    let mut backend = mount(
+        MouseRegion::new()
+            .capture_requires_mods(KeyMods::ALT)
+            .hit_test(|x, _| x == 1)
+            .child(terminal),
+    );
+    let terminal_id = backend
+        .core
+        .tree
+        .iter()
+        .find(|node| matches!(node.kind, NodeKind::Terminal(_)))
+        .unwrap()
+        .id;
+    backend.set_focused(terminal_id);
+
+    for (kind, x) in [
+        (MouseKind::Down(button), press_x),
+        (MouseKind::Drag(button), release_x),
+        (MouseKind::Up(button), release_x),
+    ] {
+        backend
+            .send_mouse(MouseEvent {
+                x,
+                y: 0,
+                kind,
+                mods,
+            })
+            .unwrap();
+    }
+    reports.borrow().iter().map(|report| report.kind).collect()
+}
+
+#[cfg(feature = "terminal")]
+#[test]
 fn right_release_does_not_reach_a_replacement_snapshot_terminal() {
     struct Snapshots {
         original: Callback<ForwardedMouseEvent>,
@@ -1768,5 +1852,123 @@ fn context_menu_terminal_chrome_reaches_lower_passthrough_handler() {
         right_click(&mut backend, x as u16, content.y as u16);
         assert_eq!(upper.get(), 1);
         assert_eq!(lower.borrow().len(), index + 1);
+    }
+}
+
+#[test]
+fn context_menu_yields_modifiers_an_ancestor_captures() {
+    let (menus, on_menu) = capture();
+    let (drags, on_drag) = capture();
+    let (nested_drags, on_nested_drag) = capture();
+    let mut backend = mount(
+        MouseRegion::new()
+            .capture_requires_mods(KeyMods::ALT)
+            .right_drag_requires_mods(KeyMods::ALT)
+            .drag_threshold(1, 1)
+            .on_right_drag_start(on_drag)
+            .child(
+                MouseRegion::new()
+                    .on_right_drag_start(on_nested_drag)
+                    .child(
+                        MouseRegion::new()
+                            .on_context_menu(on_menu)
+                            .child(resize_border()),
+                    ),
+            ),
+    );
+    for mods in [KeyMods::NONE, KeyMods::ALT] {
+        right_drag(&mut backend, 1, 4, mods);
+    }
+    assert_eq!(
+        menus.borrow().len(),
+        1,
+        "only the plain press opens the menu"
+    );
+    assert_eq!(
+        drags.borrow().len(),
+        1,
+        "Alt keeps the window's resize drag"
+    );
+    assert!(nested_drags.borrow().is_empty());
+}
+
+#[test]
+fn context_menu_modifier_capture_respects_the_ancestor_hit_area() {
+    for use_mask in [false, true] {
+        let (menus, on_menu) = capture();
+        let (drags, on_drag) = capture();
+        let wrapper = MouseRegion::new()
+            .capture_requires_mods(KeyMods::ALT)
+            .right_drag_requires_mods(KeyMods::ALT)
+            .drag_threshold(1, 1)
+            .on_right_drag_start(on_drag)
+            .child(
+                MouseRegion::new()
+                    .on_context_menu(on_menu)
+                    .child(resize_border()),
+            );
+        let wrapper = if use_mask {
+            wrapper.cell_mask(std::sync::Arc::new(crate::CellMask {
+                origin: (1, 0),
+                w: 1,
+                h: 1,
+                bits: [1].into(),
+            }))
+        } else {
+            wrapper.hit_test(|x, y| x == 1 && y == 0)
+        };
+        let mut backend = mount(wrapper);
+
+        right_drag(&mut backend, 4, 1, KeyMods::ALT);
+        assert_eq!(menus.borrow().len(), 1, "use_mask={use_mask}");
+        assert!(drags.borrow().is_empty(), "use_mask={use_mask}");
+
+        right_drag(&mut backend, 1, 4, KeyMods::ALT);
+        assert_eq!(menus.borrow().len(), 1, "use_mask={use_mask}");
+        assert_eq!(drags.borrow().len(), 1, "use_mask={use_mask}");
+    }
+}
+
+#[test]
+fn context_menu_right_drag_fallback_respects_ancestor_hit_test() {
+    let (drags, on_drag) = capture();
+    let mut backend = mount(
+        MouseRegion::new()
+            .hit_test(|x, _| x == 1)
+            .on_right_drag_start(on_drag)
+            .child(
+                MouseRegion::new()
+                    .on_click(Callback::new(|_| {}))
+                    .child(resize_border()),
+            ),
+    );
+
+    right_drag(&mut backend, 4, 1, KeyMods::ALT);
+    assert!(drags.borrow().is_empty());
+
+    right_drag(&mut backend, 1, 4, KeyMods::ALT);
+    assert_eq!(drags.borrow().len(), 1);
+}
+
+fn resize_border() -> Text {
+    Text::new("border")
+        .width(Length::Px(12))
+        .height(Length::Px(2))
+}
+
+fn right_drag(backend: &mut TestBackend<View>, from_x: u16, to_x: u16, mods: KeyMods) {
+    for (kind, x) in [
+        (MouseKind::Down(MouseButton::Right), from_x),
+        (MouseKind::Drag(MouseButton::Right), to_x),
+        (MouseKind::Up(MouseButton::Right), to_x),
+    ] {
+        backend
+            .send_mouse(MouseEvent {
+                x,
+                y: 0,
+                kind,
+                mods,
+            })
+            .unwrap();
     }
 }

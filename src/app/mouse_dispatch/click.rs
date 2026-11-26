@@ -158,75 +158,71 @@ pub(crate) fn transition_diff_line_range_gesture<C: Component, T: MouseDispatchC
 
 pub(crate) fn transition_right_click<C: Component, T: MouseDispatchCtx<C>>(
     ctx: &mut T,
-    adjusted_mouse: MouseEvent,
-    mouse: &MouseEvent,
-    x: u16,
-    y: u16,
+    mouse: MouseEvent,
     hover_dirty: bool,
 ) -> Option<bool> {
-    if matches!(mouse.kind, MouseKind::Down(MouseButton::Right)) {
-        // A fresh button-down always begins a new interaction. Drop any in-flight
-        // drag so a previous session whose button-up was lost (e.g. release outside
-        // the terminal, focus loss mid-drag) cannot linger and swallow this one.
-        ctx.mouse_state().mouse_region_drag = None;
+    if !matches!(mouse.kind, MouseKind::Down(MouseButton::Right)) {
+        return None;
+    }
 
-        let Some(hit) =
-            ctx.tree()
-                .secondary_hit_test(x as i16, y as i16, MouseButton::Right, mouse.mods)
-        else {
-            return Some(hover_dirty);
+    // A fresh press replaces any drag whose release was lost.
+    ctx.mouse_state().mouse_region_drag = None;
+
+    let MouseEvent { x, y, mods, .. } = mouse;
+    let Some(hit) = ctx
+        .tree()
+        .secondary_hit_test(x as i16, y as i16, MouseButton::Right, mods)
+    else {
+        return Some(hover_dirty);
+    };
+    let capture = mouse::find_mouse_region_modifier_capture(ctx.tree(), hit, mouse);
+
+    #[cfg(feature = "terminal")]
+    let use_default_context_routing =
+        match super::terminal_right::application_first_press(ctx, hit, mouse, capture.is_some()) {
+            super::terminal_right::RightPressRoute::Handled => return Some(true),
+            super::terminal_right::RightPressRoute::Fallback => false,
+            super::terminal_right::RightPressRoute::Default => true,
         };
+    #[cfg(not(feature = "terminal"))]
+    let use_default_context_routing = true;
 
-        #[cfg(feature = "terminal")]
-        let use_default_context_routing =
-            match super::terminal_right::application_first_press(ctx, hit, adjusted_mouse) {
-                super::terminal_right::RightPressRoute::Handled => return Some(true),
-                super::terminal_right::RightPressRoute::Fallback => false,
-                super::terminal_right::RightPressRoute::Default => true,
-            };
-        #[cfg(not(feature = "terminal"))]
-        let use_default_context_routing = true;
-
-        if use_default_context_routing && dispatch_context_menu(ctx.tree(), hit, adjusted_mouse) {
-            ctx.mouse_state().context_menu_press_consumed = true;
-            return Some(true);
-        }
-
-        #[cfg(feature = "terminal")]
-        if use_default_context_routing
-            && super::terminal_right::forward_right_press(ctx, adjusted_mouse)
+    if let Some(owner) = capture {
+        if let NodeKind::MouseRegion(region) = &ctx.tree().node(owner).kind
+            && region.accepts_drag_press(MouseButton::Right, mods)
         {
-            return Some(true);
+            ctx.mouse_state().mouse_region_drag =
+                pending_mouse_region_drag(ctx.tree(), owner, MouseButton::Right, x, y);
         }
-
-        // Right-drag bubbles to any enabled ancestor mouse region
-        // (`allow_ungated_ancestors = true`), unlike left-drag which only bubbles to
-        // ancestors that gate behind a modifier. This lets right-drag-to-resize work
-        // anywhere inside a window without an explicit modifier, while keeping plain
-        // left-drag from being stolen by an enclosing region.
-        let drag_target = find_ancestor_mouse_region_drag_target(
-            ctx.tree(),
-            hit,
-            MouseButton::Right,
-            mouse.mods,
-            true,
-        );
-        if let Some(target) = drag_target {
-            let drag = pending_mouse_region_drag(ctx.tree(), target, MouseButton::Right, x, y);
-            ctx.mouse_state().mouse_region_drag = drag;
-        }
-
-        if ctx.handle_right_click_textarea(hit, *mouse) {
-            return Some(true);
-        }
-
-        if drag_target.is_none() && right_click_clipboard(ctx, hit) {
-            return Some(true);
-        }
-
         return Some(hover_dirty);
     }
-    None
+
+    if use_default_context_routing && dispatch_context_menu(ctx.tree(), hit, mouse) {
+        ctx.mouse_state().context_menu_press_consumed = true;
+        return Some(true);
+    }
+
+    #[cfg(feature = "terminal")]
+    if use_default_context_routing && super::terminal_right::forward_right_press(ctx, mouse) {
+        return Some(true);
+    }
+
+    let drag_target =
+        find_ancestor_mouse_region_drag_target(ctx.tree(), hit, MouseButton::Right, mouse);
+    if let Some(target) = drag_target {
+        ctx.mouse_state().mouse_region_drag =
+            pending_mouse_region_drag(ctx.tree(), target, MouseButton::Right, x, y);
+    }
+
+    if ctx.handle_right_click_textarea(hit, mouse) {
+        return Some(true);
+    }
+
+    if drag_target.is_none() && right_click_clipboard(ctx, hit) {
+        return Some(true);
+    }
+
+    Some(hover_dirty)
 }
 
 // The nearest accepting handler resolves its own semantic target. The caller owns

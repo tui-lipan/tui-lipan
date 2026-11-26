@@ -398,7 +398,7 @@ fn dispatch_mouse_inner<C: Component, T: MouseDispatchCtx<C>>(
         return result;
     }
 
-    if let Some(result) = transition_right_click(ctx, mouse, &mouse, x, y, hover_dirty) {
+    if let Some(result) = transition_right_click(ctx, mouse, hover_dirty) {
         return result;
     }
 
@@ -427,13 +427,8 @@ fn dispatch_mouse_inner<C: Component, T: MouseDispatchCtx<C>>(
         let drag_start =
             hit_before_resolve.or_else(|| scrollbar_target.as_ref().map(|target| target.id));
         if let Some(start) = drag_start
-            && let Some(target) = find_ancestor_mouse_region_drag_target(
-                ctx.tree(),
-                start,
-                MouseButton::Left,
-                mouse.mods,
-                false,
-            )
+            && let Some(target) =
+                find_ancestor_mouse_region_drag_target(ctx.tree(), start, MouseButton::Left, mouse)
         {
             let drag = pending_mouse_region_drag(ctx.tree(), target, MouseButton::Left, x, y);
             ctx.mouse_state().mouse_region_drag = drag;
@@ -496,13 +491,7 @@ fn dispatch_mouse_inner<C: Component, T: MouseDispatchCtx<C>>(
         {
             Some(hit)
         } else {
-            find_ancestor_mouse_region_drag_target(
-                ctx.tree(),
-                hit,
-                MouseButton::Left,
-                mouse.mods,
-                false,
-            )
+            find_ancestor_mouse_region_drag_target(ctx.tree(), hit, MouseButton::Left, mouse)
         };
         if let Some(target) = drag_target {
             let drag = pending_mouse_region_drag(ctx.tree(), target, MouseButton::Left, x, y);

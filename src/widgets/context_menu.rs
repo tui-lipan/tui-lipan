@@ -304,6 +304,7 @@ pub struct ContextMenu {
     separator_style: Option<Style>,
     header_style: Option<Style>,
     detail_style: Option<Style>,
+    active_detail_style: StyleSlot,
     detail_gap: u16,
     disabled_style: Option<Style>,
     destructive_style: Option<Style>,
@@ -364,6 +365,7 @@ impl ContextMenu {
             separator_style: None,
             header_style: None,
             detail_style: None,
+            active_detail_style: StyleSlot::Inherit,
             detail_gap: 2,
             disabled_style: None,
             destructive_style: None,
@@ -642,6 +644,25 @@ impl ContextMenu {
         self
     }
 
+    /// Detail and submenu indicator style on the highlighted entry, so they stay readable on the
+    /// selection fill. Inherits [`detail_style`](Self::detail_style) by default.
+    pub fn active_detail_style(mut self, style: Style) -> Self {
+        self.active_detail_style = StyleSlot::Replace(style);
+        self
+    }
+
+    /// Patch the highlighted entry's detail style over [`detail_style`](Self::detail_style).
+    pub fn extend_active_detail_style(mut self, style: Style) -> Self {
+        self.active_detail_style = StyleSlot::Extend(style);
+        self
+    }
+
+    /// Set the highlighted entry's detail style slot.
+    pub fn active_detail_style_slot(mut self, slot: StyleSlot) -> Self {
+        self.active_detail_style = slot;
+        self
+    }
+
     /// Minimum blank columns between a label and its right-aligned detail or submenu indicator.
     pub fn detail_gap(mut self, gap: u16) -> Self {
         self.detail_gap = gap;
@@ -751,6 +772,7 @@ impl From<ContextMenu> for Element {
                 separator_style: menu.separator_style,
                 header_style: menu.header_style,
                 detail_style: menu.detail_style,
+                active_detail_style: menu.active_detail_style,
                 detail_gap: menu.detail_gap,
                 disabled_style: menu.disabled_style,
                 destructive_style: menu.destructive_style,
@@ -911,6 +933,7 @@ struct MenuRenderConfig {
     separator_style: Option<Style>,
     header_style: Option<Style>,
     detail_style: Option<Style>,
+    active_detail_style: StyleSlot,
     detail_gap: u16,
     disabled_style: Option<Style>,
     destructive_style: Option<Style>,
@@ -1374,7 +1397,10 @@ fn render_menu_level(
 
     let items: Vec<ListItem> = entries
         .iter()
-        .map(|entry| entry_to_list_item(entry, cfg, theme, gutter_left_pad))
+        .enumerate()
+        .map(|(index, entry)| {
+            entry_to_list_item(entry, cfg, theme, gutter_left_pad, selected == Some(index))
+        })
         .collect();
 
     let level_width = resolve_level_width(entries, cfg);
@@ -1527,6 +1553,7 @@ fn entry_to_list_item(
     cfg: &MenuRenderConfig,
     theme: &crate::style::Theme,
     gutter_left_pad: u16,
+    active: bool,
 ) -> ListItem {
     let muted_style = cfg.disabled_style.unwrap_or(Style {
         bg: None,
@@ -1540,6 +1567,14 @@ fn entry_to_list_item(
         bg: None,
         ..theme.muted
     });
+    let (detail_style, active_detail) = match (active, cfg.active_detail_style) {
+        (false, _) | (true, StyleSlot::Inherit) => (detail_style, None),
+        (true, StyleSlot::Extend(style)) => {
+            let style = detail_style.patch(style);
+            (style, Some(style))
+        }
+        (true, StyleSlot::Replace(style)) => (style, Some(style)),
+    };
     let destructive_style = cfg
         .destructive_style
         .unwrap_or(Style::new().fg(theme.status.error));
@@ -1641,7 +1676,7 @@ fn entry_to_list_item(
             let chevron_style = if disabled {
                 muted_style
             } else {
-                cfg.submenu_indicator_style.unwrap_or(detail_style)
+                active_detail.unwrap_or(cfg.submenu_indicator_style.unwrap_or(detail_style))
             };
             let mut list_item =
                 ListItem::from_spans([Span::new(sub.label.clone()).style(label_style)])

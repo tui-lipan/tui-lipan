@@ -1073,3 +1073,109 @@ mod terminal_routing {
         assert!(events.borrow().reports.is_empty());
     }
 }
+
+#[derive(Clone, Default)]
+struct DetailMenu {
+    extend: bool,
+}
+
+impl Component for DetailMenu {
+    type Properties = ();
+    type State = ();
+    type Message = ();
+
+    fn create_state(&self, _: &()) {}
+
+    fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _: &Context<Self>) -> Element {
+        let menu = ContextMenu::new(Text::new("Host"))
+            .open(true)
+            .anchor(Some((0, 0)))
+            .entries([
+                ContextMenuEntry::action("one", "One").detail("K1"),
+                ContextMenuEntry::action("two", "Two").detail("K2"),
+                ContextMenuEntry::submenu(
+                    "more",
+                    "More",
+                    [ContextMenuEntry::action("child", "Child")],
+                ),
+            ])
+            .selection_style(Style::new().fg(Color::Black).bg(Color::Magenta))
+            .detail_style(Style::new().fg(Color::Blue))
+            .submenu_indicator_style(Style::new().fg(Color::Green));
+        if self.extend {
+            menu.extend_active_detail_style(Style::new().bold()).into()
+        } else {
+            menu.active_detail_style(Style::new().fg(Color::Red)).into()
+        }
+    }
+}
+
+#[test]
+fn highlighted_entry_detail_uses_the_active_detail_style() {
+    let mut backend = TestBackend::new(DetailMenu::default());
+    backend.render();
+    // The foreground of the first cell of `detail`, a two-letter label.
+    let detail_fg = |backend: &TestBackend<DetailMenu>, detail: &str| {
+        let frame = backend.capture_frame();
+        let (first, second) = (&detail[..1], &detail[1..]);
+        (0..frame.height)
+            .flat_map(|y| (0..frame.width.saturating_sub(1)).map(move |x| (x, y)))
+            .find(|&(x, y)| {
+                frame.cell(x, y).symbol == first && frame.cell(x + 1, y).symbol == second
+            })
+            .map(|(x, y)| frame.cell(x, y).fg)
+            .expect("detail on screen")
+    };
+    assert_eq!(detail_fg(&backend, "K1"), Color::Red);
+    assert_eq!(detail_fg(&backend, "K2"), Color::Blue);
+    backend
+        .send_key(KeyEvent {
+            code: KeyCode::Down,
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.render();
+    assert_eq!(detail_fg(&backend, "K1"), Color::Blue);
+    assert_eq!(detail_fg(&backend, "K2"), Color::Red);
+}
+
+#[test]
+fn hovering_submenu_applies_the_extended_active_detail_style_to_its_indicator() {
+    let mut backend = TestBackend::new(DetailMenu { extend: true });
+    backend.render();
+
+    let frame = backend.capture_frame();
+    let detail = frame.cells.iter().find(|cell| cell.symbol == "K").unwrap();
+    assert_eq!(detail.fg, Color::Blue);
+    assert!(detail.modifiers.bold);
+    let indicator = frame
+        .cells
+        .iter()
+        .position(|cell| cell.symbol == "›")
+        .unwrap();
+    assert_eq!(frame.cells[indicator].fg, Color::Green);
+    assert!(!frame.cells[indicator].modifiers.bold);
+
+    let width = usize::from(frame.width);
+    backend
+        .send_mouse(MouseEvent {
+            x: (indicator % width) as u16,
+            y: (indicator / width) as u16,
+            kind: MouseKind::Moved,
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.render();
+
+    let frame = backend.capture_frame();
+    let detail = frame.cells.iter().find(|cell| cell.symbol == "K").unwrap();
+    assert_eq!(detail.fg, Color::Blue);
+    assert!(!detail.modifiers.bold);
+    let indicator = frame.cells.iter().find(|cell| cell.symbol == "›").unwrap();
+    assert_eq!(indicator.fg, Color::Blue);
+    assert!(indicator.modifiers.bold);
+}
