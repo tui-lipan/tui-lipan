@@ -683,6 +683,8 @@ order is the visual order navigation walks.
 | `input_suffix` | `impl Into<Arc<str>>` | Suffix after query text (default: `"{matches}/{total}"`) |
 | `input_border` | `bool` | Show input border |
 | `input_divider` | `bool` | Reserve a divider row below the input (uncontrolled mode, default: `true`) |
+| `input_accessory` | `impl Into<Element>` | Content beside the built-in input. Hidden in controlled mode. |
+| `auto_select` | `bool` | Automatically highlight the first result after a reset. Defaults to true. |
 | `results_header` | `impl Into<Element>` | Content between the input divider and results, such as category tabs. In controlled mode, appears above the results. Set an explicit content height for fixed-height palettes. |
 | `input_divider_style` | `Style` | Divider style below input |
 | `input_divider_join_frame` | `bool` | Join divider with surrounding frame border (default: `true`) |

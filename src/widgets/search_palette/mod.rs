@@ -651,6 +651,8 @@ pub(crate) struct SearchPaletteProps<T> {
     query: Option<Arc<str>>,
     placeholder: Arc<str>,
     results_header: Option<Rc<Element>>,
+    input_accessory: Option<Rc<Element>>,
+    auto_select: bool,
     // Layout
     width: Length,
     height: Length,
@@ -761,6 +763,12 @@ impl<T: PartialEq> PartialEq for SearchPaletteProps<T> {
                 (Some(left), Some(right)) => Rc::ptr_eq(left, right),
                 _ => false,
             }
+            && match (&self.input_accessory, &other.input_accessory) {
+                (None, None) => true,
+                (Some(left), Some(right)) => Rc::ptr_eq(left, right),
+                _ => false,
+            }
+            && self.auto_select == other.auto_select
             && self.width == other.width
             && self.height == other.height
             && self.max_width == other.max_width
@@ -930,6 +938,8 @@ impl<T: Clone + PartialEq> Default for SearchPalette<T> {
                 query: None,
                 placeholder: "Search...".into(),
                 results_header: None,
+                input_accessory: None,
+                auto_select: true,
                 width: Length::Flex(1),
                 height: Length::Flex(1),
                 max_width: None,
@@ -1182,6 +1192,21 @@ impl<T: Clone + PartialEq> SearchPalette<T> {
     /// ignored in controlled mode.
     pub fn query(mut self, query: impl Into<Arc<str>>) -> Self {
         self.props.query = Some(query.into());
+        self
+    }
+
+    /// Place content beside the built-in input. In controlled mode no accessory is shown.
+    pub fn input_accessory(mut self, accessory: impl Into<Element>) -> Self {
+        self.props.input_accessory = Some(Rc::new(accessory.into()));
+        self
+    }
+
+    /// Highlight the first result when the query or reset key changes (default: true).
+    ///
+    /// When disabled, navigation or a click establishes the selection. An explicit
+    /// initial selection still takes precedence.
+    pub fn auto_select(mut self, enable: bool) -> Self {
+        self.props.auto_select = enable;
         self
     }
 
