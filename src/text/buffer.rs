@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::text::edit::{TextEdit, TextEditEvent, TextEditFields, TextEditKind, TextTarget};
 use crate::utils::text::clamp_cursor;
@@ -9,24 +9,66 @@ use undo::Record;
 
 const DEFAULT_HISTORY_LIMIT: usize = 1000;
 
-static NEXT_HISTORY_EPOCH: AtomicU64 = AtomicU64::new(1);
-
-pub(crate) fn next_history_epoch() -> u64 {
-    NEXT_HISTORY_EPOCH.fetch_add(1, Ordering::Relaxed)
-}
-
-/// Compact history cursor carried from a bound [`TextEditor`](super::TextEditor) into
-/// [`TextArea`](crate::widgets::TextArea) so the runtime can tell programmatic edits,
-/// programmatic undo/redo, and fresh document resets apart.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct BoundHistoryState {
-    pub(crate) epoch: u64,
-    pub(crate) edit_version: u64,
-    pub(crate) undo_count: u64,
-    pub(crate) redo_count: u64,
-}
-
 type CoreEdit = TextEdit<TextBufferCore>;
+
+/// Undo history backing a [`TextBufferCore`].
+///
+/// Cloning a `SharedHistory` deep-clones the underlying undo record so cloning a
+/// [`TextEditor`](super::TextEditor) or [`TextInput`](super::TextInput) produces an independent
+/// history. Sharing the same history with a bound [`TextArea`](crate::widgets::TextArea) goes
+/// explicitly through [`SharedHistoryHandle`].
+#[derive(Debug)]
+pub(crate) struct SharedHistory(Arc<Mutex<Record<CoreEdit>>>);
+
+impl SharedHistory {
+    pub(crate) fn fresh() -> Self {
+        Self(Arc::new(Mutex::new(TextBufferCore::fresh_record())))
+    }
+
+    pub(crate) fn from_handle(handle: &SharedHistoryHandle) -> Self {
+        Self(Arc::clone(&handle.0))
+    }
+
+    pub(crate) fn handle(&self) -> SharedHistoryHandle {
+        SharedHistoryHandle(Arc::clone(&self.0))
+    }
+
+    fn lock(&self) -> MutexGuard<'_, Record<CoreEdit>> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    pub(crate) fn can_undo(&self) -> bool {
+        self.lock().can_undo()
+    }
+
+    pub(crate) fn can_redo(&self) -> bool {
+        self.lock().can_redo()
+    }
+
+    pub(crate) fn clear(&self) {
+        *self.lock() = TextBufferCore::fresh_record();
+    }
+
+    pub(crate) fn take(&self) -> Record<CoreEdit> {
+        std::mem::replace(&mut *self.lock(), TextBufferCore::fresh_record())
+    }
+
+    pub(crate) fn put_back(&self, record: Record<CoreEdit>) {
+        *self.lock() = record;
+    }
+}
+
+impl Clone for SharedHistory {
+    fn clone(&self) -> Self {
+        Self(Arc::new(Mutex::new(self.lock().clone())))
+    }
+}
+
+/// Shared handle to a bound [`TextEditor`](super::TextEditor)'s authoritative undo history.
+#[derive(Clone, Debug)]
+pub(crate) struct SharedHistoryHandle(Arc<Mutex<Record<CoreEdit>>>);
 
 /// Shared text buffer backing both `TextInput` (single-line) and `TextEditor` (multi-line).
 ///
@@ -38,18 +80,8 @@ pub struct TextBufferCore {
     pub(crate) text: String,
     pub(crate) cursor: usize,
     pub(crate) anchor: Option<usize>,
-    pub(crate) history: Record<CoreEdit>,
+    pub(crate) history: SharedHistory,
     pub(crate) last_edit: Option<TextEditEvent>,
-    /// Unique identifier for the current document/session in this buffer. Bumped on
-    /// construction, `set_text`, and `clear_history`/`reset_history` so bound widgets know
-    /// when to discard runtime undo history vs. record a programmatic edit onto it.
-    pub(crate) history_epoch: u64,
-    /// Monotonic counter incremented on every edit recorded via `record_edit`.
-    pub(crate) edit_version: u64,
-    /// Monotonic counter incremented on every successful `undo()`.
-    pub(crate) undo_count: u64,
-    /// Monotonic counter incremented on every successful `redo()`.
-    pub(crate) redo_count: u64,
 }
 
 impl Default for TextBufferCore {
@@ -58,12 +90,8 @@ impl Default for TextBufferCore {
             text: String::new(),
             cursor: 0,
             anchor: None,
-            history: Self::fresh_history(),
+            history: SharedHistory::fresh(),
             last_edit: None,
-            history_epoch: next_history_epoch(),
-            edit_version: 0,
-            undo_count: 0,
-            redo_count: 0,
         }
     }
 }
@@ -86,8 +114,12 @@ impl TextTarget for TextBufferCore {
 }
 
 impl TextBufferCore {
-    pub(crate) fn fresh_history() -> Record<CoreEdit> {
+    pub(crate) fn fresh_record() -> Record<CoreEdit> {
         Record::builder().limit(DEFAULT_HISTORY_LIMIT).build()
+    }
+
+    pub(crate) fn share_history(&self) -> SharedHistoryHandle {
+        self.history.handle()
     }
 
     // ── Accessors ────────────────────────────────────────────────────────
@@ -139,50 +171,27 @@ impl TextBufferCore {
 
     /// Undo the most recent edit.
     pub fn undo(&mut self) -> bool {
-        let mut history = std::mem::take(&mut self.history);
+        let mut history = self.history.take();
         let changed = history.undo(self).is_some();
-        self.history = history;
-        if changed {
-            self.undo_count = self.undo_count.wrapping_add(1);
-        }
+        self.history.put_back(history);
         changed
     }
 
     /// Redo the most recently undone edit.
     pub fn redo(&mut self) -> bool {
-        let mut history = std::mem::take(&mut self.history);
+        let mut history = self.history.take();
         let changed = history.redo(self).is_some();
-        self.history = history;
-        if changed {
-            self.redo_count = self.redo_count.wrapping_add(1);
-        }
+        self.history.put_back(history);
         changed
-    }
-
-    pub(crate) fn bound_history_state(&self) -> BoundHistoryState {
-        BoundHistoryState {
-            epoch: self.history_epoch,
-            edit_version: self.edit_version,
-            undo_count: self.undo_count,
-            redo_count: self.redo_count,
-        }
     }
 
     /// Clear all undo/redo history without changing the text.
     pub fn clear_history(&mut self) {
         self.history.clear();
-        self.history_epoch = next_history_epoch();
-        self.edit_version = 0;
-        self.undo_count = 0;
-        self.redo_count = 0;
     }
 
     pub(crate) fn reset_history(&mut self) {
-        self.history = Self::fresh_history();
-        self.history_epoch = next_history_epoch();
-        self.edit_version = 0;
-        self.undo_count = 0;
-        self.redo_count = 0;
+        self.history.clear();
     }
 
     // ── Sync / setters ───────────────────────────────────────────────────
@@ -231,10 +240,7 @@ impl TextBufferCore {
         self.text = text.into();
         self.cursor = clamp_cursor(&self.text, self.cursor);
         self.anchor = self.anchor.map(|a| clamp_cursor(&self.text, a));
-        self.history_epoch = next_history_epoch();
-        self.edit_version = 0;
-        self.undo_count = 0;
-        self.redo_count = 0;
+        self.history.clear();
     }
 
     /// Set the cursor position (byte index), clearing selection.
@@ -286,10 +292,9 @@ impl TextBufferCore {
 
     pub(crate) fn record_edit(&mut self, edit: CoreEdit) {
         self.last_edit = Some(TextEditEvent::from(&edit));
-        let mut history = std::mem::take(&mut self.history);
+        let mut history = self.history.take();
         history.edit(self, edit);
-        self.history = history;
-        self.edit_version = self.edit_version.wrapping_add(1);
+        self.history.put_back(history);
     }
 
     pub(crate) fn take_last_edit(&mut self) -> Option<TextEditEvent> {

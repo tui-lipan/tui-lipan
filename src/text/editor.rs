@@ -2,7 +2,7 @@
 
 use crate::clipboard::ImageContent;
 use crate::core::event::KeyEvent;
-use crate::text::buffer::{BoundHistoryState, TextBufferCore};
+use crate::text::buffer::{SharedHistory, SharedHistoryHandle, TextBufferCore};
 use crate::text::edit::TextEditKind;
 use crate::utils::text::clamp_cursor;
 use crate::widgets::{TextAreaEvent, TextAreaSentinel};
@@ -33,8 +33,36 @@ pub struct TextEditor {
     /// Set after moving to the end of a soft-wrapped row. That byte is also where the next row
     /// starts, so this records that the caret still counts as on the row it came from.
     pub(crate) visual_row_end: Option<usize>,
-    /// Last history state observed from a bound [`TextArea`](crate::widgets::TextArea).
-    pub(crate) synced_bound_history: Option<BoundHistoryState>,
+}
+
+/// RAII guard that temporarily attaches a bound [`TextEditor`]'s shared undo history to the
+/// runtime [`TextArea`](crate::widgets::TextArea) editor so keyboard and programmatic edits
+/// share one authoritative undo stack.
+pub(crate) struct BoundEditorGuard<'a> {
+    editor: &'a mut TextEditor,
+    previous_history: Option<SharedHistory>,
+}
+
+impl Deref for BoundEditorGuard<'_> {
+    type Target = TextEditor;
+
+    fn deref(&self) -> &Self::Target {
+        self.editor
+    }
+}
+
+impl DerefMut for BoundEditorGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.editor
+    }
+}
+
+impl Drop for BoundEditorGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(previous_history) = self.previous_history.take() {
+            self.editor.core.history = previous_history;
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -93,19 +121,14 @@ impl TextEditor {
                 text,
                 cursor: 0,
                 anchor: None,
-                history: TextBufferCore::fresh_history(),
+                history: SharedHistory::fresh(),
                 last_edit: None,
-                history_epoch: crate::text::buffer::next_history_epoch(),
-                edit_version: 0,
-                undo_count: 0,
-                redo_count: 0,
             },
             pending_external_paste: None,
             image_snapshots: Vec::new(),
             sentinel_snapshots: Vec::new(),
             visual_nav_col: None,
             visual_row_end: None,
-            synced_bound_history: None,
         }
     }
 
@@ -124,38 +147,11 @@ impl TextEditor {
     /// Clears the sticky visual column when the externally-supplied cursor
     /// differs from our last known position, so a subsequent up/down arrow
     /// recomputes the column instead of using a stale one.
-    pub(crate) fn sync_from_bound(
-        &mut self,
-        text: &str,
-        cursor: usize,
-        anchor: Option<usize>,
-        bound_history: Option<BoundHistoryState>,
-    ) {
+    pub(crate) fn sync_from(&mut self, text: &str, cursor: usize, anchor: Option<usize>) {
         let prev_cursor = self.core.cursor;
-        let prev_anchor = self.core.anchor;
         let text_changed = self.core.text != text;
         let pending_external_paste = self.pending_external_paste.take();
-        let epoch_changed = match (self.synced_bound_history, bound_history) {
-            (Some(prev), Some(next)) => prev.epoch != next.epoch,
-            _ => false,
-        };
-        let bound_delta = match (self.synced_bound_history, bound_history) {
-            (Some(prev), Some(next)) if prev.epoch == next.epoch => Some((
-                next.edit_version != prev.edit_version,
-                next.undo_count.wrapping_sub(prev.undo_count),
-                next.redo_count.wrapping_sub(prev.redo_count),
-            )),
-            _ => None,
-        };
-
-        if epoch_changed {
-            // An explicit document/session reset always takes precedence over pending
-            // external pastes so prior document history can never leak across editors.
-            self.core.sync_from(text, cursor, anchor);
-            if !text_changed {
-                self.core.reset_history();
-            }
-        } else if text_changed
+        if text_changed
             && let Some(pending) = pending_external_paste
             && self.core.text == pending.text_before
         {
@@ -166,66 +162,53 @@ impl TextEditor {
                 cursor,
                 anchor,
             );
-        } else if text_changed && let Some((edited, undo_delta, redo_delta)) = bound_delta {
-            if !edited && undo_delta > 0 && redo_delta == 0 {
-                let mut applied = 0u64;
-                for _ in 0..undo_delta {
-                    if self.core.undo() {
-                        applied += 1;
-                    } else {
-                        break;
-                    }
-                }
-                if self.core.text == text {
-                    self.core.sync_from(text, cursor, anchor);
-                } else {
-                    for _ in 0..applied {
-                        let _ = self.core.redo();
-                    }
-                    self.core.sync_external_edit_from(
-                        text,
-                        prev_cursor,
-                        prev_anchor,
-                        cursor,
-                        anchor,
-                    );
-                }
-            } else if !edited && redo_delta > 0 && undo_delta == 0 {
-                let mut applied = 0u64;
-                for _ in 0..redo_delta {
-                    if self.core.redo() {
-                        applied += 1;
-                    } else {
-                        break;
-                    }
-                }
-                if self.core.text == text {
-                    self.core.sync_from(text, cursor, anchor);
-                } else {
-                    for _ in 0..applied {
-                        let _ = self.core.undo();
-                    }
-                    self.core.sync_external_edit_from(
-                        text,
-                        prev_cursor,
-                        prev_anchor,
-                        cursor,
-                        anchor,
-                    );
-                }
-            } else if edited || undo_delta > 0 || redo_delta > 0 {
-                self.core
-                    .sync_external_edit_from(text, prev_cursor, prev_anchor, cursor, anchor);
-            } else {
-                self.core.sync_from(text, cursor, anchor);
-            }
         } else {
             self.core.sync_from(text, cursor, anchor);
         }
-        self.synced_bound_history = bound_history;
         if text_changed || self.core.cursor != prev_cursor {
             self.visual_nav_col = None;
             self.visual_row_end = None;
+        }
+    }
+
+    /// Reconcile the runtime editor with a [`TextArea`](crate::widgets::TextArea) node's current
+    /// `(text, cursor, anchor)`.
+    ///
+    /// When `bound_history` is `Some`, attaches the bound [`TextEditor`]'s authoritative undo
+    /// history for the lifetime of the returned guard so keyboard and programmatic edits operate
+    /// on a single undo stack. When `None`, falls back to the runtime editor's local history.
+    pub(crate) fn sync_for_widget<'a>(
+        &'a mut self,
+        text: &str,
+        cursor: usize,
+        anchor: Option<usize>,
+        bound_history: Option<&SharedHistoryHandle>,
+    ) -> BoundEditorGuard<'a> {
+        if let Some(handle) = bound_history {
+            let prev_cursor = self.core.cursor;
+            let text_changed = self.core.text != text;
+            self.pending_external_paste = None;
+            if text_changed {
+                self.core.text = text.to_string();
+            }
+            self.core.cursor = clamp_cursor(&self.core.text, cursor);
+            self.core.anchor = anchor.map(|a| clamp_cursor(&self.core.text, a));
+            if text_changed || self.core.cursor != prev_cursor {
+                self.visual_nav_col = None;
+                self.visual_row_end = None;
+            }
+            let previous_history =
+                std::mem::replace(&mut self.core.history, SharedHistory::from_handle(handle));
+            BoundEditorGuard {
+                editor: self,
+                previous_history: Some(previous_history),
+            }
+        } else {
+            self.sync_from(text, cursor, anchor);
+            BoundEditorGuard {
+                editor: self,
+                previous_history: None,
+            }
         }
     }
 
@@ -1181,5 +1164,24 @@ mod tests {
         assert_eq!(editor.anchor(), None);
         assert!(!editor.can_undo());
         assert!(!editor.clear());
+    }
+
+    #[test]
+    fn cloning_editor_creates_independent_undo_history() {
+        let mut original = TextEditor::new("");
+        original.insert_str("hello");
+
+        let mut cloned = original.clone();
+        cloned.insert_str(" world");
+        assert!(cloned.undo());
+        assert_eq!(cloned.text(), "hello");
+        assert!(cloned.undo());
+        assert_eq!(cloned.text(), "");
+
+        assert_eq!(original.text(), "hello");
+        assert!(original.can_undo());
+        assert!(!original.can_redo());
+        assert!(original.undo());
+        assert_eq!(original.text(), "");
     }
 }

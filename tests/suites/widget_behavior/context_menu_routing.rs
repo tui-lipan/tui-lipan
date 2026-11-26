@@ -1406,10 +1406,10 @@ fn programmatic_bound_editor_edits_preserve_and_extend_undo_history() {
     backend.render();
     assert_eq!(backend.state().text(), "hi there");
 
-    // Second programmatic edit without an intermediate keystroke gets its own undo step.
-    backend.dispatch(UndoMenuMsg::Paste("!")).unwrap();
+    // Second multi-char programmatic edit without an intermediate keystroke gets its own undo step.
+    backend.dispatch(UndoMenuMsg::Paste(" again")).unwrap();
     backend.render();
-    assert_eq!(backend.state().text(), "hi there!");
+    assert_eq!(backend.state().text(), "hi there again");
 
     let undo = KeyEvent {
         code: KeyCode::Char('z'),
@@ -1853,4 +1853,191 @@ fn captured_static_caret_respects_suspended_vim_insert_mode() {
         "captured static caret should reflect suspended Vim Insert mode"
     );
     assert!(!static_cursor.blinking);
+}
+
+#[test]
+fn mixing_keyboard_undo_and_programmatic_undo_never_panics_and_shares_history() {
+    #[derive(Clone, Debug)]
+    enum Msg {
+        Edited(tui_lipan::TextAreaEvent),
+        Insert(&'static str),
+        Undo,
+        Redo,
+    }
+
+    struct SharedHistoryHarness;
+
+    impl Component for SharedHistoryHarness {
+        type Properties = ();
+        type State = tui_lipan::TextEditor;
+        type Message = Msg;
+
+        fn create_state(&self, _: &()) -> Self::State {
+            tui_lipan::TextEditor::default()
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            match msg {
+                Msg::Edited(ev) => {
+                    ev.apply_to(&mut ctx.state);
+                    Update::full()
+                }
+                Msg::Insert(s) => {
+                    ctx.state.insert_str(s);
+                    Update::full()
+                }
+                Msg::Undo => {
+                    ctx.state.undo();
+                    Update::full()
+                }
+                Msg::Redo => {
+                    ctx.state.redo();
+                    Update::full()
+                }
+            }
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            TextArea::bound(&ctx.state)
+                .height(Length::Px(4))
+                .on_change(ctx.link().callback(Msg::Edited))
+                .key("shared-history-editor")
+        }
+    }
+
+    let mut backend = TestBackend::new(SharedHistoryHarness);
+    backend.focus_key(&tui_lipan::Key::from("shared-history-editor"));
+    backend.render();
+
+    // 1. Type "hello" via keyboard.
+    for ch in ['h', 'e', 'l', 'l', 'o'] {
+        backend
+            .send_key(KeyEvent {
+                code: KeyCode::Char(ch),
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+        backend.render();
+    }
+    assert_eq!(backend.state().text(), "hello");
+    assert!(
+        backend.state().can_undo(),
+        "keyboard edits on a bound TextArea should populate the bound TextEditor's undo stack"
+    );
+
+    // 2. Programmatically insert " world".
+    backend.dispatch(Msg::Insert(" world")).unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "hello world");
+
+    let undo = KeyEvent {
+        code: KeyCode::Char('z'),
+        mods: KeyMods::CTRL,
+    };
+    let redo = KeyEvent {
+        code: KeyCode::Char('y'),
+        mods: KeyMods::CTRL,
+    };
+
+    // 3. Keyboard Ctrl+Z reverts the programmatic insertion back to "hello".
+    backend.send_key(undo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "hello");
+
+    // 4. Programmatic undo reverts the earlier keyboard typing back to "" without panicking.
+    backend.dispatch(Msg::Undo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "");
+    assert!(!backend.state().can_undo());
+    assert!(backend.state().can_redo());
+
+    // 5. Keyboard Ctrl+Y redoes the keyboard typing, then programmatic redo redoes " world".
+    backend.send_key(redo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "hello");
+
+    backend.dispatch(Msg::Redo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "hello world");
+    assert!(!backend.state().can_redo());
+}
+
+#[test]
+fn coalesced_programmatic_edits_preserve_exact_undo_and_redo_semantics() {
+    #[derive(Clone, Debug)]
+    enum Msg {
+        Edited(tui_lipan::TextAreaEvent),
+        Insert(&'static str),
+        Undo,
+    }
+
+    struct CoalescedHarness;
+
+    impl Component for CoalescedHarness {
+        type Properties = ();
+        type State = tui_lipan::TextEditor;
+        type Message = Msg;
+
+        fn create_state(&self, _: &()) -> Self::State {
+            tui_lipan::TextEditor::default()
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            match msg {
+                Msg::Edited(ev) => {
+                    ev.apply_to(&mut ctx.state);
+                    Update::full()
+                }
+                Msg::Insert(s) => {
+                    ctx.state.insert_str(s);
+                    Update::full()
+                }
+                Msg::Undo => {
+                    ctx.state.undo();
+                    Update::full()
+                }
+            }
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            TextArea::bound(&ctx.state)
+                .height(Length::Px(4))
+                .on_change(ctx.link().callback(Msg::Edited))
+                .key("coalesced-editor")
+        }
+    }
+
+    let mut backend = TestBackend::new(CoalescedHarness);
+    backend.focus_key(&tui_lipan::Key::from("coalesced-editor"));
+    backend.render();
+
+    // Two consecutive programmatic insertions coalesce into a single edit in TextEditor.
+    backend.dispatch(Msg::Insert("a")).unwrap();
+    backend.render();
+    backend.dispatch(Msg::Insert("b")).unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "ab");
+
+    // Programmatic undo reverts the coalesced edit back to "".
+    backend.dispatch(Msg::Undo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "");
+
+    let undo = KeyEvent {
+        code: KeyCode::Char('z'),
+        mods: KeyMods::CTRL,
+    };
+    let redo = KeyEvent {
+        code: KeyCode::Char('y'),
+        mods: KeyMods::CTRL,
+    };
+
+    // Keyboard Ctrl+Y redoes the exact coalesced edit ("ab"), and Ctrl+Z undoes back to "".
+    backend.send_key(redo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "ab");
+
+    backend.send_key(undo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "");
 }

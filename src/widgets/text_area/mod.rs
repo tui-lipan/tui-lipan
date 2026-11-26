@@ -218,7 +218,7 @@ pub struct TextArea {
     pub(crate) cursor: usize,         // byte index
     pub(crate) anchor: Option<usize>, // selection anchor byte index
     pub(crate) cursor_controlled: bool,
-    pub(crate) bound_history: Option<crate::text::buffer::BoundHistoryState>,
+    pub(crate) bound_history: Option<crate::text::buffer::SharedHistoryHandle>,
     pub(crate) placeholder: Option<Arc<str>>,
     pub(crate) style: Style,
     pub(crate) hover_style: StyleSlot,
@@ -475,6 +475,7 @@ impl TextArea {
     /// Set the text content.
     pub fn value(mut self, value: impl Into<Arc<str>>) -> Self {
         self.value = value.into();
+        self.bound_history = None;
         self
     }
 
@@ -505,7 +506,7 @@ impl TextArea {
         self.cursor = state.cursor();
         self.anchor = state.anchor();
         self.cursor_controlled = true;
-        self.bound_history = Some(state.core.bound_history_state());
+        self.bound_history = Some(state.core.share_history());
         self
     }
 

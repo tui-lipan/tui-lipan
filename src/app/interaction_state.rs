@@ -387,35 +387,6 @@ impl WidgetState {
         self.hex_pending_edit.retain(|id, _| {
             tree.is_valid(*id) && matches!(tree.node(*id).kind, NodeKind::HexArea(_))
         });
-
-        // Keep runtime undo history in sync with bound TextAreas after reconciliation so
-        // programmatic edits on a bound TextEditor (e.g. context menu paste/cut or completion
-        // insertions) append undo steps instead of wiping undo history on the next keystroke.
-        for node in tree.iter() {
-            if let NodeKind::TextArea(ta) = &node.kind
-                && let Some(bound_history) = ta.bound_history
-                && !ta.read_only
-                && ta.on_change.is_some()
-            {
-                match self.textarea_history.entry(node.id) {
-                    std::collections::hash_map::Entry::Occupied(mut entry) => {
-                        entry.get_mut().sync_from_bound(
-                            ta.value.as_ref(),
-                            ta.cursor,
-                            ta.anchor,
-                            Some(bound_history),
-                        );
-                    }
-                    std::collections::hash_map::Entry::Vacant(entry) => {
-                        let mut editor = TextEditor::new(ta.value.as_ref());
-                        editor.set_cursor(ta.cursor);
-                        editor.set_anchor(ta.anchor);
-                        editor.synced_bound_history = Some(bound_history);
-                        entry.insert(editor);
-                    }
-                }
-            }
-        }
     }
 }
 

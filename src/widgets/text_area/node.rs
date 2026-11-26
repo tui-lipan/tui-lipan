@@ -31,7 +31,7 @@ pub struct TextAreaNode {
     pub value: Arc<str>,
     pub cursor: usize,
     pub anchor: Option<usize>,
-    pub(crate) bound_history: Option<crate::text::buffer::BoundHistoryState>,
+    pub(crate) bound_history: Option<crate::text::buffer::SharedHistoryHandle>,
     pub(crate) uncontrolled: crate::utils::text::UncontrolledTextState,
     pub placeholder: Option<Arc<str>>,
     pub style: Style,
