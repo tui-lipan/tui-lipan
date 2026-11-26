@@ -4,7 +4,8 @@ use crate::animation::VisibilityAnimation;
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use crate::core::component::{Component, Context, Update};
@@ -570,28 +571,85 @@ struct TooltipState {
     reveal: HoverReveal,
     /// Whether the pointer is on the trigger, nested triggers included.
     trigger_hovered: bool,
-    /// The nested tooltips whose trigger has the pointer. While any does, this one steps aside.
-    nested: Vec<usize>,
+    /// The nested tooltips whose trigger has the pointer, each with a handle on whether its
+    /// subtree is showing. While any has the pointer, this one steps aside.
+    nested: ShowingHandle,
     /// The tooltip this one told the pointer is on its trigger, owed a leave.
     reported_to: Option<NestedTooltip>,
     /// Whether this tooltip is showing, or would be but for a hovered nested trigger, as of the
     /// last render. Nested tooltips read it to take over at once.
-    shown: Rc<Cell<bool>>,
+    shown: Arc<AtomicBool>,
     /// Whether the popup was open in the last render, to notice it opening and closing.
     visible: Cell<bool>,
     /// Whether another tooltip opened while this one faded out: the fade ends at once.
     fade_cut: Cell<bool>,
 }
 
+/// Whether a tooltip or any tooltip nested in it, at any depth, is showing. A tooltip hands one to
+/// the tooltip enclosing it, so a pointer leaving several levels at once still carries the news
+/// that a tooltip deep inside was showing.
+#[derive(Clone, Default)]
+struct ShowingHandle {
+    own: Arc<AtomicBool>,
+    nested: Arc<Mutex<Vec<(usize, ShowingHandle)>>>,
+}
+
+impl std::fmt::Debug for ShowingHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ShowingHandle")
+            .field("showing", &self.showing())
+            .finish()
+    }
+}
+
+impl ShowingHandle {
+    fn list(&self) -> std::sync::MutexGuard<'_, Vec<(usize, ShowingHandle)>> {
+        self.nested
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn showing(&self) -> bool {
+        self.own.load(Ordering::Relaxed) || self.list().iter().any(|(_, nested)| nested.showing())
+    }
+
+    fn is_empty(&self) -> bool {
+        self.list().is_empty()
+    }
+
+    fn contains(&self, id: usize) -> bool {
+        self.list().iter().any(|(nested, _)| *nested == id)
+    }
+
+    fn insert(&self, id: usize, handle: ShowingHandle) {
+        self.list().push((id, handle));
+    }
+
+    fn remove(&self, id: usize) -> bool {
+        let mut nested = self.list();
+        let Some(index) = nested.iter().position(|(nested, _)| *nested == id) else {
+            return false;
+        };
+        nested.swap_remove(index);
+        true
+    }
+
+    fn clear(&self) {
+        self.list().clear();
+    }
+}
+
 /// What a nested tooltip tells the tooltip whose trigger holds it.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct NestedHover {
     /// The nested tooltip.
     id: usize,
     /// The pointer entered (`true`) or left (`false`) the nested trigger.
     hovered: bool,
-    /// Whether the nested tooltip was showing as the pointer crossed.
+    /// Whether the nested tooltip, or one nested in it, was showing as the pointer crossed.
     shown: bool,
+    /// Whether the nested tooltip's subtree is showing, kept while the pointer is on it.
+    showing: ShowingHandle,
 }
 
 /// What a tooltip offers the tooltips nested in its trigger: a way to say the pointer is on them,
@@ -603,7 +661,7 @@ struct NestedTooltip {
     report: crate::callback::Callback<NestedHover>,
     /// Whether each enclosing tooltip, this one and its own ancestors, is showing. A nested
     /// tooltip entered while any is takes over at once, however deep it sits.
-    shown: Rc<[Rc<Cell<bool>>]>,
+    shown: Rc<[Arc<AtomicBool>]>,
 }
 
 impl std::fmt::Debug for NestedTooltip {
@@ -614,7 +672,7 @@ impl std::fmt::Debug for NestedTooltip {
 
 impl NestedTooltip {
     fn any_shown(&self) -> bool {
-        self.shown.iter().any(|shown| shown.get())
+        self.shown.iter().any(|shown| shown.load(Ordering::Relaxed))
     }
 }
 
@@ -665,7 +723,8 @@ impl TooltipComponent {
             outer.report.emit(NestedHover {
                 id: ctx.state.id,
                 hovered,
-                shown: ctx.state.shown.get(),
+                shown: ctx.state.nested.showing(),
+                showing: ctx.state.nested.clone(),
             });
         };
         match (ctx.state.reported_to.take(), target) {
@@ -684,20 +743,17 @@ impl TooltipComponent {
         }
     }
 
-    /// A nested tooltip entered or left; `shown` says whether it was showing as it left.
+    /// A nested tooltip entered or left; `shown` says whether its subtree was showing as it left.
     fn nested(ctx: &mut Context<Self>, report: NestedHover) -> Update {
         let before = !ctx.state.nested.is_empty();
         if report.hovered {
             // A report from a pointer already gone from this trigger is stale.
-            if !ctx.state.trigger_hovered || ctx.state.nested.contains(&report.id) {
+            if !ctx.state.trigger_hovered || ctx.state.nested.contains(report.id) {
                 return Update::none();
             }
-            ctx.state.nested.push(report.id);
-        } else {
-            let Some(index) = ctx.state.nested.iter().position(|id| *id == report.id) else {
-                return Update::none();
-            };
-            ctx.state.nested.swap_remove(index);
+            ctx.state.nested.insert(report.id, report.showing);
+        } else if !ctx.state.nested.remove(report.id) {
+            return Update::none();
         }
         let after = !ctx.state.nested.is_empty();
         if before == after {
@@ -749,14 +805,18 @@ impl Component for TooltipComponent {
 
     fn create_state(&self, _props: &Self::Properties) -> Self::State {
         let id = TOOLTIP_ID.fetch_add(1, Ordering::Relaxed);
+        let shown: Arc<AtomicBool> = Arc::default();
         TooltipState {
             id,
             trigger_key: Key::from(format!("tooltip-trigger-{}", id)),
             reveal: HoverReveal::default(),
             trigger_hovered: false,
-            nested: Vec::new(),
+            nested: ShowingHandle {
+                own: shown.clone(),
+                nested: Arc::default(),
+            },
             reported_to: None,
-            shown: Rc::default(),
+            shown,
             visible: Cell::new(false),
             fade_cut: Cell::new(false),
         }
@@ -806,11 +866,13 @@ impl Component for TooltipComponent {
         match msg {
             TooltipMsg::Hover(hovered) => {
                 ctx.state.trigger_hovered = hovered;
+                // Report before forgetting nested tooltips: leaving several levels at once, the
+                // enclosing tooltip learns whether one deep inside was showing.
+                Self::sync_report(ctx);
                 if !hovered {
                     // A nested trigger's leave may arrive after this one's: the pointer is gone.
                     ctx.state.nested.clear();
                 }
-                Self::sync_report(ctx);
                 if !ctx.props.delays_hover() {
                     // Shown from the live hover state, which re-renders it already.
                     return Update::none();
@@ -861,7 +923,8 @@ impl Component for TooltipComponent {
             outer.report.emit(NestedHover {
                 id: ctx.state.id,
                 hovered: false,
-                shown: ctx.state.shown.get(),
+                shown: ctx.state.nested.showing(),
+                showing: ctx.state.nested.clone(),
             });
         }
     }
@@ -875,7 +938,7 @@ impl Component for TooltipComponent {
         // child and hover counts only over it.
         // Tooltips nested in the trigger report the pointer through this context, and this one
         // reports its own trigger to any tooltip it is nested in.
-        let shown: Rc<[Rc<Cell<bool>>]> = ctx
+        let shown: Rc<[Arc<AtomicBool>]> = ctx
             .use_context::<NestedTooltip>()
             .map(|outer| outer.shown.iter().cloned().collect::<Vec<_>>())
             .unwrap_or_default()
@@ -911,7 +974,9 @@ impl Component for TooltipComponent {
             && (hover_open
                 || (ctx.props.show_on_focus
                     && ctx.has_focus_within_key(ctx.state.trigger_key.clone())));
-        ctx.state.shown.set(ctx.props.open.unwrap_or(auto_open));
+        ctx.state
+            .shown
+            .store(ctx.props.open.unwrap_or(auto_open), Ordering::Relaxed);
         // One tooltip at a time: while the pointer is on a nested trigger, its tooltip speaks.
         let open = ctx
             .props

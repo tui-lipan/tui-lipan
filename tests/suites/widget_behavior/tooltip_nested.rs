@@ -21,12 +21,10 @@ enum Button {
     Removed,
 }
 
-/// A row with a card tooltip, holding a button with its own tooltip; with `middle`, the button
-/// sits in a group with a third tooltip between the two. The card warms up apart from the rest,
-/// so a swap between them never rides on warm-up.
-struct Row {
-    middle: Option<Middle>,
-}
+/// A row with a card tooltip, holding a button with its own tooltip; with a middle, the button
+/// sits in a group with a third tooltip between the two. Each warms up apart from the others, so a
+/// swap between them never rides on warm-up. `Row` holds the middle the row starts with.
+struct Row(Option<Middle>);
 
 /// The tooltip between the card and the button.
 #[derive(Clone, Copy, PartialEq)]
@@ -36,49 +34,67 @@ enum Middle {
     AutoOff,
 }
 
+#[derive(Clone, Copy)]
+struct Setup {
+    button: Button,
+    middle: Option<Middle>,
+}
+
+enum Change {
+    Button(Button),
+    Middle(Option<Middle>),
+}
+
 impl Component for Row {
     type Properties = ();
-    type State = Button;
-    type Message = Button;
-    fn create_state(&self, _: &()) -> Button {
-        Button::Tip
+    type State = Setup;
+    type Message = Change;
+    fn create_state(&self, _: &()) -> Setup {
+        Setup {
+            button: Button::Tip,
+            middle: self.0,
+        }
     }
-    fn update(&mut self, button: Button, ctx: &mut Context<Self>) -> Update {
-        ctx.state = button;
+    fn update(&mut self, change: Change, ctx: &mut Context<Self>) -> Update {
+        match change {
+            Change::Button(button) => ctx.state.button = button,
+            Change::Middle(middle) => ctx.state.middle = middle,
+        }
         Update::full()
     }
     fn view(&self, ctx: &Context<Self>) -> Element {
         let mut line = HStack::new()
             .height(Length::Px(1))
             .child(Text::new("row text").width(Length::Px(10)));
-        if ctx.state != Button::Removed {
+        if ctx.state.button != Button::Removed {
             let mut tip = Tooltip::new("button-tip")
                 .delay(DELAY)
+                .warmup_group("buttons")
                 .placement(PopoverPlacement::BelowStart)
                 .child(tui_lipan::prelude::Button::new("Snooze"));
-            match ctx.state {
+            match ctx.state.button {
                 Button::AutoOff => tip = tip.auto(false),
                 Button::HeldClosed => tip = tip.open(false),
                 Button::Tip | Button::Removed => {}
             }
-            let tip: Element = if let Some(middle) = self.middle {
-                Tooltip::new("group-tip")
-                    .delay(DELAY)
-                    .auto(middle == Middle::Enabled)
-                    .warmup_group("groups")
-                    .placement(PopoverPlacement::BelowStart)
-                    .offset((0, 2))
-                    .child(
-                        HStack::new()
-                            .height(Length::Px(1))
-                            .child(Text::new("group ").width(Length::Px(6)))
-                            .child(tip),
-                    )
-                    .into()
-            } else {
-                tip.into()
+            line = match ctx.state.middle {
+                None => line.child(tip),
+                // Switching the middle between enabled and not keeps the button mounted.
+                Some(middle) => line.child(
+                    Tooltip::new("group-tip")
+                        .delay(DELAY)
+                        .warmup_group("groups")
+                        .auto(middle == Middle::Enabled)
+                        .placement(PopoverPlacement::BelowStart)
+                        .offset((0, 2))
+                        .child(
+                            HStack::new()
+                                .height(Length::Px(1))
+                                .child(Text::new("group ").width(Length::Px(6)))
+                                .child(tip),
+                        ),
+                ),
             };
-            line = line.child(tip);
         }
         let card = Tooltip::new("card-tip")
             .delay(DELAY)
@@ -95,7 +111,7 @@ fn backend() -> TestBackend<Row> {
 }
 
 fn backend_with(middle: Option<Middle>) -> TestBackend<Row> {
-    let mut backend = TestBackend::new(Row { middle });
+    let mut backend = TestBackend::new(Row(middle));
     backend.set_viewport(Rect {
         x: 0,
         y: 0,
@@ -234,7 +250,7 @@ fn outer_tooltip_takes_over_from_a_showing_nested_one() {
 /// With the card open, the pointer moves onto a button whose tooltip cannot open.
 fn card_over_a_button_that_cannot_show(button: Button) -> bool {
     let mut backend = backend();
-    backend.dispatch(button).unwrap();
+    backend.dispatch(Change::Button(button)).unwrap();
     backend.render();
     hover(&mut backend, "row text");
     wait(&mut backend);
@@ -264,7 +280,7 @@ fn removing_a_hovered_nested_tooltip_brings_the_outer_one_back() {
     hover(&mut backend, "Snooze");
     assert!(!shows(&backend, "card-tip"));
 
-    backend.dispatch(Button::Removed).unwrap();
+    backend.dispatch(Change::Button(Button::Removed)).unwrap();
     backend.pump().unwrap();
     backend.render();
     backend.pump().unwrap();
@@ -311,14 +327,14 @@ fn a_tooltip_between_that_cannot_open_stays_out_of_the_way() {
 /// enabled.
 fn enable_the_hovered_button(from: Button) {
     let mut backend = backend();
-    backend.dispatch(from).unwrap();
+    backend.dispatch(Change::Button(from)).unwrap();
     backend.render();
     hover(&mut backend, "row text");
     wait(&mut backend);
     hover(&mut backend, "Snooze");
     assert!(shows(&backend, "card-tip"));
 
-    backend.dispatch(Button::Tip).unwrap();
+    backend.dispatch(Change::Button(Button::Tip)).unwrap();
     backend.pump().unwrap();
     backend.render();
     backend.pump().unwrap();
@@ -334,4 +350,74 @@ fn enable_the_hovered_button(from: Button) {
 fn enabling_a_hovered_nested_tooltip_opens_it() {
     enable_the_hovered_button(Button::AutoOff);
     enable_the_hovered_button(Button::HeldClosed);
+}
+
+fn hover_outside(backend: &mut TestBackend<Row>) {
+    backend
+        .send_mouse(MouseEvent {
+            x: 39,
+            y: 5,
+            kind: MouseKind::Moved,
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.pump().unwrap();
+    backend.render();
+}
+
+#[test]
+fn a_showing_tooltip_deep_inside_hands_over_to_a_far_ancestor() {
+    let mut backend = backend_with(Some(Middle::Enabled));
+    hover_outside(&mut backend);
+    hover(&mut backend, "Snooze");
+    wait(&mut backend);
+    assert!(shows(&backend, "button-tip"));
+
+    hover(&mut backend, "row text");
+    let text = backend.capture_frame().plain_text();
+    assert!(
+        text.contains("card-tip"),
+        "the card waited although the button tooltip two levels down was showing: {text:?}"
+    );
+    assert!(!text.contains("button-tip") && !text.contains("group-tip"));
+}
+
+fn settle(backend: &mut TestBackend<Row>) {
+    for _ in 0..2 {
+        backend.pump().unwrap();
+        backend.render();
+    }
+}
+
+#[test]
+fn switching_the_tooltip_between_while_the_button_has_the_pointer() {
+    let mut backend = backend_with(Some(Middle::Enabled));
+    hover(&mut backend, "row text");
+    wait(&mut backend);
+    hover(&mut backend, "Snooze");
+    assert!(shows(&backend, "button-tip") && !shows(&backend, "card-tip"));
+
+    for middle in [
+        Some(Middle::AutoOff),
+        Some(Middle::Enabled),
+        Some(Middle::AutoOff),
+    ] {
+        backend.dispatch(Change::Middle(middle)).unwrap();
+        settle(&mut backend);
+        let text = backend.capture_frame().plain_text();
+        assert!(
+            text.contains("button-tip")
+                && !text.contains("card-tip")
+                && !text.contains("group-tip"),
+            "switching the tooltip between disturbed the handoff: {text:?}"
+        );
+    }
+
+    hover(&mut backend, "row text");
+    assert!(
+        shows(&backend, "card-tip"),
+        "the card did not come back at once after the switches"
+    );
+    hover_outside(&mut backend);
+    assert!(!shows(&backend, "card-tip"));
 }
