@@ -1073,3 +1073,61 @@ mod terminal_routing {
         assert!(events.borrow().reports.is_empty());
     }
 }
+
+#[derive(Clone, Default)]
+struct DetailMenu;
+
+impl Component for DetailMenu {
+    type Properties = ();
+    type State = ();
+    type Message = ();
+
+    fn create_state(&self, _: &()) {}
+
+    fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _: &Context<Self>) -> Element {
+        ContextMenu::new(Text::new("Host"))
+            .open(true)
+            .anchor(Some((0, 0)))
+            .entries([
+                ContextMenuEntry::action("one", "One").detail("K1"),
+                ContextMenuEntry::action("two", "Two").detail("K2"),
+            ])
+            .selection_style(Style::new().fg(Color::Black).bg(Color::Magenta))
+            .detail_style(Style::new().fg(Color::Blue))
+            .active_detail_style(Style::new().fg(Color::Red))
+            .into()
+    }
+}
+
+#[test]
+fn highlighted_entry_detail_uses_the_active_detail_style() {
+    let mut backend = TestBackend::new(DetailMenu);
+    backend.render();
+    // The foreground of the first cell of `detail`, a two-letter label.
+    let detail_fg = |backend: &TestBackend<DetailMenu>, detail: &str| {
+        let frame = backend.capture_frame();
+        let (first, second) = (&detail[..1], &detail[1..]);
+        (0..frame.height)
+            .flat_map(|y| (0..frame.width.saturating_sub(1)).map(move |x| (x, y)))
+            .find(|&(x, y)| {
+                frame.cell(x, y).symbol == first && frame.cell(x + 1, y).symbol == second
+            })
+            .map(|(x, y)| frame.cell(x, y).fg)
+            .expect("detail on screen")
+    };
+    assert_eq!(detail_fg(&backend, "K1"), Color::Red);
+    assert_eq!(detail_fg(&backend, "K2"), Color::Blue);
+    backend
+        .send_key(KeyEvent {
+            code: KeyCode::Down,
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.render();
+    assert_eq!(detail_fg(&backend, "K1"), Color::Blue);
+    assert_eq!(detail_fg(&backend, "K2"), Color::Red);
+}

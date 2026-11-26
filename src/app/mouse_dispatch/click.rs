@@ -187,7 +187,18 @@ pub(crate) fn transition_right_click<C: Component, T: MouseDispatchCtx<C>>(
         #[cfg(not(feature = "terminal"))]
         let use_default_context_routing = true;
 
-        if use_default_context_routing && dispatch_context_menu(ctx.tree(), hit, adjusted_mouse) {
+        // Modifiers an ancestor captures belong to its gesture, such as a window's modified
+        // right-drag resize, so a menu handler under it does not take the press. Terminal content
+        // applies the same rule in `application_first_press`.
+        let ancestor_capture = crate::app::input::mouse::ancestor_mouse_region_captures_mods(
+            ctx.tree(),
+            hit,
+            mouse.mods,
+        );
+        if use_default_context_routing
+            && !ancestor_capture
+            && dispatch_context_menu(ctx.tree(), hit, adjusted_mouse)
+        {
             ctx.mouse_state().context_menu_press_consumed = true;
             return Some(true);
         }

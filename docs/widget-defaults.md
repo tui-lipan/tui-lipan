@@ -1557,6 +1557,7 @@ Source: `src/widgets/context_menu.rs` (`ContextMenu`).
 | `separator_style` | `None` |
 | `header_style` | `None` |
 | `detail_style` | `None` |
+| `active_detail_style` | `StyleSlot::Inherit` |
 | `detail_gap` | `2` |
 | `disabled_style` | `None` |
 | `destructive_style` | `None` |

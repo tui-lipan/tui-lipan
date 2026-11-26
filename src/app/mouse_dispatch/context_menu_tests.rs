@@ -1770,3 +1770,49 @@ fn context_menu_terminal_chrome_reaches_lower_passthrough_handler() {
         assert_eq!(lower.borrow().len(), index + 1);
     }
 }
+
+#[test]
+fn context_menu_yields_modifiers_an_ancestor_captures() {
+    let (menus, on_menu) = capture();
+    let (drags, on_drag) = capture();
+    let mut backend = mount(
+        MouseRegion::new()
+            .capture_requires_mods(KeyMods::ALT)
+            .right_drag_requires_mods(KeyMods::ALT)
+            .drag_threshold(1, 1)
+            .on_right_drag_start(on_drag)
+            .child(
+                MouseRegion::new().on_context_menu(on_menu).child(
+                    Text::new("border")
+                        .width(Length::Px(12))
+                        .height(Length::Px(2)),
+                ),
+            ),
+    );
+    for mods in [KeyMods::NONE, KeyMods::ALT] {
+        for (kind, x) in [
+            (MouseKind::Down(MouseButton::Right), 1),
+            (MouseKind::Drag(MouseButton::Right), 4),
+            (MouseKind::Up(MouseButton::Right), 4),
+        ] {
+            backend
+                .send_mouse(MouseEvent {
+                    x,
+                    y: 0,
+                    kind,
+                    mods,
+                })
+                .unwrap();
+        }
+    }
+    assert_eq!(
+        menus.borrow().len(),
+        1,
+        "only the plain press opens the menu"
+    );
+    assert_eq!(
+        drags.borrow().len(),
+        1,
+        "Alt keeps the window's resize drag"
+    );
+}

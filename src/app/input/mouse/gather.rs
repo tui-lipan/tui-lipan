@@ -314,7 +314,6 @@ pub(crate) fn resolve_left_click_target(
     hit
 }
 
-#[cfg(feature = "terminal")]
 pub(crate) fn ancestor_mouse_region_captures_mods(
     tree: &NodeTree,
     start: NodeId,

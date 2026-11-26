@@ -1019,6 +1019,7 @@ A popup menu backed by `Popover` + `List`. Typically triggered by right-click or
 | `separator_style` | `Style` | theme border | Horizontal separator rule style |
 | `header_style` | `Style` | theme muted | Section header style |
 | `detail_style` | `Style` | theme muted | Right-aligned detail text style |
+| `active_detail_style` / `extend_active_detail_style` / `active_detail_style_slot` | `Style` / `Style` / `StyleSlot` | inherits `detail_style` | Detail and submenu indicator style on the highlighted entry |
 | `detail_gap` | `u16` | `2` | Minimum blank columns before detail or submenu chevron |
 | `disabled_style` | `Style` | theme muted | Disabled entry style |
 | `destructive_style` | `Style` | theme error | Destructive entry style |
