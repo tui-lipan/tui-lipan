@@ -175,6 +175,7 @@ impl Default for Terminal {
             selection_style: StyleSlot::Inherit,
             on_selection: None,
             on_resize: None,
+            mouse_input_target: None,
             on_mouse_forward: None,
             context_menu_policy: TerminalContextMenuPolicy::default(),
             on_context_menu: None,
@@ -557,6 +558,16 @@ impl Terminal {
     /// The handler owns the full gesture. Mouse coordinates anchor an application-owned popup.
     pub fn on_context_menu(mut self, cb: Callback<crate::core::event::MouseEvent>) -> Self {
         self.on_context_menu = Some(cb);
+        self
+    }
+
+    /// Identify the child receiving forwarded mouse gestures independently of widget identity.
+    ///
+    /// Use the same key while rebuilding callbacks for one PTY. Change it when replacing that
+    /// PTY, even if the widget stays in the same slot. By default, the live screen handle or
+    /// the snapshot terminal's forwarding callback identifies the child.
+    pub fn mouse_input_target(mut self, target: impl Into<crate::Key>) -> Self {
+        self.mouse_input_target = Some(target.into());
         self
     }
 

@@ -1789,7 +1789,7 @@ Controls right-button routing inside terminal content on `Terminal` and `Managed
 | Variant | Behavior |
 |---------|----------|
 | `MenuFirst` (default) | Menu handlers have priority over terminal mouse forwarding. |
-| `ApplicationFirst { override_mods, open_when_untracked }` | PTY forwarding takes priority while the child is tracking, except when the terminal menu override is held or an ancestor captures the modifiers. `open_when_untracked` enables the terminal menu when no child can receive the press. |
+| `ApplicationFirst { override_mods, open_when_untracked }` | PTY forwarding takes priority while the child is tracking, except when Shift is held, the terminal menu override matches, or an ancestor captures the modifiers. `open_when_untracked` enables the terminal menu when no child can receive the press. |
 
 ## Terminal mutations and retained graphics identities
 

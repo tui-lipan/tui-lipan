@@ -5106,6 +5106,7 @@ fn context_menu_consumes_the_entire_terminal_right_button_gesture() {
                     },
                     ..TerminalRenderSnapshot::default()
                 })
+                .mouse_input_target("context-menu-test-child")
                 .on_mouse_forward(Callback::new(move |bytes| {
                     forwarded.borrow_mut().push(bytes)
                 }));

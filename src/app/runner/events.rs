@@ -1175,6 +1175,17 @@ fn host_cell_size() -> crate::widgets::TerminalCellSize {
     crate::widgets::TerminalCellSize::default()
 }
 
+/// The cell size the child was told through `TIOCGWINSZ`. Snapshot-only terminals use the host size.
+#[cfg(feature = "terminal")]
+pub(crate) fn terminal_mouse_cell_size(
+    terminal: &crate::widgets::internal::TerminalNode,
+) -> crate::widgets::TerminalCellSize {
+    terminal
+        .screen
+        .as_ref()
+        .map_or_else(host_cell_size, |screen| screen.cell_size())
+}
+
 /// What forwarding a mouse event to a terminal requires, resolved from the node tree alone.
 ///
 /// Split out from [`AppRunner::forward_terminal_mouse`] so `TestBackend` can share it. Without
@@ -1281,12 +1292,7 @@ pub(crate) fn terminal_mouse_forward_plan_at(
     let geometry = crate::widgets::MouseReportGeometry {
         content_origin: (content_rect.x.max(0) as u16, content_rect.y.max(0) as u16),
         sub_cell,
-        // The size the child was told through `TIOCGWINSZ`, so the pixels it is handed divide back
-        // into the cell it thinks they are in. Only a screen the app never installed falls back.
-        cell: term
-            .screen
-            .as_ref()
-            .map_or_else(host_cell_size, |screen| screen.cell_size()),
+        cell: terminal_mouse_cell_size(term),
     };
     let event = crate::widgets::encode_mouse_event(mouse, mouse_mode, geometry).ok()?;
     Some(TerminalMouseForward {

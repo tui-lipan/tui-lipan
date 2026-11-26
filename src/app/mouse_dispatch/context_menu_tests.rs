@@ -416,6 +416,136 @@ fn context_menu_terminal_preempts_mouse_forwarding_for_the_whole_gesture() {
     assert!(forwarded.borrow().is_empty());
 }
 
+#[cfg(feature = "terminal")]
+#[test]
+fn right_release_does_not_reach_a_replacement_snapshot_terminal() {
+    struct Snapshots {
+        original: Callback<ForwardedMouseEvent>,
+        replacement: Callback<ForwardedMouseEvent>,
+        preserve_target: bool,
+    }
+
+    impl Component for Snapshots {
+        type Properties = ();
+        type State = bool;
+        type Message = ();
+
+        fn create_state(&self, _: &()) -> bool {
+            false
+        }
+
+        fn update(&mut self, _: (), ctx: &mut Context<Self>) -> Update {
+            ctx.state = true;
+            Update::render()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            let callback = if ctx.state {
+                &self.replacement
+            } else {
+                &self.original
+            };
+            let terminal = Terminal::new()
+                .snapshot(TerminalRenderSnapshot {
+                    mouse_mode: MouseModeState {
+                        mode: MouseMode::Normal,
+                        encoding: MouseEncoding::Sgr,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                })
+                .on_mouse_forward_event(callback.clone());
+            if self.preserve_target {
+                terminal.mouse_input_target("same-pty").into()
+            } else {
+                terminal.into()
+            }
+        }
+    }
+
+    let terminal_id = |backend: &TestBackend<Snapshots>| {
+        backend
+            .core
+            .tree
+            .iter()
+            .find(|node| matches!(node.kind, NodeKind::Terminal(_)))
+            .unwrap()
+            .id
+    };
+    let right = |kind| MouseEvent {
+        x: 1,
+        y: 1,
+        mods: KeyMods::NONE,
+        kind,
+    };
+    for preserve_target in [false, true] {
+        let (initial_reports, original) = capture();
+        let (replacement_reports, replacement) = capture();
+        let mut backend = TestBackend::new(Snapshots {
+            original,
+            replacement,
+            preserve_target,
+        });
+        backend.render();
+        let slot = terminal_id(&backend);
+        backend
+            .send_mouse(right(MouseKind::Down(MouseButton::Right)))
+            .unwrap();
+        backend.dispatch(()).unwrap();
+        assert_eq!(
+            terminal_id(&backend),
+            slot,
+            "the widget node must be reused"
+        );
+        backend
+            .send_mouse(right(MouseKind::Up(MouseButton::Right)))
+            .unwrap();
+        assert_eq!(initial_reports.borrow().len(), 1);
+        let after = replacement_reports.borrow();
+        assert_eq!(after.len(), usize::from(preserve_target));
+        if let Some(report) = after.first() {
+            assert_eq!(report.kind, MouseKind::Up(MouseButton::Right));
+        }
+    }
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn terminal_right_gesture_clamps_pixels_per_axis() {
+    let mut screen = TerminalScreen::new(3, 4, 0);
+    screen.set_cell_size(TerminalCellSize::new(10, 20));
+    screen.process_bytes(b"\x1b[?1002;1016h");
+    let (reports, callback) = capture();
+    let mut backend = mount(
+        Terminal::new()
+            .screen(Rc::new(RefCell::new(screen)))
+            .width(Length::Px(6))
+            .height(Length::Px(5))
+            .padding((1, 1, 1, 1))
+            .scrollbar(false)
+            .on_mouse_forward_event(callback),
+    );
+
+    for (kind, x, y) in [
+        (MouseKind::Down(MouseButton::Right), 2, 2),
+        (MouseKind::Drag(MouseButton::Right), 9, 2),
+        (MouseKind::Up(MouseButton::Right), 2, 0),
+    ] {
+        backend.mouse.sub_cell.set(Some((3, 7)));
+        backend
+            .send_mouse(MouseEvent {
+                kind,
+                x,
+                y,
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+    }
+
+    let pixels: Vec<_> = reports.borrow().iter().map(|report| report.pixel).collect();
+    assert_eq!(pixels, [Some((13, 27)), Some((39, 27)), Some((13, 0))]);
+}
+
 #[test]
 fn context_menu_diagrams_report_semantic_items() {
     let (graph_events, graph_callback) = capture();

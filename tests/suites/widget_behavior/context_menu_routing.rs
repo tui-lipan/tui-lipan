@@ -1000,6 +1000,29 @@ mod terminal_routing {
     }
 
     #[test]
+    fn shift_keeps_right_press_local_unless_the_menu_override_matches() {
+        let panes = Panes::new(false, true);
+        panes.first.borrow_mut().process_bytes(b"\x1b[?1002;1006h");
+        let events = panes.events.clone();
+        let mut backend = TestBackend::new(panes);
+        backend.render();
+
+        press(&mut backend, RIGHT_DOWN, 1, 1, KeyMods::SHIFT);
+        press(&mut backend, RIGHT_UP, 1, 1, KeyMods::NONE);
+        assert!(events.borrow().menus.is_empty());
+        assert!(events.borrow().reports.is_empty());
+
+        let ctrl_shift = KeyMods {
+            shift: true,
+            ..KeyMods::CTRL
+        };
+        press(&mut backend, RIGHT_DOWN, 1, 1, ctrl_shift);
+        press(&mut backend, RIGHT_UP, 1, 1, KeyMods::NONE);
+        assert_eq!(events.borrow().menus, ["first"]);
+        assert!(events.borrow().reports.is_empty());
+    }
+
+    #[test]
     fn disabling_tracking_mid_gesture_and_x10_do_not_retarget_release() {
         let panes = Panes::new(false, false);
         let first = panes.first.clone();

@@ -1374,6 +1374,7 @@ Source: `src/widgets/terminal/mod.rs` (`Terminal`).
 | `selection_style` | `StyleSlot::Inherit` |
 | `on_selection` | `None` |
 | `on_resize` | `None` |
+| `mouse_input_target` | `None` |
 | `on_mouse_forward` | `None` |
 | `context_menu_policy` | `TerminalContextMenuPolicy::default()` |
 | `on_context_menu` | `None` |

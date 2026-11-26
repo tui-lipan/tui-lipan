@@ -129,6 +129,7 @@ same live screen does not repeat the report. Paint-only updates also synchronize
 | `on_scroll_to` | `Callback<usize>` | Scrollback offset changed |
 | `on_mouse_forward` | `Callback<Vec<u8>>` | Mouse event bytes for PTY |
 | `on_mouse_forward_event` | `Callback<ForwardedMouseEvent>` | Structured mouse report with terminal-local coordinates, modes, and encoded bytes |
+| `mouse_input_target` | `impl Into<Key>` | Stable child identity for an active right-button gesture on `Terminal` |
 | `link_activation_mods` | `KeyMods` | Modifiers required for link activation (default: `KeyMods::CTRL`; extras allowed) |
 | `link_hover_style` | `StyleSlot` | Style for the link under a modified pointer (default: underline) |
 | `on_link_activate` | `Callback<TerminalLinkEvent>` | Modified click on an OSC 8 link, a detected URL, or a path accepted by `link_paths` |
@@ -140,8 +141,9 @@ same live screen does not repeat the report. Paint-only updates also synchronize
 
 Use `ApplicationFirst` to give a mouse-tracking child priority over terminal and ancestor menu
 handlers. The framework checks the current mode on button press. An explicit modifier override
-opens the terminal's menu even over a tracking child. Other modifiers captured by an ancestor
-`MouseRegion` remain available for gestures such as pane resize.
+opens the terminal's menu even over a tracking child. Shift keeps the press local unless it matches
+the configured menu override. Other modifiers captured by an ancestor `MouseRegion` remain available
+for gestures such as pane resize.
 
 ```rust,ignore
 Terminal::new()
@@ -157,8 +159,14 @@ Terminal::new()
 Set `open_when_untracked` to `false` for a modifier-only menu that leaves unhandled right-clicks
 available for local drag and clipboard behavior. A right-button gesture sent to the PTY stays
 with its original terminal. Reports are clamped to that terminal's content when the pointer moves
-outside it. The framework drops a follow-up report if the terminal disappears or its tracking mode
-cannot report that event.
+outside it. Pixel reports retain the sub-cell offset on each axis that stays inside the terminal.
+The framework drops a follow-up report if the target changes or its tracking mode cannot report
+that event.
+
+By default, a live terminal's screen handle identifies its input target. For a snapshot-only
+terminal, tui-lipan compares the forwarding callback by identity. When rebuilding the callback
+for the same child, use `mouse_input_target(child_id)` to keep its gesture active across renders.
+Change the ID when the widget begins forwarding to a different child.
 
 Calling `selection(...)` makes the selection controlled. Mouse clicks and drags
 still emit `on_selection`, but they do not transiently overwrite the rendered

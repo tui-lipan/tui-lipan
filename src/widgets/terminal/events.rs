@@ -594,7 +594,7 @@ pub struct ForwardedMouseEvent {
     pub mods: crate::core::event::KeyMods,
     /// Cell position inside the terminal content area.
     pub cell: (u16, u16),
-    /// Pixel position when the host supplied sub-cell precision, clamped to the reported cell.
+    /// Pixel position when the host supplied sub-cell precision or a captured pixel report hit an edge.
     pub pixel: Option<(u16, u16)>,
     /// Tracking mode and encoding requested by the child at the time of forwarding.
     pub mouse_mode: MouseModeState,

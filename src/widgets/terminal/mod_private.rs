@@ -54,6 +54,7 @@ pub struct Terminal {
     pub(crate) selection_style: StyleSlot,
     pub(crate) on_selection: Option<Callback<TerminalSelectionEvent>>,
     pub(crate) on_resize: Option<Callback<TerminalViewport>>,
+    pub(crate) mouse_input_target: Option<crate::core::element::Key>,
     pub(crate) on_mouse_forward: Option<Callback<ForwardedMouseEvent>>,
     pub(crate) context_menu_policy: super::TerminalContextMenuPolicy,
     pub(crate) on_context_menu: Option<Callback<crate::core::event::MouseEvent>>,

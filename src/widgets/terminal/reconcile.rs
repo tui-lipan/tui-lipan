@@ -225,6 +225,7 @@ pub(crate) fn reconcile_terminal(
         show_cursor_requested: terminal.show_cursor,
         paste_shortcut_behavior: terminal.paste_shortcut_behavior,
         on_selection: terminal.on_selection.clone(),
+        mouse_input_target: terminal.mouse_input_target.clone(),
         on_mouse_forward: terminal.on_mouse_forward.clone(),
         context_menu_policy: terminal.context_menu_policy,
         on_context_menu: terminal.on_context_menu.clone(),
