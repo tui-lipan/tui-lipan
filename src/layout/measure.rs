@@ -10,16 +10,17 @@ use crate::widgets::internal::measure_image_constrained;
 #[cfg(feature = "terminal")]
 use crate::widgets::internal::measure_terminal;
 use crate::widgets::internal::{
-    measure_animated, measure_ascii_canvas, measure_button, measure_canvas, measure_center,
-    measure_center_pin, measure_chart, measure_checkbox, measure_class_diagram, measure_divider,
-    measure_document_view, measure_document_view_constrained, measure_drag_source,
-    measure_draggable_tab_bar, measure_drop_target, measure_effect_scope, measure_er_diagram,
-    measure_flow, measure_flowchart, measure_frame, measure_frame_within, measure_gantt_diagram,
-    measure_graph, measure_grid, measure_heatmap, measure_hex_area, measure_input,
-    measure_mouse_region, measure_pan_view, measure_progress_bar, measure_scroll_view,
-    measure_sequence_diagram, measure_slider, measure_spacer, measure_sparkline, measure_spinner,
-    measure_splitter, measure_stack, measure_state_diagram, measure_status_bar_layout,
-    measure_tabs, measure_text_area, measure_text_area_constrained,
+    drag_source_is_snapshot_collapsed, measure_animated, measure_ascii_canvas, measure_button,
+    measure_canvas, measure_center, measure_center_pin, measure_chart, measure_checkbox,
+    measure_class_diagram, measure_divider, measure_document_view,
+    measure_document_view_constrained, measure_drag_source_within, measure_draggable_tab_bar,
+    measure_drop_target, measure_effect_scope, measure_er_diagram, measure_flow, measure_flowchart,
+    measure_frame, measure_frame_within, measure_gantt_diagram, measure_graph, measure_grid,
+    measure_heatmap, measure_hex_area, measure_input, measure_mouse_region, measure_pan_view,
+    measure_progress_bar, measure_scroll_view, measure_sequence_diagram, measure_slider,
+    measure_spacer, measure_sparkline, measure_spinner, measure_splitter, measure_stack,
+    measure_state_diagram, measure_status_bar_layout, measure_tabs, measure_text_area,
+    measure_text_area_constrained,
 };
 
 use crate::style::{Edge, Length};
@@ -158,31 +159,27 @@ pub(crate) fn min_size(el: &Element) -> (u16, u16) {
 /// content floor. Atomic widgets report the same value for both; wrapping
 /// widgets can opt into narrower min-content and `LayoutConstraints::reflows`.
 pub(crate) fn intrinsic_main(el: &Element, axis: Axis, cross: Option<u16>) -> (u16, u16) {
-    match &el.kind {
-        ElementKind::Group(group) => intrinsic_main(&group.child, axis, cross),
-        ElementKind::EffectScope(scope) => scope
-            .child
-            .as_deref()
-            .map(|child| intrinsic_main(child, axis, cross))
-            .unwrap_or((0, 0)),
-        ElementKind::ThemeProvider(tp) => intrinsic_main(&tp.child, axis, cross),
-        ElementKind::ContextProvider(cp) => intrinsic_main(&cp.child, axis, cross),
-        ElementKind::Flow(flow) if axis == Axis::Horizontal => {
-            let max_content = measure_flow(flow, None, cross).0;
-            (flow_intrinsic_min_width(flow), max_content)
-        }
-        _ => {
-            let (w, h) = match axis {
-                Axis::Vertical => min_size_constrained(el, cross, None),
-                Axis::Horizontal => min_size_constrained(el, None, cross),
-            };
-            let main = match axis {
-                Axis::Vertical => h,
-                Axis::Horizontal => w,
-            };
-            (main, main)
-        }
+    let mut target = el;
+    while let Some(inner) = transparent_measure_child(target) {
+        target = inner;
     }
+    if let ElementKind::Flow(flow) = &target.kind
+        && axis == Axis::Horizontal
+    {
+        let constraints = el.layout_constraints();
+        let max_content = min_size_constrained(el, None, cross).0;
+        let min_content = constraints.clamp_width(flow_intrinsic_min_width(flow), u16::MAX);
+        return (min_content.min(max_content), max_content);
+    }
+    let (w, h) = match axis {
+        Axis::Vertical => min_size_constrained(el, cross, None),
+        Axis::Horizontal => min_size_constrained(el, None, cross),
+    };
+    let main = match axis {
+        Axis::Vertical => h,
+        Axis::Horizontal => w,
+    };
+    (main, main)
 }
 
 fn flow_intrinsic_min_width(flow: &crate::widgets::Flow) -> u16 {
@@ -346,8 +343,11 @@ fn same_size_child(el: &Element) -> Option<&Element> {
     }
 }
 
-/// The inner child of a transparent wrapper whose own measurement simply delegates to that child
-/// (preserving the parent's `avail_w`/`avail_h` percentage basis alongside tightened max bounds).
+/// The inner child of a transparent wrapper whose own measurement simply delegates to that child.
+///
+/// Peeling all transparent wrappers in `measure_uncached` ensures that merged min/max constraints
+/// across the entire wrapper chain are resolved once against the parent's `(avail_w, avail_h)`
+/// basis before measuring the wrapped target widget.
 fn transparent_measure_child(el: &Element) -> Option<&Element> {
     match &el.kind {
         ElementKind::Group(g) => Some(g.child.as_ref()),
@@ -355,6 +355,11 @@ fn transparent_measure_child(el: &Element) -> Option<&Element> {
         ElementKind::ContextProvider(cp) => Some(&cp.child),
         ElementKind::EffectScope(scope) => scope.child.as_deref(),
         ElementKind::DropTarget(target) => target.child.as_deref(),
+        ElementKind::DragSource(source)
+            if !drag_source_is_snapshot_collapsed(source, el.key.as_ref()) =>
+        {
+            source.child.as_deref()
+        }
         ElementKind::MouseRegion(region) if region.fit_child => region.child.as_deref(),
         ElementKind::Animated(animated)
             if animated.visibility.is_none()
@@ -384,26 +389,31 @@ fn measure_uncached(
     let req_w = requested_main_axis(el, Axis::Horizontal, None);
     let req_h = requested_main_axis(el, Axis::Vertical, None);
 
-    // Resolve the element's own min/max constraints to pixels, then take the tighter of
-    // the element's resolved max, requested size, and the parent's offered size.
+    // Peel all transparent wrappers so merged min/max constraints from the entire chain
+    // apply once against `(avail_w, avail_h)` directly when measuring the inner target widget.
+    // This keeps percentage constraints resolved against the parent's offered size (never
+    // double-applied) and lets an outer `min_*` override an inner `max_*` during measurement,
+    // matching reconciliation.
+    let mut target = el;
+    while let Some(inner) = transparent_measure_child(target) {
+        target = inner;
+    }
+
+    // Resolve the merged min/max constraints to pixels, then take the tighter of
+    // the resolved max, requested size, and the parent's offered size.
     // Minimum constraints take precedence over both `max_*` and explicit requested bounds,
     // while still remaining capped by the parent's `max_w`/`max_h`.
-    // A transparent wrapper (Group, Animated, ...) reports its child's constraints;
-    // tightening by those here would let the child resolve a relative bound such as
-    // `Percent(50)` a second time, against the already-halved size.
     let element_min_w = constraints.min_w.resolve(avail_w);
     let element_min_h = constraints.min_h.resolve(avail_h);
     let requested_max_w = requested_measure_bound(req_w, avail_w).map(|req| req.max(element_min_w));
     let requested_max_h = requested_measure_bound(req_h, avail_h).map(|req| req.max(element_min_h));
-    let element_max_w = el
-        .layout
+    let element_max_w = constraints
         .max_w
-        .and_then(|l| l.resolve_as_max(avail_w))
+        .resolve(avail_w)
         .map(|max| max.max(element_min_w));
-    let element_max_h = el
-        .layout
+    let element_max_h = constraints
         .max_h
-        .and_then(|l| l.resolve_as_max(avail_h))
+        .resolve(avail_h)
         .map(|max| max.max(element_min_h));
     let effective_max_w = [element_max_w, max_w, requested_max_w]
         .into_iter()
@@ -414,9 +424,9 @@ fn measure_uncached(
         .flatten()
         .min();
 
-    let (w, h) = if let ElementKind::TextArea(t) = &el.kind {
+    let (w, h) = if let ElementKind::TextArea(t) = &target.kind {
         measure_text_area_constrained(t, effective_max_w)
-    } else if let ElementKind::DocumentView(dv) = &el.kind {
+    } else if let ElementKind::DocumentView(dv) = &target.kind {
         if measure_context == MeasureContext::NONE {
             measure_document_view_constrained(dv, effective_max_w)
         } else {
@@ -429,7 +439,7 @@ fn measure_uncached(
                 },
             )
         }
-    } else if let ElementKind::Frame(frame) = &el.kind {
+    } else if let ElementKind::Frame(frame) = &target.kind {
         // The effective bound already holds the frame's own percentage size; the frame resolves
         // that percentage against the parent's offered size and stays within the bound.
         let basis = |avail: u16| (avail != u16::MAX).then_some(avail);
@@ -441,15 +451,19 @@ fn measure_uncached(
             basis(avail_h),
         )
         .outer_size()
-    } else if let Some(inner) = transparent_measure_child(el) {
-        // Forward the parent's `avail_w`/`avail_h` basis alongside the tightened
-        // `effective_max_*` so percentage constraints on the inner element still resolve
-        // against the parent's offered size rather than an outer pixel cap.
-        min_size_within(inner, effective_max_w, effective_max_h, avail_w, avail_h)
+    } else if let ElementKind::DragSource(source) = &target.kind {
+        measure_drag_source_within(
+            source,
+            target.key.as_ref(),
+            effective_max_w,
+            effective_max_h,
+            avail_w,
+            avail_h,
+        )
     } else {
         // Pass the effective (tighter) bounds so children are measured within
         // both the parent's available space and this element's own max constraints.
-        min_size_unconstrained_constrained(el, effective_max_w, effective_max_h)
+        min_size_unconstrained_constrained(target, effective_max_w, effective_max_h)
     };
 
     let w = resolve_requested_measure(req_w, w, avail_w);
@@ -489,9 +503,14 @@ fn min_size_unconstrained_constrained(
         ElementKind::Group(g) => min_size_constrained(g.child.as_ref(), max_w, max_h),
         ElementKind::EffectScope(scope) => measure_effect_scope(scope, max_w, max_h),
         ElementKind::Animated(animated) => measure_animated(animated, max_w, max_h),
-        ElementKind::DragSource(source) => {
-            measure_drag_source(source, el.key.as_ref(), max_w, max_h)
-        }
+        ElementKind::DragSource(source) => measure_drag_source_within(
+            source,
+            el.key.as_ref(),
+            max_w,
+            max_h,
+            max_w.unwrap_or(u16::MAX),
+            max_h.unwrap_or(u16::MAX),
+        ),
         ElementKind::DropTarget(target) => measure_drop_target(target, max_w, max_h),
         ElementKind::MouseRegion(region) => measure_mouse_region(region, max_w, max_h),
         ElementKind::ScrollView(sv) => measure_scroll_view(&sv.props, &sv.children, max_w),

@@ -34,8 +34,8 @@ pub(crate) use super::document_view::{
     measure_document_view, measure_document_view_constrained, reconcile_document_view,
 };
 pub(crate) use super::drag_drop::{
-    DragSourceNode, DropTargetNode, measure_drag_source, measure_drop_target,
-    reconcile_drag_source, reconcile_drop_target,
+    DragSourceNode, DropTargetNode, drag_source_is_snapshot_collapsed, measure_drag_source_within,
+    measure_drop_target, reconcile_drag_source, reconcile_drop_target,
 };
 pub(crate) use super::draggable_tab_bar::{
     DraggableTabBarNode, measure_draggable_tab_bar, reconcile_draggable_tab_bar,

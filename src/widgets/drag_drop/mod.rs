@@ -11,7 +11,9 @@ mod drop_target_reconcile;
 mod payload;
 
 pub use self::drag_source::DragSource;
-pub(crate) use self::drag_source_layout::measure_drag_source;
+pub(crate) use self::drag_source_layout::{
+    drag_source_is_snapshot_collapsed, measure_drag_source_within,
+};
 pub use self::drag_source_node::DragSourceNode;
 pub(crate) use self::drag_source_reconcile::reconcile_drag_source;
 pub use self::drop_target::{DropHighlight, DropTarget};

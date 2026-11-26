@@ -2198,4 +2198,100 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn drag_source_preserves_percentage_basis_and_outer_min_propagates_into_measurement() {
+        use crate::style::{Align, Theme};
+        use crate::widgets::{DragSource, Overflow, Text, ThemeProvider, VStack};
+
+        // 1. DragSource with inner max_width(Percent(50)) and outer max_width(Px(60)) in a
+        //    100-col parent must resolve 50% against 100 (= 50 cols, 2 rows), not against 60
+        //    (= 30 cols, 3 rows), and at 150 cols must cap at 60 cols, 2 rows.
+        let make_drag_source = || -> Element {
+            let child = Element::from(
+                Text::new("a".repeat(80))
+                    .overflow(Overflow::Wrap)
+                    .height(Length::Auto),
+            )
+            .max_width(Length::Percent(50));
+            let wrapped = Element::from(DragSource::new().child(child))
+                .max_width(Length::Px(60))
+                .key("drag-mixed");
+            VStack::new().align(Align::Center).child(wrapped).into()
+        };
+
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &make_drag_source(),
+            Rect {
+                x: 0,
+                y: 0,
+                w: 100,
+                h: 10,
+            },
+            None,
+        );
+        let rect_100 = tree.node(find_by_key(&tree, "drag-mixed")).rect;
+        assert_eq!(
+            (rect_100.w, rect_100.h),
+            (50, 2),
+            "DragSource must resolve inner 50% against 100-col parent (50x2), not 60-col outer cap (30x3)"
+        );
+
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &make_drag_source(),
+            Rect {
+                x: 0,
+                y: 0,
+                w: 150,
+                h: 10,
+            },
+            None,
+        );
+        let rect_150 = tree.node(find_by_key(&tree, "drag-mixed")).rect;
+        assert_eq!((rect_150.w, rect_150.h), (60, 2));
+
+        // 2. Outer min_width(Px(50)) overriding inner max_width(Px(20)) must also govern
+        //    measurement: 80-char wrapping text wraps at 50 cols (2 rows), not 20 cols (4 rows),
+        //    and the sibling below starts at y = 2.
+        let mut tree = NodeTree::new();
+        let inner = Element::from(
+            Text::new("a".repeat(80))
+                .overflow(Overflow::Wrap)
+                .height(Length::Auto),
+        )
+        .key("min-beats-max-text")
+        .max_width(Length::Px(20));
+        let wrapped = Element::from(ThemeProvider::new(Theme::default()).child(inner))
+            .min_width(Length::Px(50));
+        let root: Element = VStack::new()
+            .child(wrapped)
+            .child(Text::new("after").height(Length::Px(1)).key("after"))
+            .into();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &root,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 100,
+                h: 10,
+            },
+            None,
+        );
+        let text_rect = tree.node(find_by_key(&tree, "min-beats-max-text")).rect;
+        let after_rect = tree.node(find_by_key(&tree, "after")).rect;
+        assert_eq!(
+            (text_rect.w, text_rect.h),
+            (50, 2),
+            "outer min_width(50) must propagate into child measurement so 80 chars wrap into 2 rows, not 4"
+        );
+        assert_eq!(
+            after_rect.y, 2,
+            "sibling after wrapped text must sit directly below row 2"
+        );
+    }
 }

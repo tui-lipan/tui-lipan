@@ -1,24 +1,35 @@
 use crate::core::element::Key;
 use crate::layout::drag_source_layout_hint::drag_source_snapshot_collapse_key;
-use crate::layout::measure::min_size_constrained;
+use crate::layout::measure::min_size_within;
 
 use super::drag_source::DragSource;
 use super::payload::{DragSlot, DragSlotAxis};
 
-pub(crate) fn measure_drag_source(
+pub(crate) fn drag_source_is_snapshot_collapsed(
+    source: &DragSource,
+    element_key: Option<&Key>,
+) -> bool {
+    matches!(source.preview, crate::widgets::DragPreview::SourceSnapshot)
+        && element_key.is_some_and(|ek| {
+            drag_source_snapshot_collapse_key().is_some_and(|collapse| ek == &collapse)
+        })
+}
+
+pub(crate) fn measure_drag_source_within(
     source: &DragSource,
     element_key: Option<&Key>,
     max_w: Option<u16>,
     max_h: Option<u16>,
+    avail_w: u16,
+    avail_h: u16,
 ) -> (u16, u16) {
     if let Some(child) = source.child.as_deref() {
-        if matches!(source.preview, crate::widgets::DragPreview::SourceSnapshot)
-            && let (Some(ek), Some(collapse)) = (element_key, drag_source_snapshot_collapse_key())
-            && ek == &collapse
-        {
-            return snapshot_collapsed_intrinsic_size(source, child, max_w, max_h);
+        if drag_source_is_snapshot_collapsed(source, element_key) {
+            return snapshot_collapsed_intrinsic_size(
+                source, child, max_w, max_h, avail_w, avail_h,
+            );
         }
-        min_size_constrained(child, max_w, max_h)
+        min_size_within(child, max_w, max_h, avail_w, avail_h)
     } else {
         (0, 0)
     }
@@ -29,8 +40,10 @@ pub(crate) fn snapshot_collapsed_intrinsic_size(
     child: &crate::core::element::Element,
     max_w: Option<u16>,
     max_h: Option<u16>,
+    avail_w: u16,
+    avail_h: u16,
 ) -> (u16, u16) {
-    let (cw, ch) = min_size_constrained(child, max_w, max_h);
+    let (cw, ch) = min_size_within(child, max_w, max_h, avail_w, avail_h);
     match source.drag_slot {
         DragSlot::Collapse => match source.drag_slot_axis {
             DragSlotAxis::Vertical => (cw, 0),
@@ -55,6 +68,7 @@ mod tests {
     use super::*;
     use crate::core::element::Element;
     use crate::layout::drag_source_layout_hint::set_drag_source_snapshot_collapse_key;
+    use crate::layout::measure::min_size_constrained;
     use crate::widgets::Text;
 
     #[test]
