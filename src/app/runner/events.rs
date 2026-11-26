@@ -789,6 +789,10 @@ impl<C: Component> AppRunner<C> {
             &mut self.mouse,
             mouse::list_row_hover_state(&self.core.tree, hovered, x, y),
         );
+        mouse::set_document_hint_hover(
+            &mut self.mouse,
+            mouse::document_hint_hover_state(&self.core.tree, hovered, x, y),
+        );
         let prev_hovered = self.mouse.hovered;
         let node_changed = hovered != prev_hovered;
         let previous_regions = std::mem::take(&mut self.mouse.mouse_region_hover_chain);

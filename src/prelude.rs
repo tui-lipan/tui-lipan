@@ -114,7 +114,8 @@ pub use crate::widgets::{
     Spacer, Sparkline, SparklineVariant, Spinner, SpinnerSpeed, SpinnerStyle, Splitter,
     SplitterResizeEvent, StateDiagram, StatusBar, Tab, Table, TableCell, TableEvent, TableRow,
     Tabs, TabsEvent, Text, TextArea, TextAreaEvent, TextAreaLineNumberMode, ThemeProvider, Toast,
-    Tooltip, Tree, TreeEvent, TreeExpansionMode, TreeNode, TreeToggleEvent, VStack, ZStack,
+    Tooltip, TooltipConfig, Tree, TreeEvent, TreeExpansionMode, TreeNode, TreeToggleEvent, VStack,
+    ZStack,
 };
 pub use crate::widgets::{RadioEvent, SelectEvent};
 

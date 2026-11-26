@@ -1,4 +1,6 @@
-use crate::app::interaction_state::{ListRowHoverState, MouseRegionHoverState, MouseTrackingState};
+use crate::app::interaction_state::{
+    DocumentHintHoverState, ListRowHoverState, MouseRegionHoverState, MouseTrackingState,
+};
 use crate::core::node::{NodeId, NodeKind, NodeTree};
 use crate::style::Rect;
 
@@ -163,8 +165,56 @@ pub(crate) fn set_list_row_hover(state: &mut MouseTrackingState, next: Option<Li
     state.list_row_hover = next;
 }
 
+/// The hint under the pointer when the hovered node is a document view that shows tooltips.
+pub(crate) fn document_hint_hover_state(
+    tree: &NodeTree,
+    hovered: Option<NodeId>,
+    x: u16,
+    y: u16,
+) -> Option<DocumentHintHoverState> {
+    let id = hovered.filter(|id| tree.is_valid(*id))?;
+    let node = tree.node(id);
+    let NodeKind::DocumentView(doc) = &node.kind else {
+        return None;
+    };
+    let on_hover_hint = doc.on_hover_hint.clone()?;
+    let hint = doc.hover_hint_at(node.rect, x as i16, y as i16)?;
+    Some(DocumentHintHoverState {
+        id,
+        hint,
+        on_hover_hint,
+    })
+}
+
+/// Record the document hint under the pointer, telling a document the pointer left that its hint
+/// is gone before telling the new one about its hint.
+pub(crate) fn set_document_hint_hover(
+    state: &mut MouseTrackingState,
+    next: Option<DocumentHintHoverState>,
+) {
+    let previous = state.document_hint_hover.take();
+    match (&previous, &next) {
+        (Some(previous), Some(next)) if previous.id == next.id => {
+            if previous.hint != next.hint {
+                next.on_hover_hint.emit(Some(next.hint.clone()));
+            }
+        }
+        _ => {
+            if let Some(previous) = &previous {
+                previous.on_hover_hint.emit(None);
+            }
+            if let Some(next) = &next {
+                next.on_hover_hint.emit(Some(next.hint.clone()));
+            }
+        }
+    }
+    // Keep the newest callback, so a leave reaches the handler the view last supplied.
+    state.document_hint_hover = next;
+}
+
 pub(crate) fn clear_mouse_hover_state(state: &mut MouseTrackingState) -> bool {
     set_list_row_hover(state, None);
+    set_document_hint_hover(state, None);
     let previous_regions = std::mem::take(&mut state.mouse_region_hover_chain);
     emit_mouse_region_hover_changes(&previous_regions, &[]);
     state.hovered_item_index = None;

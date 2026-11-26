@@ -2,12 +2,21 @@ use crate::layout::measure::min_size_constrained;
 use crate::style::Rect;
 
 pub fn resolve_popover_rect(popover: &super::Popover, trigger: Rect, bounds: Rect) -> Rect {
-    let trigger = popover.anchor.map_or(trigger, |(x, y)| Rect {
-        x: x as i16,
-        y: y as i16,
-        w: 0,
-        h: 0,
-    });
+    let trigger = match (popover.anchor, popover.anchor_area) {
+        (Some((x, y)), _) => Rect {
+            x: x as i16,
+            y: y as i16,
+            w: 0,
+            h: 0,
+        },
+        (None, Some(area)) => Rect {
+            x: trigger.x.saturating_add(area.x),
+            y: trigger.y.saturating_add(area.y),
+            w: area.w,
+            h: area.h,
+        },
+        (None, None) => trigger,
+    };
 
     let max_width = popover
         .max_width
@@ -236,6 +245,36 @@ mod tests {
     use super::resolve_popover_rect;
     use crate::style::{Length, Rect};
     use crate::widgets::{Popover, PopoverPlacement, Spacer, Text};
+
+    #[test]
+    fn anchor_area_places_the_popover_against_an_area_of_the_trigger() {
+        let popover = Popover::new()
+            .content(Text::new("rust"))
+            .placement(PopoverPlacement::AboveStart)
+            .min_trigger_width(false)
+            .anchor_area(Rect {
+                x: 3,
+                y: 4,
+                w: 1,
+                h: 1,
+            });
+        let trigger = Rect {
+            x: 10,
+            y: 5,
+            w: 40,
+            h: 12,
+        };
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            w: 80,
+            h: 24,
+        };
+
+        let rect = resolve_popover_rect(&popover, trigger, bounds);
+
+        assert_eq!((rect.x, rect.y, rect.w, rect.h), (13, 8, 4, 1));
+    }
 
     #[test]
     fn min_trigger_width_allows_content_to_exceed_trigger_width() {

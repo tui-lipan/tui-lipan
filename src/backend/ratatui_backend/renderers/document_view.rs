@@ -1102,7 +1102,9 @@ fn line_segments<'a>(
                         segs.push((Cow::Owned(" ".repeat(*rect_width as usize)), effective));
                     }
                 }
-                crate::widgets::document_view::node::CodeBlockChromeKind::Header { spans } => {
+                crate::widgets::document_view::node::CodeBlockChromeKind::Header {
+                    spans, ..
+                } => {
                     let header_base = effective.patch(doc_styles.code_block_header_style);
                     if *left_inset > 0 {
                         segs.push((Cow::Owned(" ".repeat(*left_inset as usize)), effective));
@@ -1903,7 +1905,10 @@ mod tests {
         };
         let lines = vec![
             chrome(CodeBlockChromeKind::TopHalfBlock),
-            chrome(CodeBlockChromeKind::Header { spans: Vec::new() }),
+            chrome(CodeBlockChromeKind::Header {
+                spans: Vec::new(),
+                hint: None,
+            }),
             code(3),
             code(4),
             DocumentVisualLine {

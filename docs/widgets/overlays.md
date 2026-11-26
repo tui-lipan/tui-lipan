@@ -330,6 +330,7 @@ inherit ScrollView clipping from the overlay's declaration site.
 | `fit_trigger_width` | `bool` | Force popover width to exactly match the trigger, unless capped by `max_width` |
 | `max_width` | `Length` | Cap the resolved popover width; percent resolves against overlay bounds |
 | `anchor` | `Option<(u16, u16)>` | Absolute content-coordinate anchor instead of trigger rect |
+| `anchor_area` | `impl Into<Option<Rect>>` | Place against this area of the trigger (relative to its top-left corner) instead of the whole trigger; follows the trigger as it moves. `anchor` wins |
 
 `Popover` renders through the root overlay pipeline by default, so it appears above normal in-tree content and captures focus while open. Auto-focus and trapping remain active under `FocusPolicy::Manual`. Use `.capture_focus(false)` for passive root-portal overlays, such as autocomplete suggestions, that must render above the tree while the trigger retains keyboard focus. Use `.scope(OverlayScope::Local)` when the content should stay inside parent stacking order. Use `.auto_focus(false)` for a capturing popover that must suspend focus while retaining its trap.
 
@@ -407,6 +408,12 @@ controlled tooltip (`open(...)`) runs no hover timer, so it never warms its neig
 | `offset` | `impl Into<PopoverOffset>` | Shift from the placed position; mirrored when `auto_flip` flips |
 | `clamp` | `bool` | Keep within screen bounds |
 | `auto_flip` | `bool` | Flip when out of bounds |
+| `config` | `TooltipConfig` | Replace all of the timing, surface and placement props above at once |
+
+`TooltipConfig` holds the timing, surface and placement props (`animation` through `auto_flip`)
+with the same builders. Build one for the app and pass it to every `Tooltip` with `.config(...)`
+and to widgets that show tooltips for parts of themselves, such as
+[`DocumentView::tooltips`](display.md#tooltips), so they all open and look alike.
 
 ```rust
 Tooltip::new("This button saves your work")
