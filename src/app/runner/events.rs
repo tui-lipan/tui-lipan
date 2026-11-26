@@ -1199,7 +1199,7 @@ pub(crate) fn terminal_mouse_cell_size(
 pub(crate) struct TerminalMouseForward {
     pub(crate) hit: crate::core::node::NodeId,
     pub(crate) event: ForwardedMouseEvent,
-    pub(crate) callback: crate::callback::Callback<ForwardedMouseEvent>,
+    pub(crate) callback: crate::widgets::internal::TerminalMouseCallback,
     /// Clicks, drags, and scrolls focus the terminal they act on; plain motion must not, or
     /// hovering an any-event pane would steal focus.
     pub(crate) focus: bool,

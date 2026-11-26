@@ -511,6 +511,108 @@ fn right_release_does_not_reach_a_replacement_snapshot_terminal() {
 
 #[cfg(feature = "terminal")]
 #[test]
+fn stable_byte_mouse_callback_keeps_snapshot_gesture_across_press_update() {
+    #[derive(Default)]
+    struct Snapshot {
+        forward: Option<Callback<Vec<u8>>>,
+    }
+
+    impl Component for Snapshot {
+        type Properties = ();
+        type State = Vec<Vec<u8>>;
+        type Message = Vec<u8>;
+
+        fn create_state(&self, _: &()) -> Self::State {
+            Vec::new()
+        }
+
+        fn init(&mut self, ctx: &mut Context<Self>) -> Update {
+            self.forward = Some(ctx.link().callback(|report| report));
+            Update::render()
+        }
+
+        fn update(&mut self, report: Vec<u8>, ctx: &mut Context<Self>) -> Update {
+            ctx.state.push(report);
+            Update::render()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            let terminal = Terminal::new()
+                .snapshot(TerminalRenderSnapshot {
+                    mouse_mode: MouseModeState {
+                        mode: MouseMode::Normal,
+                        encoding: MouseEncoding::Sgr,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                })
+                .content(ctx.state.len().to_string());
+            match &self.forward {
+                Some(callback) => terminal.on_mouse_forward(callback.clone()).into(),
+                None => terminal.into(),
+            }
+        }
+    }
+
+    let mut backend = TestBackend::new(Snapshot::default());
+    backend.render();
+    for kind in [
+        MouseKind::Down(MouseButton::Right),
+        MouseKind::Up(MouseButton::Right),
+    ] {
+        backend
+            .send_mouse(MouseEvent {
+                x: 1,
+                y: 1,
+                mods: KeyMods::NONE,
+                kind,
+            })
+            .unwrap();
+    }
+    assert_eq!(
+        backend.state(),
+        &[b"\x1b[<2;2;2M".to_vec(), b"\x1b[<2;2;2m".to_vec()]
+    );
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn terminal_right_release_with_coarse_input_can_exceed_u16_pixels() {
+    let mut screen = TerminalScreen::new(3, 5, 0);
+    screen.set_cell_size(TerminalCellSize::new(20_000, 20));
+    screen.process_bytes(b"\x1b[?1002;1016h");
+    let (reports, callback) = capture();
+    let mut backend = mount(
+        Terminal::new()
+            .screen(Rc::new(RefCell::new(screen)))
+            .width(Length::Px(5))
+            .height(Length::Px(3))
+            .scrollbar(false)
+            .on_mouse_forward_event(callback),
+    );
+
+    for (kind, x) in [
+        (MouseKind::Down(MouseButton::Right), 1),
+        (MouseKind::Up(MouseButton::Right), 8),
+    ] {
+        backend
+            .send_mouse(MouseEvent {
+                kind,
+                x,
+                y: 1,
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+    }
+
+    let reports = reports.borrow();
+    assert_eq!(reports.len(), 2);
+    assert_eq!(reports[1].bytes, b"\x1b[<2;80001;21m");
+    assert_eq!(reports[1].pixel, None);
+}
+
+#[cfg(feature = "terminal")]
+#[test]
 fn terminal_right_gesture_clamps_pixels_per_axis() {
     let mut screen = TerminalScreen::new(3, 4, 0);
     screen.set_cell_size(TerminalCellSize::new(10, 20));

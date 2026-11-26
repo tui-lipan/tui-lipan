@@ -3,16 +3,14 @@ use crate::app::runner::events::{
     TerminalMouseForward, terminal_mouse_cell_size, terminal_mouse_forward_plan,
     terminal_mouse_forward_plan_at,
 };
-use crate::callback::Callback;
 use crate::core::component::Component;
 use crate::core::element::Key;
 use crate::core::event::{MouseButton, MouseEvent, MouseKind};
 use crate::core::node::{NodeId, NodeKind, NodeTree};
 use crate::style::Rect;
-use crate::widgets::internal::{TerminalNode, terminal_mouse_content_rect};
+use crate::widgets::internal::{TerminalMouseCallback, TerminalNode, terminal_mouse_content_rect};
 use crate::widgets::{
-    ForwardedMouseEvent, MouseEncoding, MouseMode, TerminalCellSize, TerminalContextMenuPolicy,
-    TerminalScreenHandle,
+    MouseMode, TerminalCellSize, TerminalContextMenuPolicy, TerminalScreenHandle,
 };
 
 use super::MouseDispatchCtx;
@@ -28,11 +26,11 @@ pub(crate) struct TerminalRightPress {
 enum MouseInputTarget {
     Explicit(Key),
     Screen(TerminalScreenHandle),
-    SnapshotCallback(Callback<ForwardedMouseEvent>),
+    SnapshotCallback(TerminalMouseCallback),
 }
 
 impl MouseInputTarget {
-    fn capture(terminal: &TerminalNode, callback: &Callback<ForwardedMouseEvent>) -> Self {
+    fn capture(terminal: &TerminalNode, callback: &TerminalMouseCallback) -> Self {
         if let Some(key) = &terminal.mouse_input_target {
             Self::Explicit(key.clone())
         } else if let Some(screen) = &terminal.screen {
@@ -176,8 +174,7 @@ fn captured_report(
     }
     let rect = terminal_mouse_content_rect(tree, owner.node).filter(|rect| !rect.is_empty())?;
     let cell_size = terminal_mouse_cell_size(terminal);
-    let pixel_mode = terminal.input_mouse_mode().encoding == MouseEncoding::SgrPixels;
-    let (mouse, sub_cell) = clamp_pointer(mouse, sub_cell, rect, cell_size, pixel_mode);
+    let (mouse, sub_cell) = clamp_pointer(mouse, sub_cell, rect, cell_size);
     terminal_mouse_forward_plan_at(tree, owner.node, mouse, sub_cell)
 }
 
@@ -186,15 +183,13 @@ fn clamp_pointer(
     sub_cell: Option<(u16, u16)>,
     rect: Rect,
     cell_size: TerminalCellSize,
-    pixel_mode: bool,
 ) -> (MouseEvent, Option<(u16, u16)>) {
     let (sub_x, sub_y) = sub_cell.unwrap_or_default();
     let (x, sub_x) = clamp_axis(mouse.x, sub_x, rect.x, rect.w, cell_size.width);
     let (y, sub_y) = clamp_axis(mouse.y, sub_y, rect.y, rect.h, cell_size.height);
-    let report_pixels = sub_cell.is_some() || (pixel_mode && (x, y) != (mouse.x, mouse.y));
     (
         MouseEvent { x, y, ..mouse },
-        report_pixels.then_some((sub_x, sub_y)),
+        sub_cell.map(|_| (sub_x, sub_y)),
     )
 }
 

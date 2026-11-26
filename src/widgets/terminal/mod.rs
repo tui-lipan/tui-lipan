@@ -56,6 +56,7 @@ pub use damage::{DamagedRow, GraphicsDamage, TerminalDamage, TerminalMutation};
 
 #[cfg(feature = "terminal")]
 pub use copy_mode::{CopyModeAction, CopyModeGrid, CopyModeViewport, TerminalCopyMode};
+pub(crate) use events::TerminalMouseCallback;
 pub use events::{
     ForwardedMouseEvent, KittyKeyboardFlags, MouseEncoding, MouseMode, MouseModeState,
     MouseReportError, MouseReportGeometry, TerminalContextMenuPolicy, TerminalInputEvent,
@@ -573,9 +574,7 @@ impl Terminal {
 
     /// Set callback to forward mouse bytes to PTY.
     pub fn on_mouse_forward(mut self, cb: Callback<Vec<u8>>) -> Self {
-        self.on_mouse_forward = Some(Callback::new(move |event: ForwardedMouseEvent| {
-            cb.emit(event.bytes)
-        }));
+        self.on_mouse_forward = Some(TerminalMouseCallback::Bytes(cb));
         self
     }
 
@@ -583,7 +582,7 @@ impl Terminal {
     /// This and [`Self::on_mouse_forward`] set the same callback; the last setter wins.
     /// Mode gating, focus-only presses, Shift selection, and wheel coalescing apply equally.
     pub fn on_mouse_forward_event(mut self, cb: Callback<ForwardedMouseEvent>) -> Self {
-        self.on_mouse_forward = Some(cb);
+        self.on_mouse_forward = Some(TerminalMouseCallback::Structured(cb));
         self
     }
 

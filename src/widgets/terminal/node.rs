@@ -14,7 +14,7 @@ use crate::widgets::ScrollEvent;
 
 use super::damage::TerminalDamage;
 use super::events::{
-    ForwardedMouseEvent, MouseModeState, TerminalInputEvent, TerminalKeyModes, TerminalLinkEvent,
+    MouseModeState, TerminalInputEvent, TerminalKeyModes, TerminalLinkEvent,
     TerminalPasteShortcutBehavior,
 };
 #[cfg(feature = "terminal-images")]
@@ -71,7 +71,7 @@ pub(crate) struct TerminalNode {
     pub paste_shortcut_behavior: TerminalPasteShortcutBehavior,
     pub on_selection: Option<Callback<TerminalSelectionEvent>>,
     pub mouse_input_target: Option<crate::core::element::Key>,
-    pub on_mouse_forward: Option<Callback<ForwardedMouseEvent>>,
+    pub on_mouse_forward: Option<super::TerminalMouseCallback>,
     pub context_menu_policy: super::TerminalContextMenuPolicy,
     pub on_context_menu: Option<Callback<crate::core::event::MouseEvent>>,
     pub link_activation_mods: crate::core::event::KeyMods,

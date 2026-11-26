@@ -159,14 +159,16 @@ Terminal::new()
 Set `open_when_untracked` to `false` for a modifier-only menu that leaves unhandled right-clicks
 available for local drag and clipboard behavior. A right-button gesture sent to the PTY stays
 with its original terminal. Reports are clamped to that terminal's content when the pointer moves
-outside it. Pixel reports retain the sub-cell offset on each axis that stays inside the terminal.
+outside it. With pixel-precise host input, each axis keeps its sub-cell offset until it crosses
+an edge. Cell-precise host input stays cell-precise.
 The framework drops a follow-up report if the target changes or its tracking mode cannot report
 that event.
 
 By default, a live terminal's screen handle identifies its input target. For a snapshot-only
-terminal, tui-lipan compares the forwarding callback by identity. When rebuilding the callback
-for the same child, use `mouse_input_target(child_id)` to keep its gesture active across renders.
-Change the ID when the widget begins forwarding to a different child.
+terminal, tui-lipan compares the registered callback by identity. Cloning the same callback
+keeps the gesture active across renders. If each render creates a fresh callback for the same
+child, use `mouse_input_target(child_id)`. Change the ID when the widget starts forwarding
+to a different child.
 
 Calling `selection(...)` makes the selection controlled. Mouse clicks and drags
 still emit `on_selection`, but they do not transiently overwrite the rendered

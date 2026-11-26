@@ -1,6 +1,7 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
+use crate::callback::Callback;
 use crate::core::event::{KeyCode, KeyEvent, KeyMods, MouseButton, MouseEvent, MouseKind};
 use crate::style::Span;
 use crate::utils::spans::{line_text, line_width, slice_columns};
@@ -594,7 +595,7 @@ pub struct ForwardedMouseEvent {
     pub mods: crate::core::event::KeyMods,
     /// Cell position inside the terminal content area.
     pub cell: (u16, u16),
-    /// Pixel position when the host supplied sub-cell precision or a captured pixel report hit an edge.
+    /// Pixel position when the host supplied sub-cell precision, clamped to the reported cell.
     pub pixel: Option<(u16, u16)>,
     /// Tracking mode and encoding requested by the child at the time of forwarding.
     pub mouse_mode: MouseModeState,
@@ -602,6 +603,22 @@ pub struct ForwardedMouseEvent {
     pub repeat_count: u16,
     /// Authoritative encoded reports, including repetitions. Forward these bytes unchanged.
     pub bytes: Vec<u8>,
+}
+
+/// Retain the registered callback so its identity survives reconstruction of a terminal widget.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) enum TerminalMouseCallback {
+    Bytes(Callback<Vec<u8>>),
+    Structured(Callback<ForwardedMouseEvent>),
+}
+
+impl TerminalMouseCallback {
+    pub(crate) fn emit(&self, event: ForwardedMouseEvent) {
+        match self {
+            Self::Bytes(callback) => callback.emit(event.bytes),
+            Self::Structured(callback) => callback.emit(event),
+        }
+    }
 }
 
 impl ForwardedMouseEvent {
