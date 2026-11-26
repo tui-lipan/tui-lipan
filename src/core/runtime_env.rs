@@ -429,8 +429,9 @@ pub(crate) struct RuntimeEnv {
     /// How long a chord must stay pending before [`Context::command_chord_revealed`] reports it.
     /// Zero (the default) reveals immediately.
     pub command_chord_reveal_delay: Rc<std::cell::Cell<Duration>>,
-    /// When a delayed [`crate::widgets::Tooltip`] last closed, so the next one can skip its delay.
-    pub tooltip_closed_at: Rc<Cell<Option<Instant>>>,
+    /// When a delayed [`crate::widgets::Tooltip`] last closed in each warm-up group (`None` is the
+    /// default group), so the next one in that group can skip its delay.
+    pub tooltip_closed_at: Rc<RefCell<FxHashMap<Option<Arc<str>>, Instant>>>,
     /// The trail drawn behind the host caret when it jumps, from [`crate::App::cursor_trail`] and
     /// [`crate::Context::set_cursor_trail`]. `None` draws none.
     pub cursor_trail: Rc<Cell<Option<crate::app::CursorTrail>>>,

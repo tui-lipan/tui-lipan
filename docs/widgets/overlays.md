@@ -388,6 +388,17 @@ if the pointer reaches it within `skip_delay`. Focus always shows the tooltip im
 controlled tooltip (`open(...)`) runs no hover timer, so it never warms its neighbours, and changing
 `delay` mid-hover counts from when the pointer arrived.
 
+Warm-up stays within a `warmup_group`. Give large hover cards their own group, so that closing one
+does not open the small tooltips of nearby controls at once. With a zero `skip_delay` as well, each
+card in a list waits for its delay:
+
+```rust
+let cards = TooltipConfig::new()
+    .delay(Duration::from_secs(1))
+    .warmup_group("hover-cards")
+    .skip_delay(Duration::ZERO);
+```
+
 | Prop | Type | Description |
 |------|------|-------------|
 | `animation` | `impl Into<Option<VisibilityAnimation>>` | Opt-in popup animation, forwarded to Popover |
@@ -398,6 +409,7 @@ controlled tooltip (`open(...)`) runs no hover timer, so it never warms its neig
 | `show_on_focus` | `bool` | Show automatically on focus (default `true`) |
 | `delay` | `Duration` | Hover time before the tooltip opens (default zero) |
 | `skip_delay` | `Duration` | Open at once if another delayed tooltip closed this recently (default `DEFAULT_TOOLTIP_SKIP_DELAY`, 300 ms) |
+| `warmup_group` | `impl Into<Arc<str>>` | Warm up only with tooltips in the same group; tooltips without one share the default group |
 | `text_style` | `Style` | Style for string content; element content carries its own styles |
 | `container_style` | `Style` | Tooltip container style |
 | `border` | `bool` | Show border |

@@ -13,10 +13,10 @@ mod disabled_focus;
 #[cfg(feature = "markdown")]
 #[path = "suites/widget_behavior/document_tooltips.rs"]
 mod document_tooltips;
-#[path = "suites/widget_behavior/drag_wrapper_clicks.rs"]
-mod drag_wrapper_clicks;
 #[path = "suites/widget_behavior/drag_drop_test_backend.rs"]
 mod drag_drop_test_backend;
+#[path = "suites/widget_behavior/drag_wrapper_clicks.rs"]
+mod drag_wrapper_clicks;
 #[path = "suites/widget_behavior/draggable_tab_bar_caps_render.rs"]
 mod draggable_tab_bar_caps_render;
 #[path = "suites/widget_behavior/draggable_tab_bar_clipped_render.rs"]
@@ -109,6 +109,8 @@ mod tooltip_child_update;
 mod tooltip_delay;
 #[path = "suites/widget_behavior/tooltip_trigger_gestures.rs"]
 mod tooltip_trigger_gestures;
+#[path = "suites/widget_behavior/tooltip_warmup_groups.rs"]
+mod tooltip_warmup_groups;
 #[path = "suites/widget_behavior/uncontrolled_text_cursor.rs"]
 mod uncontrolled_text_cursor;
 
@@ -160,4 +162,3 @@ mod search_palette_items;
 #[cfg(feature = "terminal")]
 #[path = "suites/widget_behavior/terminal_corpus.rs"]
 mod terminal_corpus;
-

@@ -88,6 +88,7 @@ pub struct TooltipConfig {
     pub(crate) animation: Option<VisibilityAnimation>,
     pub(crate) delay: Duration,
     skip_delay: Duration,
+    warmup_group: Option<Arc<str>>,
     text_style: Style,
     container_style: Style,
     border: bool,
@@ -113,6 +114,7 @@ impl TooltipConfig {
             animation: None,
             delay: Duration::ZERO,
             skip_delay: DEFAULT_TOOLTIP_SKIP_DELAY,
+            warmup_group: None,
             text_style: Style::default(),
             container_style: Style::default(),
             border: false,
@@ -149,6 +151,18 @@ impl TooltipConfig {
     /// zero always waits.
     pub fn skip_delay(mut self, skip_delay: Duration) -> Self {
         self.skip_delay = skip_delay;
+        self
+    }
+
+    /// Warm up only with tooltips in the same group.
+    ///
+    /// A delayed tooltip that closes lets the next one skip its [`delay`](Self::delay) only when
+    /// both share a group. Tooltips without a group form one default group. Give a different
+    /// kind of hover popup, such as a large preview card, its own group so that closing it does
+    /// not open small control tooltips at once, and so that cards in a list each wait their delay
+    /// when combined with a zero [`skip_delay`](Self::skip_delay).
+    pub fn warmup_group(mut self, group: impl Into<Arc<str>>) -> Self {
+        self.warmup_group = Some(group.into());
         self
     }
 
@@ -296,15 +310,18 @@ impl HoverReveal {
             // Only a delayed tooltip the user actually saw warms its neighbours: one that opens at
             // once never made the user wait, as with a plain `Tooltip` that has no delay.
             if !config.delay.is_zero() {
-                env.tooltip_closed_at.set(Some(env.now()));
+                env.tooltip_closed_at
+                    .borrow_mut()
+                    .insert(config.warmup_group.clone(), env.now());
             }
             return RevealStep::Render;
         }
         self.hovered_since = Some(env.now());
         let warm = env
             .tooltip_closed_at
-            .get()
-            .is_some_and(|closed| env.elapsed(closed) < config.skip_delay);
+            .borrow()
+            .get(&config.warmup_group)
+            .is_some_and(|closed| env.elapsed(*closed) < config.skip_delay);
         if warm {
             self.revealed = true;
             return RevealStep::Render;
@@ -444,6 +461,8 @@ impl Tooltip {
         /// tooltip immediately, as desktop toolkits do. Defaults to
         /// [`DEFAULT_TOOLTIP_SKIP_DELAY`]; zero always waits.
         skip_delay(skip_delay: Duration);
+        /// Warm up only with tooltips in the same group; see [`TooltipConfig::warmup_group`].
+        warmup_group(group: impl Into<Arc<str>>);
         /// Set the style of text content. Element content carries its own styles.
         text_style(style: Style);
         /// Set container style.

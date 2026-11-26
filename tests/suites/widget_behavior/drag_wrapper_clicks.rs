@@ -46,7 +46,10 @@ impl Component for Rows {
         };
         Tree::forest(vec![node("alpha"), node("beta")])
             .show_arrows(false)
-            .on_select(ctx.link().callback(|e: TreeEvent| format!("select {}", e.index)))
+            .on_select(
+                ctx.link()
+                    .callback(|e: TreeEvent| format!("select {}", e.index)),
+            )
             .into()
     }
 }
