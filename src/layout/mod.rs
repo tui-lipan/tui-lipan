@@ -2397,4 +2397,183 @@ mod tests {
         assert_eq!((rect.w, rect.h), (50, 2));
         assert_eq!(tree.node(find_by_key(&tree, "after-min")).rect.y, 2);
     }
+
+    #[test]
+    fn animated_collapse_visibility_caches_natural_height_with_wrapper_constraints_and_percent_basis()
+     {
+        use crate::animation::{Easing, TransitionConfig, VisibilityAnimation};
+        use crate::core::node::NodeKind;
+        use crate::style::Align;
+        use crate::widgets::{Animated, Overflow, Text, VStack};
+        use std::time::Duration;
+
+        let exit_recipe = VisibilityAnimation::new()
+            .enter(TransitionConfig {
+                duration: Duration::ZERO,
+                easing: Easing::Linear,
+            })
+            .exit(TransitionConfig {
+                duration: Duration::from_millis(200),
+                easing: Easing::Linear,
+            });
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            w: 100,
+            h: 20,
+        };
+
+        // 1. Inner max_width(20) overridden by outer min_width(50) on an Animated with
+        //    collapse_visibility(true): natural height must be cached as 2 (not 4), so
+        //    toggling visibility to false collapses smoothly from 2 -> 1 -> 0 without
+        //    jumping the sibling to y=4.
+        let make_min_beats_max = |visible: bool| -> Element {
+            let child = Element::from(
+                Text::new("a".repeat(80))
+                    .overflow(Overflow::Wrap)
+                    .height(Length::Auto),
+            )
+            .max_width(Length::Px(20));
+            let animated = Element::from(
+                Animated::new(child)
+                    .visibility(visible, exit_recipe.clone())
+                    .collapse_visibility(true),
+            )
+            .min_width(Length::Px(50))
+            .key("collapse-min");
+            VStack::new()
+                .align(Align::Center)
+                .child(animated)
+                .child(Text::new("after").height(Length::Px(1)).key("after"))
+                .into()
+        };
+
+        let mut tree = NodeTree::new();
+        let visible_root = make_min_beats_max(true);
+        LayoutEngine::reconcile_with_focus(&mut tree, &visible_root, bounds, None);
+        let anim_id = find_by_key(&tree, "collapse-min");
+        assert_eq!(
+            (tree.node(anim_id).rect.w, tree.node(anim_id).rect.h),
+            (50, 2)
+        );
+        assert_eq!(tree.node(find_by_key(&tree, "after")).rect.y, 2);
+        if let NodeKind::Animated(node) = &tree.node(anim_id).kind {
+            assert_eq!(
+                node.visibility_layout.as_ref().unwrap().natural_size(),
+                (50, 2),
+                "visibility_layout must cache natural height using merged wrapper constraints"
+            );
+        } else {
+            panic!("expected Animated node");
+        }
+
+        // Toggle visibility to false: exit starts at progress=1.0 -> height 2, sibling stays at y=2.
+        let hidden_root = make_min_beats_max(false);
+        LayoutEngine::reconcile_with_focus(&mut tree, &hidden_root, bounds, None);
+        let anim_id = find_by_key(&tree, "collapse-min");
+        assert_eq!(
+            tree.node(anim_id).rect.h,
+            2,
+            "exit start must keep height 2, not jump to 4"
+        );
+        assert_eq!(tree.node(find_by_key(&tree, "after")).rect.y, 2);
+
+        // Tick halfway (100ms -> progress 0.5): height 1, sibling moves to y=1.
+        if let NodeKind::Animated(node) = &mut tree.node_mut(anim_id).kind {
+            node.tick(Duration::from_millis(100));
+        }
+        LayoutEngine::reconcile_with_focus(&mut tree, &hidden_root, bounds, None);
+        assert_eq!(tree.node(find_by_key(&tree, "collapse-min")).rect.h, 1);
+        assert_eq!(tree.node(find_by_key(&tree, "after")).rect.y, 1);
+
+        // Tick to completion (100ms -> progress 0.0): height 0, sibling moves to y=0.
+        if let NodeKind::Animated(node) = &mut tree.node_mut(anim_id).kind {
+            node.tick(Duration::from_millis(100));
+        }
+        LayoutEngine::reconcile_with_focus(&mut tree, &hidden_root, bounds, None);
+        assert_eq!(tree.node(find_by_key(&tree, "collapse-min")).rect.h, 0);
+        assert_eq!(tree.node(find_by_key(&tree, "after")).rect.y, 0);
+
+        // 2. Child with max_width(Percent(50)) under collapse_visibility(true) must also
+        //    preserve the 100-col percentage basis when caching natural height (2 rows, not 4).
+        let make_percent = |visible: bool| -> Element {
+            let child = Element::from(
+                Text::new("a".repeat(80))
+                    .overflow(Overflow::Wrap)
+                    .height(Length::Auto),
+            )
+            .max_width(Length::Percent(50));
+            let animated = Element::from(
+                Animated::new(child)
+                    .visibility(visible, exit_recipe.clone())
+                    .collapse_visibility(true),
+            )
+            .key("collapse-pct");
+            VStack::new()
+                .align(Align::Center)
+                .child(animated)
+                .child(Text::new("after").height(Length::Px(1)).key("after-pct"))
+                .into()
+        };
+
+        let mut tree = NodeTree::new();
+        let visible_root = make_percent(true);
+        LayoutEngine::reconcile_with_focus(&mut tree, &visible_root, bounds, None);
+        let anim_id = find_by_key(&tree, "collapse-pct");
+        assert_eq!(
+            (tree.node(anim_id).rect.w, tree.node(anim_id).rect.h),
+            (50, 2)
+        );
+        assert_eq!(tree.node(find_by_key(&tree, "after-pct")).rect.y, 2);
+
+        let hidden_root = make_percent(false);
+        LayoutEngine::reconcile_with_focus(&mut tree, &hidden_root, bounds, None);
+        assert_eq!(tree.node(find_by_key(&tree, "collapse-pct")).rect.h, 2);
+        assert_eq!(tree.node(find_by_key(&tree, "after-pct")).rect.y, 2);
+
+        // 3. `height_target` for `Animated::height(Length::Auto)` must also respect merged
+        //    wrapper constraints and the original percentage basis (target_height == Some(2)).
+        let mut tree = NodeTree::new();
+        let child = Element::from(
+            Text::new("a".repeat(80))
+                .overflow(Overflow::Wrap)
+                .height(Length::Auto),
+        )
+        .max_width(Length::Px(20));
+        let animated = Element::from(Animated::new(child).height(Length::Auto))
+            .min_width(Length::Px(50))
+            .key("height-target-min");
+        let root: Element = VStack::new().align(Align::Center).child(animated).into();
+        LayoutEngine::reconcile_with_focus(&mut tree, &root, bounds, None);
+        let anim_id = find_by_key(&tree, "height-target-min");
+        let NodeKind::Animated(node) = &tree.node(anim_id).kind else {
+            panic!("expected Animated node");
+        };
+        assert_eq!(
+            node.target_height,
+            Some(2),
+            "height_target must use merged wrapper constraints (2 rows, not 4)"
+        );
+
+        let mut tree = NodeTree::new();
+        let child = Element::from(
+            Text::new("a".repeat(80))
+                .overflow(Overflow::Wrap)
+                .height(Length::Auto),
+        )
+        .max_width(Length::Percent(50));
+        let animated =
+            Element::from(Animated::new(child).height(Length::Auto)).key("height-target-pct");
+        let root: Element = VStack::new().align(Align::Center).child(animated).into();
+        LayoutEngine::reconcile_with_focus(&mut tree, &root, bounds, None);
+        let anim_id = find_by_key(&tree, "height-target-pct");
+        let NodeKind::Animated(node) = &tree.node(anim_id).kind else {
+            panic!("expected Animated node");
+        };
+        assert_eq!(
+            node.target_height,
+            Some(2),
+            "height_target must preserve percentage basis (2 rows, not 4)"
+        );
+    }
 }

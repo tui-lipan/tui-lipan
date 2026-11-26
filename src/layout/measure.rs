@@ -375,6 +375,30 @@ fn transparent_measure_child(el: &Element) -> Option<&Element> {
     }
 }
 
+/// Measure `el` using pre-merged `constraints` within `max_w`/`max_h`, resolving relative
+/// bounds against `avail_w`/`avail_h`.
+///
+/// Used by wrapper reconcilers such as `Animated` that need to measure their child with the
+/// same merged wrapper constraints and percentage basis as the main layout pass.
+pub(crate) fn min_size_with_constraints(
+    el: &Element,
+    constraints: crate::style::EffectiveLayoutConstraints,
+    max_w: Option<u16>,
+    max_h: Option<u16>,
+    avail_w: u16,
+    avail_h: u16,
+) -> (u16, u16) {
+    measure_uncached_with_constraints(
+        el,
+        constraints,
+        max_w,
+        max_h,
+        avail_w,
+        avail_h,
+        current_measure_context(),
+    )
+}
+
 fn measure_uncached(
     el: &Element,
     max_w: Option<u16>,

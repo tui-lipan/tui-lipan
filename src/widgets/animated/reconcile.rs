@@ -2,7 +2,7 @@ use crate::animation::Transition;
 use crate::core::component::FocusContext;
 use crate::core::element::Element;
 use crate::core::node::{NodeId, NodeKind, NodeTree};
-use crate::layout::measure::min_size_constrained;
+use crate::layout::measure::min_size_with_constraints;
 use crate::layout::reconcile::{
     OverlayState, ReconcileCtx, SingleChildReconcile, reconcile_single_child,
 };
@@ -59,7 +59,7 @@ pub(crate) fn reconcile_animated(
         next.position_transition = animated.position_transition;
         next.auto_exit = animated.auto_exit;
 
-        retarget_height(&mut next, animated, rect);
+        retarget_height(&mut next, animated, rect, overlay_state);
 
         next.on_opacity_transition_end = animated.on_opacity_transition_end.clone();
         next.on_height_transition_end = animated.on_height_transition_end.clone();
@@ -89,7 +89,7 @@ pub(crate) fn reconcile_animated(
         animated,
         &old_children,
         &mut child_rect,
-        overlay_state.bounds,
+        overlay_state,
         epoch,
     ) {
         return id;
@@ -205,8 +205,13 @@ fn retarget_background(next: &mut AnimatedNode, animated: &Animated) {
     }
 }
 
-fn retarget_height(next: &mut AnimatedNode, animated: &Animated, rect: Rect) {
-    let next_target_height = height_target(animated, rect);
+fn retarget_height(
+    next: &mut AnimatedNode,
+    animated: &Animated,
+    rect: Rect,
+    overlay_state: &OverlayState,
+) {
+    let next_target_height = height_target(animated, rect, overlay_state);
 
     if let Some(target_height) = next_target_height {
         if next.target_height != Some(target_height) {
@@ -292,7 +297,7 @@ fn reconcile_visibility_content(
     animated: &Animated,
     old_children: &[NodeId],
     child_rect: &mut Rect,
-    viewport: Rect,
+    overlay_state: &OverlayState,
     epoch: u32,
 ) -> bool {
     if let Some((visible, _)) = &animated.visibility {
@@ -315,10 +320,14 @@ fn reconcile_visibility_content(
             crate::widgets::containers::exit_retention::revive(tree, child);
         }
         if animated.collapse_visibility {
-            child_rect.h = min_size_constrained(
+            let viewport = overlay_state.bounds;
+            child_rect.h = measure_animated_child(
                 animated.child.as_ref(),
+                overlay_state,
                 Some(child_rect.w),
                 Some(viewport.h),
+                child_rect.w,
+                viewport.h,
             )
             .1;
         }
@@ -330,8 +339,33 @@ fn reconcile_visibility_content(
     false
 }
 
-fn height_target(animated: &Animated, rect: Rect) -> Option<u16> {
-    let (_, natural_h) = min_size_constrained(animated.child.as_ref(), Some(rect.w), None);
+fn measure_animated_child(
+    child: &Element,
+    overlay_state: &OverlayState,
+    max_w: Option<u16>,
+    max_h: Option<u16>,
+    fallback_avail_w: u16,
+    fallback_avail_h: u16,
+) -> (u16, u16) {
+    let mut constraints = child.layout_constraints();
+    if let Some(outer) = overlay_state.wrapper_constraints {
+        constraints = constraints.merge_effective(outer);
+    }
+    let (avail_w, avail_h) = overlay_state
+        .constraint_avail
+        .unwrap_or((fallback_avail_w, fallback_avail_h));
+    min_size_with_constraints(child, constraints, max_w, max_h, avail_w, avail_h)
+}
+
+fn height_target(animated: &Animated, rect: Rect, overlay_state: &OverlayState) -> Option<u16> {
+    let (_, natural_h) = measure_animated_child(
+        animated.child.as_ref(),
+        overlay_state,
+        Some(rect.w),
+        None,
+        rect.w,
+        u16::MAX,
+    );
     animated.height.map(|height| match height {
         Length::Auto => natural_h,
         Length::Px(px) => px,
