@@ -114,7 +114,7 @@ pub(crate) fn reconcile_drag_source(
                 rect: preview_rect,
             },
         );
-        reconcile_ctx.tree.node_mut(preview_id).inert = true;
+        mark_subtree_inert(reconcile_ctx.tree, preview_id);
         new_children.push(preview_id);
         Some(preview_id)
     } else {
@@ -128,4 +128,130 @@ pub(crate) fn reconcile_drag_source(
     }
 
     id
+}
+
+fn mark_subtree_inert(tree: &mut NodeTree, id: NodeId) {
+    let mut stack = vec![id];
+    while let Some(current) = stack.pop() {
+        if !tree.is_valid(current) {
+            continue;
+        }
+        let node = tree.node_mut(current);
+        node.inert = true;
+        stack.extend(node.children.iter().copied());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::TestBackend;
+    use crate::app::interaction_state::ActiveDrag;
+    use crate::core::event::{MouseButton, MouseEvent, MouseKind};
+    use crate::core::node::NodeId;
+    use crate::prelude::*;
+    use crate::style::Rect;
+
+    #[derive(Debug)]
+    struct Payload;
+
+    struct App;
+
+    impl Component for App {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            let preview = VStack::new()
+                .child(Button::new("preview-btn").key("preview-btn"))
+                .child(
+                    Popover::new()
+                        .open(true)
+                        .trigger(Text::new("pop-trigger"))
+                        .content(Button::new("portal-btn").key("portal-btn")),
+                );
+            DragSource::new()
+                .child(Text::new("source").height(Length::Px(1)))
+                .threshold(1)
+                .preview_element(preview)
+                .on_drag_start(|_| Some(Box::new(Payload) as Box<dyn DragPayload>))
+                .key("src")
+        }
+    }
+
+    fn subtree(tree: &crate::core::node::NodeTree, root: NodeId) -> Vec<NodeId> {
+        let mut out = Vec::new();
+        let mut stack = vec![root];
+        while let Some(id) = stack.pop() {
+            if !tree.is_valid(id) {
+                continue;
+            }
+            let node = tree.node(id);
+            out.push(id);
+            stack.extend(node.children.iter().copied());
+        }
+        out
+    }
+
+    #[test]
+    fn element_preview_marks_nested_focusables_and_portals_inert() {
+        let mut backend = TestBackend::new(App);
+        backend.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 8,
+        });
+        backend.render();
+
+        for (kind, x, y) in [
+            (MouseKind::Down(MouseButton::Left), 1, 0),
+            (MouseKind::Drag(MouseButton::Left), 4, 1),
+        ] {
+            backend
+                .send_mouse(MouseEvent {
+                    kind,
+                    x,
+                    y,
+                    mods: KeyMods::NONE,
+                })
+                .unwrap();
+            backend.render();
+        }
+
+        let ActiveDrag::DragDrop(drag) = &backend.drag.active else {
+            panic!("drag should be active");
+        };
+        let preview = backend
+            .core
+            .tree
+            .node(drag.source_id)
+            .kind
+            .drag_preview_child()
+            .expect("element preview should be mounted");
+        let nodes = subtree(&backend.core.tree, preview);
+        assert!(
+            nodes.len() > 1,
+            "preview should contain the button and popover"
+        );
+        assert!(
+            nodes.iter().all(|id| backend.core.tree.node(*id).inert),
+            "every preview descendant must be inert"
+        );
+        let focused = backend.focused();
+        assert!(
+            focused.is_none_or(|id| !nodes.contains(&id)),
+            "focus must not land inside the preview"
+        );
+        assert!(
+            backend.core.tree.overlay_roots().is_empty(),
+            "an open popover inside the preview must not become an overlay"
+        );
+    }
 }
