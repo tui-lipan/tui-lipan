@@ -25,7 +25,15 @@ enum Button {
 /// sits in a group with a third tooltip between the two. The card warms up apart from the rest,
 /// so a swap between them never rides on warm-up.
 struct Row {
-    middle: bool,
+    middle: Option<Middle>,
+}
+
+/// The tooltip between the card and the button.
+#[derive(Clone, Copy, PartialEq)]
+enum Middle {
+    Enabled,
+    /// It never opens on hover, so it must stay out of the way.
+    AutoOff,
 }
 
 impl Component for Row {
@@ -53,9 +61,10 @@ impl Component for Row {
                 Button::HeldClosed => tip = tip.open(false),
                 Button::Tip | Button::Removed => {}
             }
-            let tip: Element = if self.middle {
+            let tip: Element = if let Some(middle) = self.middle {
                 Tooltip::new("group-tip")
                     .delay(DELAY)
+                    .auto(middle == Middle::Enabled)
                     .warmup_group("groups")
                     .placement(PopoverPlacement::BelowStart)
                     .offset((0, 2))
@@ -82,10 +91,10 @@ impl Component for Row {
 }
 
 fn backend() -> TestBackend<Row> {
-    backend_with(false)
+    backend_with(None)
 }
 
-fn backend_with(middle: bool) -> TestBackend<Row> {
+fn backend_with(middle: Option<Middle>) -> TestBackend<Row> {
     let mut backend = TestBackend::new(Row { middle });
     backend.set_viewport(Rect {
         x: 0,
@@ -268,7 +277,7 @@ fn removing_a_hovered_nested_tooltip_brings_the_outer_one_back() {
 
 #[test]
 fn a_deeply_nested_tooltip_takes_over_from_a_showing_ancestor() {
-    let mut backend = backend_with(true);
+    let mut backend = backend_with(Some(Middle::Enabled));
     hover(&mut backend, "row text");
     wait(&mut backend);
     assert!(shows(&backend, "card-tip"));
@@ -280,4 +289,49 @@ fn a_deeply_nested_tooltip_takes_over_from_a_showing_ancestor() {
         "the innermost tooltip waited although an ancestor was showing: {text:?}"
     );
     assert!(!text.contains("card-tip") && !text.contains("group-tip"));
+}
+
+#[test]
+fn a_tooltip_between_that_cannot_open_stays_out_of_the_way() {
+    let mut backend = backend_with(Some(Middle::AutoOff));
+    hover(&mut backend, "row text");
+    wait(&mut backend);
+    assert!(shows(&backend, "card-tip"));
+
+    hover(&mut backend, "Snooze");
+    let text = backend.capture_frame().plain_text();
+    assert!(
+        !text.contains("card-tip"),
+        "the card stayed over the button: {text:?}"
+    );
+    assert!(text.contains("button-tip"));
+}
+
+/// With the card open and the pointer on a button whose tooltip cannot open, the tooltip is
+/// enabled.
+fn enable_the_hovered_button(from: Button) {
+    let mut backend = backend();
+    backend.dispatch(from).unwrap();
+    backend.render();
+    hover(&mut backend, "row text");
+    wait(&mut backend);
+    hover(&mut backend, "Snooze");
+    assert!(shows(&backend, "card-tip"));
+
+    backend.dispatch(Button::Tip).unwrap();
+    backend.pump().unwrap();
+    backend.render();
+    backend.pump().unwrap();
+    backend.render();
+    let text = backend.capture_frame().plain_text();
+    assert!(
+        text.contains("button-tip") && !text.contains("card-tip"),
+        "enabling the hovered button's tooltip left it closed: {text:?}"
+    );
+}
+
+#[test]
+fn enabling_a_hovered_nested_tooltip_opens_it() {
+    enable_the_hovered_button(Button::AutoOff);
+    enable_the_hovered_button(Button::HeldClosed);
 }

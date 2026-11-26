@@ -598,6 +598,8 @@ struct NestedHover {
 /// so it can step aside while their tooltip is the one that matters.
 #[derive(Clone)]
 struct NestedTooltip {
+    /// The tooltip receiving the reports.
+    owner: usize,
     report: crate::callback::Callback<NestedHover>,
     /// Whether each enclosing tooltip, this one and its own ancestors, is showing. A nested
     /// tooltip entered while any is takes over at once, however deep it sits.
@@ -617,10 +619,10 @@ impl NestedTooltip {
 }
 
 impl PartialEq for NestedTooltip {
-    /// Always equal: the callback reaches the same tooltip on every render, so a new one must not
-    /// invalidate the trigger's subtree.
-    fn eq(&self, _other: &Self) -> bool {
-        true
+    /// Equal while it reaches the same tooltip: a fresh callback each render must not invalidate
+    /// the trigger's subtree.
+    fn eq(&self, other: &Self) -> bool {
+        self.owner == other.owner
     }
 }
 
@@ -654,27 +656,31 @@ impl TooltipComponent {
         Self
     }
 
-    /// Tell the enclosing tooltip whether the pointer is on this trigger, when that changed or
-    /// this tooltip stopped or started being able to show.
+    /// Tell the enclosing tooltip whether the pointer is on this trigger, when that changed, this
+    /// tooltip stopped or started being able to show, or the enclosing tooltip changed.
     fn sync_report(ctx: &mut Context<Self>) {
         let on = ctx.state.trigger_hovered && ctx.props.can_show();
-        match (ctx.state.reported_to.take(), on) {
-            (Some(outer), false) => outer.report.emit(NestedHover {
+        let target = on.then(|| ctx.use_context::<NestedTooltip>()).flatten();
+        let report = |outer: &NestedTooltip, hovered: bool, ctx: &Context<Self>| {
+            outer.report.emit(NestedHover {
                 id: ctx.state.id,
-                hovered: false,
+                hovered,
                 shown: ctx.state.shown.get(),
-            }),
-            (None, true) => {
-                if let Some(outer) = ctx.use_context::<NestedTooltip>() {
-                    outer.report.emit(NestedHover {
-                        id: ctx.state.id,
-                        hovered: true,
-                        shown: ctx.state.shown.get(),
-                    });
-                    ctx.state.reported_to = Some(outer);
-                }
+            });
+        };
+        match (ctx.state.reported_to.take(), target) {
+            (Some(reported), Some(target)) if reported.owner == target.owner => {
+                ctx.state.reported_to = Some(target);
             }
-            (reported, _) => ctx.state.reported_to = reported,
+            (reported, target) => {
+                if let Some(reported) = &reported {
+                    report(reported, false, ctx);
+                }
+                if let Some(target) = &target {
+                    report(target, true, ctx);
+                }
+                ctx.state.reported_to = target;
+            }
         }
     }
 
@@ -770,7 +776,25 @@ impl Component for TooltipComponent {
         let step = if delays {
             let config = ctx.props.config.clone();
             let env = ctx.env().clone();
-            ctx.state.reveal.retime(&config, &env)
+            if !old_props.delays_hover() {
+                // Hover was not timed until now: a pointer already resting on this trigger starts
+                // the wait now, unless a nested trigger has it.
+                let _ = ctx.state.reveal.reset();
+                let takes_over = ctx
+                    .state
+                    .reported_to
+                    .as_ref()
+                    .is_some_and(NestedTooltip::any_shown);
+                if !ctx.state.trigger_hovered || !ctx.state.nested.is_empty() {
+                    RevealStep::Nothing
+                } else if takes_over {
+                    ctx.state.reveal.hover_revealed(&env)
+                } else {
+                    ctx.state.reveal.hover(true, &config, &env)
+                }
+            } else {
+                ctx.state.reveal.retime(&config, &env)
+            }
         } else {
             // Hover is no longer tracked here; closing this way does not warm other tooltips.
             ctx.state.reveal.reset()
@@ -858,11 +882,19 @@ impl Component for TooltipComponent {
             .into_iter()
             .chain([ctx.state.shown.clone()])
             .collect();
-        let nested = crate::widgets::ContextProvider::new(NestedTooltip {
+        let own = NestedTooltip {
+            owner: ctx.state.id,
             report: ctx.link().callback(TooltipMsg::Nested),
             shown,
-        })
-        .child(ctx.props.child.clone());
+        };
+        // A tooltip that cannot show stays out of the way: tooltips nested in it report to the
+        // nearest enclosing tooltip that can.
+        let provided = if ctx.props.can_show() {
+            own
+        } else {
+            ctx.use_context::<NestedTooltip>().unwrap_or(own)
+        };
+        let nested = crate::widgets::ContextProvider::new(provided).child(ctx.props.child.clone());
         let region = MouseRegion::new()
             .child(nested)
             .fitted_to_child()
