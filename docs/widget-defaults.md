@@ -1199,6 +1199,8 @@ Source: `src/widgets/search_palette/mod.rs` (`SearchPalette`).
 | `query` | `None` |
 | `placeholder` | `"Search...".into()` |
 | `results_header` | `None` |
+| `input_accessory` | `None` |
+| `auto_select` | `true` |
 | `width` | `Length::Flex(1)` |
 | `height` | `Length::Flex(1)` |
 | `max_width` | `None` |

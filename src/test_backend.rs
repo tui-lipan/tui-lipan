@@ -8258,6 +8258,29 @@ mod tests {
     }
 
     #[test]
+    fn modal_search_palette_omits_divider_row_when_disabled() {
+        let mut backend = TestBackend::new(ModalSearchPaletteRoot);
+        backend.render();
+
+        let input = backend
+            .core
+            .tree
+            .iter()
+            .find(|node| matches!(node.kind, NodeKind::Input(_)))
+            .expect("palette input")
+            .rect;
+        let list = backend
+            .core
+            .tree
+            .iter()
+            .find(|node| matches!(node.kind, NodeKind::List(_)))
+            .expect("palette results")
+            .rect;
+
+        assert_eq!(list.y, input.y + input.h as i16);
+    }
+
+    #[test]
     fn modal_search_palette_component_focus_still_drives_query_input() {
         let app = app_commands_first();
         let mut backend = TestBackend::new_with_app(app, ModalSearchPaletteRoot, ());

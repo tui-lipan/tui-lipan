@@ -12,7 +12,7 @@ use crate::core::element::{Element, IntoElement};
 use crate::core::event::KeyCode;
 use crate::style::Length;
 use crate::text::input::TextInput;
-use crate::widgets::{Divider, Input, InputEvent, List, ListEvent, ListItem, Spacer, VStack};
+use crate::widgets::{Divider, HStack, Input, InputEvent, List, ListEvent, ListItem, VStack};
 
 use super::matching::{SearchResult, all_item_results, build_search_entries, match_items};
 use super::render::{
@@ -42,11 +42,13 @@ impl QuerySource {
     }
 }
 
+const NO_SELECTION: usize = usize::MAX;
+
 pub(crate) struct SearchState {
     query_source: QuerySource,
     results: Vec<SearchResult>,
     results_query: Arc<str>,
-    /// Index into `results` - always refers to a real matched item.
+    /// Index into `results`, or `NO_SELECTION` before explicit navigation.
     selected: usize,
     query_id: u64,
     /// Query whose eventual results must apply the initial selection seed.
@@ -121,14 +123,14 @@ fn search_input_key_interceptor(
     link: crate::callback::Link<SearchPaletteMsg>,
     user_interceptor: Option<KeyHandler>,
     has_results: bool,
+    has_selection: bool,
 ) -> KeyHandler {
     KeyHandler::new(move |key| {
         if let Some(msg) = nav_key_to_msg(key) {
-            // Navigation outranks the caller's interceptor, but only where the palette can act on
-            // it. With no matching row there is nothing to move to or open, so claiming the key
-            // would swallow it for nothing — and the caller loses the one state where giving Enter
-            // another meaning (create what was typed, start something new) is most useful.
-            if has_results {
+            // Navigation takes precedence only when it can move to or activate a row.
+            // Otherwise the caller can give Enter a meaning such as submitting the query.
+            if has_results && (has_selection || !matches!(msg, SearchPaletteMsg::ActivateSelected))
+            {
                 link.send(msg);
                 return true;
             }
@@ -181,7 +183,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
 
         let results = initial_results(props, query_source.query_str());
         let results_query: Arc<str> = Arc::from(query_source.query_str().to_owned());
-        let selected = resolve_initial_result_index(props.initial_selected_item_index, &results);
+        let selected = initial_selection(props, &results);
 
         Self::State {
             query_source,
@@ -227,8 +229,8 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
         old_props: &Self::Properties,
         ctx: &mut Context<Self>,
     ) -> Update {
-        let mut should_refresh = false;
-        let mut reset_selection = false;
+        let mut reset_selection = old_props.auto_select != ctx.props.auto_select;
+        let mut should_refresh = reset_selection;
 
         if old_props.reset_key != ctx.props.reset_key {
             if let QuerySource::Uncontrolled(input) = &mut ctx.state.query_source {
@@ -303,66 +305,22 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                     ctx.state.last_notified_selection = None;
                 }
             }
-            let selection = if reset_selection
-                || (items_changed && current_selected_item_index(&ctx.state).is_none())
-                || reseed
-            {
-                SelectionRefresh::ResetToInitial
+            let previous_item_index = current_selected_item_index(&ctx.state);
+            let result_index = ctx.state.selected;
+            let item_index = if items_changed {
+                remap_replaced_items(&old_props.items, &ctx.props, &mut ctx.state)
             } else {
-                let indices = ctx.props.item_key.map(|key| {
-                    let mut indices = std::collections::HashMap::new();
-                    for (index, item) in ctx.props.items.iter().enumerate() {
-                        indices.entry(key(item)).or_insert(index);
-                    }
-                    indices
-                });
-                let find_item = |previous_index: usize, previous: &SearchItem<T>| {
-                    if let Some(key) = ctx.props.item_key {
-                        indices
-                            .as_ref()
-                            .and_then(|indices| indices.get(&key(previous)).copied())
-                    } else {
-                        ctx.props
-                            .items
-                            .get(previous_index)
-                            .filter(|item| previous.value == item.value)
-                            .map(|_| previous_index)
-                            .or_else(|| {
-                                ctx.props
-                                    .items
-                                    .iter()
-                                    .position(|item| previous.value == item.value)
-                            })
+                previous_item_index
+            };
+            let selection =
+                if reset_selection || (items_changed && previous_item_index.is_none()) || reseed {
+                    SelectionRefresh::ResetToInitial
+                } else {
+                    SelectionRefresh::PreserveCurrent {
+                        item_index,
+                        result_index,
                     }
                 };
-                let item_index = current_selected_item_index(&ctx.state).and_then(|index| {
-                    old_props
-                        .items
-                        .get(index)
-                        .and_then(|item| find_item(index, item))
-                });
-                let result_index = ctx.state.selected;
-                if items_changed && !matches_synchronously(&ctx.props) {
-                    ctx.state.results = ctx
-                        .state
-                        .results
-                        .iter()
-                        .filter_map(|result| {
-                            let previous = old_props.items.get(result.item_index)?;
-                            let index = find_item(result.item_index, previous)?;
-                            let mut result = result.clone();
-                            result.item_index = index;
-                            Some(result)
-                        })
-                        .collect();
-                    ctx.state.selected =
-                        resolve_preserved_selection(item_index, result_index, &ctx.state.results);
-                }
-                SelectionRefresh::PreserveCurrent {
-                    item_index,
-                    result_index,
-                }
-            };
             return refresh_results(ctx, selection);
         }
 
@@ -386,10 +344,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
             if ctx.props.initial_selected_item_index != current_selected_item_index(&ctx.state) {
                 ctx.state.pending_preserved_selection = None;
             }
-            ctx.state.selected = resolve_initial_result_index(
-                ctx.props.initial_selected_item_index,
-                &ctx.state.results,
-            );
+            ctx.state.selected = initial_selection(&ctx.props, &ctx.state.results);
             ctx.state.pending_selection_reset = None;
             sync_current_selection(&ctx.props, &mut ctx.state);
             return Update::render();
@@ -457,14 +412,16 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                     gradient: ctx.props.score_gradient,
                     range: ctx.props.score_range,
                 },
-                selected_result_index: Some(ctx.state.selected),
+                selected_result_index: (ctx.state.selected != NO_SELECTION)
+                    .then_some(ctx.state.selected),
                 header_style: ctx.props.header_style,
             },
         );
 
         // Translate the result-space `selected` index to a visual row index for
         // the List widget. If there are no results the list is empty so 0 is fine.
-        let visual_selected = result_to_row.get(ctx.state.selected).copied().unwrap_or(0);
+        let visual_selected = (ctx.state.selected != NO_SELECTION)
+            .then(|| result_to_row.get(ctx.state.selected).copied().unwrap_or(0));
 
         // Capture the mapping so the callbacks can reverse-translate row → result.
         let row_to_result_for_select = row_to_result.clone();
@@ -580,6 +537,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                 ctx.link().clone(),
                 ctx.props.input_key_interceptor.clone(),
                 !ctx.state.results.is_empty(),
+                ctx.state.selected != NO_SELECTION,
             );
 
             let default_suffix = format!("{}/{}", ctx.state.results.len(), ctx.props.items.len());
@@ -631,19 +589,24 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
             }
 
             // `.key()` yields an Element, so it has to come after every Input setter.
-            match ctx.props.input_key.clone() {
-                Some(key) => stack = stack.child(input.key(key)),
-                None => stack = stack.child(input),
-            }
+            let input: Element = match ctx.props.input_key.clone() {
+                Some(key) => input.key(key),
+                None => input.into(),
+            };
+            stack = match &ctx.props.input_accessory {
+                Some(accessory) => stack.child(
+                    HStack::new()
+                        .height(Length::Auto)
+                        .child(input)
+                        .child(accessory.as_ref().clone()),
+                ),
+                None => stack.child(input),
+            };
             if ctx.props.input_divider {
                 let divider = Divider::horizontal()
                     .style(ctx.props.input_divider_style)
                     .join_frame(ctx.props.input_divider_join_frame);
                 stack = stack.child(divider);
-            } else {
-                // When the divider is disabled, keep a 1-line vertical gap so the
-                // palette layout stays consistent with the default appearance.
-                stack = stack.child(Spacer::new().height(Length::Px(1)));
             }
         }
 
@@ -671,6 +634,9 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
         let Some(msg) = nav_key_to_msg(key) else {
             return KeyUpdate::unhandled(Update::none());
         };
+        if matches!(msg, SearchPaletteMsg::ActivateSelected) && ctx.state.selected == NO_SELECTION {
+            return KeyUpdate::unhandled(Update::none());
+        }
         ctx.link().send(msg);
         KeyUpdate::handled(Update::none())
     }
@@ -684,13 +650,18 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                     return Update::none();
                 };
 
-                text_input.set_text(event.value.as_ref().to_string());
+                let query_changed = text_input.text() != event.value.as_ref();
+                if query_changed {
+                    text_input.set_text(event.value.as_ref().to_owned());
+                }
                 text_input.set_cursor(event.cursor);
                 text_input.set_anchor(event.anchor);
+                if !query_changed {
+                    return Update::render();
+                }
 
-                let query: Arc<str> = Arc::from(text_input.text().to_owned());
                 if let Some(cb) = &ctx.props.on_query_change {
-                    cb.emit(query.clone());
+                    cb.emit(event.value.clone());
                 }
 
                 refresh_results(ctx, SelectionRefresh::ResetToInitial)
@@ -707,10 +678,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                 ctx.state.results = results;
                 ctx.state.results_query = Arc::from(ctx.state.query_source.query_str().to_owned());
                 if ctx.state.pending_selection_reset == Some(query_id) {
-                    ctx.state.selected = resolve_initial_result_index(
-                        ctx.props.initial_selected_item_index,
-                        &ctx.state.results,
-                    );
+                    ctx.state.selected = initial_selection(&ctx.props, &ctx.state.results);
                 } else {
                     let (item_index, result_index) = ctx
                         .state
@@ -774,7 +742,11 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                 let len = ctx.state.results.len();
                 if len > 0 {
                     let selected_item_index = current_selected_item_index(&ctx.state);
-                    ctx.state.selected = ctx.state.selected.saturating_sub(10);
+                    ctx.state.selected = if ctx.state.selected == NO_SELECTION {
+                        len - 1
+                    } else {
+                        ctx.state.selected.saturating_sub(10)
+                    };
                     emit_search_event(&ctx.props, &ctx.state.results, ctx.state.selected, true);
                     remember_current_selection(&ctx.props, &mut ctx.state);
                     clear_pending_reset_after_navigation(&mut ctx.state, selected_item_index);
@@ -785,7 +757,11 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                 let len = ctx.state.results.len();
                 if len > 0 {
                     let selected_item_index = current_selected_item_index(&ctx.state);
-                    ctx.state.selected = (ctx.state.selected + 10).min(len - 1);
+                    ctx.state.selected = if ctx.state.selected == NO_SELECTION {
+                        0
+                    } else {
+                        ctx.state.selected.saturating_add(10).min(len - 1)
+                    };
                     emit_search_event(&ctx.props, &ctx.state.results, ctx.state.selected, true);
                     remember_current_selection(&ctx.props, &mut ctx.state);
                     clear_pending_reset_after_navigation(&mut ctx.state, selected_item_index);
@@ -798,6 +774,57 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
             }
         }
     }
+}
+
+/// Remap pending matches to the new source indices before they can be rendered or activated.
+fn remap_replaced_items<T: PartialEq>(
+    previous_items: &[SearchItem<T>],
+    props: &SearchPaletteProps<T>,
+    state: &mut SearchState,
+) -> Option<usize> {
+    let indices = props.item_key.map(|key| {
+        let mut indices = std::collections::HashMap::new();
+        for (index, item) in props.items.iter().enumerate() {
+            indices.entry(key(item)).or_insert(index);
+        }
+        indices
+    });
+    let find_item = |previous_index: usize| {
+        let previous = previous_items.get(previous_index)?;
+        if let Some(key) = props.item_key {
+            return indices.as_ref()?.get(&key(previous)).copied();
+        }
+        if props
+            .items
+            .get(previous_index)
+            .is_some_and(|item| item.value == previous.value)
+        {
+            return Some(previous_index);
+        }
+        props
+            .items
+            .iter()
+            .position(|item| item.value == previous.value)
+    };
+
+    let selected_item = current_selected_item_index(state).and_then(find_item);
+    if !matches_synchronously(props) {
+        state.results.retain_mut(|result| {
+            let Some(item_index) = find_item(result.item_index) else {
+                return false;
+            };
+            result.item_index = item_index;
+            true
+        });
+    }
+    selected_item
+}
+
+fn initial_selection<T>(props: &SearchPaletteProps<T>, results: &[SearchResult]) -> usize {
+    if !props.auto_select && props.initial_selected_item_index.is_none() {
+        return NO_SELECTION;
+    }
+    resolve_initial_result_index(props.initial_selected_item_index, results)
 }
 
 fn resolve_initial_result_index(
@@ -862,11 +889,7 @@ fn refresh_results<T: Clone + PartialEq + 'static>(
     {
         ctx.state.results = initial_results(&ctx.props, query.as_ref());
         ctx.state.results_query = query.clone();
-        ctx.state.selected = resolve_refreshed_selection(
-            selection,
-            ctx.props.initial_selected_item_index,
-            &ctx.state.results,
-        );
+        ctx.state.selected = resolve_refreshed_selection(selection, &ctx.props, &ctx.state.results);
         if matches_synchronously(&ctx.props) {
             ctx.state.pending_selection_reset = None;
             sync_current_selection(&ctx.props, &mut ctx.state);
@@ -876,17 +899,12 @@ fn refresh_results<T: Clone + PartialEq + 'static>(
         let results = initial_results(&ctx.props, query.as_ref());
         ctx.state.results = results;
         ctx.state.results_query = query.clone();
-        ctx.state.selected = resolve_refreshed_selection(
-            selection,
-            ctx.props.initial_selected_item_index,
-            &ctx.state.results,
-        );
+        ctx.state.selected = resolve_refreshed_selection(selection, &ctx.props, &ctx.state.results);
         ctx.state.pending_selection_reset = None;
         sync_current_selection(&ctx.props, &mut ctx.state);
         return Update::render();
-    } else if selection == SelectionRefresh::ResetToInitial {
-        ctx.state.selected =
-            resolve_initial_result_index(ctx.props.initial_selected_item_index, &ctx.state.results);
+    } else {
+        ctx.state.selected = resolve_refreshed_selection(selection, &ctx.props, &ctx.state.results);
     }
 
     ctx.state.pending_selection_reset =
@@ -910,9 +928,9 @@ fn refresh_results<T: Clone + PartialEq + 'static>(
     ))
 }
 
-fn resolve_refreshed_selection(
+fn resolve_refreshed_selection<T>(
     selection: SelectionRefresh,
-    initial_item_index: Option<usize>,
+    props: &SearchPaletteProps<T>,
     results: &[SearchResult],
 ) -> usize {
     match selection {
@@ -920,9 +938,7 @@ fn resolve_refreshed_selection(
             item_index,
             result_index,
         } => resolve_preserved_selection(item_index, result_index, results),
-        SelectionRefresh::ResetToInitial => {
-            resolve_initial_result_index(initial_item_index, results)
-        }
+        SelectionRefresh::ResetToInitial => initial_selection(props, results),
     }
 }
 
@@ -931,6 +947,9 @@ fn resolve_preserved_selection(
     previous_position: usize,
     results: &[SearchResult],
 ) -> usize {
+    if previous_position == NO_SELECTION {
+        return NO_SELECTION;
+    }
     item_index
         .and_then(|index| results.iter().position(|result| result.item_index == index))
         .unwrap_or_else(|| previous_position.min(results.len().saturating_sub(1)))
@@ -1115,12 +1134,16 @@ fn emit_search_event<T: Clone>(
 }
 
 fn navigate_up<T: Clone>(props: &SearchPaletteProps<T>, state: &mut SearchState) {
-    let Some(next) = List::step_index(
-        state.selected,
-        state.results.len(),
-        -1,
-        props.navigation_wrap,
-    ) else {
+    let Some(next) = (if state.selected == NO_SELECTION {
+        (!state.results.is_empty()).then_some(state.results.len().saturating_sub(1))
+    } else {
+        List::step_index(
+            state.selected,
+            state.results.len(),
+            -1,
+            props.navigation_wrap,
+        )
+    }) else {
         return;
     };
     if next != state.selected {
@@ -1131,12 +1154,16 @@ fn navigate_up<T: Clone>(props: &SearchPaletteProps<T>, state: &mut SearchState)
 }
 
 fn navigate_down<T: Clone>(props: &SearchPaletteProps<T>, state: &mut SearchState) {
-    let Some(next) = List::step_index(
-        state.selected,
-        state.results.len(),
-        1,
-        props.navigation_wrap,
-    ) else {
+    let Some(next) = (if state.selected == NO_SELECTION {
+        (!state.results.is_empty()).then_some(0)
+    } else {
+        List::step_index(
+            state.selected,
+            state.results.len(),
+            1,
+            props.navigation_wrap,
+        )
+    }) else {
         return;
     };
     if next != state.selected {
@@ -1198,7 +1225,7 @@ mod tests {
 
     struct MutatingItemsRoot {
         query: &'static str,
-        selected: usize,
+        selected: Option<usize>,
         limit: usize,
         activated: Rc<RefCell<Vec<Arc<str>>>>,
         selections: Rc<RefCell<Vec<Arc<str>>>>,
@@ -1274,7 +1301,8 @@ mod tests {
                 .query(self.query)
                 .match_mode(SearchMatchMode::Hybrid)
                 .sync_match_limit(self.limit)
-                .initial_selected_item_index(Some(self.selected))
+                .auto_select(self.selected.is_some())
+                .initial_selected_item_index(self.selected)
                 .sync_selection(true)
                 .on_select(Callback::new(move |event: SearchEvent<usize>| {
                     selections.borrow_mut().push(event.item.label)
@@ -1311,7 +1339,7 @@ mod tests {
                 let mut runtime = RuntimeCore::new_test(
                     MutatingItemsRoot {
                         query,
-                        selected,
+                        selected: Some(selected),
                         limit,
                         activated: activated.clone(),
                         selections: selections.clone(),
@@ -1397,6 +1425,63 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn pending_async_item_replacement_remaps_results_without_a_selection() {
+        let activated = Rc::new(RefCell::new(Vec::new()));
+        let selections = Rc::new(RefCell::new(Vec::new()));
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 12,
+        };
+        let mut runtime = RuntimeCore::new_test(
+            MutatingItemsRoot {
+                query: "keep",
+                selected: None,
+                limit: 1,
+                activated: activated.clone(),
+                selections: selections.clone(),
+            },
+            (),
+            Rect::default(),
+            Theme::default(),
+            crate::app::context::SurfaceMode::Fullscreen,
+            Rc::new(Cell::new(true)),
+        );
+        runtime.render_element(bounds, None, None, None);
+        runtime
+            .update_from_boxed(
+                ScopeId(2),
+                Box::new(SearchPaletteMsg::ResultsReady {
+                    query_id: 1,
+                    results: all_item_results(5)
+                        .into_iter()
+                        .filter(|result| [1, 3, 4].contains(&result.item_index))
+                        .collect(),
+                }),
+            )
+            .unwrap();
+        assert!(selections.borrow().is_empty());
+
+        runtime
+            .update_from_boxed(
+                ScopeId(1),
+                Box::new(vec!["keep/b", "unrelated", "keep/c", "also unrelated"]),
+            )
+            .unwrap();
+        runtime.render_element(bounds, None, None, None);
+        // Keep the replacement search pending while navigating and activating a retained match.
+        assert!(selections.borrow().is_empty());
+        runtime
+            .update_from_boxed(ScopeId(2), Box::new(SearchPaletteMsg::NavigateDown))
+            .unwrap();
+        runtime
+            .update_from_boxed(ScopeId(2), Box::new(SearchPaletteMsg::ActivateSelected))
+            .unwrap();
+        assert_eq!(activated.borrow().as_slice(), &[Arc::<str>::from("keep/b")]);
     }
 
     struct RefreshRoot {
@@ -1734,6 +1819,103 @@ mod tests {
         view_count: Rc<Cell<usize>>,
     }
 
+    struct AccessoryPaletteRoot {
+        submitted: Rc<Cell<usize>>,
+        selected: Rc<Cell<Option<usize>>>,
+        activated: Rc<Cell<Option<usize>>>,
+    }
+
+    impl Component for AccessoryPaletteRoot {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _: &()) {}
+
+        fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+
+        fn view(&self, _: &Context<Self>) -> Element {
+            let submitted = self.submitted.clone();
+            let selected = self.selected.clone();
+            let activated = self.activated.clone();
+            SearchPalette::new()
+                .items([
+                    SearchItem::new("apple", 1_usize),
+                    SearchItem::new("apricot", 2),
+                ])
+                .auto_select(false)
+                .placeholder("Find fruit")
+                .input_accessory(crate::widgets::Text::new("Submit"))
+                .input_key_interceptor(KeyHandler::new(move |key| {
+                    if key.code != KeyCode::Enter {
+                        return false;
+                    }
+                    submitted.set(submitted.get() + 1);
+                    true
+                }))
+                .on_select(Callback::new(move |event: SearchEvent<usize>| {
+                    selected.set(Some(event.item.value));
+                }))
+                .on_activate(Callback::new(move |event: SearchEvent<usize>| {
+                    activated.set(Some(event.item.value));
+                }))
+                .into()
+        }
+    }
+
+    #[test]
+    fn input_accessory_shares_the_input_row_and_enter_can_submit_before_selection() {
+        let submitted = Rc::new(Cell::new(0));
+        let selected = Rc::new(Cell::new(None));
+        let activated = Rc::new(Cell::new(None));
+        let mut backend = crate::TestBackend::new(AccessoryPaletteRoot {
+            submitted: submitted.clone(),
+            selected: selected.clone(),
+            activated: activated.clone(),
+        });
+        backend.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 6,
+        });
+        backend.render();
+        backend.focus_next();
+        let frame = backend.capture_frame().plain_text();
+        assert!(
+            frame
+                .lines()
+                .any(|line| line.contains("Find fruit") && line.contains("Submit"))
+        );
+
+        press(&mut backend, KeyCode::Enter, KeyMods::default());
+        assert_eq!(submitted.get(), 1);
+        assert_eq!(activated.get(), None);
+
+        press(&mut backend, KeyCode::Down, KeyMods::default());
+        assert_eq!(selected.get(), Some(1));
+        press(&mut backend, KeyCode::Enter, KeyMods::default());
+        assert_eq!(activated.get(), Some(1));
+        assert_eq!(submitted.get(), 1);
+
+        press(&mut backend, KeyCode::Char('a'), KeyMods::default());
+        press(&mut backend, KeyCode::Enter, KeyMods::default());
+        assert_eq!(submitted.get(), 2);
+
+        press(&mut backend, KeyCode::Down, KeyMods::default());
+        activated.set(None);
+        press(&mut backend, KeyCode::Left, KeyMods::default());
+        press(&mut backend, KeyCode::Enter, KeyMods::default());
+        assert_eq!(
+            activated.get(),
+            Some(1),
+            "moving the cursor keeps the row selected"
+        );
+        assert_eq!(submitted.get(), 2);
+    }
+
     struct HeaderPaletteRoot {
         controlled: bool,
     }
@@ -1875,7 +2057,11 @@ mod tests {
         }
     }
 
-    fn press(backend: &mut crate::TestBackend<EmptyPagesRoot>, code: KeyCode, mods: KeyMods) {
+    fn press<C: Component<Properties = ()>>(
+        backend: &mut crate::TestBackend<C>,
+        code: KeyCode,
+        mods: KeyMods,
+    ) {
         backend.send_key(KeyEvent { code, mods }).unwrap();
         backend.render();
     }
@@ -2450,7 +2636,7 @@ mod tests {
             true
         });
 
-        let handler = search_input_key_interceptor(link, Some(user_interceptor), true);
+        let handler = search_input_key_interceptor(link, Some(user_interceptor), true, true);
 
         assert!(handler.handle(key(KeyCode::Down)));
         std::assert_matches!(
@@ -2489,7 +2675,7 @@ mod tests {
             key.code == KeyCode::Enter
         });
 
-        let handler = search_input_key_interceptor(link, Some(user_interceptor), false);
+        let handler = search_input_key_interceptor(link, Some(user_interceptor), false, false);
 
         assert!(
             handler.handle(key(KeyCode::Enter)),
@@ -2522,8 +2708,9 @@ mod tests {
                 false
             })),
             false,
+            false,
         );
-        let without_caller = search_input_key_interceptor(link, None, false);
+        let without_caller = search_input_key_interceptor(link, None, false, false);
         for ch in ['j', 'k'] {
             let event = KeyEvent {
                 code: KeyCode::Char(ch),

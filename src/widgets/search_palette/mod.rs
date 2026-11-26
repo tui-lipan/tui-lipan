@@ -651,6 +651,8 @@ pub(crate) struct SearchPaletteProps<T> {
     query: Option<Arc<str>>,
     placeholder: Arc<str>,
     results_header: Option<Rc<Element>>,
+    input_accessory: Option<Rc<Element>>,
+    auto_select: bool,
     // Layout
     width: Length,
     height: Length,
@@ -761,6 +763,12 @@ impl<T: PartialEq> PartialEq for SearchPaletteProps<T> {
                 (Some(left), Some(right)) => Rc::ptr_eq(left, right),
                 _ => false,
             }
+            && match (&self.input_accessory, &other.input_accessory) {
+                (None, None) => true,
+                (Some(left), Some(right)) => Rc::ptr_eq(left, right),
+                _ => false,
+            }
+            && self.auto_select == other.auto_select
             && self.width == other.width
             && self.height == other.height
             && self.max_width == other.max_width
@@ -930,6 +938,8 @@ impl<T: Clone + PartialEq> Default for SearchPalette<T> {
                 query: None,
                 placeholder: "Search...".into(),
                 results_header: None,
+                input_accessory: None,
+                auto_select: true,
                 width: Length::Flex(1),
                 height: Length::Flex(1),
                 max_width: None,
@@ -1185,6 +1195,21 @@ impl<T: Clone + PartialEq> SearchPalette<T> {
         self
     }
 
+    /// Place content beside the built-in input. In controlled mode no accessory is shown.
+    pub fn input_accessory(mut self, accessory: impl Into<Element>) -> Self {
+        self.props.input_accessory = Some(Rc::new(accessory.into()));
+        self
+    }
+
+    /// Highlight the first result when the query or reset key changes (default: true).
+    ///
+    /// When disabled, navigation or a click establishes the selection. An explicit
+    /// initial selection still takes precedence.
+    pub fn auto_select(mut self, enable: bool) -> Self {
+        self.props.auto_select = enable;
+        self
+    }
+
     /// Insert content above the results, after the built-in input and its divider.
     ///
     /// Use this for category tabs or result controls while retaining the palette's
@@ -1243,11 +1268,11 @@ impl<T: Clone + PartialEq> SearchPalette<T> {
     /// key is consumed and no character is inserted. Use this to remap keys
     /// like spacebar to a different action (e.g. toggle) in the palette.
     ///
-    /// The palette's own navigation keys (arrows, `PageUp`/`PageDown`, `Home`/`End`, and `Enter`
-    /// to activate) are claimed first and never reach this handler — *while there is a matching
-    /// row to act on*. With no matches the palette has nothing to navigate to or open, so those
-    /// keys fall through here instead of being swallowed: that is what lets `Enter` mean "create
-    /// what was typed" or "start something new" in an empty list.
+    /// The palette claims navigation keys (arrows, `PageUp`/`PageDown`, and
+    /// `Home`/`End`) first when matching results exist. It claims `Enter` first
+    /// only when a matching result is selected. Otherwise the interceptor can
+    /// use `Enter` to submit the query, including when matches are visible but
+    /// none is selected (see [`auto_select`](Self::auto_select)).
     ///
     /// Only effective in uncontrolled mode (when [`query`](Self::query) is not set).
     pub fn input_key_interceptor(mut self, handler: KeyHandler) -> Self {
@@ -1281,7 +1306,7 @@ impl<T: Clone + PartialEq> SearchPalette<T> {
         self
     }
 
-    /// Control whether a divider is rendered below the input (uncontrolled mode).
+    /// Reserve a row for a divider below the input (uncontrolled mode).
     ///
     /// Default: `true`.
     pub fn input_divider(mut self, divider: bool) -> Self {
