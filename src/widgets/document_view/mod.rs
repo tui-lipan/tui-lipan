@@ -20,10 +20,11 @@ pub(crate) mod reconcile;
 mod tooltips;
 
 pub(crate) use format::FormatCache;
+#[cfg(test)]
+pub(crate) use format::FormattedLink;
 pub use format::{
     ColumnAlign, ContentFormatter, DocumentStyles, FormatInput, FormattedBlock, FormattedCodeBlock,
-    FormattedDiagramBlock, FormattedDocument, FormattedLine, FormattedLink, FormattedTable,
-    PlainFormatter,
+    FormattedDiagramBlock, FormattedDocument, FormattedLine, FormattedTable, PlainFormatter,
 };
 #[cfg(feature = "markdown")]
 pub use format_markdown::{MarkdownFormatter, MarkdownSpacing, SourceSpacing};

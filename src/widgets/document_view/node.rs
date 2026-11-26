@@ -41,7 +41,7 @@ use super::format::FormatCache;
 use super::{
     CodeBlockHeader, CodeBlockPadding, DocumentClickEvent, DocumentLineNumberMode,
     DocumentSelectEvent, DocumentStyles, DocumentTableWidthMode, DocumentView, FormattedDocument,
-    FormattedLink,
+    FormattedLine,
 };
 
 /// The visual-line kind after block flattening.
@@ -52,7 +52,7 @@ pub(crate) enum VisualLineKind {
         spans: Vec<Span>,
         indent_cols: u16,
         continuation: bool,
-        links: Vec<FormattedLink>,
+        links: Vec<VisualLink>,
         /// Source whitespace skipped at the wrap point that ends the previous row.
         /// It is not rendered, but copy restores it across the soft break.
         wrap_gap: Option<Arc<str>>,
@@ -117,7 +117,7 @@ pub(crate) enum VisualLineKind {
     BlockQuoteLine {
         spans: Vec<Span>,
         depth: u16,
-        links: Vec<FormattedLink>,
+        links: Vec<VisualLink>,
         /// Source whitespace skipped at the wrap point that ends the previous row.
         wrap_gap: Option<Arc<str>>,
     },
@@ -140,10 +140,36 @@ pub(crate) enum CodeBlockChromeKind {
     },
 }
 
+/// A link's range on one visual row, with what holds for the whole link it belongs to.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct VisualLink {
+    /// Start byte offset (inclusive) in the row text.
+    pub start: usize,
+    /// End byte offset (exclusive) in the row text.
+    pub end: usize,
+    /// Link destination URL.
+    pub url: Arc<str>,
+    /// Where the whole link starts in its formatted line: the same on every row it wraps onto.
+    pub origin: usize,
+    /// Whether the whole link text, not just this row's part of it, already shows the URL.
+    pub label_shows_url: bool,
+}
+
+/// Which part of a document a hint belongs to: two parts with the same text are still two parts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HintPart {
+    /// The header of the code block starting on this source line.
+    CodeBlockHeader { source_line: usize },
+    /// The link starting at `origin` in the formatted line of `source_line`.
+    Link { source_line: usize, origin: usize },
+}
+
 /// Text a [`DocumentView`](super::DocumentView) offers for the part of it under the pointer,
 /// shown by its [`tooltips`](super::DocumentView::tooltips).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DocumentHoverHint {
+    /// The part the hint belongs to, stable while it scrolls or rewraps.
+    pub part: HintPart,
     /// What the tooltip says.
     pub text: Arc<str>,
     /// The hinted part, relative to the document view's top-left corner.
@@ -661,7 +687,7 @@ impl DocumentViewNode {
         let vline = self.visual_cache.lines.get(visual_idx)?;
         let h_scroll = if self.wrap { 0 } else { self.h_scroll_offset };
         let visual_col = (x.saturating_sub(cl.content_x) as usize).saturating_add(h_scroll);
-        let (text, start_col, end_col) = match &vline.kind {
+        let (part, text, start_col, end_col) = match &vline.kind {
             VisualLineKind::CodeBlockChrome {
                 kind:
                     CodeBlockChromeKind::Header {
@@ -674,6 +700,9 @@ impl DocumentViewNode {
             } => {
                 let start = usize::from(indent_cols.saturating_add(*left_inset));
                 (
+                    HintPart::CodeBlockHeader {
+                        source_line: vline.source_line,
+                    },
                     hint.clone(),
                     start,
                     start.saturating_add(span_width(spans) as usize),
@@ -684,13 +713,10 @@ impl DocumentViewNode {
                 let byte = document_view_byte_in_line_from_visual_col(line_text, vline, visual_col);
                 let link = links
                     .iter()
-                    .find(|link| byte >= link.start && byte < link.end)?;
+                    .find(|link| byte >= link.start && byte < link.end)
+                    .filter(|link| !link.label_shows_url)?;
                 let start = link.start.min(line_text.len());
                 let end = link.end.min(line_text.len());
-                let label = line_text.get(start..end)?;
-                if link_label_shows_url(label, &link.url) {
-                    return None;
-                }
                 let prefix = visual_line_render_prefix_cols(vline);
                 let col = |byte: usize| {
                     prefix.saturating_add(crate::utils::text::str_visual_width(
@@ -698,7 +724,15 @@ impl DocumentViewNode {
                         None,
                     ))
                 };
-                (link.url.clone(), col(start), col(end))
+                (
+                    HintPart::Link {
+                        source_line: vline.source_line,
+                        origin: link.origin,
+                    },
+                    link.url.clone(),
+                    col(start),
+                    col(end),
+                )
             }
             _ => return None,
         };
@@ -714,6 +748,7 @@ impl DocumentViewNode {
         let left = left.max(i32::from(content.x));
         let right = right.min(i32::from(content.x) + i32::from(content.w));
         Some(DocumentHoverHint {
+            part,
             text,
             area: Rect {
                 x: (left - i32::from(rect.x)) as i16,
@@ -1189,7 +1224,7 @@ fn flatten_text_lines(
         if wrap && line_w + indent_cols > inner_w {
             // Word-wrap this line
             let avail = inner_w.saturating_sub(indent_cols);
-            let wrapped = wrap_spans_with_links(&fl.spans, &fl.links, avail, avail);
+            let wrapped = wrap_spans_with_links(&fl.spans, &visual_links(fl), avail, avail);
             let anchor = extract_bg_anchor(&fl.spans);
             for (i, (mut wline, links, wrap_gap)) in wrapped.into_iter().enumerate() {
                 if let Some(ref anchor) = anchor {
@@ -1221,7 +1256,7 @@ fn flatten_text_lines(
                     VisualLineKind::BlockQuoteLine {
                         spans: fl.spans.clone(),
                         depth: bq_depth,
-                        links: fl.links.clone(),
+                        links: visual_links(fl),
                         wrap_gap: None,
                     }
                 } else {
@@ -1230,7 +1265,7 @@ fn flatten_text_lines(
                         spans: fl.spans.clone(),
                         indent_cols,
                         continuation: false,
-                        links: shift_links(&fl.links, indent_bytes),
+                        links: shift_links(&visual_links(fl), indent_bytes),
                         wrap_gap: None,
                     }
                 },
@@ -1363,7 +1398,7 @@ fn flatten_block(
                                         let anchor = extract_bg_anchor(&fl.spans);
                                         for (mut wline, links, wrap_gap) in wrap_spans_with_links(
                                             &spans,
-                                            &shift_links(&fl.links, line_prefix_bytes),
+                                            &shift_links(&visual_links(fl), line_prefix_bytes),
                                             first_budget,
                                             cont_budget,
                                         ) {
@@ -1385,7 +1420,10 @@ fn flatten_block(
                                             kind: VisualLineKind::BlockQuoteLine {
                                                 spans,
                                                 depth: bq_depth,
-                                                links: shift_links(&fl.links, line_prefix_bytes),
+                                                links: shift_links(
+                                                    &visual_links(fl),
+                                                    line_prefix_bytes,
+                                                ),
                                                 wrap_gap: None,
                                             },
                                             source_line: fl.source_line,
@@ -1395,7 +1433,7 @@ fn flatten_block(
                                     let wrapped = wrap_spans_with_links(
                                         &spans,
                                         &shift_links(
-                                            &fl.links,
+                                            &visual_links(fl),
                                             if li == 0 { prefix.len() } else { 0 },
                                         ),
                                         first_budget,
@@ -1426,9 +1464,9 @@ fn flatten_block(
                                     }
                                 } else {
                                     let links = if li == 0 {
-                                        shift_links(&fl.links, prefix.len())
+                                        shift_links(&visual_links(fl), prefix.len())
                                     } else {
-                                        fl.links.clone()
+                                        visual_links(fl)
                                     };
                                     accum.out.push(DocumentVisualLine {
                                         kind: VisualLineKind::Text {
@@ -2159,12 +2197,12 @@ fn spans_plain_text(spans: &[Span]) -> String {
 
 /// One wrapped row: its spans, its link ranges, and the source whitespace
 /// skipped at the wrap point before it.
-type WrappedRow = (Vec<Span>, Vec<FormattedLink>, Option<Arc<str>>);
+type WrappedRow = (Vec<Span>, Vec<VisualLink>, Option<Arc<str>>);
 
 /// Preserve semantic link ranges through wrapping, including a link spanning several rows.
 fn wrap_spans_with_links(
     spans: &[Span],
-    links: &[FormattedLink],
+    links: &[VisualLink],
     first_budget: u16,
     cont_budget: u16,
 ) -> Vec<WrappedRow> {
@@ -2202,10 +2240,10 @@ fn wrap_spans_with_links(
                 .filter_map(|link| {
                     let first = start.max(link.start);
                     let last = end.min(link.end);
-                    (first < last).then(|| FormattedLink {
+                    (first < last).then(|| VisualLink {
                         start: first - start,
                         end: last - start,
-                        url: link.url.clone(),
+                        ..link.clone()
                     })
                 })
                 .collect();
@@ -2214,13 +2252,33 @@ fn wrap_spans_with_links(
         .collect()
 }
 
-fn shift_links(links: &[FormattedLink], shift_bytes: usize) -> Vec<FormattedLink> {
+fn shift_links(links: &[VisualLink], shift_bytes: usize) -> Vec<VisualLink> {
     links
         .iter()
-        .map(|link| FormattedLink {
+        .map(|link| VisualLink {
             start: link.start.saturating_add(shift_bytes),
             end: link.end.saturating_add(shift_bytes),
+            ..link.clone()
+        })
+        .collect()
+}
+
+/// A formatted line's links, each knowing its whole extent before wrapping splits it into rows.
+fn visual_links(fl: &FormattedLine) -> Vec<VisualLink> {
+    if fl.links.is_empty() {
+        return Vec::new();
+    }
+    let text = spans_plain_text(&fl.spans);
+    fl.links
+        .iter()
+        .map(|link| VisualLink {
+            start: link.start,
+            end: link.end,
             url: link.url.clone(),
+            origin: link.start,
+            label_shows_url: text
+                .get(link.start..link.end)
+                .is_some_and(|label| link_label_shows_url(label, &link.url)),
         })
         .collect()
 }

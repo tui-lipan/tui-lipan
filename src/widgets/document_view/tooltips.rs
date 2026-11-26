@@ -63,7 +63,7 @@ impl DocumentTooltips {
     /// The pointer moved onto `next`: the old hint's tooltip closes and the new one's opens.
     fn hint(next: Option<DocumentHoverHint>, ctx: &mut Context<Self>) -> Update {
         let same_part = match (&ctx.state.hint, &next) {
-            (Some(current), Some(next)) => current.text == next.text,
+            (Some(current), Some(next)) => current.part == next.part,
             (None, None) => true,
             _ => false,
         };

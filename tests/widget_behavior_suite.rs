@@ -10,6 +10,7 @@ mod cursor_occlusion;
 mod data_overflow_indicator_clicks;
 #[path = "suites/widget_behavior/disabled_focus.rs"]
 mod disabled_focus;
+#[cfg(feature = "markdown")]
 #[path = "suites/widget_behavior/document_tooltips.rs"]
 mod document_tooltips;
 #[path = "suites/widget_behavior/drag_drop_test_backend.rs"]
