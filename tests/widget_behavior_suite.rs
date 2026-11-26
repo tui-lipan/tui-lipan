@@ -107,6 +107,8 @@ mod text_edit_actions;
 mod tooltip_child_update;
 #[path = "suites/widget_behavior/tooltip_delay.rs"]
 mod tooltip_delay;
+#[path = "suites/widget_behavior/tooltip_nested.rs"]
+mod tooltip_nested;
 #[path = "suites/widget_behavior/tooltip_trigger_gestures.rs"]
 mod tooltip_trigger_gestures;
 #[path = "suites/widget_behavior/tooltip_warmup_groups.rs"]

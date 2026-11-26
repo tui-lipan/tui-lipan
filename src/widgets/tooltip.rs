@@ -523,6 +523,23 @@ struct TooltipState {
     trigger_key: Key,
     /// Hover timing, used only for delayed tooltips.
     reveal: HoverReveal,
+    /// Whether the pointer is on the trigger of a tooltip nested in this one's trigger.
+    nested_hovered: bool,
+}
+
+/// What a tooltip offers the tooltips nested in its trigger: a way to say the pointer is on them,
+/// so it can step aside while their tooltip is the one that matters.
+#[derive(Clone)]
+struct NestedTooltip {
+    report: crate::callback::Callback<bool>,
+}
+
+impl PartialEq for NestedTooltip {
+    /// Always equal: the callback reaches the same tooltip on every render, so a new one must not
+    /// invalidate the trigger's subtree.
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
 }
 
 impl TooltipProps {
@@ -536,6 +553,8 @@ impl TooltipProps {
 enum TooltipMsg {
     Hover(bool),
     Reveal(u64),
+    /// The pointer entered or left the trigger of a tooltip nested in this one's trigger.
+    Nested(bool),
 }
 
 struct TooltipComponent;
@@ -568,6 +587,7 @@ impl Component for TooltipComponent {
         TooltipState {
             trigger_key: Key::from(format!("tooltip-trigger-{}", id)),
             reveal: HoverReveal::default(),
+            nested_hovered: false,
         }
     }
 
@@ -594,6 +614,9 @@ impl Component for TooltipComponent {
     fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
         match msg {
             TooltipMsg::Hover(hovered) => {
+                if let Some(outer) = ctx.use_context::<NestedTooltip>() {
+                    outer.report.emit(hovered);
+                }
                 if !ctx.props.delays_hover() {
                     return Update::none();
                 }
@@ -609,6 +632,15 @@ impl Component for TooltipComponent {
                     Update::none()
                 }
             }
+            TooltipMsg::Nested(hovered) => {
+                if ctx.state.nested_hovered == hovered {
+                    return Update::none();
+                }
+                // Hidden, not closed: the tooltip stays revealed and shows again at once when
+                // the pointer comes back from the nested trigger.
+                ctx.state.nested_hovered = hovered;
+                Update::render()
+            }
         }
     }
 
@@ -619,10 +651,14 @@ impl Component for TooltipComponent {
         // trigger. Only the hover callback comes and goes. The region takes the child's sizing, so a
         // flexible child stays flexible, and its reconciled rectangle, so the popup anchors to the
         // child and hover counts only over it.
-        let mut region = MouseRegion::new()
-            .child(ctx.props.child.clone())
-            .fitted_to_child();
-        if delayed {
+        // Tooltips nested in the trigger report the pointer through this context, and this one
+        // reports its own trigger to any tooltip it is nested in.
+        let nested = crate::widgets::ContextProvider::new(NestedTooltip {
+            report: ctx.link().callback(TooltipMsg::Nested),
+        })
+        .child(ctx.props.child.clone());
+        let mut region = MouseRegion::new().child(nested).fitted_to_child();
+        if delayed || ctx.use_context::<NestedTooltip>().is_some() {
             region = region.on_hover_change(ctx.link().callback(TooltipMsg::Hover));
         }
         let trigger: Element = region.into();
@@ -637,7 +673,11 @@ impl Component for TooltipComponent {
             && (hover_open
                 || (ctx.props.show_on_focus
                     && ctx.has_focus_within_key(ctx.state.trigger_key.clone())));
-        let open = ctx.props.open.unwrap_or(auto_open);
+        // One tooltip at a time: while the pointer is on a nested trigger, its tooltip speaks.
+        let open = ctx
+            .props
+            .open
+            .unwrap_or(auto_open && !ctx.state.nested_hovered);
         ctx.props
             .config
             .popover(trigger, &ctx.props.content, open)
