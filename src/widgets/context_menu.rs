@@ -1309,9 +1309,28 @@ fn render_menu_level(
     let selected = level_state.and_then(|level| level.selected);
     let open_child = level_state.and_then(|level| level.open_child);
 
+    let has_gutter = entries.iter().any(|entry| match entry {
+        ContextMenuEntry::Action(item) => item.checked.is_some() || item.icon.is_some(),
+        ContextMenuEntry::Submenu(sub) => sub.icon.is_some(),
+        ContextMenuEntry::Separator | ContextMenuEntry::Header(_) => false,
+    });
+    let gutter_left_pad = if has_gutter {
+        cfg.item_horizontal_padding.left
+    } else {
+        0
+    };
+    let list_item_h_pad = if has_gutter {
+        Padding {
+            left: 0,
+            ..cfg.item_horizontal_padding
+        }
+    } else {
+        cfg.item_horizontal_padding
+    };
+
     let items: Vec<ListItem> = entries
         .iter()
-        .map(|entry| entry_to_list_item(entry, cfg, theme))
+        .map(|entry| entry_to_list_item(entry, cfg, theme, gutter_left_pad))
         .collect();
 
     let level_width = resolve_level_width(entries, cfg);
@@ -1357,7 +1376,7 @@ fn render_menu_level(
         .selection_full_width(cfg.selection_full_width)
         .symbol_column(cfg.symbol_column)
         .gutter_gap(cfg.gutter_gap)
-        .item_horizontal_padding(cfg.item_horizontal_padding)
+        .item_horizontal_padding(list_item_h_pad)
         .header_horizontal_padding(cfg.header_horizontal_padding)
         .selection_symbol(cfg.selection_symbol.clone())
         .selection_symbol_style(
@@ -1449,10 +1468,19 @@ fn render_menu_level(
         .into()
 }
 
+fn gutter_with_left_pad(left_pad: u16, span: Span) -> ListItemGutter {
+    if left_pad == 0 {
+        ListItemGutter::from_spans([span])
+    } else {
+        ListItemGutter::from_spans([Span::new(" ".repeat(usize::from(left_pad))), span])
+    }
+}
+
 fn entry_to_list_item(
     entry: &ContextMenuEntry,
     cfg: &MenuRenderConfig,
     theme: &crate::style::Theme,
+    gutter_left_pad: u16,
 ) -> ListItem {
     let muted_style = cfg.disabled_style.unwrap_or(Style {
         bg: None,
@@ -1514,9 +1542,12 @@ fn entry_to_list_item(
                 } else {
                     Arc::from(" ".repeat(UnicodeWidthStr::width(cfg.check_symbol.as_ref()).max(1)))
                 };
-                list_item = list_item.gutter(ListItemGutter::from_spans([Span::new(glyph)
-                    .style(check_style)
-                    .row_style_policy(RowStylePolicy::PreserveForeground)]));
+                list_item = list_item.gutter(gutter_with_left_pad(
+                    gutter_left_pad,
+                    Span::new(glyph)
+                        .style(check_style)
+                        .row_style_policy(RowStylePolicy::PreserveForeground),
+                ));
             } else if let Some(icon) = &item.icon {
                 let default_icon_style = if item.disabled {
                     muted_style
@@ -1530,11 +1561,12 @@ fn entry_to_list_item(
                 } else {
                     icon.style
                 };
-                list_item = list_item.gutter(ListItemGutter::from_spans([Span::new(
-                    icon.content.clone(),
-                )
-                .style(style)
-                .row_style_policy(RowStylePolicy::PreserveForeground)]));
+                list_item = list_item.gutter(gutter_with_left_pad(
+                    gutter_left_pad,
+                    Span::new(icon.content.clone())
+                        .style(style)
+                        .row_style_policy(RowStylePolicy::PreserveForeground),
+                ));
             }
             if let Some(detail) = &item.detail {
                 let style = if item.disabled {
@@ -1581,11 +1613,12 @@ fn entry_to_list_item(
                 } else {
                     icon.style
                 };
-                list_item = list_item.gutter(ListItemGutter::from_spans([Span::new(
-                    icon.content.clone(),
-                )
-                .style(style)
-                .row_style_policy(RowStylePolicy::PreserveForeground)]));
+                list_item = list_item.gutter(gutter_with_left_pad(
+                    gutter_left_pad,
+                    Span::new(icon.content.clone())
+                        .style(style)
+                        .row_style_policy(RowStylePolicy::PreserveForeground),
+                ));
             }
             list_item
         }
