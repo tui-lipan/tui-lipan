@@ -2,7 +2,7 @@
 
 use crate::clipboard::ImageContent;
 use crate::core::event::KeyEvent;
-use crate::text::buffer::TextBufferCore;
+use crate::text::buffer::{BoundHistoryState, TextBufferCore};
 use crate::text::edit::TextEditKind;
 use crate::utils::text::clamp_cursor;
 use crate::widgets::{TextAreaEvent, TextAreaSentinel};
@@ -33,8 +33,8 @@ pub struct TextEditor {
     /// Set after moving to the end of a soft-wrapped row. That byte is also where the next row
     /// starts, so this records that the caret still counts as on the row it came from.
     pub(crate) visual_row_end: Option<usize>,
-    /// Last `(history_epoch, edit_version)` observed from a bound [`TextArea`](crate::widgets::TextArea).
-    pub(crate) synced_bound_history: Option<(u64, u64)>,
+    /// Last history state observed from a bound [`TextArea`](crate::widgets::TextArea).
+    pub(crate) synced_bound_history: Option<BoundHistoryState>,
 }
 
 #[derive(Clone, Debug)]
@@ -97,6 +97,8 @@ impl TextEditor {
                 last_edit: None,
                 history_epoch: crate::text::buffer::next_history_epoch(),
                 edit_version: 0,
+                undo_count: 0,
+                redo_count: 0,
             },
             pending_external_paste: None,
             image_snapshots: Vec::new(),
@@ -127,23 +129,33 @@ impl TextEditor {
         text: &str,
         cursor: usize,
         anchor: Option<usize>,
-        bound_history: Option<(u64, u64)>,
+        bound_history: Option<BoundHistoryState>,
     ) {
         let prev_cursor = self.core.cursor;
         let prev_anchor = self.core.anchor;
         let text_changed = self.core.text != text;
         let pending_external_paste = self.pending_external_paste.take();
-        let same_bound_edit = match (self.synced_bound_history, bound_history) {
-            (Some((prev_epoch, prev_ver)), Some((epoch, ver))) => {
-                prev_epoch == epoch && ver != prev_ver
-            }
-            _ => false,
-        };
         let epoch_changed = match (self.synced_bound_history, bound_history) {
-            (Some((prev_epoch, _)), Some((epoch, _))) => prev_epoch != epoch,
+            (Some(prev), Some(next)) => prev.epoch != next.epoch,
             _ => false,
         };
-        if text_changed
+        let bound_delta = match (self.synced_bound_history, bound_history) {
+            (Some(prev), Some(next)) if prev.epoch == next.epoch => Some((
+                next.edit_version != prev.edit_version,
+                next.undo_count.wrapping_sub(prev.undo_count),
+                next.redo_count.wrapping_sub(prev.redo_count),
+            )),
+            _ => None,
+        };
+
+        if epoch_changed {
+            // An explicit document/session reset always takes precedence over pending
+            // external pastes so prior document history can never leak across editors.
+            self.core.sync_from(text, cursor, anchor);
+            if !text_changed {
+                self.core.reset_history();
+            }
+        } else if text_changed
             && let Some(pending) = pending_external_paste
             && self.core.text == pending.text_before
         {
@@ -154,14 +166,61 @@ impl TextEditor {
                 cursor,
                 anchor,
             );
-        } else if text_changed && same_bound_edit {
-            self.core
-                .sync_external_edit_from(text, prev_cursor, prev_anchor, cursor, anchor);
+        } else if text_changed && let Some((edited, undo_delta, redo_delta)) = bound_delta {
+            if !edited && undo_delta > 0 && redo_delta == 0 {
+                let mut applied = 0u64;
+                for _ in 0..undo_delta {
+                    if self.core.undo() {
+                        applied += 1;
+                    } else {
+                        break;
+                    }
+                }
+                if self.core.text == text {
+                    self.core.sync_from(text, cursor, anchor);
+                } else {
+                    for _ in 0..applied {
+                        let _ = self.core.redo();
+                    }
+                    self.core.sync_external_edit_from(
+                        text,
+                        prev_cursor,
+                        prev_anchor,
+                        cursor,
+                        anchor,
+                    );
+                }
+            } else if !edited && redo_delta > 0 && undo_delta == 0 {
+                let mut applied = 0u64;
+                for _ in 0..redo_delta {
+                    if self.core.redo() {
+                        applied += 1;
+                    } else {
+                        break;
+                    }
+                }
+                if self.core.text == text {
+                    self.core.sync_from(text, cursor, anchor);
+                } else {
+                    for _ in 0..applied {
+                        let _ = self.core.undo();
+                    }
+                    self.core.sync_external_edit_from(
+                        text,
+                        prev_cursor,
+                        prev_anchor,
+                        cursor,
+                        anchor,
+                    );
+                }
+            } else if edited || undo_delta > 0 || redo_delta > 0 {
+                self.core
+                    .sync_external_edit_from(text, prev_cursor, prev_anchor, cursor, anchor);
+            } else {
+                self.core.sync_from(text, cursor, anchor);
+            }
         } else {
             self.core.sync_from(text, cursor, anchor);
-            if epoch_changed && !text_changed {
-                self.core.reset_history();
-            }
         }
         self.synced_bound_history = bound_history;
         if text_changed || self.core.cursor != prev_cursor {

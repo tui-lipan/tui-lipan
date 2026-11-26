@@ -290,14 +290,11 @@ impl<C: Component> AppRunner<C> {
     }
 
     pub(super) fn incremental_cursor_position(&self) -> Option<Position> {
-        let id = self
-            .focus
-            .focused
-            .filter(|id| {
-                self.core.tree.is_valid(*id)
-                    && crate::app::caret::focused_caret(&self.core.tree, Some(*id), None).is_some()
-            })
-            .or_else(|| self.preserved_caret_node())?;
+        let id = crate::app::caret::caret_owner_node(
+            &self.core.tree,
+            self.focus.focused,
+            self.preserved_caret_node(),
+        )?;
         let position = self.focused_cursor_position(id)?;
         // This path places the caret without running the renderers, so the occlusion check they do
         // has to happen here too - a layer drawn over the focused widget still owns the cell.

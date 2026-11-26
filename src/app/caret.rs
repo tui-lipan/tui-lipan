@@ -106,6 +106,18 @@ pub(crate) fn preserved_caret_node(
     None
 }
 
+/// Resolve the node that owns the active caret: the focused node when it displays a caret,
+/// otherwise the suspended underlying editor (`static_caret_node`) when present.
+pub(crate) fn caret_owner_node(
+    tree: &NodeTree,
+    focused: Option<NodeId>,
+    static_caret_node: Option<NodeId>,
+) -> Option<NodeId> {
+    focused
+        .filter(|&id| tree.is_valid(id) && focused_caret(tree, Some(id), None).is_some())
+        .or_else(|| static_caret_node.filter(|&id| tree.is_valid(id)))
+}
+
 /// Resolve the active caret, falling back to `static_caret_node` (with blinking forced off)
 /// when the focused widget itself shows no caret.
 ///

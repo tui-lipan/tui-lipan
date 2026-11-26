@@ -15,6 +15,17 @@ pub(crate) fn next_history_epoch() -> u64 {
     NEXT_HISTORY_EPOCH.fetch_add(1, Ordering::Relaxed)
 }
 
+/// Compact history cursor carried from a bound [`TextEditor`](super::TextEditor) into
+/// [`TextArea`](crate::widgets::TextArea) so the runtime can tell programmatic edits,
+/// programmatic undo/redo, and fresh document resets apart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct BoundHistoryState {
+    pub(crate) epoch: u64,
+    pub(crate) edit_version: u64,
+    pub(crate) undo_count: u64,
+    pub(crate) redo_count: u64,
+}
+
 type CoreEdit = TextEdit<TextBufferCore>;
 
 /// Shared text buffer backing both `TextInput` (single-line) and `TextEditor` (multi-line).
@@ -35,6 +46,10 @@ pub struct TextBufferCore {
     pub(crate) history_epoch: u64,
     /// Monotonic counter incremented on every edit recorded via `record_edit`.
     pub(crate) edit_version: u64,
+    /// Monotonic counter incremented on every successful `undo()`.
+    pub(crate) undo_count: u64,
+    /// Monotonic counter incremented on every successful `redo()`.
+    pub(crate) redo_count: u64,
 }
 
 impl Default for TextBufferCore {
@@ -47,6 +62,8 @@ impl Default for TextBufferCore {
             last_edit: None,
             history_epoch: next_history_epoch(),
             edit_version: 0,
+            undo_count: 0,
+            redo_count: 0,
         }
     }
 }
@@ -125,6 +142,9 @@ impl TextBufferCore {
         let mut history = std::mem::take(&mut self.history);
         let changed = history.undo(self).is_some();
         self.history = history;
+        if changed {
+            self.undo_count = self.undo_count.wrapping_add(1);
+        }
         changed
     }
 
@@ -133,7 +153,19 @@ impl TextBufferCore {
         let mut history = std::mem::take(&mut self.history);
         let changed = history.redo(self).is_some();
         self.history = history;
+        if changed {
+            self.redo_count = self.redo_count.wrapping_add(1);
+        }
         changed
+    }
+
+    pub(crate) fn bound_history_state(&self) -> BoundHistoryState {
+        BoundHistoryState {
+            epoch: self.history_epoch,
+            edit_version: self.edit_version,
+            undo_count: self.undo_count,
+            redo_count: self.redo_count,
+        }
     }
 
     /// Clear all undo/redo history without changing the text.
@@ -141,12 +173,16 @@ impl TextBufferCore {
         self.history.clear();
         self.history_epoch = next_history_epoch();
         self.edit_version = 0;
+        self.undo_count = 0;
+        self.redo_count = 0;
     }
 
     pub(crate) fn reset_history(&mut self) {
         self.history = Self::fresh_history();
         self.history_epoch = next_history_epoch();
         self.edit_version = 0;
+        self.undo_count = 0;
+        self.redo_count = 0;
     }
 
     // ── Sync / setters ───────────────────────────────────────────────────
@@ -197,6 +233,8 @@ impl TextBufferCore {
         self.anchor = self.anchor.map(|a| clamp_cursor(&self.text, a));
         self.history_epoch = next_history_epoch();
         self.edit_version = 0;
+        self.undo_count = 0;
+        self.redo_count = 0;
     }
 
     /// Set the cursor position (byte index), clearing selection.

@@ -84,12 +84,7 @@ impl TerminalManager {
         let mut target_style = SetCursorStyle::DefaultUserShape;
         let mut desired_cursor_color: Option<(u8, u8, u8)> = None;
 
-        let caret_node = focused
-            .filter(|id| {
-                tree.is_valid(*id)
-                    && crate::app::caret::focused_caret(tree, Some(*id), None).is_some()
-            })
-            .or(static_caret);
+        let caret_node = crate::app::caret::caret_owner_node(tree, focused, static_caret);
         let vim_mode = caret_node
             .and_then(|id| text_area_vim_state.get(&id))
             .map(|state| state.mode);

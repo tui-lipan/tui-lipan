@@ -71,6 +71,8 @@ impl TextInput {
                 last_edit: None,
                 history_epoch: crate::text::buffer::next_history_epoch(),
                 edit_version: 0,
+                undo_count: 0,
+                redo_count: 0,
             },
             history_scope: None,
         }

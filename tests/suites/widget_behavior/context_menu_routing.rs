@@ -1570,3 +1570,287 @@ fn context_menu_keeps_static_caret_without_selection_and_hides_caret_with_select
         "caret must stay hidden when a selection is active"
     );
 }
+
+#[test]
+fn intercepted_paste_replacing_bound_editor_resets_undo_history() {
+    #[derive(Clone, Debug)]
+    enum Msg {
+        Edited(tui_lipan::TextAreaEvent),
+        ReplaceOnPaste,
+    }
+
+    struct PasteResetHarness;
+
+    impl Component for PasteResetHarness {
+        type Properties = ();
+        type State = tui_lipan::TextEditor;
+        type Message = Msg;
+
+        fn create_state(&self, _: &()) -> Self::State {
+            tui_lipan::TextEditor::default()
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            match msg {
+                Msg::Edited(ev) => {
+                    ev.apply_to(&mut ctx.state);
+                    Update::full()
+                }
+                Msg::ReplaceOnPaste => {
+                    ctx.state = tui_lipan::TextEditor::new("fresh");
+                    let end = ctx.state.text().len();
+                    ctx.state.set_cursor(end);
+                    Update::full()
+                }
+            }
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            TextArea::bound(&ctx.state)
+                .height(Length::Px(4))
+                .on_change(ctx.link().callback(Msg::Edited))
+                .on_text_paste(ctx.link().callback(|_| Msg::ReplaceOnPaste))
+                .key("paste-reset-editor")
+        }
+    }
+
+    let mut backend = TestBackend::new(PasteResetHarness);
+    backend.focus_key(&tui_lipan::Key::from("paste-reset-editor"));
+    backend.render();
+
+    for ch in ['o', 'l', 'd'] {
+        backend
+            .send_key(KeyEvent {
+                code: KeyCode::Char(ch),
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+        backend.render();
+    }
+    assert_eq!(backend.state().text(), "old");
+
+    // Paste triggers on_text_paste, which replaces the bound TextEditor with a fresh instance.
+    backend.send_paste("ignored").unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "fresh");
+
+    // Pressing Ctrl+Z must NOT restore content from the previous editor instance.
+    backend
+        .send_key(KeyEvent {
+            code: KeyCode::Char('z'),
+            mods: KeyMods::CTRL,
+        })
+        .unwrap();
+    backend.render();
+    assert_eq!(
+        backend.state().text(),
+        "fresh",
+        "fresh TextEditor history epoch must override pending external paste and reset history"
+    );
+}
+
+#[test]
+fn programmatic_undo_and_redo_preserve_runtime_history() {
+    #[derive(Clone, Debug)]
+    enum Msg {
+        Edited(tui_lipan::TextAreaEvent),
+        Insert(&'static str),
+        Undo,
+        Redo,
+    }
+
+    struct ProgrammaticUndoHarness;
+
+    impl Component for ProgrammaticUndoHarness {
+        type Properties = ();
+        type State = tui_lipan::TextEditor;
+        type Message = Msg;
+
+        fn create_state(&self, _: &()) -> Self::State {
+            tui_lipan::TextEditor::default()
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            match msg {
+                Msg::Edited(ev) => {
+                    ev.apply_to(&mut ctx.state);
+                    Update::full()
+                }
+                Msg::Insert(s) => {
+                    ctx.state.insert_str(s);
+                    Update::full()
+                }
+                Msg::Undo => {
+                    ctx.state.undo();
+                    Update::full()
+                }
+                Msg::Redo => {
+                    ctx.state.redo();
+                    Update::full()
+                }
+            }
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            TextArea::bound(&ctx.state)
+                .height(Length::Px(4))
+                .on_change(ctx.link().callback(Msg::Edited))
+                .key("prog-undo-editor")
+        }
+    }
+
+    let mut backend = TestBackend::new(ProgrammaticUndoHarness);
+    backend.focus_key(&tui_lipan::Key::from("prog-undo-editor"));
+    backend.render();
+
+    for ch in ['h', 'e', 'l', 'l', 'o'] {
+        backend
+            .send_key(KeyEvent {
+                code: KeyCode::Char(ch),
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+        backend.render();
+    }
+    assert_eq!(backend.state().text(), "hello");
+
+    backend.dispatch(Msg::Insert(" world")).unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "hello world");
+
+    let undo = KeyEvent {
+        code: KeyCode::Char('z'),
+        mods: KeyMods::CTRL,
+    };
+    let redo = KeyEvent {
+        code: KeyCode::Char('y'),
+        mods: KeyMods::CTRL,
+    };
+
+    // Flow A: Programmatic undo followed by programmatic redo preserves full keyboard undo stack.
+    backend.dispatch(Msg::Undo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "hello");
+
+    backend.dispatch(Msg::Redo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "hello world");
+
+    // Flow B: Programmatic undo leaves both earlier typed undo history and redo stack intact.
+    backend.dispatch(Msg::Undo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "hello");
+
+    // Keyboard undo steps back through the original typed text.
+    backend.send_key(undo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "");
+
+    // Keyboard redo walks forward through both typed text and the programmatically undone edit.
+    backend.send_key(redo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "hello");
+
+    backend.send_key(redo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "hello world");
+}
+
+#[test]
+fn captured_static_caret_respects_suspended_vim_insert_mode() {
+    struct VimCaretMenuHarness;
+
+    impl Component for VimCaretMenuHarness {
+        type Properties = ();
+        type State = TextAreaMenuState;
+        type Message = TextAreaMenuMsg;
+
+        fn create_state(&self, _: &()) -> Self::State {
+            let mut editor = tui_lipan::TextEditor::new("hello world");
+            editor.set_cursor(5);
+            TextAreaMenuState {
+                editor,
+                anchor: None,
+                copied_on_action: None,
+            }
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            match msg {
+                TextAreaMenuMsg::Edited(ev) => {
+                    ev.apply_to(&mut ctx.state.editor);
+                    Update::full()
+                }
+                TextAreaMenuMsg::Open(mouse) => {
+                    ctx.state.anchor = Some((mouse.x, mouse.y));
+                    Update::full()
+                }
+                TextAreaMenuMsg::Action(_) | TextAreaMenuMsg::Close => {
+                    ctx.state.anchor = None;
+                    Update::full()
+                }
+            }
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            let area = TextArea::bound(&ctx.state.editor)
+                .vim_motions(true)
+                .caret_shape(tui_lipan::style::CaretShape::Block)
+                .caret_blinking(true)
+                .height(Length::Px(4))
+                .on_change(ctx.link().callback(TextAreaMenuMsg::Edited))
+                .on_context_menu(ctx.link().callback(TextAreaMenuMsg::Open))
+                .key("vim-caret-editor");
+            ContextMenu::new(area)
+                .open(ctx.state.anchor.is_some())
+                .anchor(ctx.state.anchor)
+                .entries([ContextMenuEntry::action("paste", "Paste")])
+                .on_action(ctx.link().callback(TextAreaMenuMsg::Action))
+                .on_close(ctx.link().callback(|()| TextAreaMenuMsg::Close))
+                .into()
+        }
+    }
+
+    let mut backend = TestBackend::new(VimCaretMenuHarness);
+    backend.focus_key(&tui_lipan::Key::from("vim-caret-editor"));
+    backend.render();
+
+    // Enter Vim Insert mode -> focused block caret becomes a blinking bar.
+    backend
+        .send_key(KeyEvent {
+            code: KeyCode::Char('i'),
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.render();
+    let focused_cursor = backend
+        .capture_frame()
+        .cursor
+        .expect("focused vim insert caret");
+    assert_eq!(focused_cursor.shape, tui_lipan::capture::CursorShape::Bar);
+    assert!(focused_cursor.blinking);
+
+    // Open the context menu (focus moves to menu List): captured static caret must still
+    // resolve the suspended editor's Insert mode as a steady Bar, not Normal-mode Block.
+    backend
+        .send_mouse(MouseEvent {
+            x: 15,
+            y: 2,
+            kind: MouseKind::Down(MouseButton::Right),
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.render();
+    assert!(backend.state().anchor.is_some());
+
+    let static_cursor = backend
+        .capture_frame()
+        .cursor
+        .expect("static vim insert caret while context menu is open");
+    assert_eq!(
+        static_cursor.shape,
+        tui_lipan::capture::CursorShape::Bar,
+        "captured static caret should reflect suspended Vim Insert mode"
+    );
+    assert!(!static_cursor.blinking);
+}
