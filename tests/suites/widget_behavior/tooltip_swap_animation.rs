@@ -101,3 +101,42 @@ fn swapping_tooltips_ends_the_old_fade_and_skips_the_new_one() {
     );
     assert!(shows(&backend, "Snooze-tip"));
 }
+
+#[test]
+fn a_tooltip_closing_right_after_opening_still_fades_out() {
+    let mut backend = TestBackend::new(Toolbar);
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 40,
+        h: 4,
+    });
+    backend.render();
+
+    hover(&mut backend, "Settle");
+    backend.advance(DELAY);
+    backend.pump().unwrap();
+    backend.render();
+    frames(&mut backend, Duration::from_millis(16));
+    assert!(shows(&backend, "Settle-tip"));
+
+    // Leave well inside the window in which a closing tooltip counts as swapped out.
+    backend
+        .send_mouse(MouseEvent {
+            x: 39,
+            y: 3,
+            kind: MouseKind::Moved,
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.pump().unwrap();
+    backend.render();
+    assert!(
+        shows(&backend, "Settle-tip"),
+        "a tooltip closing just after it opened skipped its own fade"
+    );
+    for _ in 0..6 {
+        frames(&mut backend, Duration::from_millis(50));
+    }
+    assert!(!shows(&backend, "Settle-tip"));
+}
