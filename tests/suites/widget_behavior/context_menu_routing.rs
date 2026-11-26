@@ -3413,3 +3413,117 @@ fn redo_reemits_sentinel_deleted_lifecycle_event_with_same_id() {
         );
     }
 }
+
+#[test]
+fn ordinary_edit_transformed_to_drop_sentinels_is_rejected() {
+    #[derive(Clone, Debug)]
+    enum Msg {
+        Edited(tui_lipan::TextAreaEvent),
+        Images(Vec<tui_lipan::ImageContent>),
+        UseApplyWithImages(bool),
+    }
+
+    struct State {
+        editor: tui_lipan::TextEditor,
+        images: Vec<tui_lipan::ImageContent>,
+        use_apply_with_images: bool,
+    }
+
+    struct StripPrivateUseHarness;
+
+    let s0 = tui_lipan::IMAGE_SENTINEL_BASE;
+    let s1 = char::from_u32(tui_lipan::IMAGE_SENTINEL_BASE as u32 + 1).unwrap();
+    let img_a = tui_lipan::ImageContent::from_bytes(b"pua-a", tui_lipan::ImageFormat::Png);
+    let img_b = tui_lipan::ImageContent::from_bytes(b"pua-b", tui_lipan::ImageFormat::Png);
+
+    impl Component for StripPrivateUseHarness {
+        type Properties = ();
+        type State = State;
+        type Message = Msg;
+
+        fn create_state(&self, _: &()) -> Self::State {
+            let s0 = tui_lipan::IMAGE_SENTINEL_BASE;
+            let s1 = char::from_u32(tui_lipan::IMAGE_SENTINEL_BASE as u32 + 1).unwrap();
+            let initial = format!("{s0} {s1} ");
+            let cursor = initial.len();
+            let mut editor = tui_lipan::TextEditor::new(initial);
+            editor.set_cursor(cursor);
+            State {
+                editor,
+                images: vec![
+                    tui_lipan::ImageContent::from_bytes(b"pua-a", tui_lipan::ImageFormat::Png),
+                    tui_lipan::ImageContent::from_bytes(b"pua-b", tui_lipan::ImageFormat::Png),
+                ],
+                use_apply_with_images: false,
+            }
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            match msg {
+                Msg::Edited(mut ev) => {
+                    // Sanitizer strips all Private Use Area characters (including sentinels).
+                    let stripped: String = ev
+                        .value
+                        .chars()
+                        .filter(|&ch| !('\u{E000}'..='\u{F8FF}').contains(&ch))
+                        .collect();
+                    ev.value = std::sync::Arc::from(stripped);
+                    ev.cursor = ev.cursor.min(ev.value.len());
+                    if ctx.state.use_apply_with_images {
+                        ctx.state
+                            .editor
+                            .apply_with_images(&ev, &mut ctx.state.images);
+                    } else {
+                        ctx.state.editor.apply(&ev);
+                    }
+                    Update::full()
+                }
+                Msg::Images(images) => {
+                    ctx.state.images = images;
+                    Update::full()
+                }
+                Msg::UseApplyWithImages(flag) => {
+                    ctx.state.use_apply_with_images = flag;
+                    Update::full()
+                }
+            }
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            TextArea::bound(&ctx.state.editor)
+                .height(Length::Px(4))
+                .image_mode(tui_lipan::TextAreaImageMode::Inline)
+                .images(ctx.state.images.clone())
+                .on_change(ctx.link().callback(Msg::Edited))
+                .on_images_change(ctx.link().callback(Msg::Images))
+                .key("strip-pua-editor")
+        }
+    }
+
+    let mut backend = TestBackend::new(StripPrivateUseHarness);
+    backend.focus_key(&tui_lipan::Key::from("strip-pua-editor"));
+    backend.render();
+
+    let expected_initial = format!("{s0} {s1} ");
+    for use_apply_with_images in [false, true] {
+        backend
+            .dispatch(Msg::UseApplyWithImages(use_apply_with_images))
+            .unwrap();
+        backend.render();
+
+        // Typing an ordinary character triggers the sanitizer that strips private-use sentinels.
+        // Because the transformation introduces an incompatible sentinel change without matching
+        // metadata, both `apply()` and `apply_with_images()` reject it cleanly.
+        backend
+            .send_key(KeyEvent {
+                code: KeyCode::Char('a'),
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+        backend.render();
+
+        assert_eq!(backend.state().editor.text(), expected_initial);
+        assert_eq!(backend.state().images, vec![img_a.clone(), img_b.clone()]);
+        assert!(!backend.state().editor.can_undo());
+    }
+}

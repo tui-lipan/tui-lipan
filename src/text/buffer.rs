@@ -310,6 +310,9 @@ impl SharedHistory {
         }
 
         step.discard_callbacks();
+        if !sentinel_codepoints_match(expected_text, current_text) {
+            return StagedCommitOutcome::RejectIncompatibleMetadata;
+        }
         StagedCommitOutcome::Unmatched
     }
 }
