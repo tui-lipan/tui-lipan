@@ -346,7 +346,7 @@ fn mouse_region_captures_mods(
         .is_some_and(|required| mods_contain(required, mods))
 }
 
-fn mods_contain(required: KeyMods, actual: KeyMods) -> bool {
+pub(crate) fn mods_contain(required: KeyMods, actual: KeyMods) -> bool {
     (!required.ctrl || actual.ctrl)
         && (!required.alt || actual.alt)
         && (!required.shift || actual.shift)

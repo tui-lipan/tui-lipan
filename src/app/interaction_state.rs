@@ -551,6 +551,12 @@ pub(crate) struct MouseTrackingState {
     pub click_consumed: bool,
     /// A context-menu handler owns the right-button gesture until its release.
     pub context_menu_press_consumed: bool,
+    /// A left press consumed by an overlay owns the remainder of the gesture.
+    pub overlay_left_press_consumed: bool,
+    /// The terminal that received the right-button press, if any.
+    #[cfg(feature = "terminal")]
+    pub terminal_right_press:
+        Option<crate::app::mouse_dispatch::terminal_right::TerminalRightPress>,
     /// A middle-click handler owns drag/release even after its subtree disappears.
     pub middle_click_press_consumed: bool,
     /// A modified terminal-link press waiting for release on the same destination.
@@ -619,6 +625,20 @@ impl MouseTrackingState {
             MouseKind::Drag(MouseButton::Right) => self.context_menu_press_consumed,
             MouseKind::Up(MouseButton::Right) => {
                 std::mem::take(&mut self.context_menu_press_consumed)
+            }
+            _ => false,
+        }
+    }
+
+    pub(crate) fn consume_overlay_left_gesture(&mut self, kind: MouseKind) -> bool {
+        match kind {
+            MouseKind::Down(MouseButton::Left) => {
+                self.overlay_left_press_consumed = false;
+                false
+            }
+            MouseKind::Drag(MouseButton::Left) => self.overlay_left_press_consumed,
+            MouseKind::Up(MouseButton::Left) => {
+                std::mem::take(&mut self.overlay_left_press_consumed)
             }
             _ => false,
         }

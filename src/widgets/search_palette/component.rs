@@ -1,12 +1,13 @@
 #![allow(private_interfaces)]
 
 use std::cmp::Reverse;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use nucleo::pattern::{CaseMatching, Normalization};
 use unicode_width::UnicodeWidthStr;
 
-use crate::callback::KeyHandler;
+use crate::callback::{Callback, KeyHandler};
 use crate::core::component::{Component, Context, KeyUpdate, TaskPolicy, Update};
 use crate::core::element::{Element, IntoElement};
 use crate::core::event::KeyCode;
@@ -424,8 +425,9 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
             .then(|| result_to_row.get(ctx.state.selected).copied().unwrap_or(0));
 
         // Capture the mapping so the callbacks can reverse-translate row → result.
-        let row_to_result_for_select = row_to_result.clone();
-        let row_to_result_for_activate = row_to_result;
+        let row_to_result = Rc::new(row_to_result);
+        let row_to_result_for_select = Rc::clone(&row_to_result);
+        let row_to_result_for_activate = Rc::clone(&row_to_result);
 
         let list_height = match ctx.props.height {
             Length::Auto => Length::Auto,
@@ -501,6 +503,31 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                     }
                 })
             });
+
+        if let Some(callback) = ctx.props.on_context_menu.clone() {
+            let items = ctx.props.items.clone();
+            let item_indices: Vec<_> = ctx
+                .state
+                .results
+                .iter()
+                .map(|result| result.item_index)
+                .collect();
+            list = list.on_context_menu(Callback::new(move |(row, mouse): (ListEvent, _)| {
+                if let Some(Some(match_index)) = row_to_result.get(row.index).copied()
+                    && let Some(&item_index) = item_indices.get(match_index)
+                    && let Some(item) = items.get(item_index).filter(|item| !item.disabled)
+                {
+                    callback.emit((
+                        SearchEvent {
+                            match_index,
+                            item_index,
+                            item: item.clone(),
+                        },
+                        mouse,
+                    ));
+                }
+            }));
+        }
 
         if let Some(style) = ctx.props.list_config.selection_symbol_style {
             list = list.selection_symbol_style(style);

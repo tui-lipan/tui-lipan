@@ -129,13 +129,46 @@ same live screen does not repeat the report. Paint-only updates also synchronize
 | `on_scroll_to` | `Callback<usize>` | Scrollback offset changed |
 | `on_mouse_forward` | `Callback<Vec<u8>>` | Mouse event bytes for PTY |
 | `on_mouse_forward_event` | `Callback<ForwardedMouseEvent>` | Structured mouse report with terminal-local coordinates, modes, and encoded bytes |
+| `mouse_input_target` | `impl Into<Key>` | Stable child identity for an active right-button gesture on `Terminal` |
 | `link_activation_mods` | `KeyMods` | Modifiers required for link activation (default: `KeyMods::CTRL`; extras allowed) |
 | `link_hover_style` | `StyleSlot` | Style for the link under a modified pointer (default: underline) |
 | `on_link_activate` | `Callback<TerminalLinkEvent>` | Modified click on an OSC 8 link, a detected URL, or a path accepted by `link_paths` |
 | `link_paths` | `TerminalPathFilter` | Treat detected file paths the filter accepts as links (default: paths are not links) |
 | `on_selection` | `Callback<TerminalSelectionEvent>` | Selection and extracted text changed |
-| `on_context_menu` | `Callback<MouseEvent>` | Opt-in handler on `Terminal` and `ManagedTerminal`; owns the full right-button gesture before PTY forwarding or clipboard fallback |
+| `on_context_menu` | `Callback<MouseEvent>` | Handles a right-button press inside the content area and owns the whole gesture |
+| `context_menu_policy` | `TerminalContextMenuPolicy` | Right-button routing on `Terminal` and `ManagedTerminal`. Defaults to `MenuFirst` |
 | `on_key` | `KeyHandler` | Low-level key handler |
+
+Use `ApplicationFirst` to give a mouse-tracking child priority over terminal and ancestor menu
+handlers. The framework checks the current mode on button press. An explicit modifier override
+opens the terminal's menu even over a tracking child. Shift keeps the press local unless it matches
+the configured menu override. Other modifiers captured by an ancestor `MouseRegion` remain available
+for gestures such as pane resize.
+
+```rust,ignore
+Terminal::new()
+    .screen(screen)
+    .on_mouse_forward_event(ctx.link().callback(Msg::ForwardToPty))
+    .context_menu_policy(TerminalContextMenuPolicy::ApplicationFirst {
+        override_mods: Some(KeyMods::CTRL),
+        open_when_untracked: true,
+    })
+    .on_context_menu(ctx.link().callback(Msg::OpenPaneMenu))
+```
+
+Set `open_when_untracked` to `false` for a modifier-only menu that leaves unhandled right-clicks
+available for local drag and clipboard behavior. A right-button gesture sent to the PTY stays
+with its original terminal. Reports are clamped to that terminal's content when the pointer moves
+outside it. With pixel-precise host input, each axis keeps its sub-cell offset until it crosses
+an edge. Cell-precise host input stays cell-precise.
+The framework drops a follow-up report if the target changes or its tracking mode cannot report
+that event.
+
+By default, a live terminal's screen handle identifies its input target. For a snapshot-only
+terminal, tui-lipan compares the registered callback by identity. Cloning the same callback
+keeps the gesture active across renders. If each render creates a fresh callback for the same
+child, use `mouse_input_target(child_id)`. Change the ID when the widget starts forwarding
+to a different child.
 
 Calling `selection(...)` makes the selection controlled. Mouse clicks and drags
 still emit `on_selection`, but they do not transiently overwrite the rendered

@@ -737,6 +737,7 @@ pub(crate) struct SearchPaletteProps<T> {
     on_query_change: Option<Callback<Arc<str>>>,
     on_select: Option<Callback<SearchEvent<T>>>,
     on_activate: Option<Callback<SearchEvent<T>>>,
+    on_context_menu: Option<Callback<(SearchEvent<T>, crate::MouseEvent)>>,
     render_item: Option<SearchRenderer<T>>,
     item_status: Option<SearchStatusRenderer<T>>,
     item_gutter: Option<SearchGutterRenderer<T>>,
@@ -833,6 +834,7 @@ impl<T: PartialEq> PartialEq for SearchPaletteProps<T> {
             && self.on_query_change == other.on_query_change
             && self.on_select == other.on_select
             && self.on_activate == other.on_activate
+            && self.on_context_menu == other.on_context_menu
             && render_item_eq(&self.render_item, &other.render_item)
             && render_status_eq(&self.item_status, &other.item_status)
             && render_gutter_eq(&self.item_gutter, &other.item_gutter)
@@ -1032,6 +1034,7 @@ impl<T: Clone + PartialEq> Default for SearchPalette<T> {
                 on_query_change: None,
                 on_select: None,
                 on_activate: None,
+                on_context_menu: None,
                 render_item: None,
                 item_status: None,
                 item_gutter: None,
@@ -1283,6 +1286,14 @@ impl<T: Clone + PartialEq> SearchPalette<T> {
     /// Set activation callback.
     pub fn on_activate(mut self, cb: Callback<SearchEvent<T>>) -> Self {
         self.props.on_activate = Some(cb);
+        self
+    }
+
+    /// Handle a right-button press on an enabled result without changing selection or focus.
+    ///
+    /// The event identifies the result in both the filtered results and the source items.
+    pub fn on_context_menu(mut self, cb: Callback<(SearchEvent<T>, crate::MouseEvent)>) -> Self {
+        self.props.on_context_menu = Some(cb);
         self
     }
 

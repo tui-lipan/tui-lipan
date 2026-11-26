@@ -14,6 +14,8 @@ use crate::test_backend::TestBackend;
 mod click;
 mod dispatch_drag;
 mod scroll;
+#[cfg(feature = "terminal")]
+pub(crate) mod terminal_right;
 mod test_support;
 
 pub(crate) use click::*;
@@ -304,7 +306,12 @@ fn dispatch_mouse_inner<C: Component, T: MouseDispatchCtx<C>>(
     // Gesture ownership precedes overlays, drags and terminal release forwarding.
     if ctx.mouse_state().consume_context_menu_gesture(mouse.kind)
         || ctx.mouse_state().consume_middle_click_gesture(mouse.kind)
+        || ctx.mouse_state().consume_overlay_left_gesture(mouse.kind)
     {
+        return true;
+    }
+    #[cfg(feature = "terminal")]
+    if terminal_right::consume_terminal_right_gesture(ctx, mouse) {
         return true;
     }
     let x = mouse.x;
@@ -348,7 +355,9 @@ fn dispatch_mouse_inner<C: Component, T: MouseDispatchCtx<C>>(
         return drag_dirty;
     }
 
-    if matches!(mouse.kind, MouseKind::Up(_)) && ctx.forward_terminal_mouse(mouse) {
+    if matches!(mouse.kind, MouseKind::Up(button) if button != MouseButton::Right)
+        && ctx.forward_terminal_mouse(mouse)
+    {
         return true;
     }
 

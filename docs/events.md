@@ -99,6 +99,7 @@ the popup anchor in terminal content coordinates, modifiers, and button press.
 | Widget | Callback payload |
 |--------|------------------|
 | `List`, `MultiSelect` | `(ListEvent, MouseEvent)` |
+| `SearchPalette` | `(SearchEvent<T>, MouseEvent)` |
 | `Tree` | `(TreeEvent, MouseEvent)` |
 | `FileTree` | `(FileTreeEvent, MouseEvent)` |
 | `Table` | `(TableEvent, MouseEvent)` |
@@ -116,7 +117,8 @@ Right-clicking preserves focus, selection, expansion, checked items, and editor
 carets. The nearest accepting handler owns the full gesture, including drag and
 release, even if it opens a popup or removes the clicked widget. This prevents
 release from activating the popup or reaching PTY/clipboard handling. Without a
-handler, existing forwarding and clipboard behavior continues.
+handler, existing forwarding and clipboard behavior continues. Terminal views can opt into
+[application-first routing](widgets/terminal.md) when a child requests mouse reporting.
 
 Data-row callbacks exclude non-selectable rows, headers, borders, padding,
 scroll indicators, scrollbar tracks, standalone scrollbar gaps, and empty rows. These

@@ -56,12 +56,14 @@ pub use damage::{DamagedRow, GraphicsDamage, TerminalDamage, TerminalMutation};
 
 #[cfg(feature = "terminal")]
 pub use copy_mode::{CopyModeAction, CopyModeGrid, CopyModeViewport, TerminalCopyMode};
+pub(crate) use events::TerminalMouseCallback;
 pub use events::{
     ForwardedMouseEvent, KittyKeyboardFlags, MouseEncoding, MouseMode, MouseModeState,
-    MouseReportError, MouseReportGeometry, TerminalInputEvent, TerminalInputKind, TerminalKeyModes,
-    TerminalLinkEvent, TerminalLinkKind, TerminalPasteEvent, TerminalPasteShortcutBehavior,
-    TerminalPathFilter, encode_mouse_event, encode_paste, focus_sequences, key_event_to_bytes,
-    mouse_event_to_bytes, paste_sequences, terminal_selection_text,
+    MouseReportError, MouseReportGeometry, TerminalContextMenuPolicy, TerminalInputEvent,
+    TerminalInputKind, TerminalKeyModes, TerminalLinkEvent, TerminalLinkKind, TerminalPasteEvent,
+    TerminalPasteShortcutBehavior, TerminalPathFilter, encode_mouse_event, encode_paste,
+    focus_sequences, key_event_to_bytes, mouse_event_to_bytes, paste_sequences,
+    terminal_selection_text,
 };
 #[cfg(feature = "terminal-images")]
 pub use graphics::{
@@ -174,7 +176,9 @@ impl Default for Terminal {
             selection_style: StyleSlot::Inherit,
             on_selection: None,
             on_resize: None,
+            mouse_input_target: None,
             on_mouse_forward: None,
+            context_menu_policy: TerminalContextMenuPolicy::default(),
             on_context_menu: None,
             link_activation_mods: KeyMods::CTRL,
             link_hover_style: StyleSlot::Replace(Style::new().underline()),
@@ -545,18 +549,32 @@ impl Terminal {
         self
     }
 
-    /// Handle a right-button press before clipboard actions or terminal mouse forwarding.
+    /// Set right-button routing inside terminal content. Defaults to menu-first routing.
+    pub fn context_menu_policy(mut self, policy: TerminalContextMenuPolicy) -> Self {
+        self.context_menu_policy = policy;
+        self
+    }
+
+    /// Handle a right-button press according to the configured context-menu policy.
     /// The handler owns the full gesture. Mouse coordinates anchor an application-owned popup.
     pub fn on_context_menu(mut self, cb: Callback<crate::core::event::MouseEvent>) -> Self {
         self.on_context_menu = Some(cb);
         self
     }
 
+    /// Identify the child receiving forwarded mouse gestures independently of widget identity.
+    ///
+    /// Use the same key while rebuilding callbacks for one PTY. Change it when replacing that
+    /// PTY, even if the widget stays in the same slot. By default, the live screen handle or
+    /// the snapshot terminal's forwarding callback identifies the child.
+    pub fn mouse_input_target(mut self, target: impl Into<crate::Key>) -> Self {
+        self.mouse_input_target = Some(target.into());
+        self
+    }
+
     /// Set callback to forward mouse bytes to PTY.
     pub fn on_mouse_forward(mut self, cb: Callback<Vec<u8>>) -> Self {
-        self.on_mouse_forward = Some(Callback::new(move |event: ForwardedMouseEvent| {
-            cb.emit(event.bytes)
-        }));
+        self.on_mouse_forward = Some(TerminalMouseCallback::Bytes(cb));
         self
     }
 
@@ -564,7 +582,7 @@ impl Terminal {
     /// This and [`Self::on_mouse_forward`] set the same callback; the last setter wins.
     /// Mode gating, focus-only presses, Shift selection, and wheel coalescing apply equally.
     pub fn on_mouse_forward_event(mut self, cb: Callback<ForwardedMouseEvent>) -> Self {
-        self.on_mouse_forward = Some(cb);
+        self.on_mouse_forward = Some(TerminalMouseCallback::Structured(cb));
         self
     }
 

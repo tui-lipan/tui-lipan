@@ -1,6 +1,7 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
+use crate::callback::Callback;
 use crate::core::event::{KeyCode, KeyEvent, KeyMods, MouseButton, MouseEvent, MouseKind};
 use crate::style::Span;
 use crate::utils::spans::{line_text, line_width, slice_columns};
@@ -467,6 +468,23 @@ fn ctrl_char(ch: char) -> Option<u8> {
     })
 }
 
+/// Routing policy for a right-button press inside a terminal's content.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TerminalContextMenuPolicy {
+    /// Give context-menu handlers priority over the PTY.
+    #[default]
+    MenuFirst,
+    /// Give the PTY priority while it requests mouse reporting and forwarding is enabled.
+    ApplicationFirst {
+        /// Allow the terminal menu while these modifiers are held on press.
+        /// Extra modifiers are allowed. Use `None` to disable the mouse override.
+        override_mods: Option<KeyMods>,
+        /// Open the terminal menu when there is no forwarding child.
+        /// Set to `false` to keep ordinary unhandled right-click behavior in that case.
+        open_when_untracked: bool,
+    },
+}
+
 /// Mouse tracking mode requested by PTY application: which events it wants reported.
 ///
 /// Independent of [`MouseEncoding`], which only says how a report is framed on the wire.
@@ -585,6 +603,22 @@ pub struct ForwardedMouseEvent {
     pub repeat_count: u16,
     /// Authoritative encoded reports, including repetitions. Forward these bytes unchanged.
     pub bytes: Vec<u8>,
+}
+
+/// Retain the registered callback so its identity survives reconstruction of a terminal widget.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) enum TerminalMouseCallback {
+    Bytes(Callback<Vec<u8>>),
+    Structured(Callback<ForwardedMouseEvent>),
+}
+
+impl TerminalMouseCallback {
+    pub(crate) fn emit(&self, event: ForwardedMouseEvent) {
+        match self {
+            Self::Bytes(callback) => callback.emit(event.bytes),
+            Self::Structured(callback) => callback.emit(event),
+        }
+    }
 }
 
 impl ForwardedMouseEvent {

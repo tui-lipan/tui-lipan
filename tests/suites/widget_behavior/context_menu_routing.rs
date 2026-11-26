@@ -780,3 +780,296 @@ fn flat_context_menu_preserves_zero_default_gutter_gap() {
         "flat context menu should default gutter_gap to 0 (matching List):\n{frame}"
     );
 }
+
+fn press<C: Component>(
+    backend: &mut TestBackend<C>,
+    kind: MouseKind,
+    x: u16,
+    y: u16,
+    mods: KeyMods,
+) {
+    backend.send_mouse(MouseEvent { kind, x, y, mods }).unwrap();
+}
+
+#[test]
+fn search_palette_context_menu_maps_filtered_rows_without_selecting() {
+    type PickerHit = (SearchEvent<u8>, MouseEvent);
+    struct Picker(Rc<RefCell<Vec<PickerHit>>>);
+
+    impl Component for Picker {
+        type Properties = ();
+        type State = ();
+        type Message = ();
+
+        fn create_state(&self, _: &()) {}
+        fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+        fn view(&self, _: &Context<Self>) -> Element {
+            let hits = self.0.clone();
+            SearchPalette::new()
+                .entries([
+                    tui_lipan::SearchEntry::header("Group"),
+                    tui_lipan::SearchEntry::item("Skip", 1),
+                    tui_lipan::SearchEntry::item("Match first", 2),
+                    tui_lipan::SearchEntry::item("Match target", 3),
+                    tui_lipan::SearchEntry::item("Match disabled", 4).disabled(true),
+                ])
+                .initial_query("Match")
+                .preserve_groups(true)
+                .preserve_item_order(true)
+                .initial_selected_item_index(Some(1))
+                .on_context_menu(Callback::new(move |hit| hits.borrow_mut().push(hit)))
+                .into()
+        }
+    }
+
+    let hits = Rc::new(RefCell::new(Vec::new()));
+    let mut backend = TestBackend::new(Picker(hits.clone()));
+    backend.render();
+    let before = backend.capture_frame().plain_text();
+    let find = |label| {
+        before
+            .lines()
+            .enumerate()
+            .find_map(|(y, line)| line.find(label).map(|x| (x as u16, y as u16)))
+            .unwrap_or_else(|| panic!("{label} missing from palette:\n{before}"))
+    };
+    for label in ["Group", "Match disabled", "Match target"] {
+        let (x, y) = find(label);
+        press(
+            &mut backend,
+            MouseKind::Down(MouseButton::Right),
+            x,
+            y,
+            KeyMods::NONE,
+        );
+        press(
+            &mut backend,
+            MouseKind::Up(MouseButton::Right),
+            x,
+            y,
+            KeyMods::NONE,
+        );
+    }
+    backend.render();
+    assert_eq!(backend.capture_frame().plain_text(), before);
+    let hits = hits.borrow();
+    assert_eq!(hits.len(), 1);
+    let (event, mouse) = &hits[0];
+    assert_eq!(
+        (event.match_index, event.item_index, event.item.value),
+        (1, 2, 3)
+    );
+    assert_eq!((mouse.x, mouse.y), find("Match target"));
+}
+
+#[cfg(feature = "terminal")]
+mod terminal_routing {
+    use super::*;
+
+    use tui_lipan::ForwardedMouseEvent;
+
+    const RIGHT_DOWN: MouseKind = MouseKind::Down(MouseButton::Right);
+    const RIGHT_DRAG: MouseKind = MouseKind::Drag(MouseButton::Right);
+    const RIGHT_UP: MouseKind = MouseKind::Up(MouseButton::Right);
+
+    #[derive(Default)]
+    struct Events {
+        menus: Vec<&'static str>,
+        reports: Vec<(&'static str, ForwardedMouseEvent)>,
+    }
+
+    struct Panes {
+        first: Rc<RefCell<TerminalScreen>>,
+        second: Rc<RefCell<TerminalScreen>>,
+        events: Rc<RefCell<Events>>,
+        open: bool,
+        open_when_untracked: bool,
+    }
+
+    impl Panes {
+        fn new(open: bool, open_when_untracked: bool) -> Self {
+            let second = Rc::new(RefCell::new(TerminalScreen::new(5, 10, 0)));
+            second.borrow_mut().process_bytes(b"\x1b[?1002;1006h");
+            Self {
+                first: Rc::new(RefCell::new(TerminalScreen::new(5, 10, 0))),
+                second,
+                events: Rc::new(RefCell::new(Events::default())),
+                open,
+                open_when_untracked,
+            }
+        }
+
+        fn terminal(&self, name: &'static str, screen: Rc<RefCell<TerminalScreen>>) -> Terminal {
+            let events = self.events.clone();
+            Terminal::new()
+                .screen(screen)
+                .width(Length::Px(10))
+                .scrollbar(false)
+                .on_mouse_forward_event(Callback::new(move |event| {
+                    events.borrow_mut().reports.push((name, event));
+                }))
+        }
+    }
+
+    impl Component for Panes {
+        type Properties = ();
+        type State = bool;
+        type Message = ();
+
+        fn create_state(&self, _: &()) -> bool {
+            self.open
+        }
+
+        fn update(&mut self, _: (), ctx: &mut Context<Self>) -> Update {
+            ctx.state = false;
+            Update::render()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            let menus = self.events.clone();
+            let ancestor = self.events.clone();
+            ContextMenu::new(
+                HStack::new()
+                    .gap(0)
+                    .child(
+                        MouseRegion::new()
+                            .on_context_menu(Callback::new(move |_| {
+                                ancestor.borrow_mut().menus.push("ancestor");
+                            }))
+                            .child(
+                                self.terminal("first", self.first.clone())
+                                    .context_menu_policy(
+                                        TerminalContextMenuPolicy::ApplicationFirst {
+                                            override_mods: Some(KeyMods::CTRL),
+                                            open_when_untracked: self.open_when_untracked,
+                                        },
+                                    )
+                                    .on_context_menu(Callback::new(move |_| {
+                                        menus.borrow_mut().menus.push("first");
+                                    })),
+                            ),
+                    )
+                    .child(self.terminal("second", self.second.clone())),
+            )
+            .open(ctx.state)
+            .anchor(Some((15, 4)))
+            .items(["Do something"])
+            .on_close(ctx.link().callback(|_| ()))
+            .into()
+        }
+    }
+
+    #[test]
+    fn terminal_policy_reads_live_modes_and_keeps_right_gesture_with_press_owner() {
+        let panes = Panes::new(false, true);
+        let first = panes.first.clone();
+        let events = panes.events.clone();
+        let mut backend = TestBackend::new(panes);
+        backend.render();
+
+        press(&mut backend, RIGHT_DOWN, 1, 1, KeyMods::NONE);
+        press(&mut backend, RIGHT_DRAG, 11, 1, KeyMods::NONE);
+        press(&mut backend, RIGHT_UP, 11, 1, KeyMods::NONE);
+
+        // Change the PTY mode through the live screen without rebuilding the component.
+        first.borrow_mut().process_bytes(b"\x1b[?1002;1006h");
+        press(&mut backend, RIGHT_DOWN, 1, 1, KeyMods::NONE);
+        press(&mut backend, RIGHT_DRAG, 11, 1, KeyMods::CTRL);
+        press(&mut backend, RIGHT_UP, 11, 1, KeyMods::SHIFT);
+
+        press(&mut backend, RIGHT_DOWN, 1, 1, KeyMods::CTRL);
+        press(&mut backend, RIGHT_UP, 11, 1, KeyMods::NONE);
+
+        assert_eq!(events.borrow().menus, ["first", "first"]);
+        let reports: Vec<_> = events
+            .borrow()
+            .reports
+            .iter()
+            .map(|(name, event)| (*name, event.kind, event.cell.0))
+            .collect();
+        assert_eq!(
+            reports,
+            [
+                ("first", RIGHT_DOWN, 1),
+                ("first", RIGHT_DRAG, 9),
+                ("first", RIGHT_UP, 9)
+            ]
+        );
+    }
+
+    #[test]
+    fn shift_keeps_right_press_local_unless_the_menu_override_matches() {
+        let panes = Panes::new(false, true);
+        panes.first.borrow_mut().process_bytes(b"\x1b[?1002;1006h");
+        let events = panes.events.clone();
+        let mut backend = TestBackend::new(panes);
+        backend.render();
+
+        press(&mut backend, RIGHT_DOWN, 1, 1, KeyMods::SHIFT);
+        press(&mut backend, RIGHT_UP, 1, 1, KeyMods::NONE);
+        assert!(events.borrow().menus.is_empty());
+        assert!(events.borrow().reports.is_empty());
+
+        let ctrl_shift = KeyMods {
+            shift: true,
+            ..KeyMods::CTRL
+        };
+        press(&mut backend, RIGHT_DOWN, 1, 1, ctrl_shift);
+        press(&mut backend, RIGHT_UP, 1, 1, KeyMods::NONE);
+        assert_eq!(events.borrow().menus, ["first"]);
+        assert!(events.borrow().reports.is_empty());
+    }
+
+    #[test]
+    fn disabling_tracking_mid_gesture_and_x10_do_not_retarget_release() {
+        let panes = Panes::new(false, false);
+        let first = panes.first.clone();
+        let events = panes.events.clone();
+        let mut backend = TestBackend::new(panes);
+        backend.render();
+
+        press(&mut backend, RIGHT_DOWN, 1, 1, KeyMods::NONE);
+        first.borrow_mut().process_bytes(b"\x1b[?1000;1006h");
+        press(&mut backend, RIGHT_UP, 1, 1, KeyMods::NONE);
+
+        press(&mut backend, RIGHT_DOWN, 1, 1, KeyMods::NONE);
+        first.borrow_mut().process_bytes(b"\x1b[?1000l");
+        press(&mut backend, RIGHT_UP, 11, 1, KeyMods::NONE);
+
+        first.borrow_mut().process_bytes(b"\x1b[?9h");
+        press(&mut backend, RIGHT_DOWN, 1, 1, KeyMods::NONE);
+        first.borrow_mut().process_bytes(b"\x1b[?1003h");
+        press(&mut backend, RIGHT_DRAG, 11, 1, KeyMods::NONE);
+        press(&mut backend, RIGHT_UP, 11, 1, KeyMods::NONE);
+
+        assert!(events.borrow().menus.is_empty());
+        let reports: Vec<_> = events
+            .borrow()
+            .reports
+            .iter()
+            .map(|(name, event)| (*name, event.kind))
+            .collect();
+        assert_eq!(reports, [("first", RIGHT_DOWN), ("first", RIGHT_DOWN)]);
+    }
+
+    #[test]
+    fn outside_dismissal_does_not_send_a_left_release_to_the_terminal() {
+        let panes = Panes::new(true, true);
+        let events = panes.events.clone();
+        let mut backend = TestBackend::new(panes);
+        backend.render();
+
+        for kind in [
+            MouseKind::Down(MouseButton::Left),
+            MouseKind::Drag(MouseButton::Left),
+            MouseKind::Up(MouseButton::Left),
+        ] {
+            press(&mut backend, kind, 11, 1, KeyMods::NONE);
+        }
+
+        assert!(!*backend.state());
+        assert!(events.borrow().reports.is_empty());
+    }
+}
