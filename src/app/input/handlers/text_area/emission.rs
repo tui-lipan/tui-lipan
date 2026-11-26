@@ -1,4 +1,8 @@
 use super::*;
+use crate::text::editor::{
+    custom_sentinel_required_len, image_sentinel_required_len, prune_images_for_value,
+    prune_sentinels_for_value,
+};
 
 pub(super) struct TextAreaEmission<'a> {
     pub(super) on_change: &'a Callback<TextAreaEvent>,
@@ -65,8 +69,7 @@ pub(super) fn emit_text_area_editor_change(
                 .filter(|images| required_images <= images.len())
         };
         if let Some(image_source) = image_source {
-            let (pruned, remapped) =
-                prune_images_for_value(emission.old_value, &current_value, &image_source);
+            let (pruned, remapped) = prune_images_for_value(&current_value, &image_source);
             if let Some(remapped_val) = remapped {
                 current_value = remapped_val;
             }
@@ -186,191 +189,4 @@ pub(super) fn emit_editor_state_change(
         edit,
         vim_mode,
     });
-}
-
-fn custom_sentinel_required_len(value: &str) -> usize {
-    let base = crate::widgets::SENTINEL_BASE as u32;
-    let private_use_end = 0xF900;
-    value
-        .chars()
-        .filter_map(|ch| {
-            let cp = ch as u32;
-            if cp >= base && cp < private_use_end {
-                Some((cp - base) as usize + 1)
-            } else {
-                None
-            }
-        })
-        .max()
-        .unwrap_or(0)
-}
-
-fn image_sentinel_required_len(value: &str) -> usize {
-    let base = crate::widgets::IMAGE_SENTINEL_BASE as u32;
-    let private_use_end = 0xE100;
-    value
-        .chars()
-        .filter_map(|ch| {
-            let cp = ch as u32;
-            if cp >= base && cp < private_use_end {
-                Some((cp - base) as usize + 1)
-            } else {
-                None
-            }
-        })
-        .max()
-        .unwrap_or(0)
-}
-
-/// Return a pruned images list that only keeps images still referenced by sentinel
-/// characters present in `new_value`.
-///
-/// In inline mode each image at index `i` is represented by the sentinel character
-/// `U+E000 + i`.  When the user deletes one of those characters the corresponding
-/// image must be removed from the list.
-///
-/// Returns `(pruned_images, Option<remapped_value>)`. When a middle sentinel is deleted,
-/// the remaining sentinel chars in the value are remapped to sequential indices so that
-/// the pruned list and the value stay consistent.
-pub(super) fn prune_images_for_value(
-    _old_value: &str,
-    new_value: &str,
-    images: &[crate::clipboard::ImageContent],
-) -> (Vec<crate::clipboard::ImageContent>, Option<String>) {
-    if images.is_empty() {
-        return (Vec::new(), None);
-    }
-    let sentinel_base = crate::IMAGE_SENTINEL_BASE as u32;
-    let max_sentinel = sentinel_base + images.len() as u32;
-    let mut present = vec![false; images.len()];
-    for ch in new_value.chars() {
-        let cp = ch as u32;
-        if cp >= sentinel_base && cp < max_sentinel {
-            let idx = (cp - sentinel_base) as usize;
-            present[idx] = true;
-        }
-    }
-    let pruned: Vec<crate::clipboard::ImageContent> = images
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| present[*i])
-        .map(|(_, img)| img.clone())
-        .collect();
-
-    // Build old_index → new_index mapping for remapping sentinel chars.
-    let mut remap: Vec<Option<usize>> = vec![None; images.len()];
-    let mut new_idx = 0usize;
-    for (old_idx, was_present) in present.iter().enumerate() {
-        if *was_present {
-            remap[old_idx] = Some(new_idx);
-            new_idx += 1;
-        }
-    }
-
-    // Check if any char needs remapping (gap was created).
-    let needs_remap = remap
-        .iter()
-        .enumerate()
-        .any(|(i, r)| r.is_some_and(|n| n != i));
-    let remapped_value = if needs_remap {
-        let mut out = String::with_capacity(new_value.len());
-        for ch in new_value.chars() {
-            let cp = ch as u32;
-            if cp >= sentinel_base && cp < max_sentinel {
-                let old_idx = (cp - sentinel_base) as usize;
-                if let Some(Some(new_i)) = remap.get(old_idx) {
-                    out.push(char::from_u32(sentinel_base + *new_i as u32).unwrap_or(ch));
-                } else {
-                    out.push(ch);
-                }
-            } else {
-                out.push(ch);
-            }
-        }
-        Some(out)
-    } else {
-        None
-    };
-
-    (pruned, remapped_value)
-}
-
-/// Prune the custom sentinels list when sentinel chars are removed from the value.
-///
-/// Returns `(pruned_sentinels, Option<remapped_value>)`. When a middle sentinel is deleted,
-/// the remaining sentinel chars in the value are remapped to sequential indices.
-pub(super) fn prune_sentinels_for_value(
-    new_value: &str,
-    sentinels: &[crate::widgets::TextAreaSentinel],
-) -> (
-    Vec<crate::widgets::TextAreaSentinel>,
-    Option<String>,
-    Vec<crate::widgets::SentinelEvent>,
-) {
-    use crate::widgets::{SentinelEvent, SentinelId};
-
-    if sentinels.is_empty() {
-        return (Vec::new(), None, Vec::new());
-    }
-    let sentinel_base = crate::widgets::SENTINEL_BASE as u32;
-    let max_sentinel = sentinel_base + sentinels.len() as u32;
-    let mut present = vec![false; sentinels.len()];
-    for ch in new_value.chars() {
-        let cp = ch as u32;
-        if cp >= sentinel_base && cp < max_sentinel {
-            let idx = (cp - sentinel_base) as usize;
-            present[idx] = true;
-        }
-    }
-    let mut events = Vec::new();
-    for (i, was_present) in present.iter().enumerate() {
-        if !*was_present {
-            let s = &sentinels[i];
-            events.push(SentinelEvent::Deleted {
-                id: s.sentinel_id().unwrap_or(SentinelId::UNKNOWN),
-                sentinel: s.clone(),
-            });
-        }
-    }
-    let pruned: Vec<crate::widgets::TextAreaSentinel> = sentinels
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| present[*i])
-        .map(|(_, s)| s.clone())
-        .collect();
-
-    let mut remap: Vec<Option<usize>> = vec![None; sentinels.len()];
-    let mut new_idx = 0usize;
-    for (old_idx, was_present) in present.iter().enumerate() {
-        if *was_present {
-            remap[old_idx] = Some(new_idx);
-            new_idx += 1;
-        }
-    }
-
-    let needs_remap = remap
-        .iter()
-        .enumerate()
-        .any(|(i, r)| r.is_some_and(|n| n != i));
-    let remapped_value = if needs_remap {
-        let mut out = String::with_capacity(new_value.len());
-        for ch in new_value.chars() {
-            let cp = ch as u32;
-            if cp >= sentinel_base && cp < max_sentinel {
-                let old_idx = (cp - sentinel_base) as usize;
-                if let Some(Some(new_i)) = remap.get(old_idx) {
-                    out.push(char::from_u32(sentinel_base + *new_i as u32).unwrap_or(ch));
-                } else {
-                    out.push(ch);
-                }
-            } else {
-                out.push(ch);
-            }
-        }
-        Some(out)
-    } else {
-        None
-    };
-
-    (pruned, remapped_value, events)
 }

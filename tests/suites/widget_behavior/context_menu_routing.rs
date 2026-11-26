@@ -2306,11 +2306,11 @@ fn bound_inline_image_sentinel_remap_is_atomic_across_undo_and_redo() {
                     Update::full()
                 }
                 Msg::Undo => {
-                    ctx.state.editor.undo();
+                    ctx.state.editor.undo_with_images(&mut ctx.state.images);
                     Update::full()
                 }
                 Msg::Redo => {
-                    ctx.state.editor.redo();
+                    ctx.state.editor.redo_with_images(&mut ctx.state.images);
                     Update::full()
                 }
             }
@@ -2363,14 +2363,23 @@ fn bound_inline_image_sentinel_remap_is_atomic_across_undo_and_redo() {
     assert_eq!(backend.state().editor.text(), format!("{s0}"));
     assert_eq!(backend.state().images, vec![img1.clone()]);
 
-    // Programmatic undo/redo on the bound TextEditor also sees distinct identifiers.
+    // Programmatic undo/redo on the bound TextEditor restores both distinct sentinel IDs and
+    // their image metadata.
     backend.dispatch(Msg::Undo).unwrap();
     backend.render();
     assert_eq!(backend.state().editor.text(), format!("{s0}{s1}"));
+    assert_eq!(backend.state().images, vec![img0.clone(), img1.clone()]);
 
     backend.dispatch(Msg::Redo).unwrap();
     backend.render();
     assert_eq!(backend.state().editor.text(), format!("{s0}"));
+    assert_eq!(backend.state().images, vec![img1.clone()]);
+
+    // Subsequent keyboard undo still sees the shared metadata snapshots.
+    backend.send_key(undo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().editor.text(), format!("{s0}{s1}"));
+    assert_eq!(backend.state().images, vec![img0, img1]);
 }
 
 #[test]
@@ -2379,6 +2388,8 @@ fn bound_custom_sentinel_middle_delete_remap_is_atomic_across_undo_and_redo() {
     enum Msg {
         Edited(tui_lipan::TextAreaEvent),
         Sentinels(Vec<tui_lipan::TextAreaSentinel>),
+        Undo,
+        Redo,
     }
 
     struct State {
@@ -2430,6 +2441,18 @@ fn bound_custom_sentinel_middle_delete_remap_is_atomic_across_undo_and_redo() {
                 }
                 Msg::Sentinels(sentinels) => {
                     ctx.state.sentinels = sentinels;
+                    Update::full()
+                }
+                Msg::Undo => {
+                    ctx.state
+                        .editor
+                        .undo_with_sentinels(&mut ctx.state.sentinels);
+                    Update::full()
+                }
+                Msg::Redo => {
+                    ctx.state
+                        .editor
+                        .redo_with_sentinels(&mut ctx.state.sentinels);
                     Update::full()
                 }
             }
@@ -2489,5 +2512,112 @@ fn bound_custom_sentinel_middle_delete_remap_is_atomic_across_undo_and_redo() {
     backend.send_key(redo).unwrap();
     backend.render();
     assert_eq!(backend.state().editor.text(), format!("{c0}{c1}"));
+    assert_eq!(backend.state().sentinels, vec![s0.clone(), s2.clone()]);
+
+    // Programmatic undo/redo restores both text and exact sentinel metadata (including IDs).
+    backend.dispatch(Msg::Undo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().editor.text(), format!("{c0}{c1}{c2}"));
+    assert_eq!(
+        backend.state().sentinels,
+        vec![s0.clone(), s1.clone(), s2.clone()]
+    );
+
+    backend.dispatch(Msg::Redo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().editor.text(), format!("{c0}{c1}"));
     assert_eq!(backend.state().sentinels, vec![s0, s2]);
+}
+
+#[test]
+fn text_editor_apply_commits_bound_history_and_never_panics() {
+    #[derive(Clone, Debug)]
+    enum Msg {
+        Edited(tui_lipan::TextAreaEvent),
+        Insert(&'static str),
+        Undo,
+        Redo,
+    }
+
+    struct ApplyMethodHarness;
+
+    impl Component for ApplyMethodHarness {
+        type Properties = ();
+        type State = tui_lipan::TextEditor;
+        type Message = Msg;
+
+        fn create_state(&self, _: &()) -> Self::State {
+            tui_lipan::TextEditor::default()
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            match msg {
+                Msg::Edited(ev) => {
+                    ctx.state.apply(&ev);
+                    Update::full()
+                }
+                Msg::Insert(s) => {
+                    ctx.state.insert_str(s);
+                    Update::full()
+                }
+                Msg::Undo => {
+                    ctx.state.undo();
+                    Update::full()
+                }
+                Msg::Redo => {
+                    ctx.state.redo();
+                    Update::full()
+                }
+            }
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            TextArea::bound(&ctx.state)
+                .height(Length::Px(4))
+                .on_change(ctx.link().callback(Msg::Edited))
+                .key("apply-method-editor")
+        }
+    }
+
+    let mut backend = TestBackend::new(ApplyMethodHarness);
+    backend.focus_key(&tui_lipan::Key::from("apply-method-editor"));
+    backend.render();
+
+    // 1. Programmatically insert "abc".
+    backend.dispatch(Msg::Insert("abc")).unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "abc");
+
+    // 2. Press Backspace so on_change routes through TextEditor::apply(&ev).
+    backend
+        .send_key(KeyEvent {
+            code: KeyCode::Backspace,
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "ab");
+
+    // 3. Programmatic undo must restore "abc" (without panicking), then "".
+    backend.dispatch(Msg::Undo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "abc");
+
+    backend.dispatch(Msg::Undo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "");
+
+    // 4. Keyboard redo and programmatic redo walk forward cleanly.
+    backend
+        .send_key(KeyEvent {
+            code: KeyCode::Char('y'),
+            mods: KeyMods::CTRL,
+        })
+        .unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "abc");
+
+    backend.dispatch(Msg::Redo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "ab");
 }

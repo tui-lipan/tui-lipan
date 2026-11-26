@@ -445,7 +445,13 @@ impl ClipboardContext for TextAreaClipboardContext<'_> {
                 if !tail_starts_with_space {
                     text.push(' ');
                 }
+                let before_text = self.editor.text().to_owned();
+                self.editor
+                    .remember_text_area_images(&before_text, self.images);
                 if self.editor.insert_text(&text) {
+                    let after_text = self.editor.text().to_owned();
+                    self.editor
+                        .remember_text_area_images(&after_text, &new_images);
                     let edit = self.emit_edit();
                     self.emit_change(edit);
                 }

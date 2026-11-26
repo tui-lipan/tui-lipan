@@ -1,22 +1,39 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use crate::clipboard::ImageContent;
 use crate::text::edit::{TextEdit, TextEditEvent, TextEditFields, TextEditKind, TextTarget};
 use crate::utils::text::clamp_cursor;
 use crate::utils::text::{
     next_char_boundary, prev_char_boundary, word_boundary_left, word_boundary_right,
 };
+use crate::widgets::TextAreaSentinel;
 use undo::Record;
 
 const DEFAULT_HISTORY_LIMIT: usize = 1000;
 const MAX_STAGED_HISTORY_STEPS: usize = 64;
+const SENTINEL_SNAPSHOT_LIMIT: usize = 1000;
 
 pub(crate) type CoreEdit = TextEdit<TextBufferCore>;
+
+#[derive(Clone, Debug)]
+pub(crate) struct ImageSnapshot {
+    pub(crate) text: String,
+    pub(crate) images: Vec<ImageContent>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct SentinelSnapshot {
+    pub(crate) text: String,
+    pub(crate) sentinels: Vec<TextAreaSentinel>,
+}
 
 #[derive(Debug)]
 struct StagedHistoryStep {
     expected_text: Arc<str>,
-    record: Record<CoreEdit>,
+    record: Arc<Record<CoreEdit>>,
+    image_snapshots: Vec<ImageSnapshot>,
+    sentinel_snapshots: Vec<SentinelSnapshot>,
 }
 
 #[derive(Debug)]
@@ -27,31 +44,74 @@ struct StagedHistory {
 
 #[derive(Debug)]
 struct SharedHistoryInner {
-    record: Record<CoreEdit>,
+    /// Copy-on-write undo/redo record so snapshots and non-mutating operations avoid deep clones.
+    record: Arc<Record<CoreEdit>>,
     generation: u64,
     staged: Option<StagedHistory>,
+    image_snapshots: Vec<ImageSnapshot>,
+    sentinel_snapshots: Vec<SentinelSnapshot>,
+}
+
+fn push_image_snapshot(snapshots: &mut Vec<ImageSnapshot>, text: &str, images: &[ImageContent]) {
+    if images.is_empty() {
+        return;
+    }
+    if let Some(pos) = snapshots.iter().position(|snapshot| snapshot.text == text) {
+        snapshots.remove(pos);
+    }
+    snapshots.push(ImageSnapshot {
+        text: text.to_owned(),
+        images: images.to_vec(),
+    });
+    if snapshots.len() > SENTINEL_SNAPSHOT_LIMIT {
+        snapshots.remove(0);
+    }
+}
+
+fn push_sentinel_snapshot(
+    snapshots: &mut Vec<SentinelSnapshot>,
+    text: &str,
+    sentinels: &[TextAreaSentinel],
+) {
+    if sentinels.is_empty() {
+        return;
+    }
+    if let Some(pos) = snapshots.iter().position(|snapshot| snapshot.text == text) {
+        snapshots.remove(pos);
+    }
+    snapshots.push(SentinelSnapshot {
+        text: text.to_owned(),
+        sentinels: sentinels.to_vec(),
+    });
+    if snapshots.len() > SENTINEL_SNAPSHOT_LIMIT {
+        snapshots.remove(0);
+    }
 }
 
 /// Undo history backing a [`TextBufferCore`].
 ///
-/// Cloning a `SharedHistory` deep-clones only the committed undo record so cloning a
-/// [`TextEditor`](super::TextEditor) or [`TextInput`](super::TextInput) produces an independent
-/// history. Sharing the same history with a bound [`TextArea`](crate::widgets::TextArea) goes
-/// explicitly through [`SharedHistoryHandle`], where runtime edits are staged until accepted via
-/// [`TextAreaEvent::apply_to`](crate::widgets::TextAreaEvent::apply_to).
+/// Cloning a `SharedHistory` creates a new independent handle sharing only the immutable
+/// copy-on-write [`Record`] until mutation, so cloning a [`TextEditor`](super::TextEditor) or
+/// [`TextInput`](super::TextInput) is O(1) while preserving independent undo stacks. Sharing the
+/// same history with a bound [`TextArea`](crate::widgets::TextArea) goes explicitly through
+/// [`SharedHistoryHandle`], where runtime edits are staged until accepted via
+/// [`TextAreaEvent::apply_to`](crate::widgets::TextAreaEvent::apply_to) or
+/// [`TextEditor::apply`](super::TextEditor::apply).
 #[derive(Debug)]
 pub(crate) struct SharedHistory(Arc<Mutex<SharedHistoryInner>>);
 
 impl SharedHistory {
     pub(crate) fn fresh() -> Self {
-        Self::from_record(TextBufferCore::fresh_record())
+        Self::from_arc_record(Arc::new(TextBufferCore::fresh_record()))
     }
 
-    pub(crate) fn from_record(record: Record<CoreEdit>) -> Self {
+    pub(crate) fn from_arc_record(record: Arc<Record<CoreEdit>>) -> Self {
         Self(Arc::new(Mutex::new(SharedHistoryInner {
             record,
             generation: 0,
             staged: None,
+            image_snapshots: Vec::new(),
+            sentinel_snapshots: Vec::new(),
         })))
     }
 
@@ -77,24 +137,68 @@ impl SharedHistory {
         self.lock().generation
     }
 
-    pub(crate) fn snapshot(&self) -> Record<CoreEdit> {
-        self.lock().record.clone()
+    pub(crate) fn snapshot(&self) -> Arc<Record<CoreEdit>> {
+        Arc::clone(&self.lock().record)
+    }
+
+    pub(crate) fn remember_images(&self, text: &str, images: &[ImageContent]) {
+        let mut inner = self.lock();
+        push_image_snapshot(&mut inner.image_snapshots, text, images);
+    }
+
+    pub(crate) fn remembered_images(&self, text: &str) -> Option<Vec<ImageContent>> {
+        self.lock()
+            .image_snapshots
+            .iter()
+            .rev()
+            .find(|snapshot| snapshot.text == text)
+            .map(|snapshot| snapshot.images.clone())
+    }
+
+    pub(crate) fn remember_sentinels(&self, text: &str, sentinels: &[TextAreaSentinel]) {
+        let mut inner = self.lock();
+        push_sentinel_snapshot(&mut inner.sentinel_snapshots, text, sentinels);
+    }
+
+    pub(crate) fn remembered_sentinels(&self, text: &str) -> Option<Vec<TextAreaSentinel>> {
+        self.lock()
+            .sentinel_snapshots
+            .iter()
+            .rev()
+            .find(|snapshot| snapshot.text == text)
+            .map(|snapshot| snapshot.sentinels.clone())
+    }
+
+    pub(crate) fn clone_metadata_snapshots(&self) -> (Vec<ImageSnapshot>, Vec<SentinelSnapshot>) {
+        let inner = self.lock();
+        (
+            inner.image_snapshots.clone(),
+            inner.sentinel_snapshots.clone(),
+        )
     }
 
     pub(crate) fn clear(&self) {
         let mut inner = self.lock();
-        inner.record = TextBufferCore::fresh_record();
+        inner.record = Arc::new(TextBufferCore::fresh_record());
         inner.generation = inner.generation.wrapping_add(1);
         inner.staged = None;
+        inner.image_snapshots.clear();
+        inner.sentinel_snapshots.clear();
     }
 
+    /// Take an owned mutable `Record`, reusing the existing allocation in O(1) when unshared or
+    /// cloning copy-on-write when another handle holds a snapshot.
     pub(crate) fn take(&self) -> Record<CoreEdit> {
-        std::mem::replace(&mut self.lock().record, TextBufferCore::fresh_record())
+        let arc = std::mem::replace(
+            &mut self.lock().record,
+            Arc::new(TextBufferCore::fresh_record()),
+        );
+        Arc::try_unwrap(arc).unwrap_or_else(|shared| (*shared).clone())
     }
 
     pub(crate) fn put_back_committed(&self, record: Record<CoreEdit>, changed: bool) {
         let mut inner = self.lock();
-        inner.record = record;
+        inner.record = Arc::new(record);
         if changed {
             inner.generation = inner.generation.wrapping_add(1);
             inner.staged = None;
@@ -136,13 +240,30 @@ impl SharedHistory {
         if remaining_empty {
             inner.staged = None;
         }
+        for snapshot in step.image_snapshots {
+            push_image_snapshot(&mut inner.image_snapshots, &snapshot.text, &snapshot.images);
+        }
+        for snapshot in step.sentinel_snapshots {
+            push_sentinel_snapshot(
+                &mut inner.sentinel_snapshots,
+                &snapshot.text,
+                &snapshot.sentinels,
+            );
+        }
         true
     }
 }
 
 impl Clone for SharedHistory {
     fn clone(&self) -> Self {
-        Self::from_record(self.snapshot())
+        let inner = self.lock();
+        Self(Arc::new(Mutex::new(SharedHistoryInner {
+            record: Arc::clone(&inner.record),
+            generation: 0,
+            staged: None,
+            image_snapshots: inner.image_snapshots.clone(),
+            sentinel_snapshots: inner.sentinel_snapshots.clone(),
+        })))
     }
 }
 
@@ -157,32 +278,78 @@ impl SharedHistoryHandle {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// Check out a working snapshot of the bound history for runtime `TextArea` handling.
+    /// Check out a copy-on-write snapshot of the bound history for runtime `TextArea` handling.
     ///
     /// If uncommitted staged steps from the current generation end at `text` (e.g. a second
     /// runtime operation arrived before the first `on_change` event was drained), continues from
     /// that staged snapshot; otherwise drops stale staged steps and starts from the committed
     /// record.
-    pub(crate) fn checkout_for_text(&self, text: &str) -> (Record<CoreEdit>, u64) {
+    pub(crate) fn checkout_for_text(&self, text: &str) -> (Arc<Record<CoreEdit>>, u64) {
         let mut inner = self.lock();
         if let Some(staged) = inner.staged.as_ref()
             && staged.base_generation == inner.generation
             && let Some(last) = staged.steps.back()
             && last.expected_text.as_ref() == text
         {
-            return (last.record.clone(), staged.base_generation);
+            return (Arc::clone(&last.record), staged.base_generation);
         }
         inner.staged = None;
-        (inner.record.clone(), inner.generation)
+        (Arc::clone(&inner.record), inner.generation)
+    }
+
+    pub(crate) fn remembered_images(&self, text: &str) -> Option<Vec<ImageContent>> {
+        let inner = self.lock();
+        if let Some(staged) = inner.staged.as_ref()
+            && staged.base_generation == inner.generation
+            && let Some(found) = staged.steps.iter().rev().find_map(|step| {
+                step.image_snapshots
+                    .iter()
+                    .rev()
+                    .find(|snapshot| snapshot.text == text)
+                    .map(|snapshot| snapshot.images.clone())
+            })
+        {
+            return Some(found);
+        }
+        inner
+            .image_snapshots
+            .iter()
+            .rev()
+            .find(|snapshot| snapshot.text == text)
+            .map(|snapshot| snapshot.images.clone())
+    }
+
+    pub(crate) fn remembered_sentinels(&self, text: &str) -> Option<Vec<TextAreaSentinel>> {
+        let inner = self.lock();
+        if let Some(staged) = inner.staged.as_ref()
+            && staged.base_generation == inner.generation
+            && let Some(found) = staged.steps.iter().rev().find_map(|step| {
+                step.sentinel_snapshots
+                    .iter()
+                    .rev()
+                    .find(|snapshot| snapshot.text == text)
+                    .map(|snapshot| snapshot.sentinels.clone())
+            })
+        {
+            return Some(found);
+        }
+        inner
+            .sentinel_snapshots
+            .iter()
+            .rev()
+            .find(|snapshot| snapshot.text == text)
+            .map(|snapshot| snapshot.sentinels.clone())
     }
 
     /// Stage a runtime history checkpoint to be committed when the matching `TextAreaEvent` is
-    /// accepted by `TextAreaEvent::apply_to`.
+    /// accepted by `TextAreaEvent::apply_to` or `TextEditor::apply`.
     pub(crate) fn stage_step(
         &self,
         base_generation: u64,
         expected_text: Arc<str>,
-        record: Record<CoreEdit>,
+        record: Arc<Record<CoreEdit>>,
+        image_snapshots: Vec<ImageSnapshot>,
+        sentinel_snapshots: Vec<SentinelSnapshot>,
     ) {
         let mut inner = self.lock();
         if inner.generation != base_generation {
@@ -191,6 +358,8 @@ impl SharedHistoryHandle {
         let step = StagedHistoryStep {
             expected_text,
             record,
+            image_snapshots,
+            sentinel_snapshots,
         };
         if let Some(staged) = inner.staged.as_mut()
             && staged.base_generation == base_generation

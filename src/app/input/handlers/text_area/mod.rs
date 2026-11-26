@@ -225,8 +225,13 @@ pub(crate) fn handle_key(
                 editor.set_anchor(anchor);
                 editor
             });
-            let mut editor =
-                editor.sync_for_widget(value.as_ref(), cursor, anchor, bound_history.as_ref());
+            let mut editor = editor.sync_for_widget(
+                value.as_ref(),
+                cursor,
+                anchor,
+                bound_history.as_ref(),
+                !images.is_empty() || !sentinels.is_empty(),
+            );
 
             let dispatch = {
                 let mut context = TextAreaClipboardContext::new(
@@ -297,8 +302,13 @@ pub(crate) fn handle_key(
             editor.set_anchor(anchor);
             editor
         });
-        let mut editor =
-            editor.sync_for_widget(value.as_ref(), cursor, anchor, bound_history.as_ref());
+        let mut editor = editor.sync_for_widget(
+            value.as_ref(),
+            cursor,
+            anchor,
+            bound_history.as_ref(),
+            !images.is_empty() || !sentinels.is_empty(),
+        );
 
         let newline_binding = effective_text_area_newline_binding(
             newline_binding_widget,
@@ -602,7 +612,13 @@ pub(crate) fn handle_paste(
         editor.set_anchor(anchor);
         editor
     });
-    let mut editor = editor.sync_for_widget(value.as_ref(), cursor, anchor, bound_history.as_ref());
+    let mut editor = editor.sync_for_widget(
+        value.as_ref(),
+        cursor,
+        anchor,
+        bound_history.as_ref(),
+        !images.is_empty() || !sentinels.is_empty(),
+    );
 
     let before_text = editor.text().to_owned();
     let before_cursor = editor.cursor();

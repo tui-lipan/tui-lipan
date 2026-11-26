@@ -440,6 +440,7 @@ fn dispatch_selection_clipboard_request(
                         cursor,
                         anchor,
                         bound_history.as_ref(),
+                        !images.is_empty() || !sentinels.is_empty(),
                     );
 
                     let dispatch = {
