@@ -432,6 +432,12 @@ pub(crate) struct RuntimeEnv {
     /// When a delayed [`crate::widgets::Tooltip`] last closed in each warm-up group (`None` is the
     /// default group), so the next one in that group can skip its delay.
     pub tooltip_closed_at: Rc<RefCell<FxHashMap<Option<Arc<str>>, Instant>>>,
+    /// Tooltips still fading out, each reached through a callback that ends its fade. A tooltip
+    /// that opens ends them all, so tooltips never fade over one another.
+    pub tooltip_fading: Rc<RefCell<Vec<crate::callback::Callback<()>>>>,
+    /// When a tooltip last opened. A tooltip that starts fading out right after is being swapped
+    /// out, whichever of the two rendered first, so it disappears at once.
+    pub tooltip_opened_at: Rc<Cell<Option<Instant>>>,
     /// The trail drawn behind the host caret when it jumps, from [`crate::App::cursor_trail`] and
     /// [`crate::Context::set_cursor_trail`]. `None` draws none.
     pub cursor_trail: Rc<Cell<Option<crate::app::CursorTrail>>>,

@@ -109,6 +109,8 @@ mod tooltip_child_update;
 mod tooltip_delay;
 #[path = "suites/widget_behavior/tooltip_nested.rs"]
 mod tooltip_nested;
+#[path = "suites/widget_behavior/tooltip_swap_animation.rs"]
+mod tooltip_swap_animation;
 #[path = "suites/widget_behavior/tooltip_trigger_gestures.rs"]
 mod tooltip_trigger_gestures;
 #[path = "suites/widget_behavior/tooltip_warmup_groups.rs"]

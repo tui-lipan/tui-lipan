@@ -351,7 +351,10 @@ Reopening reverses from the current visibility. Closed content does not mount or
 Local-scope popovers keep their existing immediate behavior.
 
 `Select`, `ComboBox`, `ContextMenu`, and `Tooltip` expose the same `.animation(...)` property and
-forward it to Popover. Tooltips stay passive and do not acquire focus because animation is enabled.
+forward it to Popover. Tooltips stay passive and do not acquire focus because animation is enabled. Animated
+tooltips never fade over one another: a tooltip that opens ends any other tooltip's fade-out, and
+one that swaps in without waiting (after warm-up, or between nested tooltips) appears at once.
+Only a tooltip that waited for its delay fades in.
 
 ```rust
 Popover::new()

@@ -16,6 +16,10 @@ use web_time::Instant;
 
 static TOOLTIP_ID: AtomicUsize = AtomicUsize::new(1);
 
+/// How soon after another tooltip opened a closing tooltip counts as swapped out by it, covering
+/// the two rendering in either order within one update.
+const SWAP_WINDOW: Duration = Duration::from_millis(50);
+
 /// Default [`Tooltip::skip_delay`]: how long after a delayed tooltip closes that the next one
 /// still opens at once.
 pub const DEFAULT_TOOLTIP_SKIP_DELAY: Duration = Duration::from_millis(300);
@@ -288,11 +292,24 @@ pub(crate) struct HoverReveal {
     generation: u64,
     /// When the current hover began, so a changed delay counts from the original entry.
     hovered_since: Option<Instant>,
+    /// Whether the current reveal skipped the delay, taking over from another tooltip: such a
+    /// tooltip appears at once instead of fading in.
+    instant: bool,
 }
 
 impl HoverReveal {
     pub(crate) fn revealed(&self) -> bool {
         self.revealed
+    }
+
+    /// Whether the current reveal took over from another tooltip without waiting.
+    pub(crate) fn instant(&self) -> bool {
+        self.revealed && self.instant
+    }
+
+    /// The tooltip, already revealed, takes over again from another one without waiting.
+    pub(crate) fn mark_instant(&mut self) {
+        self.instant = true;
     }
 
     /// The pointer entered (`true`) or left (`false`) the trigger.
@@ -326,6 +343,7 @@ impl HoverReveal {
             .is_some_and(|closed| env.elapsed(*closed) < config.skip_delay);
         if warm {
             self.revealed = true;
+            self.instant = true;
             return RevealStep::Render;
         }
         self.arm(config.delay)
@@ -348,6 +366,7 @@ impl HoverReveal {
         self.generation = self.generation.wrapping_add(1);
         self.hovered_since = Some(env.now());
         self.revealed = true;
+        self.instant = true;
         RevealStep::Render
     }
 
@@ -357,6 +376,7 @@ impl HoverReveal {
             return false;
         }
         self.revealed = true;
+        self.instant = false;
         true
     }
 
@@ -388,6 +408,7 @@ impl HoverReveal {
 
     /// Schedule a reveal for the current hover after `wait`, or reveal now when nothing is left.
     fn arm(&mut self, wait: Duration) -> RevealStep {
+        self.instant = false;
         if wait.is_zero() {
             self.revealed = true;
             return RevealStep::Render;
@@ -552,6 +573,10 @@ struct TooltipState {
     /// Whether this tooltip is showing, or would be but for a hovered nested trigger, as of the
     /// last render. Nested tooltips read it to take over at once.
     shown: Rc<Cell<bool>>,
+    /// Whether the popup was open in the last render, to notice it opening and closing.
+    visible: Cell<bool>,
+    /// Whether another tooltip opened while this one faded out: the fade ends at once.
+    fade_cut: Cell<bool>,
 }
 
 /// What a nested tooltip tells the tooltip whose trigger holds it.
@@ -593,6 +618,8 @@ enum TooltipMsg {
     Reveal(u64),
     /// The pointer entered or left the trigger of a tooltip nested in this one's trigger.
     Nested(NestedHover),
+    /// Another tooltip opened while this one fades out.
+    CutFade,
 }
 
 struct TooltipComponent;
@@ -628,6 +655,8 @@ impl Component for TooltipComponent {
             trigger_hovered: false,
             nested_hovered: false,
             shown: Rc::default(),
+            visible: Cell::new(false),
+            fade_cut: Cell::new(false),
         }
     }
 
@@ -699,6 +728,9 @@ impl Component for TooltipComponent {
                 // A revealed tooltip is hidden, not closed, so it shows again at once when the
                 // pointer comes back.
                 if !ctx.props.delays_hover() || ctx.state.reveal.revealed() {
+                    if !hovered {
+                        ctx.state.reveal.mark_instant();
+                    }
                     return Update::render();
                 }
                 // One still waiting counts only time spent on its own part of the trigger.
@@ -719,6 +751,13 @@ impl Component for TooltipComponent {
                     ctx.state.reveal.hover(true, &config, &env)
                 };
                 Self::step(step, ctx)
+            }
+            TooltipMsg::CutFade => {
+                if ctx.state.visible.get() || ctx.state.fade_cut.get() {
+                    return Update::none();
+                }
+                ctx.state.fade_cut.set(true);
+                Update::render()
             }
         }
     }
@@ -759,10 +798,44 @@ impl Component for TooltipComponent {
             .props
             .open
             .unwrap_or(auto_open && !ctx.state.nested_hovered);
-        ctx.props
-            .config
-            .popover(trigger, &ctx.props.content, open)
-            .into()
+        let mut config = ctx.props.config.clone();
+        let was_visible = ctx.state.visible.replace(open);
+        if open {
+            ctx.state.fade_cut.set(false);
+            if !was_visible {
+                // Opening ends every tooltip still fading out, so two never fade over each other.
+                let env = ctx.env();
+                env.tooltip_opened_at.set(Some(env.now()));
+                let fading = std::mem::take(&mut *env.tooltip_fading.borrow_mut());
+                for cut in fading {
+                    cut.emit(());
+                }
+            }
+            if ctx.state.reveal.instant() {
+                // A swap from another tooltip appears at once: only a first open fades in.
+                if let Some(animation) = &mut config.animation {
+                    animation.enter.duration = Duration::ZERO;
+                }
+            }
+        } else if was_visible && config.animation.is_some() {
+            let env = ctx.env();
+            let swapped = env
+                .tooltip_opened_at
+                .get()
+                .is_some_and(|opened| env.elapsed(opened) < SWAP_WINDOW);
+            if swapped {
+                // Another tooltip just opened in this one's place: leave without fading.
+                ctx.state.fade_cut.set(true);
+            } else {
+                env.tooltip_fading
+                    .borrow_mut()
+                    .push(ctx.link().callback(|()| TooltipMsg::CutFade));
+            }
+        }
+        if !open && ctx.state.fade_cut.get() {
+            config.animation = None;
+        }
+        config.popover(trigger, &ctx.props.content, open).into()
     }
 }
 
