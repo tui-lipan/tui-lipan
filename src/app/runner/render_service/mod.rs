@@ -88,8 +88,7 @@ impl<C: Component> AppRunner<C> {
     pub(super) fn push_drag_layout_collapse_hint(&self) {
         let key = match &self.drag.active {
             ActiveDrag::DragDrop(d)
-                if matches!(d.preview, DragPreview::SourceSnapshot)
-                    && self.core.tree.is_valid(d.source_id) =>
+                if d.preview.uses_source_slot() && self.core.tree.is_valid(d.source_id) =>
             {
                 self.core.tree.node(d.source_id).key.clone()
             }
@@ -1568,28 +1567,43 @@ impl<C: Component> AppRunner<C> {
             }
             _ => None,
         };
-        let (mut drag_preview_label_owned, mut drag_preview_snapshot_rect) = self
-            .drag_preview_context()
-            .map_or((None, None), |(_, _, drag)| match &drag.preview {
-                crate::widgets::DragPreview::Label(label) => (Some(label.clone()), None),
-                crate::widgets::DragPreview::SourceSnapshot => {
-                    let rect = drag
-                        .preview_snapshot_anchor
-                        .filter(|r| !r.is_empty() && r.x >= 0 && r.y >= 0)
-                        .map(|r| ratatui::layout::Rect::new(r.x as u16, r.y as u16, r.w, r.h))
-                        .or_else(|| {
-                            if !self.core.tree.is_valid(drag.source_id) {
-                                return None;
-                            }
-                            let r = self.core.tree.node(drag.source_id).rect;
-                            (r.x >= 0 && r.y >= 0).then(|| {
-                                ratatui::layout::Rect::new(r.x as u16, r.y as u16, r.w, r.h)
+        let (mut drag_preview_label_owned, mut drag_preview_snapshot_rect, drag_preview_node) =
+            self.drag_preview_context()
+                .map_or((None, None, None), |(_, _, drag)| match &drag.preview {
+                    crate::widgets::DragPreview::Label(label) => (Some(label.clone()), None, None),
+                    crate::widgets::DragPreview::SourceSnapshot => {
+                        let rect = drag
+                            .preview_snapshot_anchor
+                            .filter(|r| !r.is_empty() && r.x >= 0 && r.y >= 0)
+                            .map(|r| ratatui::layout::Rect::new(r.x as u16, r.y as u16, r.w, r.h))
+                            .or_else(|| {
+                                if !self.core.tree.is_valid(drag.source_id) {
+                                    return None;
+                                }
+                                let r = self.core.tree.node(drag.source_id).rect;
+                                (r.x >= 0 && r.y >= 0).then(|| {
+                                    ratatui::layout::Rect::new(r.x as u16, r.y as u16, r.w, r.h)
+                                })
+                            });
+                        (None, rect, None)
+                    }
+                    crate::widgets::DragPreview::Element => {
+                        let preview_node = self
+                            .core
+                            .tree
+                            .is_valid(drag.source_id)
+                            .then(|| {
+                                self.core
+                                    .tree
+                                    .node(drag.source_id)
+                                    .kind
+                                    .drag_preview_child()
                             })
-                        });
-                    (None, rect)
-                }
-                crate::widgets::DragPreview::None => (None, None),
-            });
+                            .flatten();
+                        (None, None, preview_node)
+                    }
+                    crate::widgets::DragPreview::None => (None, None, None),
+                });
         // For tab bar drags, derive snapshot rect from the anchor set at drag activation.
         if drag_preview_snapshot_rect.is_none()
             && let ActiveDrag::DraggableTabBar(d) = &self.drag.active
@@ -1691,6 +1705,7 @@ impl<C: Component> AppRunner<C> {
             drag_preview_label,
             drag_preview_at_mouse,
             drag_preview_snapshot_rect,
+            drag_preview_node,
             dnd_snapshot_cells: &self.dnd_snapshot_cells,
             drag_preview_max_width,
             drag_preview_max_height,

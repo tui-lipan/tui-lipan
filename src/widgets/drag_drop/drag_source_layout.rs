@@ -12,7 +12,8 @@ pub(crate) fn measure_drag_source(
     max_h: Option<u16>,
 ) -> (u16, u16) {
     if let Some(child) = source.child.as_deref() {
-        if matches!(source.preview, crate::widgets::DragPreview::SourceSnapshot)
+        if source.preview.uses_source_slot()
+            && source.hide_source_while_dragging
             && let (Some(ek), Some(collapse)) = (element_key, drag_source_snapshot_collapse_key())
             && ek == &collapse
         {
@@ -78,6 +79,45 @@ mod tests {
         );
 
         // Clean up
+        set_drag_source_snapshot_collapse_key(None);
+    }
+
+    #[test]
+    fn visible_drag_source_keeps_its_height_when_collapse_key_matches() {
+        use crate::layout::stack::layout_vstack;
+        use crate::style::Rect;
+        use crate::widgets::internal::StackProps;
+
+        let child: Element = Text::new("Hello world").into();
+        let source = DragSource::new()
+            .child(child)
+            .preview_snapshot()
+            .hide_source_while_dragging(false);
+        let el: Element = Element::from(source).key("test-card");
+        let below: Element = Text::new("below").into();
+
+        set_drag_source_snapshot_collapse_key(Some("test-card".into()));
+        let (_, h) = min_size_constrained(&el, Some(40), None);
+        assert!(h > 0, "a visible source must keep its height, got {h}");
+
+        let props = StackProps {
+            gap: 0,
+            ..StackProps::default()
+        };
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 20,
+        };
+        let rects = layout_vstack(&props, &[el, below], bounds, None, None);
+        assert!(
+            rects[0].h > 0,
+            "stack must not collapse a visible source, got {}",
+            rects[0].h
+        );
+        assert_eq!(rects[1].y, rects[0].h as i16);
+
         set_drag_source_snapshot_collapse_key(None);
     }
 

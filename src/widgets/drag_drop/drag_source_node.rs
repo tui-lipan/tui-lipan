@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use crate::core::node::{NodeKind, WidgetNode};
+use crate::core::node::{NodeId, NodeKind, WidgetNode};
 use crate::style::{StyleSlot, Theme, ThemeRole};
 
 use super::drag_source::{DragSource, DragStartHandler};
-use super::payload::{DragCancelEvent, DragPreview, DragSlot, DragStartedEvent};
+use super::payload::{DragCancelEvent, DragPreview, DragPreviewAnchor, DragSlot, DragStartedEvent};
 
 /// Runtime node for `DragSource`.
 #[derive(Clone)]
@@ -14,6 +14,9 @@ pub struct DragSourceNode {
     pub on_drag_started: Option<crate::callback::Callback<DragStartedEvent>>,
     pub drag_group: Option<Arc<str>>,
     pub preview: DragPreview,
+    pub preview_child: Option<NodeId>,
+    pub preview_anchor: DragPreviewAnchor,
+    pub hide_source_while_dragging: bool,
     pub dragging_style: StyleSlot,
     pub drag_slot: DragSlot,
     pub preview_max_width: Option<u16>,
@@ -31,6 +34,9 @@ impl Default for DragSourceNode {
             on_drag_started: None,
             drag_group: None,
             preview: DragPreview::None,
+            preview_child: None,
+            preview_anchor: DragPreviewAnchor::Free,
+            hide_source_while_dragging: true,
             dragging_style: StyleSlot::Inherit,
             drag_slot: DragSlot::Collapse,
             preview_max_width: None,
@@ -64,6 +70,9 @@ impl From<DragSource> for DragSourceNode {
             on_drag_started: value.on_drag_started,
             drag_group: value.drag_group,
             preview: value.preview,
+            preview_child: None,
+            preview_anchor: value.preview_anchor,
+            hide_source_while_dragging: value.hide_source_while_dragging,
             dragging_style: value.dragging_style,
             drag_slot: value.drag_slot,
             preview_max_width: value.preview_max_width,

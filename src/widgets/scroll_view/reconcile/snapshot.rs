@@ -99,7 +99,18 @@ pub(crate) fn collect_visible_scroll_children(
     let mut visible_rects = Vec::with_capacity(children.len());
 
     for (i, r) in content_layout.rects.iter().enumerate() {
-        if r.w == 0 || r.h == 0 {
+        if r.w == 0 {
+            continue;
+        }
+        if r.h == 0 {
+            // Keep collapsed drag sources mounted so an active drag retains its NodeId and
+            // can continue reconciling its floating preview at the row's width.
+            if children.get(i).is_some_and(contains_drag_source) {
+                visible_indices.push(i);
+                let x = inner.x.saturating_add(r.x).saturating_sub(h_offset as i16);
+                let y = (visible_viewport.y as i32 + r.y as i32 - range_start as i32) as i16;
+                visible_rects.push(Rect { x, y, w: r.w, h: 0 });
+            }
             continue;
         }
 
@@ -120,6 +131,11 @@ pub(crate) fn collect_visible_scroll_children(
     }
 
     (visible_indices, visible_rects)
+}
+
+fn contains_drag_source(el: &Element) -> bool {
+    matches!(el.kind, ElementKind::DragSource(_))
+        || el.kind.children().into_iter().any(contains_drag_source)
 }
 
 fn same_scroll_child_identity(a: &ScrollVisibleChild, b: &ScrollVisibleChild) -> bool {

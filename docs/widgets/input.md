@@ -99,11 +99,14 @@ Wrapper that turns a single child into a generic drag source.
 | `on_drag_started` | `Callback<DragStartedEvent>` | Fired once when the drag activates (after the movement threshold); includes `payload` |
 | `drag_group` | `impl Into<Arc<str>>` | Optional compatibility group |
 | `clear_drag_group` | `()` | Remove group restriction |
-| `preview` | `DragPreview` | `Label` text near pointer, `SourceSnapshot` (layout slot collapses per `drag_slot`; float preview copies cells and may leave the viewport, clipped at the edges), or `None` |
+| `preview` | `DragPreview` | `Label` text near pointer, `SourceSnapshot` (layout slot collapses per `drag_slot`; float preview copies cells and may leave the viewport, clipped at the edges), `Element` (renders `preview_element` live on every frame while dragging, clearing its screen rect first so underlying cells cannot bleed through), or `None` |
 | `preview_label` | `impl Into<Arc<str>>` | Convenience for `DragPreview::Label` |
 | `preview_snapshot` | `()` | Convenience for `DragPreview::SourceSnapshot` |
+| `preview_element` | `impl Into<Element>` | Set a live preview element and switch preview mode to `DragPreview::Element` |
+| `preview_anchor` | `DragPreviewAnchor` | How a floating `DragPreview::Element` tracks the pointer: `Free` (follows pointer minus grab offset, default), `VerticalRail` (locks X to source column), `HorizontalRail` (locks Y to source row), or `CursorOffset(dx, dy)` |
+| `hide_source_while_dragging` | `bool` | Whether to hide the source child while dragging (`true` by default). `false` keeps the source painted at its normal layout size; `drag_slot` applies only while the source is hidden |
 | `no_preview` | `()` | Convenience for `DragPreview::None` |
-| `drag_slot` | `DragSlot` | `Collapse` (0 main-axis cells) or `Specified(Length)` using the same `Length` rules as stack children (`Auto`, `Px`, `Percent`, `Flex`). In `VStack`/`HStack` the stack axis applies; elsewhere use `drag_slot_axis`. |
+| `drag_slot` | `DragSlot` | Hole left while the source is hidden: `Collapse` (0 main-axis cells) or `Specified(Length)` using the same `Length` rules as stack children (`Auto`, `Px`, `Percent`, `Flex`). Ignored when `hide_source_while_dragging` is `false`. In `VStack`/`HStack` the stack axis applies; elsewhere use `drag_slot_axis`. |
 | `drag_slot_collapse` | `()` | Same as `drag_slot(DragSlot::Collapse)` |
 | `drag_slot_length` | `Length` | Same as `drag_slot(DragSlot::Specified(len))` |
 | `drag_slot_axis` | `DragSlotAxis` | `Vertical` or `Horizontal`: which axis `Fixed`/`Collapse` apply to when measured outside a stack (default: vertical) |

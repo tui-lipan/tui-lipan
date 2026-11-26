@@ -384,6 +384,9 @@ pub(crate) fn collect_popover_overlay_roots(tree: &mut NodeTree, overlay_state: 
         .collect();
     let mut seen = HashSet::new();
     for id in popovers {
+        if inside_drag_preview(tree, id) {
+            continue;
+        }
         collect_popover_overlay_root(tree, overlay_state, id, &mut seen);
     }
 }
@@ -480,6 +483,21 @@ fn trigger_visible(tree: &NodeTree, trigger: NodeId, bounds: Rect) -> bool {
     !visible.intersection(&bounds).is_empty()
 }
 
+fn inside_drag_preview(tree: &NodeTree, mut id: NodeId) -> bool {
+    loop {
+        let Some(parent) = tree.node(id).parent else {
+            return false;
+        };
+        if !tree.is_valid(parent) {
+            return false;
+        }
+        if tree.node(parent).kind.drag_preview_child() == Some(id) {
+            return true;
+        }
+        id = parent;
+    }
+}
+
 fn crosses_root_portal_boundary(node: &crate::core::node::Node, child: NodeId) -> bool {
     node.kind.root_portal_content() == Some(child)
 }
@@ -509,11 +527,17 @@ pub(crate) fn collect_portal_overlay_roots(tree: &NodeTree, overlay_state: &mut 
     pending.push(tree.root);
     let mut visited = HashSet::new();
     while let Some(id) = pending.pop() {
-        if !tree.is_valid(id) || !visited.insert(id) {
+        if !tree.is_valid(id) || !visited.insert(id) || inside_drag_preview(tree, id) {
             continue;
         }
         let node = tree.node(id);
-        pending.extend(node.children.iter().rev().copied());
+        pending.extend(
+            node.children
+                .iter()
+                .rev()
+                .copied()
+                .filter(|child| node.kind.drag_preview_child() != Some(*child)),
+        );
         let NodeKind::Portal(portal) = &node.kind else {
             continue;
         };
