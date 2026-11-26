@@ -2836,11 +2836,15 @@ fn vim_paste_image(
             if !tail_starts_with_space {
                 text.push(' ');
             }
-            changed = editor.insert_text(&text);
-            if changed {
-                let text = editor.text().to_owned();
-                editor.remember_text_area_images(&text, &new_images);
-            }
+            changed = editor.insert_text_with_metadata(
+                &text,
+                crate::text::edit::EditMetadata {
+                    images_before: Some(clipboard.params.images.to_vec()),
+                    images_after: Some(new_images),
+                    sentinels_before: None,
+                    sentinels_after: None,
+                },
+            );
         }
         TextAreaImageMode::Attachment => {
             on_images_change.emit(new_images);

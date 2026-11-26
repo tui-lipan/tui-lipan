@@ -2,8 +2,10 @@
 
 use crate::clipboard::ImageContent;
 use crate::core::event::KeyEvent;
-use crate::text::buffer::{CoreEdit, SharedHistory, SharedHistoryHandle, TextBufferCore};
-use crate::text::edit::{TextEditEvent, TextEditKind};
+use crate::text::buffer::{
+    CoreEdit, SharedHistory, SharedHistoryHandle, StagedMetadata, TextBufferCore,
+};
+use crate::text::edit::{EditMetadata, RestoredMetadata, TextEditEvent, TextEditKind};
 use crate::utils::text::clamp_cursor;
 use crate::widgets::{SentinelEvent, SentinelId, TextAreaEvent, TextAreaSentinel};
 use std::ops::{Deref, DerefMut};
@@ -132,6 +134,7 @@ impl TextEditor {
                 anchor: None,
                 history: SharedHistory::fresh(),
                 last_edit: None,
+                last_restored_metadata: None,
             },
             pending_external_paste: None,
             visual_nav_col: None,
@@ -246,43 +249,47 @@ impl TextEditor {
         }
     }
 
+    pub(crate) fn is_bound(&self) -> bool {
+        self.active_tx
+            .0
+            .as_ref()
+            .is_some_and(|tx| tx.bound.is_some())
+    }
+
+    pub(crate) fn take_last_restored_metadata(&mut self) -> Option<RestoredMetadata> {
+        self.core.take_last_restored_metadata()
+    }
+
     /// Replace the active edit transaction's history entry with a single atomic replacement from
-    /// the pre-edit text to `final_text` (e.g. after sentinel renumbering).
+    /// the pre-edit text to `final_text` (e.g. after sentinel deletion or renumbering), attaching
+    /// optional image/sentinel metadata directly to the recorded edit.
     pub(crate) fn rewrite_pending_edit_to(
         &mut self,
         final_text: &str,
         final_cursor: usize,
         final_anchor: Option<usize>,
+        metadata: Option<EditMetadata>,
     ) -> Option<TextEditEvent> {
         let pre = self.active_tx.0.as_ref()?;
         let pre_record = pre.pre_record.as_ref().map(Arc::clone)?;
         let pre_text = pre.pre_text.clone();
         let pre_cursor = pre.pre_cursor;
         let pre_anchor = pre.pre_anchor;
-        let (image_snapshots, sentinel_snapshots) = self.core.history.clone_metadata_snapshots();
 
         self.core.text = pre_text;
         self.core.cursor = pre_cursor;
         self.core.anchor = pre_anchor;
         self.core.history = SharedHistory::from_arc_record(pre_record);
-        for snapshot in image_snapshots {
-            self.core
-                .history
-                .remember_images(&snapshot.text, &snapshot.images);
-        }
-        for snapshot in sentinel_snapshots {
-            self.core
-                .history
-                .remember_sentinels(&snapshot.text, &snapshot.sentinels);
-        }
         let event = self.core.record_full_replace_edit(
             final_text,
             pre_cursor,
             pre_anchor,
             final_cursor,
             final_anchor,
+            metadata,
         );
         self.core.last_edit = None;
+        self.core.last_restored_metadata = None;
         if let Some(tx) = self.active_tx.0.as_mut() {
             // `from_arc_record` starts local generation at 0 and `record_full_replace_edit`
             // bumped it to 1, so `pre_generation` must be 0 to mark the transaction as mutated.
@@ -291,9 +298,15 @@ impl TextEditor {
         Some(event)
     }
 
-    /// Stage the working history snapshot onto the bound handle right before emitting `on_change`
-    /// so `TextAreaEvent::apply_to` / `TextEditor::apply` can commit it atomically if accepted.
-    pub(crate) fn stage_bound_history(&self, expected_text: &Arc<str>) {
+    /// Stage the working history snapshot (and any deferred metadata callbacks) onto the bound
+    /// handle right before emitting `on_change` so `TextAreaEvent::apply_to` /
+    /// `TextEditor::apply` / `TextEditor::apply_with_metadata` can commit them atomically.
+    pub(crate) fn stage_bound_history(
+        &self,
+        expected_text: &Arc<str>,
+        deferred_callbacks_token: Option<u64>,
+        staged_metadata: Option<StagedMetadata>,
+    ) {
         let Some(tx) = self.active_tx.0.as_ref() else {
             return;
         };
@@ -303,13 +316,12 @@ impl TextEditor {
         if self.core.history.generation() == tx.pre_generation {
             return;
         }
-        let (image_snapshots, sentinel_snapshots) = self.core.history.clone_metadata_snapshots();
         handle.stage_step(
             *base_generation,
             expected_text.clone(),
             self.core.history.snapshot(),
-            image_snapshots,
-            sentinel_snapshots,
+            deferred_callbacks_token,
+            staged_metadata,
         );
     }
 
@@ -320,41 +332,6 @@ impl TextEditor {
             cursor_before: self.core.cursor(),
             anchor_before: self.core.anchor(),
         });
-    }
-
-    pub(crate) fn remember_text_area_sentinels(
-        &mut self,
-        text: &str,
-        sentinels: &[TextAreaSentinel],
-    ) {
-        self.core.history.remember_sentinels(text, sentinels);
-    }
-
-    pub(crate) fn remembered_text_area_sentinels(
-        &self,
-        text: &str,
-    ) -> Option<Vec<TextAreaSentinel>> {
-        self.core.history.remembered_sentinels(text).or_else(|| {
-            self.active_tx
-                .0
-                .as_ref()
-                .and_then(|tx| tx.bound.as_ref())
-                .and_then(|(handle, _)| handle.remembered_sentinels(text))
-        })
-    }
-
-    pub(crate) fn remember_text_area_images(&mut self, text: &str, images: &[ImageContent]) {
-        self.core.history.remember_images(text, images);
-    }
-
-    pub(crate) fn remembered_text_area_images(&self, text: &str) -> Option<Vec<ImageContent>> {
-        self.core.history.remembered_images(text).or_else(|| {
-            self.active_tx
-                .0
-                .as_ref()
-                .and_then(|tx| tx.bound.as_ref())
-                .and_then(|(handle, _)| handle.remembered_images(text))
-        })
     }
 
     /// Undo the most recent edit and synchronize any tracked inline image metadata with the
@@ -401,18 +378,43 @@ impl TextEditor {
         self.replay_history_with_metadata(false, images, sentinels)
     }
 
+    /// Apply a [`TextAreaEvent`] and any staged inline image update atomically.
+    pub fn apply_with_images(&mut self, ev: &TextAreaEvent, images: &mut Vec<ImageContent>) {
+        self.apply_with_metadata(ev, Some(images), None);
+    }
+
+    /// Apply a [`TextAreaEvent`] and any staged custom sentinel update atomically.
+    pub fn apply_with_sentinels(
+        &mut self,
+        ev: &TextAreaEvent,
+        sentinels: &mut Vec<TextAreaSentinel>,
+    ) {
+        self.apply_with_metadata(ev, None, Some(sentinels));
+    }
+
+    /// Apply a [`TextAreaEvent`] together with any staged inline image and/or custom sentinel
+    /// updates atomically.
+    pub fn apply_with_metadata(
+        &mut self,
+        ev: &TextAreaEvent,
+        images: Option<&mut Vec<ImageContent>>,
+        sentinels: Option<&mut Vec<TextAreaSentinel>>,
+    ) {
+        self.core.apply_controlled_change_with_metadata(
+            ev.value.as_ref(),
+            ev.cursor,
+            ev.anchor,
+            images,
+            sentinels,
+        );
+    }
+
     fn replay_history_with_metadata(
         &mut self,
         is_undo: bool,
         images: Option<&mut Vec<ImageContent>>,
         sentinels: Option<&mut Vec<TextAreaSentinel>>,
     ) -> bool {
-        if let Some(imgs) = images.as_deref() {
-            self.core.history.remember_images(&self.core.text, imgs);
-        }
-        if let Some(sents) = sentinels.as_deref() {
-            self.core.history.remember_sentinels(&self.core.text, sents);
-        }
         let changed = if is_undo {
             self.core.undo()
         } else {
@@ -421,35 +423,32 @@ impl TextEditor {
         if !changed {
             return false;
         }
+        let restored = self.core.take_last_restored_metadata();
         let restored_text = self.text().to_owned();
         if let Some(imgs) = images {
-            let required = image_sentinel_required_len(&restored_text);
-            let source = if required == 0 {
-                (!imgs.is_empty()).then(|| imgs.clone())
+            if let Some(next_images) = restored.as_ref().and_then(|meta| meta.images.clone()) {
+                *imgs = next_images;
             } else {
-                self.remembered_text_area_images(&restored_text)
-                    .filter(|saved| required <= saved.len())
-                    .or_else(|| (required <= imgs.len()).then(|| imgs.clone()))
-            };
-            if let Some(source) = source {
-                let (pruned, _) = prune_images_for_value(&restored_text, &source);
-                *imgs = pruned;
-                self.remember_text_area_images(&restored_text, imgs);
+                let required = image_sentinel_required_len(&restored_text);
+                if required == 0 {
+                    imgs.clear();
+                } else if required <= imgs.len() {
+                    let (pruned, _) = prune_images_for_value(&restored_text, imgs);
+                    *imgs = pruned;
+                }
             }
         }
         if let Some(sents) = sentinels {
-            let required = custom_sentinel_required_len(&restored_text);
-            let source = if required == 0 {
-                (!sents.is_empty()).then(|| sents.clone())
+            if let Some(next_sentinels) = restored.and_then(|meta| meta.sentinels) {
+                *sents = next_sentinels;
             } else {
-                self.remembered_text_area_sentinels(&restored_text)
-                    .filter(|saved| required <= saved.len())
-                    .or_else(|| (required <= sents.len()).then(|| sents.clone()))
-            };
-            if let Some(source) = source {
-                let (pruned, _, _) = prune_sentinels_for_value(&restored_text, &source);
-                *sents = pruned;
-                self.remember_text_area_sentinels(&restored_text, sents);
+                let required = custom_sentinel_required_len(&restored_text);
+                if required == 0 {
+                    sents.clear();
+                } else if required <= sents.len() {
+                    let (pruned, _, _) = prune_sentinels_for_value(&restored_text, sents);
+                    *sents = pruned;
+                }
             }
         }
         true
@@ -465,6 +464,23 @@ impl TextEditor {
             .unwrap_or((self.core.cursor, self.core.cursor));
         self.core
             .replace_range(start, end, text, TextEditKind::Replace)
+    }
+
+    pub(crate) fn insert_text_with_metadata(&mut self, text: &str, metadata: EditMetadata) -> bool {
+        if text.is_empty() {
+            return false;
+        }
+        let (start, end) = self
+            .core
+            .selection()
+            .unwrap_or((self.core.cursor, self.core.cursor));
+        self.core.replace_range_with_metadata(
+            start,
+            end,
+            text,
+            TextEditKind::Replace,
+            Some(metadata),
+        )
     }
 
     /// Clear all text while preserving undo/redo history.
@@ -1526,5 +1542,11 @@ mod tests {
         assert!(!original.can_redo());
         assert!(original.undo());
         assert_eq!(original.text(), "");
+    }
+
+    #[test]
+    fn text_editor_is_send_and_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<TextEditor>();
     }
 }

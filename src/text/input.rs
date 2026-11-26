@@ -69,6 +69,7 @@ impl TextInput {
                 anchor: None,
                 history: SharedHistory::fresh(),
                 last_edit: None,
+                last_restored_metadata: None,
             },
             history_scope: None,
         }

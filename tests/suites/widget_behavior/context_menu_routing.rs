@@ -2621,3 +2621,473 @@ fn text_editor_apply_commits_bound_history_and_never_panics() {
     backend.render();
     assert_eq!(backend.state().text(), "ab");
 }
+
+struct TestImageClipboardProvider(tui_lipan::ImageContent);
+
+impl tui_lipan::ClipboardProvider for TestImageClipboardProvider {
+    fn read_clipboard_text(&mut self) -> std::result::Result<String, tui_lipan::ClipboardError> {
+        Ok(String::new())
+    }
+
+    fn write_clipboard_text(
+        &mut self,
+        _text: &str,
+    ) -> std::result::Result<(), tui_lipan::ClipboardError> {
+        Ok(())
+    }
+
+    fn read_clipboard_image(
+        &mut self,
+    ) -> std::result::Result<tui_lipan::ImageContent, tui_lipan::ClipboardError> {
+        Ok(self.0.clone())
+    }
+}
+
+#[test]
+fn identical_text_at_different_history_positions_preserves_distinct_image_metadata() {
+    #[derive(Clone, Debug)]
+    enum Msg {
+        Edited(tui_lipan::TextAreaEvent),
+        Images(Vec<tui_lipan::ImageContent>),
+        Undo,
+        Redo,
+    }
+
+    struct State {
+        editor: tui_lipan::TextEditor,
+        images: Vec<tui_lipan::ImageContent>,
+    }
+
+    struct IdenticalTextImagesHarness;
+
+    let s0 = tui_lipan::IMAGE_SENTINEL_BASE;
+    let s1 = char::from_u32(tui_lipan::IMAGE_SENTINEL_BASE as u32 + 1).unwrap();
+    let img_a = tui_lipan::ImageContent::from_bytes(b"image-a", tui_lipan::ImageFormat::Png);
+    let img_b = tui_lipan::ImageContent::from_bytes(b"image-b", tui_lipan::ImageFormat::Png);
+
+    impl Component for IdenticalTextImagesHarness {
+        type Properties = ();
+        type State = State;
+        type Message = Msg;
+
+        fn create_state(&self, _: &()) -> Self::State {
+            let s0 = tui_lipan::IMAGE_SENTINEL_BASE;
+            let initial = format!("{s0} ");
+            let cursor = initial.len();
+            let mut editor = tui_lipan::TextEditor::new(initial);
+            editor.set_cursor(cursor);
+            State {
+                editor,
+                images: vec![tui_lipan::ImageContent::from_bytes(
+                    b"image-a",
+                    tui_lipan::ImageFormat::Png,
+                )],
+            }
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            match msg {
+                Msg::Edited(ev) => {
+                    ctx.state.editor.apply(&ev);
+                    Update::full()
+                }
+                Msg::Images(images) => {
+                    ctx.state.images = images;
+                    Update::full()
+                }
+                Msg::Undo => {
+                    ctx.state.editor.undo_with_images(&mut ctx.state.images);
+                    Update::full()
+                }
+                Msg::Redo => {
+                    ctx.state.editor.redo_with_images(&mut ctx.state.images);
+                    Update::full()
+                }
+            }
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            TextArea::bound(&ctx.state.editor)
+                .height(Length::Px(4))
+                .image_mode(tui_lipan::TextAreaImageMode::Inline)
+                .images(ctx.state.images.clone())
+                .on_change(ctx.link().callback(Msg::Edited))
+                .on_images_change(ctx.link().callback(Msg::Images))
+                .key("identical-text-images-editor")
+        }
+    }
+
+    let app = tui_lipan::App::new().clipboard_provider(TestImageClipboardProvider(img_b.clone()));
+    let mut backend = TestBackend::new_with_app(app, IdenticalTextImagesHarness, ());
+    backend.focus_key(&tui_lipan::Key::from("identical-text-images-editor"));
+    backend.render();
+    assert_eq!(backend.state().editor.text(), format!("{s0} "));
+    assert_eq!(backend.state().images, vec![img_a.clone()]);
+
+    // 1. Paste image B via Ctrl+V -> "[E000] [E001] ", images = [A, B].
+    backend
+        .send_key(KeyEvent {
+            code: KeyCode::Char('v'),
+            mods: KeyMods::CTRL,
+        })
+        .unwrap();
+    backend.render();
+    assert_eq!(backend.state().editor.text(), format!("{s0} {s1} "));
+    assert_eq!(backend.state().images, vec![img_a.clone(), img_b.clone()]);
+
+    // 2. Select A and its separator ("[E000] ") and delete -> remaps to "[E000] ", images = [B].
+    //    Notice the internal text is now identical to the initial state, with different metadata!
+    let first_with_space = format!("{s0} ").len();
+    backend.state_mut().editor.set_anchor(Some(0));
+    backend
+        .state_mut()
+        .editor
+        .set_cursor_keep_anchor(first_with_space);
+    backend.render();
+    backend
+        .send_key(KeyEvent {
+            code: KeyCode::Backspace,
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.render();
+    assert_eq!(backend.state().editor.text(), format!("{s0} "));
+    assert_eq!(backend.state().images, vec![img_b.clone()]);
+
+    let undo = KeyEvent {
+        code: KeyCode::Char('z'),
+        mods: KeyMods::CTRL,
+    };
+    let redo = KeyEvent {
+        code: KeyCode::Char('y'),
+        mods: KeyMods::CTRL,
+    };
+
+    // 3. Keyboard undo deletion -> "[E000] [E001] ", [A, B].
+    backend.send_key(undo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().editor.text(), format!("{s0} {s1} "));
+    assert_eq!(backend.state().images, vec![img_a.clone(), img_b.clone()]);
+
+    // 4. Keyboard undo paste -> "[E000] ", MUST restore [A] (not [B])!
+    backend.send_key(undo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().editor.text(), format!("{s0} "));
+    assert_eq!(
+        backend.state().images,
+        vec![img_a.clone()],
+        "undoing back to the initial position must restore image A, not image B"
+    );
+
+    // 5. Keyboard redo paste -> [A, B], redo deletion -> [B].
+    backend.send_key(redo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().editor.text(), format!("{s0} {s1} "));
+    assert_eq!(backend.state().images, vec![img_a.clone(), img_b.clone()]);
+
+    backend.send_key(redo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().editor.text(), format!("{s0} "));
+    assert_eq!(backend.state().images, vec![img_b.clone()]);
+
+    // 6. Programmatic undo_with_images / redo_with_images traverse the exact same transitions.
+    backend.dispatch(Msg::Undo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().editor.text(), format!("{s0} {s1} "));
+    assert_eq!(backend.state().images, vec![img_a.clone(), img_b.clone()]);
+
+    backend.dispatch(Msg::Undo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().editor.text(), format!("{s0} "));
+    assert_eq!(backend.state().images, vec![img_a.clone()]);
+
+    backend.dispatch(Msg::Redo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().editor.text(), format!("{s0} {s1} "));
+    assert_eq!(backend.state().images, vec![img_a, img_b.clone()]);
+
+    backend.dispatch(Msg::Redo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().editor.text(), format!("{s0} "));
+    assert_eq!(backend.state().images, vec![img_b]);
+}
+
+#[test]
+fn rejecting_controlled_edits_also_rejects_image_and_sentinel_metadata_changes() {
+    #[derive(Clone, Debug)]
+    enum Msg {
+        Edited(tui_lipan::TextAreaEvent),
+        Images(Vec<tui_lipan::ImageContent>),
+        Sentinels(Vec<tui_lipan::TextAreaSentinel>),
+        SentinelEvents(Vec<tui_lipan::SentinelEvent>),
+        SetReject(bool),
+    }
+
+    struct State {
+        editor: tui_lipan::TextEditor,
+        images: Vec<tui_lipan::ImageContent>,
+        sentinels: Vec<tui_lipan::TextAreaSentinel>,
+        reject: bool,
+        image_callbacks: usize,
+        sentinel_callbacks: usize,
+        sentinel_event_callbacks: usize,
+    }
+
+    struct RejectMetadataHarness;
+
+    let img0 = tui_lipan::ImageContent::from_bytes(b"img-0", tui_lipan::ImageFormat::Png);
+    let img1 = tui_lipan::ImageContent::from_bytes(b"img-1", tui_lipan::ImageFormat::Png);
+    let img2 = tui_lipan::ImageContent::from_bytes(b"img-2", tui_lipan::ImageFormat::Png);
+
+    impl Component for RejectMetadataHarness {
+        type Properties = ();
+        type State = State;
+        type Message = Msg;
+
+        fn create_state(&self, _: &()) -> Self::State {
+            let s0 = tui_lipan::IMAGE_SENTINEL_BASE;
+            let s1 = char::from_u32(tui_lipan::IMAGE_SENTINEL_BASE as u32 + 1).unwrap();
+            let mut sentinels = Vec::new();
+            let base = format!("{s0}{s1}");
+            let (v, cursor_after_first_custom) = tui_lipan::insert_sentinel(
+                &base,
+                base.len(),
+                &mut sentinels,
+                tui_lipan::TextAreaSentinel::new("@one"),
+            );
+            let (v, _) = tui_lipan::insert_sentinel(
+                &v,
+                cursor_after_first_custom,
+                &mut sentinels,
+                tui_lipan::TextAreaSentinel::new("@two"),
+            );
+            let mut editor = tui_lipan::TextEditor::new(v);
+            editor.set_cursor(s0.len_utf8());
+            State {
+                editor,
+                images: vec![
+                    tui_lipan::ImageContent::from_bytes(b"img-0", tui_lipan::ImageFormat::Png),
+                    tui_lipan::ImageContent::from_bytes(b"img-1", tui_lipan::ImageFormat::Png),
+                ],
+                sentinels,
+                reject: true,
+                image_callbacks: 0,
+                sentinel_callbacks: 0,
+                sentinel_event_callbacks: 0,
+            }
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            match msg {
+                Msg::Edited(ev) => {
+                    if !ctx.state.reject {
+                        ev.apply_to(&mut ctx.state.editor);
+                    }
+                    Update::full()
+                }
+                Msg::Images(images) => {
+                    ctx.state.image_callbacks += 1;
+                    ctx.state.images = images;
+                    Update::full()
+                }
+                Msg::Sentinels(sentinels) => {
+                    ctx.state.sentinel_callbacks += 1;
+                    ctx.state.sentinels = sentinels;
+                    Update::full()
+                }
+                Msg::SentinelEvents(events) => {
+                    ctx.state.sentinel_event_callbacks += events.len();
+                    Update::full()
+                }
+                Msg::SetReject(reject) => {
+                    ctx.state.reject = reject;
+                    Update::full()
+                }
+            }
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            TextArea::bound(&ctx.state.editor)
+                .height(Length::Px(4))
+                .image_mode(tui_lipan::TextAreaImageMode::Inline)
+                .images(ctx.state.images.clone())
+                .sentinels(ctx.state.sentinels.clone())
+                .on_change(ctx.link().callback(Msg::Edited))
+                .on_images_change(ctx.link().callback(Msg::Images))
+                .on_sentinels_change(ctx.link().callback(Msg::Sentinels))
+                .on_sentinel_event(ctx.link().callback(Msg::SentinelEvents))
+                .key("reject-metadata-editor")
+        }
+    }
+
+    let app = tui_lipan::App::new().clipboard_provider(TestImageClipboardProvider(img2));
+    let mut backend = TestBackend::new_with_app(app, RejectMetadataHarness, ());
+    backend.focus_key(&tui_lipan::Key::from("reject-metadata-editor"));
+    backend.render();
+
+    let initial_text = backend.state().editor.text().to_owned();
+    let initial_sentinels = backend.state().sentinels.clone();
+    let [c0, c1]: [tui_lipan::TextAreaSentinel; 2] = initial_sentinels
+        .clone()
+        .try_into()
+        .expect("two custom sentinels");
+
+    // 1. Reject deleting the first inline image sentinel: on_images_change must NOT fire.
+    backend
+        .send_key(KeyEvent {
+            code: KeyCode::Backspace,
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.render();
+    assert_eq!(backend.state().editor.text(), initial_text);
+    assert_eq!(backend.state().images, vec![img0.clone(), img1.clone()]);
+    assert_eq!(backend.state().image_callbacks, 0);
+    assert!(!backend.state().editor.can_undo());
+
+    // 2. Reject pasting a new inline image via Ctrl+V: on_images_change must NOT fire.
+    backend
+        .send_key(KeyEvent {
+            code: KeyCode::Char('v'),
+            mods: KeyMods::CTRL,
+        })
+        .unwrap();
+    backend.render();
+    assert_eq!(backend.state().editor.text(), initial_text);
+    assert_eq!(backend.state().images, vec![img0.clone(), img1.clone()]);
+    assert_eq!(backend.state().image_callbacks, 0);
+
+    // 3. Reject deleting the first custom sentinel: on_sentinels_change and on_sentinel_event
+    //    must NOT fire.
+    let after_first_custom =
+        tui_lipan::IMAGE_SENTINEL_BASE.len_utf8() * 2 + tui_lipan::SENTINEL_BASE.len_utf8();
+    backend.state_mut().editor.set_cursor(after_first_custom);
+    backend.render();
+    backend
+        .send_key(KeyEvent {
+            code: KeyCode::Backspace,
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.render();
+    assert_eq!(backend.state().editor.text(), initial_text);
+    assert_eq!(backend.state().sentinels, initial_sentinels);
+    assert_eq!(backend.state().sentinel_callbacks, 0);
+    assert_eq!(backend.state().sentinel_event_callbacks, 0);
+
+    // 4. Once acceptance is enabled, deleting the custom sentinel commits both text and metadata.
+    backend.dispatch(Msg::SetReject(false)).unwrap();
+    backend.render();
+    backend
+        .send_key(KeyEvent {
+            code: KeyCode::Backspace,
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.render();
+    assert_eq!(backend.state().sentinels, vec![c1]);
+    assert_eq!(backend.state().sentinel_callbacks, 1);
+    assert_eq!(backend.state().sentinel_event_callbacks, 1);
+    assert_eq!(backend.state().images, vec![img0, img1]);
+    let _ = c0;
+}
+
+#[test]
+fn apply_with_metadata_commits_text_history_and_metadata_atomically() {
+    #[derive(Clone, Debug)]
+    enum Msg {
+        Edited(tui_lipan::TextAreaEvent),
+        Images(Vec<tui_lipan::ImageContent>),
+    }
+
+    struct State {
+        editor: tui_lipan::TextEditor,
+        images: Vec<tui_lipan::ImageContent>,
+        separate_image_callbacks: usize,
+    }
+
+    struct AtomicApplyHarness;
+
+    let s0 = tui_lipan::IMAGE_SENTINEL_BASE;
+    let s1 = char::from_u32(tui_lipan::IMAGE_SENTINEL_BASE as u32 + 1).unwrap();
+    let img0 = tui_lipan::ImageContent::from_bytes(b"atomic-0", tui_lipan::ImageFormat::Png);
+    let img1 = tui_lipan::ImageContent::from_bytes(b"atomic-1", tui_lipan::ImageFormat::Png);
+
+    impl Component for AtomicApplyHarness {
+        type Properties = ();
+        type State = State;
+        type Message = Msg;
+
+        fn create_state(&self, _: &()) -> Self::State {
+            let s0 = tui_lipan::IMAGE_SENTINEL_BASE;
+            let s1 = char::from_u32(tui_lipan::IMAGE_SENTINEL_BASE as u32 + 1).unwrap();
+            let mut editor = tui_lipan::TextEditor::new(format!("{s0}{s1}"));
+            editor.set_cursor(s0.len_utf8());
+            State {
+                editor,
+                images: vec![
+                    tui_lipan::ImageContent::from_bytes(b"atomic-0", tui_lipan::ImageFormat::Png),
+                    tui_lipan::ImageContent::from_bytes(b"atomic-1", tui_lipan::ImageFormat::Png),
+                ],
+                separate_image_callbacks: 0,
+            }
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            match msg {
+                Msg::Edited(ev) => {
+                    ctx.state
+                        .editor
+                        .apply_with_images(&ev, &mut ctx.state.images);
+                    Update::full()
+                }
+                Msg::Images(images) => {
+                    ctx.state.separate_image_callbacks += 1;
+                    ctx.state.images = images;
+                    Update::full()
+                }
+            }
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            TextArea::bound(&ctx.state.editor)
+                .height(Length::Px(4))
+                .image_mode(tui_lipan::TextAreaImageMode::Inline)
+                .images(ctx.state.images.clone())
+                .on_change(ctx.link().callback(Msg::Edited))
+                .on_images_change(ctx.link().callback(Msg::Images))
+                .key("atomic-apply-editor")
+        }
+    }
+
+    let mut backend = TestBackend::new(AtomicApplyHarness);
+    backend.focus_key(&tui_lipan::Key::from("atomic-apply-editor"));
+    backend.render();
+
+    backend
+        .send_key(KeyEvent {
+            code: KeyCode::Backspace,
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.render();
+
+    assert_eq!(backend.state().editor.text(), format!("{s0}"));
+    assert_eq!(backend.state().images, vec![img1.clone()]);
+    assert_eq!(
+        backend.state().separate_image_callbacks,
+        0,
+        "apply_with_images should apply metadata inline without emitting a duplicate on_images_change"
+    );
+
+    backend
+        .send_key(KeyEvent {
+            code: KeyCode::Char('z'),
+            mods: KeyMods::CTRL,
+        })
+        .unwrap();
+    backend.render();
+    assert_eq!(backend.state().editor.text(), format!("{s0}{s1}"));
+    assert_eq!(backend.state().images, vec![img0, img1]);
+    assert_eq!(backend.state().separate_image_callbacks, 0);
+}

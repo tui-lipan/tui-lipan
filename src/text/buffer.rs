@@ -1,39 +1,97 @@
+use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use crate::callback::Callback;
 use crate::clipboard::ImageContent;
-use crate::text::edit::{TextEdit, TextEditEvent, TextEditFields, TextEditKind, TextTarget};
+use crate::text::edit::{
+    EditMetadata, RestoredMetadata, TextEdit, TextEditEvent, TextEditFields, TextEditKind,
+    TextTarget,
+};
 use crate::utils::text::clamp_cursor;
 use crate::utils::text::{
     next_char_boundary, prev_char_boundary, word_boundary_left, word_boundary_right,
 };
-use crate::widgets::TextAreaSentinel;
+use crate::widgets::{SentinelEvent, TextAreaSentinel};
 use undo::Record;
 
 const DEFAULT_HISTORY_LIMIT: usize = 1000;
 const MAX_STAGED_HISTORY_STEPS: usize = 64;
-const SENTINEL_SNAPSHOT_LIMIT: usize = 1000;
 
 pub(crate) type CoreEdit = TextEdit<TextBufferCore>;
 
-#[derive(Clone, Debug)]
-pub(crate) struct ImageSnapshot {
-    pub(crate) text: String,
-    pub(crate) images: Vec<ImageContent>,
+/// Proposed image/sentinel metadata staged alongside a bound runtime edit so it can be applied
+/// atomically via `TextEditor::apply_with_metadata` or gated until `TextAreaEvent::apply_to`.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct StagedMetadata {
+    pub(crate) images: Option<Vec<ImageContent>>,
+    pub(crate) sentinels: Option<Vec<TextAreaSentinel>>,
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct SentinelSnapshot {
-    pub(crate) text: String,
-    pub(crate) sentinels: Vec<TextAreaSentinel>,
+/// UI-thread metadata callbacks deferred until the matching bound `TextAreaEvent` is accepted.
+///
+/// Stored in a bounded thread-local queue keyed by an opaque token so [`TextBufferCore`] and
+/// [`TextEditor`](super::TextEditor) remain `Send + Sync`.
+pub(crate) struct DeferredMetadataCallbacks {
+    pub(crate) images: Option<(Callback<Vec<ImageContent>>, Vec<ImageContent>)>,
+    pub(crate) sentinels: Option<(Callback<Vec<TextAreaSentinel>>, Vec<TextAreaSentinel>)>,
+    pub(crate) sentinel_events: Option<(Callback<Vec<SentinelEvent>>, Vec<SentinelEvent>)>,
+}
+
+static NEXT_DEFERRED_CALLBACK_TOKEN: AtomicU64 = AtomicU64::new(1);
+
+thread_local! {
+    static DEFERRED_METADATA_CALLBACKS: RefCell<VecDeque<(u64, DeferredMetadataCallbacks)>> =
+        const { RefCell::new(VecDeque::new()) };
+}
+
+pub(crate) fn register_deferred_metadata_callbacks(
+    callbacks: DeferredMetadataCallbacks,
+) -> Option<u64> {
+    if callbacks.images.is_none()
+        && callbacks.sentinels.is_none()
+        && callbacks.sentinel_events.is_none()
+    {
+        return None;
+    }
+    let token = NEXT_DEFERRED_CALLBACK_TOKEN.fetch_add(1, Ordering::Relaxed);
+    DEFERRED_METADATA_CALLBACKS.with(|registry| {
+        let mut queue = registry.borrow_mut();
+        if queue.len() >= MAX_STAGED_HISTORY_STEPS {
+            queue.pop_front();
+        }
+        queue.push_back((token, callbacks));
+    });
+    Some(token)
+}
+
+fn take_deferred_metadata_callbacks(token: u64) -> Option<DeferredMetadataCallbacks> {
+    DEFERRED_METADATA_CALLBACKS.with(|registry| {
+        let mut queue = registry.borrow_mut();
+        let pos = queue.iter().position(|(id, _)| *id == token)?;
+        queue.remove(pos).map(|(_, callbacks)| callbacks)
+    })
+}
+
+fn discard_deferred_metadata_callbacks(token: u64) {
+    let _ = take_deferred_metadata_callbacks(token);
 }
 
 #[derive(Debug)]
 struct StagedHistoryStep {
     expected_text: Arc<str>,
     record: Arc<Record<CoreEdit>>,
-    image_snapshots: Vec<ImageSnapshot>,
-    sentinel_snapshots: Vec<SentinelSnapshot>,
+    deferred_callbacks_token: Option<u64>,
+    staged_metadata: Option<StagedMetadata>,
+}
+
+impl StagedHistoryStep {
+    fn discard_callbacks(&mut self) {
+        if let Some(token) = self.deferred_callbacks_token.take() {
+            discard_deferred_metadata_callbacks(token);
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -42,49 +100,32 @@ struct StagedHistory {
     steps: VecDeque<StagedHistoryStep>,
 }
 
+impl StagedHistory {
+    fn discard_all_callbacks(&mut self) {
+        for step in &mut self.steps {
+            step.discard_callbacks();
+        }
+    }
+}
+
+pub(crate) struct CommittedStagedChange {
+    pub(crate) deferred_callbacks_token: Option<u64>,
+    pub(crate) staged_metadata: Option<StagedMetadata>,
+}
+
 #[derive(Debug)]
 struct SharedHistoryInner {
     /// Copy-on-write undo/redo record so snapshots and non-mutating operations avoid deep clones.
     record: Arc<Record<CoreEdit>>,
     generation: u64,
     staged: Option<StagedHistory>,
-    image_snapshots: Vec<ImageSnapshot>,
-    sentinel_snapshots: Vec<SentinelSnapshot>,
 }
 
-fn push_image_snapshot(snapshots: &mut Vec<ImageSnapshot>, text: &str, images: &[ImageContent]) {
-    if images.is_empty() {
-        return;
-    }
-    if let Some(pos) = snapshots.iter().position(|snapshot| snapshot.text == text) {
-        snapshots.remove(pos);
-    }
-    snapshots.push(ImageSnapshot {
-        text: text.to_owned(),
-        images: images.to_vec(),
-    });
-    if snapshots.len() > SENTINEL_SNAPSHOT_LIMIT {
-        snapshots.remove(0);
-    }
-}
-
-fn push_sentinel_snapshot(
-    snapshots: &mut Vec<SentinelSnapshot>,
-    text: &str,
-    sentinels: &[TextAreaSentinel],
-) {
-    if sentinels.is_empty() {
-        return;
-    }
-    if let Some(pos) = snapshots.iter().position(|snapshot| snapshot.text == text) {
-        snapshots.remove(pos);
-    }
-    snapshots.push(SentinelSnapshot {
-        text: text.to_owned(),
-        sentinels: sentinels.to_vec(),
-    });
-    if snapshots.len() > SENTINEL_SNAPSHOT_LIMIT {
-        snapshots.remove(0);
+impl SharedHistoryInner {
+    fn clear_staged(&mut self) {
+        if let Some(mut staged) = self.staged.take() {
+            staged.discard_all_callbacks();
+        }
     }
 }
 
@@ -94,8 +135,8 @@ fn push_sentinel_snapshot(
 /// copy-on-write [`Record`] until mutation, so cloning a [`TextEditor`](super::TextEditor) or
 /// [`TextInput`](super::TextInput) is O(1) while preserving independent undo stacks. Sharing the
 /// same history with a bound [`TextArea`](crate::widgets::TextArea) goes explicitly through
-/// [`SharedHistoryHandle`], where runtime edits are staged until accepted via
-/// [`TextAreaEvent::apply_to`](crate::widgets::TextAreaEvent::apply_to) or
+/// [`SharedHistoryHandle`], where runtime edits (and any associated metadata callbacks) are staged
+/// until accepted via [`TextAreaEvent::apply_to`](crate::widgets::TextAreaEvent::apply_to) or
 /// [`TextEditor::apply`](super::TextEditor::apply).
 #[derive(Debug)]
 pub(crate) struct SharedHistory(Arc<Mutex<SharedHistoryInner>>);
@@ -110,8 +151,6 @@ impl SharedHistory {
             record,
             generation: 0,
             staged: None,
-            image_snapshots: Vec::new(),
-            sentinel_snapshots: Vec::new(),
         })))
     }
 
@@ -141,49 +180,11 @@ impl SharedHistory {
         Arc::clone(&self.lock().record)
     }
 
-    pub(crate) fn remember_images(&self, text: &str, images: &[ImageContent]) {
-        let mut inner = self.lock();
-        push_image_snapshot(&mut inner.image_snapshots, text, images);
-    }
-
-    pub(crate) fn remembered_images(&self, text: &str) -> Option<Vec<ImageContent>> {
-        self.lock()
-            .image_snapshots
-            .iter()
-            .rev()
-            .find(|snapshot| snapshot.text == text)
-            .map(|snapshot| snapshot.images.clone())
-    }
-
-    pub(crate) fn remember_sentinels(&self, text: &str, sentinels: &[TextAreaSentinel]) {
-        let mut inner = self.lock();
-        push_sentinel_snapshot(&mut inner.sentinel_snapshots, text, sentinels);
-    }
-
-    pub(crate) fn remembered_sentinels(&self, text: &str) -> Option<Vec<TextAreaSentinel>> {
-        self.lock()
-            .sentinel_snapshots
-            .iter()
-            .rev()
-            .find(|snapshot| snapshot.text == text)
-            .map(|snapshot| snapshot.sentinels.clone())
-    }
-
-    pub(crate) fn clone_metadata_snapshots(&self) -> (Vec<ImageSnapshot>, Vec<SentinelSnapshot>) {
-        let inner = self.lock();
-        (
-            inner.image_snapshots.clone(),
-            inner.sentinel_snapshots.clone(),
-        )
-    }
-
     pub(crate) fn clear(&self) {
         let mut inner = self.lock();
         inner.record = Arc::new(TextBufferCore::fresh_record());
         inner.generation = inner.generation.wrapping_add(1);
-        inner.staged = None;
-        inner.image_snapshots.clear();
-        inner.sentinel_snapshots.clear();
+        inner.clear_staged();
     }
 
     /// Take an owned mutable `Record`, reusing the existing allocation in O(1) when unshared or
@@ -201,30 +202,30 @@ impl SharedHistory {
         inner.record = Arc::new(record);
         if changed {
             inner.generation = inner.generation.wrapping_add(1);
-            inner.staged = None;
+            inner.clear_staged();
         }
     }
 
-    pub(crate) fn commit_staged(&self, expected_text: &str) -> bool {
+    pub(crate) fn commit_staged(&self, expected_text: &str) -> Option<CommittedStagedChange> {
         let mut inner = self.lock();
         let current_generation = inner.generation;
-        let Some(staged) = inner.staged.as_mut() else {
-            return false;
-        };
+        let staged = inner.staged.as_mut()?;
         if staged.base_generation != current_generation {
-            inner.staged = None;
-            return false;
+            inner.clear_staged();
+            return None;
         }
         let Some(pos) = staged
             .steps
             .iter()
             .position(|step| step.expected_text.as_ref() == expected_text)
         else {
-            inner.staged = None;
-            return false;
+            inner.clear_staged();
+            return None;
         };
         for _ in 0..pos {
-            staged.steps.pop_front();
+            if let Some(mut skipped) = staged.steps.pop_front() {
+                skipped.discard_callbacks();
+            }
         }
         let step = staged
             .steps
@@ -240,17 +241,10 @@ impl SharedHistory {
         if remaining_empty {
             inner.staged = None;
         }
-        for snapshot in step.image_snapshots {
-            push_image_snapshot(&mut inner.image_snapshots, &snapshot.text, &snapshot.images);
-        }
-        for snapshot in step.sentinel_snapshots {
-            push_sentinel_snapshot(
-                &mut inner.sentinel_snapshots,
-                &snapshot.text,
-                &snapshot.sentinels,
-            );
-        }
-        true
+        Some(CommittedStagedChange {
+            deferred_callbacks_token: step.deferred_callbacks_token,
+            staged_metadata: step.staged_metadata,
+        })
     }
 }
 
@@ -261,8 +255,6 @@ impl Clone for SharedHistory {
             record: Arc::clone(&inner.record),
             generation: 0,
             staged: None,
-            image_snapshots: inner.image_snapshots.clone(),
-            sentinel_snapshots: inner.sentinel_snapshots.clone(),
         })))
     }
 }
@@ -293,52 +285,8 @@ impl SharedHistoryHandle {
         {
             return (Arc::clone(&last.record), staged.base_generation);
         }
-        inner.staged = None;
+        inner.clear_staged();
         (Arc::clone(&inner.record), inner.generation)
-    }
-
-    pub(crate) fn remembered_images(&self, text: &str) -> Option<Vec<ImageContent>> {
-        let inner = self.lock();
-        if let Some(staged) = inner.staged.as_ref()
-            && staged.base_generation == inner.generation
-            && let Some(found) = staged.steps.iter().rev().find_map(|step| {
-                step.image_snapshots
-                    .iter()
-                    .rev()
-                    .find(|snapshot| snapshot.text == text)
-                    .map(|snapshot| snapshot.images.clone())
-            })
-        {
-            return Some(found);
-        }
-        inner
-            .image_snapshots
-            .iter()
-            .rev()
-            .find(|snapshot| snapshot.text == text)
-            .map(|snapshot| snapshot.images.clone())
-    }
-
-    pub(crate) fn remembered_sentinels(&self, text: &str) -> Option<Vec<TextAreaSentinel>> {
-        let inner = self.lock();
-        if let Some(staged) = inner.staged.as_ref()
-            && staged.base_generation == inner.generation
-            && let Some(found) = staged.steps.iter().rev().find_map(|step| {
-                step.sentinel_snapshots
-                    .iter()
-                    .rev()
-                    .find(|snapshot| snapshot.text == text)
-                    .map(|snapshot| snapshot.sentinels.clone())
-            })
-        {
-            return Some(found);
-        }
-        inner
-            .sentinel_snapshots
-            .iter()
-            .rev()
-            .find(|snapshot| snapshot.text == text)
-            .map(|snapshot| snapshot.sentinels.clone())
     }
 
     /// Stage a runtime history checkpoint to be committed when the matching `TextAreaEvent` is
@@ -348,27 +296,33 @@ impl SharedHistoryHandle {
         base_generation: u64,
         expected_text: Arc<str>,
         record: Arc<Record<CoreEdit>>,
-        image_snapshots: Vec<ImageSnapshot>,
-        sentinel_snapshots: Vec<SentinelSnapshot>,
+        deferred_callbacks_token: Option<u64>,
+        staged_metadata: Option<StagedMetadata>,
     ) {
         let mut inner = self.lock();
         if inner.generation != base_generation {
+            if let Some(token) = deferred_callbacks_token {
+                discard_deferred_metadata_callbacks(token);
+            }
             return;
         }
         let step = StagedHistoryStep {
             expected_text,
             record,
-            image_snapshots,
-            sentinel_snapshots,
+            deferred_callbacks_token,
+            staged_metadata,
         };
         if let Some(staged) = inner.staged.as_mut()
             && staged.base_generation == base_generation
         {
-            if staged.steps.len() >= MAX_STAGED_HISTORY_STEPS {
-                staged.steps.pop_front();
+            if staged.steps.len() >= MAX_STAGED_HISTORY_STEPS
+                && let Some(mut evicted) = staged.steps.pop_front()
+            {
+                evicted.discard_callbacks();
             }
             staged.steps.push_back(step);
         } else {
+            inner.clear_staged();
             let mut steps = VecDeque::with_capacity(2);
             steps.push_back(step);
             inner.staged = Some(StagedHistory {
@@ -391,6 +345,7 @@ pub struct TextBufferCore {
     pub(crate) anchor: Option<usize>,
     pub(crate) history: SharedHistory,
     pub(crate) last_edit: Option<TextEditEvent>,
+    pub(crate) last_restored_metadata: Option<RestoredMetadata>,
 }
 
 impl Default for TextBufferCore {
@@ -401,6 +356,7 @@ impl Default for TextBufferCore {
             anchor: None,
             history: SharedHistory::fresh(),
             last_edit: None,
+            last_restored_metadata: None,
         }
     }
 }
@@ -481,7 +437,9 @@ impl TextBufferCore {
     /// Undo the most recent edit.
     pub fn undo(&mut self) -> bool {
         let mut history = self.history.take();
-        let changed = history.undo(self).is_some();
+        let outcome = history.undo(self);
+        let changed = outcome.is_some();
+        self.last_restored_metadata = outcome.flatten();
         self.history.put_back_committed(history, changed);
         changed
     }
@@ -489,17 +447,21 @@ impl TextBufferCore {
     /// Redo the most recently undone edit.
     pub fn redo(&mut self) -> bool {
         let mut history = self.history.take();
-        let changed = history.redo(self).is_some();
+        let outcome = history.redo(self);
+        let changed = outcome.is_some();
+        self.last_restored_metadata = outcome.flatten();
         self.history.put_back_committed(history, changed);
         changed
     }
 
     /// Clear all undo/redo history without changing the text.
     pub fn clear_history(&mut self) {
+        self.last_restored_metadata = None;
         self.history.clear();
     }
 
     pub(crate) fn reset_history(&mut self) {
+        self.last_restored_metadata = None;
         self.history.clear();
     }
 
@@ -531,6 +493,7 @@ impl TextBufferCore {
             anchor_before,
             cursor_after,
             anchor_after,
+            None,
         );
         self.last_edit = None;
     }
@@ -542,6 +505,7 @@ impl TextBufferCore {
         anchor_before: Option<usize>,
         cursor_after: usize,
         anchor_after: Option<usize>,
+        metadata: Option<EditMetadata>,
     ) -> TextEditEvent {
         let deleted = self.text.clone();
         let cursor_before = clamp_cursor(&deleted, cursor_before);
@@ -557,25 +521,65 @@ impl TextBufferCore {
             cursor_after,
             anchor_after,
             kind: TextEditKind::Replace,
-        });
+        })
+        .with_metadata(metadata);
         let event = TextEditEvent::from(&edit);
         self.record_edit(edit);
         event
     }
 
     /// Apply a controlled `TextAreaEvent` back to a bound buffer, committing the matching staged
-    /// runtime history step when the text was accepted verbatim, or recording a clean replacement
-    /// edit when the application transformed the text.
+    /// runtime history step (and firing any deferred metadata callbacks) when the text was
+    /// accepted verbatim, or recording a clean replacement edit when transformed.
     pub(crate) fn apply_controlled_change(
         &mut self,
         value: &str,
         cursor: usize,
         anchor: Option<usize>,
     ) {
-        if self.history.commit_staged(value) {
+        self.apply_controlled_change_with_metadata(value, cursor, anchor, None, None);
+    }
+
+    pub(crate) fn apply_controlled_change_with_metadata(
+        &mut self,
+        value: &str,
+        cursor: usize,
+        anchor: Option<usize>,
+        images: Option<&mut Vec<ImageContent>>,
+        sentinels: Option<&mut Vec<TextAreaSentinel>>,
+    ) {
+        if let Some(committed) = self.history.commit_staged(value) {
             self.text = value.to_string();
             self.cursor = clamp_cursor(&self.text, cursor);
             self.anchor = anchor.map(|a| clamp_cursor(&self.text, a));
+
+            let mut applied_images_inline = false;
+            let mut applied_sentinels_inline = false;
+            if let Some(staged_metadata) = committed.staged_metadata {
+                if let (Some(target), Some(next_images)) = (images, staged_metadata.images) {
+                    *target = next_images;
+                    applied_images_inline = true;
+                }
+                if let (Some(target), Some(next_sentinels)) = (sentinels, staged_metadata.sentinels)
+                {
+                    *target = next_sentinels;
+                    applied_sentinels_inline = true;
+                }
+            }
+            if let Some(token) = committed.deferred_callbacks_token
+                && let Some(callbacks) = take_deferred_metadata_callbacks(token)
+            {
+                if !applied_images_inline && let Some((cb, next_images)) = callbacks.images {
+                    cb.emit(next_images);
+                }
+                if !applied_sentinels_inline && let Some((cb, next_sentinels)) = callbacks.sentinels
+                {
+                    cb.emit(next_sentinels);
+                }
+                if let Some((cb, events)) = callbacks.sentinel_events {
+                    cb.emit(events);
+                }
+            }
         } else if self.text != value {
             let prev_cursor = self.cursor;
             let prev_anchor = self.anchor;
@@ -591,6 +595,7 @@ impl TextBufferCore {
         self.text = text.into();
         self.cursor = clamp_cursor(&self.text, self.cursor);
         self.anchor = self.anchor.map(|a| clamp_cursor(&self.text, a));
+        self.last_restored_metadata = None;
         self.history.clear();
     }
 
@@ -644,12 +649,16 @@ impl TextBufferCore {
     pub(crate) fn record_edit(&mut self, edit: CoreEdit) {
         self.last_edit = Some(TextEditEvent::from(&edit));
         let mut history = self.history.take();
-        history.edit(self, edit);
+        self.last_restored_metadata = history.edit(self, edit);
         self.history.put_back_committed(history, true);
     }
 
     pub(crate) fn take_last_edit(&mut self) -> Option<TextEditEvent> {
         self.last_edit.take()
+    }
+
+    pub(crate) fn take_last_restored_metadata(&mut self) -> Option<RestoredMetadata> {
+        self.last_restored_metadata.take()
     }
 
     pub(crate) fn replace_range(
@@ -658,6 +667,17 @@ impl TextBufferCore {
         end: usize,
         inserted: &str,
         kind: TextEditKind,
+    ) -> bool {
+        self.replace_range_with_metadata(start, end, inserted, kind, None)
+    }
+
+    pub(crate) fn replace_range_with_metadata(
+        &mut self,
+        start: usize,
+        end: usize,
+        inserted: &str,
+        kind: TextEditKind,
+        metadata: Option<EditMetadata>,
     ) -> bool {
         self.normalize_cursor_and_anchor();
         let start = clamp_cursor(&self.text, start);
@@ -683,7 +703,8 @@ impl TextBufferCore {
             cursor_after,
             anchor_after: None,
             kind,
-        });
+        })
+        .with_metadata(metadata);
         self.record_edit(edit);
         true
     }
