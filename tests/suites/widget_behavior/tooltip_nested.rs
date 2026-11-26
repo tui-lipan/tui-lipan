@@ -23,8 +23,9 @@ enum Button {
 
 /// A row with a card tooltip, holding a button with its own tooltip; with a middle, the button
 /// sits in a group with a third tooltip between the two. Each warms up apart from the others, so a
-/// swap between them never rides on warm-up. `Row` holds the middle the row starts with.
-struct Row(Option<Middle>);
+/// swap between them never rides on warm-up. `Row` holds the middle the row starts with, and
+/// whether a fourth tooltip sits between the middle and the button.
+struct Row(Option<Middle>, bool);
 
 /// The tooltip between the card and the button.
 #[derive(Clone, Copy, PartialEq)]
@@ -77,6 +78,22 @@ impl Component for Row {
                 Button::HeldClosed => tip = tip.open(false),
                 Button::Tip | Button::Removed => {}
             }
+            let tip: Element = if self.1 {
+                Tooltip::new("sub-tip")
+                    .delay(DELAY)
+                    .warmup_group("subgroups")
+                    .placement(PopoverPlacement::BelowStart)
+                    .offset((0, 3))
+                    .child(
+                        HStack::new()
+                            .height(Length::Px(1))
+                            .child(Text::new("sub ").width(Length::Px(4)))
+                            .child(tip),
+                    )
+                    .into()
+            } else {
+                tip.into()
+            };
             line = match ctx.state.middle {
                 None => line.child(tip),
                 // Switching the middle between enabled and not keeps the button mounted.
@@ -111,7 +128,7 @@ fn backend() -> TestBackend<Row> {
 }
 
 fn backend_with(middle: Option<Middle>) -> TestBackend<Row> {
-    let mut backend = TestBackend::new(Row(middle));
+    let mut backend = TestBackend::new(Row(middle, false));
     backend.set_viewport(Rect {
         x: 0,
         y: 0,
@@ -367,7 +384,21 @@ fn hover_outside(backend: &mut TestBackend<Row>) {
 
 #[test]
 fn a_showing_tooltip_deep_inside_hands_over_to_a_far_ancestor() {
-    let mut backend = backend_with(Some(Middle::Enabled));
+    for deep in [false, true] {
+        a_showing_tooltip_hands_over_from_depth(deep);
+    }
+}
+
+/// From the innermost tooltip, three levels down or with `deep` four, straight out to the card.
+fn a_showing_tooltip_hands_over_from_depth(deep: bool) {
+    let mut backend = TestBackend::new(Row(Some(Middle::Enabled), deep));
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 40,
+        h: 6,
+    });
+    backend.render();
     hover_outside(&mut backend);
     hover(&mut backend, "Snooze");
     wait(&mut backend);
@@ -377,9 +408,11 @@ fn a_showing_tooltip_deep_inside_hands_over_to_a_far_ancestor() {
     let text = backend.capture_frame().plain_text();
     assert!(
         text.contains("card-tip"),
-        "the card waited although the button tooltip two levels down was showing: {text:?}"
+        "the card waited although the button tooltip deep inside was showing (deep: {deep}): {text:?}"
     );
-    assert!(!text.contains("button-tip") && !text.contains("group-tip"));
+    assert!(
+        !text.contains("button-tip") && !text.contains("group-tip") && !text.contains("sub-tip")
+    );
 }
 
 fn settle(backend: &mut TestBackend<Row>) {
