@@ -1,6 +1,8 @@
 //! Tooltip widget.
 
 use crate::animation::VisibilityAnimation;
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -329,6 +331,15 @@ impl HoverReveal {
         self.arm(config.delay)
     }
 
+    /// The pointer entered the trigger to take over from a tooltip already showing: open at once.
+    pub(crate) fn hover_revealed(&mut self, env: &RuntimeEnv) -> RevealStep {
+        self.hovered = true;
+        self.generation = self.generation.wrapping_add(1);
+        self.hovered_since = Some(env.now());
+        self.revealed = true;
+        RevealStep::Render
+    }
+
     /// A timer armed for `generation` elapsed; returns whether the tooltip opened.
     pub(crate) fn reveal(&mut self, generation: u64) -> bool {
         if generation != self.generation || !self.hovered {
@@ -525,6 +536,9 @@ struct TooltipState {
     reveal: HoverReveal,
     /// Whether the pointer is on the trigger of a tooltip nested in this one's trigger.
     nested_hovered: bool,
+    /// Whether this tooltip is showing, or would be but for a hovered nested trigger, as of the
+    /// last render. Nested tooltips read it to take over at once.
+    shown: Rc<Cell<bool>>,
 }
 
 /// What a tooltip offers the tooltips nested in its trigger: a way to say the pointer is on them,
@@ -532,6 +546,8 @@ struct TooltipState {
 #[derive(Clone)]
 struct NestedTooltip {
     report: crate::callback::Callback<bool>,
+    /// Whether the outer tooltip is showing: a nested tooltip entered then skips its delay.
+    shown: Rc<Cell<bool>>,
 }
 
 impl PartialEq for NestedTooltip {
@@ -588,6 +604,7 @@ impl Component for TooltipComponent {
             trigger_key: Key::from(format!("tooltip-trigger-{}", id)),
             reveal: HoverReveal::default(),
             nested_hovered: false,
+            shown: Rc::default(),
         }
     }
 
@@ -614,15 +631,21 @@ impl Component for TooltipComponent {
     fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
         match msg {
             TooltipMsg::Hover(hovered) => {
-                if let Some(outer) = ctx.use_context::<NestedTooltip>() {
+                let outer = ctx.use_context::<NestedTooltip>();
+                if let Some(outer) = &outer {
                     outer.report.emit(hovered);
                 }
                 if !ctx.props.delays_hover() {
                     return Update::none();
                 }
-                let config = ctx.props.config.clone();
                 let env = ctx.env().clone();
-                let step = ctx.state.reveal.hover(hovered, &config, &env);
+                // Taking over from the tooltip this one is nested in: the user already waited.
+                let step = if hovered && outer.is_some_and(|outer| outer.shown.get()) {
+                    ctx.state.reveal.hover_revealed(&env)
+                } else {
+                    let config = ctx.props.config.clone();
+                    ctx.state.reveal.hover(hovered, &config, &env)
+                };
                 Self::step(step, ctx)
             }
             TooltipMsg::Reveal(generation) => {
@@ -655,6 +678,7 @@ impl Component for TooltipComponent {
         // reports its own trigger to any tooltip it is nested in.
         let nested = crate::widgets::ContextProvider::new(NestedTooltip {
             report: ctx.link().callback(TooltipMsg::Nested),
+            shown: ctx.state.shown.clone(),
         })
         .child(ctx.props.child.clone());
         let mut region = MouseRegion::new().child(nested).fitted_to_child();
@@ -673,6 +697,7 @@ impl Component for TooltipComponent {
             && (hover_open
                 || (ctx.props.show_on_focus
                     && ctx.has_focus_within_key(ctx.state.trigger_key.clone())));
+        ctx.state.shown.set(ctx.props.open.unwrap_or(auto_open));
         // One tooltip at a time: while the pointer is on a nested trigger, its tooltip speaks.
         let open = ctx
             .props

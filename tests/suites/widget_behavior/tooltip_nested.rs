@@ -1,4 +1,5 @@
-//! A tooltip steps aside while the pointer is on the trigger of a tooltip nested in its own.
+//! A tooltip steps aside while the pointer is on the trigger of a tooltip nested in its own, and
+//! the nested tooltip takes over at once when the outer one was showing.
 use std::time::Duration;
 
 use tui_lipan::TestBackend;
@@ -80,7 +81,7 @@ fn shows(backend: &TestBackend<Row>, tip: &str) -> bool {
 }
 
 #[test]
-fn nested_trigger_hides_the_outer_tooltip_until_the_pointer_returns() {
+fn nested_tooltip_takes_over_from_the_outer_one_until_the_pointer_returns() {
     let mut backend = backend();
     hover(&mut backend, "row text");
     wait(&mut backend);
@@ -92,12 +93,9 @@ fn nested_trigger_hides_the_outer_tooltip_until_the_pointer_returns() {
         "the card stayed over the button"
     );
     assert!(
-        !shows(&backend, "button-tip"),
-        "the button tooltip skipped its delay"
+        shows(&backend, "button-tip"),
+        "the button tooltip did not take over from the card at once"
     );
-    wait(&mut backend);
-    assert!(shows(&backend, "button-tip"));
-    assert!(!shows(&backend, "card-tip"));
 
     hover(&mut backend, "row text");
     assert!(
@@ -116,5 +114,17 @@ fn nested_trigger_hides_the_outer_tooltip_until_the_pointer_returns() {
         .unwrap();
     backend.pump().unwrap();
     backend.render();
+    assert!(!shows(&backend, "card-tip"));
+}
+
+#[test]
+fn nested_tooltip_waits_its_delay_when_the_outer_one_never_opened() {
+    let mut backend = backend();
+    hover(&mut backend, "row text");
+    hover(&mut backend, "Snooze");
+    assert!(!shows(&backend, "button-tip"));
+    assert!(!shows(&backend, "card-tip"));
+    wait(&mut backend);
+    assert!(shows(&backend, "button-tip"));
     assert!(!shows(&backend, "card-tip"));
 }
