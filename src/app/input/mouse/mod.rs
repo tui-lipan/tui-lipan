@@ -14,7 +14,7 @@ pub(crate) use click::{
 pub(crate) use gather::diff_line_event_at_node;
 pub(crate) use gather::find_mouse_region_modifier_capture;
 #[cfg(feature = "terminal")]
-pub(crate) use gather::mods_contain;
+pub(crate) use gather::{ancestor_mouse_region_captures_mods, mods_contain};
 pub(crate) use gather::{find_ancestor_on_click, gather_hit_actions, resolve_left_click_target};
 pub(crate) use hover::{
     clear_mouse_hover_state, document_hint_hover_state, emit_mouse_region_hover_changes,

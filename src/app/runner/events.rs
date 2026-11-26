@@ -1257,7 +1257,15 @@ pub(crate) fn terminal_mouse_forward_plan(
     if !tree.is_valid(hit) {
         return None;
     }
-    if mouse::find_mouse_region_modifier_capture(tree, hit, mouse).is_some() {
+    // Right presses retain their owner through release. Other events are picked
+    // independently, so their capture policy must be uniform within the wrapper.
+    let captured = match mouse.kind {
+        MouseKind::Down(MouseButton::Right) => {
+            mouse::find_mouse_region_modifier_capture(tree, hit, mouse).is_some()
+        }
+        _ => mouse::ancestor_mouse_region_captures_mods(tree, hit, mouse.mods),
+    };
+    if captured {
         return None;
     }
 

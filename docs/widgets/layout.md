@@ -734,8 +734,9 @@ MouseRegion::new()
 > With `capture_requires_mods(...)`, the nearest region that accepts the press
 > position and modifiers owns the right press. Its right-drag callbacks run if
 > the drag requirements are met. Outside its hit area, context menus and other
-> right-drag handlers follow normal routing. Terminal mouse forwarding also
-> respects the region's hit area and modifier requirements.
+> right-drag handlers follow normal routing. A terminal that receives a right
+> press keeps the gesture through release. Outside right-button gestures,
+> matching modifiers suppress terminal mouse forwarding throughout the wrapper.
 
 ---
 

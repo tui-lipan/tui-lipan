@@ -320,6 +320,24 @@ pub(crate) fn find_mouse_region_modifier_capture(
     start: NodeId,
     mouse: crate::core::event::MouseEvent,
 ) -> Option<NodeId> {
+    find_ancestor_modifier_capture(tree, start, mouse.mods, Some((mouse.x, mouse.y)))
+}
+
+#[cfg(feature = "terminal")]
+pub(crate) fn ancestor_mouse_region_captures_mods(
+    tree: &NodeTree,
+    start: NodeId,
+    mods: KeyMods,
+) -> bool {
+    find_ancestor_modifier_capture(tree, start, mods, None).is_some()
+}
+
+fn find_ancestor_modifier_capture(
+    tree: &NodeTree,
+    start: NodeId,
+    mods: KeyMods,
+    point: Option<(u16, u16)>,
+) -> Option<NodeId> {
     let mut cur = Some(start);
     while let Some(id) = cur {
         if !tree.is_valid(id) {
@@ -327,8 +345,10 @@ pub(crate) fn find_mouse_region_modifier_capture(
         }
         let node = tree.node(id);
         if let NodeKind::MouseRegion(region) = &node.kind
-            && mouse_region_captures_mods(region, mouse.mods)
-            && super::mouse_region_accepts_point(region, node.rect, mouse.x, mouse.y)
+            && mouse_region_captures_mods(region, mods)
+            && point.map_or(region.enabled, |(x, y)| {
+                super::mouse_region_accepts_point(region, node.rect, x, y)
+            })
         {
             return Some(id);
         }
