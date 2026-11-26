@@ -304,6 +304,9 @@ impl MouseRegion {
 
 impl From<MouseRegion> for Element {
     fn from(value: MouseRegion) -> Self {
+        if value.fit_child {
+            return Element::new(ElementKind::MouseRegion(value));
+        }
         let (min_w, min_h) = measure_mouse_region(&value, None, None);
         Element::new(ElementKind::MouseRegion(value)).with_layout(
             LayoutConstraints::default()

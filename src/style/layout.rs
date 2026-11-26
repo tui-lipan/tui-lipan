@@ -178,6 +178,217 @@ impl LayoutConstraints {
     }
 }
 
+/// Combined minimum bound across an element and any transparent wrappers around it.
+///
+/// Preserves both an absolute (`px`) floor and a relative (`percent`) floor so mixed
+/// `Px` + `Percent` constraints resolve against `available` and take the larger (stricter)
+/// minimum.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub(crate) struct MinBound {
+    pub px: u16,
+    pub percent: Option<u16>,
+}
+
+impl MinBound {
+    pub const ZERO: Self = Self {
+        px: 0,
+        percent: None,
+    };
+
+    pub const fn from_length(len: Length) -> Self {
+        match len {
+            Length::Px(px) => Self { px, percent: None },
+            Length::Percent(percent) => Self {
+                px: 0,
+                percent: Some(percent),
+            },
+            Length::Auto | Length::Flex(_) => Self::ZERO,
+        }
+    }
+
+    pub const fn is_set(self) -> bool {
+        self.px > 0 || self.percent.is_some()
+    }
+
+    pub const fn has_percent(self) -> bool {
+        self.percent.is_some()
+    }
+
+    pub fn merge(self, other: Self) -> Self {
+        Self {
+            px: self.px.max(other.px),
+            percent: match (self.percent, other.percent) {
+                (Some(a), Some(b)) => Some(a.max(b)),
+                (a, b) => a.or(b),
+            },
+        }
+    }
+
+    pub fn resolve(self, available: u16) -> u16 {
+        let pct = self
+            .percent
+            .map_or(0, |p| Length::Percent(p).resolve_as_min(available));
+        self.px.max(pct)
+    }
+}
+
+/// Combined maximum bound across an element and any transparent wrappers around it.
+///
+/// Preserves both an absolute (`px`) cap and a relative (`percent`) cap so mixed
+/// `Px` + `Percent` constraints resolve against `available` and take the smaller (tighter)
+/// maximum.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub(crate) struct MaxBound {
+    pub px: Option<u16>,
+    pub percent: Option<u16>,
+}
+
+impl MaxBound {
+    pub const NONE: Self = Self {
+        px: None,
+        percent: None,
+    };
+
+    pub const fn from_option(len: Option<Length>) -> Self {
+        match len {
+            Some(Length::Px(px)) => Self {
+                px: Some(px),
+                percent: None,
+            },
+            Some(Length::Percent(percent)) => Self {
+                px: None,
+                percent: Some(percent),
+            },
+            Some(Length::Auto | Length::Flex(_)) | None => Self::NONE,
+        }
+    }
+
+    pub fn merge(self, other: Self) -> Self {
+        Self {
+            px: match (self.px, other.px) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            },
+            percent: match (self.percent, other.percent) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            },
+        }
+    }
+
+    pub fn resolve(self, available: u16) -> Option<u16> {
+        let pct = self
+            .percent
+            .and_then(|p| Length::Percent(p).resolve_as_max(available));
+        match (self.px, pct) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
+    }
+}
+
+/// Effective layout constraints merged across an element and any transparent wrappers around it.
+///
+/// Keeps `LayoutConstraints` unchanged publicly while preserving mixed `Px` + `Percent`
+/// min/max bounds across nested wrappers and enforcing the framework's `min` > `max`
+/// precedence without mutating child minimums on unconstrained wrappers.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub(crate) struct EffectiveLayoutConstraints {
+    pub min_w: MinBound,
+    pub min_h: MinBound,
+    pub max_w: MaxBound,
+    pub max_h: MaxBound,
+    pub focus_min_w: u16,
+    pub focus_min_h: u16,
+    pub collapse_w: Option<u16>,
+    pub collapse_h: Option<u16>,
+    pub force_compact: bool,
+    pub reflows: bool,
+    pub shrink_priority: ShrinkPriority,
+}
+
+impl From<LayoutConstraints> for EffectiveLayoutConstraints {
+    fn from(layout: LayoutConstraints) -> Self {
+        Self {
+            min_w: MinBound::from_length(layout.min_w),
+            min_h: MinBound::from_length(layout.min_h),
+            max_w: MaxBound::from_option(layout.max_w),
+            max_h: MaxBound::from_option(layout.max_h),
+            focus_min_w: layout.focus_min_w,
+            focus_min_h: layout.focus_min_h,
+            collapse_w: layout.collapse_w,
+            collapse_h: layout.collapse_h,
+            force_compact: layout.force_compact,
+            reflows: layout.reflows,
+            shrink_priority: layout.shrink_priority,
+        }
+    }
+}
+
+impl EffectiveLayoutConstraints {
+    /// Merge an outer transparent wrapper's own `LayoutConstraints` onto `self`.
+    ///
+    /// When `outer` is `LayoutConstraints::default()`, this is an exact identity operation.
+    pub(crate) fn merge_outer(self, outer: LayoutConstraints) -> Self {
+        self.merge_effective(Self::from(outer))
+    }
+
+    pub(crate) fn merge_effective(mut self, outer: Self) -> Self {
+        self.min_w = self.min_w.merge(outer.min_w);
+        self.min_h = self.min_h.merge(outer.min_h);
+        self.max_w = self.max_w.merge(outer.max_w);
+        self.max_h = self.max_h.merge(outer.max_h);
+        self.focus_min_w = self.focus_min_w.max(outer.focus_min_w);
+        self.focus_min_h = self.focus_min_h.max(outer.focus_min_h);
+        self.collapse_w = outer.collapse_w.or(self.collapse_w);
+        self.collapse_h = outer.collapse_h.or(self.collapse_h);
+        self.force_compact = self.force_compact || outer.force_compact;
+        self.reflows = self.reflows || outer.reflows;
+        self.shrink_priority = self.shrink_priority.max(outer.shrink_priority);
+        self
+    }
+
+    /// Resolve all absolute and percentage min/max bounds against `(avail_w, avail_h)` into a
+    /// concrete pixel `LayoutConstraints` for leaf reconcilers.
+    pub(crate) fn resolve_to_layout_constraints(
+        &self,
+        avail_w: u16,
+        avail_h: u16,
+    ) -> LayoutConstraints {
+        LayoutConstraints {
+            min_w: Length::Px(self.min_w.resolve(avail_w)),
+            min_h: Length::Px(self.min_h.resolve(avail_h)),
+            max_w: self.max_w.resolve(avail_w).map(Length::Px),
+            max_h: self.max_h.resolve(avail_h).map(Length::Px),
+            focus_min_w: self.focus_min_w,
+            focus_min_h: self.focus_min_h,
+            collapse_w: self.collapse_w,
+            collapse_h: self.collapse_h,
+            force_compact: self.force_compact,
+            reflows: self.reflows,
+            shrink_priority: self.shrink_priority,
+        }
+    }
+
+    pub(crate) fn clamp_width(&self, natural: u16, available: u16) -> u16 {
+        let min = self.min_w.resolve(available);
+        let mut w = natural.max(min);
+        if let Some(max) = self.max_w.resolve(available) {
+            w = w.min(max).max(min);
+        }
+        w
+    }
+
+    pub(crate) fn clamp_height(&self, natural: u16, available: u16) -> u16 {
+        let min = self.min_h.resolve(available);
+        let mut h = natural.max(min);
+        if let Some(max) = self.max_h.resolve(available) {
+            h = h.min(max).max(min);
+        }
+        h
+    }
+}
+
 /// Flexbox-inspired sizing.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Length {

@@ -122,9 +122,12 @@ fn measured_cross_for_layout(
 /// Return the main-axis layout constraints for a child element.
 ///
 /// Returns `(min_main, collapse_main, force_compact, focus_min_main)`.
-/// `min_main` is a `Length` - callers must resolve it against the available
+/// `min_main` is a `MinBound` - callers must resolve it against the available
 /// main-axis size before comparing it to pixel sizes.
-pub(crate) fn axis_constraints(child: &Element, axis: Axis) -> (Length, Option<u16>, bool, u16) {
+pub(crate) fn axis_constraints(
+    child: &Element,
+    axis: Axis,
+) -> (crate::style::MinBound, Option<u16>, bool, u16) {
     let layout = child.layout_constraints();
     match axis {
         Axis::Vertical => (

@@ -1883,4 +1883,319 @@ mod tests {
         );
         assert_eq!(empty.h, 0);
     }
+
+    #[test]
+    fn transparent_wrapper_merges_mixed_px_and_percent_max_constraints() {
+        use crate::style::{Align, Theme};
+        use crate::widgets::{DropTarget, HStack, Overflow, Text, ThemeProvider, VStack};
+
+        // 1. Child max_width(Px(20)) + wrapper max_width(Percent(50)):
+        //    - at 100 cols => min(20, 50) = 20
+        //    - at 30 cols  => min(20, 15) = 15
+        let make_outer_pct = || -> Element {
+            let child = Element::from(
+                VStack::new()
+                    .height(Length::Px(1))
+                    .child(Text::new("content")),
+            )
+            .key("mixed-max")
+            .max_width(Length::Px(20));
+            let wrapped = Element::from(ThemeProvider::new(Theme::default()).child(child))
+                .max_width(Length::Percent(50));
+            VStack::new().align(Align::Center).child(wrapped).into()
+        };
+
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &make_outer_pct(),
+            Rect {
+                x: 0,
+                y: 0,
+                w: 100,
+                h: 10,
+            },
+            None,
+        );
+        assert_eq!(tree.node(find_by_key(&tree, "mixed-max")).rect.w, 20);
+
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &make_outer_pct(),
+            Rect {
+                x: 0,
+                y: 0,
+                w: 30,
+                h: 10,
+            },
+            None,
+        );
+        assert_eq!(tree.node(find_by_key(&tree, "mixed-max")).rect.w, 15);
+
+        // 2. Child max_width(Percent(50)) + wrapper max_width(Px(60)):
+        //    - at 100 cols => min(50, 60) = 50 (and wrapping text resolves 50% against 100, not 60!)
+        //    - at 150 cols => min(75, 60) = 60
+        let make_outer_px = || -> Element {
+            let child = Element::from(
+                Text::new("a".repeat(80))
+                    .overflow(Overflow::Wrap)
+                    .height(Length::Auto),
+            )
+            .max_width(Length::Percent(50));
+            let wrapped = Element::from(DropTarget::new().child(child))
+                .max_width(Length::Px(60))
+                .key("mixed-wrap");
+            VStack::new().align(Align::Center).child(wrapped).into()
+        };
+
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &make_outer_px(),
+            Rect {
+                x: 0,
+                y: 0,
+                w: 100,
+                h: 10,
+            },
+            None,
+        );
+        let rect_100 = tree.node(find_by_key(&tree, "mixed-wrap")).rect;
+        assert_eq!(
+            (rect_100.w, rect_100.h),
+            (50, 2),
+            "80 chars wrapped at 50 cols (50% of 100) must take 2 rows, not 3 (50% of 60)"
+        );
+
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &make_outer_px(),
+            Rect {
+                x: 0,
+                y: 0,
+                w: 150,
+                h: 10,
+            },
+            None,
+        );
+        let rect_150 = tree.node(find_by_key(&tree, "mixed-wrap")).rect;
+        assert_eq!((rect_150.w, rect_150.h), (60, 2));
+
+        // 3. Mixed max_height on cross-axis of HStack:
+        //    child max_height(Px(10)) + wrapper max_height(Percent(50)):
+        //    - at 40 rows => min(10, 20) = 10
+        //    - at 16 rows => min(10, 8) = 8
+        let make_hstack = || -> Element {
+            let child = Element::from(VStack::new().width(Length::Px(10)).child(Text::new("tall")))
+                .key("mixed-h")
+                .max_height(Length::Px(10));
+            let wrapped = Element::from(ThemeProvider::new(Theme::default()).child(child))
+                .max_height(Length::Percent(50));
+            HStack::new().align(Align::Center).child(wrapped).into()
+        };
+
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &make_hstack(),
+            Rect {
+                x: 0,
+                y: 0,
+                w: 40,
+                h: 40,
+            },
+            None,
+        );
+        assert_eq!(tree.node(find_by_key(&tree, "mixed-h")).rect.h, 10);
+
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &make_hstack(),
+            Rect {
+                x: 0,
+                y: 0,
+                w: 40,
+                h: 16,
+            },
+            None,
+        );
+        assert_eq!(tree.node(find_by_key(&tree, "mixed-h")).rect.h, 8);
+    }
+
+    #[test]
+    fn unconstrained_transparent_wrappers_preserve_child_min_over_max_precedence() {
+        use crate::style::{Align, Theme};
+        use crate::widgets::{
+            Animated, DragSource, DropTarget, EffectScope, Text, ThemeProvider, VStack,
+        };
+
+        let make_child = || -> Element {
+            Element::from(VStack::new().height(Length::Px(1)).child(Text::new("x")))
+                .key("wrapped")
+                .max_width(Length::Px(20))
+                .min_width(Length::Px(30))
+        };
+
+        let wrappers: Vec<(&str, Element)> = vec![
+            (
+                "ThemeProvider",
+                ThemeProvider::new(Theme::default())
+                    .child(make_child())
+                    .into(),
+            ),
+            ("DropTarget", DropTarget::new().child(make_child()).into()),
+            ("DragSource", DragSource::new().child(make_child()).into()),
+            ("EffectScope", EffectScope::new().child(make_child()).into()),
+            ("Animated", Animated::new(make_child()).into()),
+        ];
+
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            w: 60,
+            h: 10,
+        };
+        for (name, wrapped) in wrappers {
+            let mut tree = NodeTree::new();
+            let root: Element = VStack::new().align(Align::Center).child(wrapped).into();
+            LayoutEngine::reconcile_with_focus(&mut tree, &root, bounds, None);
+            let rect = tree.node(find_by_key(&tree, "wrapped")).rect;
+            assert_eq!(
+                rect.w, 30,
+                "unconstrained {name} must not lower child's min_width(30) to max_width(20)"
+            );
+        }
+
+        // Unconstrained DropTarget around a shrinkable Text must not inject measured min_width.
+        let mut tree = NodeTree::new();
+        let root: Element = VStack::new()
+            .child(
+                Element::from(DropTarget::new().child(Text::new("0123456789abcdef")))
+                    .key("shrinkable"),
+            )
+            .into();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &root,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 8,
+                h: 4,
+            },
+            None,
+        );
+        assert_eq!(tree.node(find_by_key(&tree, "shrinkable")).rect.w, 8);
+    }
+
+    #[test]
+    fn transparent_wrapper_preserves_outer_minimums_and_nested_constraints() {
+        use crate::style::{Align, Theme};
+        use crate::widgets::{DropTarget, Text, ThemeProvider, VStack};
+
+        // 1. Outer min_width / min_height on wrappers are honored.
+        let mut tree = NodeTree::new();
+        let outer_min = Element::from(
+            DropTarget::new().child(Text::new("hi").width(Length::Auto).height(Length::Auto)),
+        )
+        .min_width(Length::Px(30))
+        .min_height(Length::Px(5))
+        .key("outer-min");
+        let root: Element = VStack::new().align(Align::Center).child(outer_min).into();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &root,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 60,
+                h: 20,
+            },
+            None,
+        );
+        let rect = tree.node(find_by_key(&tree, "outer-min")).rect;
+        assert_eq!((rect.w, rect.h), (30, 5));
+
+        // 2. Mixed outer min_width(Percent(40)) + inner min_width(Px(30)):
+        //    - at 100 cols => max(40, 30) = 40
+        //    - at 50 cols  => max(20, 30) = 30
+        let make_mixed_min = || -> Element {
+            let inner = Element::from(Text::new("hi").width(Length::Auto).height(Length::Px(1)))
+                .key("mixed-min")
+                .min_width(Length::Px(30));
+            let wrapped = Element::from(ThemeProvider::new(Theme::default()).child(inner))
+                .min_width(Length::Percent(40));
+            VStack::new().align(Align::Center).child(wrapped).into()
+        };
+
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &make_mixed_min(),
+            Rect {
+                x: 0,
+                y: 0,
+                w: 100,
+                h: 10,
+            },
+            None,
+        );
+        assert_eq!(tree.node(find_by_key(&tree, "mixed-min")).rect.w, 40);
+
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &make_mixed_min(),
+            Rect {
+                x: 0,
+                y: 0,
+                w: 50,
+                h: 10,
+            },
+            None,
+        );
+        assert_eq!(tree.node(find_by_key(&tree, "mixed-min")).rect.w, 30);
+
+        // 3. Multi-level nested wrappers:
+        //    ThemeProvider(max 50%) -> DropTarget(min 15) -> VStack(max 25):
+        //    - at 100 cols => max(15, min(50, 25)) = 25
+        //    - at 40 cols  => max(15, min(20, 25)) = 20
+        //    - at 20 cols  => max(15, min(10, 25)) = 15 (min beats max)
+        let make_nested = || -> Element {
+            let inner = Element::from(
+                VStack::new()
+                    .height(Length::Px(1))
+                    .child(Text::new("nested")),
+            )
+            .key("nested")
+            .max_width(Length::Px(25));
+            let mid = Element::from(DropTarget::new().child(inner)).min_width(Length::Px(15));
+            let outer = Element::from(ThemeProvider::new(Theme::default()).child(mid))
+                .max_width(Length::Percent(50));
+            VStack::new().align(Align::Center).child(outer).into()
+        };
+
+        for (avail_w, expected_w) in [(100, 25), (40, 20), (20, 15)] {
+            let mut tree = NodeTree::new();
+            LayoutEngine::reconcile_with_focus(
+                &mut tree,
+                &make_nested(),
+                Rect {
+                    x: 0,
+                    y: 0,
+                    w: avail_w,
+                    h: 10,
+                },
+                None,
+            );
+            assert_eq!(
+                tree.node(find_by_key(&tree, "nested")).rect.w,
+                expected_w,
+                "nested constraints at width {avail_w}"
+            );
+        }
+    }
 }

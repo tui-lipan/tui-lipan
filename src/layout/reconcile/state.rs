@@ -165,6 +165,9 @@ pub(crate) struct OverlayState {
     /// child against their own bounds set this so leaf reconcilers do not apply percentage
     /// constraints a second time against the child's already-clamped `rect`.
     pub(crate) constraint_avail: Option<(u16, u16)>,
+    /// Accumulated constraints from transparent wrappers surrounding the element currently being
+    /// reconciled. Cleared before descending into non-wrapper children.
+    pub(crate) wrapper_constraints: Option<crate::style::EffectiveLayoutConstraints>,
 }
 
 impl OverlayState {
@@ -182,6 +185,7 @@ impl OverlayState {
             previous_entry_roots: Vec::new(),
             sized_root: false,
             constraint_avail: None,
+            wrapper_constraints: None,
         }
     }
 

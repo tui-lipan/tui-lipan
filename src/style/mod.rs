@@ -47,6 +47,7 @@ pub use effect_amount::{EffectAmount, EffectPulse};
 pub use effects::*;
 pub use geometry::*;
 pub use layout::*;
+pub(crate) use layout::{EffectiveLayoutConstraints, MaxBound, MinBound};
 #[cfg(feature = "theme-reload")]
 pub use reload::{ThemeWatcher, load_theme_from_toml};
 pub use resolve::{resolve_selection_slot, resolve_slot};

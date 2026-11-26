@@ -322,7 +322,11 @@ pub(crate) fn min_size_within(
 
 /// The child of a wrapper that always measures exactly as that child does.
 fn same_size_child(el: &Element) -> Option<&Element> {
-    if el.layout.max_w.is_some() || el.layout.max_h.is_some() {
+    if el.layout.max_w.is_some()
+        || el.layout.max_h.is_some()
+        || crate::style::MinBound::from_length(el.layout.min_w).is_set()
+        || crate::style::MinBound::from_length(el.layout.min_h).is_set()
+    {
         return None;
     }
     match &el.kind {
@@ -330,6 +334,28 @@ fn same_size_child(el: &Element) -> Option<&Element> {
         ElementKind::ThemeProvider(tp) => Some(&tp.child),
         ElementKind::ContextProvider(cp) => Some(&cp.child),
         ElementKind::EffectScope(scope) => scope.child.as_deref(),
+        ElementKind::Animated(animated)
+            if animated.visibility.is_none()
+                && animated.visibility_layout.is_none()
+                && animated.height.is_none()
+                && animated.layout_height.is_none() =>
+        {
+            Some(animated.child.as_ref())
+        }
+        _ => None,
+    }
+}
+
+/// The inner child of a transparent wrapper whose own measurement simply delegates to that child
+/// (preserving the parent's `avail_w`/`avail_h` percentage basis alongside tightened max bounds).
+fn transparent_measure_child(el: &Element) -> Option<&Element> {
+    match &el.kind {
+        ElementKind::Group(g) => Some(g.child.as_ref()),
+        ElementKind::ThemeProvider(tp) => Some(&tp.child),
+        ElementKind::ContextProvider(cp) => Some(&cp.child),
+        ElementKind::EffectScope(scope) => scope.child.as_deref(),
+        ElementKind::DropTarget(target) => target.child.as_deref(),
+        ElementKind::MouseRegion(region) if region.fit_child => region.child.as_deref(),
         ElementKind::Animated(animated)
             if animated.visibility.is_none()
                 && animated.visibility_layout.is_none()
@@ -365,8 +391,8 @@ fn measure_uncached(
     // A transparent wrapper (Group, Animated, ...) reports its child's constraints;
     // tightening by those here would let the child resolve a relative bound such as
     // `Percent(50)` a second time, against the already-halved size.
-    let element_min_w = constraints.min_w.resolve_as_min(avail_w);
-    let element_min_h = constraints.min_h.resolve_as_min(avail_h);
+    let element_min_w = constraints.min_w.resolve(avail_w);
+    let element_min_h = constraints.min_h.resolve(avail_h);
     let requested_max_w = requested_measure_bound(req_w, avail_w).map(|req| req.max(element_min_w));
     let requested_max_h = requested_measure_bound(req_h, avail_h).map(|req| req.max(element_min_h));
     let element_max_w = el
@@ -415,6 +441,11 @@ fn measure_uncached(
             basis(avail_h),
         )
         .outer_size()
+    } else if let Some(inner) = transparent_measure_child(el) {
+        // Forward the parent's `avail_w`/`avail_h` basis alongside the tightened
+        // `effective_max_*` so percentage constraints on the inner element still resolve
+        // against the parent's offered size rather than an outer pixel cap.
+        min_size_within(inner, effective_max_w, effective_max_h, avail_w, avail_h)
     } else {
         // Pass the effective (tighter) bounds so children are measured within
         // both the parent's available space and this element's own max constraints.

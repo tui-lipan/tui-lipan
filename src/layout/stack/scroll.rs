@@ -183,7 +183,7 @@ fn measure_scroll_child(
         None => layout.clamp_width(cw, viewport_width).min(viewport_width),
     };
 
-    let resolved_min_h = layout.min_h.resolve_as_min(viewport_height);
+    let resolved_min_h = layout.min_h.resolve(viewport_height);
     let natural_h = match requested_main_axis(child, Axis::Vertical, None) {
         Length::Px(px) => px.max(resolved_min_h),
         Length::Percent(percent) => Length::Percent(percent)
@@ -1190,8 +1190,7 @@ mod tests {
                 width_spec: CachedChildWidth {
                     requested: Length::Flex(1),
                     natural: 70,
-                    min: Length::Px(0),
-                    max: None,
+                    ..CachedChildWidth::default()
                 },
                 gap_after: false,
                 is_portal: false,
