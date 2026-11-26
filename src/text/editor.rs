@@ -33,6 +33,8 @@ pub struct TextEditor {
     /// Set after moving to the end of a soft-wrapped row. That byte is also where the next row
     /// starts, so this records that the caret still counts as on the row it came from.
     pub(crate) visual_row_end: Option<usize>,
+    /// Last `(history_epoch, edit_version)` observed from a bound [`TextArea`](crate::widgets::TextArea).
+    pub(crate) synced_bound_history: Option<(u64, u64)>,
 }
 
 #[derive(Clone, Debug)]
@@ -93,12 +95,15 @@ impl TextEditor {
                 anchor: None,
                 history: TextBufferCore::fresh_history(),
                 last_edit: None,
+                history_epoch: crate::text::buffer::next_history_epoch(),
+                edit_version: 0,
             },
             pending_external_paste: None,
             image_snapshots: Vec::new(),
             sentinel_snapshots: Vec::new(),
             visual_nav_col: None,
             visual_row_end: None,
+            synced_bound_history: None,
         }
     }
 
@@ -117,10 +122,27 @@ impl TextEditor {
     /// Clears the sticky visual column when the externally-supplied cursor
     /// differs from our last known position, so a subsequent up/down arrow
     /// recomputes the column instead of using a stale one.
-    pub(crate) fn sync_from(&mut self, text: &str, cursor: usize, anchor: Option<usize>) {
+    pub(crate) fn sync_from_bound(
+        &mut self,
+        text: &str,
+        cursor: usize,
+        anchor: Option<usize>,
+        bound_history: Option<(u64, u64)>,
+    ) {
         let prev_cursor = self.core.cursor;
+        let prev_anchor = self.core.anchor;
         let text_changed = self.core.text != text;
         let pending_external_paste = self.pending_external_paste.take();
+        let same_bound_edit = match (self.synced_bound_history, bound_history) {
+            (Some((prev_epoch, prev_ver)), Some((epoch, ver))) => {
+                prev_epoch == epoch && ver != prev_ver
+            }
+            _ => false,
+        };
+        let epoch_changed = match (self.synced_bound_history, bound_history) {
+            (Some((prev_epoch, _)), Some((epoch, _))) => prev_epoch != epoch,
+            _ => false,
+        };
         if text_changed
             && let Some(pending) = pending_external_paste
             && self.core.text == pending.text_before
@@ -132,9 +154,16 @@ impl TextEditor {
                 cursor,
                 anchor,
             );
+        } else if text_changed && same_bound_edit {
+            self.core
+                .sync_external_edit_from(text, prev_cursor, prev_anchor, cursor, anchor);
         } else {
             self.core.sync_from(text, cursor, anchor);
+            if epoch_changed && !text_changed {
+                self.core.reset_history();
+            }
         }
+        self.synced_bound_history = bound_history;
         if text_changed || self.core.cursor != prev_cursor {
             self.visual_nav_col = None;
             self.visual_row_end = None;

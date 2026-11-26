@@ -412,6 +412,7 @@ fn dispatch_selection_clipboard_request(
                     .unwrap_or((node.cursor, node.anchor));
                 let disabled = node.disabled;
                 let read_only = node.read_only;
+                let bound_history = node.bound_history;
                 let value = node.value.clone();
                 let on_change = node.on_change.clone();
                 let on_edit = node.on_edit.clone();
@@ -432,9 +433,10 @@ fn dispatch_selection_clipboard_request(
                         let mut editor = crate::text::editor::TextEditor::new(value.as_ref());
                         editor.set_cursor(cursor);
                         editor.set_anchor(anchor);
+                        editor.synced_bound_history = bound_history;
                         editor
                     });
-                    editor.sync_from(value.as_ref(), cursor, anchor);
+                    editor.sync_from_bound(value.as_ref(), cursor, anchor, bound_history);
 
                     let dispatch = {
                         let mut context = TextAreaClipboardContext::new(

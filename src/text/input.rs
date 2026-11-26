@@ -69,6 +69,8 @@ impl TextInput {
                 anchor: None,
                 history: TextBufferCore::fresh_history(),
                 last_edit: None,
+                history_epoch: crate::text::buffer::next_history_epoch(),
+                edit_version: 0,
             },
             history_scope: None,
         }

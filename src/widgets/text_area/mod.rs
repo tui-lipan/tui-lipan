@@ -218,6 +218,7 @@ pub struct TextArea {
     pub(crate) cursor: usize,         // byte index
     pub(crate) anchor: Option<usize>, // selection anchor byte index
     pub(crate) cursor_controlled: bool,
+    pub(crate) bound_history: Option<(u64, u64)>,
     pub(crate) placeholder: Option<Arc<str>>,
     pub(crate) style: Style,
     pub(crate) hover_style: StyleSlot,
@@ -353,6 +354,7 @@ impl Default for TextArea {
             cursor: 0,
             anchor: None,
             cursor_controlled: false,
+            bound_history: None,
             placeholder: None,
             style: Style::default(),
             hover_style: StyleSlot::Inherit,
@@ -503,6 +505,7 @@ impl TextArea {
         self.cursor = state.cursor();
         self.anchor = state.anchor();
         self.cursor_controlled = true;
+        self.bound_history = Some((state.core.history_epoch, state.core.edit_version));
         self
     }
 

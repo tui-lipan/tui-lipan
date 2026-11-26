@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use crate::text::edit::{TextEdit, TextEditEvent, TextEditFields, TextEditKind, TextTarget};
 use crate::utils::text::clamp_cursor;
 use crate::utils::text::{
@@ -6,6 +8,12 @@ use crate::utils::text::{
 use undo::Record;
 
 const DEFAULT_HISTORY_LIMIT: usize = 1000;
+
+static NEXT_HISTORY_EPOCH: AtomicU64 = AtomicU64::new(1);
+
+pub(crate) fn next_history_epoch() -> u64 {
+    NEXT_HISTORY_EPOCH.fetch_add(1, Ordering::Relaxed)
+}
 
 type CoreEdit = TextEdit<TextBufferCore>;
 
@@ -21,6 +29,12 @@ pub struct TextBufferCore {
     pub(crate) anchor: Option<usize>,
     pub(crate) history: Record<CoreEdit>,
     pub(crate) last_edit: Option<TextEditEvent>,
+    /// Unique identifier for the current document/session in this buffer. Bumped on
+    /// construction, `set_text`, and `clear_history`/`reset_history` so bound widgets know
+    /// when to discard runtime undo history vs. record a programmatic edit onto it.
+    pub(crate) history_epoch: u64,
+    /// Monotonic counter incremented on every edit recorded via `record_edit`.
+    pub(crate) edit_version: u64,
 }
 
 impl Default for TextBufferCore {
@@ -31,6 +45,8 @@ impl Default for TextBufferCore {
             anchor: None,
             history: Self::fresh_history(),
             last_edit: None,
+            history_epoch: next_history_epoch(),
+            edit_version: 0,
         }
     }
 }
@@ -123,10 +139,14 @@ impl TextBufferCore {
     /// Clear all undo/redo history without changing the text.
     pub fn clear_history(&mut self) {
         self.history.clear();
+        self.history_epoch = next_history_epoch();
+        self.edit_version = 0;
     }
 
     pub(crate) fn reset_history(&mut self) {
         self.history = Self::fresh_history();
+        self.history_epoch = next_history_epoch();
+        self.edit_version = 0;
     }
 
     // ── Sync / setters ───────────────────────────────────────────────────
@@ -175,6 +195,8 @@ impl TextBufferCore {
         self.text = text.into();
         self.cursor = clamp_cursor(&self.text, self.cursor);
         self.anchor = self.anchor.map(|a| clamp_cursor(&self.text, a));
+        self.history_epoch = next_history_epoch();
+        self.edit_version = 0;
     }
 
     /// Set the cursor position (byte index), clearing selection.
@@ -229,6 +251,7 @@ impl TextBufferCore {
         let mut history = std::mem::take(&mut self.history);
         history.edit(self, edit);
         self.history = history;
+        self.edit_version = self.edit_version.wrapping_add(1);
     }
 
     pub(crate) fn take_last_edit(&mut self) -> Option<TextEditEvent> {

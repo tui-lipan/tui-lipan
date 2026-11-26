@@ -135,6 +135,7 @@ pub(crate) fn handle_key(
     let read_only = ta.read_only;
     let cursor = ta.cursor;
     let anchor = ta.anchor;
+    let bound_history = ta.bound_history;
     let value = ta.value.clone();
     let has_on_change = ta.on_change.is_some();
     let on_change = ta.on_change.clone();
@@ -222,9 +223,10 @@ pub(crate) fn handle_key(
                 let mut editor = TextEditor::new(value.as_ref().to_string());
                 editor.set_cursor(cursor);
                 editor.set_anchor(anchor);
+                editor.synced_bound_history = bound_history;
                 editor
             });
-            editor.sync_from(value.as_ref(), cursor, anchor);
+            editor.sync_from_bound(value.as_ref(), cursor, anchor, bound_history);
 
             let dispatch = {
                 let mut context = TextAreaClipboardContext::new(
@@ -292,9 +294,10 @@ pub(crate) fn handle_key(
             let mut editor = TextEditor::new(value.as_ref().to_string());
             editor.set_cursor(cursor);
             editor.set_anchor(anchor);
+            editor.synced_bound_history = bound_history;
             editor
         });
-        editor.sync_from(value.as_ref(), cursor, anchor);
+        editor.sync_from_bound(value.as_ref(), cursor, anchor, bound_history);
 
         let newline_binding = effective_text_area_newline_binding(
             newline_binding_widget,
@@ -566,6 +569,7 @@ pub(crate) fn handle_paste(
     let read_only = ta.read_only;
     let cursor = ta.cursor;
     let anchor = ta.anchor;
+    let bound_history = ta.bound_history;
     let value = ta.value.clone();
     let has_on_change = ta.on_change.is_some();
     let on_change = ta.on_change.clone();
@@ -594,9 +598,10 @@ pub(crate) fn handle_paste(
         let mut editor = TextEditor::new(value.as_ref().to_string());
         editor.set_cursor(cursor);
         editor.set_anchor(anchor);
+        editor.synced_bound_history = bound_history;
         editor
     });
-    editor.sync_from(value.as_ref(), cursor, anchor);
+    editor.sync_from_bound(value.as_ref(), cursor, anchor, bound_history);
 
     let before_text = editor.text().to_owned();
     let before_cursor = editor.cursor();

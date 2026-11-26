@@ -1339,3 +1339,112 @@ fn clicking_context_menu_item_preserves_underlying_textarea_selection() {
         "clicking outside the TextArea when the context menu is closed should still clear selection"
     );
 }
+
+#[derive(Clone, Debug)]
+enum UndoMenuMsg {
+    Edited(tui_lipan::TextAreaEvent),
+    Paste(&'static str),
+    Reset(&'static str),
+}
+
+struct BoundUndoHarness;
+
+impl Component for BoundUndoHarness {
+    type Properties = ();
+    type State = tui_lipan::TextEditor;
+    type Message = UndoMenuMsg;
+
+    fn create_state(&self, _: &()) -> Self::State {
+        tui_lipan::TextEditor::default()
+    }
+
+    fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+        match msg {
+            UndoMenuMsg::Edited(ev) => {
+                ev.apply_to(&mut ctx.state);
+                Update::full()
+            }
+            UndoMenuMsg::Paste(text) => {
+                ctx.state.insert_str(text);
+                Update::full()
+            }
+            UndoMenuMsg::Reset(text) => {
+                ctx.state = tui_lipan::TextEditor::new(text);
+                Update::full()
+            }
+        }
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        TextArea::bound(&ctx.state)
+            .height(Length::Px(4))
+            .on_change(ctx.link().callback(UndoMenuMsg::Edited))
+            .key("bound-editor")
+    }
+}
+
+#[test]
+fn programmatic_bound_editor_edits_preserve_and_extend_undo_history() {
+    let mut backend = TestBackend::new(BoundUndoHarness);
+    backend.render();
+
+    // Focus the TextArea and type "hi " so undo history has a typed step.
+    backend.focus_key(&tui_lipan::Key::from("bound-editor"));
+    for ch in ['h', 'i', ' '] {
+        backend
+            .send_key(KeyEvent {
+                code: KeyCode::Char(ch),
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+        backend.render();
+    }
+    assert_eq!(backend.state().text(), "hi ");
+
+    // Programmatically insert via TextEditor::insert_str (e.g. context menu Paste).
+    backend.dispatch(UndoMenuMsg::Paste("there")).unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "hi there");
+
+    // Second programmatic edit without an intermediate keystroke gets its own undo step.
+    backend.dispatch(UndoMenuMsg::Paste("!")).unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "hi there!");
+
+    let undo = KeyEvent {
+        code: KeyCode::Char('z'),
+        mods: KeyMods::CTRL,
+    };
+    let redo = KeyEvent {
+        code: KeyCode::Char('y'),
+        mods: KeyMods::CTRL,
+    };
+
+    backend.send_key(undo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "hi there");
+
+    backend.send_key(undo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "hi ");
+
+    // Prior typed undo history is still intact!
+    backend.send_key(undo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "");
+
+    // Redo walks back forward through typed and programmatic edits.
+    backend.send_key(redo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "hi ");
+    backend.send_key(redo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "hi there");
+
+    // Replacing TextEditor with a fresh instance (e.g. after submit) resets undo history.
+    backend.dispatch(UndoMenuMsg::Reset("")).unwrap();
+    backend.render();
+    backend.send_key(undo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().text(), "");
+}
