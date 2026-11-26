@@ -1524,10 +1524,17 @@ pub(crate) fn render_list(params: ListRenderParams<'_, '_, '_>) {
                 item_spans.extend(right_spans);
             }
 
+            // The right inset belongs to the row, not the description: a full-width
+            // highlight covers it even when the description opts out of selection.
             if row_padding.right > 0 {
+                let padding_style = if selection_full_width {
+                    rs_base
+                } else {
+                    rs_right_base
+                };
                 item_spans.push(Span::styled(
                     spaces(row_padding.right as usize),
-                    rs_right_base,
+                    padding_style,
                 ));
             }
 
@@ -2650,6 +2657,100 @@ mod tests {
         assert!(row0.starts_with("[Aa"), "row0 = {row0:?}");
         assert!(row0.ends_with(']'), "row0 = {row0:?}");
         assert!(!row0.starts_with("[Aa]"), "row0 = {row0:?}");
+    }
+
+    #[test]
+    fn full_width_highlight_covers_right_inset_when_description_opts_out() {
+        let selection_bg = Color::Rgb(1, 2, 3);
+        let badge_bg = Color::Rgb(9, 9, 9);
+        let items = [ListItem::from_spans([Span::new("Aa")])
+            .description_spans([Span::new("B").style(Style::new().bg(badge_bg))])
+            .primary_selection_description(false)];
+
+        let rect = Rect {
+            x: 0,
+            y: 0,
+            w: 8,
+            h: 1,
+        };
+        let backend = TestBackend::new(rect.w, rect.h);
+        let mut terminal = Terminal::with_options(
+            backend,
+            TerminalOptions {
+                viewport: Viewport::Fixed(ratatui::layout::Rect::new(0, 0, rect.w, rect.h)),
+            },
+        )
+        .expect("terminal");
+
+        terminal
+            .draw(|f| {
+                render_list(ListRenderParams {
+                    f,
+                    items: &items,
+                    selected: Some(0),
+                    offset: 0,
+                    style: Style::default(),
+                    hover_style: Style::default(),
+                    item_hover_style: Style::default(),
+                    active_style: Style::default(),
+                    selection_style: Style::new().bg(selection_bg),
+                    active_symbol: None,
+                    active_symbol_position: ListSymbolPosition::Left,
+                    active_symbol_style: None,
+                    selection_symbol: None,
+                    selection_symbol_right: None,
+                    selection_symbol_style: None,
+                    unselected_symbol: None,
+                    symbol_column: false,
+                    gutter_gap: 0,
+                    gutter_for_non_selectable: false,
+                    selection_full_width: true,
+                    item_horizontal_padding: Padding::from((0, 1)),
+                    header_horizontal_padding: Padding::default(),
+                    border: false,
+                    border_style: BorderStyle::Plain,
+                    title: None,
+                    title_style: Style::default(),
+                    padding: Padding::default(),
+                    scrollbar: false,
+                    scrollbar_variant: ScrollbarVariant::Standalone,
+                    scrollbar_gap: 0,
+                    scrollbar_thumb: None,
+                    scrollbar_thumb_style: None,
+                    scrollbar_thumb_focus_style: None,
+                    scrollbar_track_style: None,
+                    show_scroll_indicators: false,
+                    scroll_indicator_style: Style::default(),
+                    top_indicator: false,
+                    bottom_indicator: false,
+                    bottom_count: 0,
+                    empty_text: None,
+                    empty_text_style: Style::default(),
+                    empty_text_padding: Padding::default(),
+                    is_focused: true,
+                    is_hovered: false,
+                    mouse_pos: None,
+                    disabled: false,
+                    disabled_style: Style::default(),
+                    rect,
+                    rrect: ratatui::layout::Rect::new(0, 0, rect.w, rect.h),
+                    parent_integrated_v: None,
+                    clip_rect: None,
+                    contrast_policy: ContrastPolicy::Off,
+                });
+            })
+            .expect("draw");
+
+        let buffer = terminal.backend().buffer();
+        let rgb = |c: Color| match c {
+            Color::Rgb(r, g, b) => ratatui::style::Color::Rgb(r, g, b),
+            _ => unreachable!(),
+        };
+        // `·Aa···B·`: the description keeps its own fill, the insets take the highlight.
+        assert_eq!(buffer[(6, 0)].symbol(), "B");
+        assert_eq!(buffer[(6, 0)].bg, rgb(badge_bg));
+        assert_eq!(buffer[(0, 0)].bg, rgb(selection_bg));
+        assert_eq!(buffer[(7, 0)].bg, rgb(selection_bg));
     }
 
     #[test]
