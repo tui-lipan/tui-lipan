@@ -792,7 +792,11 @@ impl From<ContextMenu> for Element {
                     move |ev: crate::widgets::ListEvent| cb.emit(ev.index),
                 ));
             }
-            crate::child(|| MenuList, MenuListProps(Rc::new(list)))
+            let close_on_right = on_close.clone();
+            crate::widgets::MouseRegion::new()
+                .on_context_menu(Callback::new(move |_| close_on_right.emit(())))
+                .child(crate::child(|| MenuList, MenuListProps(Rc::new(list))))
+                .into()
         };
 
         Popover::new()
@@ -1262,7 +1266,10 @@ fn render_menu_level(
         .unfocused_selection_style_slot(cfg.unfocused_selection_style)
         .item_hover_style_slot(cfg.item_hover_style);
 
-    let list_el = list.key(level_key(depth));
+    let list_el: Element = crate::widgets::MouseRegion::new()
+        .on_context_menu(ctx.link().callback(|_| MenuStackMsg::CloseAll))
+        .child(list.key(level_key(depth)))
+        .into();
 
     let Some(child_idx) = open_child else {
         return list_el;

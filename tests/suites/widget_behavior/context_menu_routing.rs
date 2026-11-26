@@ -256,3 +256,67 @@ fn hovering_submenu_opens_and_clicking_outside_dismisses_entire_stack() {
     backend.render();
     assert!(!*backend.state(), "outside click should close menu stack");
 }
+
+#[test]
+fn right_click_closes_open_context_menu_outside_and_inside() {
+    let mut backend = TestBackend::new(CascadingMenu::default());
+    backend.render();
+    assert!(*backend.state());
+
+    // Right-clicking outside the menu closes it without leaking.
+    backend
+        .send_mouse(MouseEvent {
+            x: 75,
+            y: 20,
+            kind: MouseKind::Down(MouseButton::Right),
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend
+        .send_mouse(MouseEvent {
+            x: 75,
+            y: 20,
+            kind: MouseKind::Up(MouseButton::Right),
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.render();
+    assert!(
+        !*backend.state(),
+        "right-clicking outside an open context menu should close it"
+    );
+
+    // Re-open and verify right-clicking inside the menu itself also closes it.
+    let mut backend = TestBackend::new(CascadingMenu::default());
+    backend.render();
+    assert!(*backend.state());
+
+    let frame = backend.capture_frame().plain_text();
+    let (item_x, item_y) = frame
+        .lines()
+        .enumerate()
+        .find_map(|(row, line)| line.find("Copy").map(|col| (col as u16 + 1, row as u16)))
+        .expect("Copy should be rendered inside the menu");
+
+    backend
+        .send_mouse(MouseEvent {
+            x: item_x,
+            y: item_y,
+            kind: MouseKind::Down(MouseButton::Right),
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend
+        .send_mouse(MouseEvent {
+            x: item_x,
+            y: item_y,
+            kind: MouseKind::Up(MouseButton::Right),
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.render();
+    assert!(
+        !*backend.state(),
+        "right-clicking inside an open context menu should close it"
+    );
+}

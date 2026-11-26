@@ -953,8 +953,10 @@ impl<C: Component> MouseDispatchCtx<C> for TestBackend<C> {
                 }
                 return false;
             }
-            if button == crate::core::event::MouseButton::Left
-                && overlay.dismiss_policy.dismiss_on_click_outside()
+            if matches!(
+                button,
+                crate::core::event::MouseButton::Left | crate::core::event::MouseButton::Right
+            ) && overlay.dismiss_policy.dismiss_on_click_outside()
             {
                 return self.dismiss_overlay(overlay);
             }
