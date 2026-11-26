@@ -1012,7 +1012,7 @@ A popup menu backed by `Popover` + `List`. Typically triggered by right-click or
 | `selection_symbol` | `Option<impl Into<Arc<str>>>` | `"> "` (flat) / `None` (entries) | Selection indicator |
 | `selection_symbol_style` | `Style` | - | Selection indicator style |
 | `unfocused_selection_symbol_style` | `Style` | - | Selection indicator style while menu list is not focused; defaults to `selection_symbol_style` |
-| `gutter_gap` | `u16` | `1` | Columns between icon/check gutter and label |
+| `gutter_gap` | `u16` | `0` (flat) / `1` (entries) | Columns between icon/check gutter and label |
 | `item_horizontal_padding` | `impl Into<Padding>` | default | Horizontal padding on normal and disabled rows |
 | `header_horizontal_padding` | `impl Into<Padding>` | default | Horizontal padding on separators and headers |
 | `separator_style` | `Style` | theme border | Horizontal separator rule style |

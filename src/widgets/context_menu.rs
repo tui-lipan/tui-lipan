@@ -9,12 +9,11 @@ use crate::callback::{Callback, KeyHandler};
 use crate::core::element::{Element, IntoElement};
 use crate::core::event::KeyCode;
 use crate::style::{
-    BorderStyle, Length, Padding, Rect, RowStylePolicy, ScrollbarConfig, Span, Style, StyleSlot,
+    BorderStyle, Length, Padding, RowStylePolicy, ScrollbarConfig, Span, Style, StyleSlot,
 };
 use crate::widgets::hover_reveal::{HoverDelay, HoverReveal, RevealStep};
 use crate::widgets::{
-    List, ListHoverEvent, ListItem, ListItemGutter, ListItemRole, Popover, PopoverOffset,
-    PopoverPlacement,
+    List, ListHoverEvent, ListItem, ListItemGutter, Popover, PopoverOffset, PopoverPlacement,
 };
 
 /// A structured entry inside a [`ContextMenu`], supporting actions, cascading submenus,
@@ -299,7 +298,7 @@ pub struct ContextMenu {
     selection_symbol_explicit: bool,
     selection_symbol_style: Option<Style>,
     unfocused_selection_symbol_style: Option<Style>,
-    gutter_gap: u16,
+    gutter_gap: Option<u16>,
     item_horizontal_padding: Padding,
     header_horizontal_padding: Padding,
     separator_style: Option<Style>,
@@ -359,7 +358,7 @@ impl ContextMenu {
             selection_symbol_explicit: false,
             selection_symbol_style: None,
             unfocused_selection_symbol_style: None,
-            gutter_gap: 1,
+            gutter_gap: None,
             item_horizontal_padding: Padding::default(),
             header_horizontal_padding: Padding::default(),
             separator_style: None,
@@ -605,8 +604,11 @@ impl ContextMenu {
     }
 
     /// Gap in columns between an entry's leading icon/check gutter and its label.
+    ///
+    /// Defaults to `0` in flat `.items(...)` mode (matching [`List`]) and `1` in structured
+    /// `.entries(...)` mode.
     pub fn gutter_gap(mut self, gap: u16) -> Self {
-        self.gutter_gap = gap;
+        self.gutter_gap = Some(gap);
         self
     }
 
@@ -743,7 +745,7 @@ impl From<ContextMenu> for Element {
                 selection_symbol,
                 selection_symbol_style: menu.selection_symbol_style,
                 unfocused_selection_symbol_style: menu.unfocused_selection_symbol_style,
-                gutter_gap: menu.gutter_gap,
+                gutter_gap: menu.gutter_gap.unwrap_or(1),
                 item_horizontal_padding: menu.item_horizontal_padding,
                 header_horizontal_padding: menu.header_horizontal_padding,
                 separator_style: menu.separator_style,
@@ -779,7 +781,7 @@ impl From<ContextMenu> for Element {
                 .style(menu.style)
                 .selection_full_width(menu.selection_full_width.unwrap_or(false))
                 .symbol_column(menu.symbol_column.unwrap_or(true))
-                .gutter_gap(menu.gutter_gap)
+                .gutter_gap(menu.gutter_gap.unwrap_or(0))
                 .item_horizontal_padding(menu.item_horizontal_padding)
                 .header_horizontal_padding(menu.header_horizontal_padding)
                 .selection_symbol_style(
@@ -977,6 +979,13 @@ enum MenuStackMsg {
         depth: usize,
     },
     CloseSubmenu {
+        depth: usize,
+    },
+    CloseSubmenuFrom {
+        depth: usize,
+    },
+    CloseDeepest,
+    Scrolled {
         depth: usize,
     },
     CloseAll,
@@ -1237,6 +1246,52 @@ impl crate::Component for MenuStack {
                 ctx.request_focus(level_key(depth - 1));
                 crate::Update::render()
             }
+            MenuStackMsg::CloseSubmenuFrom { depth } => {
+                cancel_pending_hover(&mut ctx.state);
+                let had_open = ctx
+                    .state
+                    .levels
+                    .get(depth)
+                    .is_some_and(|level| level.open_child.is_some());
+                if !had_open {
+                    return crate::Update::none();
+                }
+                ctx.state.levels.truncate(depth + 1);
+                if let Some(parent) = ctx.state.levels.get_mut(depth) {
+                    parent.open_child = None;
+                }
+                ctx.request_focus(level_key(depth));
+                crate::Update::render()
+            }
+            MenuStackMsg::CloseDeepest => {
+                cancel_pending_hover(&mut ctx.state);
+                if ctx.state.levels.len() > 1 {
+                    let parent_depth = ctx.state.levels.len() - 2;
+                    ctx.state.levels.truncate(parent_depth + 1);
+                    if let Some(parent) = ctx.state.levels.get_mut(parent_depth) {
+                        parent.open_child = None;
+                    }
+                    ctx.request_focus(level_key(parent_depth));
+                    crate::Update::render()
+                } else {
+                    if let Some(on_close) = &ctx.props.on_close {
+                        on_close.emit(());
+                    }
+                    crate::Update::none()
+                }
+            }
+            MenuStackMsg::Scrolled { depth } => {
+                if ctx
+                    .state
+                    .levels
+                    .get(depth)
+                    .is_some_and(|level| level.open_child.is_some())
+                {
+                    crate::Update::render()
+                } else {
+                    crate::Update::none()
+                }
+            }
             MenuStackMsg::CloseAll => {
                 cancel_pending_hover(&mut ctx.state);
                 if let Some(on_close) = &ctx.props.on_close {
@@ -1352,11 +1407,7 @@ fn render_menu_level(
             true
         }
         KeyCode::Esc => {
-            if depth > 0 {
-                link_close.send(MenuStackMsg::CloseSubmenu { depth });
-            } else {
-                link_tab.send(MenuStackMsg::CloseAll);
-            }
+            link_close.send(MenuStackMsg::CloseDeepest);
             true
         }
         KeyCode::Tab => {
@@ -1422,6 +1473,10 @@ fn render_menu_level(
                 }
             },
         ))
+        .on_scroll_to(
+            ctx.link()
+                .callback(move |_| MenuStackMsg::Scrolled { depth }),
+        )
         .on_key(on_key);
     list = list
         .selection_style_slot(cfg.selection_style)
@@ -1433,30 +1488,32 @@ fn render_menu_level(
         .child(list.key(level_key(depth)))
         .into();
 
-    let Some(child_idx) = open_child else {
-        return list_el;
-    };
-    let Some(ContextMenuEntry::Submenu(sub)) = entries.get(child_idx) else {
-        return list_el;
-    };
-    if sub.disabled || sub.children.is_empty() {
-        return list_el;
-    }
+    let open_sub = open_child.and_then(|child_idx| match entries.get(child_idx) {
+        Some(ContextMenuEntry::Submenu(sub)) if !sub.disabled && !sub.children.is_empty() => {
+            Some((child_idx, sub))
+        }
+        _ => None,
+    });
 
     let top_inset = u16::from(cfg.border).saturating_add(cfg.padding.top);
-    let trigger_row_y = top_inset.saturating_add(u16::try_from(child_idx).unwrap_or(0));
-    let child_el = render_menu_level(ctx, theme, &sub.children, depth + 1);
+    let (submenu_open, anchor_idx, child_el) = match open_sub {
+        Some((child_idx, sub)) => (
+            true,
+            Some(child_idx),
+            render_menu_level(ctx, theme, &sub.children, depth + 1),
+        ),
+        None => (false, None, crate::widgets::Spacer::new().into()),
+    };
 
     Popover::new()
         .trigger(list_el)
         .content(child_el)
-        .open(true)
-        .anchor_area(Some(Rect {
-            x: 0,
-            y: trigger_row_y as i16,
-            w: level_width,
-            h: 1,
-        }))
+        .open(submenu_open)
+        .anchor_list_item(anchor_idx)
+        .on_anchor_hidden(
+            ctx.link()
+                .callback(move |_| MenuStackMsg::CloseSubmenuFrom { depth }),
+        )
         .placement(PopoverPlacement::RightStart)
         .offset((0, -(top_inset as i16)))
         .auto_flip(true)
@@ -1529,7 +1586,7 @@ fn entry_to_list_item(
             };
             let mut list_item = ListItem::from_spans([label_span]);
             if item.disabled {
-                list_item = list_item.role(ListItemRole::Disabled);
+                list_item = list_item.disabled(true);
             }
             if let Some(checked) = item.checked {
                 let check_style = if item.disabled {
@@ -1604,7 +1661,7 @@ fn entry_to_list_item(
                         .row_style_policy(RowStylePolicy::PreserveForeground)])
                     .primary_description_gap(cfg.detail_gap);
             if disabled {
-                list_item = list_item.role(ListItemRole::Disabled);
+                list_item = list_item.disabled(true);
             }
             if let Some(icon) = &sub.icon {
                 let default_icon_style = if disabled { muted_style } else { icon_base };

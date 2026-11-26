@@ -58,16 +58,33 @@ pub(crate) fn reconcile_popover(
 
     let mut content_rect = None;
     let mut desired_bottom = 0u16;
-    if popover.open {
+    let (effective_open, anchor_trigger_rect) = if popover.open {
+        if let Some(item_idx) = popover.anchor_list_item {
+            match resolve_anchored_list_item_rect(tree, trigger_id, item_idx) {
+                Some(row_rect) => (true, row_rect),
+                None => {
+                    if let Some(cb) = &popover.on_anchor_hidden {
+                        cb.emit(());
+                    }
+                    (false, tree.node(trigger_id).rect)
+                }
+            }
+        } else {
+            (true, tree.node(trigger_id).rect)
+        }
+    } else {
+        (false, tree.node(trigger_id).rect)
+    };
+
+    if effective_open {
         if let Some(content) = reuse_content.filter(|id| tree.is_valid(*id)) {
             crate::widgets::containers::exit_retention::revive(tree, content);
         }
-        let trigger_rect = tree.node(trigger_id).rect;
         let bounds = overlay_state.bounds;
-        let resolved = resolve_popover_rect(popover, trigger_rect, bounds);
+        let resolved = resolve_popover_rect(popover, anchor_trigger_rect, bounds);
         if popover.scope == OverlayScope::RootPortal {
             let desired = overlay_state.popover_expand_bounds.map_or(resolved, |max| {
-                resolve_popover_rect(popover, trigger_rect, max)
+                resolve_popover_rect(popover, anchor_trigger_rect, max)
             });
             desired_bottom =
                 (i32::from(desired.y) + i32::from(desired.h)).clamp(0, i32::from(u16::MAX)) as u16;
@@ -124,6 +141,7 @@ pub(crate) fn reconcile_popover(
     let node = tree.node_mut(id);
     node.children = new_children.clone();
     if let NodeKind::Popover(popover_node) = &mut node.kind {
+        popover_node.open = effective_open;
         *popover_node.trigger = new_children[0];
         if new_children.len() > 1 {
             *popover_node.content = new_children[1];
@@ -135,6 +153,27 @@ pub(crate) fn reconcile_popover(
     tree.note_kind_set(id);
 
     id
+}
+
+fn resolve_anchored_list_item_rect(tree: &NodeTree, id: NodeId, item_idx: usize) -> Option<Rect> {
+    let (list_rect, list_node) = find_descendant_list_node(tree, id)?;
+    list_node.visible_item_rect(list_rect, item_idx)
+}
+
+fn find_descendant_list_node(
+    tree: &NodeTree,
+    id: NodeId,
+) -> Option<(Rect, &crate::widgets::internal::ListNode)> {
+    let node = tree.node(id);
+    if let NodeKind::List(list) = &node.kind {
+        return Some((node.rect, list));
+    }
+    for &child_id in &node.children {
+        if let Some(found) = find_descendant_list_node(tree, child_id) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 fn reconcile_animation(

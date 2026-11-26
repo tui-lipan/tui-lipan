@@ -464,3 +464,278 @@ fn submenu_delay_waits_for_hover_cancels_on_sweep_and_retimes() {
         "shortening submenu_delay below elapsed hover time should open immediately"
     );
 }
+
+#[test]
+fn escape_closes_hover_opened_submenu_before_root_menu() {
+    let mut backend = TestBackend::new(CascadingMenu::default());
+    backend.render();
+    assert!(*backend.state());
+
+    let text = backend.capture_frame().plain_text();
+    let (copy_x, copy_y) = text
+        .lines()
+        .enumerate()
+        .find_map(|(y, line)| line.find("Copy").map(|x| (x as u16 + 1, y as u16)))
+        .expect("Copy row should be visible");
+
+    // Hover Copy to open the submenu without transferring keyboard focus.
+    backend
+        .send_mouse(MouseEvent {
+            x: copy_x,
+            y: copy_y,
+            kind: MouseKind::Moved,
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.render();
+    assert!(
+        backend.capture_frame().plain_text().contains("Thread ID"),
+        "hovering Copy should open submenu"
+    );
+
+    // First Esc closes only the hover-opened submenu, keeping the root menu open.
+    key(&mut backend, KeyCode::Esc);
+    assert!(
+        *backend.state(),
+        "root menu must stay open after Esc closes a hover-opened submenu"
+    );
+    assert!(
+        !backend.capture_frame().plain_text().contains("Thread ID"),
+        "submenu must close on first Esc"
+    );
+
+    // Second Esc closes the root menu.
+    key(&mut backend, KeyCode::Esc);
+    assert!(!*backend.state(), "second Esc must close root menu");
+}
+
+struct SizedMenu {
+    width: Option<Length>,
+    height: Length,
+    entries: Vec<ContextMenuEntry>,
+}
+
+impl Component for SizedMenu {
+    type Properties = ();
+    type State = ();
+    type Message = ();
+
+    fn create_state(&self, _: &()) {}
+
+    fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _: &Context<Self>) -> Element {
+        let mut menu = ContextMenu::new(Text::new("Host"))
+            .open(true)
+            .anchor(Some((2, 2)))
+            .height(self.height)
+            .entries(self.entries.clone());
+        if let Some(width) = self.width {
+            menu = menu.width(width);
+        }
+        menu.into()
+    }
+}
+
+#[test]
+fn submenu_anchors_against_explicit_and_constrained_parent_width() {
+    let entries = vec![
+        ContextMenuEntry::action("a", "Alpha"),
+        ContextMenuEntry::submenu(
+            "sub",
+            "More",
+            [ContextMenuEntry::action("child", "SubItem")],
+        ),
+    ];
+
+    // 1. Explicit parent width (40 cols): submenu must start at x = 2 + 40 = 42, not overlap!
+    let mut backend = TestBackend::new(SizedMenu {
+        width: Some(Length::Px(40)),
+        height: Length::Auto,
+        entries: entries.clone(),
+    });
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 80,
+        h: 24,
+    });
+    backend.render();
+    backend
+        .send_key(KeyEvent {
+            code: KeyCode::Down,
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend
+        .send_key(KeyEvent {
+            code: KeyCode::Right,
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.render();
+
+    let frame = backend.capture_frame();
+    let lines = frame.to_fixed_grid_lines();
+    let sub_col = lines
+        .iter()
+        .find_map(|line| line.find("SubItem"))
+        .expect("SubItem should be rendered");
+    assert!(
+        sub_col >= 42,
+        "submenu should open at or right of explicit 40-col parent (x=2..42), got col {sub_col}:\n{}",
+        frame.plain_text()
+    );
+
+    // 2. Narrow terminal constraining a 40-col menu: submenu flips/clamps cleanly without panic.
+    let mut narrow = TestBackend::new(SizedMenu {
+        width: Some(Length::Px(40)),
+        height: Length::Auto,
+        entries,
+    });
+    narrow.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 36,
+        h: 12,
+    });
+    narrow.render();
+    narrow
+        .send_key(KeyEvent {
+            code: KeyCode::Down,
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    narrow
+        .send_key(KeyEvent {
+            code: KeyCode::Right,
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    narrow.render();
+    assert!(
+        narrow.capture_frame().plain_text().contains("SubItem"),
+        "submenu should remain visible in a terminal-constrained layout"
+    );
+}
+
+#[test]
+fn submenu_tracks_scrolled_parent_row_and_closes_when_scrolled_out_of_view() {
+    let entries = vec![
+        ContextMenuEntry::action("0", "Row 0"),
+        ContextMenuEntry::action("1", "Row 1"),
+        ContextMenuEntry::action("2", "Row 2"),
+        ContextMenuEntry::action("3", "Row 3"),
+        ContextMenuEntry::action("4", "Row 4"),
+        ContextMenuEntry::submenu(
+            "sub",
+            "Row 5 Sub",
+            [ContextMenuEntry::action("child", "ScrolledChild")],
+        ),
+        ContextMenuEntry::action("6", "Row 6"),
+        ContextMenuEntry::action("7", "Row 7"),
+        ContextMenuEntry::action("8", "Row 8"),
+    ];
+
+    // Menu height = 5 (2 border rows + 3 visible item rows).
+    let mut backend = TestBackend::new(SizedMenu {
+        width: None,
+        height: Length::Px(5),
+        entries,
+    });
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 80,
+        h: 24,
+    });
+    backend.render();
+
+    // Navigate down 5 times so "Row 5 Sub" is scrolled into the 3-row viewport, then open submenu.
+    for _ in 0..5 {
+        backend
+            .send_key(KeyEvent {
+                code: KeyCode::Down,
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+        backend.render();
+    }
+    backend
+        .send_key(KeyEvent {
+            code: KeyCode::Right,
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.render();
+
+    let open_frame = backend.capture_frame().plain_text();
+    let trigger_y = open_frame
+        .lines()
+        .enumerate()
+        .find_map(|(y, line)| line.contains("Row 5 Sub").then_some(y))
+        .expect("Row 5 Sub should be visible");
+    let child_y = open_frame
+        .lines()
+        .enumerate()
+        .find_map(|(y, line)| line.contains("ScrolledChild").then_some(y))
+        .expect("ScrolledChild should be visible");
+    assert_eq!(
+        child_y, trigger_y,
+        "submenu's first item should align vertically with scrolled trigger row:\n{open_frame}"
+    );
+
+    // Wheel-scroll the parent menu back up until "Row 5 Sub" scrolls out of view.
+    for _ in 0..5 {
+        backend
+            .send_mouse(MouseEvent {
+                x: 6,
+                y: 4,
+                kind: MouseKind::ScrollUp,
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+        backend.render();
+    }
+    let scrolled_out = backend.capture_frame().plain_text();
+    assert!(
+        !scrolled_out.contains("Row 5 Sub") && !scrolled_out.contains("ScrolledChild"),
+        "submenu must close once its trigger row scrolls out of view:\n{scrolled_out}"
+    );
+}
+
+struct FlatGutterMenu;
+
+impl Component for FlatGutterMenu {
+    type Properties = ();
+    type State = ();
+    type Message = ();
+
+    fn create_state(&self, _: &()) {}
+
+    fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _: &Context<Self>) -> Element {
+        ContextMenu::new(Text::new("Host"))
+            .open(true)
+            .anchor(Some((1, 1)))
+            .items([ListItem::new("Open")
+                .gutter(tui_lipan::ListItemGutter::from_spans([Span::new("*")]))])
+            .into()
+    }
+}
+
+#[test]
+fn flat_context_menu_preserves_zero_default_gutter_gap() {
+    let mut backend = TestBackend::new(FlatGutterMenu);
+    backend.render();
+    let frame = backend.capture_frame().plain_text();
+    assert!(
+        frame.contains("*Open"),
+        "flat context menu should default gutter_gap to 0 (matching List):\n{frame}"
+    );
+}

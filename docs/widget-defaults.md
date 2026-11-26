@@ -680,6 +680,8 @@ Source: `src/widgets/popover/mod.rs` (`Popover`).
 | `max_width` | `None` |
 | `anchor` | `None` |
 | `anchor_area` | `None` |
+| `anchor_list_item` | `None` |
+| `on_anchor_hidden` | `None` |
 | `capture_focus` | `true` |
 | `capture_pointer` | `true` |
 | `auto_focus` | `true` |
@@ -1545,7 +1547,7 @@ Source: `src/widgets/context_menu.rs` (`ContextMenu`).
 | `selection_symbol_explicit` | `false` |
 | `selection_symbol_style` | `None` |
 | `unfocused_selection_symbol_style` | `None` |
-| `gutter_gap` | `1` |
+| `gutter_gap` | `None` |
 | `item_horizontal_padding` | `Padding::default()` |
 | `header_horizontal_padding` | `Padding::default()` |
 | `separator_style` | `None` |

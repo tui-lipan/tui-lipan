@@ -82,6 +82,8 @@ pub struct Popover {
     pub(crate) max_width: Option<Length>,
     pub(crate) anchor: Option<(u16, u16)>,
     pub(crate) anchor_area: Option<crate::style::Rect>,
+    pub(crate) anchor_list_item: Option<usize>,
+    pub(crate) on_anchor_hidden: Option<Callback<()>>,
     pub(crate) capture_focus: bool,
     pub(crate) capture_pointer: bool,
     pub(crate) auto_focus: bool,
@@ -120,6 +122,8 @@ impl Popover {
             max_width: None,
             anchor: None,
             anchor_area: None,
+            anchor_list_item: None,
+            on_anchor_hidden: None,
             capture_focus: true,
             capture_pointer: true,
             auto_focus: true,
@@ -243,6 +247,21 @@ impl Popover {
         self
     }
 
+    /// Anchor against a reconciled item row in a descendant [`List`](crate::widgets::List) of the
+    /// trigger, using the list's actual width and scroll offset. If that row is scrolled out of
+    /// view, the popover stays closed and invokes [`on_anchor_hidden`](Self::on_anchor_hidden).
+    pub(crate) fn anchor_list_item(mut self, index: Option<usize>) -> Self {
+        self.anchor_list_item = index;
+        self
+    }
+
+    /// Notify when [`anchor_list_item`](Self::anchor_list_item) is scrolled out of view while
+    /// open.
+    pub(crate) fn on_anchor_hidden(mut self, cb: Callback<()>) -> Self {
+        self.on_anchor_hidden = Some(cb);
+        self
+    }
+
     /// Control whether `Esc` dismisses this root-portal popover directly (default `true`).
     ///
     /// When `false`, `Esc` is passed through to the focused widget inside the popover so
@@ -286,6 +305,7 @@ impl crate::layout::hash::LayoutHash for Popover {
         self.max_width.hash(hasher);
         self.anchor.hash(hasher);
         self.anchor_area.hash(hasher);
+        self.anchor_list_item.hash(hasher);
         self.capture_focus.hash(hasher);
         self.capture_pointer.hash(hasher);
         self.auto_focus.hash(hasher);

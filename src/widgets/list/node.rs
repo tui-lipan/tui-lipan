@@ -126,6 +126,41 @@ impl ListNode {
         let row = row.checked_sub(usize::from(top))?;
         super::utils::item_index_at_visual_line(&self.items, start, row, end.saturating_sub(start))
     }
+
+    /// Screen-space rectangle of `index` spanning the list's outer width, or `None` when
+    /// `index` is scrolled out of the visible viewport.
+    pub(crate) fn visible_item_rect(&self, rect: Rect, index: usize) -> Option<Rect> {
+        if index >= self.items.len() {
+            return None;
+        }
+        let inner = rect.inner(self.border, self.padding);
+        if inner.h == 0 || rect.w == 0 {
+            return None;
+        }
+        let (start, end, top, _bottom) = super::utils::calc_list_window_for_items_with_indicators(
+            self.offset,
+            &self.items,
+            inner.h as usize,
+            self.show_scroll_indicators,
+        );
+        if index < start || index >= end {
+            return None;
+        }
+        let mut rel_y = usize::from(top);
+        for item in &self.items[start..index] {
+            rel_y = rel_y.saturating_add(super::utils::list_item_height(item));
+        }
+        if rel_y >= inner.h as usize {
+            return None;
+        }
+        let h = super::utils::list_item_height(&self.items[index]).min(u16::MAX as usize) as u16;
+        Some(Rect {
+            x: rect.x,
+            y: inner.y.saturating_add(rel_y.min(i16::MAX as usize) as i16),
+            w: rect.w,
+            h: h.min(inner.h.saturating_sub(rel_y as u16)),
+        })
+    }
 }
 
 impl WidgetNode for ListNode {
