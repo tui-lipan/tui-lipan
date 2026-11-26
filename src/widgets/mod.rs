@@ -59,6 +59,7 @@ mod graph;
 mod grid;
 mod heatmap;
 mod hex_area;
+pub(crate) mod hover_reveal;
 mod hyperlink;
 #[cfg(feature = "image")]
 mod image;
@@ -146,7 +147,7 @@ pub use class_diagram::{
 pub use combo_box::{ComboBox, ComboBoxCommitEvent};
 pub use command_palette::CommandPalette;
 pub use containers::{FocusAccordion, FocusScope, FocusSizing, HStack, TabVariant, VStack};
-pub use context_menu::ContextMenu;
+pub use context_menu::{ContextMenu, ContextMenuEntry, ContextMenuItem, ContextMenuSubmenu};
 pub use context_provider::ContextProvider;
 pub use date_picker::{DateEvent, DatePicker};
 #[cfg(feature = "diff-view")]

@@ -680,9 +680,12 @@ Source: `src/widgets/popover/mod.rs` (`Popover`).
 | `max_width` | `None` |
 | `anchor` | `None` |
 | `anchor_area` | `None` |
+| `anchor_list_item` | `None` |
+| `on_anchor_hidden` | `None` |
 | `capture_focus` | `true` |
 | `capture_pointer` | `true` |
 | `auto_focus` | `true` |
+| `close_on_escape` | `true` |
 
 ## HexArea
 
@@ -1516,16 +1519,20 @@ Source: `src/widgets/context_menu.rs` (`ContextMenu`).
 |---|---|
 | `trigger` | `constructor/local value (not a default)` |
 | `items` | `Vec::new()` |
+| `entries` | `None` |
 | `open` | `false` |
 | `animation` | `None` |
 | `on_select` | `None` |
+| `on_action` | `None` |
 | `on_close` | `None` |
 | `placement` | `PopoverPlacement::BelowStart` |
 | `offset` | `PopoverOffset::ZERO` |
 | `clamp` | `true` |
 | `auto_flip` | `true` |
 | `anchor` | `None` |
-| `width` | `Length::Px(20)` |
+| `width` | `None` |
+| `min_width` | `16` |
+| `max_width` | `Some(48)` |
 | `height` | `Length::Auto` |
 | `border` | `true` |
 | `border_style` | `BorderStyle::Plain` |
@@ -1534,8 +1541,26 @@ Source: `src/widgets/context_menu.rs` (`ContextMenu`).
 | `selection_style` | `StyleSlot::Inherit` |
 | `unfocused_selection_style` | `StyleSlot::Inherit` |
 | `item_hover_style` | `None` |
+| `selection_full_width` | `None` |
+| `symbol_column` | `None` |
 | `selection_symbol` | `Some("> ".into())` |
+| `selection_symbol_explicit` | `false` |
 | `selection_symbol_style` | `None` |
 | `unfocused_selection_symbol_style` | `None` |
+| `gutter_gap` | `None` |
+| `item_horizontal_padding` | `Padding::default()` |
+| `header_horizontal_padding` | `Padding::default()` |
+| `separator_style` | `None` |
+| `header_style` | `None` |
+| `detail_style` | `None` |
+| `detail_gap` | `2` |
+| `disabled_style` | `None` |
+| `destructive_style` | `None` |
+| `icon_style` | `None` |
+| `submenu_indicator` | `"›".into()` |
+| `submenu_indicator_style` | `None` |
+| `submenu_delay` | `Duration::ZERO` |
+| `check_symbol` | `"✓".into()` |
+| `check_style` | `None` |
 | `scrollbar` | `false` |
 | `scrollbar_config` | `ScrollbarConfig::default()` |

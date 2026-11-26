@@ -19,6 +19,9 @@ pub(crate) fn transition_overlay_click<C: Component, T: MouseDispatchCtx<C>>(
     if let MouseKind::Down(button @ (MouseButton::Left | MouseButton::Right)) = mouse.kind
         && ctx.handle_overlay_click(button, x, y, mouse.mods)
     {
+        if button == MouseButton::Right {
+            ctx.mouse_state().context_menu_press_consumed = true;
+        }
         return Some(true);
     }
     None

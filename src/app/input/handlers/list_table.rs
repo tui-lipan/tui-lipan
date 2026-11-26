@@ -249,6 +249,9 @@ pub(crate) fn handle_list_scroll(tree: &mut NodeTree, id: NodeId, action: Scroll
         list_node.top_indicator = list_node.show_scroll_indicators && t;
         list_node.bottom_indicator = list_node.show_scroll_indicators && b;
         list_node.bottom_count = total.saturating_sub(e);
+        if let Some(cb) = list_node.on_scroll_to.clone() {
+            cb.emit(next);
+        }
         true
     } else {
         false

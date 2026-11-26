@@ -20,6 +20,8 @@ pub struct PopoverNode {
     pub capture_pointer: bool,
     /// Whether the root overlay establishes focus automatically.
     pub auto_focus: bool,
+    /// Whether `Esc` dismisses the root overlay directly or passes through to content.
+    pub close_on_escape: bool,
     /// Exclusive bottom row (in content-local coordinates) needed to display
     /// this popover within an auto-height inline viewport.
     pub(crate) desired_bottom: u16,

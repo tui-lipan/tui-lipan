@@ -68,7 +68,9 @@ impl<C: Component> AppRunner<C> {
                 return false;
             }
 
-            if button == MouseButton::Left && overlay.dismiss_policy.dismiss_on_click_outside() {
+            if matches!(button, MouseButton::Left | MouseButton::Right)
+                && overlay.dismiss_policy.dismiss_on_click_outside()
+            {
                 return self.dismiss_overlay(overlay);
             }
 

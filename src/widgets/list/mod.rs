@@ -622,6 +622,7 @@ pub struct ListItem {
     pub(crate) extra_line_indent: u16,
     pub(crate) style: Style,
     pub(crate) role: ListItemRole,
+    pub(crate) disabled: bool,
     pub(crate) active: bool,
     pub(crate) primary_selection_label: bool,
     pub(crate) primary_selection_description: bool,
@@ -991,6 +992,7 @@ impl ListItem {
             extra_line_indent: 0,
             style: Style::default(),
             role: ListItemRole::Normal,
+            disabled: false,
             active: false,
             primary_selection_label: true,
             primary_selection_description: true,
@@ -1281,6 +1283,13 @@ impl ListItem {
         self
     }
 
+    /// Mark this row as disabled. Disabled rows cannot be selected or activated, while keeping
+    /// normal row padding and gutter alignment.
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
+    }
+
     /// Mark this row as active.
     pub fn active(mut self, active: bool) -> Self {
         self.active = active;
@@ -1289,7 +1298,12 @@ impl ListItem {
 
     /// Whether this row is keyboard/mouse selectable.
     pub fn is_selectable(&self) -> bool {
-        matches!(self.role, ListItemRole::Normal)
+        matches!(self.role, ListItemRole::Normal) && !self.disabled
+    }
+
+    /// Whether this row is disabled.
+    pub fn is_disabled(&self) -> bool {
+        self.disabled
     }
 
     /// Whether this row is active.
@@ -1495,7 +1509,7 @@ pub(crate) fn item_selection_right_symbol_width(
 }
 
 pub(crate) fn item_uses_gutter(item: &ListItem, gutter_for_non_selectable: bool) -> bool {
-    item.is_selectable() || gutter_for_non_selectable
+    item.is_selectable() || item.disabled || gutter_for_non_selectable
 }
 
 pub(crate) fn reserved_gutter_width_for_items(
@@ -2531,6 +2545,7 @@ fn hash_list_item_layout(item: &ListItem, hasher: &mut impl std::hash::Hasher) {
     use std::hash::Hash;
 
     item.role.hash(hasher);
+    item.disabled.hash(hasher);
     item.active.hash(hasher);
     item.status.as_ref().map(ListItemStatus::width).hash(hasher);
     item.gutter.as_ref().map(ListItemGutter::width).hash(hasher);
@@ -2866,6 +2881,40 @@ mod tests {
             .into();
 
         assert_ne!(element_layout_hash(&base), element_layout_hash(&wrapped));
+    }
+
+    #[test]
+    fn layout_hash_and_measurement_track_disabled_rows() {
+        let enabled_list = List::new()
+            .width(Length::Auto)
+            .symbol_column(true)
+            .selection_symbol(None::<&str>)
+            .items(vec![
+                ListItem::new("item").status(ListItemStatus::from_spans([Span::new("[STATUS] ")])),
+            ]);
+        let disabled_list = List::new()
+            .width(Length::Auto)
+            .symbol_column(true)
+            .selection_symbol(None::<&str>)
+            .items(vec![
+                ListItem::new("item")
+                    .status(ListItemStatus::from_spans([Span::new("[STATUS] ")]))
+                    .disabled(true),
+            ]);
+
+        let (enabled_w, _) = layout::measure_list(&enabled_list);
+        let (disabled_w, _) = layout::measure_list(&disabled_list);
+        assert!(
+            enabled_w > disabled_w,
+            "disabled row's status symbol should not reserve symbol width ({enabled_w} vs {disabled_w})"
+        );
+
+        let enabled_el: Element = enabled_list.into();
+        let disabled_el: Element = disabled_list.into();
+        assert_ne!(
+            element_layout_hash(&enabled_el),
+            element_layout_hash(&disabled_el)
+        );
     }
 
     #[test]
