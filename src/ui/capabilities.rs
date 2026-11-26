@@ -467,7 +467,9 @@ impl ClipboardContext for TextAreaClipboardContext<'_> {
                     let edit = self.emit_edit();
                     if self.editor.is_bound() && self.on_change.is_some() {
                         let staged_metadata = Some(crate::text::buffer::StagedMetadata {
+                            images_before: Some(self.images.to_vec()),
                             images: Some(new_images.clone()),
+                            sentinels_before: None,
                             sentinels: None,
                         });
                         let deferred_token =

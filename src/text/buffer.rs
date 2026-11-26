@@ -25,8 +25,33 @@ pub(crate) type CoreEdit = TextEdit<TextBufferCore>;
 /// atomically via `TextEditor::apply_with_metadata` or gated until `TextAreaEvent::apply_to`.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct StagedMetadata {
+    pub(crate) images_before: Option<Vec<ImageContent>>,
     pub(crate) images: Option<Vec<ImageContent>>,
+    pub(crate) sentinels_before: Option<Vec<TextAreaSentinel>>,
     pub(crate) sentinels: Option<Vec<TextAreaSentinel>>,
+}
+
+impl StagedMetadata {
+    pub(crate) fn to_edit_metadata(&self) -> EditMetadata {
+        EditMetadata {
+            images_before: self.images_before.clone(),
+            images_after: self.images.clone(),
+            sentinels_before: self.sentinels_before.clone(),
+            sentinels_after: self.sentinels.clone(),
+        }
+    }
+}
+
+fn is_text_area_sentinel_char(ch: char) -> bool {
+    let cp = ch as u32;
+    (cp >= crate::widgets::IMAGE_SENTINEL_BASE as u32 && cp < 0xE100)
+        || (cp >= crate::widgets::SENTINEL_BASE as u32 && cp < 0xF900)
+}
+
+fn sentinel_codepoints_match(a: &str, b: &str) -> bool {
+    a.chars()
+        .filter(|&ch| is_text_area_sentinel_char(ch))
+        .eq(b.chars().filter(|&ch| is_text_area_sentinel_char(ch)))
 }
 
 /// UI-thread metadata callbacks deferred until the matching bound `TextAreaEvent` is accepted.
@@ -111,6 +136,18 @@ impl StagedHistory {
 pub(crate) struct CommittedStagedChange {
     pub(crate) deferred_callbacks_token: Option<u64>,
     pub(crate) staged_metadata: Option<StagedMetadata>,
+}
+
+pub(crate) enum StagedCommitOutcome {
+    /// Exact match with the staged `expected_text`; staged `Record` was committed directly.
+    Verbatim(CommittedStagedChange),
+    /// Non-sentinel text was transformed while preserving the staged sentinel sequence.
+    TransformedWithMetadata(CommittedStagedChange),
+    /// Transformed text changed sentinel codepoints incompatibly on a metadata-bearing edit;
+    /// reject the entire transaction so text and metadata never diverge.
+    RejectIncompatibleMetadata,
+    /// No matching metadata-bearing staged transaction; fall back to normal controlled update.
+    Unmatched,
 }
 
 #[derive(Debug)]
@@ -206,45 +243,74 @@ impl SharedHistory {
         }
     }
 
-    pub(crate) fn commit_staged(&self, expected_text: &str) -> Option<CommittedStagedChange> {
+    pub(crate) fn commit_or_reconcile_staged(
+        &self,
+        current_text: &str,
+        expected_text: &str,
+    ) -> StagedCommitOutcome {
         let mut inner = self.lock();
         let current_generation = inner.generation;
-        let staged = inner.staged.as_mut()?;
+        let Some(staged) = inner.staged.as_mut() else {
+            return StagedCommitOutcome::Unmatched;
+        };
         if staged.base_generation != current_generation {
             inner.clear_staged();
-            return None;
+            return StagedCommitOutcome::Unmatched;
         }
-        let Some(pos) = staged
+        if let Some(pos) = staged
             .steps
             .iter()
             .position(|step| step.expected_text.as_ref() == expected_text)
-        else {
-            inner.clear_staged();
-            return None;
-        };
-        for _ in 0..pos {
-            if let Some(mut skipped) = staged.steps.pop_front() {
-                skipped.discard_callbacks();
+        {
+            for _ in 0..pos {
+                if let Some(mut skipped) = staged.steps.pop_front() {
+                    skipped.discard_callbacks();
+                }
             }
+            let step = staged
+                .steps
+                .pop_front()
+                .expect("matched staged history step must exist");
+            let next_generation = current_generation.wrapping_add(1);
+            let remaining_empty = staged.steps.is_empty();
+            if !remaining_empty {
+                staged.base_generation = next_generation;
+            }
+            inner.record = step.record;
+            inner.generation = next_generation;
+            if remaining_empty {
+                inner.staged = None;
+            }
+            return StagedCommitOutcome::Verbatim(CommittedStagedChange {
+                deferred_callbacks_token: step.deferred_callbacks_token,
+                staged_metadata: step.staged_metadata,
+            });
         }
-        let step = staged
+
+        // The application transformed the proposed text instead of accepting it verbatim.
+        let mut step = staged
             .steps
             .pop_front()
-            .expect("matched staged history step must exist");
-        let next_generation = current_generation.wrapping_add(1);
-        let remaining_empty = staged.steps.is_empty();
-        if !remaining_empty {
-            staged.base_generation = next_generation;
+            .expect("staged history queue should be non-empty");
+        // Discard any remaining queued steps since we are diverging from the staged sequence.
+        inner.clear_staged();
+
+        if step.staged_metadata.is_some() {
+            if sentinel_codepoints_match(expected_text, step.expected_text.as_ref()) {
+                return StagedCommitOutcome::TransformedWithMetadata(CommittedStagedChange {
+                    deferred_callbacks_token: step.deferred_callbacks_token.take(),
+                    staged_metadata: step.staged_metadata.take(),
+                });
+            }
+            step.discard_callbacks();
+            if sentinel_codepoints_match(expected_text, current_text) {
+                return StagedCommitOutcome::Unmatched;
+            }
+            return StagedCommitOutcome::RejectIncompatibleMetadata;
         }
-        inner.record = step.record;
-        inner.generation = next_generation;
-        if remaining_empty {
-            inner.staged = None;
-        }
-        Some(CommittedStagedChange {
-            deferred_callbacks_token: step.deferred_callbacks_token,
-            staged_metadata: step.staged_metadata,
-        })
+
+        step.discard_callbacks();
+        StagedCommitOutcome::Unmatched
     }
 }
 
@@ -548,45 +614,78 @@ impl TextBufferCore {
         images: Option<&mut Vec<ImageContent>>,
         sentinels: Option<&mut Vec<TextAreaSentinel>>,
     ) {
-        if let Some(committed) = self.history.commit_staged(value) {
-            self.text = value.to_string();
-            self.cursor = clamp_cursor(&self.text, cursor);
-            self.anchor = anchor.map(|a| clamp_cursor(&self.text, a));
+        match self.history.commit_or_reconcile_staged(&self.text, value) {
+            StagedCommitOutcome::Verbatim(committed) => {
+                self.text = value.to_string();
+                self.cursor = clamp_cursor(&self.text, cursor);
+                self.anchor = anchor.map(|a| clamp_cursor(&self.text, a));
+                Self::finish_committed_metadata(committed, images, sentinels);
+            }
+            StagedCommitOutcome::TransformedWithMetadata(committed) => {
+                let prev_cursor = self.cursor;
+                let prev_anchor = self.anchor;
+                let edit_metadata = committed
+                    .staged_metadata
+                    .as_ref()
+                    .map(StagedMetadata::to_edit_metadata);
+                self.record_full_replace_edit(
+                    value,
+                    prev_cursor,
+                    prev_anchor,
+                    cursor,
+                    anchor,
+                    edit_metadata,
+                );
+                self.last_edit = None;
+                self.last_restored_metadata = None;
+                Self::finish_committed_metadata(committed, images, sentinels);
+            }
+            StagedCommitOutcome::RejectIncompatibleMetadata => {
+                // Reject the entire metadata-bearing transaction so text and metadata remain
+                // consistent rather than silently dropping metadata updates.
+            }
+            StagedCommitOutcome::Unmatched => {
+                if self.text != value {
+                    let prev_cursor = self.cursor;
+                    let prev_anchor = self.anchor;
+                    self.sync_external_edit_from(value, prev_cursor, prev_anchor, cursor, anchor);
+                } else {
+                    self.cursor = clamp_cursor(&self.text, cursor);
+                    self.anchor = anchor.map(|a| clamp_cursor(&self.text, a));
+                }
+            }
+        }
+    }
 
-            let mut applied_images_inline = false;
-            let mut applied_sentinels_inline = false;
-            if let Some(staged_metadata) = committed.staged_metadata {
-                if let (Some(target), Some(next_images)) = (images, staged_metadata.images) {
-                    *target = next_images;
-                    applied_images_inline = true;
-                }
-                if let (Some(target), Some(next_sentinels)) = (sentinels, staged_metadata.sentinels)
-                {
-                    *target = next_sentinels;
-                    applied_sentinels_inline = true;
-                }
+    fn finish_committed_metadata(
+        committed: CommittedStagedChange,
+        images: Option<&mut Vec<ImageContent>>,
+        sentinels: Option<&mut Vec<TextAreaSentinel>>,
+    ) {
+        let mut applied_images_inline = false;
+        let mut applied_sentinels_inline = false;
+        if let Some(staged_metadata) = committed.staged_metadata {
+            if let (Some(target), Some(next_images)) = (images, staged_metadata.images) {
+                *target = next_images;
+                applied_images_inline = true;
             }
-            if let Some(token) = committed.deferred_callbacks_token
-                && let Some(callbacks) = take_deferred_metadata_callbacks(token)
-            {
-                if !applied_images_inline && let Some((cb, next_images)) = callbacks.images {
-                    cb.emit(next_images);
-                }
-                if !applied_sentinels_inline && let Some((cb, next_sentinels)) = callbacks.sentinels
-                {
-                    cb.emit(next_sentinels);
-                }
-                if let Some((cb, events)) = callbacks.sentinel_events {
-                    cb.emit(events);
-                }
+            if let (Some(target), Some(next_sentinels)) = (sentinels, staged_metadata.sentinels) {
+                *target = next_sentinels;
+                applied_sentinels_inline = true;
             }
-        } else if self.text != value {
-            let prev_cursor = self.cursor;
-            let prev_anchor = self.anchor;
-            self.sync_external_edit_from(value, prev_cursor, prev_anchor, cursor, anchor);
-        } else {
-            self.cursor = clamp_cursor(&self.text, cursor);
-            self.anchor = anchor.map(|a| clamp_cursor(&self.text, a));
+        }
+        if let Some(token) = committed.deferred_callbacks_token
+            && let Some(callbacks) = take_deferred_metadata_callbacks(token)
+        {
+            if !applied_images_inline && let Some((cb, next_images)) = callbacks.images {
+                cb.emit(next_images);
+            }
+            if !applied_sentinels_inline && let Some((cb, next_sentinels)) = callbacks.sentinels {
+                cb.emit(next_sentinels);
+            }
+            if let Some((cb, events)) = callbacks.sentinel_events {
+                cb.emit(events);
+            }
         }
     }
 

@@ -3091,3 +3091,325 @@ fn apply_with_metadata_commits_text_history_and_metadata_atomically() {
     assert_eq!(backend.state().images, vec![img0, img1]);
     assert_eq!(backend.state().separate_image_callbacks, 0);
 }
+
+#[test]
+fn transformed_controlled_edits_preserve_or_reject_sentinel_metadata_consistently() {
+    #[derive(Clone, Copy, Debug)]
+    enum TransformMode {
+        UppercaseAscii,
+        MangleSentinels,
+    }
+
+    #[derive(Clone, Debug)]
+    enum Msg {
+        Edited(tui_lipan::TextAreaEvent),
+        Images(Vec<tui_lipan::ImageContent>),
+        SetMode(TransformMode),
+        Undo,
+        Redo,
+    }
+
+    struct State {
+        editor: tui_lipan::TextEditor,
+        images: Vec<tui_lipan::ImageContent>,
+        mode: TransformMode,
+        image_callbacks: usize,
+    }
+
+    struct TransformedImagesHarness;
+
+    let s0 = tui_lipan::IMAGE_SENTINEL_BASE;
+    let s1 = char::from_u32(tui_lipan::IMAGE_SENTINEL_BASE as u32 + 1).unwrap();
+    let s2 = char::from_u32(tui_lipan::IMAGE_SENTINEL_BASE as u32 + 2).unwrap();
+    let img_a = tui_lipan::ImageContent::from_bytes(b"transform-a", tui_lipan::ImageFormat::Png);
+    let img_b = tui_lipan::ImageContent::from_bytes(b"transform-b", tui_lipan::ImageFormat::Png);
+
+    impl Component for TransformedImagesHarness {
+        type Properties = ();
+        type State = State;
+        type Message = Msg;
+
+        fn create_state(&self, _: &()) -> Self::State {
+            let s0 = tui_lipan::IMAGE_SENTINEL_BASE;
+            let s1 = char::from_u32(tui_lipan::IMAGE_SENTINEL_BASE as u32 + 1).unwrap();
+            let mut editor = tui_lipan::TextEditor::new(format!("x {s0} {s1}"));
+            editor.set_cursor(format!("x {s0}").len());
+            State {
+                editor,
+                images: vec![
+                    tui_lipan::ImageContent::from_bytes(
+                        b"transform-a",
+                        tui_lipan::ImageFormat::Png,
+                    ),
+                    tui_lipan::ImageContent::from_bytes(
+                        b"transform-b",
+                        tui_lipan::ImageFormat::Png,
+                    ),
+                ],
+                mode: TransformMode::MangleSentinels,
+                image_callbacks: 0,
+            }
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            match msg {
+                Msg::Edited(mut ev) => {
+                    match ctx.state.mode {
+                        TransformMode::UppercaseAscii => {
+                            let transformed: String =
+                                ev.value.chars().map(|ch| ch.to_ascii_uppercase()).collect();
+                            ev.value = std::sync::Arc::from(transformed);
+                        }
+                        TransformMode::MangleSentinels => {
+                            let s0 = tui_lipan::IMAGE_SENTINEL_BASE;
+                            let s2 =
+                                char::from_u32(tui_lipan::IMAGE_SENTINEL_BASE as u32 + 2).unwrap();
+                            ev.value = std::sync::Arc::from(format!("X {s0} {s2}"));
+                        }
+                    }
+                    ctx.state.editor.apply(&ev);
+                    Update::full()
+                }
+                Msg::Images(images) => {
+                    ctx.state.image_callbacks += 1;
+                    ctx.state.images = images;
+                    Update::full()
+                }
+                Msg::SetMode(mode) => {
+                    ctx.state.mode = mode;
+                    Update::full()
+                }
+                Msg::Undo => {
+                    ctx.state.editor.undo_with_images(&mut ctx.state.images);
+                    Update::full()
+                }
+                Msg::Redo => {
+                    ctx.state.editor.redo_with_images(&mut ctx.state.images);
+                    Update::full()
+                }
+            }
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            TextArea::bound(&ctx.state.editor)
+                .height(Length::Px(4))
+                .image_mode(tui_lipan::TextAreaImageMode::Inline)
+                .images(ctx.state.images.clone())
+                .on_change(ctx.link().callback(Msg::Edited))
+                .on_images_change(ctx.link().callback(Msg::Images))
+                .key("transformed-images-editor")
+        }
+    }
+
+    let mut backend = TestBackend::new(TransformedImagesHarness);
+    backend.focus_key(&tui_lipan::Key::from("transformed-images-editor"));
+    backend.render();
+    let _ = s2;
+
+    // 1. Incompatible sentinel-mangling transform on a metadata-bearing deletion rejects the
+    //    entire transaction instead of leaving text and image metadata inconsistent.
+    backend
+        .send_key(KeyEvent {
+            code: KeyCode::Backspace,
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.render();
+    assert_eq!(backend.state().editor.text(), format!("x {s0} {s1}"));
+    assert_eq!(backend.state().images, vec![img_a.clone(), img_b.clone()]);
+    assert_eq!(backend.state().image_callbacks, 0);
+    assert!(!backend.state().editor.can_undo());
+
+    // 2. Compatible plain-text transformation (uppercasing `x` -> `X` while preserving the
+    //    remapped sentinel `[E000]`) accepts BOTH the transformed text and updated metadata `[B]`,
+    //    and records metadata on the replacement undo entry.
+    backend
+        .dispatch(Msg::SetMode(TransformMode::UppercaseAscii))
+        .unwrap();
+    backend.render();
+    backend
+        .send_key(KeyEvent {
+            code: KeyCode::Backspace,
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.render();
+    assert_eq!(backend.state().editor.text(), format!("X  {s0}"));
+    assert_eq!(backend.state().images, vec![img_b.clone()]);
+    assert_eq!(backend.state().image_callbacks, 1);
+
+    // 3. Keyboard undo/redo and programmatic undo_with_images/redo_with_images restore exact
+    //    text and image metadata in both directions.
+    let undo = KeyEvent {
+        code: KeyCode::Char('z'),
+        mods: KeyMods::CTRL,
+    };
+    let redo = KeyEvent {
+        code: KeyCode::Char('y'),
+        mods: KeyMods::CTRL,
+    };
+
+    // Undo without uppercasing transforming the restored text back: switch mode? Wait: even with
+    // UppercaseAscii active, undo restores "x E000 E001" -> uppercased to "X E000 E001" while
+    // STILL restoring [A, B] because the sentinel sequence [E000, E001] matches!
+    backend.send_key(undo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().editor.text(), format!("X {s0} {s1}"));
+    assert_eq!(backend.state().images, vec![img_a.clone(), img_b.clone()]);
+
+    // Programmatic undo_with_images / redo_with_images bypass the callback transform and restore
+    // the exact committed text and metadata.
+    backend.dispatch(Msg::Undo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().editor.text(), format!("X  {s0}"));
+    assert_eq!(backend.state().images, vec![img_b.clone()]);
+
+    backend.dispatch(Msg::Undo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().editor.text(), format!("x {s0} {s1}"));
+    assert_eq!(backend.state().images, vec![img_a.clone(), img_b.clone()]);
+
+    backend.dispatch(Msg::Redo).unwrap();
+    backend.render();
+    assert_eq!(backend.state().editor.text(), format!("X  {s0}"));
+    assert_eq!(backend.state().images, vec![img_b.clone()]);
+
+    let _ = (redo, img_a);
+}
+
+#[test]
+fn redo_reemits_sentinel_deleted_lifecycle_event_with_same_id() {
+    #[derive(Clone, Debug)]
+    enum Msg {
+        Edited(tui_lipan::TextAreaEvent),
+        Sentinels(Vec<tui_lipan::TextAreaSentinel>),
+        SentinelEvents(Vec<tui_lipan::SentinelEvent>),
+    }
+
+    struct State {
+        editor: tui_lipan::TextEditor,
+        sentinels: Vec<tui_lipan::TextAreaSentinel>,
+        deleted_ids: Vec<tui_lipan::SentinelId>,
+    }
+
+    struct RedoSentinelLifecycleHarness {
+        bound: bool,
+    }
+
+    impl Component for RedoSentinelLifecycleHarness {
+        type Properties = ();
+        type State = State;
+        type Message = Msg;
+
+        fn create_state(&self, _: &()) -> Self::State {
+            let mut sentinels = Vec::new();
+            let (v, cursor) = tui_lipan::insert_sentinel(
+                "",
+                0,
+                &mut sentinels,
+                tui_lipan::TextAreaSentinel::new("@first"),
+            );
+            let (v, cursor_after_middle) = tui_lipan::insert_sentinel(
+                &v,
+                cursor,
+                &mut sentinels,
+                tui_lipan::TextAreaSentinel::new("@middle"),
+            );
+            let (v, _) = tui_lipan::insert_sentinel(
+                &v,
+                cursor_after_middle,
+                &mut sentinels,
+                tui_lipan::TextAreaSentinel::new("@last"),
+            );
+            let mut editor = tui_lipan::TextEditor::new(v);
+            editor.set_cursor(cursor_after_middle);
+            State {
+                editor,
+                sentinels,
+                deleted_ids: Vec::new(),
+            }
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            match msg {
+                Msg::Edited(ev) => {
+                    ev.apply_to(&mut ctx.state.editor);
+                    Update::full()
+                }
+                Msg::Sentinels(sentinels) => {
+                    ctx.state.sentinels = sentinels;
+                    Update::full()
+                }
+                Msg::SentinelEvents(events) => {
+                    for event in events {
+                        let tui_lipan::SentinelEvent::Deleted { id, .. } = event;
+                        ctx.state.deleted_ids.push(id);
+                    }
+                    Update::full()
+                }
+            }
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            let area = if self.bound {
+                TextArea::bound(&ctx.state.editor)
+            } else {
+                TextArea::new(ctx.state.editor.text())
+                    .cursor(ctx.state.editor.cursor())
+                    .anchor(ctx.state.editor.anchor())
+            };
+            area.height(Length::Px(4))
+                .sentinels(ctx.state.sentinels.clone())
+                .on_change(ctx.link().callback(Msg::Edited))
+                .on_sentinels_change(ctx.link().callback(Msg::Sentinels))
+                .on_sentinel_event(ctx.link().callback(Msg::SentinelEvents))
+                .key("redo-sentinel-lifecycle-editor")
+        }
+    }
+
+    for bound in [true, false] {
+        let mut backend = TestBackend::new(RedoSentinelLifecycleHarness { bound });
+        backend.focus_key(&tui_lipan::Key::from("redo-sentinel-lifecycle-editor"));
+        backend.render();
+
+        let middle_id = backend.state().sentinels[1]
+            .sentinel_id()
+            .expect("middle sentinel should have a stable ID");
+
+        // 1. Delete middle sentinel -> emits SentinelEvent::Deleted with middle_id.
+        backend
+            .send_key(KeyEvent {
+                code: KeyCode::Backspace,
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+        backend.render();
+        assert_eq!(backend.state().deleted_ids, vec![middle_id]);
+
+        // 2. Undo deletion -> restores sentinel, no deletion event emitted.
+        backend
+            .send_key(KeyEvent {
+                code: KeyCode::Char('z'),
+                mods: KeyMods::CTRL,
+            })
+            .unwrap();
+        backend.render();
+        assert_eq!(backend.state().sentinels.len(), 3);
+        assert_eq!(backend.state().deleted_ids, vec![middle_id]);
+
+        // 3. Redo deletion -> re-emits SentinelEvent::Deleted with the exact same middle_id.
+        backend
+            .send_key(KeyEvent {
+                code: KeyCode::Char('y'),
+                mods: KeyMods::CTRL,
+            })
+            .unwrap();
+        backend.render();
+        assert_eq!(backend.state().sentinels.len(), 2);
+        assert_eq!(
+            backend.state().deleted_ids,
+            vec![middle_id, middle_id],
+            "redo must re-emit SentinelEvent::Deleted with the same stable ID (bound={bound})"
+        );
+    }
+}

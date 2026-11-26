@@ -103,12 +103,17 @@ pub(super) fn emit_text_area_editor_change(
         if is_history_replay {
             if let Some(restored_sentinels) = restored_metadata.and_then(|meta| meta.sentinels) {
                 if restored_sentinels.as_slice() != emission.sentinels {
+                    pending_sentinel_events =
+                        deleted_sentinel_events(emission.sentinels, &restored_sentinels);
                     pending_sentinels = Some(restored_sentinels);
                 }
             } else {
                 let required_sentinels = custom_sentinel_required_len(&current_value);
                 if required_sentinels == 0 && !emission.sentinels.is_empty() {
-                    pending_sentinels = Some(Vec::new());
+                    let (pruned, _, events) =
+                        prune_sentinels_for_value(&current_value, emission.sentinels);
+                    pending_sentinels = Some(pruned);
+                    pending_sentinel_events = events;
                 }
             }
         } else if let Some(edit_sentinels) = restored_metadata.and_then(|meta| meta.sentinels) {
@@ -170,7 +175,11 @@ pub(super) fn emit_text_area_editor_change(
     if editor.is_bound() {
         let staged_metadata =
             (pending_images.is_some() || pending_sentinels.is_some()).then(|| StagedMetadata {
+                images_before: pending_images.is_some().then(|| emission.images.to_vec()),
                 images: pending_images.clone(),
+                sentinels_before: pending_sentinels
+                    .is_some()
+                    .then(|| emission.sentinels.to_vec()),
                 sentinels: pending_sentinels.clone(),
             });
         let deferred_token = register_deferred_metadata_callbacks(DeferredMetadataCallbacks {
@@ -256,4 +265,38 @@ pub(super) fn emit_editor_state_change(
         edit,
         vim_mode,
     });
+}
+
+fn deleted_sentinel_events(
+    current: &[TextAreaSentinel],
+    next: &[TextAreaSentinel],
+) -> Vec<SentinelEvent> {
+    use crate::widgets::SentinelId;
+
+    let mut remaining_idless: Vec<&TextAreaSentinel> = next
+        .iter()
+        .filter(|sentinel| sentinel.sentinel_id().is_none())
+        .collect();
+    let mut events = Vec::new();
+    for sentinel in current {
+        let still_present = if let Some(id) = sentinel.sentinel_id() {
+            next.iter()
+                .any(|candidate| candidate.sentinel_id() == Some(id))
+        } else if let Some(pos) = remaining_idless
+            .iter()
+            .position(|candidate| *candidate == sentinel)
+        {
+            remaining_idless.remove(pos);
+            true
+        } else {
+            false
+        };
+        if !still_present {
+            events.push(SentinelEvent::Deleted {
+                id: sentinel.sentinel_id().unwrap_or(SentinelId::UNKNOWN),
+                sentinel: sentinel.clone(),
+            });
+        }
+    }
+    events
 }
