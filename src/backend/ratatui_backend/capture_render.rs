@@ -6,7 +6,7 @@ use ratatui::layout::Position;
 use ratatui::style::Modifier;
 
 use crate::app::ContrastPolicy;
-use crate::app::caret::focused_caret;
+use crate::app::caret::active_caret;
 use crate::capture::{
     CapturedCell, CapturedFrame, CellModifiers, CursorShape, CursorState, UnderlineStyle,
 };
@@ -34,6 +34,7 @@ fn convert_modifiers(modifier: Modifier) -> CellModifiers {
 #[derive(Clone, Copy, Default)]
 pub(crate) struct CaptureInteraction<'a> {
     pub focused: Option<NodeId>,
+    pub static_caret_node: Option<NodeId>,
     pub hovered: Option<NodeId>,
     pub mouse_pos: Option<(u16, u16)>,
     /// The focused text area's Vim mode, which decides its caret shape.
@@ -89,6 +90,7 @@ fn render_headless(
 ) -> RenderedBuffer {
     let CaptureInteraction {
         focused,
+        static_caret_node,
         hovered,
         mouse_pos,
         copy_feedback,
@@ -105,6 +107,7 @@ fn render_headless(
     let ctx = RenderContext {
         tree,
         focused,
+        static_caret_node,
         hovered,
         mouse_pos,
         suppress_pointer_item_hover_nodes: None,
@@ -190,11 +193,18 @@ pub(crate) fn capture_live_frame(
         paint_glyph_caches: ctx.paint_glyph_caches.clone(),
         ..*ctx
     };
-    captured_frame(ctx.tree, viewport, ctx.focused, vim_mode, || {
-        let mut rendered = draw_offscreen(viewport, &ctx, None, None);
-        overlay(&mut rendered);
-        rendered
-    })
+    captured_frame(
+        ctx.tree,
+        viewport,
+        ctx.focused,
+        ctx.static_caret_node,
+        vim_mode,
+        || {
+            let mut rendered = draw_offscreen(viewport, &ctx, None, None);
+            overlay(&mut rendered);
+            rendered
+        },
+    )
 }
 
 /// As [`render_to_buffer_with_interaction`], but painting only `regions`.
@@ -258,6 +268,7 @@ pub(crate) fn render_to_captured_frame_with_interaction(
         tree,
         viewport,
         interaction.focused,
+        interaction.static_caret_node,
         interaction.vim_mode,
         || {
             render_to_buffer_with_interaction(
@@ -276,6 +287,7 @@ fn captured_frame(
     tree: &NodeTree,
     viewport: Rect,
     focused: Option<NodeId>,
+    static_caret_node: Option<NodeId>,
     vim_mode: Option<TextAreaVimMode>,
     render: impl FnOnce() -> RenderedBuffer,
 ) -> CapturedFrame {
@@ -304,21 +316,25 @@ fn captured_frame(
     #[cfg(not(feature = "terminal-images"))]
     let images = Vec::new();
 
-    let caret = focused_caret(tree, focused, vim_mode);
+    let caret = active_caret(tree, focused, static_caret_node, vim_mode);
     let cursor = rendered.cursor.map(|pos| {
         let cursor = CursorState::new(pos.x, pos.y);
         match caret {
             // `TerminalDefault` defers to a terminal the capture does not have, so it keeps the
-            // default steady block.
-            Some(caret) if !caret.shape.is_terminal_default() => cursor
+            // default steady block (or steady bar when preserved statically).
+            Some((caret, is_static)) if !caret.shape.is_terminal_default() => cursor
                 .shape(match caret.shape {
                     CaretShape::Bar => CursorShape::Bar,
                     CaretShape::Underline => CursorShape::Underline,
                     CaretShape::Block | CaretShape::TerminalDefault => CursorShape::Block,
                 })
-                .blinking(caret.blinking)
+                .blinking(caret.blinking && !is_static)
                 .color(caret.color),
-            Some(caret) => cursor.color(caret.color),
+            Some((caret, true)) => cursor
+                .shape(CursorShape::Bar)
+                .blinking(false)
+                .color(caret.color),
+            Some((caret, false)) => cursor.color(caret.color),
             None => cursor,
         }
     });

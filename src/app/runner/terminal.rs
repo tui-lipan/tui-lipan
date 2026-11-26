@@ -5,10 +5,12 @@ use crossterm::execute;
 use crossterm::style::Print;
 
 use crate::Result;
+use crate::app::caret::active_caret;
+#[cfg(test)]
 use crate::app::caret::focused_caret;
 use crate::app::input::text_area_vim::TextAreaVimState;
 use crate::core::node::{NodeId, NodeTree};
-use crate::style::{CaretShape, Color};
+use crate::style::{CaretShape, Color, TerminalCursorStyle};
 
 #[derive(Default)]
 pub(crate) struct PointerManager {
@@ -59,6 +61,7 @@ impl Default for TerminalManager {
 }
 
 impl TerminalManager {
+    #[cfg(test)]
     pub fn update_cursor<B: std::io::Write>(
         &mut self,
         backend: &mut B,
@@ -66,21 +69,53 @@ impl TerminalManager {
         focused: Option<NodeId>,
         text_area_vim_state: &HashMap<NodeId, TextAreaVimState>,
     ) -> Result<()> {
+        self.update_cursor_with_static(backend, tree, focused, None, None, text_area_vim_state)
+    }
+
+    pub fn update_cursor_with_static<B: std::io::Write>(
+        &mut self,
+        backend: &mut B,
+        tree: &NodeTree,
+        focused: Option<NodeId>,
+        static_caret: Option<NodeId>,
+        host_cursor_style: Option<TerminalCursorStyle>,
+        text_area_vim_state: &HashMap<NodeId, TextAreaVimState>,
+    ) -> Result<()> {
         let mut target_style = SetCursorStyle::DefaultUserShape;
         let mut desired_cursor_color: Option<(u8, u8, u8)> = None;
 
-        let vim_mode = focused
+        let caret_node = focused
+            .filter(|id| {
+                tree.is_valid(*id)
+                    && crate::app::caret::focused_caret(tree, Some(*id), None).is_some()
+            })
+            .or(static_caret);
+        let vim_mode = caret_node
             .and_then(|id| text_area_vim_state.get(&id))
             .map(|state| state.mode);
-        if let Some(caret) = focused_caret(tree, focused, vim_mode) {
+        if let Some((caret, is_static)) = active_caret(tree, focused, static_caret, vim_mode) {
             if self.osc12_supported {
                 desired_cursor_color = caret.color.and_then(Color::to_rgb);
             }
-            // Software-blinking carets use a steady hardware shape. Host output can reset a
-            // terminal's hardware blink timer, so the framework owns their visible phase.
-            let blinking = caret.blinking && !caret.framework_blinks;
-            if let Some(style) = cursor_style_for(caret.shape, blinking) {
-                target_style = style;
+            if is_static {
+                let shape = if caret.shape.is_terminal_default() {
+                    host_cursor_style
+                        .map(|style| style.shape)
+                        .filter(|shape| !shape.is_terminal_default())
+                        .unwrap_or(CaretShape::Bar)
+                } else {
+                    caret.shape
+                };
+                if let Some(style) = cursor_style_for(shape, false) {
+                    target_style = style;
+                }
+            } else {
+                // Software-blinking carets use a steady hardware shape. Host output can reset a
+                // terminal's hardware blink timer, so the framework owns their visible phase.
+                let blinking = caret.blinking && !caret.framework_blinks;
+                if let Some(style) = cursor_style_for(caret.shape, blinking) {
+                    target_style = style;
+                }
             }
         }
 

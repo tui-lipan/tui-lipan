@@ -552,10 +552,13 @@ where
         placed?;
         self.frame_rendered = true;
 
-        self.terminal.update_cursor(
+        let static_caret = self.preserved_caret_node();
+        self.terminal.update_cursor_with_static(
             terminal.backend_mut(),
             &self.core.tree,
             self.focus.focused,
+            static_caret,
+            self.core.ctx.host_cursor_style(),
             &self.widgets.text_area_vim_state,
         )?;
         terminal.backend_mut().finish_output_frame(output_frame)?;

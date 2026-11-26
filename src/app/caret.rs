@@ -1,5 +1,6 @@
 //! The caret the focused widget asks for, shared by the runtime and headless captures.
 
+use crate::app::focus_service::{FocusStackEntry, OverlayKey};
 use crate::core::node::{NodeId, NodeKind, NodeTree};
 use crate::style::{CaretShape, Color};
 use crate::widgets::TextAreaVimMode;
@@ -72,4 +73,91 @@ pub(crate) fn focused_caret(
 pub(crate) fn caret_is_lit(tree: &NodeTree, id: NodeId, blink_visible: bool) -> bool {
     focused_caret(tree, Some(id), None)
         .is_none_or(|caret| !caret.framework_blinks || !caret.blinking || blink_visible)
+}
+
+/// If keyboard focus currently sits inside a selection-preserving popover (such as a
+/// `ContextMenu`) that suspended focus from an editable text widget (`TextArea` or `Input`)
+/// with no active selection, return that underlying widget's `NodeId` so it can keep a
+/// static (non-blinking) insertion caret visible while the menu is open.
+pub(crate) fn preserved_caret_node(
+    tree: &NodeTree,
+    focused: Option<NodeId>,
+    focus_stack: &[FocusStackEntry],
+) -> Option<NodeId> {
+    if focused_caret(tree, focused, None).is_some() {
+        return None;
+    }
+    for entry in focus_stack.iter().rev() {
+        if !overlay_preserves_selection(tree, entry.overlay) {
+            return None;
+        }
+        let candidate = entry.focused.filter(|&id| tree.is_valid(id)).or_else(|| {
+            let key = entry.key.as_ref()?;
+            tree.iter()
+                .find(|node| node.key.as_ref() == Some(key))
+                .map(|node| node.id)
+        });
+        if let Some(id) = candidate
+            && is_editable_text_without_selection(tree, id)
+        {
+            return Some(id);
+        }
+    }
+    None
+}
+
+/// Resolve the active caret, falling back to `static_caret_node` (with blinking forced off)
+/// when the focused widget itself shows no caret.
+///
+/// Returns `(caret, is_static)`.
+pub(crate) fn active_caret(
+    tree: &NodeTree,
+    focused: Option<NodeId>,
+    static_caret_node: Option<NodeId>,
+    vim_mode: Option<TextAreaVimMode>,
+) -> Option<(FocusedCaret, bool)> {
+    if let Some(caret) = focused_caret(tree, focused, vim_mode) {
+        return Some((caret, false));
+    }
+    let id = static_caret_node.filter(|&id| tree.is_valid(id))?;
+    let mut caret = focused_caret(tree, Some(id), vim_mode)?;
+    caret.blinking = false;
+    Some((caret, true))
+}
+
+fn overlay_preserves_selection(tree: &NodeTree, key: OverlayKey) -> bool {
+    tree.overlay_roots().iter().any(|overlay| {
+        if !overlay.captures_focus || OverlayKey::of(overlay) != key || !tree.is_valid(overlay.id) {
+            return false;
+        }
+        let Some(parent_id) = tree.node(overlay.id).parent else {
+            return false;
+        };
+        if !tree.is_valid(parent_id) {
+            return false;
+        }
+        matches!(
+            &tree.node(parent_id).kind,
+            NodeKind::Popover(popover) if popover.preserve_selection && *popover.content == overlay.id
+        )
+    })
+}
+
+fn is_editable_text_without_selection(tree: &NodeTree, id: NodeId) -> bool {
+    if !tree.is_valid(id) {
+        return false;
+    }
+    match &tree.node(id).kind {
+        NodeKind::TextArea(node) => {
+            !node.disabled
+                && !node.read_only
+                && node.anchor.is_none_or(|anchor| anchor == node.cursor)
+        }
+        NodeKind::Input(node) => {
+            !node.disabled
+                && !node.read_only
+                && node.anchor.is_none_or(|anchor| anchor == node.cursor)
+        }
+        _ => false,
+    }
 }

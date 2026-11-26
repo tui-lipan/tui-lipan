@@ -123,6 +123,7 @@ fn render_runtime_with_hover<C: Component>(
     let ctx = RenderContext {
         tree: &runtime.tree,
         focused: None,
+        static_caret_node: None,
         hovered,
         mouse_pos,
         suppress_pointer_item_hover_nodes: None,
@@ -1515,6 +1516,7 @@ fn frame_header_renders_on_border_row() {
         tree: &runtime.tree,
 
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -1583,6 +1585,7 @@ fn effect_scope_applies_post_render_style_effects() {
         tree: &runtime.tree,
 
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -1653,6 +1656,7 @@ fn visual_effect_color_transform_can_target_foreground_only() {
     let ctx = RenderContext {
         tree: &runtime.tree,
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -1713,6 +1717,7 @@ fn effect_scope_monochrome_remaps_fg_bg() {
     let ctx = RenderContext {
         tree: &runtime.tree,
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -1773,6 +1778,7 @@ fn effect_scope_palette_quantize_clamps_to_palette() {
     let ctx = RenderContext {
         tree: &runtime.tree,
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -1834,6 +1840,7 @@ fn effect_scope_rainbow_wave_phase_is_deterministic() {
         let ctx = RenderContext {
             tree: &runtime.tree,
             focused: None,
+            static_caret_node: None,
             hovered: None,
             mouse_pos: None,
             suppress_pointer_item_hover_nodes: None,
@@ -1898,6 +1905,7 @@ fn effect_scope_reset_cells_skipped_by_color_remap() {
     let ctx = RenderContext {
         tree: &runtime.tree,
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -1958,6 +1966,7 @@ fn effect_scope_scanlines_dim_only_matching_rows() {
     let ctx = RenderContext {
         tree: &runtime.tree,
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -2027,6 +2036,7 @@ fn effect_scope_ancestor_applies_to_nested_root_portal_overlay() {
     let ctx = RenderContext {
         tree: &runtime.tree,
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -2097,6 +2107,7 @@ fn effect_scope_wrapping_component_root_portal_does_not_affect_backdrop_area() {
     let ctx = RenderContext {
         tree: &runtime.tree,
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -2162,6 +2173,7 @@ fn nested_effect_scope_composition_order_inner_then_outer() {
     let ctx = RenderContext {
         tree: &runtime.tree,
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -2221,6 +2233,7 @@ fn transparent_modal_overlay_preserves_underlying_cells() {
     let ctx = RenderContext {
         tree: &runtime.tree,
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -2290,6 +2303,7 @@ fn overlay_clear_is_clipped_when_overlay_extends_below_viewport() {
     let ctx = RenderContext {
         tree: &runtime.tree,
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -2349,6 +2363,7 @@ fn explicit_overlay_background_paint_is_not_restored() {
     let ctx = RenderContext {
         tree: &runtime.tree,
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -2468,6 +2483,7 @@ fn toast_transition_blends_against_the_rendered_underlay() {
     let ctx = RenderContext {
         tree: &runtime.tree,
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -2574,6 +2590,7 @@ fn explicit_overlay_spaces_with_only_fg_are_restored() {
     let ctx = RenderContext {
         tree: &runtime.tree,
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -2635,6 +2652,7 @@ fn transparent_modal_border_preserves_underlying_background() {
     let ctx = RenderContext {
         tree: &runtime.tree,
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -2697,6 +2715,7 @@ fn default_modal_clears_underlying_text_and_background() {
     let ctx = RenderContext {
         tree: &runtime.tree,
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -2832,6 +2851,7 @@ fn transparent_modal_border_preserves_underlying_foreground() {
     let ctx = RenderContext {
         tree: &runtime.tree,
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -2894,6 +2914,7 @@ fn transparent_frame_decoration_preserves_underlying_background() {
     let ctx = RenderContext {
         tree: &runtime.tree,
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -2960,6 +2981,7 @@ fn extra_root_renders_above_app_modal_backdrop_and_effect_scope() {
     let ctx = RenderContext {
         tree: &runtime.tree,
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -3074,6 +3096,7 @@ fn effect_scope_dim_keeps_case2_resolved_fg_matching_dimmed_backdrop() {
     let ctx = RenderContext {
         tree: &runtime.tree,
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -3142,6 +3165,7 @@ fn animated_opacity_zero_restores_pre_render_cells() {
     let ctx = RenderContext {
         tree: &runtime.tree,
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -3204,6 +3228,7 @@ fn animated_opacity_zero_does_not_cover_zstack_content() {
     let ctx = RenderContext {
         tree: &runtime.tree,
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -3268,6 +3293,7 @@ fn animated_opacity_zero_fg_only_does_not_cover_zstack_content() {
     let ctx = RenderContext {
         tree: &runtime.tree,
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -3332,6 +3358,7 @@ fn animated_opacity_blends_toward_underlay_not_terminal_bg() {
     let ctx = RenderContext {
         tree: &runtime.tree,
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -3414,6 +3441,7 @@ fn animated_color_targets_override_rendered_cell_channels() {
     let ctx = RenderContext {
         tree: &runtime.tree,
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -3476,6 +3504,7 @@ fn compact_frame_only_paints_the_visible_row() {
     let ctx = RenderContext {
         tree: &runtime.tree,
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -3536,6 +3565,7 @@ fn compact_frame_with_footer_right_fills_the_visible_row() {
     let ctx = RenderContext {
         tree: &runtime.tree,
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -3625,6 +3655,7 @@ fn horizontal_caps_frame_renders_corners_without_vertical_edges() {
     let ctx = RenderContext {
         tree: &runtime.tree,
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -3723,6 +3754,7 @@ fn integrated_scrollbar_track_uses_parent_frame_border_style() {
         tree: &runtime.tree,
 
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -3844,6 +3876,7 @@ fn frame_border_overlap_merges_symbols_by_default() {
         tree: &runtime.tree,
 
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -3917,6 +3950,7 @@ fn frame_border_overlap_replace_strategy_keeps_last_symbol() {
         tree: &runtime.tree,
 
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -4035,6 +4069,7 @@ fn fuzzy_merge_preserves_neighbor_border_title_on_shared_seam() {
     let ctx = RenderContext {
         tree: &runtime.tree,
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -4130,6 +4165,7 @@ fn fuzzy_border_still_draws_over_styled_backdrop_spaces() {
     let ctx = RenderContext {
         tree: &runtime.tree,
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -4592,6 +4628,7 @@ fn adjacent_frames_without_join_keep_double_seam() {
         tree: &runtime.tree,
 
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -4654,6 +4691,7 @@ fn adjacent_frames_with_join_collapse_seam() {
         tree: &runtime.tree,
 
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -4716,6 +4754,7 @@ fn adjacent_frames_with_join_do_not_add_left_content_margin() {
         tree: &runtime.tree,
 
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -4785,6 +4824,7 @@ fn stacked_frames_with_join_do_not_add_top_content_margin() {
         tree: &runtime.tree,
 
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -4855,6 +4895,7 @@ fn nested_splitter_join_merges_frame_seam() {
         tree: &runtime.tree,
 
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -4917,6 +4958,7 @@ fn divider_join_frame_uses_merged_border_intersections() {
         tree: &runtime.tree,
 
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -5026,6 +5068,7 @@ fn animated_position_offset_renders_subtree_at_visual_offset() {
     let ctx = RenderContext {
         tree: &runtime.tree,
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -5105,6 +5148,7 @@ fn animated_position_offset_post_pass_uses_shifted_rect() {
     let ctx = RenderContext {
         tree: &runtime.tree,
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -5183,6 +5227,7 @@ fn translucent_overlay_surface_blends_with_the_cells_it_covers() {
     let ctx = RenderContext {
         tree: &runtime.tree,
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -5278,6 +5323,7 @@ fn translucent_toast_surface_is_uniform_behind_its_text() {
     let ctx = RenderContext {
         tree: &runtime.tree,
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         suppress_pointer_item_hover_nodes: None,
@@ -5738,6 +5784,7 @@ mod local_layers_over_images {
         let ctx = RenderContext {
             tree: &runtime.tree,
             focused: None,
+            static_caret_node: None,
             hovered: None,
             mouse_pos: None,
             suppress_pointer_item_hover_nodes: None,

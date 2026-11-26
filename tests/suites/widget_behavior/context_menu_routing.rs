@@ -1448,3 +1448,125 @@ fn programmatic_bound_editor_edits_preserve_and_extend_undo_history() {
     backend.render();
     assert_eq!(backend.state().text(), "");
 }
+
+#[test]
+fn context_menu_keeps_static_caret_without_selection_and_hides_caret_with_selection() {
+    struct CaretMenuHarness;
+
+    impl Component for CaretMenuHarness {
+        type Properties = ();
+        type State = TextAreaMenuState;
+        type Message = TextAreaMenuMsg;
+
+        fn create_state(&self, _: &()) -> Self::State {
+            let mut editor = tui_lipan::TextEditor::new("hello world");
+            editor.set_cursor(5);
+            TextAreaMenuState {
+                editor,
+                anchor: None,
+                copied_on_action: None,
+            }
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            match msg {
+                TextAreaMenuMsg::Edited(ev) => {
+                    ev.apply_to(&mut ctx.state.editor);
+                    Update::full()
+                }
+                TextAreaMenuMsg::Open(mouse) => {
+                    ctx.state.anchor = Some((mouse.x, mouse.y));
+                    Update::full()
+                }
+                TextAreaMenuMsg::Action(_) | TextAreaMenuMsg::Close => {
+                    ctx.state.anchor = None;
+                    Update::full()
+                }
+            }
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            let area = TextArea::bound(&ctx.state.editor)
+                .caret_shape(tui_lipan::style::CaretShape::Bar)
+                .caret_blinking(true)
+                .height(Length::Px(4))
+                .on_change(ctx.link().callback(TextAreaMenuMsg::Edited))
+                .on_context_menu(ctx.link().callback(TextAreaMenuMsg::Open))
+                .key("caret-editor");
+            ContextMenu::new(area)
+                .open(ctx.state.anchor.is_some())
+                .anchor(ctx.state.anchor)
+                .entries([ContextMenuEntry::action("paste", "Paste")])
+                .on_action(ctx.link().callback(TextAreaMenuMsg::Action))
+                .on_close(ctx.link().callback(|()| TextAreaMenuMsg::Close))
+                .into()
+        }
+    }
+
+    let mut backend = TestBackend::new(CaretMenuHarness);
+    backend.focus_key(&tui_lipan::Key::from("caret-editor"));
+    backend.render();
+
+    // Focused editor with no selection has a blinking bar caret.
+    let before = backend.capture_frame();
+    let before_cursor = before.cursor.expect("focused caret visible");
+    assert!(before_cursor.blinking);
+
+    // Right-click away from the caret cell so the menu doesn't occlude it.
+    backend
+        .send_mouse(MouseEvent {
+            x: 15,
+            y: 2,
+            kind: MouseKind::Down(MouseButton::Right),
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.render();
+    assert!(backend.state().anchor.is_some());
+
+    // With no selection, the insertion caret stays visible at the same cell and turns static.
+    let while_open = backend.capture_frame();
+    let static_cursor = while_open
+        .cursor
+        .expect("static insertion caret should remain visible while context menu is open");
+    assert_eq!(
+        (static_cursor.x, static_cursor.y),
+        (before_cursor.x, before_cursor.y)
+    );
+    assert!(
+        !static_cursor.blinking,
+        "preserved caret must be static (non-blinking) while context menu owns focus"
+    );
+
+    // Dismissing restores focus and blinking caret.
+    backend
+        .send_key(KeyEvent {
+            code: KeyCode::Esc,
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.render();
+    let after_close = backend.capture_frame();
+    assert!(
+        after_close.cursor.expect("caret after close").blinking,
+        "blinking caret should resume once context menu closes"
+    );
+
+    // When text IS selected, opening the context menu keeps the caret hidden.
+    backend.state_mut().editor.set_cursor(11);
+    backend.state_mut().editor.set_anchor(Some(6));
+    backend.render();
+    backend
+        .send_mouse(MouseEvent {
+            x: 15,
+            y: 2,
+            kind: MouseKind::Down(MouseButton::Right),
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.render();
+    assert!(
+        backend.capture_frame().cursor.is_none(),
+        "caret must stay hidden when a selection is active"
+    );
+}

@@ -15188,6 +15188,7 @@ fn inline_auto_height_expands_viewport_for_open_select_and_shrinks_on_close() {
         let ctx = crate::backend::ratatui_backend::RenderContext {
             tree: &runner.core.tree,
             focused: None,
+            static_caret_node: None,
             hovered: None,
             mouse_pos: None,
             suppress_pointer_item_hover_nodes: None,

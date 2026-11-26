@@ -281,8 +281,23 @@ impl<C: Component> AppRunner<C> {
             .map(|offset| offset.min(max_h_scroll_offset));
     }
 
+    pub(super) fn preserved_caret_node(&self) -> Option<NodeId> {
+        crate::app::caret::preserved_caret_node(
+            &self.core.tree,
+            self.focus.focused,
+            &self.focus.focus_stack,
+        )
+    }
+
     pub(super) fn incremental_cursor_position(&self) -> Option<Position> {
-        let id = self.focus.focused?;
+        let id = self
+            .focus
+            .focused
+            .filter(|id| {
+                self.core.tree.is_valid(*id)
+                    && crate::app::caret::focused_caret(&self.core.tree, Some(*id), None).is_some()
+            })
+            .or_else(|| self.preserved_caret_node())?;
         let position = self.focused_cursor_position(id)?;
         // This path places the caret without running the renderers, so the occlusion check they do
         // has to happen here too - a layer drawn over the focused widget still owns the cell.
@@ -1467,10 +1482,13 @@ impl<C: Component> AppRunner<C> {
         self.stabilize_inline_resize_anchor(terminal)?;
 
         self.update_mouse_pointer(terminal.backend_mut())?;
-        self.terminal.update_cursor(
+        let static_caret = self.preserved_caret_node();
+        self.terminal.update_cursor_with_static(
             terminal.backend_mut(),
             &self.core.tree,
             self.focus.focused,
+            static_caret,
+            self.core.ctx.host_cursor_style(),
             &self.widgets.text_area_vim_state,
         )?;
         terminal.backend_mut().finish_output_frame(output_frame)?;
@@ -1687,6 +1705,7 @@ impl<C: Component> AppRunner<C> {
         let ctx = RenderContext {
             tree: &self.core.tree,
             focused: self.focus.focused,
+            static_caret_node: self.preserved_caret_node(),
             hovered: self.mouse.hovered,
             mouse_pos: self.mouse.last_mouse.get(),
             suppress_pointer_item_hover_nodes: Some(&self.mouse.suppress_pointer_item_hover_nodes),
@@ -1747,61 +1766,62 @@ impl<C: Component> AppRunner<C> {
     }
 
     pub(super) fn focused_node_has_cursor_anchor(&self) -> bool {
-        let Some(id) = self.focus.focused else {
-            return false;
-        };
-        if !self.core.tree.is_valid(id) {
-            return false;
+        if let Some(id) = self.focus.focused
+            && self.core.tree.is_valid(id)
+        {
+            let has_anchor = match &self.core.tree.node(id).kind {
+                NodeKind::Input(node) => !node.disabled && !node.read_only,
+                NodeKind::TextArea(node) => !node.disabled && !node.read_only,
+                #[cfg(feature = "terminal")]
+                NodeKind::Terminal(node) => node.shows_caret(),
+                _ => false,
+            };
+            if has_anchor {
+                return true;
+            }
         }
-
-        match &self.core.tree.node(id).kind {
-            NodeKind::Input(node) => !node.disabled && !node.read_only,
-            NodeKind::TextArea(node) => !node.disabled && !node.read_only,
-            #[cfg(feature = "terminal")]
-            NodeKind::Terminal(node) => node.shows_caret(),
-            _ => false,
-        }
+        self.preserved_caret_node().is_some()
     }
 
     pub(super) fn focused_node_requests_cursor(&self) -> bool {
-        let Some(id) = self.focus.focused else {
-            return false;
-        };
-        if !self.core.tree.is_valid(id) {
-            return false;
+        if let Some(id) = self.focus.focused
+            && self.core.tree.is_valid(id)
+            && crate::app::caret::focused_caret(&self.core.tree, Some(id), None).is_some()
+        {
+            // When the host terminal window is unfocused, keep the hardware
+            // cursor visible regardless of blink phase so the emulator can
+            // render its native unfocused glyph (outlined block). Hiding the
+            // cursor during the blink-off half-cycle would leave nothing for
+            // the emulator to outline.
+            let blink_on = !self.focus.window_focused || self.animation.blink_visible;
+            if !crate::app::caret::caret_is_lit(&self.core.tree, id, blink_on) {
+                return false;
+            }
+
+            return match &self.core.tree.node(id).kind {
+                NodeKind::Input(node) => {
+                    !node.disabled
+                        && !node.read_only
+                        && node
+                            .anchor
+                            .map(|anchor| anchor == node.cursor)
+                            .unwrap_or(true)
+                }
+                NodeKind::TextArea(node) => {
+                    !node.disabled
+                        && !node.read_only
+                        && node
+                            .anchor
+                            .map(|anchor| anchor == node.cursor)
+                            .unwrap_or(true)
+                }
+                #[cfg(feature = "terminal")]
+                NodeKind::Terminal(node) => node.shows_caret(),
+                _ => false,
+            };
         }
 
-        // When the host terminal window is unfocused, keep the hardware
-        // cursor visible regardless of blink phase so the emulator can
-        // render its native unfocused glyph (outlined block). Hiding the
-        // cursor during the blink-off half-cycle would leave nothing for
-        // the emulator to outline.
-        let blink_on = !self.focus.window_focused || self.animation.blink_visible;
-        if !crate::app::caret::caret_is_lit(&self.core.tree, id, blink_on) {
-            return false;
-        }
-
-        match &self.core.tree.node(id).kind {
-            NodeKind::Input(node) => {
-                !node.disabled
-                    && !node.read_only
-                    && node
-                        .anchor
-                        .map(|anchor| anchor == node.cursor)
-                        .unwrap_or(true)
-            }
-            NodeKind::TextArea(node) => {
-                !node.disabled
-                    && !node.read_only
-                    && node
-                        .anchor
-                        .map(|anchor| anchor == node.cursor)
-                        .unwrap_or(true)
-            }
-            #[cfg(feature = "terminal")]
-            NodeKind::Terminal(node) => node.shows_caret(),
-            _ => false,
-        }
+        self.preserved_caret_node().is_some()
     }
 }
 

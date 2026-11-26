@@ -207,6 +207,7 @@ impl<C: Component> AppRunner<C> {
         let ctx = RenderContext {
             tree: &tree,
             focused: None,
+            static_caret_node: None,
             hovered: None,
             mouse_pos: None,
             suppress_pointer_item_hover_nodes: None,

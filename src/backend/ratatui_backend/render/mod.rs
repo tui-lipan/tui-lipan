@@ -79,6 +79,9 @@ pub(crate) type EffectPhase = u64;
 pub(crate) struct RenderContext<'a> {
     pub tree: &'a NodeTree,
     pub focused: Option<NodeId>,
+    /// Underlying text widget that keeps a static (non-blinking) insertion caret while a
+    /// selection-preserving popover (such as a `ContextMenu`) holds focus.
+    pub static_caret_node: Option<NodeId>,
     pub hovered: Option<NodeId>,
     pub mouse_pos: Option<(u16, u16)>,
     /// When set, List/Table skip pointer-derived `item_hover_style` for these node ids.
