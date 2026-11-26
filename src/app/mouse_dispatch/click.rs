@@ -683,6 +683,16 @@ pub(crate) fn transition_widget_up<C: Component, T: MouseDispatchCtx<C>>(
         if let Some(cb) = actions.on_click {
             return Some(ctx.handle_fallback_click(cb, mouse));
         }
+
+        // Drag sources and drop targets only wrap content for drag and drop: a press that never
+        // became a drag is a click on whatever holds them, such as a list or tree row.
+        if matches!(
+            &ctx.tree().node(hit).kind,
+            NodeKind::DragSource(_) | NodeKind::DropTarget(_)
+        ) && let Some(cb) = mouse::find_ancestor_on_click(ctx.tree(), hit)
+        {
+            return Some(ctx.handle_fallback_click(cb, mouse));
+        }
         if diff_line_handled {
             return Some(true);
         }

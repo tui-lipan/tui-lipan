@@ -1,8 +1,10 @@
 //! Tooltip widget.
 
 use crate::animation::VisibilityAnimation;
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use crate::core::component::{Component, Context, Update};
@@ -13,6 +15,10 @@ use crate::widgets::{Frame, MouseRegion, Popover, PopoverOffset, PopoverPlacemen
 use web_time::Instant;
 
 static TOOLTIP_ID: AtomicUsize = AtomicUsize::new(1);
+
+/// How soon after another tooltip opened a closing tooltip counts as swapped out by it, covering
+/// the two rendering in either order within one update.
+const SWAP_WINDOW: Duration = Duration::from_millis(50);
 
 /// Default [`Tooltip::skip_delay`]: how long after a delayed tooltip closes that the next one
 /// still opens at once.
@@ -88,6 +94,7 @@ pub struct TooltipConfig {
     pub(crate) animation: Option<VisibilityAnimation>,
     pub(crate) delay: Duration,
     skip_delay: Duration,
+    warmup_group: Option<Arc<str>>,
     text_style: Style,
     container_style: Style,
     border: bool,
@@ -113,6 +120,7 @@ impl TooltipConfig {
             animation: None,
             delay: Duration::ZERO,
             skip_delay: DEFAULT_TOOLTIP_SKIP_DELAY,
+            warmup_group: None,
             text_style: Style::default(),
             container_style: Style::default(),
             border: false,
@@ -149,6 +157,18 @@ impl TooltipConfig {
     /// zero always waits.
     pub fn skip_delay(mut self, skip_delay: Duration) -> Self {
         self.skip_delay = skip_delay;
+        self
+    }
+
+    /// Warm up only with tooltips in the same group.
+    ///
+    /// A delayed tooltip that closes lets the next one skip its [`delay`](Self::delay) only when
+    /// both share a group. Tooltips without a group form one default group. Give a different
+    /// kind of hover popup, such as a large preview card, its own group so that closing it does
+    /// not open small control tooltips at once, and so that cards in a list each wait their delay
+    /// when combined with a zero [`skip_delay`](Self::skip_delay).
+    pub fn warmup_group(mut self, group: impl Into<Arc<str>>) -> Self {
+        self.warmup_group = Some(group.into());
         self
     }
 
@@ -272,11 +292,24 @@ pub(crate) struct HoverReveal {
     generation: u64,
     /// When the current hover began, so a changed delay counts from the original entry.
     hovered_since: Option<Instant>,
+    /// Whether the current reveal skipped the delay, taking over from another tooltip: such a
+    /// tooltip appears at once instead of fading in.
+    instant: bool,
 }
 
 impl HoverReveal {
     pub(crate) fn revealed(&self) -> bool {
         self.revealed
+    }
+
+    /// Whether the current reveal took over from another tooltip without waiting.
+    pub(crate) fn instant(&self) -> bool {
+        self.revealed && self.instant
+    }
+
+    /// The tooltip, already revealed, takes over again from another one without waiting.
+    pub(crate) fn mark_instant(&mut self) {
+        self.instant = true;
     }
 
     /// The pointer entered (`true`) or left (`false`) the trigger.
@@ -296,20 +329,45 @@ impl HoverReveal {
             // Only a delayed tooltip the user actually saw warms its neighbours: one that opens at
             // once never made the user wait, as with a plain `Tooltip` that has no delay.
             if !config.delay.is_zero() {
-                env.tooltip_closed_at.set(Some(env.now()));
+                env.tooltip_closed_at
+                    .borrow_mut()
+                    .insert(config.warmup_group.clone(), env.now());
             }
             return RevealStep::Render;
         }
         self.hovered_since = Some(env.now());
         let warm = env
             .tooltip_closed_at
-            .get()
-            .is_some_and(|closed| env.elapsed(closed) < config.skip_delay);
+            .borrow()
+            .get(&config.warmup_group)
+            .is_some_and(|closed| env.elapsed(*closed) < config.skip_delay);
         if warm {
             self.revealed = true;
+            self.instant = true;
             return RevealStep::Render;
         }
         self.arm(config.delay)
+    }
+
+    /// The pointer moved onto something inside the trigger that suspends the wait, such as a
+    /// nested tooltip's trigger: cancel a pending reveal. A tooltip already revealed stays so.
+    pub(crate) fn pause(&mut self) {
+        if self.revealed {
+            return;
+        }
+        self.generation = self.generation.wrapping_add(1);
+        self.hovered = false;
+        self.hovered_since = None;
+    }
+
+    /// The pointer entered the trigger to take over from a tooltip already showing: open at once.
+    pub(crate) fn hover_revealed(&mut self, env: &RuntimeEnv) -> RevealStep {
+        self.hovered = true;
+        self.generation = self.generation.wrapping_add(1);
+        self.hovered_since = Some(env.now());
+        self.revealed = true;
+        self.instant = true;
+        RevealStep::Render
     }
 
     /// A timer armed for `generation` elapsed; returns whether the tooltip opened.
@@ -318,6 +376,7 @@ impl HoverReveal {
             return false;
         }
         self.revealed = true;
+        self.instant = false;
         true
     }
 
@@ -349,6 +408,7 @@ impl HoverReveal {
 
     /// Schedule a reveal for the current hover after `wait`, or reveal now when nothing is left.
     fn arm(&mut self, wait: Duration) -> RevealStep {
+        self.instant = false;
         if wait.is_zero() {
             self.revealed = true;
             return RevealStep::Render;
@@ -444,6 +504,8 @@ impl Tooltip {
         /// tooltip immediately, as desktop toolkits do. Defaults to
         /// [`DEFAULT_TOOLTIP_SKIP_DELAY`]; zero always waits.
         skip_delay(skip_delay: Duration);
+        /// Warm up only with tooltips in the same group; see [`TooltipConfig::warmup_group`].
+        warmup_group(group: impl Into<Arc<str>>);
         /// Set the style of text content. Element content carries its own styles.
         text_style(style: Style);
         /// Set container style.
@@ -501,9 +563,88 @@ impl From<Tooltip> for TooltipProps {
 
 #[derive(Clone, Debug)]
 struct TooltipState {
+    /// Identifies this tooltip to the tooltips around it.
+    id: usize,
     trigger_key: Key,
     /// Hover timing, used only for delayed tooltips.
     reveal: HoverReveal,
+    /// Whether the pointer is on the trigger, nested triggers included.
+    trigger_hovered: bool,
+    /// The nested tooltips whose trigger has the pointer. While any does, this one steps aside.
+    nested: Vec<usize>,
+    /// The tooltip this one told the pointer is on its trigger, owed a leave.
+    reported_to: Option<NestedTooltip>,
+    /// Whether this tooltip is showing, or would be but for a hovered nested trigger, as of the
+    /// last render. Nested tooltips read it to take over at once.
+    shown: Arc<AtomicBool>,
+    /// Set by a tooltip nested in this one, at any depth, that was showing as the pointer left
+    /// it: if the pointer lands on this tooltip's own part, it takes over at once.
+    handoff: Arc<AtomicBool>,
+    /// Whether the popup was open in the last render, to notice it opening and closing.
+    visible: Cell<bool>,
+    /// Whether another tooltip opened while this one faded out: the fade ends at once.
+    fade_cut: Cell<bool>,
+}
+
+/// What a nested tooltip tells the tooltip whose trigger holds it.
+#[derive(Clone, Copy)]
+struct NestedHover {
+    /// The nested tooltip.
+    id: usize,
+    /// The pointer entered (`true`) or left (`false`) the nested trigger.
+    hovered: bool,
+}
+
+/// One tooltip enclosing a nested one, as the nested one sees it.
+#[derive(Clone)]
+struct Enclosing {
+    /// Whether it is showing: a nested tooltip entered then takes over at once.
+    shown: Arc<AtomicBool>,
+    /// Raised by a nested tooltip leaving while it shows: see [`TooltipState::handoff`].
+    handoff: Arc<AtomicBool>,
+}
+
+/// What a tooltip offers the tooltips nested in its trigger: a way to say the pointer is on them,
+/// so it can step aside while their tooltip is the one that matters.
+#[derive(Clone)]
+struct NestedTooltip {
+    /// The tooltip receiving the reports.
+    owner: usize,
+    report: crate::callback::Callback<NestedHover>,
+    /// Every enclosing tooltip, this one and its own ancestors, so a handoff works at any depth.
+    enclosing: Rc<[Enclosing]>,
+}
+
+impl std::fmt::Debug for NestedTooltip {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NestedTooltip").finish_non_exhaustive()
+    }
+}
+
+impl NestedTooltip {
+    /// Whether any enclosing tooltip is showing.
+    fn any_shown(&self) -> bool {
+        self.enclosing
+            .iter()
+            .any(|outer| outer.shown.load(Ordering::Relaxed))
+    }
+
+    /// A nested tooltip that was showing is leaving: whichever enclosing tooltip the pointer lands
+    /// on takes over at once. Leaves arrive innermost first, so this reaches every level before
+    /// any of them handles the leave of the tooltip nested in it.
+    fn hand_off(&self) {
+        for outer in self.enclosing.iter() {
+            outer.handoff.store(true, Ordering::Relaxed);
+        }
+    }
+}
+
+impl PartialEq for NestedTooltip {
+    /// Equal while it reaches the same tooltip: a fresh callback each render must not invalidate
+    /// the trigger's subtree.
+    fn eq(&self, other: &Self) -> bool {
+        self.owner == other.owner
+    }
 }
 
 impl TooltipProps {
@@ -512,11 +653,21 @@ impl TooltipProps {
     fn delays_hover(&self) -> bool {
         self.auto && self.open.is_none() && !self.config.delay.is_zero()
     }
+
+    /// Whether this tooltip can show at all: one that cannot never makes an enclosing tooltip
+    /// step aside.
+    fn can_show(&self) -> bool {
+        self.open.unwrap_or(self.auto)
+    }
 }
 
 enum TooltipMsg {
     Hover(bool),
     Reveal(u64),
+    /// The pointer entered or left the trigger of a tooltip nested in this one's trigger.
+    Nested(NestedHover),
+    /// Another tooltip opened while this one fades out.
+    CutFade,
 }
 
 struct TooltipComponent;
@@ -524,6 +675,83 @@ struct TooltipComponent;
 impl TooltipComponent {
     fn new() -> Self {
         Self
+    }
+
+    /// Tell the enclosing tooltip whether the pointer is on this trigger, when that changed, this
+    /// tooltip stopped or started being able to show, or the enclosing tooltip changed.
+    fn sync_report(ctx: &mut Context<Self>) {
+        let on = ctx.state.trigger_hovered && ctx.props.can_show();
+        let target = on.then(|| ctx.use_context::<NestedTooltip>()).flatten();
+        let report = |outer: &NestedTooltip, hovered: bool, ctx: &Context<Self>| {
+            if !hovered && ctx.state.shown.load(Ordering::Relaxed) {
+                outer.hand_off();
+            }
+            outer.report.emit(NestedHover {
+                id: ctx.state.id,
+                hovered,
+            });
+        };
+        match (ctx.state.reported_to.take(), target) {
+            (Some(reported), Some(target)) if reported.owner == target.owner => {
+                ctx.state.reported_to = Some(target);
+            }
+            (reported, target) => {
+                if let Some(reported) = &reported {
+                    report(reported, false, ctx);
+                }
+                if let Some(target) = &target {
+                    report(target, true, ctx);
+                }
+                ctx.state.reported_to = target;
+            }
+        }
+    }
+
+    /// A nested tooltip entered or left.
+    fn nested(ctx: &mut Context<Self>, report: NestedHover) -> Update {
+        let before = !ctx.state.nested.is_empty();
+        if report.hovered {
+            // A report from a pointer already gone from this trigger is stale.
+            if !ctx.state.trigger_hovered || ctx.state.nested.contains(&report.id) {
+                return Update::none();
+            }
+            ctx.state.nested.push(report.id);
+        } else {
+            let Some(index) = ctx.state.nested.iter().position(|id| *id == report.id) else {
+                return Update::none();
+            };
+            ctx.state.nested.swap_remove(index);
+        }
+        let after = !ctx.state.nested.is_empty();
+        if before == after {
+            // Moving between two nested triggers: this one stays aside.
+            return Update::none();
+        }
+        // A revealed tooltip is hidden, not closed, so it shows again at once when the pointer
+        // comes back.
+        // Back on this tooltip's own part: did a tooltip inside it, at any depth, just show?
+        let handoff = !after && ctx.state.handoff.swap(false, Ordering::Relaxed);
+        if !ctx.props.delays_hover() || ctx.state.reveal.revealed() {
+            if !after {
+                ctx.state.reveal.mark_instant();
+            }
+            return Update::render();
+        }
+        // One still waiting counts only time spent on its own part of the trigger.
+        if after {
+            ctx.state.reveal.pause();
+            return Update::none();
+        }
+        let env = ctx.env().clone();
+        let step = if handoff {
+            // Back from a nested tooltip the user was reading: swap tooltips at once, as when
+            // moving onto the nested trigger from this one.
+            ctx.state.reveal.hover_revealed(&env)
+        } else {
+            let config = ctx.props.config.clone();
+            ctx.state.reveal.hover(true, &config, &env)
+        };
+        Self::step(step, ctx)
     }
 
     fn step(step: RevealStep, ctx: &mut Context<Self>) -> Update {
@@ -546,9 +774,18 @@ impl Component for TooltipComponent {
 
     fn create_state(&self, _props: &Self::Properties) -> Self::State {
         let id = TOOLTIP_ID.fetch_add(1, Ordering::Relaxed);
+        let shown = Arc::default();
         TooltipState {
+            id,
             trigger_key: Key::from(format!("tooltip-trigger-{}", id)),
             reveal: HoverReveal::default(),
+            trigger_hovered: false,
+            nested: Vec::new(),
+            reported_to: None,
+            shown,
+            handoff: Arc::default(),
+            visible: Cell::new(false),
+            fade_cut: Cell::new(false),
         }
     }
 
@@ -557,6 +794,8 @@ impl Component for TooltipComponent {
         old_props: &Self::Properties,
         ctx: &mut Context<Self>,
     ) -> Update {
+        // A tooltip that stopped or started being able to show leaves or rejoins its enclosing one.
+        Self::sync_report(ctx);
         let delays = ctx.props.delays_hover();
         if delays == old_props.delays_hover() && ctx.props.config.delay == old_props.config.delay {
             return Update::none();
@@ -564,7 +803,25 @@ impl Component for TooltipComponent {
         let step = if delays {
             let config = ctx.props.config.clone();
             let env = ctx.env().clone();
-            ctx.state.reveal.retime(&config, &env)
+            if !old_props.delays_hover() {
+                // Hover was not timed until now: a pointer already resting on this trigger starts
+                // the wait now, unless a nested trigger has it.
+                let _ = ctx.state.reveal.reset();
+                let takes_over = ctx
+                    .state
+                    .reported_to
+                    .as_ref()
+                    .is_some_and(NestedTooltip::any_shown);
+                if !ctx.state.trigger_hovered || !ctx.state.nested.is_empty() {
+                    RevealStep::Nothing
+                } else if takes_over {
+                    ctx.state.reveal.hover_revealed(&env)
+                } else {
+                    ctx.state.reveal.hover(true, &config, &env)
+                }
+            } else {
+                ctx.state.reveal.retime(&config, &env)
+            }
         } else {
             // Hover is no longer tracked here; closing this way does not warm other tooltips.
             ctx.state.reveal.reset()
@@ -575,12 +832,36 @@ impl Component for TooltipComponent {
     fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
         match msg {
             TooltipMsg::Hover(hovered) => {
+                ctx.state.trigger_hovered = hovered;
+                ctx.state.handoff.store(false, Ordering::Relaxed);
+                Self::sync_report(ctx);
+                if !hovered {
+                    // A nested trigger's leave may arrive after this one's: the pointer is gone.
+                    ctx.state.nested.clear();
+                }
                 if !ctx.props.delays_hover() {
+                    // Shown from the live hover state, which re-renders it already.
                     return Update::none();
                 }
-                let config = ctx.props.config.clone();
+                if hovered && !ctx.state.nested.is_empty() {
+                    // Entered straight onto a nested trigger: this one waits until the pointer
+                    // comes back to its own part.
+                    return Update::none();
+                }
                 let env = ctx.env().clone();
-                let step = ctx.state.reveal.hover(hovered, &config, &env);
+                // Taking over from an enclosing tooltip: the user already waited.
+                let takes_over = hovered
+                    && ctx
+                        .state
+                        .reported_to
+                        .as_ref()
+                        .is_some_and(NestedTooltip::any_shown);
+                let step = if takes_over {
+                    ctx.state.reveal.hover_revealed(&env)
+                } else {
+                    let config = ctx.props.config.clone();
+                    ctx.state.reveal.hover(hovered, &config, &env)
+                };
                 Self::step(step, ctx)
             }
             TooltipMsg::Reveal(generation) => {
@@ -590,6 +871,28 @@ impl Component for TooltipComponent {
                     Update::none()
                 }
             }
+            TooltipMsg::Nested(report) => Self::nested(ctx, report),
+            TooltipMsg::CutFade => {
+                if ctx.state.visible.get() || ctx.state.fade_cut.get() {
+                    return Update::none();
+                }
+                ctx.state.fade_cut.set(true);
+                Update::render()
+            }
+        }
+    }
+
+    fn unmount(&mut self, ctx: &mut Context<Self>) {
+        // Removed under the pointer, as when a row's button disappears: the enclosing tooltip
+        // must not stay aside for a trigger that is gone.
+        if let Some(outer) = ctx.state.reported_to.take() {
+            if ctx.state.shown.load(Ordering::Relaxed) {
+                outer.hand_off();
+            }
+            outer.report.emit(NestedHover {
+                id: ctx.state.id,
+                hovered: false,
+            });
         }
     }
 
@@ -597,15 +900,38 @@ impl Component for TooltipComponent {
         let delayed = ctx.props.delays_hover();
         // The trigger always sits in the same region, whatever the configuration: adding or
         // removing a wrapper would change the child's container path and remount a stateful
-        // trigger. Only the hover callback comes and goes. The region takes the child's sizing, so a
+        // trigger. The region takes the child's sizing, so a
         // flexible child stays flexible, and its reconciled rectangle, so the popup anchors to the
         // child and hover counts only over it.
-        let mut region = MouseRegion::new()
-            .child(ctx.props.child.clone())
-            .fitted_to_child();
-        if delayed {
-            region = region.on_hover_change(ctx.link().callback(TooltipMsg::Hover));
-        }
+        // Tooltips nested in the trigger report the pointer through this context, and this one
+        // reports its own trigger to any tooltip it is nested in.
+        let enclosing: Rc<[Enclosing]> = ctx
+            .use_context::<NestedTooltip>()
+            .map(|outer| outer.enclosing.to_vec())
+            .unwrap_or_default()
+            .into_iter()
+            .chain([Enclosing {
+                shown: ctx.state.shown.clone(),
+                handoff: ctx.state.handoff.clone(),
+            }])
+            .collect();
+        let own = NestedTooltip {
+            owner: ctx.state.id,
+            report: ctx.link().callback(TooltipMsg::Nested),
+            enclosing,
+        };
+        // A tooltip that cannot show stays out of the way: tooltips nested in it report to the
+        // nearest enclosing tooltip that can.
+        let provided = if ctx.props.can_show() {
+            own
+        } else {
+            ctx.use_context::<NestedTooltip>().unwrap_or(own)
+        };
+        let nested = crate::widgets::ContextProvider::new(provided).child(ctx.props.child.clone());
+        let region = MouseRegion::new()
+            .child(nested)
+            .fitted_to_child()
+            .on_hover_change(ctx.link().callback(TooltipMsg::Hover));
         let trigger: Element = region.into();
         let trigger = trigger.key(ctx.state.trigger_key.clone());
 
@@ -618,11 +944,51 @@ impl Component for TooltipComponent {
             && (hover_open
                 || (ctx.props.show_on_focus
                     && ctx.has_focus_within_key(ctx.state.trigger_key.clone())));
-        let open = ctx.props.open.unwrap_or(auto_open);
-        ctx.props
-            .config
-            .popover(trigger, &ctx.props.content, open)
-            .into()
+        ctx.state
+            .shown
+            .store(ctx.props.open.unwrap_or(auto_open), Ordering::Relaxed);
+        // One tooltip at a time: while the pointer is on a nested trigger, its tooltip speaks.
+        let open = ctx
+            .props
+            .open
+            .unwrap_or(auto_open && ctx.state.nested.is_empty());
+        let mut config = ctx.props.config.clone();
+        let was_visible = ctx.state.visible.replace(open);
+        if open {
+            ctx.state.fade_cut.set(false);
+            if !was_visible {
+                // Opening ends every tooltip still fading out, so two never fade over each other.
+                let env = ctx.env();
+                env.tooltip_opened_at.set(Some((ctx.state.id, env.now())));
+                let fading = std::mem::take(&mut *env.tooltip_fading.borrow_mut());
+                for cut in fading {
+                    cut.emit(());
+                }
+            }
+            if ctx.state.reveal.instant() {
+                // A swap from another tooltip appears at once: only a first open fades in.
+                if let Some(animation) = &mut config.animation {
+                    animation.enter.duration = Duration::ZERO;
+                }
+            }
+        } else if was_visible && config.animation.is_some() {
+            let env = ctx.env();
+            let swapped = env.tooltip_opened_at.get().is_some_and(|(id, opened)| {
+                id != ctx.state.id && env.elapsed(opened) < SWAP_WINDOW
+            });
+            if swapped {
+                // Another tooltip just opened in this one's place: leave without fading.
+                ctx.state.fade_cut.set(true);
+            } else {
+                env.tooltip_fading
+                    .borrow_mut()
+                    .push(ctx.link().callback(|()| TooltipMsg::CutFade));
+            }
+        }
+        if !open && ctx.state.fade_cut.get() {
+            config.animation = None;
+        }
+        config.popover(trigger, &ctx.props.content, open).into()
     }
 }
 

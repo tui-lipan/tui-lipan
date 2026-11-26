@@ -15,6 +15,8 @@ mod disabled_focus;
 mod document_tooltips;
 #[path = "suites/widget_behavior/drag_drop_test_backend.rs"]
 mod drag_drop_test_backend;
+#[path = "suites/widget_behavior/drag_wrapper_clicks.rs"]
+mod drag_wrapper_clicks;
 #[path = "suites/widget_behavior/draggable_tab_bar_caps_render.rs"]
 mod draggable_tab_bar_caps_render;
 #[path = "suites/widget_behavior/draggable_tab_bar_clipped_render.rs"]
@@ -105,8 +107,14 @@ mod text_edit_actions;
 mod tooltip_child_update;
 #[path = "suites/widget_behavior/tooltip_delay.rs"]
 mod tooltip_delay;
+#[path = "suites/widget_behavior/tooltip_nested.rs"]
+mod tooltip_nested;
+#[path = "suites/widget_behavior/tooltip_swap_animation.rs"]
+mod tooltip_swap_animation;
 #[path = "suites/widget_behavior/tooltip_trigger_gestures.rs"]
 mod tooltip_trigger_gestures;
+#[path = "suites/widget_behavior/tooltip_warmup_groups.rs"]
+mod tooltip_warmup_groups;
 #[path = "suites/widget_behavior/uncontrolled_text_cursor.rs"]
 mod uncontrolled_text_cursor;
 

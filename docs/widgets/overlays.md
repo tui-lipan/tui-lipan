@@ -351,7 +351,10 @@ Reopening reverses from the current visibility. Closed content does not mount or
 Local-scope popovers keep their existing immediate behavior.
 
 `Select`, `ComboBox`, `ContextMenu`, and `Tooltip` expose the same `.animation(...)` property and
-forward it to Popover. Tooltips stay passive and do not acquire focus because animation is enabled.
+forward it to Popover. Tooltips stay passive and do not acquire focus because animation is enabled. Animated
+tooltips never fade over one another: a tooltip that opens ends any other tooltip's fade-out, and
+one that swaps in without waiting (after warm-up, or between nested tooltips) appears at once.
+Only a tooltip that waited for its delay fades in.
 
 ```rust
 Popover::new()
@@ -388,6 +391,24 @@ if the pointer reaches it within `skip_delay`. Focus always shows the tooltip im
 controlled tooltip (`open(...)`) runs no hover timer, so it never warms its neighbours, and changing
 `delay` mid-hover counts from when the pointer arrived.
 
+Nested tooltips, such as a button's tooltip on a row with a hover card, behave like one set of
+controls. One shows at a time: while the pointer is on the nested trigger, the outer tooltip hides.
+Once either has shown, moving between them swaps tooltips at once, in both directions; a hidden
+outer tooltip stays revealed and comes back immediately. Until then, each delay counts only time
+spent on its own part, so moving onto the nested trigger cancels the outer delay and moving back
+starts it again.
+
+Warm-up stays within a `warmup_group`. Give large hover cards their own group, so that closing one
+does not open the small tooltips of nearby controls at once. With a zero `skip_delay` as well, each
+card in a list waits for its delay:
+
+```rust
+let cards = TooltipConfig::new()
+    .delay(Duration::from_secs(1))
+    .warmup_group("hover-cards")
+    .skip_delay(Duration::ZERO);
+```
+
 | Prop | Type | Description |
 |------|------|-------------|
 | `animation` | `impl Into<Option<VisibilityAnimation>>` | Opt-in popup animation, forwarded to Popover |
@@ -398,6 +419,7 @@ controlled tooltip (`open(...)`) runs no hover timer, so it never warms its neig
 | `show_on_focus` | `bool` | Show automatically on focus (default `true`) |
 | `delay` | `Duration` | Hover time before the tooltip opens (default zero) |
 | `skip_delay` | `Duration` | Open at once if another delayed tooltip closed this recently (default `DEFAULT_TOOLTIP_SKIP_DELAY`, 300 ms) |
+| `warmup_group` | `impl Into<Arc<str>>` | Warm up only with tooltips in the same group; tooltips without one share the default group |
 | `text_style` | `Style` | Style for string content; element content carries its own styles |
 | `container_style` | `Style` | Tooltip container style |
 | `border` | `bool` | Show border |
