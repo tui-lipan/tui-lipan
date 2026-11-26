@@ -435,7 +435,11 @@ fn collect_popover_overlay_root(
         layer: OverlayLayer::Popover,
         order,
         dismiss_policy: if popover_node.open && popover_node.on_close.is_some() {
-            DismissPolicy::ClickOutsideOrEscape
+            if popover_node.close_on_escape {
+                DismissPolicy::ClickOutsideOrEscape
+            } else {
+                DismissPolicy::ClickOutsidePassthroughEscape
+            }
         } else {
             DismissPolicy::None
         },

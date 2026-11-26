@@ -85,6 +85,7 @@ pub struct Popover {
     pub(crate) capture_focus: bool,
     pub(crate) capture_pointer: bool,
     pub(crate) auto_focus: bool,
+    pub(crate) close_on_escape: bool,
 }
 
 impl Default for Popover {
@@ -122,6 +123,7 @@ impl Popover {
             capture_focus: true,
             capture_pointer: true,
             auto_focus: true,
+            close_on_escape: true,
         }
     }
 
@@ -241,6 +243,16 @@ impl Popover {
         self
     }
 
+    /// Control whether `Esc` dismisses this root-portal popover directly (default `true`).
+    ///
+    /// When `false`, `Esc` is passed through to the focused widget inside the popover so
+    /// layered content (such as cascading menus) can handle `Esc` itself while outside clicks
+    /// still dismiss the popover.
+    pub fn close_on_escape(mut self, close_on_escape: bool) -> Self {
+        self.close_on_escape = close_on_escape;
+        self
+    }
+
     /// Set on-close callback.
     pub fn on_close(mut self, cb: Callback<()>) -> Self {
         self.on_close = Some(cb);
@@ -277,6 +289,7 @@ impl crate::layout::hash::LayoutHash for Popover {
         self.capture_focus.hash(hasher);
         self.capture_pointer.hash(hasher);
         self.auto_focus.hash(hasher);
+        self.close_on_escape.hash(hasher);
         recurse(self.trigger.as_ref())?.hash(hasher);
         Some(())
     }

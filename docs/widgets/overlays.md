@@ -321,6 +321,7 @@ inherit ScrollView clipping from the overlay's declaration site.
 | `capture_focus` | `bool` | Capture and trap focus in a root-portal popover (`true` by default); disable for passive overlays whose trigger retains keyboard focus |
 | `capture_pointer` | `bool` | Block unhandled pointer events inside root-portal content (`true` by default); `false` lets non-interactive popup space pass through while interactive descendants still receive events |
 | `auto_focus` | `bool` | Focus the first focusable descendant (`true` by default); `false` suspends focus while retaining capture/trapping |
+| `close_on_escape` | `bool` | Dismiss root-portal popover directly on `Esc` (`true` by default); `false` passes `Esc` through to focused content |
 | `on_close` | `Callback<()>` | Close callback |
 | `placement` | `PopoverPlacement` | `Above`, `Below`, `Left`, `Right` + start/center/end variants |
 | `offset` | `impl Into<PopoverOffset>` | Shift from the placed position; mirrored on the flipped axis when `auto_flip` flips |
@@ -975,22 +976,26 @@ Frame::new()
 
 ## ContextMenu
 
-A popup menu backed by `Popover` + `List`. Typically triggered by right-click or a keyboard shortcut.
+A popup menu backed by `Popover` + `List`. Typically triggered by right-click or a keyboard shortcut. Supports flat `items` (`on_select`) or structured `entries` (`ContextMenuEntry` + `on_action`) with cascading submenus, horizontal separators, headers, icons, radio checkmarks, right-aligned details, disabled items, and destructive styling.
 
 | Prop | Type | Default | Description |
 |------|------|---------|-------------|
 | `animation` | `impl Into<Option<VisibilityAnimation>>` | Opt-in popup animation, forwarded to Popover |
 | `trigger` | `impl IntoElement` | **Constructor** | The element that owns the menu |
-| `items` | `impl IntoIterator<Item = impl Into<ListItem>>` | `[]` | Menu items |
+| `items` | `impl IntoIterator<Item = impl Into<ListItem>>` | `[]` | Flat menu items |
+| `entries` | `impl IntoIterator<Item = impl Into<ContextMenuEntry>>` | `None` | Structured menu entries with actions, submenus, separators, and headers |
 | `open` | `bool` | `false` | Controlled open state |
-| `on_select` | `Callback<usize>` | - | Activates the item on Enter or left click; highlight movement does not invoke it |
+| `on_select` | `Callback<usize>` | - | Activates a flat item on Enter or left click; highlight movement does not invoke it |
+| `on_action` | `Callback<Arc<str>>` | - | Fires with the activated leaf action `id` in structured `entries` mode |
 | `on_close` | `Callback<()>` | - | Fires when menu should close |
 | `anchor` | `Option<(u16, u16)>` | `None` | Absolute anchor position (content coordinates) |
 | `placement` | `PopoverPlacement` | `BelowStart` | Menu placement relative to trigger |
 | `offset` | `impl Into<PopoverOffset>` | `0` | Distance from trigger |
 | `clamp` | `bool` | `true` | Keep within screen bounds |
 | `auto_flip` | `bool` | `true` | Flip placement when out of bounds |
-| `width` | `Length` | `Px(20)` | Menu width |
+| `width` | `Length` | `Px(20)` (flat) / auto (entries) | Menu width |
+| `min_width` | `u16` | `16` | Minimum auto-sized menu width for `entries` |
+| `max_width` | `u16` | `48` | Maximum auto-sized menu width for `entries` |
 | `height` | `Length` | `Auto` | Menu height |
 | `border` | `bool` | `true` | Show border |
 | `border_style` | `BorderStyle` | `Plain` | Border style |
@@ -1002,9 +1007,25 @@ A popup menu backed by `Popover` + `List`. Typically triggered by right-click or
 | `extend_unfocused_selection_style` / `inherit_unfocused_selection_style` | `Style` / `()` | - | Extend or inherit the unfocused selection theme role instead of replacing it |
 | `item_hover_style` | `Style` | - | Hovered item style |
 | `extend_item_hover_style` / `inherit_item_hover_style` | `Style` / `()` | - | Extend or inherit the hover theme role instead of replacing it |
-| `selection_symbol` | `Option<impl Into<Arc<str>>>` | `"> "` | Selection indicator |
+| `selection_full_width` | `bool` | `false` (flat) / `true` (entries) | Fill full row width with selection highlight |
+| `symbol_column` | `bool` | `true` (flat) / `false` (entries) | Reserve left selection-symbol column |
+| `selection_symbol` | `Option<impl Into<Arc<str>>>` | `"> "` (flat) / `None` (entries) | Selection indicator |
 | `selection_symbol_style` | `Style` | - | Selection indicator style |
 | `unfocused_selection_symbol_style` | `Style` | - | Selection indicator style while menu list is not focused; defaults to `selection_symbol_style` |
+| `gutter_gap` | `u16` | `1` | Columns between icon/check gutter and label |
+| `item_horizontal_padding` | `impl Into<Padding>` | default | Horizontal padding on normal and disabled rows |
+| `header_horizontal_padding` | `impl Into<Padding>` | default | Horizontal padding on separators and headers |
+| `separator_style` | `Style` | theme border | Horizontal separator rule style |
+| `header_style` | `Style` | theme muted | Section header style |
+| `detail_style` | `Style` | theme muted | Right-aligned detail text style |
+| `detail_gap` | `u16` | `2` | Minimum blank columns before detail or submenu chevron |
+| `disabled_style` | `Style` | theme muted | Disabled entry style |
+| `destructive_style` | `Style` | theme error | Destructive entry style |
+| `icon_style` | `Style` | theme muted | Default icon gutter style |
+| `submenu_indicator` | `impl Into<Arc<str>>` | `"›"` | Trailing submenu indicator glyph |
+| `submenu_indicator_style` | `Style` | detail style | Submenu indicator style |
+| `check_symbol` | `impl Into<Arc<str>>` | `"✓"` | Checked radio/toggle glyph |
+| `check_style` | `Style` | label style | Check glyph style |
 | `scrollbar` | `bool` | `false` | Show scrollbar |
 | `scrollbar_config` | `ScrollbarConfig` | default | Scrollbar configuration |
 
@@ -1012,9 +1033,16 @@ A popup menu backed by `Popover` + `List`. Typically triggered by right-click or
 ContextMenu::new(
     Button::new("Options").on_click(ctx.link().callback(|_| Msg::ToggleMenu))
 )
-    .items(vec!["Cut", "Copy", "Paste", "Delete"])
+    .entries([
+        ContextMenuEntry::action("rename", "Rename").icon("󰲶"),
+        ContextMenuEntry::submenu("copy", "Copy", [
+            ContextMenuEntry::action("copy-path", "Path"),
+            ContextMenuEntry::action("copy-id", "ID"),
+        ]),
+        ContextMenuEntry::separator(),
+        ContextMenuEntry::action("delete", "Delete").destructive(true),
+    ])
     .open(ctx.state.menu_open)
-    .on_select(ctx.link().callback(Msg::MenuAction))
+    .on_action(ctx.link().callback(Msg::MenuAction))
     .on_close(ctx.link().callback(|_| Msg::CloseMenu))
-    .selection_style(Style::new().bg(Color::DarkGray))
 ```

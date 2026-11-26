@@ -358,6 +358,8 @@ pub enum ListItemRole {
     /// Regular selectable row.
     #[default]
     Normal,
+    /// Non-selectable disabled row that keeps normal row padding and gutter alignment.
+    Disabled,
     /// Non-selectable section/header row.
     Header,
     /// Non-selectable blank spacer row.
@@ -1495,7 +1497,7 @@ pub(crate) fn item_selection_right_symbol_width(
 }
 
 pub(crate) fn item_uses_gutter(item: &ListItem, gutter_for_non_selectable: bool) -> bool {
-    item.is_selectable() || gutter_for_non_selectable
+    item.is_selectable() || matches!(item.role, ListItemRole::Disabled) || gutter_for_non_selectable
 }
 
 pub(crate) fn reserved_gutter_width_for_items(

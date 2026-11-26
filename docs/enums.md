@@ -1205,6 +1205,7 @@ How a `DragPreview::Element` tracks the pointer. The enum is exhaustive.
 | Variant | Description |
 |---------|-------------|
 | `ListItemRole::Normal` | Regular selectable row **(default)** |
+| `ListItemRole::Disabled` | Non-selectable disabled row keeping normal row padding and gutter alignment |
 | `ListItemRole::Header` | Non-selectable section header |
 | `ListItemRole::Spacer` | Non-selectable blank row |
 

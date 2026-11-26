@@ -127,3 +127,132 @@ fn right_clicking_tab_reports_hit_without_switching_tabs() {
     right(&mut backend, x, 0);
     assert_eq!(&*events.borrow(), &["menu Some(1)"]);
 }
+
+#[derive(Clone, Default)]
+struct CascadingMenu(Rc<RefCell<Vec<String>>>);
+
+impl Component for CascadingMenu {
+    type Properties = ();
+    type State = bool;
+    type Message = bool;
+
+    fn create_state(&self, _: &()) -> bool {
+        true
+    }
+
+    fn update(&mut self, open: bool, ctx: &mut Context<Self>) -> Update {
+        ctx.state = open;
+        Update::render()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        let log = self.0.clone();
+        ContextMenu::new(Text::new("Host"))
+            .open(ctx.state)
+            .anchor(Some((2, 2)))
+            .entries([
+                ContextMenuEntry::action("pin", "Pin thread"),
+                ContextMenuEntry::action("disabled", "Busy action").disabled(true),
+                ContextMenuEntry::separator(),
+                ContextMenuEntry::submenu(
+                    "copy",
+                    "Copy",
+                    [
+                        ContextMenuEntry::action("copy-path", "Path").detail("/repo"),
+                        ContextMenuEntry::action("copy-id", "Thread ID"),
+                    ],
+                ),
+                ContextMenuEntry::action("delete", "Delete").destructive(true),
+            ])
+            .on_action(Callback::new(move |id: std::sync::Arc<str>| {
+                log.borrow_mut().push(id.to_string());
+            }))
+            .on_close(ctx.link().callback(|_| false))
+            .into()
+    }
+}
+
+fn key(backend: &mut TestBackend<CascadingMenu>, code: KeyCode) {
+    backend
+        .send_key(KeyEvent {
+            code,
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.render();
+}
+
+#[test]
+fn cascading_context_menu_navigates_submenus_skips_disabled_and_closes_in_layers() {
+    let app = CascadingMenu::default();
+    let log = app.0.clone();
+    let mut backend = TestBackend::new(app);
+    backend.render();
+
+    // Down from "Pin thread" skips disabled "Busy action" and separator to land on "Copy".
+    key(&mut backend, KeyCode::Down);
+    key(&mut backend, KeyCode::Right);
+    let open_text = backend.capture_frame().plain_text();
+    assert!(
+        open_text.contains("Path") && open_text.contains("Thread ID"),
+        "submenu should open on Right:\n{open_text}"
+    );
+
+    // Esc inside a submenu closes only the submenu, keeping the root menu open.
+    key(&mut backend, KeyCode::Esc);
+    assert!(*backend.state(), "root menu stays open when submenu closes");
+    let closed_sub_text = backend.capture_frame().plain_text();
+    assert!(
+        !closed_sub_text.contains("Thread ID"),
+        "submenu should close on Esc:\n{closed_sub_text}"
+    );
+
+    // Reopen submenu with Enter, move to second item ("Thread ID"), and activate it.
+    key(&mut backend, KeyCode::Enter);
+    key(&mut backend, KeyCode::Down);
+    key(&mut backend, KeyCode::Enter);
+    assert_eq!(&*log.borrow(), &["copy-id"]);
+    assert!(!*backend.state(), "activating leaf action closes menu");
+}
+
+#[test]
+fn hovering_submenu_opens_and_clicking_outside_dismisses_entire_stack() {
+    let app = CascadingMenu::default();
+    let mut backend = TestBackend::new(app);
+    backend.render();
+
+    let text = backend.capture_frame().plain_text();
+    let (copy_x, copy_y) = text
+        .lines()
+        .enumerate()
+        .find_map(|(y, line)| line.find("Copy").map(|x| (x as u16 + 1, y as u16)))
+        .expect("Copy row should be visible");
+
+    backend
+        .send_mouse(MouseEvent {
+            x: copy_x,
+            y: copy_y,
+            kind: MouseKind::Moved,
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.render();
+
+    let after_hover = backend.capture_frame().plain_text();
+    assert!(
+        after_hover.contains("Thread ID"),
+        "hovering submenu row should open submenu:\n{after_hover}"
+    );
+
+    // Clicking outside both menus closes the entire menu stack in a single click.
+    backend
+        .send_mouse(MouseEvent {
+            x: 75,
+            y: 20,
+            kind: MouseKind::Down(MouseButton::Left),
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.render();
+    assert!(!*backend.state(), "outside click should close menu stack");
+}
