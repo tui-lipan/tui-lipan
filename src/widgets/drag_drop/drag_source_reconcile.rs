@@ -147,7 +147,7 @@ mod tests {
     use crate::TestBackend;
     use crate::app::interaction_state::ActiveDrag;
     use crate::core::event::{MouseButton, MouseEvent, MouseKind};
-    use crate::core::node::NodeId;
+    use crate::core::node::{NodeId, NodeKind};
     use crate::prelude::*;
     use crate::style::Rect;
 
@@ -252,6 +252,116 @@ mod tests {
         assert!(
             backend.core.tree.overlay_roots().is_empty(),
             "an open popover inside the preview must not become an overlay"
+        );
+    }
+
+    struct ClosingPreview;
+
+    enum ClosingMsg {
+        Close,
+    }
+
+    struct ClosingState {
+        open: bool,
+    }
+
+    impl Component for ClosingPreview {
+        type Message = ClosingMsg;
+        type Properties = ();
+        type State = ClosingState;
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            ClosingState { open: true }
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            match msg {
+                ClosingMsg::Close => ctx.state.open = false,
+            }
+            Update::render()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            let preview: Element = if ctx.state.open {
+                VStack::new()
+                    .child(
+                        Modal::new()
+                            .animation(VisibilityAnimation::new())
+                            .width(Length::Px(20))
+                            .height(Length::Px(3))
+                            .child(Text::new("modal-body"))
+                            .key("closing-modal"),
+                    )
+                    .into()
+            } else {
+                VStack::new()
+                    .child(Text::new("preview-rest").height(Length::Px(1)))
+                    .into()
+            };
+            DragSource::new()
+                .child(Text::new("source").height(Length::Px(1)))
+                .threshold(1)
+                .preview_element(preview)
+                .on_drag_start(|_| Some(Box::new(Payload) as Box<dyn DragPayload>))
+                .key("src")
+        }
+    }
+
+    #[test]
+    fn closing_animated_portal_inside_preview_is_not_an_overlay() {
+        let mut backend = TestBackend::new(ClosingPreview);
+        backend.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 10,
+        });
+        backend.render();
+        for (kind, x, y) in [
+            (MouseKind::Down(MouseButton::Left), 1, 0),
+            (MouseKind::Drag(MouseButton::Left), 4, 1),
+        ] {
+            backend
+                .send_mouse(MouseEvent {
+                    kind,
+                    x,
+                    y,
+                    mods: KeyMods::NONE,
+                })
+                .unwrap();
+            backend.render();
+        }
+
+        backend.dispatch(ClosingMsg::Close).unwrap();
+        backend.render();
+
+        let ActiveDrag::DragDrop(drag) = &backend.drag.active else {
+            panic!("drag should stay active while the preview modal closes");
+        };
+        let preview = backend
+            .core
+            .tree
+            .node(drag.source_id)
+            .kind
+            .drag_preview_child()
+            .expect("preview should stay mounted");
+        let closing = subtree(&backend.core.tree, preview).into_iter().any(|id| {
+            matches!(
+                &backend.core.tree.node(id).kind,
+                NodeKind::Portal(portal)
+                    if portal
+                        .animation
+                        .as_ref()
+                        .is_some_and(|animation| animation.is_closing())
+            )
+        });
+        assert!(
+            closing,
+            "the removed modal should be retained as a closing portal"
+        );
+        assert!(
+            backend.core.tree.overlay_roots().is_empty(),
+            "a closing portal inside the preview must not become an overlay"
         );
     }
 }
