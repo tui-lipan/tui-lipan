@@ -962,9 +962,26 @@ impl ComponentRegistry {
             id: segment_id(&key, index_in_parent),
         };
         path.push(seg);
-        if let Some(child) = source.child.take() {
-            let expanded = self.expand_single(host, parent, path, *child, epoch, viewport);
-            source.child = Some(Box::new(expanded));
+        let child = source.child.take().map(|child| *child);
+        let preview = source.preview_element.take().map(|preview| *preview);
+        let has_child = child.is_some();
+        let has_preview = preview.is_some();
+        if has_child || has_preview {
+            let mut slots = Vec::new();
+            if let Some(child) = child {
+                slots.push(child);
+            }
+            if let Some(preview) = preview {
+                slots.push(preview);
+            }
+            let expanded = self.expand_children(host, parent, path, slots, epoch, viewport);
+            let mut iter = expanded.into_iter();
+            if has_child {
+                source.child = iter.next().map(Box::new);
+            }
+            if has_preview {
+                source.preview_element = iter.next().map(Box::new);
+            }
         }
         path.pop();
         metadata.rebuild(key, pointer_focus, ElementKind::DragSource(source), layout)

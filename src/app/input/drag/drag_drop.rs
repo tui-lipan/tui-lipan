@@ -172,7 +172,8 @@ pub(crate) fn try_activate_drag_drop(
     }
 
     set_drag_source_dragging(tree, source_id, true);
-    let preview_snapshot_anchor = matches!(preview, crate::widgets::DragPreview::SourceSnapshot)
+    let preview_snapshot_anchor = preview
+        .uses_source_slot()
         .then(|| tree.node(source_id).rect);
     drag.active = ActiveDrag::DragDrop(DragDropDrag {
         payload,
@@ -181,7 +182,6 @@ pub(crate) fn try_activate_drag_drop(
         preview,
         on_cancel,
         hovered_target: None,
-        scroll_view_id: None,
         start_x,
         start_y,
         threshold,

@@ -188,8 +188,8 @@ pub use document_view::{
 pub use document_view::{MarkdownFormatter, MarkdownSpacing, SourceSpacing};
 pub use drag_drop::{
     DEFAULT_PREVIEW_MAX_HEIGHT, DEFAULT_PREVIEW_MAX_WIDTH, DragCancelEvent, DragLeaveEvent,
-    DragOverEvent, DragPayload, DragPreview, DragSlot, DragSlotAxis, DragSource, DragStartEvent,
-    DragStartedEvent, DropEvent, DropHighlight, DropSlot, DropTarget,
+    DragOverEvent, DragPayload, DragPreview, DragPreviewAnchor, DragSlot, DragSlotAxis, DragSource,
+    DragStartEvent, DragStartedEvent, DropEvent, DropHighlight, DropSlot, DropTarget,
 };
 pub use draggable_tab_bar::{
     DragReorderMode, DraggableTab, DraggableTabActionEvent, DraggableTabBar,
@@ -263,8 +263,8 @@ pub(crate) use scroll_view::node::{
 };
 pub(crate) use scroll_view::reconcile::scroll_child_height_depends_on_width;
 pub use scroll_view::{
-    ScrollBehavior, ScrollChildExitDirection, ScrollChildVisibility, ScrollClip,
-    ScrollDistanceConfig, ScrollEvent, ScrollExitedChild, ScrollKeymap, ScrollMetrics,
+    DragDropAutoscroll, ScrollBehavior, ScrollChildExitDirection, ScrollChildVisibility,
+    ScrollClip, ScrollDistanceConfig, ScrollEvent, ScrollExitedChild, ScrollKeymap, ScrollMetrics,
     ScrollRequest, ScrollTarget, ScrollView, ScrollViewportEvent, ScrollVisibleChild,
     ScrollWheelBehavior, ScrollWheelConfig,
 };

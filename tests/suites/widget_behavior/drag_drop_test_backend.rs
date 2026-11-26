@@ -6,7 +6,7 @@ use tui_lipan::TestBackend;
 use tui_lipan::core::event::{MouseButton, MouseKind};
 use tui_lipan::prelude::*;
 use tui_lipan::style::Rect;
-use tui_lipan::{DragCancelEvent, DragOverEvent, DragStartEvent, ScrollAxis};
+use tui_lipan::{DragCancelEvent, DragOverEvent, DragPreviewAnchor, DragStartEvent, ScrollAxis};
 
 #[derive(Clone, Debug)]
 struct ItemPayload {
@@ -580,6 +580,723 @@ fn symmetric_threshold_still_requires_three_cells_on_either_axis() {
         }
         assert_eq!(*backend.state(), expected, "movement to {x},{y}");
     }
+}
+
+struct LivePreviewApp;
+
+#[derive(Default)]
+struct LivePreviewState {
+    dragging: bool,
+    hovered_target: Option<&'static str>,
+    dropped_on: Option<&'static str>,
+}
+
+enum LivePreviewMsg {
+    Started,
+    Hover(Option<&'static str>),
+    Drop(&'static str),
+    Cancel,
+}
+
+impl Component for LivePreviewApp {
+    type Message = LivePreviewMsg;
+    type Properties = ();
+    type State = LivePreviewState;
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {
+        LivePreviewState::default()
+    }
+
+    fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+        match msg {
+            LivePreviewMsg::Started => ctx.state.dragging = true,
+            LivePreviewMsg::Hover(target) => ctx.state.hovered_target = target,
+            LivePreviewMsg::Drop(target) => {
+                ctx.state.dragging = false;
+                ctx.state.hovered_target = None;
+                ctx.state.dropped_on = Some(target);
+            }
+            LivePreviewMsg::Cancel => {
+                ctx.state.dragging = false;
+                ctx.state.hovered_target = None;
+            }
+        }
+        Update::full()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        let badge = ctx.state.hovered_target.unwrap_or("");
+        let preview = HStack::new()
+            .gap(1)
+            .height(Length::Px(1))
+            .child(Text::new("floating-card").width(Length::Auto))
+            .child(Text::new(badge).width(Length::Auto));
+
+        let source = DragSource::new()
+            .child(
+                Text::new("source-card 2m")
+                    .width(Length::Px(24))
+                    .height(Length::Px(1)),
+            )
+            .drag_group("g")
+            .threshold(1)
+            .preview_element(preview)
+            .on_drag_start(|_| Some(Box::new(ItemPayload { id: 1 }) as Box<dyn DragPayload>))
+            .on_drag_started(ctx.link().callback(|_| LivePreviewMsg::Started))
+            .on_drag_cancel(ctx.link().callback(|_| LivePreviewMsg::Cancel));
+
+        let zone_a = DropTarget::new()
+            .child(Text::new("zone-a").height(Length::Px(3)))
+            .accept_group("g")
+            .on_drag_over(ctx.link().callback(|_| LivePreviewMsg::Hover(Some("Pin"))))
+            .on_drag_leave(ctx.link().callback(|_| LivePreviewMsg::Hover(None)))
+            .on_drop(ctx.link().callback(|_| LivePreviewMsg::Drop("zone-a")));
+
+        let zone_b = DropTarget::new()
+            .child(Text::new("zone-b").height(Length::Px(3)))
+            .accept_group("g")
+            .on_drag_over(
+                ctx.link()
+                    .callback(|_| LivePreviewMsg::Hover(Some("Settle"))),
+            )
+            .on_drag_leave(ctx.link().callback(|_| LivePreviewMsg::Hover(None)))
+            .on_drop(ctx.link().callback(|_| LivePreviewMsg::Drop("zone-b")));
+
+        VStack::new()
+            .gap(0)
+            .child(Element::from(source).key("live-source"))
+            .child(zone_a)
+            .child(zone_b)
+            .into()
+    }
+}
+
+#[test]
+fn preview_element_renders_live_updates_at_cursor_and_does_not_block_drops() {
+    let mut backend = TestBackend::new(LivePreviewApp);
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 40,
+        h: 10,
+    });
+    backend.render();
+
+    let idle = backend.capture_frame().plain_text();
+    assert!(idle.contains("source-card 2m"), "idle frame:\n{idle}");
+    assert!(!idle.contains("floating-card"), "preview hidden when idle");
+
+    let send = |backend: &mut TestBackend<LivePreviewApp>, kind: MouseKind, x: u16, y: u16| {
+        backend
+            .send_mouse(MouseEvent {
+                kind,
+                x,
+                y,
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+        backend.render();
+    };
+
+    // Grab row 0 and drag over zone-a (rows 1..4).
+    send(&mut backend, MouseKind::Down(MouseButton::Left), 2, 0);
+    send(&mut backend, MouseKind::Drag(MouseButton::Left), 2, 2);
+    let over_a = backend.capture_frame().plain_text();
+    assert!(
+        over_a.contains("floating-card Pin"),
+        "live preview should render Pin badge over zone-a:\n{over_a}"
+    );
+    assert!(
+        !over_a.contains("source-card 2m"),
+        "source child should stay hidden while DragPreview::Element floats:\n{over_a}"
+    );
+
+    // Move over zone-b (rows 4..7): preview must update dynamically to Settle.
+    send(&mut backend, MouseKind::Drag(MouseButton::Left), 2, 5);
+    let over_b = backend.capture_frame().plain_text();
+    assert!(
+        over_b.contains("floating-card Settle"),
+        "live preview should update to Settle over zone-b:\n{over_b}"
+    );
+
+    // Release over zone-b: inert preview must never intercept the drop target.
+    send(&mut backend, MouseKind::Up(MouseButton::Left), 2, 5);
+    assert_eq!(backend.state().dropped_on, Some("zone-b"));
+    let after = backend.capture_frame().plain_text();
+    assert!(
+        !after.contains("floating-card"),
+        "preview should disappear after drop:\n{after}"
+    );
+}
+
+struct CollapsedTreeDragApp;
+
+impl Component for CollapsedTreeDragApp {
+    type Message = LivePreviewMsg;
+    type Properties = ();
+    type State = LivePreviewState;
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {
+        LivePreviewState::default()
+    }
+
+    fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+        match msg {
+            LivePreviewMsg::Started => ctx.state.dragging = true,
+            LivePreviewMsg::Hover(target) => ctx.state.hovered_target = target,
+            LivePreviewMsg::Drop(target) => {
+                ctx.state.dragging = false;
+                ctx.state.hovered_target = None;
+                ctx.state.dropped_on = Some(target);
+            }
+            LivePreviewMsg::Cancel => {
+                ctx.state.dragging = false;
+                ctx.state.hovered_target = None;
+            }
+        }
+        Update::full()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        let collapsed = ctx.state.hovered_target == Some("Pinned");
+        let badge = ctx.state.hovered_target.unwrap_or("");
+        let preview = HStack::new()
+            .gap(1)
+            .height(Length::Px(2))
+            .style(Style::new().bg(Color::Black))
+            .child(Text::new("floating-row").width(Length::Auto))
+            .child(Text::new(badge).width(Length::Auto));
+
+        let pinned_target = DropTarget::new()
+            .child(Text::new("Pinned-zone").height(Length::Px(2)))
+            .accept_group("g")
+            .on_drag_over(
+                ctx.link()
+                    .callback(|_| LivePreviewMsg::Hover(Some("Pinned"))),
+            )
+            .on_drag_leave(ctx.link().callback(|_| LivePreviewMsg::Hover(None)))
+            .on_drop(ctx.link().callback(|_| LivePreviewMsg::Drop("Pinned")));
+
+        let source = DragSource::new()
+            .child(
+                HStack::new()
+                    .width(Length::Flex(1))
+                    .height(Length::Px(2))
+                    .child(Text::new("source-row")),
+            )
+            .drag_group("g")
+            .threshold(1)
+            .preview_element(preview)
+            .on_drag_start(|_| Some(Box::new(ItemPayload { id: 2 }) as Box<dyn DragPayload>))
+            .on_drag_started(ctx.link().callback(|_| LivePreviewMsg::Started))
+            .on_drag_cancel(ctx.link().callback(|_| LivePreviewMsg::Cancel))
+            .key("tree-drag-src");
+
+        let nodes = vec![
+            TreeNode::new(ListItem::header("Pinned"))
+                .content(pinned_target)
+                .content_height(2)
+                .show_arrow(false)
+                .gap_before(0)
+                .key("pinned-zone"),
+            TreeNode::new(ListItem::new("source"))
+                .content(source)
+                .content_height(if collapsed { 0 } else { 2 })
+                .show_arrow(false)
+                .gap_before(0)
+                .key("source-node"),
+            TreeNode::new(ListItem::new("below"))
+                .content(Text::new("below-row").height(Length::Px(1)))
+                .content_height(1)
+                .show_arrow(false)
+                .gap_before(0)
+                .key("below-node"),
+        ];
+
+        Tree::forest(nodes).into()
+    }
+}
+
+#[test]
+fn collapsed_tree_node_keeps_drag_source_and_live_preview_alive() {
+    let mut backend = TestBackend::new(CollapsedTreeDragApp);
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 36,
+        h: 10,
+    });
+    backend.render();
+
+    let idle = backend.capture_frame().plain_text();
+    let idle_lines: Vec<&str> = idle.lines().collect();
+    let below_idle = idle_lines
+        .iter()
+        .position(|l| l.contains("below-row"))
+        .expect("below-row visible when idle");
+    assert_eq!(below_idle, 4, "idle frame:\n{idle}");
+
+    let send =
+        |backend: &mut TestBackend<CollapsedTreeDragApp>, kind: MouseKind, x: u16, y: u16| {
+            backend
+                .send_mouse(MouseEvent {
+                    kind,
+                    x,
+                    y,
+                    mods: KeyMods::NONE,
+                })
+                .unwrap();
+            backend.render();
+        };
+
+    // Grab source-row at y=2 and drag up onto Pinned-zone at y=0.
+    send(&mut backend, MouseKind::Down(MouseButton::Left), 2, 2);
+    send(&mut backend, MouseKind::Drag(MouseButton::Left), 2, 0);
+
+    let dragging = backend.capture_frame().plain_text();
+    let drag_lines: Vec<&str> = dragging.lines().collect();
+    assert!(
+        dragging.contains("floating-row Pinned"),
+        "collapsed tree row must keep live preview alive at full width:\n{dragging}"
+    );
+    let below_drag = drag_lines
+        .iter()
+        .position(|l| l.contains("below-row"))
+        .expect("below-row shifts up when source collapses to 0");
+    assert_eq!(
+        below_drag, 2,
+        "below-row should collapse up from row 4 to row 2:\n{dragging}"
+    );
+
+    send(&mut backend, MouseKind::Up(MouseButton::Left), 2, 0);
+    assert_eq!(backend.state().dropped_on, Some("Pinned"));
+}
+
+struct RailAndContextApp;
+
+impl Component for RailAndContextApp {
+    type Message = LivePreviewMsg;
+    type Properties = ();
+    type State = LivePreviewState;
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {
+        LivePreviewState::default()
+    }
+
+    fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+        match msg {
+            LivePreviewMsg::Started => ctx.state.dragging = true,
+            LivePreviewMsg::Hover(target) => ctx.state.hovered_target = target,
+            LivePreviewMsg::Drop(target) => {
+                ctx.state.dragging = false;
+                ctx.state.hovered_target = None;
+                ctx.state.dropped_on = Some(target);
+            }
+            LivePreviewMsg::Cancel => {
+                ctx.state.dragging = false;
+                ctx.state.hovered_target = None;
+            }
+        }
+        Update::full()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        let over_main = ctx.state.hovered_target == Some("main");
+        let preview: Element = if over_main {
+            Text::new("chip-preview")
+                .width(Length::Auto)
+                .height(Length::Px(1))
+                .style(Style::new().bg(Color::Blue))
+                .into()
+        } else {
+            Text::new("rail-preview")
+                .width(Length::Flex(1))
+                .height(Length::Px(1))
+                .style(Style::new().bg(Color::DarkGray))
+                .into()
+        };
+
+        let source = DragSource::new()
+            .child(
+                Text::new("source-item")
+                    .width(Length::Flex(1))
+                    .height(Length::Px(1)),
+            )
+            .drag_group("g")
+            .threshold(1)
+            .preview_element(preview)
+            .preview_anchor(if over_main {
+                DragPreviewAnchor::CursorOffset(1, 0)
+            } else {
+                DragPreviewAnchor::VerticalRail
+            })
+            .hide_source_while_dragging(!over_main)
+            .on_drag_start(|_| Some(Box::new(ItemPayload { id: 3 }) as Box<dyn DragPayload>))
+            .on_drag_started(ctx.link().callback(|_| LivePreviewMsg::Started))
+            .on_drag_cancel(ctx.link().callback(|_| LivePreviewMsg::Cancel))
+            .key("rail-src");
+
+        let rail = DropTarget::new()
+            .child(
+                VStack::new()
+                    .width(Length::Px(16))
+                    .height(Length::Flex(1))
+                    .child(source)
+                    .child(Spacer::new()),
+            )
+            .accept_group("g")
+            .on_drag_over(ctx.link().callback(|_| LivePreviewMsg::Hover(Some("rail"))));
+
+        let main = DropTarget::new()
+            .child(
+                VStack::new()
+                    .width(Length::Flex(1))
+                    .height(Length::Flex(1))
+                    .child(Text::new("main-pane")),
+            )
+            .accept_group("g")
+            .on_drag_over(ctx.link().callback(|_| LivePreviewMsg::Hover(Some("main"))))
+            .on_drop(ctx.link().callback(|_| LivePreviewMsg::Drop("main")));
+
+        HStack::new().gap(0).child(rail).child(main).into()
+    }
+}
+
+#[test]
+fn preview_anchor_locks_vertical_rail_then_switches_to_cursor_chip_with_visible_source() {
+    let mut backend = TestBackend::new(RailAndContextApp);
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 44,
+        h: 8,
+    });
+    backend.render();
+
+    let send = |backend: &mut TestBackend<RailAndContextApp>, kind: MouseKind, x: u16, y: u16| {
+        backend
+            .send_mouse(MouseEvent {
+                kind,
+                x,
+                y,
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+        backend.render();
+    };
+
+    // Grab at x=2, y=0 and drag diagonally within the rail to x=10, y=3:
+    // VerticalRail must keep rail-preview locked at column 0 (not column 8!).
+    send(&mut backend, MouseKind::Down(MouseButton::Left), 2, 0);
+    send(&mut backend, MouseKind::Drag(MouseButton::Left), 10, 3);
+    let in_rail = backend.capture_frame().plain_text();
+    let row3 = in_rail.lines().nth(3).unwrap_or("");
+    assert!(
+        row3.starts_with("rail-preview"),
+        "VerticalRail should lock X to column 0 even when mouse drifted to x=10:\n{in_rail}"
+    );
+    assert!(
+        !in_rail.contains("source-item"),
+        "source should stay hidden while hide_source_while_dragging(true):\n{in_rail}"
+    );
+
+    // Move right into main-pane (x=24, y=4):
+    // preview switches to CursorOffset(1, 0) at x=25, y=4, and source-item reappears!
+    send(&mut backend, MouseKind::Drag(MouseButton::Left), 24, 4);
+    let in_main = backend.capture_frame().plain_text();
+    assert!(
+        in_main.contains("source-item"),
+        "source should remain visible when hide_source_while_dragging(false):\n{in_main}"
+    );
+    let row4 = in_main.lines().nth(4).unwrap_or("");
+    let chip_col = row4
+        .find("chip-preview")
+        .unwrap_or_else(|| panic!("expected chip-preview on row 4:\n{in_main}"));
+    assert_eq!(
+        chip_col, 25,
+        "CursorOffset(1, 0) from x=24 should start at col 25"
+    );
+
+    send(&mut backend, MouseKind::Up(MouseButton::Left), 24, 4);
+    assert_eq!(backend.state().dropped_on, Some("main"));
+}
+
+struct PreviewOverTableApp;
+
+impl Component for PreviewOverTableApp {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        let preview = Frame::new()
+            .border(true)
+            .border_style(BorderStyle::Rounded)
+            .padding((0, 1))
+            .style(
+                Style::new()
+                    .fg(Color::White)
+                    .bg(Color::Rgb(0x11, 0x11, 0x11)),
+            )
+            .width(Length::Auto)
+            .height(Length::Px(3))
+            .child(
+                Text::new("Print Markdown Test Text")
+                    .style(
+                        Style::new()
+                            .fg(Color::White)
+                            .bg(Color::Rgb(0x11, 0x11, 0x11)),
+                    )
+                    .width(Length::Auto)
+                    .height(Length::Px(1)),
+            );
+
+        let source = DragSource::new()
+            .child(
+                Text::new("drag-me")
+                    .width(Length::Px(10))
+                    .height(Length::Px(1)),
+            )
+            .drag_group("g")
+            .threshold(1)
+            .preview_element(preview)
+            .preview_anchor(DragPreviewAnchor::CursorOffset(1, 0))
+            .on_drag_start(|_| Some(Box::new(ItemPayload { id: 1 }) as Box<dyn DragPayload>));
+
+        let table = Table::new()
+            .border(true)
+            .border_style(BorderStyle::Rounded)
+            .header(["Widget", "Module", "Default size"])
+            .rows([
+                vec!["Button", "src/widgets/", "content"],
+                vec!["ScrollView", "src/widgets/", "Flex(1)"],
+                vec!["Text", "src/widgets/", "Auto"],
+            ]);
+
+        HStack::new()
+            .gap(0)
+            .child(VStack::new().width(Length::Px(12)).child(source))
+            .child(table)
+            .into()
+    }
+}
+
+#[test]
+fn preview_element_clears_underlying_table_cells_without_bleed_through() {
+    let mut backend = TestBackend::new(PreviewOverTableApp);
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 60,
+        h: 10,
+    });
+    backend.render();
+
+    let send = |backend: &mut TestBackend<PreviewOverTableApp>, kind: MouseKind, x: u16, y: u16| {
+        backend
+            .send_mouse(MouseEvent {
+                kind,
+                x,
+                y,
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+        backend.render();
+    };
+
+    // Drag over the table header + first data row so the 3-row bordered preview covers them.
+    send(&mut backend, MouseKind::Down(MouseButton::Left), 2, 0);
+    send(&mut backend, MouseKind::Drag(MouseButton::Left), 13, 1);
+
+    let frame = backend.capture_frame().plain_text();
+    let lines: Vec<&str> = frame.lines().collect();
+    // Preview starts at x=14 (CursorOffset(1, 0) from x=13), y=1, height=3 -> rows 1..=3.
+    let preview_top = lines[1];
+    let preview_mid = lines[2];
+    let preview_bot = lines[3];
+
+    assert!(
+        preview_mid.contains("Print Markdown Test Text"),
+        "expected floating preview label on row 2:\n{frame}"
+    );
+    for (label, row) in [
+        ("top border row", preview_top),
+        ("middle content row", preview_mid),
+        ("bottom border row", preview_bot),
+    ] {
+        assert!(
+            !row.contains("Widget") && !row.contains("Module") && !row.contains("Button"),
+            "underlying table text bled through {label}:\n{frame}"
+        );
+    }
+}
+
+struct PreviewChip;
+
+struct PreviewChipState {
+    label: &'static str,
+}
+
+impl Component for PreviewChip {
+    type Message = ();
+    type Properties = ();
+    type State = PreviewChipState;
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {
+        PreviewChipState {
+            label: "stateful-chip",
+        }
+    }
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        Text::new(ctx.state.label)
+            .width(Length::Auto)
+            .height(Length::Px(1))
+            .into()
+    }
+}
+
+fn source_with_chip(hide_source: bool) -> Element {
+    DragSource::new()
+        .child(
+            Text::new("keep-source")
+                .width(Length::Px(12))
+                .height(Length::Px(1)),
+        )
+        .threshold(1)
+        .preview_element(child(|| PreviewChip, ()))
+        .preview_anchor(DragPreviewAnchor::CursorOffset(16, 0))
+        .hide_source_while_dragging(hide_source)
+        .on_drag_start(|_| Some(Box::new(ItemPayload { id: 9 }) as Box<dyn DragPayload>))
+        .key("chip-src")
+}
+
+fn drag_chip_source<C: Component>(backend: &mut TestBackend<C>) {
+    let send = |backend: &mut TestBackend<C>, kind: MouseKind, x: u16, y: u16| {
+        backend
+            .send_mouse(MouseEvent {
+                kind,
+                x,
+                y,
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+        backend.render();
+    };
+    send(backend, MouseKind::Down(MouseButton::Left), 1, 0);
+    send(backend, MouseKind::Drag(MouseButton::Left), 3, 0);
+}
+
+struct VisibleChipSourceApp;
+
+impl Component for VisibleChipSourceApp {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        VStack::new()
+            .gap(0)
+            .child(source_with_chip(false))
+            .child(Text::new("below-row").height(Length::Px(1)))
+            .into()
+    }
+}
+
+#[test]
+fn element_preview_expands_stateful_component_and_keeps_visible_source() {
+    let mut backend = TestBackend::new(VisibleChipSourceApp);
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 40,
+        h: 6,
+    });
+    backend.render();
+
+    drag_chip_source(&mut backend);
+
+    let frame = backend.capture_frame().plain_text();
+    let lines: Vec<&str> = frame.lines().collect();
+    assert!(
+        lines[0].contains("keep-source"),
+        "visible source must keep its row:\n{frame}"
+    );
+    assert!(
+        lines[1].contains("below-row"),
+        "sibling must stay below a visible source:\n{frame}"
+    );
+    assert!(
+        frame.contains("stateful-chip"),
+        "stateful preview component must render:\n{frame}"
+    );
+}
+
+struct CollapsedChipSourceApp;
+
+impl Component for CollapsedChipSourceApp {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        VStack::new()
+            .gap(0)
+            .child(source_with_chip(true))
+            .child(Text::new("below-row").height(Length::Px(1)))
+            .into()
+    }
+}
+
+#[test]
+fn element_preview_collapses_hidden_source_in_test_backend() {
+    let mut backend = TestBackend::new(CollapsedChipSourceApp);
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 40,
+        h: 6,
+    });
+    backend.render();
+
+    drag_chip_source(&mut backend);
+
+    let frame = backend.capture_frame().plain_text();
+    let lines: Vec<&str> = frame.lines().collect();
+    assert!(
+        lines[0].contains("below-row"),
+        "hidden source must collapse so the sibling moves up:\n{frame}"
+    );
+    assert!(
+        !frame.contains("keep-source"),
+        "hidden source must not remain painted:\n{frame}"
+    );
+    assert!(
+        frame.contains("stateful-chip"),
+        "stateful preview component must render:\n{frame}"
+    );
 }
 
 struct CenteredDropTargetApp;

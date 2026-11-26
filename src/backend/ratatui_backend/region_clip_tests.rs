@@ -60,6 +60,8 @@ fn interaction() -> CaptureInteraction<'static> {
         mouse_pos: None,
         vim_mode: None,
         copy_feedback: None,
+        drag_preview_node: None,
+        drag_preview_grab_offset: None,
     }
 }
 

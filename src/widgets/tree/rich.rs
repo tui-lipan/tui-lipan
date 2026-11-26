@@ -218,6 +218,22 @@ impl RowParts {
             .map(|content| content.element())
             .unwrap_or_else(|| text_row(row.item));
         let height = row.item.line_count().min(u16::MAX as usize) as u16;
+        if height == 0 {
+            // A collapsed row draws nothing, but keeps its content mounted at the row's width.
+            let mut row = HStack::new().gap(0).height(Length::Px(0));
+            if let Some(leading) = &self.leading {
+                row = row.child(leading.element());
+            }
+            return row
+                .child(
+                    VStack::new()
+                        .gap(0)
+                        .width(Length::Px(0))
+                        .height(Length::Px(0)),
+                )
+                .child(content)
+                .into();
+        }
         let (style, hovered) = (row.style, row.hovered);
         let prefix = &self.prefix;
         let blank =

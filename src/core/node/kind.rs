@@ -706,6 +706,13 @@ impl NodeKind {
         }
     }
 
+    pub(crate) fn drag_preview_child(&self) -> Option<crate::core::node::NodeId> {
+        match self {
+            Self::DragSource(source) => source.preview_child,
+            _ => None,
+        }
+    }
+
     pub(crate) fn is_animating(&self) -> bool {
         match self {
             Self::Animated(animated) => animated.is_animating(),

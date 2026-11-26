@@ -1141,7 +1141,6 @@ fn handle_drag_drop_move_test_backend<C: Component>(
 
     backend.drag.active = ActiveDrag::DragDrop(crate::app::input::drag::DragDropDrag {
         hovered_target: new_hover,
-        scroll_view_id: None,
         ..drag_state
     });
     dirty

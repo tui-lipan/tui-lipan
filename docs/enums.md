@@ -1141,6 +1141,30 @@ style directly.
 | `DragReorderMode::Live` | Emit reorder events as the drag crosses tab boundaries **(default)** |
 | `DragReorderMode::OnDrop` | Preview the reordered tabs in the bar while dragging and emit one reorder event when the mouse is released |
 
+### `DragPreview`
+
+Visual shown near the pointer during a `DragSource` drag. The enum is exhaustive: a `match` must handle every variant, including `Element`.
+
+| Variant | Description |
+|---------|-------------|
+| `DragPreview::Label(text)` | Text near the pointer |
+| `DragPreview::SourceSnapshot` | Copy of the source cells, floating near the pointer. While `hide_source_while_dragging` is `true`, the source slot follows `drag_slot` |
+| `DragPreview::Element` | Live element from `DragSource::preview_element`, reconciled every frame. Positioned with `DragPreviewAnchor` |
+| `DragPreview::None` | No floating preview **(default)** |
+
+Migration: a `match` written before `Element` existed needs a `DragPreview::Element` arm (or a wildcard). Prefer `DragSource::preview_element`, `preview_label`, `preview_snapshot`, and `no_preview` when constructing a preview.
+
+### `DragPreviewAnchor`
+
+How a `DragPreview::Element` tracks the pointer. The enum is exhaustive.
+
+| Variant | Description |
+|---------|-------------|
+| `DragPreviewAnchor::Free` | Follow the pointer using the grab offset **(default)** |
+| `DragPreviewAnchor::VerticalRail` | Lock X to the source column and follow pointer Y |
+| `DragPreviewAnchor::HorizontalRail` | Lock Y to the source row and follow pointer X |
+| `DragPreviewAnchor::CursorOffset(dx, dy)` | Place the preview at `(mouse_x + dx, mouse_y + dy)` |
+
 ### `ButtonVariant`
 
 | Variant | Rendered as | Constructor shortcut |

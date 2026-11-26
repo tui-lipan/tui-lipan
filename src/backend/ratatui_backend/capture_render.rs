@@ -40,6 +40,9 @@ pub(crate) struct CaptureInteraction<'a> {
     pub vim_mode: Option<TextAreaVimMode>,
     /// Copy highlights in flight, so a capture shows them as the next frame would.
     pub copy_feedback: Option<&'a crate::app::copy_feedback::CopyFeedbackState>,
+    /// Active live drag preview subtree, when dragging a `DragPreview::Element` source.
+    pub drag_preview_node: Option<NodeId>,
+    pub drag_preview_grab_offset: Option<(u16, u16)>,
 }
 
 /// A headless render, kept as the renderer left it.
@@ -89,6 +92,8 @@ fn render_headless(
         hovered,
         mouse_pos,
         copy_feedback,
+        drag_preview_node,
+        drag_preview_grab_offset,
         ..
     } = interaction;
     let join_index = build_join_index(tree);
@@ -114,12 +119,13 @@ fn render_headless(
         cursor_position: &cursor_position,
         terminal_bg: None,
         drag_preview_label: None,
-        drag_preview_at_mouse: false,
+        drag_preview_at_mouse: drag_preview_node.is_some(),
         drag_preview_snapshot_rect: None,
+        drag_preview_node,
         dnd_snapshot_cells: &dnd_snapshot_cells,
         drag_preview_max_width: None,
         drag_preview_max_height: None,
-        drag_preview_grab_offset: None,
+        drag_preview_grab_offset,
         drop_slot_source_preview_rect: None,
         paint_glyph_caches: None,
         copy_feedback,

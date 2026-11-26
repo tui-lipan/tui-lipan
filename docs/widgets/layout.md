@@ -380,6 +380,7 @@ Scrollable container with optional scrollbar.
 | `scroll_wheel` | `bool` | Enable mouse wheel scrolling |
 | `scroll_wheel_multiplier` | `u16` | Override the app-wide wheel line multiplier for this ScrollView |
 | `scroll_wheel_behavior` | `ScrollWheelBehavior` | `Immediate` by default; opt into inertial wheel movement |
+| `drag_drop_autoscroll` | `DragDropAutoscroll` | Edge autoscroll policy during active drag-and-drop gestures: `Auto` (default; only scroll when the active `DragSource` or currently hovered compatible `DropTarget` lives inside this view), `Enabled`, or `Disabled`. Text-selection drag autoscroll is unaffected |
 | `smooth_wheel_scroll` | `bool` | Convenience toggle for default inertial wheel physics |
 | `scroll_acceleration` | `f32` | Convenience setter that enables smooth wheel scrolling and changes the wheel impulse |
 | `ambient_page_scroll` | `bool` | Opt this ScrollView into PageUp/PageDown fallback routing when no focused handler or `on_key` scope handles the key |

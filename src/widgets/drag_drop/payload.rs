@@ -133,9 +133,32 @@ pub enum DragPreview {
     Label(Arc<str>),
     /// Render a snapshot of the drag source's cells near the pointer while dragging.
     SourceSnapshot,
+    /// Render a live floating element supplied via [`crate::widgets::DragSource::preview_element`].
+    Element,
     /// Do not render a drag preview.
     #[default]
     None,
+}
+
+impl DragPreview {
+    /// Whether this preview floats the source representation and supports source-slot hiding/collapse.
+    pub(crate) const fn uses_source_slot(&self) -> bool {
+        matches!(self, Self::SourceSnapshot | Self::Element)
+    }
+}
+
+/// Positioning mode for a floating [`DragPreview::Element`] while dragging.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum DragPreviewAnchor {
+    /// Follow both X and Y of the pointer using the initial grab offset (default).
+    #[default]
+    Free,
+    /// Lock X to the drag source's column and follow pointer Y with the initial grab offset.
+    VerticalRail,
+    /// Lock Y to the drag source's row and follow pointer X with the initial grab offset.
+    HorizontalRail,
+    /// Position relative to the pointer cursor `(mouse_x + dx, mouse_y + dy)`.
+    CursorOffset(i16, i16),
 }
 
 /// Suggested maximum width (cells) when capping a [`DragPreview::SourceSnapshot`] float preview.
@@ -160,10 +183,12 @@ pub enum DragSlotAxis {
     Horizontal,
 }
 
-/// Main-axis space reserved at the [`crate::widgets::DragSource`] while dragging (when using
-/// [`DragPreview::SourceSnapshot`]).
+/// Main-axis space reserved at the [`crate::widgets::DragSource`] while dragging with
+/// [`DragPreview::SourceSnapshot`] or [`DragPreview::Element`], and only while
+/// [`crate::widgets::DragSource::hide_source_while_dragging`] is `true`.
 ///
-/// In `VStack` / `HStack`, [`DragSlot::Specified`] uses the same main-axis rules as stack children.
+/// A source that stays visible keeps its normal size. In `VStack` / `HStack`,
+/// [`DragSlot::Specified`] uses the same main-axis rules as stack children.
 /// [`DragSlot::Collapse`] is **0 cells** on the stack main axis.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum DragSlot {

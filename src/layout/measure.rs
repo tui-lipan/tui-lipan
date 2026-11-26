@@ -134,12 +134,14 @@ fn element_has_split_wrap_measure_state(_el: &Element) -> bool {
     false
 }
 
-/// SourceSnapshot drag sources must skip the per-element measure cache when a
-/// collapse hint is active, because the cached (non-collapsed) size would be
-/// returned before `measure_drag_source` has a chance to check the hint.
+/// Hidden source-slot drags must skip the per-element measure cache when a
+/// collapse hint is active, because the cached size would be returned before
+/// `measure_drag_source` has a chance to check the hint. A source that stays
+/// visible does not change size, so its cache remains valid.
 fn drag_source_should_skip_measure_cache(el: &Element) -> bool {
     if let ElementKind::DragSource(source) = &el.kind {
-        matches!(source.preview, crate::widgets::DragPreview::SourceSnapshot)
+        source.preview.uses_source_slot()
+            && source.hide_source_while_dragging
             && super::drag_source_layout_hint::drag_source_snapshot_collapse_key().is_some()
     } else {
         false

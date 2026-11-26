@@ -150,7 +150,8 @@ fn current_image_measure_epoch() -> u64 {
 
 fn is_drag_source_with_active_collapse(el: &Element) -> bool {
     if let ElementKind::DragSource(source) = &el.kind {
-        matches!(source.preview, crate::widgets::DragPreview::SourceSnapshot)
+        source.preview.uses_source_slot()
+            && source.hide_source_while_dragging
             && super::drag_source_layout_hint::drag_source_snapshot_collapse_key().is_some()
     } else {
         false

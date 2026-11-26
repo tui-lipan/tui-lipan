@@ -7,8 +7,8 @@ use crate::layout::hash::LayoutHash;
 use crate::style::{Length, Style, StyleSlot};
 
 use super::payload::{
-    DragCancelEvent, DragPayload, DragPreview, DragSlot, DragSlotAxis, DragStartEvent,
-    DragStartedEvent,
+    DragCancelEvent, DragPayload, DragPreview, DragPreviewAnchor, DragSlot, DragSlotAxis,
+    DragStartEvent, DragStartedEvent,
 };
 
 /// Callback used to start a drag and produce its payload.
@@ -24,6 +24,9 @@ pub struct DragSource {
     pub(crate) on_drag_started: Option<crate::callback::Callback<DragStartedEvent>>,
     pub(crate) drag_group: Option<Arc<str>>,
     pub(crate) preview: DragPreview,
+    pub(crate) preview_element: Option<Box<Element>>,
+    pub(crate) preview_anchor: DragPreviewAnchor,
+    pub(crate) hide_source_while_dragging: bool,
     pub(crate) dragging_style: StyleSlot,
     pub(crate) drag_slot: DragSlot,
     pub(crate) drag_slot_axis: DragSlotAxis,
@@ -42,6 +45,9 @@ impl Default for DragSource {
             on_drag_started: None,
             drag_group: None,
             preview: DragPreview::None,
+            preview_element: None,
+            preview_anchor: DragPreviewAnchor::Free,
+            hide_source_while_dragging: true,
             dragging_style: StyleSlot::Inherit,
             drag_slot: DragSlot::Collapse,
             drag_slot_axis: DragSlotAxis::default(),
@@ -113,12 +119,44 @@ impl DragSource {
     /// Render a snapshot of the drag source's cells near the cursor as a drag preview.
     pub fn preview_snapshot(mut self) -> Self {
         self.preview = DragPreview::SourceSnapshot;
+        self.preview_element = None;
+        self
+    }
+
+    /// Render a live floating element near the pointer while dragging.
+    ///
+    /// Unlike [`Self::preview_snapshot`], the element reconciles on every render so the floating
+    /// preview can update dynamically (for example, showing a badge for the hovered drop target).
+    pub fn preview_element(mut self, element: impl Into<Element>) -> Self {
+        self.preview = DragPreview::Element;
+        self.preview_element = Some(Box::new(element.into()));
+        self
+    }
+
+    /// Control how a floating [`DragPreview::Element`] tracks the pointer.
+    ///
+    /// Can change dynamically while dragging (for example, switching from
+    /// [`DragPreviewAnchor::VerticalRail`] inside a sidebar to
+    /// [`DragPreviewAnchor::CursorOffset`] when dragged out to another pane).
+    pub fn preview_anchor(mut self, anchor: DragPreviewAnchor) -> Self {
+        self.preview_anchor = anchor;
+        self
+    }
+
+    /// Whether the wrapped child is hidden in place while this drag source is actively dragging
+    /// with [`DragPreview::SourceSnapshot`] or [`DragPreview::Element`]. Default `true`.
+    ///
+    /// When `false`, the source keeps its normal layout size and stays painted. [`DragSlot`]
+    /// applies only while the source is hidden.
+    pub fn hide_source_while_dragging(mut self, hide: bool) -> Self {
+        self.hide_source_while_dragging = hide;
         self
     }
 
     /// Disable preview rendering.
     pub fn no_preview(mut self) -> Self {
         self.preview = DragPreview::None;
+        self.preview_element = None;
         self
     }
 
@@ -231,16 +269,22 @@ impl LayoutHash for DragSource {
         self.on_drag_started.is_some().hash(hasher);
         self.drag_group.hash(hasher);
         self.preview.hash(hasher);
+        self.preview_anchor.hash(hasher);
+        self.hide_source_while_dragging.hash(hasher);
         self.dragging_style.hash(hasher);
         self.drag_slot.hash(hasher);
         self.drag_slot_axis.hash(hasher);
         self.preview_max_width.hash(hasher);
         self.preview_max_height.hash(hasher);
         self.threshold.hash(hasher);
-        // Include the collapse hint so the global measure cache invalidates
-        // when a SourceSnapshot drag starts or ends.
-        if matches!(self.preview, DragPreview::SourceSnapshot) {
+        // Include the collapse hint so the measure cache invalidates when a
+        // hidden source-slot drag starts or ends. A visible source does not
+        // change size, so the hint is not part of its hash.
+        if self.preview.uses_source_slot() && self.hide_source_while_dragging {
             drag_source_snapshot_collapse_key().hash(hasher);
+        }
+        if let Some(preview_el) = self.preview_element.as_deref() {
+            recurse(preview_el)?.hash(hasher);
         }
         if let Some(child) = self.child.as_ref() {
             recurse(child.as_ref())?.hash(hasher);

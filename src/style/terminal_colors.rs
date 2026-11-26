@@ -251,7 +251,7 @@ static HOST_GRAPHICS_OK: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec:
 ///
 /// [`HostCapabilities::graphics_query_ok`] says only that *some* query was; a probe that asks
 /// about two transmission media at once needs to know which.
-#[cfg(unix)]
+#[cfg(all(unix, feature = "terminal-images"))]
 pub(crate) fn host_answered_graphics_query(id: u32) -> bool {
     HOST_GRAPHICS_OK
         .lock()
@@ -260,7 +260,7 @@ pub(crate) fn host_answered_graphics_query(id: u32) -> bool {
 }
 
 /// No startup probe runs outside Unix, so no query was answered.
-#[cfg(not(unix))]
+#[cfg(all(not(unix), feature = "terminal-images"))]
 pub(crate) fn host_answered_graphics_query(_id: u32) -> bool {
     false
 }

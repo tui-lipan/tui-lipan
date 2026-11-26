@@ -111,6 +111,8 @@ pub(crate) struct RenderContext<'a> {
     /// Source widget rect for a `DragPreview::SourceSnapshot` drag preview.
     /// When set, the cells at this rect are copied near the cursor after rendering.
     pub drag_preview_snapshot_rect: Option<ratatui::layout::Rect>,
+    /// Live preview subtree for a `DragPreview::Element` drag preview, rendered at the cursor.
+    pub drag_preview_node: Option<NodeId>,
     /// Filled on the first paint after the drag source is fully rendered; used when the
     /// source subtree is collapsed while the float preview still shows the card.
     pub dnd_snapshot_cells: &'a RefCell<Option<(u16, u16, Vec<ratatui::buffer::Cell>)>>,
@@ -446,6 +448,59 @@ pub(crate) fn render(f: &mut ratatui::Frame<'_>, ctx: &RenderContext<'_>) {
         } else if let Some((mx, my)) = ctx.mouse_pos {
             render_drag_snapshot_preview(&mut state, ctx, src_rect, mx, my);
         }
+    }
+
+    if let (Some(preview_node), Some((mx, my))) = (ctx.drag_preview_node, ctx.mouse_pos)
+        && tree.is_valid(preview_node)
+    {
+        let (anchor, source_rect) = tree
+            .node(preview_node)
+            .parent
+            .filter(|&pid| tree.is_valid(pid))
+            .and_then(|pid| {
+                let parent = tree.node(pid);
+                match &parent.kind {
+                    NodeKind::DragSource(source) => Some((source.preview_anchor, parent.rect)),
+                    _ => None,
+                }
+            })
+            .unwrap_or((
+                crate::widgets::DragPreviewAnchor::Free,
+                crate::style::Rect::default(),
+            ));
+        let (gx, gy) = ctx.drag_preview_grab_offset.unwrap_or((0, 0));
+        let (ox, oy) = match anchor {
+            crate::widgets::DragPreviewAnchor::Free => {
+                drag_snapshot_preview_origin(mx, my, (gx, gy), ctx.drag_preview_at_mouse)
+            }
+            crate::widgets::DragPreviewAnchor::VerticalRail => (
+                i32::from(source_rect.x),
+                i32::from(my).saturating_sub(i32::from(gy)),
+            ),
+            crate::widgets::DragPreviewAnchor::HorizontalRail => (
+                i32::from(mx).saturating_sub(i32::from(gx)),
+                i32::from(source_rect.y),
+            ),
+            crate::widgets::DragPreviewAnchor::CursorOffset(dx, dy) => (
+                i32::from(mx).saturating_add(i32::from(dx)),
+                i32::from(my).saturating_add(i32::from(dy)),
+            ),
+        };
+        let offset = RenderOffset::from_cells(
+            ox.saturating_sub(i32::from(state.content.x)),
+            oy.saturating_sub(i32::from(state.content.y)),
+        );
+        // Clear the preview's screen rectangle before painting its subtree so underlying
+        // glyphs, modifiers, and box-drawing seams (e.g. markdown tables) cannot bleed through
+        // or trigger border-merge title preservation on the floating preview.
+        let mut preview_screen_rect = offset.apply_to_rect(tree.node(preview_node).rect);
+        preview_screen_rect.x = preview_screen_rect.x.saturating_add(state.content.x as i16);
+        preview_screen_rect.y = preview_screen_rect.y.saturating_add(state.content.y as i16);
+        let clear_rect = clip_overlay_clear_rect(content_rect, preview_screen_rect);
+        if clear_rect.width > 0 && clear_rect.height > 0 {
+            state.f.render_widget(Clear, clear_rect);
+        }
+        render_subtree(&mut state, preview_node, Some(content_rect), offset);
     }
 
     // The synthetic extra root hosts framework chrome such as DevTools. Render it
@@ -950,7 +1005,10 @@ fn render_subtree(
                     stack.push(RenderStackItem::MouseRegionPost(id, node_clip, node_offset));
                 }
                 for &child in node.children.iter().rev() {
-                    if tree.is_valid(child) && node.kind.root_portal_content() != Some(child) {
+                    if tree.is_valid(child)
+                        && node.kind.root_portal_content() != Some(child)
+                        && node.kind.drag_preview_child() != Some(child)
+                    {
                         stack.push(RenderStackItem::Node(child, child_clip, node_offset));
                     }
                 }
@@ -1787,11 +1845,12 @@ fn render_node(
                 ThemeRole::DragSource,
                 &source.dragging_style,
             );
-            if source.is_dragging
-                && matches!(source.preview, crate::widgets::DragPreview::SourceSnapshot)
-            {
+            if source.is_dragging && source.preview.uses_source_slot() {
                 let reserve_strip = !matches!(source.drag_slot, DragSlot::Collapse);
-                if state.ctx.dnd_snapshot_cells.borrow().is_some() {
+                let hide_source = source.hide_source_while_dragging
+                    && (matches!(source.preview, crate::widgets::DragPreview::Element)
+                        || state.ctx.dnd_snapshot_cells.borrow().is_some());
+                if hide_source {
                     if reserve_strip
                         && !dragging_style.is_empty()
                         && rrect.width > 0
@@ -2129,12 +2188,13 @@ fn terminal_layer_paint_order(tree: &NodeTree) -> impl Iterator<Item = &crate::c
             }
             let node = tree.node(id);
             let portal_content = node.kind.root_portal_content();
+            let drag_preview = node.kind.drag_preview_child();
             stack.extend(
                 node.children
                     .iter()
                     .rev()
                     .copied()
-                    .filter(|child| Some(*child) != portal_content),
+                    .filter(|child| Some(*child) != portal_content && Some(*child) != drag_preview),
             );
             return Some(node);
         }
@@ -2682,7 +2742,10 @@ fn pending_image_effects(
                     _ => {}
                 }
                 for &child in node.children.iter().rev() {
-                    if tree.is_valid(child) && node.kind.root_portal_content() != Some(child) {
+                    if tree.is_valid(child)
+                        && node.kind.root_portal_content() != Some(child)
+                        && node.kind.drag_preview_child() != Some(child)
+                    {
                         stack.push(Visit::Node(child, child_clip, offset));
                     }
                 }

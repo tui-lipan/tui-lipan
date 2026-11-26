@@ -638,10 +638,16 @@ impl ElementKind {
                 None => SmallVec::new(),
             },
             Self::Animated(a) => SmallVec::from_buf_and_len([a.child.as_ref(); 4], 1),
-            Self::DragSource(ds) => match &ds.child {
-                Some(c) => SmallVec::from_buf_and_len([c.as_ref(); 4], 1),
-                None => SmallVec::new(),
-            },
+            Self::DragSource(ds) => {
+                let mut out = SmallVec::new();
+                if let Some(c) = &ds.child {
+                    out.push(c.as_ref());
+                }
+                if let Some(c) = &ds.preview_element {
+                    out.push(c.as_ref());
+                }
+                out
+            }
             Self::DropTarget(dt) => match &dt.child {
                 Some(c) => SmallVec::from_buf_and_len([c.as_ref(); 4], 1),
                 None => SmallVec::new(),
@@ -719,10 +725,16 @@ impl ElementKind {
                 None => SmallVec::new(),
             },
             Self::Animated(a) => smallvec::smallvec![a.child.as_mut()],
-            Self::DragSource(ds) => match &mut ds.child {
-                Some(c) => smallvec::smallvec![c.as_mut()],
-                None => SmallVec::new(),
-            },
+            Self::DragSource(ds) => {
+                let mut out = SmallVec::new();
+                if let Some(c) = &mut ds.child {
+                    out.push(c.as_mut());
+                }
+                if let Some(c) = &mut ds.preview_element {
+                    out.push(c.as_mut());
+                }
+                out
+            }
             Self::DropTarget(dt) => match &mut dt.child {
                 Some(c) => smallvec::smallvec![c.as_mut()],
                 None => SmallVec::new(),
