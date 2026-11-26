@@ -440,8 +440,7 @@ impl Component for TooltipComponent {
         if delayed {
             region = region.on_hover_change(ctx.link().callback(TooltipMsg::Hover));
         }
-        let mut trigger: Element = region.into();
-        trigger.layout = ctx.props.child.layout_constraints();
+        let trigger: Element = region.into();
         let trigger = trigger.key(ctx.state.trigger_key.clone());
 
         let hover_open = if delayed {

@@ -5610,8 +5610,7 @@ fn virtual_entry(h: u16, gap_after: bool, stale: bool) -> VirtualChildEntry {
         width_spec: crate::widgets::CachedChildWidth {
             requested: Length::Px(1),
             natural: 1,
-            min: Length::Px(0),
-            max: None,
+            ..crate::widgets::CachedChildWidth::default()
         },
         gap_after,
         is_portal: false,

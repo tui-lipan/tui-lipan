@@ -306,12 +306,12 @@ fn build_child_base_layouts<C: Borrow<Element>>(
             Axis::Horizontal => layout_constraints.max_w,
             Axis::Vertical => layout_constraints.max_h,
         }
-        .and_then(|max| max.resolve_as_max(ctx.available));
+        .resolve(ctx.available);
         let focus_min_main = max_main.map_or(focus_min_main, |max| focus_min_main.min(max));
         let constraint_min = if ctx.intrinsic_main_axis {
-            constraint_min_len.resolve_as_min(0)
+            constraint_min_len.resolve(0)
         } else {
-            constraint_min_len.resolve_as_min(ctx.available)
+            constraint_min_len.resolve(ctx.available)
         };
         let child_is_pinned = ctx
             .pinned_key

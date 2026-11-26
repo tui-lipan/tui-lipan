@@ -1883,4 +1883,697 @@ mod tests {
         );
         assert_eq!(empty.h, 0);
     }
+
+    #[test]
+    fn transparent_wrapper_merges_mixed_px_and_percent_max_constraints() {
+        use crate::style::{Align, Theme};
+        use crate::widgets::{DropTarget, HStack, Overflow, Text, ThemeProvider, VStack};
+
+        // 1. Child max_width(Px(20)) + wrapper max_width(Percent(50)):
+        //    - at 100 cols => min(20, 50) = 20
+        //    - at 30 cols  => min(20, 15) = 15
+        let make_outer_pct = || -> Element {
+            let child = Element::from(
+                VStack::new()
+                    .height(Length::Px(1))
+                    .child(Text::new("content")),
+            )
+            .key("mixed-max")
+            .max_width(Length::Px(20));
+            let wrapped = Element::from(ThemeProvider::new(Theme::default()).child(child))
+                .max_width(Length::Percent(50));
+            VStack::new().align(Align::Center).child(wrapped).into()
+        };
+
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &make_outer_pct(),
+            Rect {
+                x: 0,
+                y: 0,
+                w: 100,
+                h: 10,
+            },
+            None,
+        );
+        assert_eq!(tree.node(find_by_key(&tree, "mixed-max")).rect.w, 20);
+
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &make_outer_pct(),
+            Rect {
+                x: 0,
+                y: 0,
+                w: 30,
+                h: 10,
+            },
+            None,
+        );
+        assert_eq!(tree.node(find_by_key(&tree, "mixed-max")).rect.w, 15);
+
+        // 2. Child max_width(Percent(50)) + wrapper max_width(Px(60)):
+        //    - at 100 cols => min(50, 60) = 50 (and wrapping text resolves 50% against 100, not 60!)
+        //    - at 150 cols => min(75, 60) = 60
+        let make_outer_px = || -> Element {
+            let child = Element::from(
+                Text::new("a".repeat(80))
+                    .overflow(Overflow::Wrap)
+                    .height(Length::Auto),
+            )
+            .max_width(Length::Percent(50));
+            let wrapped = Element::from(DropTarget::new().child(child))
+                .max_width(Length::Px(60))
+                .key("mixed-wrap");
+            VStack::new().align(Align::Center).child(wrapped).into()
+        };
+
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &make_outer_px(),
+            Rect {
+                x: 0,
+                y: 0,
+                w: 100,
+                h: 10,
+            },
+            None,
+        );
+        let rect_100 = tree.node(find_by_key(&tree, "mixed-wrap")).rect;
+        assert_eq!(
+            (rect_100.w, rect_100.h),
+            (50, 2),
+            "80 chars wrapped at 50 cols (50% of 100) must take 2 rows, not 3 (50% of 60)"
+        );
+
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &make_outer_px(),
+            Rect {
+                x: 0,
+                y: 0,
+                w: 150,
+                h: 10,
+            },
+            None,
+        );
+        let rect_150 = tree.node(find_by_key(&tree, "mixed-wrap")).rect;
+        assert_eq!((rect_150.w, rect_150.h), (60, 2));
+
+        // 3. Mixed max_height on cross-axis of HStack:
+        //    child max_height(Px(10)) + wrapper max_height(Percent(50)):
+        //    - at 40 rows => min(10, 20) = 10
+        //    - at 16 rows => min(10, 8) = 8
+        let make_hstack = || -> Element {
+            let child = Element::from(VStack::new().width(Length::Px(10)).child(Text::new("tall")))
+                .key("mixed-h")
+                .max_height(Length::Px(10));
+            let wrapped = Element::from(ThemeProvider::new(Theme::default()).child(child))
+                .max_height(Length::Percent(50));
+            HStack::new().align(Align::Center).child(wrapped).into()
+        };
+
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &make_hstack(),
+            Rect {
+                x: 0,
+                y: 0,
+                w: 40,
+                h: 40,
+            },
+            None,
+        );
+        assert_eq!(tree.node(find_by_key(&tree, "mixed-h")).rect.h, 10);
+
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &make_hstack(),
+            Rect {
+                x: 0,
+                y: 0,
+                w: 40,
+                h: 16,
+            },
+            None,
+        );
+        assert_eq!(tree.node(find_by_key(&tree, "mixed-h")).rect.h, 8);
+    }
+
+    #[test]
+    fn unconstrained_transparent_wrappers_preserve_child_min_over_max_precedence() {
+        use crate::style::{Align, Theme};
+        use crate::widgets::{
+            Animated, DragSource, DropTarget, EffectScope, Text, ThemeProvider, VStack,
+        };
+
+        let make_child = || -> Element {
+            Element::from(VStack::new().height(Length::Px(1)).child(Text::new("x")))
+                .key("wrapped")
+                .max_width(Length::Px(20))
+                .min_width(Length::Px(30))
+        };
+
+        let wrappers: Vec<(&str, Element)> = vec![
+            (
+                "ThemeProvider",
+                ThemeProvider::new(Theme::default())
+                    .child(make_child())
+                    .into(),
+            ),
+            ("DropTarget", DropTarget::new().child(make_child()).into()),
+            ("DragSource", DragSource::new().child(make_child()).into()),
+            ("EffectScope", EffectScope::new().child(make_child()).into()),
+            ("Animated", Animated::new(make_child()).into()),
+        ];
+
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            w: 60,
+            h: 10,
+        };
+        for (name, wrapped) in wrappers {
+            let mut tree = NodeTree::new();
+            let root: Element = VStack::new().align(Align::Center).child(wrapped).into();
+            LayoutEngine::reconcile_with_focus(&mut tree, &root, bounds, None);
+            let rect = tree.node(find_by_key(&tree, "wrapped")).rect;
+            assert_eq!(
+                rect.w, 30,
+                "unconstrained {name} must not lower child's min_width(30) to max_width(20)"
+            );
+        }
+
+        // Unconstrained DropTarget around a shrinkable Text must not inject measured min_width.
+        let mut tree = NodeTree::new();
+        let root: Element = VStack::new()
+            .child(
+                Element::from(DropTarget::new().child(Text::new("0123456789abcdef")))
+                    .key("shrinkable"),
+            )
+            .into();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &root,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 8,
+                h: 4,
+            },
+            None,
+        );
+        assert_eq!(tree.node(find_by_key(&tree, "shrinkable")).rect.w, 8);
+    }
+
+    #[test]
+    fn transparent_wrapper_preserves_outer_minimums_and_nested_constraints() {
+        use crate::style::{Align, Theme};
+        use crate::widgets::{DropTarget, Text, ThemeProvider, VStack};
+
+        // 1. Outer min_width / min_height on wrappers are honored.
+        let mut tree = NodeTree::new();
+        let outer_min = Element::from(
+            DropTarget::new().child(Text::new("hi").width(Length::Auto).height(Length::Auto)),
+        )
+        .min_width(Length::Px(30))
+        .min_height(Length::Px(5))
+        .key("outer-min");
+        let root: Element = VStack::new().align(Align::Center).child(outer_min).into();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &root,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 60,
+                h: 20,
+            },
+            None,
+        );
+        let rect = tree.node(find_by_key(&tree, "outer-min")).rect;
+        assert_eq!((rect.w, rect.h), (30, 5));
+
+        // 2. Mixed outer min_width(Percent(40)) + inner min_width(Px(30)):
+        //    - at 100 cols => max(40, 30) = 40
+        //    - at 50 cols  => max(20, 30) = 30
+        let make_mixed_min = || -> Element {
+            let inner = Element::from(Text::new("hi").width(Length::Auto).height(Length::Px(1)))
+                .key("mixed-min")
+                .min_width(Length::Px(30));
+            let wrapped = Element::from(ThemeProvider::new(Theme::default()).child(inner))
+                .min_width(Length::Percent(40));
+            VStack::new().align(Align::Center).child(wrapped).into()
+        };
+
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &make_mixed_min(),
+            Rect {
+                x: 0,
+                y: 0,
+                w: 100,
+                h: 10,
+            },
+            None,
+        );
+        assert_eq!(tree.node(find_by_key(&tree, "mixed-min")).rect.w, 40);
+
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &make_mixed_min(),
+            Rect {
+                x: 0,
+                y: 0,
+                w: 50,
+                h: 10,
+            },
+            None,
+        );
+        assert_eq!(tree.node(find_by_key(&tree, "mixed-min")).rect.w, 30);
+
+        // 3. Multi-level nested wrappers:
+        //    ThemeProvider(max 50%) -> DropTarget(min 15) -> VStack(max 25):
+        //    - at 100 cols => max(15, min(50, 25)) = 25
+        //    - at 40 cols  => max(15, min(20, 25)) = 20
+        //    - at 20 cols  => max(15, min(10, 25)) = 15 (min beats max)
+        let make_nested = || -> Element {
+            let inner = Element::from(
+                VStack::new()
+                    .height(Length::Px(1))
+                    .child(Text::new("nested")),
+            )
+            .key("nested")
+            .max_width(Length::Px(25));
+            let mid = Element::from(DropTarget::new().child(inner)).min_width(Length::Px(15));
+            let outer = Element::from(ThemeProvider::new(Theme::default()).child(mid))
+                .max_width(Length::Percent(50));
+            VStack::new().align(Align::Center).child(outer).into()
+        };
+
+        for (avail_w, expected_w) in [(100, 25), (40, 20), (20, 15)] {
+            let mut tree = NodeTree::new();
+            LayoutEngine::reconcile_with_focus(
+                &mut tree,
+                &make_nested(),
+                Rect {
+                    x: 0,
+                    y: 0,
+                    w: avail_w,
+                    h: 10,
+                },
+                None,
+            );
+            assert_eq!(
+                tree.node(find_by_key(&tree, "nested")).rect.w,
+                expected_w,
+                "nested constraints at width {avail_w}"
+            );
+        }
+    }
+
+    #[test]
+    fn drag_source_preserves_percentage_basis_and_outer_min_propagates_into_measurement() {
+        use crate::style::{Align, Theme};
+        use crate::widgets::{DragSource, Overflow, Text, ThemeProvider, VStack};
+
+        // 1. DragSource with inner max_width(Percent(50)) and outer max_width(Px(60)) in a
+        //    100-col parent must resolve 50% against 100 (= 50 cols, 2 rows), not against 60
+        //    (= 30 cols, 3 rows), and at 150 cols must cap at 60 cols, 2 rows.
+        let make_drag_source = || -> Element {
+            let child = Element::from(
+                Text::new("a".repeat(80))
+                    .overflow(Overflow::Wrap)
+                    .height(Length::Auto),
+            )
+            .max_width(Length::Percent(50));
+            let wrapped = Element::from(DragSource::new().child(child))
+                .max_width(Length::Px(60))
+                .key("drag-mixed");
+            VStack::new().align(Align::Center).child(wrapped).into()
+        };
+
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &make_drag_source(),
+            Rect {
+                x: 0,
+                y: 0,
+                w: 100,
+                h: 10,
+            },
+            None,
+        );
+        let rect_100 = tree.node(find_by_key(&tree, "drag-mixed")).rect;
+        assert_eq!(
+            (rect_100.w, rect_100.h),
+            (50, 2),
+            "DragSource must resolve inner 50% against 100-col parent (50x2), not 60-col outer cap (30x3)"
+        );
+
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &make_drag_source(),
+            Rect {
+                x: 0,
+                y: 0,
+                w: 150,
+                h: 10,
+            },
+            None,
+        );
+        let rect_150 = tree.node(find_by_key(&tree, "drag-mixed")).rect;
+        assert_eq!((rect_150.w, rect_150.h), (60, 2));
+
+        // 2. Outer min_width(Px(50)) overriding inner max_width(Px(20)) must also govern
+        //    measurement: 80-char wrapping text wraps at 50 cols (2 rows), not 20 cols (4 rows),
+        //    and the sibling below starts at y = 2.
+        let mut tree = NodeTree::new();
+        let inner = Element::from(
+            Text::new("a".repeat(80))
+                .overflow(Overflow::Wrap)
+                .height(Length::Auto),
+        )
+        .key("min-beats-max-text")
+        .max_width(Length::Px(20));
+        let wrapped = Element::from(ThemeProvider::new(Theme::default()).child(inner))
+            .min_width(Length::Px(50));
+        let root: Element = VStack::new()
+            .child(wrapped)
+            .child(Text::new("after").height(Length::Px(1)).key("after"))
+            .into();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &root,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 100,
+                h: 10,
+            },
+            None,
+        );
+        let text_rect = tree.node(find_by_key(&tree, "min-beats-max-text")).rect;
+        let after_rect = tree.node(find_by_key(&tree, "after")).rect;
+        assert_eq!(
+            (text_rect.w, text_rect.h),
+            (50, 2),
+            "outer min_width(50) must propagate into child measurement so 80 chars wrap into 2 rows, not 4"
+        );
+        assert_eq!(
+            after_rect.y, 2,
+            "sibling after wrapped text must sit directly below row 2"
+        );
+    }
+
+    #[test]
+    fn animated_wrapper_does_not_double_apply_percentage_constraints() {
+        use crate::animation::VisibilityAnimation;
+        use crate::style::Align;
+        use crate::widgets::{Animated, Overflow, Text, VStack};
+
+        // 1. Animated with explicit `.height(Length::Auto)` wrapping 80-char text with
+        //    `max_width(Percent(50))` in a 100-col parent must resolve 50% once (50x2), not
+        //    twice (25x4).
+        let mut tree = NodeTree::new();
+        let child = Element::from(
+            Text::new("a".repeat(80))
+                .overflow(Overflow::Wrap)
+                .height(Length::Auto),
+        )
+        .max_width(Length::Percent(50));
+        let animated = Element::from(Animated::new(child).height(Length::Auto)).key("anim-auto");
+        let root: Element = VStack::new()
+            .align(Align::Center)
+            .child(animated)
+            .child(Text::new("after").height(Length::Px(1)).key("after-auto"))
+            .into();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &root,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 100,
+                h: 10,
+            },
+            None,
+        );
+        let rect = tree.node(find_by_key(&tree, "anim-auto")).rect;
+        assert_eq!(
+            (rect.w, rect.h),
+            (50, 2),
+            "Animated(.height(Auto)) must not apply child's Percent(50) max_width twice"
+        );
+        assert_eq!(tree.node(find_by_key(&tree, "after-auto")).rect.y, 2);
+
+        // 2. Animated with explicit `.height(Length::Px(1))` still overrides height to 1 while
+        //    preserving the 50-col width basis.
+        let mut tree = NodeTree::new();
+        let child = Element::from(
+            Text::new("a".repeat(80))
+                .overflow(Overflow::Wrap)
+                .height(Length::Auto),
+        )
+        .max_width(Length::Percent(50));
+        let animated = Element::from(Animated::new(child).height(Length::Px(1))).key("anim-px");
+        let root: Element = VStack::new().align(Align::Center).child(animated).into();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &root,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 100,
+                h: 10,
+            },
+            None,
+        );
+        let rect = tree.node(find_by_key(&tree, "anim-px")).rect;
+        assert_eq!((rect.w, rect.h), (50, 1));
+
+        // 3. Animated with visibility + outer min_width(50) overriding inner max_width(20)
+        //    measures at 50 cols (2 rows), not 20 cols (4 rows).
+        let mut tree = NodeTree::new();
+        let child = Element::from(
+            Text::new("a".repeat(80))
+                .overflow(Overflow::Wrap)
+                .height(Length::Auto),
+        )
+        .max_width(Length::Px(20));
+        let animated = Element::from(
+            Animated::new(child)
+                .visibility(true, VisibilityAnimation::new())
+                .height(Length::Auto),
+        )
+        .min_width(Length::Px(50))
+        .key("anim-min");
+        let root: Element = VStack::new()
+            .align(Align::Center)
+            .child(animated)
+            .child(Text::new("after").height(Length::Px(1)).key("after-min"))
+            .into();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &root,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 100,
+                h: 10,
+            },
+            None,
+        );
+        let rect = tree.node(find_by_key(&tree, "anim-min")).rect;
+        assert_eq!((rect.w, rect.h), (50, 2));
+        assert_eq!(tree.node(find_by_key(&tree, "after-min")).rect.y, 2);
+    }
+
+    #[test]
+    fn animated_collapse_visibility_caches_natural_height_with_wrapper_constraints_and_percent_basis()
+     {
+        use crate::animation::{Easing, TransitionConfig, VisibilityAnimation};
+        use crate::core::node::NodeKind;
+        use crate::style::Align;
+        use crate::widgets::{Animated, Overflow, Text, VStack};
+        use std::time::Duration;
+
+        let exit_recipe = VisibilityAnimation::new()
+            .enter(TransitionConfig {
+                duration: Duration::ZERO,
+                easing: Easing::Linear,
+            })
+            .exit(TransitionConfig {
+                duration: Duration::from_millis(200),
+                easing: Easing::Linear,
+            });
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            w: 100,
+            h: 20,
+        };
+
+        // 1. Inner max_width(20) overridden by outer min_width(50) on an Animated with
+        //    collapse_visibility(true): natural height must be cached as 2 (not 4), so
+        //    toggling visibility to false collapses smoothly from 2 -> 1 -> 0 without
+        //    jumping the sibling to y=4.
+        let make_min_beats_max = |visible: bool| -> Element {
+            let child = Element::from(
+                Text::new("a".repeat(80))
+                    .overflow(Overflow::Wrap)
+                    .height(Length::Auto),
+            )
+            .max_width(Length::Px(20));
+            let animated = Element::from(
+                Animated::new(child)
+                    .visibility(visible, exit_recipe.clone())
+                    .collapse_visibility(true),
+            )
+            .min_width(Length::Px(50))
+            .key("collapse-min");
+            VStack::new()
+                .align(Align::Center)
+                .child(animated)
+                .child(Text::new("after").height(Length::Px(1)).key("after"))
+                .into()
+        };
+
+        let mut tree = NodeTree::new();
+        let visible_root = make_min_beats_max(true);
+        LayoutEngine::reconcile_with_focus(&mut tree, &visible_root, bounds, None);
+        let anim_id = find_by_key(&tree, "collapse-min");
+        assert_eq!(
+            (tree.node(anim_id).rect.w, tree.node(anim_id).rect.h),
+            (50, 2)
+        );
+        assert_eq!(tree.node(find_by_key(&tree, "after")).rect.y, 2);
+        if let NodeKind::Animated(node) = &tree.node(anim_id).kind {
+            assert_eq!(
+                node.visibility_layout.as_ref().unwrap().natural_size(),
+                (50, 2),
+                "visibility_layout must cache natural height using merged wrapper constraints"
+            );
+        } else {
+            panic!("expected Animated node");
+        }
+
+        // Toggle visibility to false: exit starts at progress=1.0 -> height 2, sibling stays at y=2.
+        let hidden_root = make_min_beats_max(false);
+        LayoutEngine::reconcile_with_focus(&mut tree, &hidden_root, bounds, None);
+        let anim_id = find_by_key(&tree, "collapse-min");
+        assert_eq!(
+            tree.node(anim_id).rect.h,
+            2,
+            "exit start must keep height 2, not jump to 4"
+        );
+        assert_eq!(tree.node(find_by_key(&tree, "after")).rect.y, 2);
+
+        // Tick halfway (100ms -> progress 0.5): height 1, sibling moves to y=1.
+        if let NodeKind::Animated(node) = &mut tree.node_mut(anim_id).kind {
+            node.tick(Duration::from_millis(100));
+        }
+        LayoutEngine::reconcile_with_focus(&mut tree, &hidden_root, bounds, None);
+        assert_eq!(tree.node(find_by_key(&tree, "collapse-min")).rect.h, 1);
+        assert_eq!(tree.node(find_by_key(&tree, "after")).rect.y, 1);
+
+        // Tick to completion (100ms -> progress 0.0): height 0, sibling moves to y=0.
+        if let NodeKind::Animated(node) = &mut tree.node_mut(anim_id).kind {
+            node.tick(Duration::from_millis(100));
+        }
+        LayoutEngine::reconcile_with_focus(&mut tree, &hidden_root, bounds, None);
+        assert_eq!(tree.node(find_by_key(&tree, "collapse-min")).rect.h, 0);
+        assert_eq!(tree.node(find_by_key(&tree, "after")).rect.y, 0);
+
+        // 2. Child with max_width(Percent(50)) under collapse_visibility(true) must also
+        //    preserve the 100-col percentage basis when caching natural height (2 rows, not 4).
+        let make_percent = |visible: bool| -> Element {
+            let child = Element::from(
+                Text::new("a".repeat(80))
+                    .overflow(Overflow::Wrap)
+                    .height(Length::Auto),
+            )
+            .max_width(Length::Percent(50));
+            let animated = Element::from(
+                Animated::new(child)
+                    .visibility(visible, exit_recipe.clone())
+                    .collapse_visibility(true),
+            )
+            .key("collapse-pct");
+            VStack::new()
+                .align(Align::Center)
+                .child(animated)
+                .child(Text::new("after").height(Length::Px(1)).key("after-pct"))
+                .into()
+        };
+
+        let mut tree = NodeTree::new();
+        let visible_root = make_percent(true);
+        LayoutEngine::reconcile_with_focus(&mut tree, &visible_root, bounds, None);
+        let anim_id = find_by_key(&tree, "collapse-pct");
+        assert_eq!(
+            (tree.node(anim_id).rect.w, tree.node(anim_id).rect.h),
+            (50, 2)
+        );
+        assert_eq!(tree.node(find_by_key(&tree, "after-pct")).rect.y, 2);
+
+        let hidden_root = make_percent(false);
+        LayoutEngine::reconcile_with_focus(&mut tree, &hidden_root, bounds, None);
+        assert_eq!(tree.node(find_by_key(&tree, "collapse-pct")).rect.h, 2);
+        assert_eq!(tree.node(find_by_key(&tree, "after-pct")).rect.y, 2);
+
+        // 3. `height_target` for `Animated::height(Length::Auto)` must also respect merged
+        //    wrapper constraints and the original percentage basis (target_height == Some(2)).
+        let mut tree = NodeTree::new();
+        let child = Element::from(
+            Text::new("a".repeat(80))
+                .overflow(Overflow::Wrap)
+                .height(Length::Auto),
+        )
+        .max_width(Length::Px(20));
+        let animated = Element::from(Animated::new(child).height(Length::Auto))
+            .min_width(Length::Px(50))
+            .key("height-target-min");
+        let root: Element = VStack::new().align(Align::Center).child(animated).into();
+        LayoutEngine::reconcile_with_focus(&mut tree, &root, bounds, None);
+        let anim_id = find_by_key(&tree, "height-target-min");
+        let NodeKind::Animated(node) = &tree.node(anim_id).kind else {
+            panic!("expected Animated node");
+        };
+        assert_eq!(
+            node.target_height,
+            Some(2),
+            "height_target must use merged wrapper constraints (2 rows, not 4)"
+        );
+
+        let mut tree = NodeTree::new();
+        let child = Element::from(
+            Text::new("a".repeat(80))
+                .overflow(Overflow::Wrap)
+                .height(Length::Auto),
+        )
+        .max_width(Length::Percent(50));
+        let animated =
+            Element::from(Animated::new(child).height(Length::Auto)).key("height-target-pct");
+        let root: Element = VStack::new().align(Align::Center).child(animated).into();
+        LayoutEngine::reconcile_with_focus(&mut tree, &root, bounds, None);
+        let anim_id = find_by_key(&tree, "height-target-pct");
+        let NodeKind::Animated(node) = &tree.node(anim_id).kind else {
+            panic!("expected Animated node");
+        };
+        assert_eq!(
+            node.target_height,
+            Some(2),
+            "height_target must preserve percentage basis (2 rows, not 4)"
+        );
+    }
 }

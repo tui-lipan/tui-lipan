@@ -69,8 +69,8 @@ fn min_main_size_for_stack(
     if let Length::Px(px) = len {
         let constraints = child.layout_constraints();
         let min = match axis {
-            Axis::Vertical => constraints.min_h.resolve_as_min(avail_main),
-            Axis::Horizontal => constraints.min_w.resolve_as_min(avail_main),
+            Axis::Vertical => constraints.min_h.resolve(avail_main),
+            Axis::Horizontal => constraints.min_w.resolve(avail_main),
         };
         return px.max(min);
     }
@@ -87,8 +87,8 @@ fn min_main_size_for_stack(
         // For other Flex widgets (Frame, VStack, HStack, etc.), use their LayoutConstraints::min
         let constraints = child.layout_constraints();
         let min = match axis {
-            Axis::Vertical => constraints.min_h.resolve_as_min(avail_main),
-            Axis::Horizontal => constraints.min_w.resolve_as_min(avail_main),
+            Axis::Vertical => constraints.min_h.resolve(avail_main),
+            Axis::Horizontal => constraints.min_w.resolve(avail_main),
         };
         if min > 0 {
             return min;
@@ -303,8 +303,8 @@ pub(crate) fn measure_stack(
             let constraint_min = scrollable_min_for_axis(child, cross_axis).unwrap_or_else(|| {
                 let constraints = child.layout_constraints();
                 match cross_axis {
-                    Axis::Vertical => constraints.min_h.resolve_as_min(avail_cross),
-                    Axis::Horizontal => constraints.min_w.resolve_as_min(avail_cross),
+                    Axis::Vertical => constraints.min_h.resolve(avail_cross),
+                    Axis::Horizontal => constraints.min_w.resolve(avail_cross),
                 }
             });
 
@@ -490,8 +490,8 @@ mod tests {
 
         let constraints = hstack.layout_constraints();
         assert_eq!(
-            constraints.min_h,
-            Length::Px(3),
+            constraints.min_h.resolve(0),
+            3,
             "min_h should reflect padding (2 top + 1 content = 3)"
         );
 

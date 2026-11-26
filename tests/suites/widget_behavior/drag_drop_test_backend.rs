@@ -1298,3 +1298,64 @@ fn element_preview_collapses_hidden_source_in_test_backend() {
         "stateful preview component must render:\n{frame}"
     );
 }
+
+struct CenteredDropTargetApp;
+
+impl Component for CenteredDropTargetApp {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        let wrapped = Element::from(
+            DropTarget::new().accept_group("g").child(
+                Frame::new()
+                    .border(true)
+                    .height(Length::Px(3))
+                    .child(Text::new("composer").height(Length::Px(1))),
+            ),
+        )
+        .max_width(Length::Px(40))
+        .key("capped-composer");
+
+        VStack::new().align(Align::Center).child(wrapped).into()
+    }
+}
+
+#[test]
+fn drop_target_wrapper_respects_max_width_in_centered_vstack() {
+    let mut backend = TestBackend::new(CenteredDropTargetApp);
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 100,
+        h: 10,
+    });
+    backend.render();
+
+    let frame = backend.capture_frame().plain_text();
+    let top_row = frame.lines().next().unwrap_or("");
+    let left_col = top_row
+        .chars()
+        .position(|ch| ch == '┌')
+        .unwrap_or_else(|| panic!("expected bordered composer frame on row 0:\n{frame}"));
+    let right_col = top_row
+        .chars()
+        .position(|ch| ch == '┐')
+        .unwrap_or_else(|| panic!("expected right border corner on row 0:\n{frame}"));
+    let rendered_width = right_col - left_col + 1;
+    assert_eq!(
+        rendered_width, 40,
+        "DropTarget should respect max_width(40):\n{frame}"
+    );
+    assert_eq!(
+        left_col, 30,
+        "DropTarget should be centered in 100-col VStack:\n{frame}"
+    );
+}

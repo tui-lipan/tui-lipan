@@ -6,7 +6,7 @@ use crate::core::element::{Element, Key};
 use crate::core::node::{ScrollbarZone, ScrollbarZonesParams, WidgetNode, compute_scrollbar_zones};
 use crate::layout::axis::{Axis, requested_cross_axis};
 use crate::layout::measure::min_size_constrained;
-use crate::style::{Align, LayoutConstraints, Length, Rect, ScrollbarVariant, Style};
+use crate::style::{Align, Length, Rect, ScrollbarVariant, Style};
 use crate::widgets::document_view::FormatCache;
 use crate::widgets::document_view::node::{DocumentTableRectSelection, VisualCache};
 use crate::widgets::internal::StackProps;
@@ -166,10 +166,10 @@ pub struct CachedChildWidth {
     pub requested: Length,
     /// Uncapped natural content width (used for `Auto`, or `Flex` under `horizontal_overflow`).
     pub natural: u16,
-    /// Child's `min_width` constraint.
-    pub min: Length,
-    /// Child's `max_width` constraint.
-    pub max: Option<Length>,
+    /// Child's effective `min_width` bound.
+    pub(crate) min: crate::style::MinBound,
+    /// Child's effective `max_width` bound.
+    pub(crate) max: crate::style::MaxBound,
 }
 
 impl CachedChildWidth {
@@ -185,10 +185,8 @@ impl CachedChildWidth {
         let natural = match requested {
             Length::Px(px) => px,
             Length::Auto if !horizontal_overflow => {
-                let min_resolved = constraints.min_w.resolve_as_min(viewport_w);
-                let max_resolved = constraints
-                    .max_w
-                    .and_then(|max| max.resolve_as_max(viewport_w));
+                let min_resolved = constraints.min_w.resolve(viewport_w);
+                let max_resolved = constraints.max_w.resolve(viewport_w);
                 let may_be_clamped = rect_w >= viewport_w
                     || max_resolved.is_some_and(|max| rect_w >= max)
                     || (min_resolved > 0 && rect_w <= min_resolved);
@@ -230,10 +228,10 @@ impl CachedChildWidth {
             }
         };
 
-        LayoutConstraints {
+        crate::style::EffectiveLayoutConstraints {
             min_w: self.min,
             max_w: self.max,
-            ..LayoutConstraints::default()
+            ..crate::style::EffectiveLayoutConstraints::default()
         }
         .clamp_width(base, viewport_w)
         .min(viewport_w)

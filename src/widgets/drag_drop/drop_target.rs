@@ -5,9 +5,8 @@ use std::sync::Arc;
 use crate::callback::Callback;
 use crate::core::element::{Element, ElementKind};
 use crate::layout::hash::LayoutHash;
-use crate::style::{LayoutConstraints, Length, Style, StyleSlot};
+use crate::style::{Style, StyleSlot};
 
-use super::drop_target_layout::measure_drop_target;
 use super::payload::{DragLeaveEvent, DragOverEvent, DragPayload, DropEvent, DropSlot};
 
 /// Predicate used to accept or reject payloads.
@@ -192,12 +191,7 @@ impl DropTarget {
 
 impl From<DropTarget> for Element {
     fn from(value: DropTarget) -> Self {
-        let (min_w, min_h) = measure_drop_target(&value, None, None);
-        Element::new(ElementKind::DropTarget(value)).with_layout(
-            LayoutConstraints::default()
-                .min_width(Length::Px(min_w))
-                .min_height(Length::Px(min_h)),
-        )
+        Element::new(ElementKind::DropTarget(value))
     }
 }
 

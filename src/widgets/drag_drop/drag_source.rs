@@ -4,9 +4,8 @@ use std::sync::Arc;
 use crate::core::element::{Element, ElementKind};
 use crate::layout::drag_source_layout_hint::drag_source_snapshot_collapse_key;
 use crate::layout::hash::LayoutHash;
-use crate::style::{LayoutConstraints, Length, Style, StyleSlot};
+use crate::style::{Length, Style, StyleSlot};
 
-use super::drag_source_layout::measure_drag_source;
 use super::payload::{
     DragCancelEvent, DragPayload, DragPreview, DragPreviewAnchor, DragSlot, DragSlotAxis,
     DragStartEvent, DragStartedEvent,
@@ -254,20 +253,7 @@ impl DragSource {
 
 impl From<DragSource> for Element {
     fn from(value: DragSource) -> Self {
-        let (min_w, min_h) = measure_drag_source(&value, None, None, None);
-        // A hidden source-slot drag may collapse to zero on its main axis, so
-        // its min size must allow that. A source that stays visible keeps the
-        // child's minimum.
-        let min_h = if value.preview.uses_source_slot() && value.hide_source_while_dragging {
-            0
-        } else {
-            min_h
-        };
-        Element::new(ElementKind::DragSource(value)).with_layout(
-            LayoutConstraints::default()
-                .min_width(Length::Px(min_w))
-                .min_height(Length::Px(min_h)),
-        )
+        Element::new(ElementKind::DragSource(value))
     }
 }
 

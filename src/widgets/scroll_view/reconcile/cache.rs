@@ -688,7 +688,7 @@ pub(crate) fn scroll_child_height_depends_on_scroll_viewport_h(el: &Element) -> 
     use crate::layout::axis::{Axis, requested_main_axis};
     use crate::style::Length;
 
-    if matches!(el.layout_constraints().min_h, Length::Percent(_)) {
+    if el.layout_constraints().min_h.has_percent() {
         return true;
     }
     if matches!(

@@ -318,43 +318,54 @@ impl Element {
         self
     }
 
-    pub(crate) fn layout_constraints(&self) -> LayoutConstraints {
+    pub(crate) fn layout_constraints(&self) -> crate::style::EffectiveLayoutConstraints {
+        use crate::style::{EffectiveLayoutConstraints, MaxBound, MinBound};
+
         match &self.kind {
-            ElementKind::Group(group) => group.child.layout_constraints(),
+            ElementKind::Group(group) => group.child.layout_constraints().merge_outer(self.layout),
             ElementKind::EffectScope(scope) => scope
                 .child
                 .as_deref()
-                .map(Element::layout_constraints)
-                .unwrap_or(self.layout),
+                .map(|child| child.layout_constraints().merge_outer(self.layout))
+                .unwrap_or_else(|| EffectiveLayoutConstraints::from(self.layout)),
             ElementKind::Animated(animated) => {
                 if animated.height.is_some()
                     || (animated.collapse_visibility && animated.visibility.is_some())
                 {
-                    let mut layout = animated.child.layout_constraints();
-                    layout.min_h = self.layout.min_h;
-                    layout.max_h = self.layout.max_h;
+                    let mut layout = animated.child.layout_constraints().merge_outer(self.layout);
+                    layout.min_h = MinBound::from_length(self.layout.min_h);
+                    layout.max_h = MaxBound::from_option(self.layout.max_h);
                     layout.focus_min_h = self.layout.focus_min_h;
                     layout.collapse_h = self.layout.collapse_h;
                     layout.force_compact = false;
                     layout
                 } else {
-                    animated.child.layout_constraints()
+                    animated.child.layout_constraints().merge_outer(self.layout)
                 }
             }
             ElementKind::DragSource(source) => source
                 .child
                 .as_deref()
-                .map(Element::layout_constraints)
-                .unwrap_or(self.layout),
+                .map(|child| child.layout_constraints().merge_outer(self.layout))
+                .unwrap_or_else(|| EffectiveLayoutConstraints::from(self.layout)),
             ElementKind::DropTarget(target) => target
                 .child
                 .as_deref()
-                .map(Element::layout_constraints)
-                .unwrap_or(self.layout),
-            ElementKind::ThemeProvider(tp) => tp.child.layout_constraints(),
-            ElementKind::ContextProvider(cp) => cp.child.layout_constraints(),
-            ElementKind::Memo(_) => self.layout,
-            _ => self.layout,
+                .map(|child| child.layout_constraints().merge_outer(self.layout))
+                .unwrap_or_else(|| EffectiveLayoutConstraints::from(self.layout)),
+            ElementKind::MouseRegion(region) if region.fit_child => region
+                .child
+                .as_deref()
+                .map(|child| child.layout_constraints().merge_outer(self.layout))
+                .unwrap_or_else(|| EffectiveLayoutConstraints::from(self.layout)),
+            ElementKind::ThemeProvider(tp) => {
+                tp.child.layout_constraints().merge_outer(self.layout)
+            }
+            ElementKind::ContextProvider(cp) => {
+                cp.child.layout_constraints().merge_outer(self.layout)
+            }
+            ElementKind::Memo(_) => EffectiveLayoutConstraints::from(self.layout),
+            _ => EffectiveLayoutConstraints::from(self.layout),
         }
     }
 

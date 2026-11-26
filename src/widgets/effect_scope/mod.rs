@@ -10,9 +10,7 @@ pub(crate) use self::reconcile::reconcile_effect_scope;
 
 use crate::app::ContrastPolicy;
 use crate::core::element::{Element, ElementKind};
-use crate::style::{
-    CellEffect, Color, ColorTransform, EffectAmount, LayoutConstraints, Length, VisualEffect,
-};
+use crate::style::{CellEffect, Color, ColorTransform, EffectAmount, VisualEffect};
 
 /// Apply render-time color effects to an entire child subtree.
 ///
@@ -150,12 +148,7 @@ impl EffectScope {
 
 impl From<EffectScope> for Element {
     fn from(value: EffectScope) -> Self {
-        let (min_w, min_h) = measure_effect_scope(&value, None, None);
-        Element::new(ElementKind::EffectScope(value)).with_layout(
-            LayoutConstraints::default()
-                .min_width(Length::Px(min_w))
-                .min_height(Length::Px(min_h)),
-        )
+        Element::new(ElementKind::EffectScope(value))
     }
 }
 

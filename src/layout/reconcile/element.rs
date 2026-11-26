@@ -45,6 +45,13 @@ pub(crate) fn reconcile_element(ctx: &mut ReconcileCtx<'_>, args: ElementReconci
     let focus = ctx.focus;
     // ThemeProvider scopes the active theme for every realized descendant.
     if let ElementKind::ThemeProvider(tp) = &el.kind {
+        let prev_wrapper = ctx.overlay_state.wrapper_constraints;
+        ctx.overlay_state.wrapper_constraints = Some(prev_wrapper.map_or_else(
+            || crate::style::EffectiveLayoutConstraints::from(el.layout),
+            |outer| {
+                crate::style::EffectiveLayoutConstraints::from(el.layout).merge_effective(outer)
+            },
+        ));
         ctx.tree.push_active_theme(tp.theme.clone());
         let id = reconcile_element(
             ctx,
@@ -56,11 +63,19 @@ pub(crate) fn reconcile_element(ctx: &mut ReconcileCtx<'_>, args: ElementReconci
             },
         );
         ctx.tree.pop_active_theme();
+        ctx.overlay_state.wrapper_constraints = prev_wrapper;
         ctx.tree.inherit_pointer_shape(id, el.pointer_shape);
         ctx.tree.inherit_host_drag(id, el.host_drag.clone());
         return id;
     }
     if let ElementKind::ContextProvider(cp) = &el.kind {
+        let prev_wrapper = ctx.overlay_state.wrapper_constraints;
+        ctx.overlay_state.wrapper_constraints = Some(prev_wrapper.map_or_else(
+            || crate::style::EffectiveLayoutConstraints::from(el.layout),
+            |outer| {
+                crate::style::EffectiveLayoutConstraints::from(el.layout).merge_effective(outer)
+            },
+        ));
         let id = reconcile_element(
             ctx,
             ElementReconcile {
@@ -70,6 +85,7 @@ pub(crate) fn reconcile_element(ctx: &mut ReconcileCtx<'_>, args: ElementReconci
                 rect,
             },
         );
+        ctx.overlay_state.wrapper_constraints = prev_wrapper;
         ctx.tree.inherit_pointer_shape(id, el.pointer_shape);
         ctx.tree.inherit_host_drag(id, el.host_drag.clone());
         return id;
@@ -136,19 +152,44 @@ pub(crate) fn reconcile_element(ctx: &mut ReconcileCtx<'_>, args: ElementReconci
         .overlay_state
         .constraint_avail
         .unwrap_or((rect.w, rect.h));
-    let resolved_layout = el.layout.resolve_percentages(avail_w, avail_h);
+    let inherited_wrapper = ctx.overlay_state.wrapper_constraints;
+    let resolved_layout = match inherited_wrapper {
+        Some(outer) => crate::style::EffectiveLayoutConstraints::from(el.layout)
+            .merge_effective(outer)
+            .resolve_to_layout_constraints(avail_w, avail_h),
+        None => el.layout.resolve_percentages(avail_w, avail_h),
+    };
     let preserves_constraint_avail = matches!(
-        el.kind,
+        &el.kind,
         ElementKind::Group(_)
             | ElementKind::EffectScope(_)
             | ElementKind::Animated(_)
             | ElementKind::DragSource(_)
             | ElementKind::DropTarget(_)
-    );
+    ) || matches!(&el.kind, ElementKind::MouseRegion(r) if r.fit_child);
     let prev_constraint_avail = if preserves_constraint_avail {
         None
     } else {
         Some(ctx.overlay_state.constraint_avail.take())
+    };
+    let prev_wrapper_constraints = ctx.overlay_state.wrapper_constraints;
+    ctx.overlay_state.wrapper_constraints = if preserves_constraint_avail {
+        let mut combined = crate::style::EffectiveLayoutConstraints::from(el.layout);
+        if let Some(outer) = inherited_wrapper {
+            combined = combined.merge_effective(outer);
+        }
+        if let ElementKind::Animated(animated) = &el.kind
+            && (animated.height.is_some()
+                || (animated.collapse_visibility && animated.visibility.is_some()))
+        {
+            combined.min_h = crate::style::MinBound::ZERO;
+            combined.max_h = crate::style::MaxBound::NONE;
+            combined.focus_min_h = 0;
+            combined.collapse_h = None;
+        }
+        Some(combined)
+    } else {
+        None
     };
 
     let result_id = match &el.kind {
@@ -726,6 +767,7 @@ pub(crate) fn reconcile_element(ctx: &mut ReconcileCtx<'_>, args: ElementReconci
     if let Some(prev) = prev_constraint_avail {
         ctx.overlay_state.constraint_avail = prev;
     }
+    ctx.overlay_state.wrapper_constraints = prev_wrapper_constraints;
 
     // Incrementally track hover/mouse/animation capabilities instead of a
     // post-reconciliation full-tree DFS (refresh_hoverables).

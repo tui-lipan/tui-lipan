@@ -5,7 +5,7 @@ mod visibility;
 pub(crate) use visibility::prepare_visibility_reflow;
 pub(crate) use visibility::{VisibilityLayout, VisibilityLayoutHandle};
 
-pub(crate) use self::layout::measure_animated;
+pub(crate) use self::layout::measure_animated_within;
 pub use self::node::AnimatedNode;
 pub(crate) use self::reconcile::reconcile_animated;
 
@@ -15,7 +15,7 @@ use crate::animation::{ExitAnimation, TransitionConfig, VisibilityAnimation};
 use crate::callback::Callback;
 use crate::core::element::{Element, ElementKind};
 use crate::layout::hash::LayoutHash;
-use crate::style::{Color, LayoutConstraints, Length};
+use crate::style::{Color, Length};
 use crate::widgets::Spacer;
 
 /// Animate child opacity, revealed height, colors, and optional visual position changes.
@@ -321,12 +321,7 @@ impl Animated {
 
 impl From<Animated> for Element {
     fn from(value: Animated) -> Self {
-        let (min_w, min_h) = measure_animated(&value, None, None);
-        let mut layout = LayoutConstraints::default().min_width(Length::Px(min_w));
-        if value.height.is_none() && !value.collapse_visibility {
-            layout = layout.min_height(Length::Px(min_h));
-        }
-        Element::new(ElementKind::Animated(value)).with_layout(layout)
+        Element::new(ElementKind::Animated(value))
     }
 }
 

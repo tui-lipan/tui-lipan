@@ -63,8 +63,8 @@ fn natural_child_main_size(child: &Element, axis: Axis, available_cross: Option<
             // Resolve Percent min constraints against the element's own Px size.
             let constraints = child.layout_constraints();
             let min = match axis {
-                Axis::Vertical => constraints.min_h.resolve_as_min(px),
-                Axis::Horizontal => constraints.min_w.resolve_as_min(px),
+                Axis::Vertical => constraints.min_h.resolve(px),
+                Axis::Horizontal => constraints.min_w.resolve(px),
             };
             px.max(min)
         }

@@ -5,7 +5,7 @@
 
 // Internal re-exports (used by element.rs, layout.rs, node.rs).
 pub(crate) use super::animated::{
-    AnimatedNode, measure_animated, prepare_visibility_reflow, reconcile_animated,
+    AnimatedNode, measure_animated_within, prepare_visibility_reflow, reconcile_animated,
 };
 pub(crate) use super::ascii_canvas::{
     AsciiCanvasNode, measure_ascii_canvas, reconcile_ascii_canvas,
@@ -34,8 +34,8 @@ pub(crate) use super::document_view::{
     measure_document_view, measure_document_view_constrained, reconcile_document_view,
 };
 pub(crate) use super::drag_drop::{
-    DragSourceNode, DropTargetNode, measure_drag_source, measure_drop_target,
-    reconcile_drag_source, reconcile_drop_target,
+    DragSourceNode, DropTargetNode, drag_source_is_snapshot_collapsed, measure_drag_source_within,
+    measure_drop_target, reconcile_drag_source, reconcile_drop_target,
 };
 pub(crate) use super::draggable_tab_bar::{
     DraggableTabBarNode, measure_draggable_tab_bar, reconcile_draggable_tab_bar,
