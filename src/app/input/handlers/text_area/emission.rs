@@ -1,4 +1,12 @@
 use super::*;
+use crate::text::buffer::{
+    DeferredMetadataCallbacks, StagedMetadata, register_deferred_metadata_callbacks,
+};
+use crate::text::edit::EditMetadata;
+use crate::text::editor::{
+    custom_sentinel_required_len, image_sentinel_required_len, prune_images_for_value,
+    prune_sentinels_for_value,
+};
 
 pub(super) struct TextAreaEmission<'a> {
     pub(super) on_change: &'a Callback<TextAreaEvent>,
@@ -34,105 +42,195 @@ pub(super) fn emit_text_area_editor_change(
     editor: &mut TextEditor,
     emission: &TextAreaEmission<'_>,
 ) -> bool {
-    editor.remember_text_area_sentinels(emission.old_value, emission.sentinels);
-    let edit = editor.take_last_edit();
+    let mut edit = editor.take_last_edit();
+    let restored_metadata = editor.take_last_restored_metadata();
+    let is_history_replay = edit.is_none() && editor.text() != emission.old_value;
+    let mut current_value = editor.text().to_owned();
+    let cursor = editor.cursor();
+    let anchor = editor.anchor();
+
+    // Prune or restore images list if inline image sentinel chars changed.
+    // In attachment mode, sentinels are never inserted into the value,
+    // so sentinel-based pruning would incorrectly clear the images list.
+    let mut pending_images: Option<Vec<ImageContent>> = None;
+    let mut images_already_recorded_on_edit = false;
+    if emission.image_mode == TextAreaImageMode::Inline && emission.on_images_change.is_some() {
+        if is_history_replay {
+            if let Some(restored_images) = restored_metadata
+                .as_ref()
+                .and_then(|meta| meta.images.clone())
+            {
+                if restored_images.as_slice() != emission.images {
+                    pending_images = Some(restored_images);
+                }
+            } else {
+                let required_images = image_sentinel_required_len(&current_value);
+                if required_images == 0 && !emission.images.is_empty() {
+                    pending_images = Some(Vec::new());
+                }
+            }
+        } else if let Some(edit_images) = restored_metadata
+            .as_ref()
+            .and_then(|meta| meta.images.clone())
+        {
+            images_already_recorded_on_edit = true;
+            if edit_images.as_slice() != emission.images {
+                pending_images = Some(edit_images);
+            }
+        } else {
+            let required_images = image_sentinel_required_len(&current_value);
+            if required_images == 0 {
+                if !emission.images.is_empty() {
+                    pending_images = Some(Vec::new());
+                }
+            } else if required_images <= emission.images.len() {
+                let (pruned, remapped) = prune_images_for_value(&current_value, emission.images);
+                if let Some(remapped_val) = remapped {
+                    current_value = remapped_val;
+                }
+                if pruned.as_slice() != emission.images {
+                    pending_images = Some(pruned);
+                }
+            }
+        }
+    }
+
+    // Prune or restore custom sentinels list.
+    let mut pending_sentinels: Option<Vec<TextAreaSentinel>> = None;
+    let mut pending_sentinel_events: Vec<SentinelEvent> = Vec::new();
+    let mut sentinels_already_recorded_on_edit = false;
+    if emission.on_sentinels_change.is_some() || emission.on_sentinel_event.is_some() {
+        if is_history_replay {
+            if let Some(restored_sentinels) = restored_metadata.and_then(|meta| meta.sentinels) {
+                if restored_sentinels.as_slice() != emission.sentinels {
+                    pending_sentinel_events =
+                        deleted_sentinel_events(emission.sentinels, &restored_sentinels);
+                    pending_sentinels = Some(restored_sentinels);
+                }
+            } else {
+                let required_sentinels = custom_sentinel_required_len(&current_value);
+                if required_sentinels == 0 && !emission.sentinels.is_empty() {
+                    let (pruned, _, events) =
+                        prune_sentinels_for_value(&current_value, emission.sentinels);
+                    pending_sentinels = Some(pruned);
+                    pending_sentinel_events = events;
+                }
+            }
+        } else if let Some(edit_sentinels) = restored_metadata.and_then(|meta| meta.sentinels) {
+            sentinels_already_recorded_on_edit = true;
+            if edit_sentinels.as_slice() != emission.sentinels {
+                pending_sentinels = Some(edit_sentinels);
+            }
+        } else {
+            let required_sentinels = custom_sentinel_required_len(&current_value);
+            if required_sentinels == 0 {
+                if !emission.sentinels.is_empty() {
+                    let (pruned, _, events) =
+                        prune_sentinels_for_value(&current_value, emission.sentinels);
+                    pending_sentinels = Some(pruned);
+                    pending_sentinel_events = events;
+                }
+            } else if required_sentinels <= emission.sentinels.len() {
+                let (pruned, remapped, events) =
+                    prune_sentinels_for_value(&current_value, emission.sentinels);
+                if let Some(remapped_val) = remapped {
+                    current_value = remapped_val;
+                }
+                if pruned.as_slice() != emission.sentinels {
+                    pending_sentinels = Some(pruned);
+                    pending_sentinel_events = events;
+                }
+            }
+        }
+    }
+
+    // For new edits that remapped sentinels or changed image/sentinel metadata, rewrite the
+    // pending undo entry atomically so the recorded `TextEdit` owns both the final emitted text
+    // and its before/after metadata.
+    let needs_metadata_rewrite = !is_history_replay
+        && (current_value != editor.text()
+            || (pending_images.is_some() && !images_already_recorded_on_edit)
+            || (pending_sentinels.is_some() && !sentinels_already_recorded_on_edit));
+    if needs_metadata_rewrite {
+        let metadata =
+            (pending_images.is_some() || pending_sentinels.is_some()).then(|| EditMetadata {
+                images_before: pending_images.is_some().then(|| emission.images.to_vec()),
+                images_after: pending_images.clone(),
+                sentinels_before: pending_sentinels
+                    .is_some()
+                    .then(|| emission.sentinels.to_vec()),
+                sentinels_after: pending_sentinels.clone(),
+            });
+        if let Some(rewritten_edit) =
+            editor.rewrite_pending_edit_to(&current_value, cursor, anchor, metadata)
+        {
+            edit = Some(rewritten_edit);
+        }
+    }
+
+    let new_value: Arc<str> = Arc::from(editor.text().to_owned());
+    let cursor = editor.cursor();
+    let anchor = editor.anchor();
+
+    if editor.is_bound() {
+        let staged_metadata =
+            (pending_images.is_some() || pending_sentinels.is_some()).then(|| StagedMetadata {
+                images_before: pending_images.is_some().then(|| emission.images.to_vec()),
+                images: pending_images.clone(),
+                sentinels_before: pending_sentinels
+                    .is_some()
+                    .then(|| emission.sentinels.to_vec()),
+                sentinels: pending_sentinels.clone(),
+            });
+        let deferred_token = register_deferred_metadata_callbacks(DeferredMetadataCallbacks {
+            images: emission
+                .on_images_change
+                .cloned()
+                .zip(pending_images.take()),
+            sentinels: emission
+                .on_sentinels_change
+                .cloned()
+                .zip(pending_sentinels.take()),
+            sentinel_events: (!pending_sentinel_events.is_empty())
+                .then(|| {
+                    emission
+                        .on_sentinel_event
+                        .cloned()
+                        .map(|cb| (cb, std::mem::take(&mut pending_sentinel_events)))
+                })
+                .flatten(),
+        });
+        editor.stage_bound_history(&new_value, deferred_token, staged_metadata);
+    }
+
     if let (Some(cb), Some(edit)) = (emission.on_edit, edit.clone()) {
         cb.emit(edit);
     }
-    let mut new_value: Arc<str> = Arc::from(editor.text().to_owned());
-    let cursor = editor.cursor();
-    let anchor = editor.anchor();
     emission.on_change.emit(TextAreaEvent {
         value: new_value.clone(),
         cursor,
         anchor,
     });
-    emit_editor_state_change(
-        emission,
-        new_value.clone(),
-        cursor,
-        anchor,
-        edit.clone(),
-        None,
-    );
+    emit_editor_state_change(emission, new_value.clone(), cursor, anchor, edit, None);
 
-    // Prune or restore images list if inline image sentinel chars changed.
-    // In attachment mode, sentinels are never inserted into the value,
-    // so sentinel-based pruning would incorrectly clear the images list.
-    if emission.image_mode == TextAreaImageMode::Inline
-        && let Some(on_img_cb) = emission.on_images_change
-    {
-        editor.remember_text_area_images(emission.old_value, emission.images);
-        let required_images = image_sentinel_required_len(&new_value);
-        let image_source = if required_images == 0 {
-            (!emission.images.is_empty()).then(|| emission.images.to_vec())
-        } else if required_images <= emission.images.len() {
-            Some(emission.images.to_vec())
-        } else {
-            editor
-                .remembered_text_area_images(&new_value)
-                .filter(|images| required_images <= images.len())
-        };
-        if let Some(image_source) = image_source {
-            let (pruned, remapped) =
-                prune_images_for_value(emission.old_value, &new_value, &image_source);
-            if let Some(remapped_val) = remapped {
-                // Middle sentinel was deleted; remap chars and emit updated value.
-                let remapped_arc: Arc<str> = Arc::from(remapped_val);
-                emission.on_change.emit(TextAreaEvent {
-                    value: remapped_arc.clone(),
-                    cursor: editor.cursor(),
-                    anchor: editor.anchor(),
-                });
-                new_value = remapped_arc;
-            }
-            if pruned.as_slice() != emission.images {
-                on_img_cb.emit(pruned.clone());
-            }
-            editor.remember_text_area_images(&new_value, &pruned);
-        }
+    // Unbound TextAreas emit metadata callbacks immediately; bound TextAreas emit them only when
+    // the controlled text change is accepted via `apply_to` / `apply` / `apply_with_metadata`.
+    if let (Some(on_img_cb), Some(pruned)) = (emission.on_images_change, pending_images) {
+        on_img_cb.emit(pruned);
     }
-
-    // Prune or restore custom sentinels list.
-    let required_sentinels = custom_sentinel_required_len(&new_value);
-    let sentinel_source = if required_sentinels == 0 {
-        (!emission.sentinels.is_empty()).then(|| emission.sentinels.to_vec())
-    } else if required_sentinels <= emission.sentinels.len() {
-        Some(emission.sentinels.to_vec())
-    } else {
-        editor
-            .remembered_text_area_sentinels(&new_value)
-            .filter(|sentinels| required_sentinels <= sentinels.len())
-    };
-    if let Some(sentinel_source) = sentinel_source
-        && (emission.on_sentinels_change.is_some() || emission.on_sentinel_event.is_some())
-    {
-        let (pruned, remapped, events) = prune_sentinels_for_value(&new_value, &sentinel_source);
-        if let Some(remapped_val) = remapped {
-            let remapped_arc: Arc<str> = Arc::from(remapped_val);
-            emission.on_change.emit(TextAreaEvent {
-                value: remapped_arc.clone(),
-                cursor: editor.cursor(),
-                anchor: editor.anchor(),
-            });
-            new_value = remapped_arc;
+    if let Some(pruned) = pending_sentinels {
+        if let Some(on_sent_cb) = emission.on_sentinels_change {
+            on_sent_cb.emit(pruned);
         }
-        if pruned.as_slice() != emission.sentinels {
-            if let Some(on_sent_cb) = emission.on_sentinels_change {
-                on_sent_cb.emit(pruned.clone());
-            }
-            if !events.is_empty()
-                && let Some(ev_cb) = emission.on_sentinel_event
-            {
-                ev_cb.emit(events);
-            }
+        if !pending_sentinel_events.is_empty()
+            && let Some(ev_cb) = emission.on_sentinel_event
+        {
+            ev_cb.emit(pending_sentinel_events);
         }
-        editor.remember_text_area_sentinels(&new_value, &pruned);
     }
 
     if let NodeKind::TextArea(ta) = &mut tree.node_mut(id).kind {
-        ta.uncontrolled
-            .record_reported(new_value, editor.cursor(), editor.anchor());
+        ta.uncontrolled.record_reported(new_value, cursor, anchor);
     }
 
     cancel_text_area_smooth_scroll(tree, id);
@@ -169,189 +267,36 @@ pub(super) fn emit_editor_state_change(
     });
 }
 
-fn custom_sentinel_required_len(value: &str) -> usize {
-    let base = crate::widgets::SENTINEL_BASE as u32;
-    let private_use_end = 0xF900;
-    value
-        .chars()
-        .filter_map(|ch| {
-            let cp = ch as u32;
-            if cp >= base && cp < private_use_end {
-                Some((cp - base) as usize + 1)
-            } else {
-                None
-            }
-        })
-        .max()
-        .unwrap_or(0)
-}
+fn deleted_sentinel_events(
+    current: &[TextAreaSentinel],
+    next: &[TextAreaSentinel],
+) -> Vec<SentinelEvent> {
+    use crate::widgets::SentinelId;
 
-fn image_sentinel_required_len(value: &str) -> usize {
-    let base = crate::widgets::IMAGE_SENTINEL_BASE as u32;
-    let private_use_end = 0xE100;
-    value
-        .chars()
-        .filter_map(|ch| {
-            let cp = ch as u32;
-            if cp >= base && cp < private_use_end {
-                Some((cp - base) as usize + 1)
-            } else {
-                None
-            }
-        })
-        .max()
-        .unwrap_or(0)
-}
-
-/// Return a pruned images list that only keeps images still referenced by sentinel
-/// characters present in `new_value`.
-///
-/// In inline mode each image at index `i` is represented by the sentinel character
-/// `U+E000 + i`.  When the user deletes one of those characters the corresponding
-/// image must be removed from the list.
-///
-/// Returns `(pruned_images, Option<remapped_value>)`. When a middle sentinel is deleted,
-/// the remaining sentinel chars in the value are remapped to sequential indices so that
-/// the pruned list and the value stay consistent.
-pub(super) fn prune_images_for_value(
-    _old_value: &str,
-    new_value: &str,
-    images: &[crate::clipboard::ImageContent],
-) -> (Vec<crate::clipboard::ImageContent>, Option<String>) {
-    if images.is_empty() {
-        return (Vec::new(), None);
-    }
-    let sentinel_base = crate::IMAGE_SENTINEL_BASE as u32;
-    let max_sentinel = sentinel_base + images.len() as u32;
-    let mut present = vec![false; images.len()];
-    for ch in new_value.chars() {
-        let cp = ch as u32;
-        if cp >= sentinel_base && cp < max_sentinel {
-            let idx = (cp - sentinel_base) as usize;
-            present[idx] = true;
-        }
-    }
-    let pruned: Vec<crate::clipboard::ImageContent> = images
+    let mut remaining_idless: Vec<&TextAreaSentinel> = next
         .iter()
-        .enumerate()
-        .filter(|(i, _)| present[*i])
-        .map(|(_, img)| img.clone())
+        .filter(|sentinel| sentinel.sentinel_id().is_none())
         .collect();
-
-    // Build old_index → new_index mapping for remapping sentinel chars.
-    let mut remap: Vec<Option<usize>> = vec![None; images.len()];
-    let mut new_idx = 0usize;
-    for (old_idx, was_present) in present.iter().enumerate() {
-        if *was_present {
-            remap[old_idx] = Some(new_idx);
-            new_idx += 1;
-        }
-    }
-
-    // Check if any char needs remapping (gap was created).
-    let needs_remap = remap
-        .iter()
-        .enumerate()
-        .any(|(i, r)| r.is_some_and(|n| n != i));
-    let remapped_value = if needs_remap {
-        let mut out = String::with_capacity(new_value.len());
-        for ch in new_value.chars() {
-            let cp = ch as u32;
-            if cp >= sentinel_base && cp < max_sentinel {
-                let old_idx = (cp - sentinel_base) as usize;
-                if let Some(Some(new_i)) = remap.get(old_idx) {
-                    out.push(char::from_u32(sentinel_base + *new_i as u32).unwrap_or(ch));
-                } else {
-                    out.push(ch);
-                }
-            } else {
-                out.push(ch);
-            }
-        }
-        Some(out)
-    } else {
-        None
-    };
-
-    (pruned, remapped_value)
-}
-
-/// Prune the custom sentinels list when sentinel chars are removed from the value.
-///
-/// Returns `(pruned_sentinels, Option<remapped_value>)`. When a middle sentinel is deleted,
-/// the remaining sentinel chars in the value are remapped to sequential indices.
-pub(super) fn prune_sentinels_for_value(
-    new_value: &str,
-    sentinels: &[crate::widgets::TextAreaSentinel],
-) -> (
-    Vec<crate::widgets::TextAreaSentinel>,
-    Option<String>,
-    Vec<crate::widgets::SentinelEvent>,
-) {
-    use crate::widgets::{SentinelEvent, SentinelId};
-
-    if sentinels.is_empty() {
-        return (Vec::new(), None, Vec::new());
-    }
-    let sentinel_base = crate::widgets::SENTINEL_BASE as u32;
-    let max_sentinel = sentinel_base + sentinels.len() as u32;
-    let mut present = vec![false; sentinels.len()];
-    for ch in new_value.chars() {
-        let cp = ch as u32;
-        if cp >= sentinel_base && cp < max_sentinel {
-            let idx = (cp - sentinel_base) as usize;
-            present[idx] = true;
-        }
-    }
     let mut events = Vec::new();
-    for (i, was_present) in present.iter().enumerate() {
-        if !*was_present {
-            let s = &sentinels[i];
+    for sentinel in current {
+        let still_present = if let Some(id) = sentinel.sentinel_id() {
+            next.iter()
+                .any(|candidate| candidate.sentinel_id() == Some(id))
+        } else if let Some(pos) = remaining_idless
+            .iter()
+            .position(|candidate| *candidate == sentinel)
+        {
+            remaining_idless.remove(pos);
+            true
+        } else {
+            false
+        };
+        if !still_present {
             events.push(SentinelEvent::Deleted {
-                id: s.sentinel_id().unwrap_or(SentinelId::UNKNOWN),
-                sentinel: s.clone(),
+                id: sentinel.sentinel_id().unwrap_or(SentinelId::UNKNOWN),
+                sentinel: sentinel.clone(),
             });
         }
     }
-    let pruned: Vec<crate::widgets::TextAreaSentinel> = sentinels
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| present[*i])
-        .map(|(_, s)| s.clone())
-        .collect();
-
-    let mut remap: Vec<Option<usize>> = vec![None; sentinels.len()];
-    let mut new_idx = 0usize;
-    for (old_idx, was_present) in present.iter().enumerate() {
-        if *was_present {
-            remap[old_idx] = Some(new_idx);
-            new_idx += 1;
-        }
-    }
-
-    let needs_remap = remap
-        .iter()
-        .enumerate()
-        .any(|(i, r)| r.is_some_and(|n| n != i));
-    let remapped_value = if needs_remap {
-        let mut out = String::with_capacity(new_value.len());
-        for ch in new_value.chars() {
-            let cp = ch as u32;
-            if cp >= sentinel_base && cp < max_sentinel {
-                let old_idx = (cp - sentinel_base) as usize;
-                if let Some(Some(new_i)) = remap.get(old_idx) {
-                    out.push(char::from_u32(sentinel_base + *new_i as u32).unwrap_or(ch));
-                } else {
-                    out.push(ch);
-                }
-            } else {
-                out.push(ch);
-            }
-        }
-        Some(out)
-    } else {
-        None
-    };
-
-    (pruned, remapped_value, events)
+    events
 }

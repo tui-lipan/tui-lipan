@@ -135,6 +135,7 @@ pub(crate) fn handle_key(
     let read_only = ta.read_only;
     let cursor = ta.cursor;
     let anchor = ta.anchor;
+    let bound_history = ta.bound_history.clone();
     let value = ta.value.clone();
     let has_on_change = ta.on_change.is_some();
     let on_change = ta.on_change.clone();
@@ -224,11 +225,17 @@ pub(crate) fn handle_key(
                 editor.set_anchor(anchor);
                 editor
             });
-            editor.sync_from(value.as_ref(), cursor, anchor);
+            let mut editor = editor.sync_for_widget(
+                value.as_ref(),
+                cursor,
+                anchor,
+                bound_history.as_ref(),
+                !images.is_empty() || !sentinels.is_empty(),
+            );
 
             let dispatch = {
                 let mut context = TextAreaClipboardContext::new(
-                    editor,
+                    &mut editor,
                     TextAreaClipboardParams {
                         on_change: on_change.as_ref(),
                         on_edit: on_edit.as_ref(),
@@ -255,8 +262,9 @@ pub(crate) fn handle_key(
                 )
             };
             if dispatch.mutated {
-                sync_text_area_node_from_editor(tree, id, editor);
+                sync_text_area_node_from_editor(tree, id, &editor);
             }
+            drop(editor);
             clipboard_handled = ctx.record_copy_feedback_dispatch(dispatch);
         }
     }
@@ -294,7 +302,13 @@ pub(crate) fn handle_key(
             editor.set_anchor(anchor);
             editor
         });
-        editor.sync_from(value.as_ref(), cursor, anchor);
+        let mut editor = editor.sync_for_widget(
+            value.as_ref(),
+            cursor,
+            anchor,
+            bound_history.as_ref(),
+            !images.is_empty() || !sentinels.is_empty(),
+        );
 
         let newline_binding = effective_text_area_newline_binding(
             newline_binding_widget,
@@ -335,10 +349,10 @@ pub(crate) fn handle_key(
                 && vim_motions
                 && let Some(state) = ctx.text_area_vim_state.get_mut(&id)
             {
-                remap_vim_marks_for_last_edit(state, editor);
-                sync_text_area_vim_render_feedback(tree, id, state, editor);
+                remap_vim_marks_for_last_edit(state, &editor);
+                sync_text_area_vim_render_feedback(tree, id, state, &editor);
             }
-            return finish_text_area_edit_if_handled(tree, id, editor, &emission, handled)
+            return finish_text_area_edit_if_handled(tree, id, &mut editor, &emission, handled)
                 || on_key.as_ref().map(handle_on_key).unwrap_or(false);
         }
 
@@ -380,7 +394,7 @@ pub(crate) fn handle_key(
                 virtual_texts: &virtual_texts,
             };
             if let Some(outcome) = handle_text_area_vim_edit_command(
-                editor,
+                &mut editor,
                 state,
                 vim_key,
                 action,
@@ -390,7 +404,7 @@ pub(crate) fn handle_key(
                 sync_text_area_vim_after_key(
                     tree,
                     id,
-                    editor,
+                    &editor,
                     state,
                     ctx.copy_feedback,
                     ctx.clipboard_config,
@@ -405,7 +419,7 @@ pub(crate) fn handle_key(
                         vertical,
                         mode_changed,
                     } => {
-                        remap_vim_marks_for_last_edit(state, editor);
+                        remap_vim_marks_for_last_edit(state, &editor);
                         if let Some(mode) = mode_changed
                             && let Some(cb) = on_vim_mode_change.as_ref()
                         {
@@ -414,13 +428,14 @@ pub(crate) fn handle_key(
                         if !vertical {
                             editor.set_visual_nav_col(None);
                         }
-                        return emit_text_area_editor_change(tree, id, editor, &emission);
+                        return emit_text_area_editor_change(tree, id, &mut editor, &emission);
                     }
                     VimKeyOutcome::PassThrough | VimKeyOutcome::ModeChanged(_) => {}
                 }
             }
-            let outcome = dispatch_text_area_vim_key(editor, state, vim_key, action, &vim_layout);
-            sync_text_area_vim_render_feedback(tree, id, state, editor);
+            let outcome =
+                dispatch_text_area_vim_key(&mut editor, state, vim_key, action, &vim_layout);
+            sync_text_area_vim_render_feedback(tree, id, state, &editor);
             match outcome {
                 VimKeyOutcome::Unhandled => {
                     return on_key.as_ref().map(handle_on_key).unwrap_or(false);
@@ -445,7 +460,7 @@ pub(crate) fn handle_key(
                     vertical,
                     mode_changed,
                 } => {
-                    remap_vim_marks_for_last_edit(state, editor);
+                    remap_vim_marks_for_last_edit(state, &editor);
                     if let Some(mode) = mode_changed
                         && let Some(cb) = on_vim_mode_change.as_ref()
                     {
@@ -454,7 +469,7 @@ pub(crate) fn handle_key(
                     if !vertical {
                         editor.set_visual_nav_col(None);
                     }
-                    return emit_text_area_editor_change(tree, id, editor, &emission);
+                    return emit_text_area_editor_change(tree, id, &mut editor, &emission);
                 }
             }
         }
@@ -496,12 +511,12 @@ pub(crate) fn handle_key(
                     | Action::SelectVisualLineEnd
             )
         }) {
-            perform_visual_line_edge_nav(editor, action, lines)
+            perform_visual_line_edge_nav(&mut editor, action, lines)
         } else if let Some(lines) = visual_lines.as_deref().filter(|_| is_vert && wrap) {
             let sentinel =
                 sentinel_info_for(image_mode, images.len(), &image_placeholder, &sentinels);
             perform_visual_vertical_nav(
-                editor,
+                &mut editor,
                 action,
                 lines,
                 sentinel.as_ref(),
@@ -529,11 +544,11 @@ pub(crate) fn handle_key(
             && vim_motions
             && let Some(state) = ctx.text_area_vim_state.get_mut(&id)
         {
-            remap_vim_marks_for_last_edit(state, editor);
-            sync_text_area_vim_render_feedback(tree, id, state, editor);
+            remap_vim_marks_for_last_edit(state, &editor);
+            sync_text_area_vim_render_feedback(tree, id, state, &editor);
         }
 
-        if finish_text_area_edit_if_handled(tree, id, editor, &emission, handled) {
+        if finish_text_area_edit_if_handled(tree, id, &mut editor, &emission, handled) {
             true
         } else if let Some(cb) = on_key.as_ref() {
             handled = handle_on_key(cb);
@@ -566,6 +581,7 @@ pub(crate) fn handle_paste(
     let read_only = ta.read_only;
     let cursor = ta.cursor;
     let anchor = ta.anchor;
+    let bound_history = ta.bound_history.clone();
     let value = ta.value.clone();
     let has_on_change = ta.on_change.is_some();
     let on_change = ta.on_change.clone();
@@ -596,14 +612,20 @@ pub(crate) fn handle_paste(
         editor.set_anchor(anchor);
         editor
     });
-    editor.sync_from(value.as_ref(), cursor, anchor);
+    let mut editor = editor.sync_for_widget(
+        value.as_ref(),
+        cursor,
+        anchor,
+        bound_history.as_ref(),
+        !images.is_empty() || !sentinels.is_empty(),
+    );
 
     let before_text = editor.text().to_owned();
     let before_cursor = editor.cursor();
     let before_anchor = editor.anchor();
     let handled = {
         let mut context = TextAreaClipboardContext::new(
-            editor,
+            &mut editor,
             TextAreaClipboardParams {
                 on_change: on_change.as_ref(),
                 on_edit: on_edit.as_ref(),
@@ -626,12 +648,12 @@ pub(crate) fn handle_paste(
         || editor.anchor() != before_anchor;
     if handled {
         if mutated {
-            sync_text_area_node_from_editor(tree, id, editor);
+            sync_text_area_node_from_editor(tree, id, &editor);
         }
         if vim_motions && let Some(state) = ctx.text_area_vim_state.get_mut(&id) {
             exit_text_area_visual_mode_if_needed(state, on_vim_mode_change.as_ref());
-            remap_vim_marks_for_last_edit(state, editor);
-            sync_text_area_vim_render_feedback(tree, id, state, editor);
+            remap_vim_marks_for_last_edit(state, &editor);
+            sync_text_area_vim_render_feedback(tree, id, state, &editor);
         }
         cancel_text_area_smooth_scroll(tree, id);
     }

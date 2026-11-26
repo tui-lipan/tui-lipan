@@ -39,6 +39,7 @@ pub(crate) struct InputRenderCtx<'a> {
     pub hover_border_style: Option<BorderStyle>,
     pub mask: Option<char>,
     pub is_focused: bool,
+    pub show_static_caret: bool,
     pub is_hovered: bool,
     pub blink_visible: bool,
     pub disabled: bool,
@@ -76,6 +77,7 @@ pub(crate) fn render_input(
         hover_border_style,
         mask,
         is_focused,
+        show_static_caret,
         is_hovered,
         blink_visible,
         disabled,
@@ -435,7 +437,7 @@ pub(crate) fn render_input(
     }
 
     // Render cursor (only if no selection or at selection edge)
-    if is_focused && !disabled && !read_only {
+    if (is_focused || show_static_caret) && !disabled && !read_only {
         let cx = inner
             .x
             .saturating_add(prefix_w as i16)
@@ -559,12 +561,14 @@ pub(crate) fn render_input_node(
             hover_border_style: node.hover_border_style,
             mask: node.mask,
             is_focused,
+            show_static_caret: !is_focused && state.ctx.static_caret_node == Some(node_id),
             is_hovered,
-            blink_visible: crate::app::caret::caret_is_lit(
-                state.ctx.tree,
-                node_id,
-                state.ctx.blink_visible,
-            ),
+            blink_visible: (!is_focused && state.ctx.static_caret_node == Some(node_id))
+                || crate::app::caret::caret_is_lit(
+                    state.ctx.tree,
+                    node_id,
+                    state.ctx.blink_visible,
+                ),
             disabled: node.disabled,
             read_only: node.read_only,
             caret: CursorPlacement::tracked(state.ctx.cursor_position, state.ctx.tree, node_id),
@@ -617,6 +621,7 @@ mod tests {
             hover_border_style: None,
             mask: None,
             is_focused,
+            show_static_caret: false,
             is_hovered: false,
             blink_visible: true,
             disabled: false,

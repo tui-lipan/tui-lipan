@@ -1574,13 +1574,20 @@ where
             }
             _ => (None, None),
         };
+        let static_caret_node = crate::app::caret::preserved_caret_node(
+            &self.core.tree,
+            self.focused,
+            &self.focus_stack,
+        );
+        let caret_node =
+            crate::app::caret::caret_owner_node(&self.core.tree, self.focused, static_caret_node);
         crate::backend::ratatui_backend::capture_render::CaptureInteraction {
             copy_feedback: Some(&self.copy_feedback),
             focused: self.focused,
+            static_caret_node,
             hovered: self.mouse.hovered,
             mouse_pos: self.mouse.last_mouse.get(),
-            vim_mode: self
-                .focused
+            vim_mode: caret_node
                 .and_then(|id| self.widgets.text_area_vim_state.get(&id))
                 .map(|state| state.mode),
             drag_preview_node,

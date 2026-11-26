@@ -475,10 +475,39 @@ pub(crate) fn transition_selection_clear<C: Component, T: MouseDispatchCtx<C>>(
     if !is_down {
         return false;
     }
+    if hit_before_resolve.is_some_and(|id| is_in_selection_preserving_popover(ctx.tree(), id))
+        || scrollbar_target
+            .is_some_and(|target| is_in_selection_preserving_popover(ctx.tree(), target.id))
+    {
+        return false;
+    }
     let keep_selection = hit_before_resolve
         .and_then(|id| ctx.selection_owner_for_node(id))
         .or_else(|| scrollbar_target.and_then(|target| ctx.selection_owner_for_node(target.id)));
     ctx.clear_selectable_widget_selections(keep_selection)
+}
+
+fn is_in_selection_preserving_popover(tree: &NodeTree, start: NodeId) -> bool {
+    let mut child = start;
+    let mut current = tree
+        .is_valid(start)
+        .then(|| tree.node(start).parent)
+        .flatten();
+    while let Some(id) = current {
+        if !tree.is_valid(id) {
+            return false;
+        }
+        let node = tree.node(id);
+        if let NodeKind::Popover(popover) = &node.kind
+            && popover.preserve_selection
+            && *popover.content == child
+        {
+            return true;
+        }
+        child = id;
+        current = node.parent;
+    }
+    false
 }
 
 pub(crate) struct WidgetDownParams {

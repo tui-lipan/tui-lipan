@@ -311,9 +311,20 @@ impl<'a> TextAreaClipboardContext<'a> {
     }
 
     fn emit_change(&self, edit: Option<TextEditEvent>) {
+        self.emit_change_with_deferred(edit, None, None);
+    }
+
+    fn emit_change_with_deferred(
+        &self,
+        edit: Option<TextEditEvent>,
+        deferred_token: Option<u64>,
+        staged_metadata: Option<crate::text::buffer::StagedMetadata>,
+    ) {
         let value: Arc<str> = Arc::from(self.editor.text().to_owned());
         let cursor = self.editor.cursor();
         let anchor = self.editor.anchor();
+        self.editor
+            .stage_bound_history(&value, deferred_token, staged_metadata);
         if let Some(cb) = self.on_change {
             cb.emit(TextAreaEvent {
                 value: value.clone(),
@@ -444,17 +455,43 @@ impl ClipboardContext for TextAreaClipboardContext<'_> {
                 if !tail_starts_with_space {
                     text.push(' ');
                 }
-                if self.editor.insert_text(&text) {
+                if self.editor.insert_text_with_metadata(
+                    &text,
+                    crate::text::edit::EditMetadata {
+                        images_before: Some(self.images.to_vec()),
+                        images_after: Some(new_images.clone()),
+                        sentinels_before: None,
+                        sentinels_after: None,
+                    },
+                ) {
                     let edit = self.emit_edit();
-                    self.emit_change(edit);
+                    if self.editor.is_bound() && self.on_change.is_some() {
+                        let staged_metadata = Some(crate::text::buffer::StagedMetadata {
+                            images_before: Some(self.images.to_vec()),
+                            images: Some(new_images.clone()),
+                            sentinels_before: None,
+                            sentinels: None,
+                        });
+                        let deferred_token =
+                            crate::text::buffer::register_deferred_metadata_callbacks(
+                                crate::text::buffer::DeferredMetadataCallbacks {
+                                    images: Some((on_images_change.clone(), new_images)),
+                                    sentinels: None,
+                                    sentinel_events: None,
+                                },
+                            );
+                        self.emit_change_with_deferred(edit, deferred_token, staged_metadata);
+                    } else {
+                        self.emit_change(edit);
+                        on_images_change.emit(new_images);
+                    }
                 }
             }
             TextAreaImageMode::Attachment => {
                 // Attachment mode: do not modify the editor value; just update the list.
+                on_images_change.emit(new_images);
             }
         }
-
-        on_images_change.emit(new_images);
         true
     }
 

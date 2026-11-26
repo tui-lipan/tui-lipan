@@ -2,7 +2,27 @@ use std::marker::PhantomData;
 
 use std::sync::Arc;
 
+use crate::clipboard::ImageContent;
+use crate::widgets::TextAreaSentinel;
 use undo::{Edit, Merged};
+
+/// Inline image and custom sentinel metadata attached to a [`TextEdit`] so undo and redo restore
+/// the exact metadata for that history transition even when multiple history positions share
+/// identical text.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct EditMetadata {
+    pub(crate) images_before: Option<Vec<ImageContent>>,
+    pub(crate) images_after: Option<Vec<ImageContent>>,
+    pub(crate) sentinels_before: Option<Vec<TextAreaSentinel>>,
+    pub(crate) sentinels_after: Option<Vec<TextAreaSentinel>>,
+}
+
+/// Metadata produced when a [`TextEdit`] is applied or undone.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RestoredMetadata {
+    pub(crate) images: Option<Vec<ImageContent>>,
+    pub(crate) sentinels: Option<Vec<TextAreaSentinel>>,
+}
 
 pub(crate) trait TextTarget {
     fn with_parts_mut<R>(
@@ -63,6 +83,7 @@ pub(crate) struct TextEdit<T> {
     pub(crate) cursor_after: usize,
     pub(crate) anchor_after: Option<usize>,
     pub(crate) kind: TextEditKind,
+    pub(crate) metadata: Option<Box<EditMetadata>>,
     _target: PhantomData<T>,
 }
 
@@ -125,8 +146,14 @@ impl<T> TextEdit<T> {
             cursor_after: fields.cursor_after,
             anchor_after: fields.anchor_after,
             kind: fields.kind,
+            metadata: None,
             _target: PhantomData,
         }
+    }
+
+    pub(crate) fn with_metadata(mut self, metadata: Option<EditMetadata>) -> Self {
+        self.metadata = metadata.map(Box::new);
+        self
     }
 
     pub(crate) fn apply_to(
@@ -154,6 +181,9 @@ impl<T> TextEdit<T> {
     }
 
     pub(crate) fn merge_with(&mut self, other: Self) -> Merged<Self> {
+        if self.metadata.is_some() || other.metadata.is_some() {
+            return Merged::No(other);
+        }
         if self.kind == TextEditKind::DeleteBackspace
             && other.kind == TextEditKind::DeleteBackspace
             && self.inserted.is_empty()
@@ -228,18 +258,26 @@ impl<T> TextEdit<T> {
 
 impl<T: TextTarget> Edit for TextEdit<T> {
     type Target = T;
-    type Output = ();
+    type Output = Option<RestoredMetadata>;
 
     fn edit(&mut self, target: &mut Self::Target) -> Self::Output {
         target.with_parts_mut(|text, cursor, anchor| {
             self.apply_to(text, cursor, anchor);
         });
+        self.metadata.as_deref().map(|meta| RestoredMetadata {
+            images: meta.images_after.clone(),
+            sentinels: meta.sentinels_after.clone(),
+        })
     }
 
     fn undo(&mut self, target: &mut Self::Target) -> Self::Output {
         target.with_parts_mut(|text, cursor, anchor| {
             self.undo_on(text, cursor, anchor);
         });
+        self.metadata.as_deref().map(|meta| RestoredMetadata {
+            images: meta.images_before.clone(),
+            sentinels: meta.sentinels_before.clone(),
+        })
     }
 
     fn merge(&mut self, other: Self) -> Merged<Self> {

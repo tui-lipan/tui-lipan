@@ -1,5 +1,5 @@
 use crate::core::event::KeyEvent;
-use crate::text::buffer::TextBufferCore;
+use crate::text::buffer::{SharedHistory, TextBufferCore};
 use crate::text::edit::TextEditKind;
 use crate::utils::text::clamp_cursor;
 use crate::widgets::InputEvent;
@@ -67,8 +67,9 @@ impl TextInput {
                 text,
                 cursor,
                 anchor: None,
-                history: TextBufferCore::fresh_history(),
+                history: SharedHistory::fresh(),
                 last_edit: None,
+                last_restored_metadata: None,
             },
             history_scope: None,
         }

@@ -88,6 +88,7 @@ pub struct Popover {
     pub(crate) capture_pointer: bool,
     pub(crate) auto_focus: bool,
     pub(crate) close_on_escape: bool,
+    pub(crate) preserve_selection: bool,
 }
 
 impl Default for Popover {
@@ -128,6 +129,7 @@ impl Popover {
             capture_pointer: true,
             auto_focus: true,
             close_on_escape: true,
+            preserve_selection: false,
         }
     }
 
@@ -272,6 +274,16 @@ impl Popover {
         self
     }
 
+    /// Preserve active text selections in underlying widgets when clicking inside popup content
+    /// (default `false`).
+    ///
+    /// Context menus enable this so clicking actions such as Cut or Copy does not clear the
+    /// selection before the menu action handler runs.
+    pub fn preserve_selection(mut self, preserve_selection: bool) -> Self {
+        self.preserve_selection = preserve_selection;
+        self
+    }
+
     /// Set on-close callback.
     pub fn on_close(mut self, cb: Callback<()>) -> Self {
         self.on_close = Some(cb);
@@ -310,6 +322,7 @@ impl crate::layout::hash::LayoutHash for Popover {
         self.capture_pointer.hash(hasher);
         self.auto_focus.hash(hasher);
         self.close_on_escape.hash(hasher);
+        self.preserve_selection.hash(hasher);
         recurse(self.trigger.as_ref())?.hash(hasher);
         Some(())
     }

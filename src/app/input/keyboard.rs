@@ -412,6 +412,7 @@ fn dispatch_selection_clipboard_request(
                     .unwrap_or((node.cursor, node.anchor));
                 let disabled = node.disabled;
                 let read_only = node.read_only;
+                let bound_history = node.bound_history.clone();
                 let value = node.value.clone();
                 let on_change = node.on_change.clone();
                 let on_edit = node.on_edit.clone();
@@ -434,11 +435,17 @@ fn dispatch_selection_clipboard_request(
                         editor.set_anchor(anchor);
                         editor
                     });
-                    editor.sync_from(value.as_ref(), cursor, anchor);
+                    let mut editor = editor.sync_for_widget(
+                        value.as_ref(),
+                        cursor,
+                        anchor,
+                        bound_history.as_ref(),
+                        !images.is_empty() || !sentinels.is_empty(),
+                    );
 
                     let dispatch = {
                         let mut context = TextAreaClipboardContext::new(
-                            editor,
+                            &mut editor,
                             TextAreaClipboardParams {
                                 on_change: on_change.as_ref(),
                                 on_edit: on_edit.as_ref(),
@@ -474,6 +481,7 @@ fn dispatch_selection_clipboard_request(
                             editor.anchor(),
                         )
                     });
+                    drop(editor);
                     let handled = ctx.record_copy_feedback_dispatch(dispatch);
                     if let Some((reported_value, reported_cursor, reported_anchor)) = reported
                         && let NodeKind::TextArea(node) = &mut tree.node_mut(id).kind

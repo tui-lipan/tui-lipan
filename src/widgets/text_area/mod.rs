@@ -218,6 +218,7 @@ pub struct TextArea {
     pub(crate) cursor: usize,         // byte index
     pub(crate) anchor: Option<usize>, // selection anchor byte index
     pub(crate) cursor_controlled: bool,
+    pub(crate) bound_history: Option<crate::text::buffer::SharedHistoryHandle>,
     pub(crate) placeholder: Option<Arc<str>>,
     pub(crate) style: Style,
     pub(crate) hover_style: StyleSlot,
@@ -353,6 +354,7 @@ impl Default for TextArea {
             cursor: 0,
             anchor: None,
             cursor_controlled: false,
+            bound_history: None,
             placeholder: None,
             style: Style::default(),
             hover_style: StyleSlot::Inherit,
@@ -473,6 +475,7 @@ impl TextArea {
     /// Set the text content.
     pub fn value(mut self, value: impl Into<Arc<str>>) -> Self {
         self.value = value.into();
+        self.bound_history = None;
         self
     }
 
@@ -503,6 +506,7 @@ impl TextArea {
         self.cursor = state.cursor();
         self.anchor = state.anchor();
         self.cursor_controlled = true;
+        self.bound_history = Some(state.core.share_history());
         self
     }
 
@@ -1435,12 +1439,14 @@ pub struct TextAreaPasteEvent {
 
 impl TextAreaEvent {
     /// Apply this event to a [`TextEditor`] state bundle.
+    ///
+    /// When the event matches an uncommitted edit from a bound [`TextArea`], commits that edit's
+    /// undo history atomically. If the application transformed `value` before calling `apply_to`,
+    /// records a consistent replacement edit instead of committing the mismatched runtime record.
     pub fn apply_to(&self, state: &mut TextEditor) {
-        state.core.text = self.value.to_string();
-        state.core.cursor = crate::utils::text::clamp_cursor(&state.core.text, self.cursor);
-        state.core.anchor = self
-            .anchor
-            .map(|anchor| crate::utils::text::clamp_cursor(&state.core.text, anchor));
+        state
+            .core
+            .apply_controlled_change(self.value.as_ref(), self.cursor, self.anchor);
     }
 }
 

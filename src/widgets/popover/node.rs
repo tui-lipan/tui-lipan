@@ -22,6 +22,8 @@ pub struct PopoverNode {
     pub auto_focus: bool,
     /// Whether `Esc` dismisses the root overlay directly or passes through to content.
     pub close_on_escape: bool,
+    /// Whether clicking inside popup content preserves active text selections in underlying widgets.
+    pub preserve_selection: bool,
     /// Exclusive bottom row (in content-local coordinates) needed to display
     /// this popover within an auto-height inline viewport.
     pub(crate) desired_bottom: u16,

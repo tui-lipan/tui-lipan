@@ -875,6 +875,7 @@ pub(crate) struct TextAreaScrollRenderCtx<'a> {
 
 pub(crate) struct TextAreaInteractionRenderCtx<'a> {
     pub is_focused: bool,
+    pub show_static_caret: bool,
     pub show_selection_when_unfocused: bool,
     pub is_hovered: bool,
     pub blink_visible: bool,
@@ -1000,6 +1001,7 @@ pub(crate) fn render_text_area(
     } = scroll;
     let TextAreaInteractionRenderCtx {
         is_focused,
+        show_static_caret,
         show_selection_when_unfocused,
         is_hovered,
         blink_visible,
@@ -1813,8 +1815,8 @@ pub(crate) fn render_text_area(
     }
 
     // 4. Render Cursor
-    if is_focused && !disabled && !read_only {
-        if let (Some(feedback), Some(y)) = (pending_search_feedback, search_bar_y) {
+    if (is_focused || show_static_caret) && !disabled && !read_only {
+        if is_focused && let (Some(feedback), Some(y)) = (pending_search_feedback, search_bar_y) {
             let prompt_width = inner.w;
             if prompt_width > 0 {
                 let cx = inner
@@ -2349,13 +2351,15 @@ pub(crate) fn render_text_area_node(
             },
             interaction: TextAreaInteractionRenderCtx {
                 is_focused,
+                show_static_caret: !is_focused && state.ctx.static_caret_node == Some(node.id),
                 show_selection_when_unfocused: ta.show_selection_when_unfocused,
                 is_hovered,
-                blink_visible: crate::app::caret::caret_is_lit(
-                    state.ctx.tree,
-                    node.id,
-                    state.ctx.blink_visible,
-                ),
+                blink_visible: (!is_focused && state.ctx.static_caret_node == Some(node.id))
+                    || crate::app::caret::caret_is_lit(
+                        state.ctx.tree,
+                        node.id,
+                        state.ctx.blink_visible,
+                    ),
                 disabled: ta.disabled,
                 read_only: ta.read_only,
                 caret: CursorPlacement::tracked(state.ctx.cursor_position, state.ctx.tree, node.id),

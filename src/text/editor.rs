@@ -2,13 +2,15 @@
 
 use crate::clipboard::ImageContent;
 use crate::core::event::KeyEvent;
-use crate::text::buffer::TextBufferCore;
-use crate::text::edit::TextEditKind;
+use crate::text::buffer::{
+    CoreEdit, SharedHistory, SharedHistoryHandle, StagedMetadata, TextBufferCore,
+};
+use crate::text::edit::{EditMetadata, RestoredMetadata, TextEditEvent, TextEditKind};
 use crate::utils::text::clamp_cursor;
-use crate::widgets::{TextAreaEvent, TextAreaSentinel};
+use crate::widgets::{SentinelEvent, SentinelId, TextAreaEvent, TextAreaSentinel};
 use std::ops::{Deref, DerefMut};
-
-const SENTINEL_SNAPSHOT_LIMIT: usize = 1000;
+use std::sync::Arc;
+use undo::Record;
 
 /// A multi-line text editor with selection support.
 ///
@@ -22,8 +24,6 @@ const SENTINEL_SNAPSHOT_LIMIT: usize = 1000;
 pub struct TextEditor {
     pub(crate) core: TextBufferCore,
     pending_external_paste: Option<PendingExternalPaste>,
-    image_snapshots: Vec<ImageSnapshot>,
-    sentinel_snapshots: Vec<SentinelSnapshot>,
     /// Sticky visual column used for wrap-aware vertical navigation.
     /// Cleared whenever the cursor moves due to anything other than
     /// visual up/down (including external cursor sync, edits, horizontal
@@ -33,6 +33,59 @@ pub struct TextEditor {
     /// Set after moving to the end of a soft-wrapped row. That byte is also where the next row
     /// starts, so this records that the caret still counts as on the row it came from.
     pub(crate) visual_row_end: Option<usize>,
+    /// Pre-edit snapshot and optional bound history target active during a single runtime
+    /// `TextArea` key/paste/clipboard operation.
+    active_tx: ActiveEditTransaction,
+}
+
+#[derive(Debug, Default)]
+struct ActiveEditTransaction(Option<PendingEditTransaction>);
+
+impl Clone for ActiveEditTransaction {
+    fn clone(&self) -> Self {
+        Self(None)
+    }
+}
+
+#[derive(Debug)]
+struct PendingEditTransaction {
+    pre_text: String,
+    pre_cursor: usize,
+    pre_anchor: Option<usize>,
+    /// Copy-on-write pre-edit record captured only when needed for sentinel remapping.
+    pre_record: Option<Arc<Record<CoreEdit>>>,
+    pre_generation: u64,
+    bound: Option<(SharedHistoryHandle, u64)>,
+}
+
+/// RAII guard that scopes a single runtime [`TextArea`](crate::widgets::TextArea) edit
+/// transaction against an optional bound [`TextEditor`]'s shared undo history.
+///
+/// Bound edits run on a copy-on-write snapshot and are staged on the bound history handle right
+/// before emitting `on_change`, so rejected or transformed controlled events can never corrupt
+/// the bound `TextEditor`'s committed undo stack, and non-mutating keys avoid deep clones.
+pub(crate) struct BoundEditorGuard<'a> {
+    editor: &'a mut TextEditor,
+}
+
+impl Deref for BoundEditorGuard<'_> {
+    type Target = TextEditor;
+
+    fn deref(&self) -> &Self::Target {
+        self.editor
+    }
+}
+
+impl DerefMut for BoundEditorGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.editor
+    }
+}
+
+impl Drop for BoundEditorGuard<'_> {
+    fn drop(&mut self) {
+        self.editor.active_tx.0 = None;
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -40,18 +93,6 @@ struct PendingExternalPaste {
     text_before: String,
     cursor_before: usize,
     anchor_before: Option<usize>,
-}
-
-#[derive(Clone, Debug)]
-struct ImageSnapshot {
-    text: String,
-    images: Vec<ImageContent>,
-}
-
-#[derive(Clone, Debug)]
-struct SentinelSnapshot {
-    text: String,
-    sentinels: Vec<TextAreaSentinel>,
 }
 
 impl Default for TextEditor {
@@ -91,14 +132,14 @@ impl TextEditor {
                 text,
                 cursor: 0,
                 anchor: None,
-                history: TextBufferCore::fresh_history(),
+                history: SharedHistory::fresh(),
                 last_edit: None,
+                last_restored_metadata: None,
             },
             pending_external_paste: None,
-            image_snapshots: Vec::new(),
-            sentinel_snapshots: Vec::new(),
             visual_nav_col: None,
             visual_row_end: None,
+            active_tx: ActiveEditTransaction::default(),
         }
     }
 
@@ -141,6 +182,149 @@ impl TextEditor {
         }
     }
 
+    /// Reconcile the runtime editor with a [`TextArea`](crate::widgets::TextArea) node's current
+    /// `(text, cursor, anchor)`.
+    ///
+    /// When `bound_history` is `Some`, checks out an O(1) copy-on-write snapshot of the bound
+    /// [`TextEditor`]'s authoritative history so runtime edits remain transactional until
+    /// accepted via [`TextAreaEvent::apply_to`] or [`TextEditor::apply`], while non-mutating
+    /// operations (such as cursor navigation) never deep-clone the undo record.
+    ///
+    /// When `track_sentinel_remap` is `true`, also retains a copy-on-write pre-edit checkpoint so
+    /// sentinel renumbering can rewrite the active edit transaction atomically.
+    pub(crate) fn sync_for_widget<'a>(
+        &'a mut self,
+        text: &str,
+        cursor: usize,
+        anchor: Option<usize>,
+        bound_history: Option<&SharedHistoryHandle>,
+        track_sentinel_remap: bool,
+    ) -> BoundEditorGuard<'a> {
+        if let Some(handle) = bound_history {
+            let prev_cursor = self.core.cursor;
+            let text_changed = self.core.text != text;
+            self.pending_external_paste = None;
+            if text_changed {
+                self.core.text = text.to_string();
+            }
+            self.core.cursor = clamp_cursor(&self.core.text, cursor);
+            self.core.anchor = anchor.map(|a| clamp_cursor(&self.core.text, a));
+            if text_changed || self.core.cursor != prev_cursor {
+                self.visual_nav_col = None;
+                self.visual_row_end = None;
+            }
+            let (starting_record, base_generation) = handle.checkout_for_text(&self.core.text);
+            let pre_record = track_sentinel_remap.then(|| Arc::clone(&starting_record));
+            self.core.history = SharedHistory::from_arc_record(starting_record);
+            self.active_tx.0 = Some(PendingEditTransaction {
+                pre_text: if track_sentinel_remap {
+                    self.core.text.clone()
+                } else {
+                    String::new()
+                },
+                pre_cursor: self.core.cursor,
+                pre_anchor: self.core.anchor,
+                pre_record,
+                pre_generation: 0,
+                bound: Some((handle.clone(), base_generation)),
+            });
+            BoundEditorGuard { editor: self }
+        } else {
+            self.sync_from(text, cursor, anchor);
+            let pre_record = track_sentinel_remap.then(|| self.core.history.snapshot());
+            let pre_generation = self.core.history.generation();
+            self.active_tx.0 = Some(PendingEditTransaction {
+                pre_text: if track_sentinel_remap {
+                    self.core.text.clone()
+                } else {
+                    String::new()
+                },
+                pre_cursor: self.core.cursor,
+                pre_anchor: self.core.anchor,
+                pre_record,
+                pre_generation,
+                bound: None,
+            });
+            BoundEditorGuard { editor: self }
+        }
+    }
+
+    pub(crate) fn is_bound(&self) -> bool {
+        self.active_tx
+            .0
+            .as_ref()
+            .is_some_and(|tx| tx.bound.is_some())
+    }
+
+    pub(crate) fn take_last_restored_metadata(&mut self) -> Option<RestoredMetadata> {
+        self.core.take_last_restored_metadata()
+    }
+
+    /// Replace the active edit transaction's history entry with a single atomic replacement from
+    /// the pre-edit text to `final_text` (e.g. after sentinel deletion or renumbering), attaching
+    /// optional image/sentinel metadata directly to the recorded edit.
+    pub(crate) fn rewrite_pending_edit_to(
+        &mut self,
+        final_text: &str,
+        final_cursor: usize,
+        final_anchor: Option<usize>,
+        metadata: Option<EditMetadata>,
+    ) -> Option<TextEditEvent> {
+        let pre = self.active_tx.0.as_ref()?;
+        let pre_record = pre.pre_record.as_ref().map(Arc::clone)?;
+        let pre_text = pre.pre_text.clone();
+        let pre_cursor = pre.pre_cursor;
+        let pre_anchor = pre.pre_anchor;
+
+        self.core.text = pre_text;
+        self.core.cursor = pre_cursor;
+        self.core.anchor = pre_anchor;
+        self.core.history = SharedHistory::from_arc_record(pre_record);
+        let event = self.core.record_full_replace_edit(
+            final_text,
+            pre_cursor,
+            pre_anchor,
+            final_cursor,
+            final_anchor,
+            metadata,
+        );
+        self.core.last_edit = None;
+        self.core.last_restored_metadata = None;
+        if let Some(tx) = self.active_tx.0.as_mut() {
+            // `from_arc_record` starts local generation at 0 and `record_full_replace_edit`
+            // bumped it to 1, so `pre_generation` must be 0 to mark the transaction as mutated.
+            tx.pre_generation = 0;
+        }
+        Some(event)
+    }
+
+    /// Stage the working history snapshot (and any deferred metadata callbacks) onto the bound
+    /// handle right before emitting `on_change` so `TextAreaEvent::apply_to` /
+    /// `TextEditor::apply` / `TextEditor::apply_with_metadata` can commit them atomically.
+    pub(crate) fn stage_bound_history(
+        &self,
+        expected_text: &Arc<str>,
+        deferred_callbacks_token: Option<u64>,
+        staged_metadata: Option<StagedMetadata>,
+    ) {
+        let Some(tx) = self.active_tx.0.as_ref() else {
+            return;
+        };
+        let Some((handle, base_generation)) = tx.bound.as_ref() else {
+            return;
+        };
+        if self.core.history.generation() == tx.pre_generation {
+            return;
+        }
+        handle.stage_step(
+            *base_generation,
+            expected_text.clone(),
+            self.core.history.snapshot(),
+            deferred_callbacks_token,
+            staged_metadata,
+        );
+    }
+
     pub(crate) fn expect_external_paste_change(&mut self) {
         self.core.normalize_cursor_and_anchor();
         self.pending_external_paste = Some(PendingExternalPaste {
@@ -150,69 +334,124 @@ impl TextEditor {
         });
     }
 
-    pub(crate) fn remember_text_area_sentinels(
+    /// Undo the most recent edit and synchronize any tracked inline image metadata with the
+    /// restored text.
+    pub fn undo_with_images(&mut self, images: &mut Vec<ImageContent>) -> bool {
+        self.undo_with_metadata(Some(images), None)
+    }
+
+    /// Redo the most recently undone edit and synchronize any tracked inline image metadata with
+    /// the restored text.
+    pub fn redo_with_images(&mut self, images: &mut Vec<ImageContent>) -> bool {
+        self.redo_with_metadata(Some(images), None)
+    }
+
+    /// Undo the most recent edit and synchronize any tracked custom sentinel metadata with the
+    /// restored text.
+    pub fn undo_with_sentinels(&mut self, sentinels: &mut Vec<TextAreaSentinel>) -> bool {
+        self.undo_with_metadata(None, Some(sentinels))
+    }
+
+    /// Redo the most recently undone edit and synchronize any tracked custom sentinel metadata
+    /// with the restored text.
+    pub fn redo_with_sentinels(&mut self, sentinels: &mut Vec<TextAreaSentinel>) -> bool {
+        self.redo_with_metadata(None, Some(sentinels))
+    }
+
+    /// Undo the most recent edit and synchronize any tracked inline image and/or custom sentinel
+    /// metadata with the restored text.
+    pub fn undo_with_metadata(
         &mut self,
-        text: &str,
-        sentinels: &[TextAreaSentinel],
+        images: Option<&mut Vec<ImageContent>>,
+        sentinels: Option<&mut Vec<TextAreaSentinel>>,
+    ) -> bool {
+        self.replay_history_with_metadata(true, images, sentinels)
+    }
+
+    /// Redo the most recently undone edit and synchronize any tracked inline image and/or custom
+    /// sentinel metadata with the restored text.
+    pub fn redo_with_metadata(
+        &mut self,
+        images: Option<&mut Vec<ImageContent>>,
+        sentinels: Option<&mut Vec<TextAreaSentinel>>,
+    ) -> bool {
+        self.replay_history_with_metadata(false, images, sentinels)
+    }
+
+    /// Apply a [`TextAreaEvent`] and any staged inline image update atomically.
+    pub fn apply_with_images(&mut self, ev: &TextAreaEvent, images: &mut Vec<ImageContent>) {
+        self.apply_with_metadata(ev, Some(images), None);
+    }
+
+    /// Apply a [`TextAreaEvent`] and any staged custom sentinel update atomically.
+    pub fn apply_with_sentinels(
+        &mut self,
+        ev: &TextAreaEvent,
+        sentinels: &mut Vec<TextAreaSentinel>,
     ) {
-        if sentinels.is_empty() {
-            return;
-        }
-
-        if let Some(pos) = self
-            .sentinel_snapshots
-            .iter()
-            .position(|snapshot| snapshot.text == text)
-        {
-            self.sentinel_snapshots.remove(pos);
-        }
-        self.sentinel_snapshots.push(SentinelSnapshot {
-            text: text.to_owned(),
-            sentinels: sentinels.to_vec(),
-        });
-        if self.sentinel_snapshots.len() > SENTINEL_SNAPSHOT_LIMIT {
-            self.sentinel_snapshots.remove(0);
-        }
+        self.apply_with_metadata(ev, None, Some(sentinels));
     }
 
-    pub(crate) fn remembered_text_area_sentinels(
-        &self,
-        text: &str,
-    ) -> Option<Vec<TextAreaSentinel>> {
-        self.sentinel_snapshots
-            .iter()
-            .rev()
-            .find(|snapshot| snapshot.text == text)
-            .map(|snapshot| snapshot.sentinels.clone())
+    /// Apply a [`TextAreaEvent`] together with any staged inline image and/or custom sentinel
+    /// updates atomically.
+    pub fn apply_with_metadata(
+        &mut self,
+        ev: &TextAreaEvent,
+        images: Option<&mut Vec<ImageContent>>,
+        sentinels: Option<&mut Vec<TextAreaSentinel>>,
+    ) {
+        self.core.apply_controlled_change_with_metadata(
+            ev.value.as_ref(),
+            ev.cursor,
+            ev.anchor,
+            images,
+            sentinels,
+        );
     }
 
-    pub(crate) fn remember_text_area_images(&mut self, text: &str, images: &[ImageContent]) {
-        if images.is_empty() {
-            return;
+    fn replay_history_with_metadata(
+        &mut self,
+        is_undo: bool,
+        images: Option<&mut Vec<ImageContent>>,
+        sentinels: Option<&mut Vec<TextAreaSentinel>>,
+    ) -> bool {
+        let changed = if is_undo {
+            self.core.undo()
+        } else {
+            self.core.redo()
+        };
+        if !changed {
+            return false;
         }
-
-        if let Some(pos) = self
-            .image_snapshots
-            .iter()
-            .position(|snapshot| snapshot.text == text)
-        {
-            self.image_snapshots.remove(pos);
+        let restored = self.core.take_last_restored_metadata();
+        let restored_text = self.text().to_owned();
+        if let Some(imgs) = images {
+            if let Some(next_images) = restored.as_ref().and_then(|meta| meta.images.clone()) {
+                *imgs = next_images;
+            } else {
+                let required = image_sentinel_required_len(&restored_text);
+                if required == 0 {
+                    imgs.clear();
+                } else if required <= imgs.len() {
+                    let (pruned, _) = prune_images_for_value(&restored_text, imgs);
+                    *imgs = pruned;
+                }
+            }
         }
-        self.image_snapshots.push(ImageSnapshot {
-            text: text.to_owned(),
-            images: images.to_vec(),
-        });
-        if self.image_snapshots.len() > SENTINEL_SNAPSHOT_LIMIT {
-            self.image_snapshots.remove(0);
+        if let Some(sents) = sentinels {
+            if let Some(next_sentinels) = restored.and_then(|meta| meta.sentinels) {
+                *sents = next_sentinels;
+            } else {
+                let required = custom_sentinel_required_len(&restored_text);
+                if required == 0 {
+                    sents.clear();
+                } else if required <= sents.len() {
+                    let (pruned, _, _) = prune_sentinels_for_value(&restored_text, sents);
+                    *sents = pruned;
+                }
+            }
         }
-    }
-
-    pub(crate) fn remembered_text_area_images(&self, text: &str) -> Option<Vec<ImageContent>> {
-        self.image_snapshots
-            .iter()
-            .rev()
-            .find(|snapshot| snapshot.text == text)
-            .map(|snapshot| snapshot.images.clone())
+        true
     }
 
     pub(crate) fn insert_text(&mut self, text: &str) -> bool {
@@ -225,6 +464,23 @@ impl TextEditor {
             .unwrap_or((self.core.cursor, self.core.cursor));
         self.core
             .replace_range(start, end, text, TextEditKind::Replace)
+    }
+
+    pub(crate) fn insert_text_with_metadata(&mut self, text: &str, metadata: EditMetadata) -> bool {
+        if text.is_empty() {
+            return false;
+        }
+        let (start, end) = self
+            .core
+            .selection()
+            .unwrap_or((self.core.cursor, self.core.cursor));
+        self.core.replace_range_with_metadata(
+            start,
+            end,
+            text,
+            TextEditKind::Replace,
+            Some(metadata),
+        )
     }
 
     /// Clear all text while preserving undo/redo history.
@@ -329,11 +585,7 @@ impl TextEditor {
 
     /// Apply a [`TextAreaEvent`] to this state bundle.
     pub fn apply(&mut self, ev: &TextAreaEvent) {
-        self.core.text = ev.value.to_string();
-        self.core.cursor = clamp_cursor(&self.core.text, ev.cursor);
-        self.core.anchor = ev
-            .anchor
-            .map(|anchor| clamp_cursor(&self.core.text, anchor));
+        ev.apply_to(self);
     }
 
     /// Handle a key event.
@@ -593,6 +845,184 @@ impl TextEditor {
             }
         }
     }
+}
+
+pub(crate) fn custom_sentinel_required_len(value: &str) -> usize {
+    let base = crate::widgets::SENTINEL_BASE as u32;
+    let private_use_end = 0xF900;
+    value
+        .chars()
+        .filter_map(|ch| {
+            let cp = ch as u32;
+            if cp >= base && cp < private_use_end {
+                Some((cp - base) as usize + 1)
+            } else {
+                None
+            }
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+pub(crate) fn image_sentinel_required_len(value: &str) -> usize {
+    let base = crate::widgets::IMAGE_SENTINEL_BASE as u32;
+    let private_use_end = 0xE100;
+    value
+        .chars()
+        .filter_map(|ch| {
+            let cp = ch as u32;
+            if cp >= base && cp < private_use_end {
+                Some((cp - base) as usize + 1)
+            } else {
+                None
+            }
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+/// Return a pruned images list that only keeps images still referenced by sentinel
+/// characters present in `new_value`.
+///
+/// In inline mode each image at index `i` is represented by the sentinel character
+/// `U+E000 + i`. When the user deletes one of those characters the corresponding
+/// image must be removed from the list.
+///
+/// Returns `(pruned_images, Option<remapped_value>)`. When a middle sentinel is deleted,
+/// the remaining sentinel chars in the value are remapped to sequential indices so that
+/// the pruned list and the value stay consistent.
+pub(crate) fn prune_images_for_value(
+    new_value: &str,
+    images: &[ImageContent],
+) -> (Vec<ImageContent>, Option<String>) {
+    if images.is_empty() {
+        return (Vec::new(), None);
+    }
+    let sentinel_base = crate::IMAGE_SENTINEL_BASE as u32;
+    let max_sentinel = sentinel_base + images.len() as u32;
+    let mut present = vec![false; images.len()];
+    for ch in new_value.chars() {
+        let cp = ch as u32;
+        if cp >= sentinel_base && cp < max_sentinel {
+            let idx = (cp - sentinel_base) as usize;
+            present[idx] = true;
+        }
+    }
+    let pruned: Vec<ImageContent> = images
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| present[*i])
+        .map(|(_, img)| img.clone())
+        .collect();
+
+    let mut remap: Vec<Option<usize>> = vec![None; images.len()];
+    let mut new_idx = 0usize;
+    for (old_idx, was_present) in present.iter().enumerate() {
+        if *was_present {
+            remap[old_idx] = Some(new_idx);
+            new_idx += 1;
+        }
+    }
+
+    let needs_remap = remap
+        .iter()
+        .enumerate()
+        .any(|(i, r)| r.is_some_and(|n| n != i));
+    let remapped_value = if needs_remap {
+        let mut out = String::with_capacity(new_value.len());
+        for ch in new_value.chars() {
+            let cp = ch as u32;
+            if cp >= sentinel_base && cp < max_sentinel {
+                let old_idx = (cp - sentinel_base) as usize;
+                if let Some(Some(new_i)) = remap.get(old_idx) {
+                    out.push(char::from_u32(sentinel_base + *new_i as u32).unwrap_or(ch));
+                } else {
+                    out.push(ch);
+                }
+            } else {
+                out.push(ch);
+            }
+        }
+        Some(out)
+    } else {
+        None
+    };
+
+    (pruned, remapped_value)
+}
+
+/// Prune the custom sentinels list when sentinel chars are removed from the value.
+///
+/// Returns `(pruned_sentinels, Option<remapped_value>, deleted_events)`. When a middle sentinel
+/// is deleted, the remaining sentinel chars in the value are remapped to sequential indices.
+pub(crate) fn prune_sentinels_for_value(
+    new_value: &str,
+    sentinels: &[TextAreaSentinel],
+) -> (Vec<TextAreaSentinel>, Option<String>, Vec<SentinelEvent>) {
+    if sentinels.is_empty() {
+        return (Vec::new(), None, Vec::new());
+    }
+    let sentinel_base = crate::widgets::SENTINEL_BASE as u32;
+    let max_sentinel = sentinel_base + sentinels.len() as u32;
+    let mut present = vec![false; sentinels.len()];
+    for ch in new_value.chars() {
+        let cp = ch as u32;
+        if cp >= sentinel_base && cp < max_sentinel {
+            let idx = (cp - sentinel_base) as usize;
+            present[idx] = true;
+        }
+    }
+    let mut events = Vec::new();
+    for (i, was_present) in present.iter().enumerate() {
+        if !*was_present {
+            let s = &sentinels[i];
+            events.push(SentinelEvent::Deleted {
+                id: s.sentinel_id().unwrap_or(SentinelId::UNKNOWN),
+                sentinel: s.clone(),
+            });
+        }
+    }
+    let pruned: Vec<TextAreaSentinel> = sentinels
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| present[*i])
+        .map(|(_, s)| s.clone())
+        .collect();
+
+    let mut remap: Vec<Option<usize>> = vec![None; sentinels.len()];
+    let mut new_idx = 0usize;
+    for (old_idx, was_present) in present.iter().enumerate() {
+        if *was_present {
+            remap[old_idx] = Some(new_idx);
+            new_idx += 1;
+        }
+    }
+
+    let needs_remap = remap
+        .iter()
+        .enumerate()
+        .any(|(i, r)| r.is_some_and(|n| n != i));
+    let remapped_value = if needs_remap {
+        let mut out = String::with_capacity(new_value.len());
+        for ch in new_value.chars() {
+            let cp = ch as u32;
+            if cp >= sentinel_base && cp < max_sentinel {
+                let old_idx = (cp - sentinel_base) as usize;
+                if let Some(Some(new_i)) = remap.get(old_idx) {
+                    out.push(char::from_u32(sentinel_base + *new_i as u32).unwrap_or(ch));
+                } else {
+                    out.push(ch);
+                }
+            } else {
+                out.push(ch);
+            }
+        }
+        Some(out)
+    } else {
+        None
+    };
+
+    (pruned, remapped_value, events)
 }
 
 #[cfg(test)]
@@ -1093,5 +1523,30 @@ mod tests {
         assert_eq!(editor.anchor(), None);
         assert!(!editor.can_undo());
         assert!(!editor.clear());
+    }
+
+    #[test]
+    fn cloning_editor_creates_independent_undo_history() {
+        let mut original = TextEditor::new("");
+        original.insert_str("hello");
+
+        let mut cloned = original.clone();
+        cloned.insert_str(" world");
+        assert!(cloned.undo());
+        assert_eq!(cloned.text(), "hello");
+        assert!(cloned.undo());
+        assert_eq!(cloned.text(), "");
+
+        assert_eq!(original.text(), "hello");
+        assert!(original.can_undo());
+        assert!(!original.can_redo());
+        assert!(original.undo());
+        assert_eq!(original.text(), "");
+    }
+
+    #[test]
+    fn text_editor_is_send_and_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<TextEditor>();
     }
 }

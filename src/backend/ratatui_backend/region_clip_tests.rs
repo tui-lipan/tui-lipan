@@ -56,6 +56,7 @@ fn viewport() -> Rect {
 fn interaction() -> CaptureInteraction<'static> {
     CaptureInteraction {
         focused: None,
+        static_caret_node: None,
         hovered: None,
         mouse_pos: None,
         vim_mode: None,
