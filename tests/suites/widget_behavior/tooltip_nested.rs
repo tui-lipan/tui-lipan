@@ -8,7 +8,8 @@ use tui_lipan::prelude::*;
 
 const DELAY: Duration = Duration::from_millis(1000);
 
-/// A row with a card tooltip, holding a button with its own tooltip.
+/// A row with a card tooltip, holding a button with its own tooltip. The card warms up apart from
+/// the button, so a swap between them never rides on warm-up.
 struct Row;
 
 impl Component for Row {
@@ -22,6 +23,7 @@ impl Component for Row {
     fn view(&self, _: &Context<Self>) -> Element {
         let card = Tooltip::new("card-tip")
             .delay(DELAY)
+            .warmup_group("cards")
             .placement(PopoverPlacement::BelowStart)
             .offset((0, 1))
             .child(
@@ -154,4 +156,24 @@ fn hovering_a_nested_trigger_restarts_the_outer_delay() {
     );
     wait(&mut backend);
     assert!(shows(&backend, "card-tip"));
+}
+
+#[test]
+fn outer_tooltip_takes_over_from_a_showing_nested_one() {
+    let mut backend = backend();
+    hover(&mut backend, "row text");
+    hover(&mut backend, "Snooze");
+    wait(&mut backend);
+    assert!(shows(&backend, "button-tip"));
+
+    hover(&mut backend, "row text");
+    assert!(
+        shows(&backend, "card-tip"),
+        "the card waited although the button tooltip was showing"
+    );
+    assert!(!shows(&backend, "button-tip"));
+
+    hover(&mut backend, "Snooze");
+    assert!(shows(&backend, "button-tip"));
+    assert!(!shows(&backend, "card-tip"));
 }

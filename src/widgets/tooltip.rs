@@ -554,11 +554,20 @@ struct TooltipState {
     shown: Rc<Cell<bool>>,
 }
 
+/// What a nested tooltip tells the tooltip whose trigger holds it.
+#[derive(Clone, Copy)]
+struct NestedHover {
+    /// The pointer entered (`true`) or left (`false`) the nested trigger.
+    hovered: bool,
+    /// Whether the nested tooltip was showing as the pointer crossed.
+    shown: bool,
+}
+
 /// What a tooltip offers the tooltips nested in its trigger: a way to say the pointer is on them,
 /// so it can step aside while their tooltip is the one that matters.
 #[derive(Clone)]
 struct NestedTooltip {
-    report: crate::callback::Callback<bool>,
+    report: crate::callback::Callback<NestedHover>,
     /// Whether the outer tooltip is showing: a nested tooltip entered then skips its delay.
     shown: Rc<Cell<bool>>,
 }
@@ -583,7 +592,7 @@ enum TooltipMsg {
     Hover(bool),
     Reveal(u64),
     /// The pointer entered or left the trigger of a tooltip nested in this one's trigger.
-    Nested(bool),
+    Nested(NestedHover),
 }
 
 struct TooltipComponent;
@@ -647,7 +656,10 @@ impl Component for TooltipComponent {
             TooltipMsg::Hover(hovered) => {
                 let outer = ctx.use_context::<NestedTooltip>();
                 if let Some(outer) = &outer {
-                    outer.report.emit(hovered);
+                    outer.report.emit(NestedHover {
+                        hovered,
+                        shown: ctx.state.shown.get(),
+                    });
                 }
                 ctx.state.trigger_hovered = hovered;
                 if !hovered {
@@ -679,17 +691,17 @@ impl Component for TooltipComponent {
                     Update::none()
                 }
             }
-            TooltipMsg::Nested(hovered) => {
+            TooltipMsg::Nested(NestedHover { hovered, shown }) => {
                 if ctx.state.nested_hovered == hovered {
                     return Update::none();
                 }
                 ctx.state.nested_hovered = hovered;
                 // A revealed tooltip is hidden, not closed, so it shows again at once when the
-                // pointer comes back. One still waiting starts over: its delay counts only time
-                // spent on its own part of the trigger.
+                // pointer comes back.
                 if !ctx.props.delays_hover() || ctx.state.reveal.revealed() {
                     return Update::render();
                 }
+                // One still waiting counts only time spent on its own part of the trigger.
                 if hovered {
                     ctx.state.reveal.pause();
                     return Update::none();
@@ -697,9 +709,15 @@ impl Component for TooltipComponent {
                 if !ctx.state.trigger_hovered {
                     return Update::none();
                 }
-                let config = ctx.props.config.clone();
                 let env = ctx.env().clone();
-                let step = ctx.state.reveal.hover(true, &config, &env);
+                let step = if shown {
+                    // Back from a nested tooltip the user was reading: swap tooltips at once, as
+                    // when moving onto the nested trigger from this one.
+                    ctx.state.reveal.hover_revealed(&env)
+                } else {
+                    let config = ctx.props.config.clone();
+                    ctx.state.reveal.hover(true, &config, &env)
+                };
                 Self::step(step, ctx)
             }
         }

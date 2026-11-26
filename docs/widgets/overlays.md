@@ -388,12 +388,12 @@ if the pointer reaches it within `skip_delay`. Focus always shows the tooltip im
 controlled tooltip (`open(...)`) runs no hover timer, so it never warms its neighbours, and changing
 `delay` mid-hover counts from when the pointer arrived.
 
-One tooltip shows at a time between nested tooltips: while the pointer is on a tooltip's trigger
-inside another tooltip's trigger, such as a button on a row with a hover card, the outer tooltip
-hides. If the outer tooltip was showing, the nested one takes over at once instead of waiting for
-its `delay`. The outer tooltip stays revealed and shows again at once when the pointer moves back.
-An outer tooltip still waiting counts only time spent on its own part of the trigger: moving onto a
-nested trigger cancels its delay, and moving back starts it again.
+Nested tooltips, such as a button's tooltip on a row with a hover card, behave like one set of
+controls. One shows at a time: while the pointer is on the nested trigger, the outer tooltip hides.
+Once either has shown, moving between them swaps tooltips at once, in both directions; a hidden
+outer tooltip stays revealed and comes back immediately. Until then, each delay counts only time
+spent on its own part, so moving onto the nested trigger cancels the outer delay and moving back
+starts it again.
 
 Warm-up stays within a `warmup_group`. Give large hover cards their own group, so that closing one
 does not open the small tooltips of nearby controls at once. With a zero `skip_delay` as well, each
