@@ -1916,6 +1916,7 @@ Optional language header row rendered at the top of fenced code blocks in `Docum
 |---------|----------|
 | `None` **(default)** | Do not render a language header row |
 | `Label` | Render the fence language tag (for example `rust` or `sh`) when present |
+| `Icon` | Render only the matching Nerd Font icon from `Theme::file_icons`, falling back to the plain label when no icon is registered |
 | `IconAndLabel` | Render the matching Nerd Font icon from `Theme::file_icons` (via `utils::language_icon_span`) followed by the language label, falling back to the plain label when no icon is registered |
 
 Available from the crate root (`tui_lipan::CodeBlockHeader`).

@@ -132,6 +132,10 @@ pub enum CodeBlockHeader {
     None,
     /// Render the fence language label (for example `rust` or `sh`).
     Label,
+    /// Render only the language's Nerd Font icon (from
+    /// [`crate::style::FileIconPalette`]), falling back to the plain label when
+    /// no icon is registered for that language.
+    Icon,
     /// Render the language's Nerd Font icon (from [`crate::style::FileIconPalette`])
     /// followed by the language label (for example ` rust`), falling back to
     /// the plain label when no icon is registered for that language.

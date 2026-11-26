@@ -1105,6 +1105,11 @@ mod tests {
                 CodeBlockPadding::HalfBlock,
                 CodeBlockHeader::Label,
             ),
+            (
+                Length::Auto,
+                CodeBlockPadding::HalfBlock,
+                CodeBlockHeader::Icon,
+            ),
         ] {
             for width in [20_u16, 32, 60, 80] {
                 let dv = DocumentView::new(md)

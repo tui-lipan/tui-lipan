@@ -105,7 +105,7 @@ display content differs from source text.
 | `code_block_width` | `Length` | Width of fenced code-block background rectangles (`Flex(1)` default, `Auto`, `Px(n)`, `Percent(p)`). `Px`/`Percent` are fixed while wrapping and minimum widths with `wrap(false)` |
 | `code_block_padding` | `CodeBlockPadding` | Vertical padding around fenced code blocks (`None` default, `HalfBlock`, `Full`) |
 | `code_block_inset` | `u16` | Blank columns between a code block's edge and its code (default `1`) |
-| `code_block_header` | `CodeBlockHeader` | Language header row at top of fenced code blocks (`None` default, `Label`, `IconAndLabel`) |
+| `code_block_header` | `CodeBlockHeader` | Language header row at top of fenced code blocks (`None` default, `Label`, `Icon`, `IconAndLabel`) |
 | `scroll_offset` | `usize` | Controlled vertical scroll offset |
 | `scroll_to_source_line` | `usize` | Scroll-sync target source line |
 | `scroll_behavior` | `ScrollBehavior` | `Instant` by default; opt into smooth `scroll_to_source_line` movement |

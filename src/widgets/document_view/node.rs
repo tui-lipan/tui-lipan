@@ -1657,11 +1657,14 @@ fn code_block_header_spans(
     match header {
         CodeBlockHeader::None => None,
         CodeBlockHeader::Label => Some(vec![Span::new(label.to_string())]),
-        CodeBlockHeader::IconAndLabel => {
-            if let Some(icon) = crate::utils::language_icon_span(label, &doc_styles.file_icons) {
-                Some(vec![icon, Span::new(format!(" {label}"))])
+        CodeBlockHeader::Icon | CodeBlockHeader::IconAndLabel => {
+            let Some(icon) = crate::utils::language_icon_span(label, &doc_styles.file_icons) else {
+                return Some(vec![Span::new(label.to_string())]);
+            };
+            if header == CodeBlockHeader::Icon {
+                Some(vec![icon])
             } else {
-                Some(vec![Span::new(label.to_string())])
+                Some(vec![icon, Span::new(format!(" {label}"))])
             }
         }
     }
@@ -3395,6 +3398,32 @@ mod tests {
         assert!(headers[0].ends_with(" rust"), "got {:?}", headers[0]);
         assert!(headers[0].chars().count() > " rust".chars().count());
         assert_eq!(headers[1], "customlang");
+
+        let (icon_lines, _) = flatten_blocks(
+            &doc,
+            60,
+            make_ctx(CodeBlockPadding::HalfBlock, CodeBlockHeader::Icon),
+        );
+        let icon_headers: Vec<String> = icon_lines
+            .iter()
+            .filter_map(|l| match &l.kind {
+                VisualLineKind::CodeBlockChrome {
+                    kind: CodeBlockChromeKind::Header { spans },
+                    ..
+                } => Some(spans_plain_text(spans)),
+                _ => None,
+            })
+            .collect();
+        // Icon alone for a known language; the label stands in when there is no icon.
+        assert_eq!(icon_headers.len(), 2);
+        assert_eq!(
+            icon_headers[0].trim().chars().count(),
+            1,
+            "got {:?}",
+            icon_headers[0]
+        );
+        assert!(!icon_headers[0].contains("rust"));
+        assert_eq!(icon_headers[1], "customlang");
 
         let top_count = decorated_lines
             .iter()
