@@ -352,3 +352,115 @@ fn right_click_outside_closes_and_inside_activates_item() {
         "right-clicking the menu's border corner (same spot as anchor) should close it"
     );
 }
+
+#[derive(Clone)]
+struct DelayedSubmenu {
+    delay: std::time::Duration,
+}
+
+impl Component for DelayedSubmenu {
+    type Properties = ();
+    type State = std::time::Duration;
+    type Message = std::time::Duration;
+
+    fn create_state(&self, _: &()) -> Self::State {
+        self.delay
+    }
+
+    fn update(&mut self, delay: Self::Message, ctx: &mut Context<Self>) -> Update {
+        ctx.state = delay;
+        Update::render()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        ContextMenu::new(Text::new("Host"))
+            .open(true)
+            .anchor(Some((2, 2)))
+            .submenu_delay(ctx.state)
+            .entries([
+                ContextMenuEntry::action("pin", "Pin thread"),
+                ContextMenuEntry::submenu(
+                    "copy",
+                    "Copy",
+                    [ContextMenuEntry::action("copy-id", "Thread ID")],
+                ),
+                ContextMenuEntry::action("delete", "Delete"),
+            ])
+            .into()
+    }
+}
+
+#[test]
+fn submenu_delay_waits_for_hover_cancels_on_sweep_and_retimes() {
+    use std::time::Duration;
+
+    let mut backend = TestBackend::new(DelayedSubmenu {
+        delay: Duration::from_millis(200),
+    });
+    backend.render();
+
+    let text = backend.capture_frame().plain_text();
+    let (copy_x, copy_y) = text
+        .lines()
+        .enumerate()
+        .find_map(|(y, line)| line.find("Copy").map(|x| (x as u16 + 1, y as u16)))
+        .expect("Copy row should be visible");
+    let (pin_x, pin_y) = text
+        .lines()
+        .enumerate()
+        .find_map(|(y, line)| line.find("Pin thread").map(|x| (x as u16 + 1, y as u16)))
+        .expect("Pin thread row should be visible");
+
+    // Hover Copy, advance less than delay -> submenu must stay closed.
+    backend
+        .send_mouse(MouseEvent {
+            x: copy_x,
+            y: copy_y,
+            kind: MouseKind::Moved,
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.render();
+    backend.advance(Duration::from_millis(100));
+    assert!(
+        !backend.capture_frame().plain_text().contains("Thread ID"),
+        "submenu should stay closed before submenu_delay elapses"
+    );
+
+    // Sweep back to Pin thread before delay completes -> cancels pending open.
+    backend
+        .send_mouse(MouseEvent {
+            x: pin_x,
+            y: pin_y,
+            kind: MouseKind::Moved,
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.render();
+    backend.advance(Duration::from_millis(200));
+    assert!(
+        !backend.capture_frame().plain_text().contains("Thread ID"),
+        "sweeping off submenu row before delay must cancel opening"
+    );
+
+    // Hover Copy again and wait the full delay -> submenu opens.
+    backend
+        .send_mouse(MouseEvent {
+            x: copy_x,
+            y: copy_y,
+            kind: MouseKind::Moved,
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    backend.render();
+    backend.advance(Duration::from_millis(120));
+    assert!(!backend.capture_frame().plain_text().contains("Thread ID"));
+
+    // Shortening submenu_delay mid-hover retimes from the original hover entry.
+    backend.dispatch(Duration::from_millis(100)).unwrap();
+    backend.render();
+    assert!(
+        backend.capture_frame().plain_text().contains("Thread ID"),
+        "shortening submenu_delay below elapsed hover time should open immediately"
+    );
+}

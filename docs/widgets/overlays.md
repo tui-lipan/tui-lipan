@@ -1024,6 +1024,7 @@ A popup menu backed by `Popover` + `List`. Typically triggered by right-click or
 | `icon_style` | `Style` | theme muted | Default icon gutter style |
 | `submenu_indicator` | `impl Into<Arc<str>>` | `"›"` | Trailing submenu indicator glyph |
 | `submenu_indicator_style` | `Style` | detail style | Submenu indicator style |
+| `submenu_delay` | `Duration` | `0ms` | Wait before hovering a submenu row opens it (keyboard and clicks open immediately) |
 | `check_symbol` | `impl Into<Arc<str>>` | `"✓"` | Checked radio/toggle glyph |
 | `check_style` | `Style` | label style | Check glyph style |
 | `scrollbar` | `bool` | `false` | Show scrollbar |

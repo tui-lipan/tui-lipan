@@ -3,7 +3,8 @@
 use crate::core::component::{Component, Context, Update};
 use crate::core::element::Element;
 use crate::widgets::TooltipConfig;
-use crate::widgets::tooltip::{HoverReveal, RevealStep, TooltipContent};
+use crate::widgets::hover_reveal::{HoverReveal, RevealStep};
+use crate::widgets::tooltip::TooltipContent;
 
 use super::DocumentView;
 use super::node::DocumentHoverHint;
@@ -77,19 +78,19 @@ impl DocumentTooltips {
             }
             return Update::none();
         }
-        let config = ctx.props.config.clone();
+        let timing = ctx.props.config.hover_delay();
         let env = ctx.env().clone();
         let mut render = false;
         if ctx.state.hint.is_some() {
             render |= matches!(
-                ctx.state.reveal.hover(false, &config, &env),
+                ctx.state.reveal.hover(false, &timing, &env),
                 RevealStep::Render
             );
         }
         ctx.state.hint = next;
         let mut command = None;
         if ctx.state.hint.is_some() {
-            let step = ctx.state.reveal.hover(true, &config, &env);
+            let step = ctx.state.reveal.hover(true, &timing, &env);
             render |= matches!(step, RevealStep::Render);
             command = Self::arm(step, ctx);
         }
@@ -121,9 +122,9 @@ impl Component for DocumentTooltips {
         if ctx.props.config.delay == old_props.config.delay {
             return Update::none();
         }
-        let config = ctx.props.config.clone();
+        let delay = ctx.props.config.delay;
         let env = ctx.env().clone();
-        let step = ctx.state.reveal.retime(&config, &env);
+        let step = ctx.state.reveal.retime(delay, &env);
         let render = matches!(step, RevealStep::Render);
         if render {
             ctx.state.shown.clone_from(&ctx.state.hint);

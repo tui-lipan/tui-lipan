@@ -9,10 +9,9 @@ use std::time::Duration;
 
 use crate::core::component::{Component, Context, Update};
 use crate::core::element::{Element, IntoElement, Key};
-use crate::core::runtime_env::RuntimeEnv;
 use crate::style::{BorderStyle, Length, Padding, Style};
+use crate::widgets::hover_reveal::{HoverDelay, HoverReveal, RevealStep};
 use crate::widgets::{Frame, MouseRegion, Popover, PopoverOffset, PopoverPlacement, Text};
-use web_time::Instant;
 
 static TOOLTIP_ID: AtomicUsize = AtomicUsize::new(1);
 
@@ -267,155 +266,12 @@ impl TooltipConfig {
         }
         popover
     }
-}
 
-/// What a hover change asks of the component that owns a [`HoverReveal`].
-#[must_use]
-pub(crate) enum RevealStep {
-    /// Nothing visible changed.
-    Nothing,
-    /// The tooltip opened or closed: render again.
-    Render,
-    /// Send a reveal for `generation` after `wait`.
-    Arm { wait: Duration, generation: u64 },
-}
-
-/// The hover timing behind a delayed tooltip: wait [`TooltipConfig::delay`] after the pointer
-/// arrives, and skip the wait while another tooltip closed moments ago.
-#[derive(Clone, Debug, Default)]
-pub(crate) struct HoverReveal {
-    /// Whether the pointer is over the trigger.
-    hovered: bool,
-    /// Whether the tooltip has finished waiting and is shown.
-    revealed: bool,
-    /// Bumped on every hover change and timing change so a timer armed earlier is ignored.
-    generation: u64,
-    /// When the current hover began, so a changed delay counts from the original entry.
-    hovered_since: Option<Instant>,
-    /// Whether the current reveal skipped the delay, taking over from another tooltip: such a
-    /// tooltip appears at once instead of fading in.
-    instant: bool,
-}
-
-impl HoverReveal {
-    pub(crate) fn revealed(&self) -> bool {
-        self.revealed
-    }
-
-    /// Whether the current reveal took over from another tooltip without waiting.
-    pub(crate) fn instant(&self) -> bool {
-        self.revealed && self.instant
-    }
-
-    /// The tooltip, already revealed, takes over again from another one without waiting.
-    pub(crate) fn mark_instant(&mut self) {
-        self.instant = true;
-    }
-
-    /// The pointer entered (`true`) or left (`false`) the trigger.
-    pub(crate) fn hover(
-        &mut self,
-        hovered: bool,
-        config: &TooltipConfig,
-        env: &RuntimeEnv,
-    ) -> RevealStep {
-        self.hovered = hovered;
-        self.generation = self.generation.wrapping_add(1);
-        if !hovered {
-            self.hovered_since = None;
-            if !std::mem::take(&mut self.revealed) {
-                return RevealStep::Nothing;
-            }
-            // Only a delayed tooltip the user actually saw warms its neighbours: one that opens at
-            // once never made the user wait, as with a plain `Tooltip` that has no delay.
-            if !config.delay.is_zero() {
-                env.tooltip_closed_at
-                    .borrow_mut()
-                    .insert(config.warmup_group.clone(), env.now());
-            }
-            return RevealStep::Render;
-        }
-        self.hovered_since = Some(env.now());
-        let warm = env
-            .tooltip_closed_at
-            .borrow()
-            .get(&config.warmup_group)
-            .is_some_and(|closed| env.elapsed(*closed) < config.skip_delay);
-        if warm {
-            self.revealed = true;
-            self.instant = true;
-            return RevealStep::Render;
-        }
-        self.arm(config.delay)
-    }
-
-    /// The pointer moved onto something inside the trigger that suspends the wait, such as a
-    /// nested tooltip's trigger: cancel a pending reveal. A tooltip already revealed stays so.
-    pub(crate) fn pause(&mut self) {
-        if self.revealed {
-            return;
-        }
-        self.generation = self.generation.wrapping_add(1);
-        self.hovered = false;
-        self.hovered_since = None;
-    }
-
-    /// The pointer entered the trigger to take over from a tooltip already showing: open at once.
-    pub(crate) fn hover_revealed(&mut self, env: &RuntimeEnv) -> RevealStep {
-        self.hovered = true;
-        self.generation = self.generation.wrapping_add(1);
-        self.hovered_since = Some(env.now());
-        self.revealed = true;
-        self.instant = true;
-        RevealStep::Render
-    }
-
-    /// A timer armed for `generation` elapsed; returns whether the tooltip opened.
-    pub(crate) fn reveal(&mut self, generation: u64) -> bool {
-        if generation != self.generation || !self.hovered {
-            return false;
-        }
-        self.revealed = true;
-        self.instant = false;
-        true
-    }
-
-    /// Hover stopped being timed here: forget it without warming other tooltips.
-    pub(crate) fn reset(&mut self) -> RevealStep {
-        self.generation = self.generation.wrapping_add(1);
-        self.hovered = false;
-        self.hovered_since = None;
-        if std::mem::take(&mut self.revealed) {
-            RevealStep::Render
-        } else {
-            RevealStep::Nothing
-        }
-    }
-
-    /// The delay changed: re-arm the current hover, counting from when it began.
-    pub(crate) fn retime(&mut self, config: &TooltipConfig, env: &RuntimeEnv) -> RevealStep {
-        // Whatever timer is pending was armed for the old delay.
-        self.generation = self.generation.wrapping_add(1);
-        let Some(since) = self.hovered_since.filter(|_| self.hovered) else {
-            return RevealStep::Nothing;
-        };
-        if self.revealed {
-            return RevealStep::Nothing;
-        }
-        let waited = env.elapsed(since);
-        self.arm(config.delay.saturating_sub(waited))
-    }
-
-    /// Schedule a reveal for the current hover after `wait`, or reveal now when nothing is left.
-    fn arm(&mut self, wait: Duration) -> RevealStep {
-        self.instant = false;
-        if wait.is_zero() {
-            self.revealed = true;
-            return RevealStep::Render;
-        }
-        RevealStep::Arm {
-            wait,
-            generation: self.generation,
+    pub(crate) fn hover_delay(&self) -> HoverDelay {
+        HoverDelay {
+            delay: self.delay,
+            skip_delay: self.skip_delay,
+            warmup_group: Some(self.warmup_group.clone()),
         }
     }
 }
@@ -748,8 +604,8 @@ impl TooltipComponent {
             // moving onto the nested trigger from this one.
             ctx.state.reveal.hover_revealed(&env)
         } else {
-            let config = ctx.props.config.clone();
-            ctx.state.reveal.hover(true, &config, &env)
+            let timing = ctx.props.config.hover_delay();
+            ctx.state.reveal.hover(true, &timing, &env)
         };
         Self::step(step, ctx)
     }
@@ -801,7 +657,7 @@ impl Component for TooltipComponent {
             return Update::none();
         }
         let step = if delays {
-            let config = ctx.props.config.clone();
+            let delay = ctx.props.config.delay;
             let env = ctx.env().clone();
             if !old_props.delays_hover() {
                 // Hover was not timed until now: a pointer already resting on this trigger starts
@@ -817,10 +673,11 @@ impl Component for TooltipComponent {
                 } else if takes_over {
                     ctx.state.reveal.hover_revealed(&env)
                 } else {
-                    ctx.state.reveal.hover(true, &config, &env)
+                    let timing = ctx.props.config.hover_delay();
+                    ctx.state.reveal.hover(true, &timing, &env)
                 }
             } else {
-                ctx.state.reveal.retime(&config, &env)
+                ctx.state.reveal.retime(delay, &env)
             }
         } else {
             // Hover is no longer tracked here; closing this way does not warm other tooltips.
@@ -859,8 +716,8 @@ impl Component for TooltipComponent {
                 let step = if takes_over {
                     ctx.state.reveal.hover_revealed(&env)
                 } else {
-                    let config = ctx.props.config.clone();
-                    ctx.state.reveal.hover(hovered, &config, &env)
+                    let timing = ctx.props.config.hover_delay();
+                    ctx.state.reveal.hover(hovered, &timing, &env)
                 };
                 Self::step(step, ctx)
             }

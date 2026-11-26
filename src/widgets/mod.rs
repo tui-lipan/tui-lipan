@@ -59,6 +59,7 @@ mod graph;
 mod grid;
 mod heatmap;
 mod hex_area;
+pub(crate) mod hover_reveal;
 mod hyperlink;
 #[cfg(feature = "image")]
 mod image;

@@ -1,6 +1,6 @@
 //! Context menu widget with flat items or structured entries and cascading submenus.
 
-use std::{rc::Rc, sync::Arc};
+use std::{rc::Rc, sync::Arc, time::Duration};
 
 use unicode_width::UnicodeWidthStr;
 
@@ -11,6 +11,7 @@ use crate::core::event::KeyCode;
 use crate::style::{
     BorderStyle, Length, Padding, Rect, RowStylePolicy, ScrollbarConfig, Span, Style, StyleSlot,
 };
+use crate::widgets::hover_reveal::{HoverDelay, HoverReveal, RevealStep};
 use crate::widgets::{
     List, ListHoverEvent, ListItem, ListItemGutter, ListItemRole, Popover, PopoverOffset,
     PopoverPlacement,
@@ -310,6 +311,7 @@ pub struct ContextMenu {
     icon_style: Option<Style>,
     submenu_indicator: Arc<str>,
     submenu_indicator_style: Option<Style>,
+    submenu_delay: Duration,
     check_symbol: Arc<str>,
     check_style: Option<Style>,
     scrollbar: bool,
@@ -369,6 +371,7 @@ impl ContextMenu {
             icon_style: None,
             submenu_indicator: "›".into(),
             submenu_indicator_style: None,
+            submenu_delay: Duration::ZERO,
             check_symbol: "✓".into(),
             check_style: None,
             scrollbar: false,
@@ -673,6 +676,16 @@ impl ContextMenu {
         self
     }
 
+    /// How long the pointer must rest on a submenu entry before hover opens it.
+    ///
+    /// Zero (the default) opens on hover immediately. Leaving the row before the delay elapses
+    /// cancels it, so sweeping across a submenu row toward another item opens nothing. Keyboard
+    /// (`Right` / `Enter`) and clicks always open immediately.
+    pub fn submenu_delay(mut self, delay: Duration) -> Self {
+        self.submenu_delay = delay;
+        self
+    }
+
     /// Glyph drawn for checked entries (default `"✓"`).
     pub fn check_symbol(mut self, glyph: impl Into<Arc<str>>) -> Self {
         self.check_symbol = glyph.into();
@@ -742,6 +755,7 @@ impl From<ContextMenu> for Element {
                 icon_style: menu.icon_style,
                 submenu_indicator: menu.submenu_indicator,
                 submenu_indicator_style: menu.submenu_indicator_style,
+                submenu_delay: menu.submenu_delay,
                 check_symbol: menu.check_symbol,
                 check_style: menu.check_style,
                 scrollbar: menu.scrollbar,
@@ -901,6 +915,7 @@ struct MenuRenderConfig {
     icon_style: Option<Style>,
     submenu_indicator: Arc<str>,
     submenu_indicator_style: Option<Style>,
+    submenu_delay: Duration,
     check_symbol: Arc<str>,
     check_style: Option<Style>,
     scrollbar: bool,
@@ -933,6 +948,9 @@ struct LevelState {
 #[derive(Clone, Debug, Default)]
 struct MenuStackState {
     levels: Vec<LevelState>,
+    /// Submenu `(depth, index)` currently waiting on [`MenuRenderConfig::submenu_delay`].
+    pending_hover: Option<(usize, usize)>,
+    hover_reveal: HoverReveal,
 }
 
 #[derive(Clone, Debug)]
@@ -945,6 +963,11 @@ enum MenuStackMsg {
         depth: usize,
         index: usize,
         hovered: bool,
+    },
+    HoverReveal {
+        depth: usize,
+        index: usize,
+        generation: u64,
     },
     Activate {
         depth: usize,
@@ -998,6 +1021,8 @@ impl crate::Component for MenuStack {
                 selected: first_selectable(&props.entries),
                 open_child: None,
             }],
+            pending_hover: None,
+            hover_reveal: HoverReveal::default(),
         }
     }
 
@@ -1011,6 +1036,33 @@ impl crate::Component for MenuStack {
                 selected: first_selectable(&ctx.props.entries),
                 open_child: None,
             }];
+            ctx.state.pending_hover = None;
+            let _ = ctx.state.hover_reveal.reset();
+            return crate::Update::render();
+        }
+        if old.cfg.submenu_delay != ctx.props.cfg.submenu_delay
+            && let Some((depth, index)) = ctx.state.pending_hover
+        {
+            let delay = ctx.props.cfg.submenu_delay;
+            let env = ctx.env().clone();
+            return match ctx.state.hover_reveal.retime(delay, &env) {
+                RevealStep::Nothing => crate::Update::render(),
+                RevealStep::Render => {
+                    ctx.state.pending_hover = None;
+                    open_submenu_on_hover(ctx, depth, index);
+                    crate::Update::render()
+                }
+                RevealStep::Arm { wait, generation } => {
+                    let cmd = ctx.link().command_after(wait, move |link| {
+                        link.send(MenuStackMsg::HoverReveal {
+                            depth,
+                            index,
+                            generation,
+                        });
+                    });
+                    crate::Update::render_with_command(cmd)
+                }
+            };
         }
         crate::Update::render()
     }
@@ -1018,6 +1070,7 @@ impl crate::Component for MenuStack {
     fn update(&mut self, msg: Self::Message, ctx: &mut crate::Context<Self>) -> crate::Update {
         match msg {
             MenuStackMsg::Select { depth, index } => {
+                cancel_pending_hover(&mut ctx.state);
                 if let Some(level) = ctx.state.levels.get_mut(depth) {
                     level.selected = Some(index);
                     if level.open_child.is_some() && level.open_child != Some(index) {
@@ -1033,6 +1086,9 @@ impl crate::Component for MenuStack {
                 hovered,
             } => {
                 if !hovered {
+                    if ctx.state.pending_hover == Some((depth, index)) {
+                        cancel_pending_hover(&mut ctx.state);
+                    }
                     return crate::Update::none();
                 }
                 let Some(entries) = entries_at_depth(&ctx.props.entries, &ctx.state.levels, depth)
@@ -1059,19 +1115,39 @@ impl crate::Component for MenuStack {
                             .levels
                             .get(depth)
                             .is_some_and(|l| l.open_child == Some(index));
-                        if !already_open {
-                            if let Some(level) = ctx.state.levels.get_mut(depth) {
-                                level.open_child = Some(index);
+                        if already_open {
+                            cancel_pending_hover(&mut ctx.state);
+                        } else if ctx.state.pending_hover != Some((depth, index)) {
+                            cancel_pending_hover(&mut ctx.state);
+                            ctx.state.pending_hover = Some((depth, index));
+                            let timing = HoverDelay::fixed(ctx.props.cfg.submenu_delay);
+                            let env = ctx.env().clone();
+                            match ctx.state.hover_reveal.hover(true, &timing, &env) {
+                                RevealStep::Nothing => {}
+                                RevealStep::Render => {
+                                    ctx.state.pending_hover = None;
+                                    open_submenu_on_hover(ctx, depth, index);
+                                    changed = true;
+                                }
+                                RevealStep::Arm { wait, generation } => {
+                                    let cmd = ctx.link().command_after(wait, move |link| {
+                                        link.send(MenuStackMsg::HoverReveal {
+                                            depth,
+                                            index,
+                                            generation,
+                                        });
+                                    });
+                                    return if changed {
+                                        crate::Update::render_with_command(cmd)
+                                    } else {
+                                        crate::Update::command_only(cmd)
+                                    };
+                                }
                             }
-                            ctx.state.levels.truncate(depth + 1);
-                            ctx.state.levels.push(LevelState {
-                                selected: first_selectable(&sub.children),
-                                open_child: None,
-                            });
-                            changed = true;
                         }
                     }
                     _ => {
+                        cancel_pending_hover(&mut ctx.state);
                         if let Some(level) = ctx.state.levels.get_mut(depth)
                             && level.open_child.is_some()
                         {
@@ -1087,7 +1163,25 @@ impl crate::Component for MenuStack {
                     crate::Update::none()
                 }
             }
+            MenuStackMsg::HoverReveal {
+                depth,
+                index,
+                generation,
+            } => {
+                if ctx.state.pending_hover != Some((depth, index))
+                    || !ctx.state.hover_reveal.reveal(generation)
+                {
+                    return crate::Update::none();
+                }
+                ctx.state.pending_hover = None;
+                if open_submenu_on_hover(ctx, depth, index) {
+                    crate::Update::render()
+                } else {
+                    crate::Update::none()
+                }
+            }
             MenuStackMsg::Activate { depth, index } => {
+                cancel_pending_hover(&mut ctx.state);
                 let Some(entries) = entries_at_depth(&ctx.props.entries, &ctx.state.levels, depth)
                 else {
                     return crate::Update::none();
@@ -1113,6 +1207,7 @@ impl crate::Component for MenuStack {
                 }
             }
             MenuStackMsg::OpenSubmenu { depth } => {
+                cancel_pending_hover(&mut ctx.state);
                 let selected = ctx.state.levels.get(depth).and_then(|level| level.selected);
                 let Some(index) = selected else {
                     return crate::Update::none();
@@ -1131,6 +1226,7 @@ impl crate::Component for MenuStack {
                 crate::Update::render()
             }
             MenuStackMsg::CloseSubmenu { depth } => {
+                cancel_pending_hover(&mut ctx.state);
                 if depth == 0 {
                     return crate::Update::none();
                 }
@@ -1142,6 +1238,7 @@ impl crate::Component for MenuStack {
                 crate::Update::render()
             }
             MenuStackMsg::CloseAll => {
+                cancel_pending_hover(&mut ctx.state);
                 if let Some(on_close) = &ctx.props.on_close {
                     on_close.emit(());
                 }
@@ -1154,6 +1251,33 @@ impl crate::Component for MenuStack {
         let theme = ctx.theme_ref();
         render_menu_level(ctx, &theme, &ctx.props.entries, 0)
     }
+}
+
+fn cancel_pending_hover(state: &mut MenuStackState) {
+    state.pending_hover = None;
+    let _ = state.hover_reveal.reset();
+}
+
+fn open_submenu_on_hover(ctx: &mut crate::Context<MenuStack>, depth: usize, index: usize) -> bool {
+    let Some(entries) = entries_at_depth(&ctx.props.entries, &ctx.state.levels, depth) else {
+        return false;
+    };
+    let Some(ContextMenuEntry::Submenu(sub)) = entries.get(index) else {
+        return false;
+    };
+    if sub.disabled || sub.children.is_empty() {
+        return false;
+    }
+    let child_selected = first_selectable(&sub.children);
+    if let Some(level) = ctx.state.levels.get_mut(depth) {
+        level.open_child = Some(index);
+    }
+    ctx.state.levels.truncate(depth + 1);
+    ctx.state.levels.push(LevelState {
+        selected: child_selected,
+        open_child: None,
+    });
+    true
 }
 
 fn open_submenu_and_focus(

@@ -1557,6 +1557,7 @@ Source: `src/widgets/context_menu.rs` (`ContextMenu`).
 | `icon_style` | `None` |
 | `submenu_indicator` | `"›".into()` |
 | `submenu_indicator_style` | `None` |
+| `submenu_delay` | `Duration::ZERO` |
 | `check_symbol` | `"✓".into()` |
 | `check_style` | `None` |
 | `scrollbar` | `false` |
