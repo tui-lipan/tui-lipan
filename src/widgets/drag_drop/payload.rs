@@ -183,10 +183,12 @@ pub enum DragSlotAxis {
     Horizontal,
 }
 
-/// Main-axis space reserved at the [`crate::widgets::DragSource`] while dragging (when using
-/// [`DragPreview::SourceSnapshot`]).
+/// Main-axis space reserved at the [`crate::widgets::DragSource`] while dragging with
+/// [`DragPreview::SourceSnapshot`] or [`DragPreview::Element`], and only while
+/// [`crate::widgets::DragSource::hide_source_while_dragging`] is `true`.
 ///
-/// In `VStack` / `HStack`, [`DragSlot::Specified`] uses the same main-axis rules as stack children.
+/// A source that stays visible keeps its normal size. In `VStack` / `HStack`,
+/// [`DragSlot::Specified`] uses the same main-axis rules as stack children.
 /// [`DragSlot::Collapse`] is **0 cells** on the stack main axis.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum DragSlot {

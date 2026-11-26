@@ -104,9 +104,9 @@ Wrapper that turns a single child into a generic drag source.
 | `preview_snapshot` | `()` | Convenience for `DragPreview::SourceSnapshot` |
 | `preview_element` | `impl Into<Element>` | Set a live preview element and switch preview mode to `DragPreview::Element` |
 | `preview_anchor` | `DragPreviewAnchor` | How a floating `DragPreview::Element` tracks the pointer: `Free` (follows pointer minus grab offset, default), `VerticalRail` (locks X to source column), `HorizontalRail` (locks Y to source row), or `CursorOffset(dx, dy)` |
-| `hide_source_while_dragging` | `bool` | Whether to hide the source child while dragging (`true` by default; set `false` to keep the source visible while a floating preview tracks the pointer) |
+| `hide_source_while_dragging` | `bool` | Whether to hide the source child while dragging (`true` by default). `false` keeps the source painted at its normal layout size; `drag_slot` applies only while the source is hidden |
 | `no_preview` | `()` | Convenience for `DragPreview::None` |
-| `drag_slot` | `DragSlot` | `Collapse` (0 main-axis cells) or `Specified(Length)` using the same `Length` rules as stack children (`Auto`, `Px`, `Percent`, `Flex`). In `VStack`/`HStack` the stack axis applies; elsewhere use `drag_slot_axis`. |
+| `drag_slot` | `DragSlot` | Hole left while the source is hidden: `Collapse` (0 main-axis cells) or `Specified(Length)` using the same `Length` rules as stack children (`Auto`, `Px`, `Percent`, `Flex`). Ignored when `hide_source_while_dragging` is `false`. In `VStack`/`HStack` the stack axis applies; elsewhere use `drag_slot_axis`. |
 | `drag_slot_collapse` | `()` | Same as `drag_slot(DragSlot::Collapse)` |
 | `drag_slot_length` | `Length` | Same as `drag_slot(DragSlot::Specified(len))` |
 | `drag_slot_axis` | `DragSlotAxis` | `Vertical` or `Horizontal`: which axis `Fixed`/`Collapse` apply to when measured outside a stack (default: vertical) |

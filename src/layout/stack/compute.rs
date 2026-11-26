@@ -222,11 +222,12 @@ fn fit_reflow_children_to_content<C: Borrow<Element>>(
     }
 }
 
-/// Returns `true` when `child` is a SourceSnapshot drag source whose element
-/// key matches the active collapse hint (layout then uses `drag_slot`).
+/// Returns `true` when `child` is a keyed drag source that should give up its
+/// main-axis slot. A source that stays visible keeps its normal size.
 fn is_drag_source_collapse_target(child: &Element) -> bool {
     if let ElementKind::DragSource(source) = &child.kind
         && source.preview.uses_source_slot()
+        && source.hide_source_while_dragging
         && let (Some(ek), Some(collapse)) =
             (child.key.as_ref(), drag_source_snapshot_collapse_key())
     {

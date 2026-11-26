@@ -1336,12 +1336,22 @@ where
         self.core.tree.refresh_live_texts();
         self.drain_copy_feedback_requests();
         let bounds = self.core.viewport();
+        let collapse_key = match &self.drag.active {
+            crate::app::interaction_state::ActiveDrag::DragDrop(drag)
+                if drag.preview.uses_source_slot() && self.core.tree.is_valid(drag.source_id) =>
+            {
+                self.core.tree.node(drag.source_id).key.clone()
+            }
+            _ => None,
+        };
+        crate::layout::drag_source_layout_hint::set_drag_source_snapshot_collapse_key(collapse_key);
         self.core.render_element(
             bounds,
             self.focused,
             self.focused_key.as_ref(),
             self.mouse.hovered,
         );
+        crate::layout::drag_source_layout_hint::clear_drag_source_snapshot_collapse_key();
         self.core.tree.refresh_live_texts();
         if let Some(title) = self.core.ctx.take_title_request() {
             self.host_title = Some(title);

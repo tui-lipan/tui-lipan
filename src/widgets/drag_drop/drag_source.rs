@@ -146,6 +146,9 @@ impl DragSource {
 
     /// Whether the wrapped child is hidden in place while this drag source is actively dragging
     /// with [`DragPreview::SourceSnapshot`] or [`DragPreview::Element`]. Default `true`.
+    ///
+    /// When `false`, the source keeps its normal layout size and stays painted. [`DragSlot`]
+    /// applies only while the source is hidden.
     pub fn hide_source_while_dragging(mut self, hide: bool) -> Self {
         self.hide_source_while_dragging = hide;
         self
@@ -252,9 +255,10 @@ impl DragSource {
 impl From<DragSource> for Element {
     fn from(value: DragSource) -> Self {
         let (min_w, min_h) = measure_drag_source(&value, None, None, None);
-        // SourceSnapshot sources may collapse to zero height during a drag,
-        // so their min_height must be 0 to allow that.
-        let min_h = if value.preview.uses_source_slot() {
+        // A hidden source-slot drag may collapse to zero on its main axis, so
+        // its min size must allow that. A source that stays visible keeps the
+        // child's minimum.
+        let min_h = if value.preview.uses_source_slot() && value.hide_source_while_dragging {
             0
         } else {
             min_h
@@ -287,9 +291,10 @@ impl LayoutHash for DragSource {
         self.preview_max_width.hash(hasher);
         self.preview_max_height.hash(hasher);
         self.threshold.hash(hasher);
-        // Include the collapse hint so the global measure cache invalidates
-        // when a SourceSnapshot drag starts or ends.
-        if self.preview.uses_source_slot() {
+        // Include the collapse hint so the measure cache invalidates when a
+        // hidden source-slot drag starts or ends. A visible source does not
+        // change size, so the hint is not part of its hash.
+        if self.preview.uses_source_slot() && self.hide_source_while_dragging {
             drag_source_snapshot_collapse_key().hash(hasher);
         }
         if let Some(preview_el) = self.preview_element.as_deref() {

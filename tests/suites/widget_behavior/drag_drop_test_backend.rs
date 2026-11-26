@@ -1136,3 +1136,165 @@ fn preview_element_clears_underlying_table_cells_without_bleed_through() {
         );
     }
 }
+
+struct PreviewChip;
+
+struct PreviewChipState {
+    label: &'static str,
+}
+
+impl Component for PreviewChip {
+    type Message = ();
+    type Properties = ();
+    type State = PreviewChipState;
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {
+        PreviewChipState {
+            label: "stateful-chip",
+        }
+    }
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        Text::new(ctx.state.label)
+            .width(Length::Auto)
+            .height(Length::Px(1))
+            .into()
+    }
+}
+
+fn source_with_chip(hide_source: bool) -> Element {
+    DragSource::new()
+        .child(
+            Text::new("keep-source")
+                .width(Length::Px(12))
+                .height(Length::Px(1)),
+        )
+        .threshold(1)
+        .preview_element(child(|| PreviewChip, ()))
+        .preview_anchor(DragPreviewAnchor::CursorOffset(16, 0))
+        .hide_source_while_dragging(hide_source)
+        .on_drag_start(|_| Some(Box::new(ItemPayload { id: 9 }) as Box<dyn DragPayload>))
+        .key("chip-src")
+}
+
+fn drag_chip_source<C: Component>(backend: &mut TestBackend<C>) {
+    let send = |backend: &mut TestBackend<C>, kind: MouseKind, x: u16, y: u16| {
+        backend
+            .send_mouse(MouseEvent {
+                kind,
+                x,
+                y,
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+        backend.render();
+    };
+    send(backend, MouseKind::Down(MouseButton::Left), 1, 0);
+    send(backend, MouseKind::Drag(MouseButton::Left), 3, 0);
+}
+
+struct VisibleChipSourceApp;
+
+impl Component for VisibleChipSourceApp {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        VStack::new()
+            .gap(0)
+            .child(source_with_chip(false))
+            .child(Text::new("below-row").height(Length::Px(1)))
+            .into()
+    }
+}
+
+#[test]
+fn element_preview_expands_stateful_component_and_keeps_visible_source() {
+    let mut backend = TestBackend::new(VisibleChipSourceApp);
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 40,
+        h: 6,
+    });
+    backend.render();
+
+    drag_chip_source(&mut backend);
+
+    let frame = backend.capture_frame().plain_text();
+    let lines: Vec<&str> = frame.lines().collect();
+    assert!(
+        lines[0].contains("keep-source"),
+        "visible source must keep its row:\n{frame}"
+    );
+    assert!(
+        lines[1].contains("below-row"),
+        "sibling must stay below a visible source:\n{frame}"
+    );
+    assert!(
+        frame.contains("stateful-chip"),
+        "stateful preview component must render:\n{frame}"
+    );
+}
+
+struct CollapsedChipSourceApp;
+
+impl Component for CollapsedChipSourceApp {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        VStack::new()
+            .gap(0)
+            .child(source_with_chip(true))
+            .child(Text::new("below-row").height(Length::Px(1)))
+            .into()
+    }
+}
+
+#[test]
+fn element_preview_collapses_hidden_source_in_test_backend() {
+    let mut backend = TestBackend::new(CollapsedChipSourceApp);
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 40,
+        h: 6,
+    });
+    backend.render();
+
+    drag_chip_source(&mut backend);
+
+    let frame = backend.capture_frame().plain_text();
+    let lines: Vec<&str> = frame.lines().collect();
+    assert!(
+        lines[0].contains("below-row"),
+        "hidden source must collapse so the sibling moves up:\n{frame}"
+    );
+    assert!(
+        !frame.contains("keep-source"),
+        "hidden source must not remain painted:\n{frame}"
+    );
+    assert!(
+        frame.contains("stateful-chip"),
+        "stateful preview component must render:\n{frame}"
+    );
+}
