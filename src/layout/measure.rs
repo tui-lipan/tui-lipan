@@ -10,9 +10,9 @@ use crate::widgets::internal::measure_image_constrained;
 #[cfg(feature = "terminal")]
 use crate::widgets::internal::measure_terminal;
 use crate::widgets::internal::{
-    drag_source_is_snapshot_collapsed, measure_animated, measure_ascii_canvas, measure_button,
-    measure_canvas, measure_center, measure_center_pin, measure_chart, measure_checkbox,
-    measure_class_diagram, measure_divider, measure_document_view,
+    drag_source_is_snapshot_collapsed, measure_animated_within, measure_ascii_canvas,
+    measure_button, measure_canvas, measure_center, measure_center_pin, measure_chart,
+    measure_checkbox, measure_class_diagram, measure_divider, measure_document_view,
     measure_document_view_constrained, measure_drag_source_within, measure_draggable_tab_bar,
     measure_drop_target, measure_effect_scope, measure_er_diagram, measure_flow, measure_flowchart,
     measure_frame, measure_frame_within, measure_gantt_diagram, measure_graph, measure_grid,
@@ -381,8 +381,26 @@ fn measure_uncached(
     avail_h: u16,
     measure_context: MeasureContext,
 ) -> (u16, u16) {
-    let constraints = el.layout_constraints();
+    measure_uncached_with_constraints(
+        el,
+        el.layout_constraints(),
+        max_w,
+        max_h,
+        avail_w,
+        avail_h,
+        measure_context,
+    )
+}
 
+fn measure_uncached_with_constraints(
+    el: &Element,
+    constraints: crate::style::EffectiveLayoutConstraints,
+    max_w: Option<u16>,
+    max_h: Option<u16>,
+    avail_w: u16,
+    avail_h: u16,
+    measure_context: MeasureContext,
+) -> (u16, u16) {
     // Explicit `.width(Length::Px/Percent)` / `.height(...)` must participate in
     // measurement, not only reconcile. Otherwise Auto/Center parents shrink-wrap to
     // content and the requested size is clamped away (see Input in form_validation).
@@ -451,6 +469,38 @@ fn measure_uncached(
             basis(avail_h),
         )
         .outer_size()
+    } else if let ElementKind::Animated(animated) = &target.kind {
+        // Preserve the parent's `(avail_w, avail_h)` percentage basis and merged horizontal
+        // constraints when measuring `Animated`'s child (so percentage bounds are never applied
+        // twice and outer `min_width` overrides inner `max_width`), while retaining `Animated`'s
+        // height/visibility override semantics.
+        let overrides_height = animated.height.is_some()
+            || (animated.collapse_visibility && animated.visibility.is_some());
+        let mut child_constraints = animated.child.layout_constraints();
+        child_constraints.min_w = constraints.min_w;
+        child_constraints.max_w = constraints.max_w;
+        if !overrides_height {
+            child_constraints.min_h = constraints.min_h;
+            child_constraints.max_h = constraints.max_h;
+        }
+        measure_animated_within(
+            animated,
+            effective_max_w,
+            effective_max_h,
+            avail_w,
+            avail_h,
+            |child, mw, mh, aw, ah| {
+                measure_uncached_with_constraints(
+                    child,
+                    child_constraints,
+                    mw,
+                    mh,
+                    aw,
+                    ah,
+                    measure_context,
+                )
+            },
+        )
     } else if let ElementKind::DragSource(source) = &target.kind {
         measure_drag_source_within(
             source,
@@ -459,6 +509,17 @@ fn measure_uncached(
             effective_max_h,
             avail_w,
             avail_h,
+            |child, mw, mh, aw, ah| {
+                measure_uncached_with_constraints(
+                    child,
+                    constraints,
+                    mw,
+                    mh,
+                    aw,
+                    ah,
+                    measure_context,
+                )
+            },
         )
     } else {
         // Pass the effective (tighter) bounds so children are measured within
@@ -502,7 +563,14 @@ fn min_size_unconstrained_constrained(
         ElementKind::Component(_) => (0, 0),
         ElementKind::Group(g) => min_size_constrained(g.child.as_ref(), max_w, max_h),
         ElementKind::EffectScope(scope) => measure_effect_scope(scope, max_w, max_h),
-        ElementKind::Animated(animated) => measure_animated(animated, max_w, max_h),
+        ElementKind::Animated(animated) => measure_animated_within(
+            animated,
+            max_w,
+            max_h,
+            max_w.unwrap_or(u16::MAX),
+            max_h.unwrap_or(u16::MAX),
+            min_size_within,
+        ),
         ElementKind::DragSource(source) => measure_drag_source_within(
             source,
             el.key.as_ref(),
@@ -510,6 +578,7 @@ fn min_size_unconstrained_constrained(
             max_h,
             max_w.unwrap_or(u16::MAX),
             max_h.unwrap_or(u16::MAX),
+            min_size_within,
         ),
         ElementKind::DropTarget(target) => measure_drop_target(target, max_w, max_h),
         ElementKind::MouseRegion(region) => measure_mouse_region(region, max_w, max_h),

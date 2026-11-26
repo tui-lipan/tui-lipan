@@ -1,12 +1,15 @@
-use crate::layout::measure::min_size_constrained;
+use crate::core::element::Element;
 use crate::style::Length;
 
 use super::Animated;
 
-pub(crate) fn measure_animated(
+pub(crate) fn measure_animated_within(
     animated: &Animated,
     max_w: Option<u16>,
     max_h: Option<u16>,
+    avail_w: u16,
+    avail_h: u16,
+    measure_child: impl FnOnce(&Element, Option<u16>, Option<u16>, u16, u16) -> (u16, u16),
 ) -> (u16, u16) {
     let (w, natural_h) = if animated
         .visibility
@@ -16,7 +19,7 @@ pub(crate) fn measure_animated(
     {
         layout.natural_size()
     } else {
-        min_size_constrained(animated.child.as_ref(), max_w, max_h)
+        measure_child(animated.child.as_ref(), max_w, max_h, avail_w, avail_h)
     };
     if animated.collapse_visibility
         && let Some(layout) = &animated.visibility_layout

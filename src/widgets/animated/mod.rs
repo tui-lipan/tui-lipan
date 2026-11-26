@@ -5,7 +5,7 @@ mod visibility;
 pub(crate) use visibility::prepare_visibility_reflow;
 pub(crate) use visibility::{VisibilityLayout, VisibilityLayoutHandle};
 
-pub(crate) use self::layout::measure_animated;
+pub(crate) use self::layout::measure_animated_within;
 pub use self::node::AnimatedNode;
 pub(crate) use self::reconcile::reconcile_animated;
 

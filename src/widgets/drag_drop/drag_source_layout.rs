@@ -1,6 +1,5 @@
-use crate::core::element::Key;
+use crate::core::element::{Element, Key};
 use crate::layout::drag_source_layout_hint::drag_source_snapshot_collapse_key;
-use crate::layout::measure::min_size_within;
 
 use super::drag_source::DragSource;
 use super::payload::{DragSlot, DragSlotAxis};
@@ -22,14 +21,21 @@ pub(crate) fn measure_drag_source_within(
     max_h: Option<u16>,
     avail_w: u16,
     avail_h: u16,
+    measure_child: impl FnOnce(&Element, Option<u16>, Option<u16>, u16, u16) -> (u16, u16),
 ) -> (u16, u16) {
     if let Some(child) = source.child.as_deref() {
         if drag_source_is_snapshot_collapsed(source, element_key) {
             return snapshot_collapsed_intrinsic_size(
-                source, child, max_w, max_h, avail_w, avail_h,
+                source,
+                child,
+                max_w,
+                max_h,
+                avail_w,
+                avail_h,
+                measure_child,
             );
         }
-        min_size_within(child, max_w, max_h, avail_w, avail_h)
+        measure_child(child, max_w, max_h, avail_w, avail_h)
     } else {
         (0, 0)
     }
@@ -37,13 +43,14 @@ pub(crate) fn measure_drag_source_within(
 
 pub(crate) fn snapshot_collapsed_intrinsic_size(
     source: &DragSource,
-    child: &crate::core::element::Element,
+    child: &Element,
     max_w: Option<u16>,
     max_h: Option<u16>,
     avail_w: u16,
     avail_h: u16,
+    measure_child: impl FnOnce(&Element, Option<u16>, Option<u16>, u16, u16) -> (u16, u16),
 ) -> (u16, u16) {
-    let (cw, ch) = min_size_within(child, max_w, max_h, avail_w, avail_h);
+    let (cw, ch) = measure_child(child, max_w, max_h, avail_w, avail_h);
     match source.drag_slot {
         DragSlot::Collapse => match source.drag_slot_axis {
             DragSlotAxis::Vertical => (cw, 0),

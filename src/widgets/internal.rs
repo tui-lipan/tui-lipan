@@ -5,7 +5,7 @@
 
 // Internal re-exports (used by element.rs, layout.rs, node.rs).
 pub(crate) use super::animated::{
-    AnimatedNode, measure_animated, prepare_visibility_reflow, reconcile_animated,
+    AnimatedNode, measure_animated_within, prepare_visibility_reflow, reconcile_animated,
 };
 pub(crate) use super::ascii_canvas::{
     AsciiCanvasNode, measure_ascii_canvas, reconcile_ascii_canvas,

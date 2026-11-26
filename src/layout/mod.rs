@@ -2294,4 +2294,107 @@ mod tests {
             "sibling after wrapped text must sit directly below row 2"
         );
     }
+
+    #[test]
+    fn animated_wrapper_does_not_double_apply_percentage_constraints() {
+        use crate::animation::VisibilityAnimation;
+        use crate::style::Align;
+        use crate::widgets::{Animated, Overflow, Text, VStack};
+
+        // 1. Animated with explicit `.height(Length::Auto)` wrapping 80-char text with
+        //    `max_width(Percent(50))` in a 100-col parent must resolve 50% once (50x2), not
+        //    twice (25x4).
+        let mut tree = NodeTree::new();
+        let child = Element::from(
+            Text::new("a".repeat(80))
+                .overflow(Overflow::Wrap)
+                .height(Length::Auto),
+        )
+        .max_width(Length::Percent(50));
+        let animated = Element::from(Animated::new(child).height(Length::Auto)).key("anim-auto");
+        let root: Element = VStack::new()
+            .align(Align::Center)
+            .child(animated)
+            .child(Text::new("after").height(Length::Px(1)).key("after-auto"))
+            .into();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &root,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 100,
+                h: 10,
+            },
+            None,
+        );
+        let rect = tree.node(find_by_key(&tree, "anim-auto")).rect;
+        assert_eq!(
+            (rect.w, rect.h),
+            (50, 2),
+            "Animated(.height(Auto)) must not apply child's Percent(50) max_width twice"
+        );
+        assert_eq!(tree.node(find_by_key(&tree, "after-auto")).rect.y, 2);
+
+        // 2. Animated with explicit `.height(Length::Px(1))` still overrides height to 1 while
+        //    preserving the 50-col width basis.
+        let mut tree = NodeTree::new();
+        let child = Element::from(
+            Text::new("a".repeat(80))
+                .overflow(Overflow::Wrap)
+                .height(Length::Auto),
+        )
+        .max_width(Length::Percent(50));
+        let animated = Element::from(Animated::new(child).height(Length::Px(1))).key("anim-px");
+        let root: Element = VStack::new().align(Align::Center).child(animated).into();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &root,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 100,
+                h: 10,
+            },
+            None,
+        );
+        let rect = tree.node(find_by_key(&tree, "anim-px")).rect;
+        assert_eq!((rect.w, rect.h), (50, 1));
+
+        // 3. Animated with visibility + outer min_width(50) overriding inner max_width(20)
+        //    measures at 50 cols (2 rows), not 20 cols (4 rows).
+        let mut tree = NodeTree::new();
+        let child = Element::from(
+            Text::new("a".repeat(80))
+                .overflow(Overflow::Wrap)
+                .height(Length::Auto),
+        )
+        .max_width(Length::Px(20));
+        let animated = Element::from(
+            Animated::new(child)
+                .visibility(true, VisibilityAnimation::new())
+                .height(Length::Auto),
+        )
+        .min_width(Length::Px(50))
+        .key("anim-min");
+        let root: Element = VStack::new()
+            .align(Align::Center)
+            .child(animated)
+            .child(Text::new("after").height(Length::Px(1)).key("after-min"))
+            .into();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &root,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 100,
+                h: 10,
+            },
+            None,
+        );
+        let rect = tree.node(find_by_key(&tree, "anim-min")).rect;
+        assert_eq!((rect.w, rect.h), (50, 2));
+        assert_eq!(tree.node(find_by_key(&tree, "after-min")).rect.y, 2);
+    }
 }
