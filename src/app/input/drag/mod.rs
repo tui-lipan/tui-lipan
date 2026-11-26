@@ -81,9 +81,6 @@ pub(crate) struct DragDropDrag {
     pub preview: DragPreview,
     pub on_cancel: Option<Callback<DragCancelEvent>>,
     pub hovered_target: Option<NodeId>,
-    /// Nearest `ScrollView` ancestor of the node under the pointer, updated
-    /// on every move event so stationary-autoscroll can tick without a re-hit-test.
-    pub scroll_view_id: Option<NodeId>,
     pub start_x: u16,
     pub start_y: u16,
     pub threshold: (u16, u16),
@@ -101,7 +98,6 @@ impl std::fmt::Debug for DragDropDrag {
             .field("drag_group", &self.drag_group)
             .field("preview", &self.preview)
             .field("hovered_target", &self.hovered_target)
-            .field("scroll_view_id", &self.scroll_view_id)
             .field("start_x", &self.start_x)
             .field("start_y", &self.start_y)
             .field("threshold", &self.threshold)

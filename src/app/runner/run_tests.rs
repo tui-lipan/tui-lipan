@@ -15440,7 +15440,6 @@ fn scroll_view_drag_drop_autoscroll_policy_respects_auto_enabled_and_disabled() 
                 preview: crate::widgets::DragPreview::None,
                 on_cancel: None,
                 hovered_target: None,
-                scroll_view_id: None,
                 start_x: 2,
                 start_y: 0,
                 threshold: (1, 1),
@@ -15496,4 +15495,177 @@ fn scroll_view_drag_drop_autoscroll_policy_respects_auto_enabled_and_disabled() 
         left_disabled, 0,
         "Disabled must opt out of drag-drop autoscroll"
     );
+}
+
+#[derive(Clone, Copy)]
+struct StationaryDragDropAutoscrollState {
+    right_policy: crate::widgets::DragDropAutoscroll,
+    /// Group each right ScrollView row's DropTarget accepts; `None` omits the targets.
+    inner_target_group: Option<&'static str>,
+    /// Changing this key replaces the row DropTarget nodes during reconciliation.
+    inner_target_key: &'static str,
+}
+
+#[derive(Clone, Copy)]
+struct StationaryDragDropAutoscrollApp;
+
+impl Component for StationaryDragDropAutoscrollApp {
+    type Message = ();
+    type Properties = ();
+    type State = StationaryDragDropAutoscrollState;
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {
+        StationaryDragDropAutoscrollState {
+            right_policy: crate::widgets::DragDropAutoscroll::Auto,
+            inner_target_group: Some("threads"),
+            inner_target_key: "a",
+        }
+    }
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        let state = ctx.state;
+        let left = ScrollView::new()
+            .width(Length::Px(20))
+            .height(Length::Px(8))
+            .child(
+                crate::widgets::DragSource::new()
+                    .child(Text::new("source").height(Length::Px(1)))
+                    .drag_group("threads")
+                    .threshold(1)
+                    .on_drag_start(|_| {
+                        Some(Box::new(0usize) as Box<dyn crate::widgets::DragPayload>)
+                    }),
+            );
+
+        let mut right = ScrollView::new()
+            .width(Length::Px(20))
+            .height(Length::Px(8))
+            .drag_drop_autoscroll(state.right_policy);
+        for i in 0..20 {
+            // Rows are draggable themselves, so the pointer hits inside each DropTarget.
+            let row = crate::widgets::DragSource::new()
+                .child(Text::new(format!("right-{i}")).height(Length::Px(1)))
+                .drag_group("threads")
+                .on_drag_start(|_| None);
+            right = right.child(match state.inner_target_group {
+                Some(group) => Element::from(
+                    crate::widgets::DropTarget::new()
+                        .accept_group(group)
+                        .child(row),
+                )
+                .key(format!("{}-{i}", state.inner_target_key)),
+                None => row.into(),
+            });
+        }
+
+        HStack::new().gap(0).child(left).child(right).into()
+    }
+}
+
+fn start_stationary_drag_drop_runner() -> (AppRunner<StationaryDragDropAutoscrollApp>, NodeId, Rect)
+{
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 40,
+        h: 8,
+    };
+    let app = StationaryDragDropAutoscrollApp;
+    let mut runner = AppRunner::new(App::new().mouse(false), app, ());
+    init_runner(&mut runner, app, viewport);
+
+    let right_sv = runner
+        .core
+        .tree
+        .iter()
+        .filter(|node| matches!(node.kind, NodeKind::ScrollView(_)))
+        .map(|node| node.id)
+        .nth(1)
+        .expect("right scroll view exists");
+    let source_id = runner
+        .core
+        .tree
+        .iter()
+        .find(|node| matches!(node.kind, NodeKind::DragSource(_)))
+        .map(|node| node.id)
+        .expect("drag source exists");
+
+    runner.drag.active =
+        crate::app::runner::ActiveDrag::DragDrop(crate::app::input::drag::DragDropDrag {
+            payload: std::sync::Arc::new(0usize),
+            source_id,
+            drag_group: Some("threads".into()),
+            preview: crate::widgets::DragPreview::None,
+            on_cancel: None,
+            hovered_target: None,
+            start_x: 2,
+            start_y: 0,
+            threshold: (1, 1),
+            started: true,
+            preview_snapshot_anchor: None,
+        });
+    (runner, right_sv, viewport)
+}
+
+fn scroll_view_offset<C: Component>(runner: &AppRunner<C>, id: NodeId) -> usize {
+    let NodeKind::ScrollView(node) = &runner.core.tree.node(id).kind else {
+        unreachable!()
+    };
+    node.offset
+}
+
+#[test]
+fn auto_drag_drop_autoscroll_scrolls_foreign_view_with_compatible_descendant_target() {
+    let (mut runner, right_sv, _) = start_stationary_drag_drop_runner();
+
+    runner.drag.remember_pointer(21, 7);
+    let _ = runner.dispatch_active_drag(21, 7);
+
+    assert!(
+        scroll_view_offset(&runner, right_sv) > 0,
+        "Auto must scroll a ScrollView whose descendant DropTarget accepts the drag"
+    );
+    assert!(runner.stationary_drag_autoscroll_pending());
+}
+
+#[test]
+fn stationary_drag_drop_autoscroll_follows_reconciled_tree() {
+    use crate::widgets::DragDropAutoscroll;
+
+    let (mut runner, right_sv, viewport) = start_stationary_drag_drop_runner();
+    runner.core.ctx.state.right_policy = DragDropAutoscroll::Disabled;
+    runner.core.render_element(viewport, None, None, None);
+
+    runner.drag.remember_pointer(21, 7);
+    let _ = runner.dispatch_active_drag(21, 7);
+    assert_eq!(scroll_view_offset(&runner, right_sv), 0);
+    assert!(!runner.stationary_drag_autoscroll_pending());
+
+    // Policy flips to Enabled while the pointer stays put: autoscroll resumes without a move.
+    runner.core.ctx.state.right_policy = DragDropAutoscroll::Enabled;
+    runner.core.render_element(viewport, None, None, None);
+    assert!(runner.stationary_drag_autoscroll_pending());
+    assert!(runner.tick_stationary_drag_autoscroll());
+    let after_enable = scroll_view_offset(&runner, right_sv);
+    assert!(after_enable > 0);
+
+    // Under Auto, a replaced (re-keyed) compatible DropTarget keeps autoscroll going.
+    runner.core.ctx.state.right_policy = DragDropAutoscroll::Auto;
+    runner.core.ctx.state.inner_target_key = "b";
+    runner.core.render_element(viewport, None, None, None);
+    assert!(runner.stationary_drag_autoscroll_pending());
+    assert!(runner.tick_stationary_drag_autoscroll());
+    let after_replace = scroll_view_offset(&runner, right_sv);
+    assert!(after_replace > after_enable);
+
+    // The target turning incompatible stops autoscroll on the very next tick.
+    runner.core.ctx.state.inner_target_group = Some("other");
+    runner.core.render_element(viewport, None, None, None);
+    assert!(!runner.stationary_drag_autoscroll_pending());
+    assert!(!runner.tick_stationary_drag_autoscroll());
+    assert_eq!(scroll_view_offset(&runner, right_sv), after_replace);
 }
