@@ -128,7 +128,7 @@ For layout reorders, wrap the moving subtree in `Animated::new(...)`, enable `.p
 | `Tooltip` | Help text or a rich card on hover/focus |
 | `Accordion` | Collapsible sections |
 | `CommandPalette` | Modal command palette backed by the runtime command registry |
-| `SearchPalette` | Fuzzy search palette with optional grouped entries, hidden aliases, and a results header for tabs or controls; per-item styles, disabled rows, external filtering, multiline labels |
+| `SearchPalette` | Fuzzy search palette with optional grouped entries, hidden aliases, and a results header for tabs or controls; per-item styles, disabled rows, external filtering, multiline labels, result context menus |
 | `ContextMenu` | Right-click menu |
 
 ## Tabs → [tabs.md](tabs.md)
@@ -143,7 +143,7 @@ For layout reorders, wrap the moving subtree in `Animated::new(...)`, enable `.p
 | Widget | Description |
 |--------|-------------|
 | `ManagedTerminal` | Full PTY terminal (recommended) |
-| `Terminal` | Low-level terminal viewport widget with hardware caret controls |
+| `Terminal` | Low-level terminal viewport with hardware caret controls and configurable context-menu routing |
 | `TerminalPty` | PTY spawner and I/O bridge |
 | `TerminalScreen` | VT100/VT220 screen emulator |
 

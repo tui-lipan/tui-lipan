@@ -226,6 +226,7 @@ pub(crate) fn reconcile_terminal(
         paste_shortcut_behavior: terminal.paste_shortcut_behavior,
         on_selection: terminal.on_selection.clone(),
         on_mouse_forward: terminal.on_mouse_forward.clone(),
+        context_menu_policy: terminal.context_menu_policy,
         on_context_menu: terminal.on_context_menu.clone(),
         link_activation_mods: terminal.link_activation_mods,
         link_hover_style: terminal.link_hover_style,

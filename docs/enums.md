@@ -1782,6 +1782,15 @@ pub struct GridSelectionEvent {
 - `TextAreaStateChangeReason`: `Edit`, `SelectionChange`, `CursorMove`,
   `Scroll`, `VimModeChange`.
 
+## TerminalContextMenuPolicy
+
+Controls right-button routing inside terminal content on `Terminal` and `ManagedTerminal`.
+
+| Variant | Behavior |
+|---------|----------|
+| `MenuFirst` (default) | Menu handlers have priority over terminal mouse forwarding. |
+| `ApplicationFirst { override_mods, open_when_untracked }` | PTY forwarding takes priority while the child is tracking, except when the terminal menu override is held or an ancestor captures the modifiers. `open_when_untracked` enables the terminal menu when no child can receive the press. |
+
 ## Terminal mutations and retained graphics identities
 
 `TerminalMutation` reports completed parser operations. See

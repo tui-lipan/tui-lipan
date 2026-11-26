@@ -21,6 +21,8 @@ pub(crate) fn transition_overlay_click<C: Component, T: MouseDispatchCtx<C>>(
     {
         if button == MouseButton::Right {
             ctx.mouse_state().context_menu_press_consumed = true;
+        } else {
+            ctx.mouse_state().overlay_left_press_consumed = true;
         }
         return Some(true);
     }
@@ -175,8 +177,25 @@ pub(crate) fn transition_right_click<C: Component, T: MouseDispatchCtx<C>>(
             return Some(hover_dirty);
         };
 
-        if dispatch_context_menu(ctx.tree(), hit, adjusted_mouse) {
+        #[cfg(feature = "terminal")]
+        let use_default_context_routing =
+            match super::terminal_right::application_first_press(ctx, hit, adjusted_mouse) {
+                super::terminal_right::RightPressRoute::Handled => return Some(true),
+                super::terminal_right::RightPressRoute::Fallback => false,
+                super::terminal_right::RightPressRoute::Default => true,
+            };
+        #[cfg(not(feature = "terminal"))]
+        let use_default_context_routing = true;
+
+        if use_default_context_routing && dispatch_context_menu(ctx.tree(), hit, adjusted_mouse) {
             ctx.mouse_state().context_menu_press_consumed = true;
+            return Some(true);
+        }
+
+        #[cfg(feature = "terminal")]
+        if use_default_context_routing
+            && super::terminal_right::forward_right_press(ctx, adjusted_mouse)
+        {
             return Some(true);
         }
 
@@ -195,10 +214,6 @@ pub(crate) fn transition_right_click<C: Component, T: MouseDispatchCtx<C>>(
         if let Some(target) = drag_target {
             let drag = pending_mouse_region_drag(ctx.tree(), target, MouseButton::Right, x, y);
             ctx.mouse_state().mouse_region_drag = drag;
-        }
-
-        if ctx.forward_terminal_mouse(adjusted_mouse) {
-            return Some(true);
         }
 
         if ctx.handle_right_click_textarea(hit, *mouse) {

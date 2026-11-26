@@ -467,6 +467,23 @@ fn ctrl_char(ch: char) -> Option<u8> {
     })
 }
 
+/// Routing policy for a right-button press inside a terminal's content.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TerminalContextMenuPolicy {
+    /// Give context-menu handlers priority over the PTY.
+    #[default]
+    MenuFirst,
+    /// Give the PTY priority while it requests mouse reporting and forwarding is enabled.
+    ApplicationFirst {
+        /// Allow the terminal menu while these modifiers are held on press.
+        /// Extra modifiers are allowed. Use `None` to disable the mouse override.
+        override_mods: Option<KeyMods>,
+        /// Open the terminal menu when there is no forwarding child.
+        /// Set to `false` to keep ordinary unhandled right-click behavior in that case.
+        open_when_untracked: bool,
+    },
+}
+
 /// Mouse tracking mode requested by PTY application: which events it wants reported.
 ///
 /// Independent of [`MouseEncoding`], which only says how a report is framed on the wire.

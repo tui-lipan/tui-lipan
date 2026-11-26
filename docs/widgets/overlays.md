@@ -697,6 +697,7 @@ order is the visual order navigation walks.
 | `on_query_change` | `Callback<Arc<str>>` | Fired when the query text changes |
 | `on_select` | `Callback<SearchEvent<T>>` | Fired when selection moves; with `sync_selection(true)` also fires for initial/result-driven source-item changes |
 | `on_activate` | `Callback<SearchEvent<T>>` | Fired on Enter or double-click |
+| `on_context_menu` | `Callback<(SearchEvent<T>, MouseEvent)>` | Right-button press on an enabled result without changing selection or focus |
 
 ### Input forwarding
 

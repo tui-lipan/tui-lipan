@@ -514,7 +514,9 @@ pub(crate) fn transition_drag_move<C: Component, T: MouseDispatchCtx<C>>(
         && !ctx.drag_is_active()
         && ctx.mouse_state().pending_drag_source.is_none()
     {
-        if ctx.forward_terminal_mouse(adjusted_mouse) {
+        if !matches!(adjusted_mouse.kind, MouseKind::Drag(MouseButton::Right))
+            && ctx.forward_terminal_mouse(adjusted_mouse)
+        {
             return Some(true);
         }
 

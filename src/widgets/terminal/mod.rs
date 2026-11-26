@@ -58,10 +58,11 @@ pub use damage::{DamagedRow, GraphicsDamage, TerminalDamage, TerminalMutation};
 pub use copy_mode::{CopyModeAction, CopyModeGrid, CopyModeViewport, TerminalCopyMode};
 pub use events::{
     ForwardedMouseEvent, KittyKeyboardFlags, MouseEncoding, MouseMode, MouseModeState,
-    MouseReportError, MouseReportGeometry, TerminalInputEvent, TerminalInputKind, TerminalKeyModes,
-    TerminalLinkEvent, TerminalLinkKind, TerminalPasteEvent, TerminalPasteShortcutBehavior,
-    TerminalPathFilter, encode_mouse_event, encode_paste, focus_sequences, key_event_to_bytes,
-    mouse_event_to_bytes, paste_sequences, terminal_selection_text,
+    MouseReportError, MouseReportGeometry, TerminalContextMenuPolicy, TerminalInputEvent,
+    TerminalInputKind, TerminalKeyModes, TerminalLinkEvent, TerminalLinkKind, TerminalPasteEvent,
+    TerminalPasteShortcutBehavior, TerminalPathFilter, encode_mouse_event, encode_paste,
+    focus_sequences, key_event_to_bytes, mouse_event_to_bytes, paste_sequences,
+    terminal_selection_text,
 };
 #[cfg(feature = "terminal-images")]
 pub use graphics::{
@@ -175,6 +176,7 @@ impl Default for Terminal {
             on_selection: None,
             on_resize: None,
             on_mouse_forward: None,
+            context_menu_policy: TerminalContextMenuPolicy::default(),
             on_context_menu: None,
             link_activation_mods: KeyMods::CTRL,
             link_hover_style: StyleSlot::Replace(Style::new().underline()),
@@ -545,7 +547,13 @@ impl Terminal {
         self
     }
 
-    /// Handle a right-button press before clipboard actions or terminal mouse forwarding.
+    /// Set right-button routing inside terminal content. Defaults to menu-first routing.
+    pub fn context_menu_policy(mut self, policy: TerminalContextMenuPolicy) -> Self {
+        self.context_menu_policy = policy;
+        self
+    }
+
+    /// Handle a right-button press according to the configured context-menu policy.
     /// The handler owns the full gesture. Mouse coordinates anchor an application-owned popup.
     pub fn on_context_menu(mut self, cb: Callback<crate::core::event::MouseEvent>) -> Self {
         self.on_context_menu = Some(cb);

@@ -1269,6 +1269,7 @@ Source: `src/widgets/search_palette/mod.rs` (`SearchPalette`).
 | `on_query_change` | `None` |
 | `on_select` | `None` |
 | `on_activate` | `None` |
+| `on_context_menu` | `None` |
 | `render_item` | `None` |
 | `item_status` | `None` |
 | `item_gutter` | `None` |
@@ -1374,6 +1375,7 @@ Source: `src/widgets/terminal/mod.rs` (`Terminal`).
 | `on_selection` | `None` |
 | `on_resize` | `None` |
 | `on_mouse_forward` | `None` |
+| `context_menu_policy` | `TerminalContextMenuPolicy::default()` |
 | `on_context_menu` | `None` |
 | `link_activation_mods` | `KeyMods::CTRL` |
 | `link_hover_style` | `StyleSlot::Replace(Style::new().underline())` |
@@ -1493,6 +1495,7 @@ Note: `ManagedTerminal` is a component; defaults come from `ManagedTerminalProps
 | `link_hover_style` | `StyleSlot::Replace(Style::new().underline())` |
 | `on_link_activate` | `None` |
 | `link_paths` | `None` |
+| `context_menu_policy` | `crate::widgets::TerminalContextMenuPolicy::default()` |
 | `on_context_menu` | `None` |
 | `resize_debounce` | `Duration::from_millis(16)` |
 | `style` | `crate::style::Style::default()` |

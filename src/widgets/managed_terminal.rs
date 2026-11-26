@@ -95,6 +95,8 @@ pub struct ManagedTerminalProps {
     pub on_link_activate: Option<Callback<TerminalLinkEvent>>,
     /// Decides which detected file paths are links. Default: `None` (paths are not links).
     pub link_paths: Option<TerminalPathFilter>,
+    /// Right-button routing inside terminal content.
+    pub context_menu_policy: crate::widgets::TerminalContextMenuPolicy,
     /// Optional handler for a right-button press in the content viewport.
     pub on_context_menu: Option<Callback<crate::core::event::MouseEvent>>,
     /// Delay before applying a burst of terminal viewport resizes.
@@ -136,6 +138,7 @@ impl Default for ManagedTerminalProps {
             link_hover_style: StyleSlot::Replace(Style::new().underline()),
             on_link_activate: None,
             link_paths: None,
+            context_menu_policy: crate::widgets::TerminalContextMenuPolicy::default(),
             on_context_menu: None,
             resize_debounce: Duration::from_millis(16),
             style: crate::style::Style::default(),
@@ -168,6 +171,15 @@ impl ManagedTerminal {
         Self {
             props: ManagedTerminalProps::default(),
         }
+    }
+
+    /// Set right-button routing inside terminal content. Defaults to menu-first routing.
+    pub fn context_menu_policy(
+        mut self,
+        policy: crate::widgets::TerminalContextMenuPolicy,
+    ) -> Self {
+        self.props.context_menu_policy = policy;
+        self
     }
 
     /// Set the PTY configuration.
@@ -574,7 +586,8 @@ impl Component for ManagedTerminal {
                     rows: viewport.rows,
                 }
             }))
-            .on_scroll_to(ctx.link().callback(ManagedTerminalMsg::TerminalScrollTo));
+            .on_scroll_to(ctx.link().callback(ManagedTerminalMsg::TerminalScrollTo))
+            .context_menu_policy(ctx.props.context_menu_policy);
 
         if let Some(multiplier) = ctx.props.scroll_wheel_multiplier {
             terminal = terminal.scroll_wheel_multiplier(multiplier);

@@ -1250,6 +1250,16 @@ pub(crate) fn terminal_mouse_forward_plan(
         return None;
     }
 
+    terminal_mouse_forward_plan_at(tree, hit, mouse, sub_cell)
+}
+
+#[cfg(feature = "terminal")]
+pub(crate) fn terminal_mouse_forward_plan_at(
+    tree: &crate::core::node::NodeTree,
+    hit: NodeId,
+    mouse: MouseEvent,
+    sub_cell: Option<(u16, u16)>,
+) -> Option<TerminalMouseForward> {
     let node = tree.node(hit);
     let NodeKind::Terminal(term) = &node.kind else {
         return None;
