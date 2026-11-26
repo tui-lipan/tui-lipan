@@ -171,6 +171,7 @@ Source: `src/widgets/text_area/mod.rs` (`TextArea`).
 | `cursor` | `0` |
 | `anchor` | `None` |
 | `cursor_controlled` | `false` |
+| `bound_history` | `None` |
 | `placeholder` | `None` |
 | `style` | `Style::default()` |
 | `hover_style` | `StyleSlot::Inherit` |
@@ -686,6 +687,7 @@ Source: `src/widgets/popover/mod.rs` (`Popover`).
 | `capture_pointer` | `true` |
 | `auto_focus` | `true` |
 | `close_on_escape` | `true` |
+| `preserve_selection` | `false` |
 
 ## HexArea
 
