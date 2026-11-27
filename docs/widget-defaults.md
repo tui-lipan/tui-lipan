@@ -1551,6 +1551,8 @@ Source: `src/widgets/context_menu.rs` (`ContextMenu`).
 | `symbol_column` | `None` |
 | `selection_symbol` | `Some("> ".into())` |
 | `selection_symbol_explicit` | `false` |
+| `selection_symbol_right` | `None` |
+| `unselected_symbol` | `None` |
 | `selection_symbol_style` | `None` |
 | `unfocused_selection_symbol_style` | `None` |
 | `gutter_gap` | `None` |

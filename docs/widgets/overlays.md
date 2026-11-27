@@ -1011,6 +1011,8 @@ A popup menu backed by `Popover` + `List`. Typically triggered by right-click or
 | `selection_full_width` | `bool` | `false` (flat) / `true` (entries) | Fill full row width with selection highlight |
 | `symbol_column` | `bool` | `true` (flat) / `false` (entries) | Reserve left selection-symbol column |
 | `selection_symbol` | `Option<impl Into<Arc<str>>>` | `"> "` (flat) / `None` (entries) | Selection indicator |
+| `selection_symbol_right` | `Option<impl Into<Arc<str>>>` | `None` | Symbol after the highlighted entry, such as a pill's right cap; shares `selection_symbol_style`. See [List](data.md) for pill caps |
+| `unselected_symbol` | `Option<impl Into<Arc<str>>>` | `None` | Symbol column on other entries; `Some("")` reserves no column for them |
 | `selection_symbol_style` | `Style` | - | Selection indicator style |
 | `unfocused_selection_symbol_style` | `Style` | - | Selection indicator style while menu list is not focused; defaults to `selection_symbol_style` |
 | `gutter_gap` | `u16` | `0` (flat) / `1` (entries) | Columns between icon/check gutter and label |

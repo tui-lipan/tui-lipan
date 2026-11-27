@@ -590,6 +590,74 @@ impl Component for SizedMenu {
     }
 }
 
+struct CappedMenu;
+
+impl Component for CappedMenu {
+    type Properties = ();
+    type State = ();
+    type Message = ();
+
+    fn create_state(&self, _: &()) {}
+
+    fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _: &Context<Self>) -> Element {
+        ContextMenu::new(Text::new("Host"))
+            .open(true)
+            .anchor(Some((2, 2)))
+            .entries([
+                // Wider than the menu's minimum width, so the caps need room of their own.
+                ContextMenuEntry::action("a", "Alphabetical order"),
+                ContextMenuEntry::submenu(
+                    "sub",
+                    "More",
+                    [ContextMenuEntry::action("child", "SubItem in a submenu")],
+                ),
+            ])
+            .symbol_column(true)
+            .selection_symbol(Some("("))
+            .selection_symbol_right(Some(")"))
+            .unselected_symbol(Some(""))
+            .into()
+    }
+}
+
+/// The highlighted entry carries both caps at every level, and the menu is wide enough for them.
+#[test]
+fn selection_caps_wrap_the_whole_highlighted_entry_at_every_level() {
+    let capped = |text: &str, label: &str| {
+        text.lines().any(|line| {
+            line.split_once(&format!("({label}"))
+                .is_some_and(|(_, rest)| rest.trim_end_matches(['│', ' ', '╮', '╯']).ends_with(')'))
+        })
+    };
+    let mut backend = TestBackend::new(CappedMenu);
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 60,
+        h: 16,
+    });
+    backend.render();
+    let text = backend.capture_frame().plain_text();
+    assert!(capped(&text, "Alphabetical order"), "{text}");
+    assert!(text.contains("More") && !text.contains("(More"), "{text}");
+
+    for code in [KeyCode::Down, KeyCode::Right] {
+        backend
+            .send_key(KeyEvent {
+                code,
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+    }
+    backend.render();
+    let text = backend.capture_frame().plain_text();
+    assert!(capped(&text, "SubItem in a submenu"), "{text}");
+}
+
 #[test]
 fn submenu_anchors_against_explicit_and_constrained_parent_width() {
     let entries = vec![

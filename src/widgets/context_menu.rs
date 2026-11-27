@@ -297,6 +297,8 @@ pub struct ContextMenu {
     symbol_column: Option<bool>,
     selection_symbol: Option<Arc<str>>,
     selection_symbol_explicit: bool,
+    selection_symbol_right: Option<Arc<str>>,
+    unselected_symbol: Option<Arc<str>>,
     selection_symbol_style: Option<Style>,
     unfocused_selection_symbol_style: Option<Style>,
     gutter_gap: Option<u16>,
@@ -358,6 +360,8 @@ impl ContextMenu {
             symbol_column: None,
             selection_symbol: Some("> ".into()),
             selection_symbol_explicit: false,
+            selection_symbol_right: None,
+            unselected_symbol: None,
             selection_symbol_style: None,
             unfocused_selection_symbol_style: None,
             gutter_gap: None,
@@ -594,6 +598,20 @@ impl ContextMenu {
         self
     }
 
+    /// Set a symbol drawn after the highlighted entry, such as the closing cap of a pill. It
+    /// shares [`selection_symbol_style`](Self::selection_symbol_style).
+    pub fn selection_symbol_right(mut self, symbol: Option<impl Into<Arc<str>>>) -> Self {
+        self.selection_symbol_right = symbol.map(Into::into);
+        self
+    }
+
+    /// Set the symbol column's content on entries that are not highlighted. `Some("")` reserves no
+    /// column for them, so only the highlighted entry carries its symbol.
+    pub fn unselected_symbol(mut self, symbol: Option<impl Into<Arc<str>>>) -> Self {
+        self.unselected_symbol = symbol.map(Into::into);
+        self
+    }
+
     /// Set highlight symbol style.
     pub fn selection_symbol_style(mut self, style: Style) -> Self {
         self.selection_symbol_style = Some(style);
@@ -765,6 +783,8 @@ impl From<ContextMenu> for Element {
                 selection_full_width: menu.selection_full_width.unwrap_or(true),
                 symbol_column,
                 selection_symbol,
+                selection_symbol_right: menu.selection_symbol_right,
+                unselected_symbol: menu.unselected_symbol,
                 selection_symbol_style: menu.selection_symbol_style,
                 unfocused_selection_symbol_style: menu.unfocused_selection_symbol_style,
                 gutter_gap: menu.gutter_gap.unwrap_or(1),
@@ -813,10 +833,13 @@ impl From<ContextMenu> for Element {
                 )
                 .unfocused_selection_symbol_style(
                     menu.unfocused_selection_symbol_style
+                        .or(menu.selection_symbol_style)
                         .or_else(|| menu.unfocused_selection_style.explicit_style())
                         .unwrap_or(menu.selection_style.explicit_style().unwrap_or_default()),
                 )
                 .selection_symbol(menu.selection_symbol)
+                .selection_symbol_right(menu.selection_symbol_right)
+                .unselected_symbol(menu.unselected_symbol)
                 .scrollbar(menu.scrollbar)
                 .scrollbar_config(menu.scrollbar_config)
                 .width(menu.width.unwrap_or(Length::Px(20)))
@@ -927,6 +950,8 @@ struct MenuRenderConfig {
     selection_full_width: bool,
     symbol_column: bool,
     selection_symbol: Option<Arc<str>>,
+    selection_symbol_right: Option<Arc<str>>,
+    unselected_symbol: Option<Arc<str>>,
     selection_symbol_style: Option<Style>,
     unfocused_selection_symbol_style: Option<Style>,
     gutter_gap: u16,
@@ -1454,12 +1479,15 @@ fn render_menu_level(
         .item_horizontal_padding(list_item_h_pad)
         .header_horizontal_padding(cfg.header_horizontal_padding)
         .selection_symbol(cfg.selection_symbol.clone())
+        .selection_symbol_right(cfg.selection_symbol_right.clone())
+        .unselected_symbol(cfg.unselected_symbol.clone())
         .selection_symbol_style(
             cfg.selection_symbol_style
                 .unwrap_or(cfg.selection_style.explicit_style().unwrap_or_default()),
         )
         .unfocused_selection_symbol_style(
             cfg.unfocused_selection_symbol_style
+                .or(cfg.selection_symbol_style)
                 .or_else(|| cfg.unfocused_selection_style.explicit_style())
                 .unwrap_or(cfg.selection_style.explicit_style().unwrap_or_default()),
         )
@@ -1744,13 +1772,14 @@ fn resolve_level_width(entries: &[ContextMenuEntry], cfg: &MenuRenderConfig) -> 
     } else {
         0
     };
+    // The widest row is the highlighted one: it carries both selection symbols.
+    let symbol_width =
+        |symbol: &Option<Arc<str>>| symbol.as_deref().map_or(0, UnicodeWidthStr::width);
     let symbol_w = if cfg.symbol_column {
-        cfg.selection_symbol
-            .as_deref()
-            .map_or(0, UnicodeWidthStr::width)
+        symbol_width(&cfg.selection_symbol).max(symbol_width(&cfg.unselected_symbol))
     } else {
         0
-    };
+    } + symbol_width(&cfg.selection_symbol_right);
 
     let row_pad = usize::from(cfg.item_horizontal_padding.horizontal());
     let header_pad = usize::from(cfg.header_horizontal_padding.horizontal());
