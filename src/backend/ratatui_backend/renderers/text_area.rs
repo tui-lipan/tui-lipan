@@ -1469,7 +1469,7 @@ pub(crate) fn render_text_area(
 
         // Apply horizontal scroll when wrap is disabled
         // Compute the visible portion of this line
-        let has_virtual_text = !virtual_texts.is_empty();
+        let has_virtual_text = !placeholder_active && !virtual_texts.is_empty();
         let (visible_text, visible_byte_start, visible_byte_end, visible_start_col) =
             if !wrap && h_scroll_start > 0 && !has_virtual_text {
                 // Find byte offset corresponding to h_scroll_start columns
@@ -1515,10 +1515,11 @@ pub(crate) fn render_text_area(
             } else {
                 // Wrapped: compute the visual column at which this visual line begins
                 // within its logical line, so tab expansion aligns correctly.
-                let logical_line_start = value[..vline.start].rfind('\n').map_or(0, |i| i + 1);
+                let logical_line_start =
+                    render_value[..vline.start].rfind('\n').map_or(0, |i| i + 1);
                 let start_col = if vline.continuation {
                     str_visual_width_with_tabs(
-                        &value[logical_line_start..vline.start],
+                        &render_value[logical_line_start..vline.start],
                         sentinel.as_ref(),
                         0,
                         tab_stop,

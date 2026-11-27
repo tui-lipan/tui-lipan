@@ -508,6 +508,54 @@ fn checkbox_uses_checkbox_state_not_selected_index() {
 }
 
 #[test]
+fn text_area_wraps_placeholder_when_the_editor_is_empty() {
+    struct PlaceholderTextArea;
+
+    impl Component for PlaceholderTextArea {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _: &()) {}
+
+        fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+
+        fn view(&self, _: &Context<Self>) -> Element {
+            TextArea::new("")
+                .border(false)
+                .wrap(true)
+                .placeholder("Type your answer here")
+                .into()
+        }
+    }
+
+    let backend = TestBackend::new_with_viewport(
+        PlaceholderTextArea,
+        Rect {
+            x: 0,
+            y: 0,
+            w: 12,
+            h: 4,
+        },
+    );
+    let screen = backend.capture_frame().plain_text();
+    assert!(
+        screen
+            .lines()
+            .next()
+            .is_some_and(|line| line.contains("Type your"))
+    );
+    assert!(
+        screen
+            .lines()
+            .nth(1)
+            .is_some_and(|line| line.contains("answer here"))
+    );
+}
+
+#[test]
 fn input_placeholder_is_separate_from_label() {
     struct PlaceholderInput;
 
