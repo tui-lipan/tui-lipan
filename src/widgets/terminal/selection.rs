@@ -186,8 +186,10 @@ impl From<TerminalSelection> for GridSelection {
     }
 }
 
-/// Rebase or drop a selection across scrollback lineage changes.
-pub(crate) fn rebase_selection(
+/// Translate a selection between scrollback lineages. Retained endpoints shift by the
+/// number of evicted rows. Returns `None` if either endpoint was evicted or the history
+/// epoch changed.
+pub fn rebase_selection(
     sel: Option<TerminalSelection>,
     from: ScrollbackLineage,
     to: ScrollbackLineage,

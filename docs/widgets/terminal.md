@@ -708,6 +708,10 @@ viewport, and the cells under them hold a half-block stand-in; `to_png()` draws 
 
 `TerminalSelection` uses absolute retained-line indices from the oldest available line, while its
 columns are display columns. It therefore remains attached to the same text as the viewport scrolls.
+If you store a selection, record `screen.scrollback_lineage()` alongside it. Use
+`rebase_selection(Some(selection), saved_lineage, screen.scrollback_lineage())` before reading
+the text. This shifts the selection after older rows are evicted and drops it if either endpoint
+or the original history is gone.
 Use `screen.selection_display_text(&selection, end_kind, trim_row_end)` to extract a selection
 across scrollback, including rows containing CJK or emoji. Snapshot-only hosts can project with
 `to_viewport` and use `snapshot.selection_text`, which is limited to visible rows.
