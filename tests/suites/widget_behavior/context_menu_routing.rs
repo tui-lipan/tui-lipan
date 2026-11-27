@@ -207,6 +207,16 @@ fn cascading_context_menu_navigates_submenus_skips_disabled_and_closes_in_layers
         "submenu should close on Esc:\n{closed_sub_text}"
     );
 
+    // `l` and `h` open and close a submenu as Right and Left do, matching `j`/`k` within a level.
+    key(&mut backend, KeyCode::Char('l'));
+    assert!(backend.capture_frame().plain_text().contains("Thread ID"));
+    key(&mut backend, KeyCode::Char('h'));
+    assert!(
+        *backend.state(),
+        "h must never dismiss the root context menu"
+    );
+    assert!(!backend.capture_frame().plain_text().contains("Thread ID"));
+
     // Reopen submenu with Enter, move to second item ("Thread ID"), and activate it.
     key(&mut backend, KeyCode::Enter);
     key(&mut backend, KeyCode::Down);

@@ -12,6 +12,7 @@ use crate::style::{
     BorderStyle, Length, Padding, RowStylePolicy, ScrollbarConfig, Span, Style, StyleSlot,
 };
 use crate::widgets::hover_reveal::{HoverDelay, HoverReveal, RevealStep};
+use crate::widgets::scroll::{ScrollAction, ScrollKeymap, scroll_action_from_key};
 use crate::widgets::{
     List, ListHoverEvent, ListItem, ListItemGutter, Popover, PopoverOffset, PopoverPlacement,
 };
@@ -1413,24 +1414,31 @@ fn render_menu_level(
     let link_open = ctx.link().clone();
     let link_close = ctx.link().clone();
     let link_tab = ctx.link().clone();
-    let on_key = KeyHandler::new(move |key| match key.code {
-        KeyCode::Right => {
-            link_open.send(MenuStackMsg::OpenSubmenu { depth });
-            true
+    let on_key = KeyHandler::new(move |key| {
+        // The horizontal keys of the list's own key map, so `h`/`l` move between levels as
+        // `j`/`k` move within one.
+        match scroll_action_from_key(&key, ScrollKeymap::default()) {
+            Some(ScrollAction::LineRight(_)) => {
+                link_open.send(MenuStackMsg::OpenSubmenu { depth });
+                return true;
+            }
+            Some(ScrollAction::LineLeft(_)) => {
+                link_close.send(MenuStackMsg::CloseDeepest { close_root: false });
+                return true;
+            }
+            _ => {}
         }
-        KeyCode::Left => {
-            link_close.send(MenuStackMsg::CloseDeepest { close_root: false });
-            true
+        match key.code {
+            KeyCode::Esc => {
+                link_close.send(MenuStackMsg::CloseDeepest { close_root: true });
+                true
+            }
+            KeyCode::Tab => {
+                link_tab.send(MenuStackMsg::CloseAll);
+                true
+            }
+            _ => false,
         }
-        KeyCode::Esc => {
-            link_close.send(MenuStackMsg::CloseDeepest { close_root: true });
-            true
-        }
-        KeyCode::Tab => {
-            link_tab.send(MenuStackMsg::CloseAll);
-            true
-        }
-        _ => false,
     });
 
     let mut list = List::new()
