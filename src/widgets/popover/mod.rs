@@ -235,7 +235,9 @@ impl Popover {
         self
     }
 
-    /// Anchor the popover to an absolute position (content coordinates).
+    /// Anchor the popover to an absolute position (content coordinates). With
+    /// [`clamp`](Self::clamp) on, a popover too tall for either side of the point keeps its height
+    /// and slides over the point to stay in bounds, as a context menu does.
     pub fn anchor(mut self, anchor: Option<(u16, u16)>) -> Self {
         self.anchor = anchor;
         self
