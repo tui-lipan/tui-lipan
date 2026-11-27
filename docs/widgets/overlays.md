@@ -330,7 +330,7 @@ inherit ScrollView clipping from the overlay's declaration site.
 | `min_trigger_width` | `bool` | Keep popover at least as wide as the trigger; content may still make it wider |
 | `fit_trigger_width` | `bool` | Force popover width to exactly match the trigger, unless capped by `max_width` |
 | `max_width` | `Length` | Cap the resolved popover width; percent resolves against overlay bounds |
-| `anchor` | `Option<(u16, u16)>` | Absolute content-coordinate anchor instead of trigger rect |
+| `anchor` | `Option<(u16, u16)>` | Absolute content-coordinate anchor instead of trigger rect. With `clamp`, a popover too tall for either side of the point slides over it instead of shrinking |
 | `anchor_area` | `impl Into<Option<Rect>>` | Place against this area of the trigger (relative to its top-left corner) instead of the whole trigger; follows the trigger as it moves. `anchor` wins |
 
 `Popover` renders through the root overlay pipeline by default, so it appears above normal in-tree content and captures focus while open. Auto-focus and trapping remain active under `FocusPolicy::Manual`. Use `.capture_focus(false)` for passive root-portal overlays, such as autocomplete suggestions, that must render above the tree while the trigger retains keyboard focus. Use `.scope(OverlayScope::Local)` when the content should stay inside parent stacking order. Use `.auto_focus(false)` for a capturing popover that must suspend focus while retaining its trap.
@@ -989,7 +989,7 @@ A popup menu backed by `Popover` + `List`. Typically triggered by right-click or
 | `on_select` | `Callback<usize>` | - | Activates a flat item on Enter or left click; highlight movement does not invoke it |
 | `on_action` | `Callback<Arc<str>>` | - | Fires with the activated leaf action `id` in structured `entries` mode |
 | `on_close` | `Callback<()>` | - | Fires when menu should close |
-| `anchor` | `Option<(u16, u16)>` | `None` | Absolute anchor position (content coordinates) |
+| `anchor` | `Option<(u16, u16)>` | `None` | Absolute anchor position (content coordinates). A menu too tall for either side of it slides over it to stay whole |
 | `placement` | `PopoverPlacement` | `BelowStart` | Menu placement relative to trigger |
 | `offset` | `impl Into<PopoverOffset>` | `0` | Distance from trigger |
 | `clamp` | `bool` | `true` | Keep within screen bounds |

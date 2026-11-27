@@ -93,13 +93,17 @@ pub fn resolve_popover_rect(popover: &super::Popover, trigger: Rect, bounds: Rec
         pos = popover_position_for_placement(placement, trigger, width, height);
     }
 
-    if let Some(available_height) = vertical_space_for_placement(placement, trigger, bounds)
-        // Keep the requested gap by shrinking the content, but never below one row.
-        .map(|space| {
-            space
-                .saturating_sub(vertical_gap(placement, offset_y))
-                .max(space.min(1))
-        })
+    // A point anchor has no trigger to keep in view, so a clamped popover keeps its full height and
+    // slides over the point instead of shrinking into the space on one side of it.
+    let slides_over_anchor = popover.anchor.is_some() && popover.clamp;
+    if !slides_over_anchor
+        && let Some(available_height) = vertical_space_for_placement(placement, trigger, bounds)
+            // Keep the requested gap by shrinking the content, but never below one row.
+            .map(|space| {
+                space
+                    .saturating_sub(vertical_gap(placement, offset_y))
+                    .max(space.min(1))
+            })
         && available_height < height
     {
         (width, height) = resolve_popover_size(popover, trigger, max_width, available_height);
@@ -434,6 +438,34 @@ mod tests {
 
         assert_eq!(rect.x, trigger.x + trigger.w as i16);
         assert_eq!(rect.y, trigger.y + ((trigger.h - rect.h) / 2) as i16);
+    }
+
+    #[test]
+    fn a_point_anchored_popover_slides_into_view_instead_of_shrinking() {
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 30,
+        };
+        // 19 rows fit neither the 12 rows below the point nor the 17 above it, but fit the bounds.
+        let content = (1..=19)
+            .map(|n| n.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let rect = resolve_popover_rect(
+            &Popover::new()
+                .content(Text::new(content))
+                .min_trigger_width(false)
+                .placement(PopoverPlacement::BelowStart)
+                .offset((0, 1))
+                .anchor(Some((4, 17))),
+            Rect::default(),
+            bounds,
+        );
+
+        assert_eq!(rect.h, 19, "every row stays visible");
+        assert!(rect.y >= 0 && rect.y + rect.h as i16 <= 30, "{rect:?}");
     }
 
     #[test]
