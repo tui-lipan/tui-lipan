@@ -96,14 +96,12 @@ pub use screen::{
 #[cfg(feature = "terminal")]
 pub use selection::{
     ScrollbackLineage, TerminalPos, TerminalSelection, TerminalSelectionEvent, absolute_line,
-    from_viewport, to_viewport, viewport_row,
+    from_viewport, rebase_selection, to_viewport, viewport_row,
 };
 
 pub(crate) use layout::{measure_terminal, terminal_content_layout, terminal_mouse_content_rect};
 pub(crate) use node::{TerminalLinkHover, TerminalNode, apply_terminal_selection_input};
 pub(crate) use reconcile::reconcile_terminal;
-#[cfg(feature = "terminal")]
-pub(crate) use selection::rebase_selection;
 
 #[cfg(feature = "terminal")]
 /// The text a copy of `sel` puts on the clipboard: the selection without the blank lines at its

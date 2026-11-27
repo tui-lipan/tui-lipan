@@ -391,7 +391,7 @@ pub use crate::widgets::{
     TerminalSemanticEvent, TerminalSemanticState, TerminalTextPosition, TerminalViewport,
     TerminalWorkingDirectory, TerminalWorkingDirectorySource, absolute_line, encode_mouse_event,
     encode_paste, focus_sequences, from_viewport, key_event_to_bytes, mouse_event_to_bytes,
-    paste_sequences, terminal_selection_text, to_viewport, viewport_row,
+    paste_sequences, rebase_selection, terminal_selection_text, to_viewport, viewport_row,
 };
 #[cfg(feature = "big-text")]
 pub use crate::widgets::{BigFont, BigText, GlyphLayout, Shadow};
